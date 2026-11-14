@@ -1,0 +1,28 @@
+{
+  "name": "@argo/model-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "import": "./index.mjs"
+    },
+    "./request": {
+      "types": "./request.d.mts",
+      "default": "./request.mjs"
+    },
+    "./router": {
+      "types": "./router.d.mts",
+      "default": "./router.mjs"
+    },
+    "./models": "./models.json"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "types": "./index.d.mts"
+}
