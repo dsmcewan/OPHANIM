@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {createGovernance, TELOS_COMMIT} from '../governance.mjs';
+import {createGovernance as createFixtureGovernance, TELOS_COMMIT} from '../governance.mjs';
 import {hash, canonical} from './check-contract.mjs';
 import {createWorkers} from '../fixtures.mjs';
 import {FIXTURE_SOURCE_SHA} from './check-release.mjs';
 import {assessEfficiency,validateEfficiencyPolicy} from './check-efficiency.mjs';
+
+const createGovernance = options => createFixtureGovernance({telosRoot:process.env.OPHANIM_TELOS_ROOT,...options});
 
 function example() {
   const output = {caseId:'case-1',department:'operations',service:'records',summary:'Find template',requester:'fixture@example.invalid',sourceRevision:'fixture-r1'};

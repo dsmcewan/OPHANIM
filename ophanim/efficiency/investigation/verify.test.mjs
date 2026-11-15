@@ -15,7 +15,7 @@ const sha=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 test('paired investigation verifies actual retained stages and TELOS evidence without replay', {timeout:60000},async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ophanim-investigation-pair-'));
   const probeRoot=path.join(root,'probe');
-  const probe=await runPairedProbe({outputDir:probeRoot,count:2,delayMs:15});
+  const probe=await runPairedProbe({outputDir:probeRoot,count:2,delayMs:15,telosRoot:process.env.OPHANIM_TELOS_ROOT});
   const reportFile=path.join(root,'report.json');
   const report={schema:'ophanim.admission-proof/v1',probes:[probe]};
   write(reportFile,report);

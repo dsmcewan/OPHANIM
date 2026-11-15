@@ -169,7 +169,7 @@ async function verifyPairSide({root,slots,request,telosRoot,expected}) {
   return row;
 }
 
-export async function verifyPairedInvestigation({root,telosRoot,expected}={}) {
+export async function verifyPairedInvestigation({root,telosRoot=process.env.OPHANIM_TELOS_ROOT,expected}={}) {
   directory(root);
   const preflight=read(path.join(root,'preflight.json'));
   const request=preflight.value.request;
@@ -299,7 +299,7 @@ export async function openLatencyModelEvidence(options) {
   };
 }
 
-export async function verifyLatencyEvidence({reportFile,expectedReportSha,telosRoot}={}) {
+export async function verifyLatencyEvidence({reportFile,expectedReportSha,telosRoot=process.env.OPHANIM_TELOS_ROOT}={}) {
   const report=read(reportFile);
   if(expectedReportSha!==undefined)assert.ok(SHA.test(expectedReportSha)&&report.sha===expectedReportSha,'Retained report digest differs');
   assert.equal(report.value.schema,'ophanim.admission-proof/v1','Expected retained admission proof report');
@@ -317,7 +317,7 @@ export async function verifyLatencyEvidence({reportFile,expectedReportSha,telosR
 
 // This path independently checks complete three-pair and crash-recovery
 // evidence with the already pinned TELOS evaluator. It never issues a decision.
-export async function verifyControlledInvestigation({manifestFile,expectedScopeSha,expectedManifestSha,telosRoot}={}) {
+export async function verifyControlledInvestigation({manifestFile,expectedScopeSha,expectedManifestSha,telosRoot=process.env.OPHANIM_TELOS_ROOT}={}) {
   assert.ok(SHA.test(expectedScopeSha??'')&&SHA.test(expectedManifestSha??''),'Exact external scope and evidence digests required');
   const {value:manifest,sha}=read(manifestFile),evidenceRoot=path.dirname(manifestFile);
   assert.equal(manifestFile,path.join(evidenceRoot,'manifest.json'),'Canonical replay manifest required');
