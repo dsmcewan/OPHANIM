@@ -11,7 +11,7 @@
 // every exit path in the original script becomes either a thrown Error (a caller-error: a bad
 // ticket or missing makeClientFor, checked before any work starts) or a value in the returned
 // result object (a run-error: something failed after work started).
-import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, appendFileSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -58,6 +58,37 @@ const NO_TOOLS = "You have NO tools in this seat: nothing you write executes and
 
 const strip = t => t.replace(/^\s*```[a-z]*\s*\n?/i, "").replace(/\n?```\s*$/, "").trim();
 const isTimeout = e => e?.name === "APIConnectionTimeoutError" || /timed out|UND_ERR_HEADERS_TIMEOUT|ETIMEDOUT/i.test(String(e?.message ?? e));
+
+// Sparse copies must keep the source's actual package scopes. Without these bytes Node may
+// parse an unchanged TypeScript module as CommonJS. Absence matters too: a new nearer manifest
+// must not silently change what acceptance or a resumed run tests. These are input context,
+// never additional owned outputs; an explicitly owned manifest remains an ordinary artifact.
+function packageContext(repoRoot, copied, slots) {
+  const paths = new Set();
+  const owned = new Set(slots.map(sl => relative(repoRoot, artifactPath(repoRoot, sl.path))));
+  const ancestors = dir => {
+    for (;;) {
+      paths.add(join(dir, "package.json"));
+      if (dir === ".") break;
+      dir = dirname(dir);
+    }
+  };
+  const visit = path => {
+    // No source or manifest symlink may alias a scope or lead discovery outside repoRoot.
+    const source = artifactPath(repoRoot, path);
+    const canonical = relative(repoRoot, source);
+    if (statSync(source).isDirectory()) {
+      ancestors(canonical);
+      for (const entry of readdirSync(source)) visit(join(canonical, entry));
+    } else ancestors(dirname(canonical));
+  };
+  for (const path of copied) visit(path);
+  for (const sl of slots) ancestors(dirname(relative(repoRoot, artifactPath(repoRoot, sl.path))));
+  return [...paths].filter(path => !owned.has(path)).sort().map(path => {
+    const contents = readArtifact(repoRoot, path);
+    return { path, bytes: contents === null ? null : cidOf("blob", contents), contents };
+  });
+}
 
 /** An output cap in the vendor's own request shape; `extra` is { tokens } or undefined. */
 const capFor = (vendor, extra) => extra?.tokens == null ? undefined
@@ -114,6 +145,8 @@ export async function runOpenItem(spec, opts = {}) {
   if (new Set(destinations).size !== destinations.length) throw new Error("duplicate artifact destination aliases");
 
   const REPO_ROOT = resolveRepoRoot(REPO, spec.repo_root);
+  const packageInputs = packageContext(REPO_ROOT, spec.copy, SLOTS);
+  const packageBinding = packageInputs.map(({ path, bytes }) => ({ path, bytes }));
   const profile = opts.profile ?? "argo";
   if (!["argo", "legacy"].includes(profile)) throw new Error("unknown routing profile");
   const pools = opts.pools ?? readPools();
@@ -136,15 +169,6 @@ export async function runOpenItem(spec, opts = {}) {
   const home = join(root, "seats");                 // isolated: never the operator's real seat store
   const outDir = join(REPO_ROOT, "outputs", "open-items", spec.key);
   mkdirSync(outDir, { recursive: true });
-
-  if (!RESUME) for (const rel of spec.copy) cpSync(join(REPO_ROOT, rel), artifactPath(worktree, rel), {
-    recursive: true, dereference: true,
-    filter: (src, dest) => {
-      if (!isUnder(REPO_ROOT, src)) throw new Error("copy contains a symlink outside the target repository");
-      artifactPath(worktree, relative(worktree, dest));
-      return true;
-    },
-  });
 
   const board = openBoard(root);
   const HUMAN = { vendor: "human" };
@@ -169,12 +193,12 @@ export async function runOpenItem(spec, opts = {}) {
   const check = (ok, line) => { if (!ok) failures++; progress({ event: "check", ok, detail: line }); };
   const clients = {};
   const clientFor = (v, pool, poolConfig) => (clients[`${v}:${pool ?? v}`] ??= makeClientFor(v, { pool, poolConfig }));
-  const ticketCid = cidOf("entry", JSON.parse(JSON.stringify({ ...spec, repo_root: REPO_ROOT, slots: SLOTS })));
+  const ticketCid = cidOf("entry", JSON.parse(JSON.stringify({ ...spec, repo_root: REPO_ROOT, slots: SLOTS, package_context: packageBinding })));
   const statePath = join(root, "run.json");
   let recordAllowed = false;
   const run = { format: 2, isolation: ACCEPTANCE_ISOLATION, ticket_cid: ticketCid, repo_root: REPO_ROOT,
     key: spec.key, started_at: new Date().toISOString(), board: root, reseats: OVERRIDES,
-    turns: [], gates: null, shipped: false, artifacts: [], files: [] };
+    package_context: packageBinding, turns: [], gates: null, shipped: false, artifacts: [], files: [] };
   const record = () => {
     if (!recordAllowed) return;
     const text = JSON.stringify(run, null, 2);
@@ -348,8 +372,21 @@ export async function runOpenItem(spec, opts = {}) {
   }
 
   /** Execute the combined change in the mandatory boundary, then check the bytes it judged. */
+  function assertPackageContext() {
+    for (const { path, bytes } of packageBinding) {
+      const actual = readArtifact(worktree, path);
+      if ((actual === null ? null : cidOf("blob", actual)) !== bytes) {
+        throw new Error(`Package context changed: ${path}; the bound source scope was not tested unchanged`);
+      }
+    }
+  }
   async function runAcceptance(crew) {
+    assertPackageContext();
     const result = await isolatedAcceptance({ worktree, cmd: CMD, head: repoHead() });
+    try { assertPackageContext(); } catch (error) {
+      result.exit = 1;
+      result.out += `\n${error.message}\n`;
+    }
     for (const c of crew) {
       const actual = readArtifact(worktree, c.sl.path);
       if (actual === null || cidOf("blob", actual) !== c.bytes) {
@@ -369,13 +406,29 @@ export async function runOpenItem(spec, opts = {}) {
     if (RESUME) {
       previous = JSON.parse(readFileSync(statePath, "utf8"));
       if (previous.format !== 2 || previous.isolation !== ACCEPTANCE_ISOLATION ||
-          previous.ticket_cid !== ticketCid || resolve(previous.board) !== resolve(root)) {
+          previous.ticket_cid !== ticketCid || resolve(previous.board) !== resolve(root) ||
+          JSON.stringify(previous.package_context) !== JSON.stringify(packageBinding)) {
         throw new Error("resume: ticket/spec differs or this is a legacy run without isolated recovery state");
       }
       Object.assign(run, previous, { error: null, salvaged: null, resumed_from: { board: root, previous_error: previous.error ?? null } });
     } else if (existsSync(statePath)) {
       throw new Error("board already has a run; use resume instead of overwriting recovery state");
     }
+    if (!RESUME) {
+      for (const rel of spec.copy) cpSync(join(REPO_ROOT, rel), artifactPath(worktree, rel), {
+        recursive: true, dereference: true,
+        filter: (src, dest) => {
+          if (!isUnder(REPO_ROOT, src)) throw new Error("copy contains a symlink outside the target repository");
+          artifactPath(worktree, relative(worktree, dest));
+          return true;
+        },
+      });
+      for (const { path, bytes, contents } of packageInputs) if (bytes !== null) {
+        if (board.store.put("blob", contents) !== bytes) throw new Error("package context CAS mismatch");
+        writeArtifact(worktree, path, contents);
+      }
+    }
+    assertPackageContext();
     recordAllowed = true;
     enter("isolation", "checking mandatory acceptance confinement before any vendor call");
     const probe = await isolatedAcceptance({ worktree, cmd: "true", head: repoHead(), timeout: 10_000 });
@@ -466,6 +519,7 @@ export async function runOpenItem(spec, opts = {}) {
         title: spec.title, goal: spec.goal, repo: "pantheon",
         constraints: spec.constraints ?? [], forbidden: spec.forbidden ?? ["do not elect a vendor as judge"],
         acceptance: [{ type: "tests", cmd: CMD, expect: "exit0" }],
+        package_context: packageBinding,
       };
       const t = await publish({ ...board, ref: REF, author: HUMAN, msg: "the ticket",
         entries: [{ kind: "ticket", links: { derived_from: scouts.map(s => s.evidence) }, payload: TICKET }] });
@@ -651,7 +705,7 @@ export async function runOpenItem(spec, opts = {}) {
           // run that cited only one file would leave the others with no executed result.
           for (const c of crew) {
             const rp = await publish({ ...board, ref: c.wip, author: CONTROLLER, msg: `the suite on rev ${rev}`,
-              entries: [{ kind: "repro", payload: { cmd: CMD, exit: acc.exit, isolation: acc.isolation }, blob: acc.out.slice(-20_000) || "(no output)", links: { derived_from: [c.artifactCid] } }] });
+              entries: [{ kind: "repro", payload: { cmd: CMD, exit: acc.exit, isolation: acc.isolation, package_context: packageBinding }, blob: acc.out.slice(-20_000) || "(no output)", links: { derived_from: [c.artifactCid] } }] });
             if (!rp.ok) throw new Error(`repro publish (${c.sl.slot} rev ${rev}): ${rp.why}`);
           }
           run.revisions.push({ rev, exit: acc.exit, slots: crew.map(c => ({ slot: c.sl.slot, chars: c.code.length, artifact: c.artifactCid, bytes: c.bytes })) });
@@ -753,6 +807,7 @@ export async function runOpenItem(spec, opts = {}) {
 
     // ---------------------------------------------------------------- ship (controller only)
     enter("ship", "the controller's transaction through every gate");
+    assertPackageContext();
     const headBefore = board.refs.resolve(REF);
     // ship() is ONE transaction over the whole change, and its artifacts come from ONE ref. With
     // several slots the artifacts sit on several seat wips (CARRY never moves code, by design), so
