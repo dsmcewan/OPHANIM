@@ -1,0 +1,26 @@
+name: Ophanim qualification
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  synthetic-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+          cache: npm
+      - name: Prepare the isolated runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          OPHANIM_TELOS_ROOT="$RUNNER_TEMP/ophanim-telos"
+          printf 'OPHANIM_TELOS_ROOT=%s\n' "$OPHANIM_TELOS_ROOT" >> "$GITHUB_ENV"
+          git clone --no-checkout https://github.com/dsmcewan/TELOS.git "$OPHANIM_TELOS_ROOT"
+          git -C "$OPHANIM_TELOS_ROOT" checkout --detach 0c9b539ddbb08e1464603faf786e0d5cdfc33fb8
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+      - run: npm run test:proof

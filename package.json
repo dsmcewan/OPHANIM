@@ -10,8 +10,8 @@
     "ophanim": "./ophanim/cli.mjs"
   },
   "scripts": {
-    "test": "npm --prefix packages/model-client test && npm --prefix pantheon test",
-    "test:proof": "node --test ophanim/tests/*.test.mjs"
+    "test": "npm --prefix packages/model-client test && npm --prefix pantheon test -- --test-concurrency=2",
+    "test:proof": "node --test ophanim/governance/*.test.mjs ophanim/tests/*.test.mjs"
   },
   "workspaces": [
     "pantheon",
