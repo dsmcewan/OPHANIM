@@ -240,7 +240,7 @@ def containment_preflight(common):
             raise ConvergeError("Repository integration quarantined: invalid containment closure")
 
 
-def gate_summary(output, candidate, trusted):
+def gate_summary(output, candidate, trusted, required_checks=EXPECTED_CHECKS):
     lines = output.decode("utf8", "replace").splitlines()
     terminal = f"Merged tested candidate {candidate} using trusted policy {trusted}"
     if lines.count(terminal) != 1:
@@ -257,8 +257,8 @@ def gate_summary(output, candidate, trusted):
         raise ConvergeError("Controller lacks one complete gate summary")
     summary = summaries[0]
     checks = summary.get("checks", [])
-    if (summary.get("merge_ready") is not True or len(checks) != len(EXPECTED_CHECKS)
-            or [check.get("name") for check in checks] != list(EXPECTED_CHECKS)
+    if (summary.get("merge_ready") is not True or len(checks) != len(required_checks)
+            or [check.get("name") for check in checks] != list(required_checks)
             or any(not HASH.fullmatch(check.get("output_sha256", "")) for check in checks)):
         raise ConvergeError("Controller did not complete every trusted gate group")
     # summary.commit names the controller's temporary staging commit. It is NOT
@@ -266,20 +266,97 @@ def gate_summary(output, candidate, trusted):
     return summary
 
 
-def source_binding(repo, target, trusted_repo, trusted_sha, node):
+def regular_source(file):
+    file = Path(file)
+    if not file.is_absolute() or ".." in file.parts or any(parent.is_symlink() for parent in (file, *file.parents)) or not file.is_file():
+        raise ConvergeError("Pinned source must be an absolute regular path without symlink parents")
+    return file
+
+
+def file_digest(file):
+    h = hashlib.sha256()
+    with file.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_controller_profile(file, expected, node):
+    if file is None and expected is None:
+        return None
+    if file is None or not isinstance(expected, str) or not HASH.fullmatch(expected) or os.environ.get("ARGO_CONTROLLER_PROFILE_SHA") != expected:
+        raise ConvergeError("Require an externally pinned ARGO_CONTROLLER_PROFILE_SHA matching --controller-profile-sha")
+    file = regular_source(file)
+    if file.stat().st_size > 8 * 1024 * 1024:
+        raise ConvergeError("Controller profile exceeds bound")
+    raw = file.read_bytes()
+    if digest(raw) != expected:
+        raise ConvergeError("Controller profile digest mismatch")
+    p = json.loads(raw)
+    if not isinstance(p, dict) or set(p) != {"schemaVersion", "entrypoint", "startup", "startupSha", "requiredChecks", "sourcePins"} or type(p["schemaVersion"]) is not int or p["schemaVersion"] != 1:
+        raise ConvergeError("Unsupported controller profile")
+    if any(not isinstance(p[name], str) for name in ("entrypoint", "startup", "startupSha")):
+        raise ConvergeError("Controller paths and startup identity must be strings")
+    entrypoint, startup = (regular_source(p[name]) for name in ("entrypoint", "startup"))
+    checks = p["requiredChecks"]
+    if not isinstance(checks, list) or not 1 <= len(checks) <= 100 or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", v) for v in checks) or len(set(checks)) != len(checks):
+        raise ConvergeError("Explicit unique bounded controller checks required")
+    pins = p["sourcePins"]
+    if not isinstance(pins, dict) or not 3 <= len(pins) <= 50000 or not {str(node), str(entrypoint), str(startup)} <= set(pins):
+        raise ConvergeError("Node, entrypoint and startup source pins required")
+    if not HASH.fullmatch(p["startupSha"] or "") or pins[str(startup)] != p["startupSha"]:
+        raise ConvergeError("Startup identity differs from pinned source")
+    for name, expected_hash in pins.items():
+        source = Path(name)
+        if not source.is_absolute() or ".." in source.parts or not isinstance(expected_hash, str) or not HASH.fullmatch(expected_hash):
+            raise ConvergeError("Invalid controller source pin")
+        if source.is_symlink():
+            if any(parent.is_symlink() for parent in source.parents):
+                raise ConvergeError("Source symlink parents refused")
+            literal = os.readlink(source)
+            target = Path(os.path.abspath(source.parent / literal))
+            if Path(literal).is_absolute() or str(target) not in pins:
+                raise ConvergeError("Source symlink requires a separately pinned regular target")
+            regular_source(target)
+            actual = digest(literal.encode())
+        else:
+            actual = file_digest(regular_source(source))
+        if actual != expected_hash:
+            raise ConvergeError("Controller pinned source changed: " + name)
+    return {"path": str(file), "sha256": expected, "profile": p}
+
+
+def controller_argv(binding, candidate, target):
+    custom = binding.get("controller_profile")
+    entrypoint = custom["profile"]["entrypoint"] if custom else str(Path(binding["trusted_repo"]) / "controller/merge.mjs")
+    argv = [binding["node"], entrypoint, "--repo", str(target), "--candidate", candidate, "--trusted", binding["trusted_sha"]]
+    if custom:
+        argv += ["--profile", custom["profile"]["startup"], "--profile-sha", custom["profile"]["startupSha"]]
+    return argv
+
+
+def controller_checks(binding):
+    return binding["controller_profile"]["profile"]["requiredChecks"] if "controller_profile" in binding else EXPECTED_CHECKS
+
+
+def source_binding(repo, target, trusted_repo, trusted_sha, node, controller_profile=None, controller_profile_sha=None):
     if head(trusted_repo) != trusted_sha:
         raise ConvergeError("Trusted checkout HEAD differs from the external immutable pin")
     clean(trusted_repo)
+    custom = load_controller_profile(controller_profile, controller_profile_sha, node)
     files = [Path(__file__).resolve(), ROOT / "tools/board.py", ROOT / "tools/board_support.py",
              ROOT / "factory/supervisor/process_guard.py",
-             *(trusted_repo / name for name in ("controller/merge.mjs", "controller/policy.ts", "controller/acceptance-policy.mjs", "scripts/gate.mjs"))]
+             *([] if custom else (trusted_repo / name for name in ("controller/merge.mjs", "controller/policy.ts", "controller/acceptance-policy.mjs", "scripts/gate.mjs")))]
     sources = {}
     for file in files:
         if file.is_symlink() or not file.is_file():
             raise ConvergeError("Trusted source must be a regular file")
         sources[str(file)] = digest(file.read_bytes())
-    return {"repo": str(repo), "target": str(target), "trusted_repo": str(trusted_repo),
-            "trusted_sha": trusted_sha, "node": str(node), "sources": sources}
+    binding = {"repo": str(repo), "target": str(target), "trusted_repo": str(trusted_repo),
+               "trusted_sha": trusted_sha, "node": str(node), "sources": sources}
+    if custom:
+        binding["controller_profile"] = custom
+    return binding
 
 
 def recovery(board, rows, ticket, journal, binding, repo, target):
@@ -323,14 +400,14 @@ def recovery(board, rows, ticket, journal, binding, repo, target):
         if log.is_symlink() or not log.is_file():
             raise ConvergeError("Controller log must be a regular file")
         raw = log.read_bytes()
-        expected_argv = [binding["node"], str(Path(binding["trusted_repo"]) / "controller/merge.mjs"), "--repo", str(target), "--candidate", candidate["candidate"], "--trusted", binding["trusted_sha"]]
+        expected_argv = controller_argv(binding, candidate["candidate"], target)
         if (passed["binding"] != binding or passed["candidate"] != candidate["candidate"]
                 or passed["candidate_tree"] != git(repo, "rev-parse", candidate["candidate"] + "^{tree}")
                 or passed["log_sha256"] != digest(raw) or passed["returncode"] != 0
                 or passed["target_before"] != candidate["base"] or passed["target_after"] != candidate["candidate"]
                 or passed["epoch"] != candidate["epoch"] or passed["argv"] != expected_argv):
             raise ConvergeError("Controller recovery receipt is not bound to current source/candidate/log")
-        gate_summary(raw, candidate["candidate"], binding["trusted_sha"])
+        gate_summary(raw, candidate["candidate"], binding["trusted_sha"], controller_checks(binding))
         if complete.exists():
             done = read_record(complete)
             if (row["status"] != "MERGED" or row["merged_commit"] != candidate["candidate"]
@@ -360,7 +437,7 @@ def recovery(board, rows, ticket, journal, binding, repo, target):
 
 
 def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tickets,
-             node="/usr/bin/node", execute=False, controller_runner=None):
+             node="/usr/bin/node", execute=False, controller_runner=None, controller_profile=None, controller_profile_sha=None):
     repo, board_dir, target, trusted_repo, journal, node = (Path(value).resolve() for value in (repo, board_dir, target, trusted_repo, journal, node))
     if not SHA.fullmatch(trusted_sha or "") or os.environ.get("ARGO_CONTROLLER_TRUSTED_SHA") != trusted_sha:
         raise ConvergeError("Require an externally pinned ARGO_CONTROLLER_TRUSTED_SHA matching --trusted-sha")
@@ -380,8 +457,9 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
     target_ref = git(target, "rev-parse", "--symbolic-full-name", "HEAD")
     if stage_ref != "HEAD" and stage_ref == target_ref:
         raise ConvergeError("Staging and target must not share the same branch ref")
-    git(repo, "cat-file", "-e", trusted_sha + "^{commit}")
-    binding = source_binding(repo, target, trusted_repo, trusted_sha, node)
+    if controller_profile is None and controller_profile_sha is None:
+        git(repo, "cat-file", "-e", trusted_sha + "^{commit}")
+    binding = source_binding(repo, target, trusted_repo, trusted_sha, node, controller_profile, controller_profile_sha)
     rows = read_rows(board_dir)
     if any(ticket not in rows for ticket in tickets):
         raise ConvergeError("Unknown native ticket")
@@ -482,15 +560,17 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                 clean(repo); clean(target)
                 if head(repo) != before or head(target) != before:
                     raise ConvergeError("Target changed before controller execution")
-                if source_binding(repo, target, trusted_repo, trusted_sha, node) != binding:
+                if source_binding(repo, target, trusted_repo, trusted_sha, node, controller_profile, controller_profile_sha) != binding:
                     raise ConvergeError("Trusted source changed before controller execution")
                 candidate_info = {"candidate": candidate, "base": before, "epoch": row["epoch"], "tree": git(repo, "rev-parse", candidate + "^{tree}")}
                 record(attempt / "candidate.json", candidate_info)
-                argv = [str(node), str(trusted_repo / "controller/merge.mjs"), "--repo", str(target), "--candidate", candidate, "--trusted", trusted_sha]
+                argv = controller_argv(binding, candidate, target)
                 # The selected Node distribution owns its matching npm and
                 # subprocess Node. Keep the remainder of PATH deterministic.
                 env = {**clean_env(), "PATH": f"{node.parent}:/usr/bin:/bin",
                        "ARGO_CONTROLLER_TRUSTED_SHA": trusted_sha}
+                if controller_profile is not None:
+                    env["ARGO_CONTROLLER_PROFILE_SHA"] = controller_profile_sha
                 if os.environ.get("ARGO_NPM_CACHE"):
                     env["ARGO_NPM_CACHE"] = str(Path(os.environ["ARGO_NPM_CACHE"]).resolve())
                 runner = controller_runner or globals()["controller_runner"]
@@ -508,7 +588,9 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                 record(attempt / "controller-result.json", evidence)
                 if result["returncode"] != 0:
                     raise ConvergeError("Application controller refused the candidate")
-                summary = gate_summary(raw, candidate, trusted_sha)
+                if controller_profile is not None and source_binding(repo, target, trusted_repo, trusted_sha, node, controller_profile, controller_profile_sha) != binding:
+                    raise ConvergeError("Controller source changed during execution")
+                summary = gate_summary(raw, candidate, trusted_sha, controller_checks(binding))
                 clean(target)
                 if head(target) != candidate or head(repo) != before:
                     raise ConvergeError("Controller outcome does not match exact target/staging heads")
@@ -550,6 +632,8 @@ def main(argv=None):
     for name in ("repo", "board-dir", "target", "trusted-repo", "trusted-sha", "journal"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--node", default="/usr/bin/node")
+    parser.add_argument("--controller-profile")
+    parser.add_argument("--controller-profile-sha")
     parser.add_argument("--ticket", action="append", dest="tickets", required=True)
     parser.add_argument("--execute", action="store_true", help="Without this flag, inspect only")
     args = vars(parser.parse_args(argv))
