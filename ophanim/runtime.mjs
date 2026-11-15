@@ -78,7 +78,7 @@ export async function rollbackRelease({stateDir,toRelease,governance,fault}){
   return activateRelease({stateDir,release,governance,kind:'rollback',fault});
 }
 
-export async function runRuntime({stateDir,obligations=[],planning=null,workers=[],slots=1,governance,effectAdapter,onEvent=()=>{},fault=()=>{},maxDispatches=100,signal}={}){
+export async function runRuntime({stateDir,obligations=[],planning=null,workers=[],slots=1,governance,effectAdapter,onEvent=()=>{},fault=()=>{},maxDispatches=100,signal,efficiencyContext=null}={}){
   if(typeof stateDir!=='string'||!stateDir||!Number.isInteger(slots)||slots<1||slots>8||!Number.isInteger(maxDispatches)||maxDispatches<1||maxDispatches>10000)fail('Bounded runtime configuration required');
   if(typeof governance?.verifyCandidate!=='function')fail('TELOS governance callback required');
   if(!Array.isArray(obligations)||obligations.length>1000||!Array.isArray(workers)||workers.length<1||workers.length>32)fail('Bounded obligation and worker sets required');
@@ -90,7 +90,12 @@ export async function runRuntime({stateDir,obligations=[],planning=null,workers=
     const before={accepted:Object.values(state.obligations).filter(row=>row.status==='accepted').length,
       effects:Object.values(state.effects).filter(effect=>effect.status==='confirmed').length,
       releases:state.releaseHistory.length};
-    const emit=async(type,details={})=>{await ctx.save(state,{type,...details});onEvent(frozen({type,...clone(details)}));};
+    const emit=async(type,details={})=>{
+      const event={type,atMs:Date.now(),...clone(details)};
+      const commit=await ctx.save(state,event);
+      onEvent(frozen(event));
+      return commit;
+    };
     if(state.pendingRelease)await transitionRelease(ctx,governance,fault);
     const approved=state.releases[state.activeRelease];
     if(canonical(registry)!==canonical(approved.workers))fail('Worker registry differs from active release');
@@ -144,7 +149,7 @@ export async function runRuntime({stateDir,obligations=[],planning=null,workers=
       const result=await governance.verifyCandidate({candidate:frozen(clone(row.candidate.candidate)),obligation:frozen(clone(row.spec)),worker:frozen(clone(row.candidate.worker)),evidence:frozen(clone(row.candidate.evidence))});
       if(result?.ok!==true)fail(`Accepted dependency verification refused: ${row.spec.id}`);
     }
-    await emit('runtime.opened',{slots,release:state.activeRelease});
+    await emit('runtime.opened',{slots,release:state.activeRelease,...efficiencyContext?{efficiencyContext:clone(efficiencyContext)}:{}});
     // A new controller owns the runtime lock; prior running attempts cannot
     // still legitimately publish. Their next lease is fenced before dispatch.
     for(const row of Object.values(state.obligations))if(row.status==='running'){
@@ -253,7 +258,7 @@ export async function runRuntime({stateDir,obligations=[],planning=null,workers=
     const changed=accepted.length>before.accepted||Object.values(state.effects).filter(effect=>effect.status==='confirmed').length>before.effects||state.releaseHistory.length>before.releases;
     const convergence=held.length?'blocked':changed?'accepted_change':'no_change';
     const blockers=clone(held);
-    await emit('runtime.settled',{accepted:accepted.length,held:held.length,dispatches,convergence,blockers});
-    return {state:clone(state),accepted,held,effects:clone(state.effects),complete:held.length===0,dispatches,convergence,blockers};
+    const boardCommit=await emit('runtime.settled',{accepted:accepted.length,held:held.length,dispatches,convergence,blockers});
+    return {state:clone(state),boardCommit,accepted,held,effects:clone(state.effects),complete:held.length===0,dispatches,convergence,blockers};
   });
 }

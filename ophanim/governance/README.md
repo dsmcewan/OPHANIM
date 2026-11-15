@@ -30,3 +30,31 @@ The interruption tests reconstruct each durable initialization boundary, includi
 the packet-before-decision boundary, and check preservation of the signed prefix.
 Separate negative cases preserve and reject torn, forged, validly signed but
 conflicting histories, and conflicting review packets.
+
+## Scheduler efficiency authority
+
+`verifyEfficiencyCandidate({candidate, evidenceRoot})` accepts only the closed
+baseline slot change from 1 to 3, for one exact fixture, obligation graph, worker
+artifact, implementation policy, and original accepted result. The separate
+`check-efficiency-artifact.mjs` executable preserves the original checker bytes
+and legacy proof bindings. It verifies retained file hashes, the original signed
+acceptances, all eight controlled replay trials, CAS publications, accepted node
+proofs, exact outputs, and one destination application per effect. Stage p95 and
+worker input byte counts are derived again from retained controller evidence.
+
+Admission requires three alternating pairs plus a recovery trial at each width.
+The worst candidate must improve on the best baseline by at least 10% and 100 ms;
+stage p95 and recovery must stay within the explicit conservative bounds. A
+forecast of twenty matching convergences must exceed the measured trial cost.
+The initial realized net value remains negative by that cost. These are local
+wall-clock measurements with zero model calls, not provider savings or attested
+remote timing. Insufficient benefit returns `no_change` without authority to
+change the scheduler.
+
+Only the guarded controller calls `issueEfficiencyDecision` after admission.
+The signed decision binds the exact policy, scope, baseline release, slot change,
+and evidence. `verifyEfficiencyDecision` normally checks that signed decision,
+the retained signed plan and artifact receipt, exact expected fields, current
+source policy, and unchanged manifest without rerunning the benchmark checks.
+Pass `replayEvidence: true` for full independent retained-evidence replay. Neither
+verification mode runs new business work or directly changes scheduler slots.

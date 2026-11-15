@@ -8,6 +8,7 @@ import {createGovernance, TELOS_COMMIT} from '../governance.mjs';
 import {hash, canonical} from './check-contract.mjs';
 import {createWorkers} from '../fixtures.mjs';
 import {FIXTURE_SOURCE_SHA} from './check-release.mjs';
+import {assessEfficiency,validateEfficiencyPolicy} from './check-efficiency.mjs';
 
 function example() {
   const output = {caseId:'case-1',department:'operations',service:'records',summary:'Find template',requester:'fixture@example.invalid',sourceRevision:'fixture-r1'};
@@ -209,4 +210,28 @@ test('caller agreement cannot authorize arbitrary source, routing change or inje
     const result=await gov.verifyCandidate(request);
     assert.equal(result.ok,false,JSON.stringify(result));
   }
+});
+
+test('scheduler benefit uses worst candidate, best baseline, full trial cost and explicit forecast',()=>{
+  const evidence={baselineMs:[1000,1100,1050],candidateMs:[600,650,700],baselineP95Ms:[300,320,310],candidateP95Ms:[330,335,340],baselineRecoveryMs:1500,candidateRecoveryMs:1300,trialCostMs:5000};
+  const admitted=assessEfficiency(evidence);
+  assert.equal(admitted.eligible,true);
+  assert.equal(admitted.conservativeSavedMs,300);
+  assert.equal(admitted.forecastNetSavedMs,1000);
+  assert.equal(admitted.realizedNetSavedMs,-5000);
+  assert.equal(admitted.forecast,true);
+  assert.equal(admitted.modelCalls,0);
+  for(const change of [{candidateMs:[600,650,950]},{trialCostMs:6000},{candidateP95Ms:[330,335,500]},{candidateRecoveryMs:2500}]){
+    const refused=assessEfficiency({...evidence,...change});
+    assert.equal(refused.eligible,false);assert.equal(refused.convergence,'no_change');assert.ok(refused.blockers.length);
+  }
+});
+
+test('efficiency authority refuses other tuning dimensions and absent retained replay evidence',async t=>{
+  const {gov}=await setup(t);
+  const policy={schema:'ophanim.scheduler-policy/v1',scopeSha:'a'.repeat(64),baselineSlots:1,slots:3,baselineRelease:'baseline',workerArtifactSha:'b'.repeat(64),policySha:'c'.repeat(64),stateSchema:'ophanim.runtime/v1',evidenceSha:'d'.repeat(64),originalResultSha:'e'.repeat(64),maxQualifiedConvergences:20};
+  assert.equal(validateEfficiencyPolicy(policy),policy);
+  for(const change of [{slots:8},{baselineSlots:3},{baselineRelease:'synthetic-v2'},{maxQualifiedConvergences:21},{skipVerification:true}])assert.throws(()=>validateEfficiencyPolicy({...policy,...change}));
+  assert.equal((await gov.verifyEfficiencyCandidate({candidate:policy,evidenceRoot:'/not-a-retained-replay'})).ok,false);
+  assert.equal((await gov.verifyEfficiencyDecision({decision:{},expected:{}})).ok,false);
 });

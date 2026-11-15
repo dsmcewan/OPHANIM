@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {makeFixtures,createPlanning,createSyntheticDestination,canonical,digest,writeJson,outputProjection} from './fixtures.mjs';
 import {loadRuntime} from './runtime.mjs';
 import {openStore} from '../pantheon/src/board/cas.mjs';
+import {verifyEfficiencyRecord} from './efficiency/assessment.mjs';
 
 const WATCHDOG=fileURLToPath(new URL('./watchdog.mjs',import.meta.url));
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
@@ -40,7 +41,7 @@ export async function runQualification({outputDir,onProgress=()=>{}}={}) {
   fs.mkdirSync(outputDir,{recursive:true,mode:0o700});
   if(fs.readdirSync(outputDir).length)throw Error('Qualification requires a new empty output directory');
   const reportFile=path.join(outputDir,'proof.json');
-  const report={schema:'ophanim.qualification/v1',synthetic:true,status:'running',convergence:null,blockers:[],startedAt:new Date().toISOString(),node:process.version,outputDir,reportFile,scenarios:[],checks:[],measurements:{},boundaries:{modelCalls:0,sourceDataRead:0,businessSystemsConnected:0,productionServicesChanged:0,publication:0,performance:'Synthetic worker delays and local TELOS verification; not department throughput or provider-cost evidence',release:'Fixture source/config manifests and worker registries; not production hot deployment'}};
+  const report={schema:'ophanim.qualification/v2',synthetic:true,status:'running',convergence:null,blockers:[],startedAt:new Date().toISOString(),node:process.version,outputDir,reportFile,scenarios:[],checks:[],measurements:{},boundaries:{modelCalls:0,sourceDataRead:0,businessSystemsConnected:0,productionServicesChanged:0,publication:0,performance:'Synthetic worker delays and local TELOS verification; not department throughput or provider-cost evidence',release:'Fixture source/config manifests and worker registries; not production hot deployment'}};
   const save=()=>writeJson(reportFile,report);
   const check=(name,value,details={})=>{
     report.checks.push({name,passed:value===true,...details});save();assert.equal(value,true,name);
@@ -57,6 +58,7 @@ export async function runQualification({outputDir,onProgress=()=>{}}={}) {
     const processResult=await child([WATCHDOG,'--request',guardRequest]);
     const watchdog=fs.existsSync(watchdogFile)?read(watchdogFile):null;
     const result=fs.existsSync(resultFile)?read(resultFile):null;
+    if(result)assert.ok(result.efficiency?.reportFile,`Missing mandatory efficiency assessment for ${name}`);
     report.scenarios.push({name,stateDir:request.stateDir,requestFile,resultFile:result?resultFile:null,watchdogFile:watchdog?watchdogFile:null,process:processResult,durationMs:watchdog?.durationMs??null});save();
     if(!watchdog)throw Error(`Watchdog did not retain report for ${name}: ${processResult.stderr}`);
     if(!allowFailure&&processResult.code!==0)throw Error(`${name} refused: ${watchdog.stderr||processResult.stderr}`);
@@ -168,7 +170,12 @@ export async function runQualification({outputDir,onProgress=()=>{}}={}) {
     verifyComplete('replication',replica.result,replicas,replicaDir);
     check('replicas keep department records separate',replica.result.effects.length===2&&new Set(replica.result.effects.map(effect=>effect.payload.department)).size===2&&new Set(replica.result.effects.map(effect=>effect.key)).size===2);
 
-    report.evidenceFiles=Object.fromEntries(report.scenarios.flatMap(s=>[s.requestFile,s.resultFile,s.watchdogFile]).filter(Boolean).sort().map(file=>[path.relative(outputDir,file),digest(fs.readFileSync(file,'utf8'))]));
+    const files=report.scenarios.flatMap(s=>{
+      const result=s.resultFile?read(s.resultFile):null;
+      const assessments=result?[result.efficiency,result.recoveredEfficiency].filter(Boolean):[];
+      return [s.requestFile,s.resultFile,s.watchdogFile,...assessments.flatMap(record=>[record.reportFile,path.join(path.dirname(record.reportFile),'trace.json')])];
+    });
+    report.evidenceFiles=Object.fromEntries(files.filter(Boolean).sort().map(file=>[path.relative(outputDir,file),digest(fs.readFileSync(file,'utf8'))]));
     report.finalStates=Object.fromEntries([...new Set(report.scenarios.map(s=>s.stateDir))].sort().map(stateDir=>[path.relative(outputDir,stateDir),{stateSha:digest(loadRuntime(stateDir)),outputSha:digest(outputProjection(loadRuntime(stateDir)))}]));
 
     report.status='passed';report.convergence='accepted_change';report.blockers=[];report.finishedAt=new Date().toISOString();report.durationMs=Date.parse(report.finishedAt)-Date.parse(report.startedAt);save();
@@ -185,7 +192,7 @@ export async function runQualification({outputDir,onProgress=()=>{}}={}) {
 export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS_ROOT}={}) {
   outputDir=path.resolve(outputDir??'');
   const report=read(path.join(outputDir,'proof.json'));
-  assert.equal(report.schema,'ophanim.qualification/v1');assert.equal(report.status,'passed');assert.equal(report.convergence,'accepted_change');
+  assert.ok(['ophanim.qualification/v1','ophanim.qualification/v2'].includes(report.schema));assert.equal(report.status,'passed');assert.equal(report.convergence,'accepted_change');
   assert.ok(Array.isArray(report.scenarios)&&report.scenarios.length>=20);
   const inside=relative=>{
     const file=path.resolve(outputDir,relative);
@@ -196,11 +203,31 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
   for(const [relative,expected] of Object.entries(report.evidenceFiles??{})){
     assert.equal(digest(fs.readFileSync(inside(relative),'utf8')),expected,`Evidence bytes changed: ${relative}`);files++;
   }
-  for(const scenario of report.scenarios)for(const field of ['requestFile','resultFile','watchdogFile'])if(scenario[field]){
-    const relative=path.relative(outputDir,scenario[field]);inside(relative);assert.ok(Object.hasOwn(report.evidenceFiles,relative),'Scenario must reference manifested evidence');
+  let efficiencyAssessments=0;
+  const {createGovernance}=await import('./governance.mjs');
+  for(const scenario of report.scenarios){
+    for(const field of ['requestFile','resultFile','watchdogFile'])if(scenario[field]){
+      const relative=path.relative(outputDir,scenario[field]);inside(relative);assert.ok(Object.hasOwn(report.evidenceFiles,relative),'Scenario must reference manifested evidence');
+    }
+    if(scenario.resultFile&&report.schema==='ophanim.qualification/v2'){
+      const output=read(scenario.resultFile);
+      assert.ok(output.efficiency?.reportFile,'A completed run requires an efficiency assessment');
+      for(const record of [output.efficiency,output.recoveredEfficiency].filter(Boolean)){
+        for(const file of [record.reportFile,path.join(path.dirname(record.reportFile),'trace.json')]){
+          const relative=path.relative(outputDir,file);inside(relative);
+          assert.ok(Object.hasOwn(report.evidenceFiles,relative),'Efficiency assessment must reference manifested evidence');
+        }
+        const assessment=verifyEfficiencyRecord({stateDir:scenario.stateDir,record,...record===output.efficiency?{output}:{}});
+        if(assessment.outcome==='promoted'){
+          const authority=await createGovernance({root:scenario.stateDir,fixtureOnly:true,readOnly:true,...telosRoot?{telosRoot}:{}});
+          const decision=await authority.verifyEfficiencyDecision({...assessment.authorization,replayEvidence:true});
+          assert.equal(decision.ok,true,`Efficiency policy authorization refused: ${decision.reason}`);
+        }
+        efficiencyAssessments++;
+      }
+    }
   }
   assert.ok(files>40,'Nonempty detailed evidence manifest required');
-  const {createGovernance}=await import('./governance.mjs');
   let states=0,accepted=0,decisions=0,effects=0;
   for(const [relative,summary] of Object.entries(report.finalStates??{})) {
     const stateDir=inside(relative),state=loadRuntime(stateDir);
@@ -247,5 +274,5 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
     const quiescent=read(report.scenarios.find(s=>s.name===name).resultFile);
     assert.equal(quiescent.convergence,'no_change');assert.equal(quiescent.dispatches,0);assert.equal(quiescent.blockers.length,0);
   }
-  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,accepted,effects,decisions,modelCalls:0,runtimeDispatches:0,deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,limits:'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
+  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,accepted,effects,decisions,efficiencyAssessments,modelCalls:0,runtimeDispatches:0,deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,limits:'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
 }

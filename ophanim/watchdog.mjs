@@ -8,11 +8,13 @@ const CLI=fileURLToPath(new URL('./cli.mjs',import.meta.url));
 
 // The watchdog is a separate process from the runtime. It owns the process
 // group, observes heartbeats and persists the reason for terminating a stall.
-export async function guardWorker({requestFile,reportFile,timeoutMs=30000,stallMs=3000}) {
+export async function guardWorker({requestFile,reportFile,timeoutMs=30000,stallMs=3000,replay=false,replayRoot}) {
   if(!path.isAbsolute(requestFile)||!path.isAbsolute(reportFile)||!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>300000||!Number.isSafeInteger(stallMs)||stallMs<100||stallMs>timeoutMs)throw Error('Bounded watchdog request required');
   const startedAt=Date.now();
   return new Promise((resolve,reject)=>{
-    const child=spawn(process.execPath,[CLI,'worker','--request',requestFile],{detached:true,stdio:['ignore','pipe','pipe','ipc'],env:{...process.env}});
+    const args=replay?[CLI,'replay-worker','--request',requestFile,'--root',replayRoot]:[CLI,'worker','--request',requestFile];
+    const env=replay?{PATH:process.env.PATH,LANG:'C.UTF-8',OPHANIM_TELOS_ROOT:process.env.OPHANIM_TELOS_ROOT}:process.env;
+    const child=spawn(process.execPath,args,{detached:true,stdio:['ignore','pipe','pipe','ipc'],env});
     let lastHeartbeat=Date.now(),heartbeats=0,reason='worker-exited',terminating=false,timer,killTimer,stdout='',stderr='',events=[];
     const stop=why=>{
       if(terminating)return;

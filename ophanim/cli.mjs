@@ -4,6 +4,10 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,canonical,digest,writeJson,outputProjection,intervalSummary} from './fixtures.mjs';
 import {runRuntime,loadRuntime,activateRelease,rollbackRelease} from './runtime.mjs';
+import {readRuntimeSnapshot} from './board.mjs';
+import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
+import {assessConvergence,chooseEfficiencySlots,efficiencyScope} from './efficiency/assessment.mjs';
+import {recoverInterruptedAssessment} from './efficiency/recovery.mjs';
 
 const FIXTURES=fileURLToPath(new URL('./fixtures.mjs',import.meta.url));
 const metadata=workers=>workers.map(({id,version,kinds,scopes})=>({id,version,kinds,scopes})).sort((a,b)=>a.id.localeCompare(b.id));
@@ -12,20 +16,43 @@ function workerArtifact(options,workers) {
 }
 
 export async function executeRequest(request) {
+  return execute(request,false);
+}
+
+async function execute(request,replay) {
   if(!request || !path.isAbsolute(request.stateDir??''))throw Error('Absolute private synthetic stateDir required');
-  const stateDir=request.stateDir;
+  const stateDir=path.resolve(request.stateDir);
   fs.mkdirSync(stateDir,{recursive:true,mode:0o700});
+  if(fs.realpathSync(stateDir)!==stateDir)throw Error('Canonical synthetic state directory required');
+  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay),{dir:path.join(stateDir,'locks'),timeoutMs:60000});
+}
+
+async function runRequest(request,replay) {
+  const stateDir=request.stateDir;
   const intervals=[],startedAt=Date.now();
   const dispatchStarts=new Map(),acceptedLatencies=[];
+  const priorRuntime=loadRuntime(stateDir);
+  const alreadyAccepted=new Set(Object.values(priorRuntime?.obligations??{}).filter(row=>row.status==='accepted').map(row=>row.spec.id));
+  const attempts=new Map(),verifications=[],events=[];
   const verificationCalls={verifyCandidate:0,verifyPlan:0};
   let workerContextBytes=0;
   const onEvent=event=>{
     const attempt=JSON.stringify([event.id,event.attempt]);
-    if(event.type==='work.started')dispatchStarts.set(attempt,performance.now());
+    if(event.type==='work.started'){
+      dispatchStarts.set(attempt,performance.now());
+      attempts.set(attempt,{id:event.id,attempt:event.attempt,startedAt:event.atMs});
+    }
+    if(event.type==='work.accepted')alreadyAccepted.add(event.id);
+    if(['work.persisted','work.failed'].includes(event.type)&&attempts.has(attempt)){
+      const row=attempts.get(attempt);
+      row.endedAt=event.atMs;
+      row.status=event.type==='work.persisted'?'produced':'failed';
+    }
     if(event.type==='work.accepted'&&dispatchStarts.has(attempt)) {
       acceptedLatencies.push(performance.now()-dispatchStarts.get(attempt));
       dispatchStarts.delete(attempt);
     }
+    if(!replay&&events.length<25000)events.push(event);
     if(process.connected)process.send({type:'event',event});
   };
   const heartbeat=setInterval(()=>{if(process.connected)process.send({type:'heartbeat',at:Date.now()});},50);
@@ -35,9 +62,17 @@ export async function executeRequest(request) {
     const telosRoot=request.telosRoot??process.env.OPHANIM_TELOS_ROOT;
     const authority=await createGovernance({root:stateDir,fixtureOnly:true,...telosRoot?{telosRoot}:{}});
     const governance={...authority};
-    for(const method of Object.keys(verificationCalls))governance[method]=(...args)=>{
-      verificationCalls[method]++;
-      return authority[method](...args);
+    governance.verifyPlan=(...args)=>{verificationCalls.verifyPlan++;return authority.verifyPlan(...args);};
+    governance.verifyCandidate=async input=>{
+      verificationCalls.verifyCandidate++;
+      const begin=Date.now(),id=input.obligation.id,purpose=alreadyAccepted.has(id)?'replay':'accept';
+      let result;
+      try{return result=await authority.verifyCandidate(input);}
+      finally{
+        if(!replay&&input.obligation.kind!=='synthetic-release')verifications.push({id,
+          attempt:input.evidence.totalAttempt??input.evidence.attempt,startedAt:begin,endedAt:Date.now(),purpose,
+          candidateSha:input.candidate.sha256,ok:result?.ok===true});
+      }
     };
     const batches=request.batches??[request.fixture??{}];
     const fixtures=batches.map(makeFixtures),planning=createPlanning({batches});
@@ -45,12 +80,26 @@ export async function executeRequest(request) {
     const workers=createWorkers({...workerOptions,onInterval:interval=>{intervals.push(interval);}}).map(worker=>({
       ...worker,
       run:input=>{
-        workerContextBytes+=Buffer.byteLength(canonical(input));
+        const bytes=Buffer.byteLength(canonical(input));
+        workerContextBytes+=bytes;
+        const row=attempts.get(JSON.stringify([input.obligation.id,input.priorAttempts+1]));
+        if(row)Object.assign(row,{inputSha:digest(input.inputs),inputBytes:Buffer.byteLength(canonical(input.inputs)),contextBytes:bytes});
         return worker.run(input);
       },
     }));
     const artifact=workerArtifact(workerOptions,workers);
-    const initialRelease=loadRuntime(stateDir)?.activeRelease??null;
+    const initialRelease=priorRuntime?.activeRelease??null;
+    const baselineSlots=request.slots??1;
+    const replayRequest={batches,maxDispatches:request.maxDispatches??1000,workerOptions,...telosRoot?{telosRoot}:{}};
+    const scope=efficiencyScope({obligations:fixtures.flatMap(f=>f.obligations),planning,
+      workerArtifactSha:digest(artifact),registry:metadata(workers),request:{batches,maxDispatches:replayRequest.maxDispatches,workerOptions},slots:baselineSlots});
+    const recoveredEfficiency=replay?null:await recoverInterruptedAssessment({stateDir,priorRuntime,scope,governance:authority});
+    const efficiencyRoot=path.resolve(request.efficiencyRoot??path.join(stateDir,'efficiency'));
+    const use=replay||request.operation||request.fault||initialRelease&&initialRelease!=='baseline'||!request.efficiencyRoot
+      ?{slots:baselineSlots}:await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,hasRuntime:!!priorRuntime,telosRoot});
+    const slots=use.slots;
+    scope.configuration.slots=slots;
+    const efficiencyContext=replay?null:{scopeSha:scope.scopeSha,configuration:scope.configuration,policy:scope.policy};
     const destination=createSyntheticDestination(path.join(stateDir,'destination'));
     const fault=async(event,payload)=>{
       if(event!==request.fault?.event)return;
@@ -83,10 +132,10 @@ export async function executeRequest(request) {
       writeJson(path.join(stateDir,'driver-request.json'),resumeRequest);
       const prior=loadRuntime(stateDir),active=prior?.pendingRelease?.release??prior?.releases?.[prior.activeRelease];
       if(active&&active.id!=='baseline'&&active.artifactSha!==digest(artifact))throw Error('Fixture worker implementation/config differs from accepted release artifact');
-      result=await runRuntime({stateDir,planning,workers,slots:request.slots??1,governance,effectAdapter:destination,fault,maxDispatches:request.maxDispatches??1000,onEvent});
+      result=await runRuntime({stateDir,planning,workers,slots,governance,effectAdapter:destination,fault,maxDispatches:request.maxDispatches??1000,onEvent,efficiencyContext});
     }
     const convergence=result.convergence??(initialRelease!==result.state.activeRelease?'accepted_change':'no_change');
-    const output={schema:'ophanim.synthetic-run/v1',synthetic:true,operation:request.operation??'run',startedAt,endedAt:Date.now(),durationMs:Date.now()-startedAt,slots:request.slots??1,convergence,blockers:result.blockers??result.held??[],complete:result.complete??null,accepted:result.accepted??[],held:result.held??[],dispatches:result.dispatches??0,activeRelease:result.state.activeRelease,outputs:outputProjection(result.state),effects:destination.list(),destinationInvocations:destination.invocations(),intervals,intervalSummary:intervalSummary(intervals),stateRevision:result.state.revision,limits:{modelCalls:0,servicesStarted:0,businessSystemsConnected:0,syntheticWorkerDelayMs:workerOptions.delayMs}};
+    const output={schema:'ophanim.synthetic-run/v1',synthetic:true,operation:request.operation??'run',startedAt,endedAt:Date.now(),durationMs:Date.now()-startedAt,slots,convergence,blockers:result.blockers??result.held??[],complete:result.complete??null,accepted:result.accepted??[],held:result.held??[],dispatches:result.dispatches??0,activeRelease:result.state.activeRelease,outputs:outputProjection(result.state),effects:destination.list(),destinationInvocations:destination.invocations(),intervals,intervalSummary:intervalSummary(intervals),stateRevision:result.state.revision,limits:{modelCalls:0,servicesStarted:0,businessSystemsConnected:0,syntheticWorkerDelayMs:workerOptions.delayMs}};
     acceptedLatencies.sort((a,b)=>a-b);
     output.measurements={
       acceptedStageSamples:acceptedLatencies.length,
@@ -94,6 +143,10 @@ export async function executeRequest(request) {
       workerContextBytes,
       verificationCalls,
     };
+    if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
+      boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
+      attempts:[...attempts.values()],verifications,events,governance:authority,use});
+    if(recoveredEfficiency)output.recoveredEfficiency=recoveredEfficiency;
     writeJson(request.resultFile??path.join(stateDir,'result.json'),output);
     return output;
   } finally {clearInterval(heartbeat);}
@@ -106,10 +159,20 @@ function options(args) {
 }
 async function main() {
   const command=process.argv[2]??'help',opts=options(process.argv.slice(3));
+  if(command==='replay-worker') {
+    if(!process.connected||!opts.request||!opts.root)throw Error('The watchdog must launch an isolated replay worker');
+    const root=fs.realpathSync(opts.root),file=fs.realpathSync(opts.request);
+    const inside=value=>typeof value==='string'&&path.isAbsolute(value)&&path.resolve(value).startsWith(root+path.sep);
+    if(!inside(file))throw Error('Replay request is outside its evidence directory');
+    const request=JSON.parse(fs.readFileSync(file,'utf8'));
+    if(request.operation||request.efficiencyRoot||!inside(request.stateDir)||!inside(request.resultFile))throw Error('Replay requires disposable synthetic state and output');
+    await execute(request,true);
+    return;
+  }
   if(command==='worker') {
     if(!opts.request)throw Error('worker requires --request');
     const result=await executeRequest(JSON.parse(fs.readFileSync(opts.request,'utf8')));
-    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,complete:result.complete,accepted:result.accepted.length,held:result.held.length,dispatches:result.dispatches})+'\n');return;
+    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,complete:result.complete,accepted:result.accepted.length,held:result.held.length,dispatches:result.dispatches,efficiency:result.efficiency})+'\n');return;
   }
   if(command==='proof'||command==='prove') {
     const {runQualification}=await import('./proof.mjs');
@@ -127,11 +190,11 @@ async function main() {
     const stateDir=path.resolve(opts.state),request=JSON.parse(fs.readFileSync(path.join(stateDir,'driver-request.json'),'utf8'));
     if(request.stateDir!==stateDir)throw Error('Saved synthetic resume identity differs');
     const result=await executeRequest({...request,resultFile:path.join(stateDir,'result.json')});
-    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,complete:result.complete,accepted:result.accepted.length,held:result.held.length,dispatches:result.dispatches,activeRelease:result.activeRelease})+'\n');return;
+    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,complete:result.complete,accepted:result.accepted.length,held:result.held.length,dispatches:result.dispatches,activeRelease:result.activeRelease,efficiency:result.efficiency})+'\n');return;
   }
   if(command==='demo') {
     if(!opts.state)throw Error('demo requires --state /absolute/new-state');
-    const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1)});
+    const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1),...opts['efficiency-root']?{efficiencyRoot:path.resolve(opts['efficiency-root'])}:{}});
     process.stdout.write(JSON.stringify(result,null,2)+'\n');return;
   }
   if(command==='status') {

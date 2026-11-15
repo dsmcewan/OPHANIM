@@ -28,3 +28,13 @@ The proof runs the complete Operations intake flow, injects failures, resumes ch
 Use `node ophanim/cli.mjs resume --state /absolute/path/to/proof/scenario-state` to resume a retained scenario with a saved request. Use `node ophanim/cli.mjs status --state /absolute/path/to/proof/scenario-state` to inspect its obligations and effect state.
 
 The qualification covers deterministic workers, fixture TELOS authority and local queue effects. Live models, shared drives, business destinations and production rollout each require their own qualification.
+
+## Execution efficiency after convergence
+
+Each governed CLI convergence retains an assessment next to the accepted Pantheon commit under the state's `efficiency/convergences/` directory. It records the obligation graph, exact input and policy identities, acceptance evidence, worker and verifier timings, and context bytes. An interrupted assessment recovers from the retained board and distinguishes missing measurements from measured zero activity.
+
+The first optimizer can propose changing a synthetic baseline from one scheduler slot to three. It screens for enough independent work before spending its separate 30-second replay budget. An eligible experiment uses three alternating pairs of clean trials plus a crash and resume at each width. The evaluator compares accepted outputs, destination effects, TELOS checks, recovery, and resource use. Identical scope fingerprints prevent retrying an already recorded experiment. Disposable trials omit recursive optimization.
+
+The TELOS adapter owns the executable acceptance checks and signs eligible scheduler decisions. A proposal must preserve the worker and acceptance policy and meet the minimum latency and recovery criteria. The controller also charges the assessment and verification time against the bounded forecast. A measured gain that cannot repay that cost produces `no_change`. Realized savings and projected savings are recorded separately. These measurements cover local fixture execution, where provider spend and model calls are zero.
+
+Use `demo --state /absolute/new-state --cases 3 --efficiency-root /absolute/efficiency-ledger` to share the experiment and decision history across fresh synthetic states. A signed decision governs only the exact matching scope and up to 20 qualified convergences. `prove` retains assessment evidence and `verify` rechecks its binding to the board. Earlier proof directories remain verifiable through their original proof format and source paths.
