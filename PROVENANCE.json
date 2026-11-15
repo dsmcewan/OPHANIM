@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "argoSourceCommit": "8ff096a78df844327e33c9bb80440a01e693db9a",
+  "pantheonSourceCommit": "7d789eb80a5907afba5e6f09d731b8095cf14bd1",
+  "filteredCommits": {
+    "a218ee3e659cbfaadfa9cacbdfaa5889b3753409": "cc5329d517d29dabc785014b3f61c4ad8f28176d",
+    "ce4da81c377181bfd27a90ca84ed4b4d6cd1f13f": "fdffec0ce5a0502d1067e3245ffcf31b1cbf1e63",
+    "c83a4cfa9aeb8dd808180c337a0caffed1d87549": "eb3533dbb5b0dd86d5c004b62266f6896cb3cb79",
+    "ad30cd9fb45292dd6de15439aa16d80d62cb127a": "c4134970fbd07bce4ed458a8264ec979d3a04baf",
+    "5d2d4c4a92ddaecc6d18e56b14b8b5925d7cee56": "0f595cd96c17462b6531218ee3c2575a17314eb5",
+    "4ab6b898c225d87fc71593d5994c51fa6058a07e": "566b29d9551fbd01eed3a65988fbda00c61b9ef3",
+    "279784eb8ae0703f05fdd8123507e66bf0f70c27": "c614d19472c89fe461e0ba9441b4065e2944e361",
+    "7114655e8e0e6a14d50695135a4a318b31b00870": "6d28c723c428a5a86333ce3cfe1b62b5b3ba6df1",
+    "7d789eb80a5907afba5e6f09d731b8095cf14bd1": "e82ff7d069714c376ef3cf66391d4b039506238c"
+  },
+  "includedPaths": [
+    "pantheon/",
+    "packages/model-client/"
+  ],
+  "excludedPaths": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "pantheon/docs/runs/"
+  ],
+  "retainedInArgo": [
+    "pantheon-seat-core/",
+    "factory/supervisor/converge.py",
+    "factory/supervisor/blackboard-mesh.mjs",
+    "tools/pantheon-mesh.mjs"
+  ],
+  "extraction": "Git fast-export and fast-import, preserving relative paths and history affecting the selected trees."
+}

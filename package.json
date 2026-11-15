@@ -1,0 +1,24 @@
+{
+  "name": "ophanim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "bin": {
+    "ophanim": "./ophanim/cli.mjs"
+  },
+  "scripts": {
+    "test": "npm --prefix packages/model-client test && npm --prefix pantheon test",
+    "test:proof": "node --test ophanim/tests/*.test.mjs"
+  },
+  "workspaces": [
+    "pantheon",
+    "packages/model-client"
+  ],
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.10.1"
+  }
+}

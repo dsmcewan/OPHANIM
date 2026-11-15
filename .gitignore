@@ -1,0 +1,8 @@
+node_modules/
+__pycache__/
+*.pyc
+.ophanim/
+.ophanim-state/
+outputs/
+.env
+.env.*
