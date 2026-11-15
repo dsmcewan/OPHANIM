@@ -20,11 +20,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 ROOT = Path(os.environ.get("ARGO_CONVERGE_SOURCE_ROOT", Path(__file__).resolve().parents[2])).resolve()
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT))
 from board import Board, BoardError, bounded_process, overlaps  # noqa: E402
+from factory.supervisor.process_guard import run_guarded  # noqa: E402
 
 EXPECTED_CHECKS = ("generated-types", "schema", "boundaries", "types", "board-and-dispatch",
                    "research-python", "research-tests", "research-package", "foundation", "model-and-process")
@@ -89,7 +92,7 @@ def head(repo):
     return git(repo, "rev-parse", "HEAD")
 
 
-def read_rows(board_dir):
+def _read_rows_once(board_dir):
     database = board_dir / "board.db"
     if database.is_symlink() or not database.is_file():
         raise ConvergeError("An existing native board database is required")
@@ -122,6 +125,22 @@ def read_rows(board_dir):
                             if k not in ("definition", "policy", "lease_token")})
                 result[item["id"]] = item
             return result
+
+
+def read_rows(board_dir):
+    # Independent builders legitimately mutate the board while we discover work.
+    # Retry only an unstable byte snapshot; every attempt retains the same full
+    # validation and private SQLite read. No controller effect has begun here.
+    for attempt in range(5):
+        try:
+            return _read_rows_once(board_dir)
+        except ConvergeError as error:
+            if str(error) != "Native board changed during the read-only snapshot" or attempt == 4:
+                raise
+        except FileNotFoundError as error:
+            if Path(error.filename) != board_dir / "board.db-wal" or attempt == 4:
+                raise
+        time.sleep(0.005 * (attempt + 1))
 
 
 def write_bytes(file, data):
@@ -168,7 +187,7 @@ def locks(common):
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise ConvergeError("Another convergence supervisor is active") from error
-        yield
+        yield opened[0]
     finally:
         for fd in reversed(opened):
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -198,9 +217,27 @@ def next_claim(rows, row):
         raise ConvergeError("Requested ticket would not be eligible for a fresh native claim")
 
 
-def controller_runner(argv, *, cwd, env, log_path):
-    code, output = bounded_process(argv, Path(cwd), timeout=2400, cap=64 * 1024 * 1024, env=env)
+def controller_runner(argv, *, cwd, env, log_path, lock_fd, record_dir):
+    code, output = run_guarded(argv, cwd=cwd, env=env, lock_fd=lock_fd, record_dir=record_dir)
     return {"returncode": code, "stdout": output, "stderr": b"", "stream_mode": "combined"}
+
+
+def containment_preflight(common):
+    directory = common / "argo-convergence-processes"
+    if not directory.exists():
+        return
+    records = list(directory.iterdir())
+    if directory.is_symlink() or len(records) > 10000:
+        raise ConvergeError("Unsafe or unbounded containment journal")
+    for record_dir in records:
+        if record_dir.is_symlink() or not record_dir.is_dir():
+            raise ConvergeError("Unsafe containment record")
+        started, drained = record_dir / "started.json", record_dir / "drained.json"
+        if not started.is_file() or started.is_symlink() or not drained.is_file() or drained.is_symlink():
+            raise ConvergeError("Repository integration quarantined: controller containment is unknown")
+        first, last = json.loads(started.read_bytes()), json.loads(drained.read_bytes())
+        if (last != {**first, "descendants_reaped": True}):
+            raise ConvergeError("Repository integration quarantined: invalid containment closure")
 
 
 def gate_summary(output, candidate, trusted):
@@ -234,6 +271,7 @@ def source_binding(repo, target, trusted_repo, trusted_sha, node):
         raise ConvergeError("Trusted checkout HEAD differs from the external immutable pin")
     clean(trusted_repo)
     files = [Path(__file__).resolve(), ROOT / "tools/board.py", ROOT / "tools/board_support.py",
+             ROOT / "factory/supervisor/process_guard.py",
              *(trusted_repo / name for name in ("controller/merge.mjs", "controller/policy.ts", "controller/acceptance-policy.mjs", "scripts/gate.mjs"))]
     sources = {}
     for file in files:
@@ -267,6 +305,17 @@ def recovery(board, rows, ticket, journal, binding, repo, target):
                 if prior.get("status") != "uncertain" and row["epoch"] != intent["original"]["epoch"]:
                     continue
                 return {"ticket_id": ticket, **prior, "journal": str(attempt)}
+            # candidate.json is durably written BEFORE the controller is called.
+            # An intent-only directory therefore proves no controller dispatch,
+            # but only for this exact unchanged attempt/base/source identity.
+            original = {key: row[key] for key in ("id", "epoch", "attempt", "base_commit", "commit_sha", "spec_sha256", "owned_paths")}
+            if ({p.name for p in attempt.iterdir()} == {"intent.json"}
+                    and intent["original"] == original and row["status"] in ("VERIFYING", "REVIEW")
+                    and not row.get("merge_intent") and row["base_commit"] == intent["target_before"]
+                    and head(repo) == intent["target_before"] == head(target)):
+                if row.get("gate_run"):
+                    board.recover(ticket)  # Native fenced data-gate recovery only.
+                return {"ticket_id": ticket, "status": "resume_pre_controller", "journal": str(attempt)}
             return {"ticket_id": ticket, "status": "uncertain", "reason": "Prior controller/reconciliation intent lacks a complete receipt", "journal": str(attempt)}
         passed = read_record(success)
         candidate = read_record(attempt / "candidate.json")
@@ -341,9 +390,9 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
     if not execute:
         return {"schema_version": 1, "mode": "dry-run", "ok": True, "target_head": head(target), "staging_head": head(repo),
                 "results": [{"ticket_id": ticket, "status": "dry_run", "native_status": rows[ticket]["status"], "candidate": rows[ticket]["commit_sha"]} for ticket in tickets]}
-    runner = controller_runner or globals()["controller_runner"]
     results = []
-    with locks(common):
+    with locks(common) as integration_fd:
+        containment_preflight(common)
         board = Board(repo, board_dir)
         for ticket in tickets:
             rows = read_rows(board_dir)
@@ -351,7 +400,8 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                 recovered = recovery(board, rows, ticket, journal, binding, repo, target)
             except Exception as error:
                 recovered = {"ticket_id": ticket, "status": "uncertain", "reason": str(error)}
-            if recovered:
+            resume_pre_controller = recovered and recovered.get("status") == "resume_pre_controller"
+            if recovered and not resume_pre_controller:
                 results.append(recovered)
                 if head(repo) != head(target):
                     break
@@ -376,7 +426,12 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
             claim = None
             try:
                 owned_diff(repo, row["base_commit"], row["commit_sha"], row["owned_paths"])
-                record(attempt / "intent.json", {"binding": binding, "original": original, "target_before": before})
+                intended = {"binding": binding, "original": original, "target_before": before}
+                if resume_pre_controller:
+                    if read_record(attempt / "intent.json") != intended:
+                        raise ConvergeError("Pre-controller recovery identity changed")
+                else:
+                    record(attempt / "intent.json", intended)
                 candidate = row["commit_sha"]
                 if row["base_commit"] != before:
                     next_claim(read_rows(board_dir), row)
@@ -438,7 +493,10 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                        "ARGO_CONTROLLER_TRUSTED_SHA": trusted_sha}
                 if os.environ.get("ARGO_NPM_CACHE"):
                     env["ARGO_NPM_CACHE"] = str(Path(os.environ["ARGO_NPM_CACHE"]).resolve())
-                result = runner(argv, cwd=trusted_repo, env=env, log_path=attempt / "controller.log")
+                runner = controller_runner or globals()["controller_runner"]
+                result = runner(argv, cwd=trusted_repo, env=env, log_path=attempt / "controller.log",
+                                **({} if controller_runner else {"lock_fd": integration_fd,
+                                    "record_dir": common / "argo-convergence-processes" / uuid.uuid4().hex}))
                 stdout, stderr = result.get("stdout", b""), result.get("stderr", b"")
                 if not isinstance(stdout, bytes) or not isinstance(stderr, bytes):
                     raise ConvergeError("Controller runner must return raw byte streams")
