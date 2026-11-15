@@ -161,6 +161,14 @@ def record(file, value):
     write_bytes(file, canonical({"payload": value, "sha256": digest(canonical(value))}) + b"\n")
 
 
+def record_once(file, value):
+    if file.exists():
+        if read_record(file) != value:
+            raise ConvergeError("Conflicting immutable recovery record")
+        return
+    record(file, value)
+
+
 def read_record(file):
     if file.is_symlink() or not file.is_file():
         raise ConvergeError(f"Missing regular journal record: {file}")
@@ -264,6 +272,80 @@ def gate_summary(output, candidate, trusted, required_checks=EXPECTED_CHECKS):
     # summary.commit names the controller's temporary staging commit. It is NOT
     # the submitted application SHA; candidate/tree are bound in our outer record.
     return summary
+
+
+def refusal_summary(output, candidate, trusted, native, required_checks):
+    """Only a completed pinned controller may report this negative protocol."""
+    lines = output.decode("utf8", "replace").splitlines()
+    summaries = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict) and value.get("controller") == "deterministic-v1":
+            summaries.append(value)
+    if not any(s.get("merge_ready") is False for s in summaries):
+        return None
+    terminal = f"Refused tested candidate {candidate['candidate']} using trusted policy {trusted}"
+    if len(summaries) != 1 or lines.count(terminal) != 1 or any(line.startswith("Merged tested candidate ") for line in lines):
+        raise ConvergeError("Controller refusal lacks one exact terminal identity")
+    summary = summaries[0]
+    refusal = summary.get("refusal")
+    if (set(summary) != {"controller", "merge_ready", "commit", "refusal", "refusal_sha"}
+            or summary["merge_ready"] is not False or summary["commit"] != candidate["candidate"]
+            or not isinstance(refusal, dict) or set(refusal) != {"schema", "kind", "identity", "check_ids", "evidence_sha", "receipt_sha", "evidence"}
+            or refusal["schema"] != "argo.factory/controller-refusal-v1"
+            or refusal["kind"] not in ("semantic-gate", "independent-review")
+            or summary["refusal_sha"] != digest(canonical(refusal))
+            or refusal["check_ids"] != list(required_checks) or not isinstance(refusal["evidence"], dict)
+            or refusal["evidence_sha"] != digest(canonical(refusal["evidence"]))):
+        raise ConvergeError("Invalid completed controller refusal")
+    identity = refusal.get("identity")
+    bindings = {"ticket_id": native["id"], "epoch": candidate["epoch"], "spec_sha": native["spec_sha256"],
+                "base_oid": candidate["base"], "candidate_oid": candidate["candidate"], "tree_oid": candidate["tree"]}
+    if (not isinstance(identity, dict) or type(identity.get("epoch")) is not int or any(identity.get(k) != v for k, v in bindings.items())
+            or not HASH.fullmatch(identity.get("policy_sha", ""))
+            or refusal["kind"] == "semantic-gate" and refusal["receipt_sha"] is not None
+            or refusal["kind"] == "independent-review" and not HASH.fullmatch(refusal.get("receipt_sha") or "")):
+        raise ConvergeError("Controller refusal differs from exact native candidate")
+    return summary
+
+
+def apply_refusal(board, ticket, attempt, binding, repo, target):
+    refused = read_record(attempt / "controller-refused.json")
+    evidence, native = refused["execution"], refused["native"]
+    candidate = read_record(attempt / "candidate.json")
+    log = attempt / "controller.log"
+    if log.is_symlink() or not log.is_file():
+        raise ConvergeError("Refusal log must remain a regular file")
+    raw = log.read_bytes()
+    if (native["id"] != ticket or native["epoch"] != candidate["epoch"] or native["commit_sha"] != candidate["candidate"]
+            or native["base_commit"] != candidate["base"] or evidence["binding"] != binding or evidence["returncode"] != 0
+            or evidence["argv"] != controller_argv(binding, candidate["candidate"], target)
+            or evidence["candidate"] != candidate["candidate"] or evidence["candidate_tree"] != candidate["tree"]
+            or evidence["epoch"] != candidate["epoch"] or evidence["target_before"] != candidate["base"]
+            or evidence["target_after"] != candidate["base"] or evidence["log_sha256"] != digest(raw)
+            or git(repo, "rev-parse", candidate["candidate"] + "^{tree}") != candidate["tree"]):
+        raise ConvergeError("Refusal recovery evidence differs from pinned execution")
+    summary = refusal_summary(raw, candidate, binding["trusted_sha"], native, controller_checks(binding))
+    if summary is None or summary != refused["summary"]:
+        raise ConvergeError("Refusal evidence is not the exact completed controller result")
+    prior = board.candidate_refusal(ticket, candidate["epoch"])
+    if prior is None:
+        clean(repo); clean(target)
+        if head(repo) != candidate["base"] or head(target) != candidate["base"]:
+            raise ConvergeError("Heads moved before native refusal reconciliation")
+    row = board.refuse_candidate(ticket, epoch=candidate["epoch"], candidate_sha=candidate["candidate"],
+        tree_sha=candidate["tree"], base_commit=candidate["base"], spec_sha256=native["spec_sha256"],
+        refusal_sha256=summary["refusal_sha"], kind=summary["refusal"]["kind"])
+    record_once(attempt / "board-refused.json", {"epoch": candidate["epoch"], "candidate": candidate["candidate"], "refusal_sha256": summary["refusal_sha"]})
+    outcome = {"status": "refused", "candidate": candidate["candidate"], "epoch": candidate["epoch"],
+               "refusal_sha256": summary["refusal_sha"], "kind": summary["refusal"]["kind"]}
+    # Retain an earlier unknown outcome if the process stopped after recording
+    # the controller refusal. This separate proof resolves it without rewriting.
+    record_once(attempt / "refusal-outcome.json", outcome)
+    return {"ticket_id": ticket, **outcome, "journal": str(attempt)}
 
 
 def regular_source(file):
@@ -377,6 +459,13 @@ def recovery(board, rows, ticket, journal, binding, repo, target):
             raise ConvergeError("Journal source/trust/target binding changed")
         complete = attempt / "board-merged.json"
         success = attempt / "controller-passed.json"
+        if (attempt / "controller-refused.json").exists():
+            if success.exists() or complete.exists():
+                raise ConvergeError("Conflicting acceptance and refusal evidence")
+            refused = apply_refusal(board, ticket, attempt, binding, repo, target)
+            if row["epoch"] > refused["epoch"]:
+                continue
+            return refused
         if not success.exists():
             if complete.exists():
                 raise ConvergeError("Completed journal lacks its controller receipt")
@@ -442,7 +531,8 @@ def recovery(board, rows, ticket, journal, binding, repo, target):
 
 
 def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tickets,
-             node="/usr/bin/node", execute=False, controller_runner=None, controller_profile=None, controller_profile_sha=None):
+             node="/usr/bin/node", execute=False, controller_runner=None, controller_profile=None, controller_profile_sha=None,
+             reconcile_only=False):
     repo, board_dir, target, trusted_repo, journal, node = (Path(value).resolve() for value in (repo, board_dir, target, trusted_repo, journal, node))
     if not SHA.fullmatch(trusted_sha or "") or os.environ.get("ARGO_CONTROLLER_TRUSTED_SHA") != trusted_sha:
         raise ConvergeError("Require an externally pinned ARGO_CONTROLLER_TRUSTED_SHA matching --trusted-sha")
@@ -488,6 +578,9 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                 results.append(recovered)
                 if head(repo) != head(target):
                     break
+                continue
+            if reconcile_only:
+                results.append({"ticket_id": ticket, "status": "uncertain", "reason": "No complete durable controller evidence; reconciliation cannot dispatch"})
                 continue
             row = board.get(ticket)
             if row["status"] == "FAILED":
@@ -597,6 +690,17 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                     raise ConvergeError("Application controller refused the candidate")
                 if controller_profile is not None and source_binding(repo, target, trusted_repo, trusted_sha, node, controller_profile, controller_profile_sha) != binding:
                     raise ConvergeError("Controller source changed during execution")
+                refusal = refusal_summary(raw, candidate_info, trusted_sha, row, controller_checks(binding))
+                if refusal is not None:
+                    if source_binding(repo, target, trusted_repo, trusted_sha, node, controller_profile, controller_profile_sha) != binding:
+                        raise ConvergeError("Refusal source changed during execution")
+                    clean(repo); clean(target)
+                    if head(repo) != before or head(target) != before:
+                        raise ConvergeError("Controller refusal cannot release a moved target")
+                    record(attempt / "controller-refused.json", {"execution": evidence, "summary": refusal,
+                        "native": {key: row[key] for key in ("id", "epoch", "base_commit", "commit_sha", "spec_sha256")}})
+                    results.append(apply_refusal(board, ticket, attempt, binding, repo, target))
+                    continue
                 summary = gate_summary(raw, candidate, trusted_sha, controller_checks(binding))
                 clean(target)
                 if head(target) != candidate or head(repo) != before:
@@ -617,7 +721,7 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                         board.fail_claim(ticket, claim["worker_id"], claim["lease_token"], str(error))
                     except BoardError:
                         pass
-                uncertain = head(target) != head(repo) or (attempt / "controller-passed.json").exists()
+                uncertain = head(target) != head(repo) or (attempt / "candidate.json").exists()
                 outcome = {"status": "uncertain" if uncertain else "needs_rework", "reason": str(error)}
                 if (attempt / "intent.json").exists() and not (attempt / "outcome.json").exists():
                     record(attempt / "outcome.json", outcome)
@@ -643,6 +747,7 @@ def main(argv=None):
     parser.add_argument("--controller-profile-sha")
     parser.add_argument("--ticket", action="append", dest="tickets", required=True)
     parser.add_argument("--execute", action="store_true", help="Without this flag, inspect only")
+    parser.add_argument("--reconcile-only", action="store_true", help="Consume existing complete receipts without controller dispatch")
     args = vars(parser.parse_args(argv))
     try:
         result = converge(**args)
