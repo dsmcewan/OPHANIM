@@ -203,7 +203,7 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
   for(const [relative,expected] of Object.entries(report.evidenceFiles??{})){
     assert.equal(digest(fs.readFileSync(inside(relative),'utf8')),expected,`Evidence bytes changed: ${relative}`);files++;
   }
-  let efficiencyAssessments=0;
+  let efficiencyAssessments=0,investigationAssessments=0;
   const {createGovernance}=await import('./governance.mjs');
   for(const scenario of report.scenarios){
     for(const field of ['requestFile','resultFile','watchdogFile'])if(scenario[field]){
@@ -218,6 +218,12 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
           assert.ok(Object.hasOwn(report.evidenceFiles,relative),'Efficiency assessment must reference manifested evidence');
         }
         const assessment=verifyEfficiencyRecord({stateDir:scenario.stateDir,record,...record===output.efficiency?{output}:{}});
+        if(assessment.investigation){
+          assert.equal(assessment.investigation.schema,'ophanim.investigation-receipt/v1',assessment.investigation.detail);
+          assert.equal(assessment.investigation.decision.limits.executionAuthorized,false);
+          assert.equal(assessment.investigation.decision.limits.promotionAuthorized,false);
+          investigationAssessments++;
+        }
         if(assessment.outcome==='promoted'){
           const authority=await createGovernance({root:scenario.stateDir,fixtureOnly:true,readOnly:true,...telosRoot?{telosRoot}:{}});
           const decision=await authority.verifyEfficiencyDecision({...assessment.authorization,replayEvidence:true});
@@ -274,5 +280,5 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
     const quiescent=read(report.scenarios.find(s=>s.name===name).resultFile);
     assert.equal(quiescent.convergence,'no_change');assert.equal(quiescent.dispatches,0);assert.equal(quiescent.blockers.length,0);
   }
-  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,accepted,effects,decisions,efficiencyAssessments,modelCalls:0,runtimeDispatches:0,deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,limits:'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
+  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,accepted,effects,decisions,efficiencyAssessments,investigationAssessments,modelCalls:0,runtimeDispatches:0,deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,limits:'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
 }

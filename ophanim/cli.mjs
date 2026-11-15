@@ -161,6 +161,18 @@ function options(args) {
   for(let i=0;i<args.length;i+=2){if(!args[i]?.startsWith('--')||args[i+1]===undefined)throw Error('Flags require values');out[args[i].slice(2)]=args[i+1];}
   return out;
 }
+function writeNewReport(file,value) {
+  fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+  const temporary=fs.mkdtempSync(path.join(path.dirname(file),'.ophanim-report-'));
+  const prepared=path.join(temporary,'receipt.json');
+  try {
+    writeJson(prepared,value);
+    fs.linkSync(prepared,file);
+  } finally {
+    if(fs.existsSync(prepared))fs.unlinkSync(prepared);
+    fs.rmdirSync(temporary);
+  }
+}
 async function main() {
   const command=process.argv[2]??'help',opts=options(process.argv.slice(3));
   if(command==='replay-worker') {
@@ -198,8 +210,15 @@ async function main() {
   }
   if(command==='demo') {
     if(!opts.state)throw Error('demo requires --state /absolute/new-state');
+    let investigationEstimate;
+    if(opts['investigation-estimate']){
+      const file=path.resolve(opts['investigation-estimate']),stat=fs.lstatSync(file);
+      if(!stat.isFile()||stat.size>8192||fs.realpathSync(file)!==file)throw Error('Bounded canonical investigation estimate file required');
+      investigationEstimate=JSON.parse(fs.readFileSync(file,'utf8'));
+    }
     const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1),
       ...opts['efficiency-root']?{efficiencyRoot:path.resolve(opts['efficiency-root'])}:{},
+      ...investigationEstimate!==undefined?{investigationEstimate}:{},
       ...Object.hasOwn(opts,'expected-convergences')?{expectedQualifiedConvergences:Number(opts['expected-convergences'])}:{}});
     process.stdout.write(JSON.stringify(result,null,2)+'\n');return;
   }
@@ -208,8 +227,35 @@ async function main() {
     const state=loadRuntime(path.resolve(opts.state));
     process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,activeRelease:state.activeRelease,obligations:Object.fromEntries(Object.entries(state.obligations).map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),effects:state.effects}:null,null,2)+'\n');return;
   }
+  if(command==='investigate') {
+    if(opts['historical-report']){
+      const {investigateHistoricalLatency}=await import('./efficiency/investigation/historical.mjs');
+      if(opts.output && fs.existsSync(path.resolve(opts.output)))throw Error('Fresh investigation report path required');
+      const retained=opts['verify-receipt']?JSON.parse(fs.readFileSync(path.resolve(opts['verify-receipt']),'utf8')):null;
+      const report=await investigateHistoricalLatency({reportFile:path.resolve(opts['historical-report']),expectedReportSha:retained?.sourceReportSha,
+        telosRoot:process.env.OPHANIM_TELOS_ROOT});
+      if(retained){
+        if(canonical(report)!==canonical(retained))throw Error('Historical investigation differs from independently reopened evidence');
+        process.stdout.write(JSON.stringify({ok:true,receiptSha:report.receiptSha})+'\n');return;
+      }
+      if(opts.output)writeNewReport(path.resolve(opts.output),report);
+      else process.stdout.write(JSON.stringify(report,null,2)+'\n');
+      return;
+    }
+    if(!opts.state)throw Error('investigate requires --state or --historical-report');
+    const stateDir=path.resolve(opts.state);
+    const output=JSON.parse(fs.readFileSync(path.join(stateDir,'result.json'),'utf8'));
+    const {verifyEfficiencyRecord}=await import('./efficiency/assessment.mjs');
+    const report=verifyEfficiencyRecord({stateDir,record:output.efficiency,output});
+    if(!report.investigation)throw Error('No investigation receipt in this assessment version');
+    const {buildFunctionalModels}=await import('./efficiency/investigation/models.mjs');
+    const trace=JSON.parse(fs.readFileSync(path.join(path.dirname(output.efficiency.reportFile),'trace.json'),'utf8'));
+    if(digest(trace)!==output.efficiency.traceSha)throw Error('Investigation trace changed after verification');
+    const models=buildFunctionalModels({trace,registry:report.contributionRegistry,variables:report.variables});
+    process.stdout.write(JSON.stringify({models,receipt:report.investigation},null,2)+'\n');return;
+  }
   if(command==='fixtures') {process.stdout.write(JSON.stringify(makeFixtures({count:Number(opts.cases??3)}),null,2)+'\n');return;}
   if(command!=='help')throw Error(`Unknown command: ${command}`);
-  process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 1 [--expected-convergences 1]\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs fixtures --cases 3\n');
+  process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 1 [--expected-convergences 1] [--investigation-estimate /absolute/forecast.json]\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs investigate --state /absolute/state\n  node ophanim/cli.mjs investigate --historical-report /absolute/report.json [--output /absolute/new-result.json | --verify-receipt /absolute/result.json]\n  node ophanim/cli.mjs fixtures --cases 3\n');
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{process.stderr.write(error.stack+'\n');process.exitCode=1;});

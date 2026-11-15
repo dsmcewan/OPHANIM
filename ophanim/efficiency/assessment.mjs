@@ -11,12 +11,14 @@ import {assessOptimizationAdmission} from './admission.mjs';
 import {buildContributionRegistry,discoverVariables} from './contributions.mjs';
 import {readRetainedExperiment} from './prior.mjs';
 import {verifyAdmissionTrace} from './trace-binding.mjs';
+import {recordInvestigation,verifyInvestigationReceipt} from './investigation/controller.mjs';
 
 const REPLAY_BUDGET_MS=30000;
 const MAX_QUALIFIED_CONVERGENCES=20;
 const MAX_OBLIGATIONS=18;
 const VERSION='ophanim.efficiency/v1';
-const REPORT_SCHEMA='ophanim.efficiency-assessment/v2';
+const ADMISSION_SCHEMA='ophanim.efficiency-assessment/v2';
+const REPORT_SCHEMA='ophanim.efficiency-assessment/v3';
 const SHAPE=['check-artifact.mjs','check-contract.mjs','check-release.mjs','check-efficiency.mjs','check-efficiency-artifact.mjs'];
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const exists=fs.existsSync;
@@ -108,6 +110,12 @@ function screen({trace,analysis,inputs}) {
     ...Object.hasOwn(inputs,'expectedQualifiedConvergences')?{expectedQualifiedConvergences:inputs.expectedQualifiedConvergences}:{}});
 }
 
+function boundAcceptedTrace(trace,snapshot) {
+  if(trace.original.convergence!=='accepted_change')return false;
+  try{return verifyAdmissionTrace(trace,snapshot).complete;}
+  catch{return false;}
+}
+
 function recordValue(use,output,trace,assessmentCostMs,interrupted) {
   const efficiency=use.promotion.efficiency;
   const resultFile=use.use.replace(/\.json$/,'.result.json');
@@ -149,6 +157,7 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
     scopeSha:applicabilityFingerprint({obligations,configuration:scope.configuration}),
     configuration:scope.configuration,policy:scope.policy,release:verifiedState.releases[verifiedState.activeRelease],authority:governance.identity,
     obligations,accepted:acceptanceEvidence(verifiedState),events,attempts,verifications,
+    investigationEstimateSha:digest(request.investigationEstimate??null),
     window:{startedAt:output.startedAt,endedAt:output.endedAt},
     original:{convergence:output.convergence,slots:output.slots,outputSha:digest(output.outputs),effectSha:digest(effectSummary(output.effects)),
       durationMs:output.durationMs,measurements:output.measurements,modelCalls:output.limits.modelCalls}};
@@ -167,9 +176,22 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
     admission={inputs,decision,binding,cost:{wallMs:performance.now()-started,controllerCpuMicros:cpu.user+cpu.system}};
     return decision;
   };
-  const finish=(fields={})=>{
+  let investigation;
+  const investigate=async()=>{
+    if(investigation)return;
+    try {
+      investigation=await recordInvestigation({root,stateDir,trace,registry:contributionRegistry,variables,
+        workload:request.expectedQualifiedConvergences??1,estimate:request.investigationEstimate??null,
+        traceTrusted:binding?.complete||boundAcceptedTrace(trace,snapshot)});
+    } catch(error) {
+      investigation={schema:'ophanim.investigation-blocked/v1',scopeSha:trace.scopeSha,traceSha,boardCommit,reason:'investigation-evidence-unavailable',
+        detail:String(error.message).slice(0,256)};
+    }
+  };
+  const finish=async(fields={})=>{
+    await investigate();
     const wallMs=Math.max(0,now()-startedAt),cpu=process.cpuUsage(cpuStart);
-    const report={schema:REPORT_SCHEMA,scopeSha:trace.scopeSha,traceSha,analysis,contributionRegistry,variables,admission,outcome:'no_change',...fields,
+    const report={schema:REPORT_SCHEMA,scopeSha:trace.scopeSha,traceSha,analysis,contributionRegistry,variables,admission,investigation,outcome:'no_change',...fields,
       cost:{wallMs,controllerCpuMicros:cpu.user+cpu.system,replayBudgetMs:REPLAY_BUDGET_MS,modelCalls:0,providerSpend:0},
       measuredValue:use?.promotion?recordValue(use,output,trace,wallMs,interrupted):{
         qualifiedConvergences:0,originalOptimizationCostMs:wallMs,measuredNetMs:-wallMs,
@@ -204,6 +226,7 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
     }
     const decision=admit(admissionInputs,gateStarted,gateCpu);
     if(!decision.admitted)return finish({reason:decision.reason});
+    await investigate();
     const evidenceRoot=directory(path.join(reportDir,'experiment'));
     put(marker,{schema:VERSION,traceSha,evidenceRoot,fromSlots:1,toSlots:3});
     const alternative={schema:'ophanim.scheduler-policy/v1',scopeSha:trace.scopeSha,baselineSlots:1,slots:3,baselineRelease:'baseline',
@@ -248,7 +271,7 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
   const expected=path.join(stateDir,'efficiency','convergences',record.boardCommit.replace(':','-'),'assessment.json');
   if(reportFile!==expected||fs.realpathSync(reportFile)!==expected)throw Error('Efficiency report path differs');
   const assessment=read(reportFile),trace=read(path.join(path.dirname(reportFile),'trace.json'));
-  if(![VERSION,REPORT_SCHEMA].includes(assessment.schema)||record.schema&&record.schema!==assessment.schema)throw Error('Efficiency assessment schema differs');
+  if(![VERSION,ADMISSION_SCHEMA,REPORT_SCHEMA].includes(assessment.schema)||record.schema&&record.schema!==assessment.schema)throw Error('Efficiency assessment schema differs');
   const snapshot=readRuntimeSnapshot(stateDir,record.boardCommit);
   if(digest(trace)!==record.traceSha||assessment.traceSha!==record.traceSha||trace.stateSha!==digest(snapshot.state)||
       trace.scopeSha!==record.scopeSha||assessment.scopeSha!==record.scopeSha||assessment.outcome!==record.outcome||
@@ -256,7 +279,7 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
   if(output&&(trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects))||
       trace.original.durationMs!==output.durationMs||trace.original.convergence!==output.convergence||trace.original.slots!==output.slots))throw Error('Efficiency observation differs from the runtime result');
   if(canonical(assessment.analysis)!==canonical(analyzeTrace(trace)))throw Error('Efficiency analysis differs from retained trace');
-  if(assessment.schema===REPORT_SCHEMA){
+  if([ADMISSION_SCHEMA,REPORT_SCHEMA].includes(assessment.schema)){
     const analysis=assessment.analysis;
     const registry=buildContributionRegistry({trace,analysis});
     const variables=discoverVariables({trace,analysis,registry});
@@ -270,6 +293,15 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
         !Number.isInteger(cost.controllerCpuMicros)||cost.controllerCpuMicros<0||
         (!decision.admitted&&(assessment.experiment||assessment.evidenceRoot||assessment.outcome!=='no_change'||assessment.reason!==decision.reason)))
       throw Error('Optimization admission differs from retained trace');
+    if(assessment.schema===REPORT_SCHEMA){
+      const receipt=assessment.investigation;
+      if(receipt?.schema==='ophanim.investigation-blocked/v1'){
+        throw Error('Held investigation evidence does not qualify for independent verification');
+      }else{
+        if(receipt?.workload!==(inputs.expectedQualifiedConvergences??1))throw Error('Investigation workload forecast differs');
+        verifyInvestigationReceipt({receipt,trace,registry,variables,traceTrusted:binding?.complete||boundAcceptedTrace(trace,snapshot)});
+      }
+    }
   }
   if(assessment.experiment?.manifestFile){
     const manifest=path.join(path.dirname(reportFile),'experiment','manifest.json');

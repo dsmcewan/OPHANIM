@@ -129,6 +129,7 @@ function sources() {
     'cli.mjs','runtime.mjs','board.mjs','fixtures.mjs','watchdog.mjs','governance.mjs',
     ...['contract','artifact','release','efficiency'].map(name=>`governance/check-${name}.mjs`),
     ...['analyze','assessment','admission','contributions','prior','trace-binding','replay'].map(name=>`efficiency/${name}.mjs`),
+    ...['controller','models','select'].map(name=>`efficiency/investigation/${name}.mjs`),
   ];
   return Object.fromEntries(files.map(file=>{
     const relative=path.join('ophanim',file);

@@ -46,3 +46,21 @@ To reproduce a retained three-slot result, pass its original manifest path to th
 ```sh
 node ophanim/efficiency/admission-proof.mjs report --output /absolute/new-admission-proof --manifest /absolute/original-state/efficiency/convergences/commit-ID/experiment/manifest.json
 ```
+
+## Investigation selection
+
+After a governed convergence, Ophanim derives versioned models from the contribution registry and accepted trace. The models preserve function contracts, variable ranges, dependencies and uncertainty. Independently checked observations update the matching scope and keep causal hypotheses provisional.
+
+The controller ranks measurable questions by the value of resolving them. It compares competing predictions with available measurement methods and accounts for forecast workload, confidence, cost, rollout, regression and alternatives. The decision receipt keeps the expected information value separate from any forecast performance gain. Missing estimates produce `insufficient_evidence`. Applicable prior decisions suppress duplicate work. A bounded scope journal binds each decision to its Pantheon trace and can recover a committed decision after interruption.
+
+Routine convergence uses retained local evidence and spends zero model calls. The programmatic `planInvestigation` interface accepts scoped findings, measurement capabilities and value estimates from a trusted integration. An optional `refineInvestigation` adapter can supply one bounded text-only model turn when a positive unresolved design tradeoff justifies its cost. The caller supplies the model route and budget. Advice contributes typed hypotheses for deterministic reevaluation.
+
+```sh
+node ophanim/cli.mjs investigate --state /absolute/synthetic-state
+node ophanim/cli.mjs investigate --historical-report /absolute/admission-proof.json --output /absolute/new-latency-receipt.json
+node ophanim/cli.mjs investigate --historical-report /absolute/admission-proof.json --verify-receipt /absolute/latency-receipt.json
+```
+
+To supply a local workload forecast, use `demo --expected-convergences N --investigation-estimate /absolute/forecast.json`. The estimate uses schema `ophanim.investigation-estimate/v1` with the exact `scopeSha`, a `basis`, and `estimates` for applicability, confidence, decision-change probability and costs. It can include an `instrumentationCeilingMs` within the existing cap. These are declared planning inputs. The report records their source identity and keeps empirical measurements separate.
+
+Investigation selection produces a proposal with measurement boundaries, independent verification requirements and stopping conditions. Execution and activation require the existing separate authority. The local synthetic controls retain the same acceptance, effects, latency and recovery requirements.
