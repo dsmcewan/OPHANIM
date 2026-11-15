@@ -354,6 +354,11 @@ def source_binding(repo, target, trusted_repo, trusted_sha, node, controller_pro
         sources[str(file)] = digest(file.read_bytes())
     binding = {"repo": str(repo), "target": str(target), "trusted_repo": str(trusted_repo),
                "trusted_sha": trusted_sha, "node": str(node), "sources": sources}
+    host_sha = os.environ.get("ARGO_HOST_PROFILE_SHA")
+    if host_sha is not None:
+        if not HASH.fullmatch(host_sha):
+            raise ConvergeError("Invalid externally pinned host profile digest")
+        binding["host_profile_sha"] = host_sha
     if custom:
         binding["controller_profile"] = custom
     return binding
@@ -571,6 +576,8 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                        "ARGO_CONTROLLER_TRUSTED_SHA": trusted_sha}
                 if controller_profile is not None:
                     env["ARGO_CONTROLLER_PROFILE_SHA"] = controller_profile_sha
+                if "host_profile_sha" in binding:
+                    env["ARGO_HOST_PROFILE_SHA"] = binding["host_profile_sha"]
                 if os.environ.get("ARGO_NPM_CACHE"):
                     env["ARGO_NPM_CACHE"] = str(Path(os.environ["ARGO_NPM_CACHE"]).resolve())
                 runner = controller_runner or globals()["controller_runner"]
