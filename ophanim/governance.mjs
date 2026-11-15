@@ -10,6 +10,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NODE_SIGNER = 'fixture-node-controller';
 const REVIEWERS = ['claude', 'agy', 'codex'];
 const DOMAIN = 'ophanim.fixture.release-decision/v1\n';
+const EFFICIENCY_DOMAIN = 'ophanim.fixture.scheduler-decision/v1\n';
 const TELOS_PINS = Object.freeze({
   'build-gate/check-registry.mjs': '3abf5bf0c430987aec6d2ed2f671e8a07444a4d74eaeb36c001aaac0cbdf55b9',
   'build-gate/concerns.mjs': 'f264abdfeca4b93cc282570f7c13aa62cc37a90f5a8903defdb8a2a16224b647',
@@ -30,6 +31,11 @@ const CHECK_PINS = Object.freeze({
   'check-artifact.mjs': 'ddfa339af1d3e446753c3b0c14a574df64a613056c9a63f81791928abd98ec8e',
   'check-release.mjs': 'a22b624442b5cb5c6ab23708a4978cb7f85e291ae3a08c5b9bddac835053dbde',
 });
+const EFFICIENCY_PINS = Object.freeze({
+  'check-efficiency.mjs': 'd9fbc14848bf59ab0eaa911c9e572e04fe50dd7139c1949919a9f2bd7abc2d2b',
+  'check-efficiency-artifact.mjs': '347379745549553339e4507fb0beabb06f59a76a6eda70b5e2520e548fdb054e',
+});
+const checksFor = request => request.obligation.kind==='synthetic-efficiency' ? {legacy:CHECK_PINS,efficiency:EFFICIENCY_PINS} : CHECK_PINS;
 const rawHash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = text => { throw Error(text); };
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -63,11 +69,14 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
   const assertPins = () => {
     for (const [rel, sha] of Object.entries(TELOS_PINS)) if (rawHash(regular(path.join(telosRoot, rel))) !== sha) fail('Pinned TELOS source changed: ' + rel);
     for (const [rel, sha] of Object.entries(CHECK_PINS)) if (rawHash(regular(path.join(HERE, 'governance', rel))) !== sha) fail('Pinned local verifier changed: ' + rel);
+    for (const [rel, sha] of Object.entries(EFFICIENCY_PINS)) if (rawHash(regular(path.join(HERE, 'governance', rel))) !== sha) fail('Pinned scheduler verifier changed: ' + rel);
   };
   assertPins();
   const own = await import(pathToFileURL(path.join(HERE, 'governance/check-contract.mjs')).href);
   const releaseCheck = await import(pathToFileURL(path.join(HERE, 'governance/check-release.mjs')).href);
-  const {canonical, hash, validateRequest} = own;
+  const efficiencyCheck = await import(pathToFileURL(path.join(HERE, 'governance/check-efficiency.mjs')).href);
+  const {canonical, hash, validateRequest:validateLegacyRequest} = own;
+  const validateRequest = request => request.obligation?.kind==='synthetic-efficiency' ? efficiencyCheck.validateEfficiencyRequest(request) : validateLegacyRequest(request);
   const load = rel => import(pathToFileURL(path.join(telosRoot, rel)).href);
   const [planner, merkle, keys, artifact, gate, proposal, recorder, lifecycle, signatures] = await Promise.all([
     load('merkle-dag/planner.mjs'), load('merkle-dag/merkle.mjs'), load('merkle-dag/crypto.mjs'),
@@ -110,11 +119,12 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
 
   function compile(request, requestSha, workspace) {
     const proposalId = 'fixture-' + requestSha;
-    const tasks = [{id: 'result', writes: ['artifacts/output.json'], reads: [], requirements: canonical({requestSha, obligation: request.obligation, fixtureOnly: true}), test: {cmd: node, args: [checker, 'inputs/request.json', 'artifacts/output.json', requestSha]}}];
+    const checks=checksFor(request),executable=request.obligation.kind==='synthetic-efficiency'?path.join(HERE,'governance/check-efficiency-artifact.mjs'):checker;
+    const tasks = [{id: 'result', writes: ['artifacts/output.json'], reads: [], requirements: canonical({requestSha, obligation: request.obligation, fixtureOnly: true}), test: {cmd: node, args: [executable, 'inputs/request.json', 'artifacts/output.json', requestSha]}}];
     const defs = tasks.map(t => ({id: t.id, files: t.writes, requirements: t.requirements, test: t.test, dependencies: []}));
-    const lifecycleBinding = {contract_ref: 'sha256:' + hash(CHECK_PINS), proposal_id: proposalId, predecessor_plan_hash: null, ...planner.assignNodeLineages(defs, {proposalId})};
+    const lifecycleBinding = {contract_ref: 'sha256:' + hash(checks), proposal_id: proposalId, predecessor_plan_hash: null, ...planner.assignNodeLineages(defs, {proposalId})};
     const compiled = planner.compileAndHashPlan({tasks, authorizedSigners: {[proposal.PROPOSAL_KEY_ID]: authority.proposal.publicJwk, [NODE_SIGNER]: authority.node.publicJwk}, repoRoot: workspace, strict: true,
-      lifecycle: lifecycleBinding, obligations: [{obligation_id: 'fixture-required-result', concern_ref: 'sha256:' + hash(request.obligation), required_result: 'pass', check_contract_ref: 'sha256:' + hash(CHECK_PINS), discharge_node_id: 'result'}]});
+      lifecycle: lifecycleBinding, obligations: [{obligation_id: 'fixture-required-result', concern_ref: 'sha256:' + hash(request.obligation), required_result: 'pass', check_contract_ref: 'sha256:' + hash(checks), discharge_node_id: 'result'}]});
     if (compiled.errors) fail('TELOS compilation refused: ' + canonical(compiled.errors));
     return compiled.plan;
   }
@@ -142,7 +152,7 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
     return {proposalHead: proposal.proposalEventHash(history.events.at(-1)), policyResultRef: decision.policy_result_ref};
   }
 
-  function prepareAuthorization(paths, plan, requestSha) {
+  function prepareAuthorization(paths, plan, requestSha, request) {
     const ledgerFile = path.join(paths.telosDir, 'proposal.jsonl');
     if (fs.existsSync(ledgerFile)) {
       const bytes = regular(ledgerFile);
@@ -169,7 +179,7 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
     event({stage: 'negotiation', actor: {seat: 'fixture-planner', role: 'planning'}, provenance: {provider: 'fixture-local', response_id: 'fixture-creation-' + requestSha}});
     event({stage: 'candidate', plan_hash: plan.plan_hash});
     const packets = REVIEWERS.map(seat => {
-      const review = recorder.buildReviewManifest({telosDir: paths.telosDir, planHash: plan.plan_hash, seat, role: 'approver', reviewContract: {schema: 'ophanim.fixture.review/v1', fixtureOnly: true, checkers: CHECK_PINS}, baseDir: paths.workspace, evidenceFiles: [{path: 'inputs/request.json', kind: 'evidence'}, {path: 'inputs/candidate-plan.json', kind: 'candidate-plan'}]});
+      const review = recorder.buildReviewManifest({telosDir: paths.telosDir, planHash: plan.plan_hash, seat, role: 'approver', reviewContract: {schema: 'ophanim.fixture.review/v1', fixtureOnly: true, checkers: checksFor(request)}, baseDir: paths.workspace, evidenceFiles: [{path: 'inputs/request.json', kind: 'evidence'}, {path: 'inputs/candidate-plan.json', kind: 'candidate-plan'}]});
       const provenance = {provider: 'fixture-local', response_id: 'fixture-review-' + seat + '-' + requestSha};
       event({stage: 'review', actor: {seat, role: 'approver'}, provenance, artifact_refs: [review.manifest_ref], review_input_hash: review.review_input_hash});
       return signatures.signPacket({model: seat, proposal_ref: plan.plan_hash, decision: 'approve', required_edits: [], provenance, fixtureOnly: true}, authority.reviewSecrets[seat]);
@@ -207,7 +217,7 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
     once(path.join(paths.telosDir, 'plans', plan.plan_hash.replace(':', '_') + '.json'), plan);
     once(path.join(paths.telosDir, 'plan.json'), plan);
     once(planFile(plan.plan_hash), entry);
-    prepareAuthorization(paths, plan, requestSha);
+    prepareAuthorization(paths, plan, requestSha, request);
     return {request, requestSha, paths, plan};
   }
 
@@ -238,7 +248,7 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
     // Only the reconstructed, pinned checker can reach this real TELOS verifier.
     const verification = gate.verify(paths.telosDir, {baseDir: paths.workspace});
     if (verification.merge_status !== 'ready') fail('TELOS final verification refused: ' + (verification.reason ?? verification.blockers.join('; ')));
-    return {ok: true, fixtureOnly: true, planRef, verification, authorization, candidateSha: request.candidate.sha256, obligationId: request.obligation.id, obligationSha: hash(request.obligation), evidenceRefs: [planRef, 'sha256:' + entry.requestSha, 'sha256:' + hash(receipt)], paths: {plan: path.join(paths.telosDir, 'plan.json'), ledger: path.join(paths.telosDir, 'ledger.jsonl')}};
+    return {ok: true, fixtureOnly: true, planRef, verification, authorization, candidateSha: request.candidate.sha256, obligationId: request.obligation.id, obligationSha: hash(request.obligation), ...(request.efficiencyEvaluation?{efficiency:request.efficiencyEvaluation}:{}), evidenceRefs: [planRef, 'sha256:' + entry.requestSha, 'sha256:' + hash(receipt)], paths: {plan: path.join(paths.telosDir, 'plan.json'), ledger: path.join(paths.telosDir, 'ledger.jsonl')}};
   }
 
   async function verifyCandidate(input) {
@@ -247,6 +257,11 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
       assertPins();
       const request = normalize(input); validateRequest(request);
       if (request.obligation.kind === 'synthetic-release') request.releaseEvaluation = await releaseCheck.evaluateRelease(request);
+      if (request.obligation.kind === 'synthetic-efficiency') {
+        if (request.obligation.inputs.governanceContractSha !== hash(CHECK_PINS) || request.obligation.inputs.telosRoot !== telosRoot) fail('Scheduler verifier configuration differs');
+        request.efficiencyEvaluation = await efficiencyCheck.evaluateEfficiency({policy:request.candidate.output,...request.obligation.inputs});
+        if (!request.efficiencyEvaluation.eligible) return {ok:false,fixtureOnly:true,convergence:'no_change',reason:request.efficiencyEvaluation.blockers.join('; '),efficiency:request.efficiencyEvaluation,evidenceRefs:[]};
+      }
       for (const dependency of request.evidence.dependencyVersions) {
         const accepted = json(acceptedFile(dependency.id));
         const proof = verifyOne(accepted.planRef);
@@ -324,5 +339,62 @@ export async function createGovernance({root, telosRoot = '/home/colchis/Project
       return {ok: true, fixtureOnly: true, decisionId: decision.decisionId, planRef: decision.body.planRef, kind: decision.body.kind};
     } catch (error) { return {ok: false, fixtureOnly: true, reason: error.message}; }
   }
-  return Object.freeze({verifyCandidate, verifyPlan, authorizePlan, issueActivationDecision, verifyActivationDecision, identity: Object.freeze({fixtureOnly: true, telosCommit, authoritySha, stateRoot: state})});
+  async function verifyEfficiencyCandidate({candidate,evidenceRoot} = {}) {
+    try {
+      efficiencyCheck.validateEfficiencyPolicy(candidate);
+      const id='efficiency:'+hash(candidate);
+      return await verifyCandidate({
+        candidate:{id:id+':1',sha256:hash(candidate),output:candidate,checks:[]},
+        obligation:{id,kind:'synthetic-efficiency',scope:'fixture-scheduler',inputs:{evidenceRoot,telosRoot,governanceContractSha:hash(CHECK_PINS)},dependsOn:[],outputKey:id,expected:candidate,maxAttempts:1},
+        worker:{id:'fixture-scheduler-proposer',version:'1',kinds:['synthetic-efficiency'],scopes:['fixture-scheduler']},
+        evidence:{attempt:1,dependencyVersions:[],stateSchema:'ophanim.runtime/v1'},
+      });
+    } catch(error) {return {ok:false,fixtureOnly:true,convergence:'blocked',reason:error.message,evidenceRefs:[]};}
+  }
+  function retainedEfficiencyProof(planRef) {
+    const entry=json(planFile(planRef));
+    if(!hex(entry.requestSha)||entry.planRef!==planRef||entry.authoritySha!==authoritySha||entry.telosCommit!==telosCommit)fail('Scheduler proof identity differs');
+    const paths=pathsFor(entry.requestSha),bytes=regular(path.join(paths.workspace,'inputs/request.json'));
+    if(rawHash(bytes)!==entry.requestSha)fail('Scheduler signed request changed');
+    const request=JSON.parse(bytes);efficiencyCheck.validateEfficiencyRequest(request);
+    if(canonical(json(obligationFile(request.obligation.id)))!==canonical(request.obligation))fail('Scheduler obligation changed');
+    const expected=compile(request,entry.requestSha,paths.workspace);
+    if(expected.plan_hash!==planRef||canonical(merkle.readPlan(paths.telosDir))!==canonical(expected)||canonical(json(path.join(paths.workspace,'inputs/candidate-plan.json')))!==canonical(expected)||canonical(json(path.join(paths.telosDir,'plans',planRef.replace(':','_')+'.json')))!==canonical(expected))fail('Scheduler signed executable contract changed');
+    checkAuthorization(paths.telosDir,planRef);
+    const lines=regular(path.join(paths.telosDir,'ledger.jsonl')).toString().trim().split('\n');
+    if(lines.length!==1)fail('Exactly one scheduler receipt required');
+    const receipt=JSON.parse(lines[0]),tree=artifact.computeDiskTreeHash(expected.nodes[0].files,paths.workspace);
+    if(receipt.task_id!=='result'||receipt.key_id!==NODE_SIGNER||receipt.effective_hash!==expected.nodes[0].effective_hash||receipt.artifact_tree_hash!==tree.tree_hash||!keys.verifyTransaction(receipt,authority.node.publicJwk)||canonical(json(path.join(paths.workspace,'artifacts/output.json')))!==canonical(request.candidate.output))fail('Scheduler signed artifact receipt changed');
+    const manifestBytes=regular(path.join(request.obligation.inputs.evidenceRoot,'manifest.json'),8*1024*1024);
+    if(rawHash(manifestBytes)!==request.candidate.output.evidenceSha)fail('Scheduler replay manifest changed');
+    efficiencyCheck.verifyEfficiencySources(JSON.parse(manifestBytes).policy);
+    return {efficiency:request.efficiencyEvaluation,evidenceRefs:[planRef,'sha256:'+entry.requestSha,'sha256:'+hash(receipt)]};
+  }
+  function efficiencyDecisionBody(input,{replayEvidence=true}={}) {
+    const proof=replayEvidence?verifyOne(input.planRef):retainedEfficiencyProof(input.planRef),entry=json(planFile(input.planRef));
+    const request=json(path.join(pathsFor(entry.requestSha).workspace,'inputs/request.json'));
+    if(request.obligation.kind!=='synthetic-efficiency'||!proof.efficiency?.eligible||input.fromSlots!==1||input.toSlots!==3||input.release!=='baseline'||input.scopeSha!==request.candidate.output.scopeSha||canonical(input.policy)!==canonical(request.candidate.output)||!Array.isArray(input.evidenceRefs)||canonical(input.evidenceRefs)!==canonical(proof.evidenceRefs))fail('Scheduler decision differs from independently admitted policy');
+    return {schema:'ophanim.fixture.scheduler-decision/v1',fixtureOnly:true,authoritySha,telosCommit,planRef:input.planRef,policy:request.candidate.output,scopeSha:input.scopeSha,fromSlots:1,toSlots:3,release:'baseline',evidenceRefs:proof.evidenceRefs,evaluationSha:hash(proof.efficiency)};
+  }
+  async function issueEfficiencyDecision(input) {
+    if(readOnly)fail('Read-only governance cannot issue scheduler decisions');
+    assertPins();
+    const body=efficiencyDecisionBody(input),decisionId='sha256:'+hash(body);
+    const signature=crypto.sign(null,Buffer.from(EFFICIENCY_DOMAIN+canonical(body)),authority.operator.privatePem).toString('base64');
+    const decision={body,decisionId,signature};
+    once(path.join(state,'decisions',refHex(decisionId)+'.json'),decision);
+    return decision;
+  }
+  async function verifyEfficiencyDecision({decision,expected,replayEvidence=false}={}) {
+    try {
+      assertPins();
+      if(!decision||!expected||decision.decisionId!=='sha256:'+hash(decision.body)||canonical(json(path.join(state,'decisions',refHex(decision.decisionId)+'.json')))!==canonical(decision))fail('Scheduler decision identity differs');
+      const signature=Buffer.from(decision.signature,'base64');
+      if(signature.length!==64||signature.toString('base64')!==decision.signature||!crypto.verify(null,Buffer.from(EFFICIENCY_DOMAIN+canonical(decision.body)),crypto.createPublicKey({key:authority.operator.publicJwk,format:'jwk'}),signature))fail('Scheduler operator signature refused');
+      if(canonical(decision.body)!==canonical(efficiencyDecisionBody(decision.body,{replayEvidence})))fail('Scheduler decision reconstruction differs');
+      for(const field of ['planRef','policy','scopeSha','fromSlots','toSlots','release','evidenceRefs'])if(canonical(expected[field])!==canonical(decision.body[field]))fail('Expected scheduler decision differs: '+field);
+      return {ok:true,fixtureOnly:true,decisionId:decision.decisionId,planRef:decision.body.planRef,policy:decision.body.policy,replayEvidence};
+    } catch(error) {return {ok:false,fixtureOnly:true,reason:error.message};}
+  }
+  return Object.freeze({verifyCandidate, verifyPlan, authorizePlan, issueActivationDecision, verifyActivationDecision, verifyEfficiencyCandidate, issueEfficiencyDecision, verifyEfficiencyDecision, identity: Object.freeze({fixtureOnly: true, telosCommit, authoritySha, governanceContractSha:hash(CHECK_PINS), stateRoot: state})});
 }

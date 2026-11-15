@@ -46,6 +46,13 @@ export function loadRuntime(stateDir){
   const store=openStore(root,{readOnly:true}),refs=openRefs(root,{store,readOnly:true});
   return decode(store,refs.resolve(REF));
 }
+export function readRuntimeSnapshot(stateDir, commit) {
+  const root=boardPath(stateDir);
+  const store=openStore(root,{readOnly:true});
+  const refs=openRefs(root,{store,readOnly:true});
+  const head=commit??refs.resolve(REF);
+  return {commit:head,state:decode(store,head)};
+}
 export async function withRuntimeBoard(stateDir,fn){
   return withSeatLock('ophanim-controller',async()=>{
     const board=openBoard(boardPath(stateDir));
