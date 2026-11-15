@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded host-side convergence over the unchanged Board and application controller.
+"""Bounded host-side convergence over native Board claims and the application controller.
 
 Mesh owns parallel builds. This consumer only rebases and integrates an explicit
 finite ticket list. The controller merges the target; Board.merge separately
@@ -155,10 +155,10 @@ def read_record(file):
 def locks(common):
     opened = []
     try:
-        # The second lock excludes the supported Mesh dispatcher while a native
-        # first-eligible claim is preflighted. Direct legacy callers still require
-        # the documented single trusted operator ownership domain.
-        for name in ("argo-convergence-supervisor.lock", "argo-mesh-supervisor.lock"):
+        # Serialize integration for the shared staging/target Git repository.
+        # Native atomic targeted claims fence paths, so builders may keep working
+        # under their separate Mesh supervisor lock throughout the full gate.
+        for name in ("argo-convergence-supervisor.lock",):
             fd = os.open(common / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
             opened.append(fd)
             info = os.fstat(fd)
@@ -167,7 +167,7 @@ def locks(common):
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
-                raise ConvergeError("Another convergence or Mesh supervisor is active") from error
+                raise ConvergeError("Another convergence supervisor is active") from error
         yield
     finally:
         for fd in reversed(opened):
@@ -186,25 +186,16 @@ def owned_diff(repo, base, candidate, owned):
 
 
 def next_claim(rows, row):
-    if any(item["status"] == "CLAIMED" for item in rows.values()):
-        raise ConvergeError("Convergence waits for all native worker claims to settle")
+    # This avoids needless rebases; Board.claim(ticket_id=...) remains the atomic
+    # authority if another builder races this advisory snapshot.
     if row["attempt"] >= row["max_attempts"]:
         raise ConvergeError("Stale ticket has exhausted native attempts")
     simulated = {key: dict(value) for key, value in rows.items()}
     simulated[row["id"]]["status"] = "READY"
     held = [item["owned_paths"] for item in simulated.values() if item["status"] in Board.LOCKED_STATES]
-    ready = sorted((item for item in simulated.values() if item["status"] == "READY"), key=lambda item: (item["wave"], item["id"]))
-    for item in ready:
-        if item["seat_model"] != row["seat_model"]:
-            continue
-        if any(overlaps(a, b) for a in item["owned_paths"] for roots in held for b in roots):
-            continue
-        if any(simulated[dependency]["status"] != "MERGED" for dependency in item["depends_on"]):
-            continue
-        if item["id"] != row["id"]:
-            raise ConvergeError(f"Native claim would select {item['id']}, not requested {row['id']}")
-        return
-    raise ConvergeError("Requested ticket would not be eligible for a fresh native claim")
+    if any(overlaps(a, b) for a in row["owned_paths"] for roots in held for b in roots) or any(
+            simulated[dependency]["status"] != "MERGED" for dependency in row["depends_on"]):
+        raise ConvergeError("Requested ticket would not be eligible for a fresh native claim")
 
 
 def controller_runner(argv, *, cwd, env, log_path):
@@ -353,8 +344,6 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
     runner = controller_runner or globals()["controller_runner"]
     results = []
     with locks(common):
-        if any(row["status"] == "CLAIMED" for row in read_rows(board_dir).values()):
-            raise ConvergeError("Convergence waits for all native worker claims to settle")
         board = Board(repo, board_dir)
         for ticket in tickets:
             rows = read_rows(board_dir)
@@ -420,9 +409,9 @@ def converge(*, repo, board_dir, target, trusted_repo, trusted_sha, journal, tic
                         raise ConvergeError("Native stale candidate did not return for a fresh attempt")
                     next_claim(read_rows(board_dir), returned)
                     worker = "converge-" + uuid.uuid4().hex[:16]
-                    claim = board.claim(worker, row["seat_model"], 900)
-                    if not claim or claim["id"] != ticket:
-                        raise ConvergeError("Native first-eligible claim changed; unexpected claim requires operator investigation")
+                    claim = board.claim(worker, row["seat_model"], 900, ticket_id=ticket)
+                    if not claim:
+                        raise ConvergeError("Requested native ticket is no longer eligible; retry after its owner settles")
                     worktree = board.prepare_worktree(ticket, worker, claim["lease_token"])
                     git(worktree, "checkout", "--detach", candidate)
                     for file in owned_diff(repo, before, candidate, row["owned_paths"]):
