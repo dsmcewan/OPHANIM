@@ -64,3 +64,22 @@ node ophanim/cli.mjs investigate --historical-report /absolute/admission-proof.j
 To supply a local workload forecast, use `demo --expected-convergences N --investigation-estimate /absolute/forecast.json`. The estimate uses schema `ophanim.investigation-estimate/v1` with the exact `scopeSha`, a `basis`, and `estimates` for applicability, confidence, decision-change probability and costs. It can include an `instrumentationCeilingMs` within the existing cap. These are declared planning inputs. The report records their source identity and keeps empirical measurements separate.
 
 Investigation selection produces a proposal with measurement boundaries, independent verification requirements and stopping conditions. Execution and activation require the existing separate authority. The local synthetic controls retain the same acceptance, effects, latency and recovery requirements.
+
+## Measurement qualification
+
+For a retained callback investigation, the measurement adapter compares the predicted signals against the available measurements. It can recommend monotonic timer scheduling, callback entry, transformation start and completion, and callback return. The resulting durations distinguish timer overshoot from transformation wall time. Aggregate CPU, event-loop statistics, and retained queue and verification spans can provide context. The plan credits measurements that distinguish the competing predictions.
+
+```sh
+measurement=ophanim/efficiency/investigation/measurement.mjs
+node "$measurement" plan --history /absolute/latency-receipt.json --receipt-sha HISTORY_SHA
+node "$measurement" qualify --history /absolute/latency-receipt.json --receipt-sha HISTORY_SHA \
+  --admission-proof /absolute/admission-proof.json --forecast /absolute/forecast.json --state /absolute/private-evidence
+node "$measurement" verify --history /absolute/latency-receipt.json --receipt-sha HISTORY_SHA \
+  --admission-proof /absolute/admission-proof.json --report /absolute/qualification.json --qualification-sha REPORT_SHA
+```
+
+The forecast uses schema `ophanim.measurement-forecast/v1`, the exact `scopeSha`, a `basis`, and `estimatedInvestigationMs` covering signed-source verification and calibration. Its `estimates` carry expected convergences, applicability, confidence, decision-change probability, avoidable decision loss per convergence, rollout, regression and opportunity costs. A forecast can decline any collection. Without a justified forecast, the retained historical investigation reports `insufficient_evidence`.
+
+An explicit qualification invocation runs four counterbalanced matched blocks on one frozen, TELOS-accepted synthetic obligation. Each block compares baseline, delayed timer resumption, increased transformation work, and both controls, with collection on and off. The probe retains monotonic marks, measured overhead and the exact accepted output and effect-proposal identities. It cannot apply destination effects or activate a change. The verifier reopens the actual signed source and recomputes contrasts and uncertainty from raw samples. Experiment identity, completed receipts, and interrupted reservations survive restart.
+
+The calibration establishes what the selected measurements can distinguish under controlled conditions. Historical attribution, workflow-level recovery and naturally occurring interactions require separately applicable evidence. The historical stage p95 requirement still governs scheduler decisions.
