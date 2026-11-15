@@ -21,6 +21,9 @@ export async function executeRequest(request) {
 
 async function execute(request,replay) {
   if(!request || !path.isAbsolute(request.stateDir??''))throw Error('Absolute private synthetic stateDir required');
+  if(Object.hasOwn(request,'expectedQualifiedConvergences')&&
+      (!Number.isInteger(request.expectedQualifiedConvergences)||request.expectedQualifiedConvergences<1||request.expectedQualifiedConvergences>20))
+    throw Error('Expected exact-scope convergences must be an integer from 1 to 20');
   const stateDir=path.resolve(request.stateDir);
   fs.mkdirSync(stateDir,{recursive:true,mode:0o700});
   if(fs.realpathSync(stateDir)!==stateDir)throw Error('Canonical synthetic state directory required');
@@ -135,7 +138,8 @@ async function runRequest(request,replay) {
       result=await runRuntime({stateDir,planning,workers,slots,governance,effectAdapter:destination,fault,maxDispatches:request.maxDispatches??1000,onEvent,efficiencyContext});
     }
     const convergence=result.convergence??(initialRelease!==result.state.activeRelease?'accepted_change':'no_change');
-    const output={schema:'ophanim.synthetic-run/v1',synthetic:true,operation:request.operation??'run',startedAt,endedAt:Date.now(),durationMs:Date.now()-startedAt,slots,convergence,blockers:result.blockers??result.held??[],complete:result.complete??null,accepted:result.accepted??[],held:result.held??[],dispatches:result.dispatches??0,activeRelease:result.state.activeRelease,outputs:outputProjection(result.state),effects:destination.list(),destinationInvocations:destination.invocations(),intervals,intervalSummary:intervalSummary(intervals),stateRevision:result.state.revision,limits:{modelCalls:0,servicesStarted:0,businessSystemsConnected:0,syntheticWorkerDelayMs:workerOptions.delayMs}};
+    const endedAt=Date.now();
+    const output={schema:'ophanim.synthetic-run/v1',synthetic:true,operation:request.operation??'run',startedAt,endedAt,durationMs:endedAt-startedAt,slots,convergence,blockers:result.blockers??result.held??[],complete:result.complete??null,accepted:result.accepted??[],held:result.held??[],dispatches:result.dispatches??0,activeRelease:result.state.activeRelease,outputs:outputProjection(result.state),effects:destination.list(),destinationInvocations:destination.invocations(),intervals,intervalSummary:intervalSummary(intervals),stateRevision:result.state.revision,limits:{modelCalls:0,servicesStarted:0,businessSystemsConnected:0,syntheticWorkerDelayMs:workerOptions.delayMs}};
     acceptedLatencies.sort((a,b)=>a-b);
     output.measurements={
       acceptedStageSamples:acceptedLatencies.length,
@@ -145,7 +149,7 @@ async function runRequest(request,replay) {
     };
     if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
       boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
-      attempts:[...attempts.values()],verifications,events,governance:authority,use});
+      attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency});
     if(recoveredEfficiency)output.recoveredEfficiency=recoveredEfficiency;
     writeJson(request.resultFile??path.join(stateDir,'result.json'),output);
     return output;
@@ -194,7 +198,9 @@ async function main() {
   }
   if(command==='demo') {
     if(!opts.state)throw Error('demo requires --state /absolute/new-state');
-    const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1),...opts['efficiency-root']?{efficiencyRoot:path.resolve(opts['efficiency-root'])}:{}});
+    const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1),
+      ...opts['efficiency-root']?{efficiencyRoot:path.resolve(opts['efficiency-root'])}:{},
+      ...Object.hasOwn(opts,'expected-convergences')?{expectedQualifiedConvergences:Number(opts['expected-convergences'])}:{}});
     process.stdout.write(JSON.stringify(result,null,2)+'\n');return;
   }
   if(command==='status') {
@@ -204,6 +210,6 @@ async function main() {
   }
   if(command==='fixtures') {process.stdout.write(JSON.stringify(makeFixtures({count:Number(opts.cases??3)}),null,2)+'\n');return;}
   if(command!=='help')throw Error(`Unknown command: ${command}`);
-  process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 3\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs fixtures --cases 3\n');
+  process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 1 [--expected-convergences 1]\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs fixtures --cases 3\n');
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{process.stderr.write(error.stack+'\n');process.exitCode=1;});

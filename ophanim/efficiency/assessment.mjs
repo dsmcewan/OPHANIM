@@ -7,11 +7,16 @@ import {withSeatLock} from '../../pantheon/src/seat/lock.mjs';
 import {canonical,digest,readRuntimeSnapshot,STATE_SCHEMA} from '../board.mjs';
 import {writeJson} from '../fixtures.mjs';
 import {analyzeTrace,applicabilityFingerprint} from './analyze.mjs';
+import {assessOptimizationAdmission} from './admission.mjs';
+import {buildContributionRegistry,discoverVariables} from './contributions.mjs';
+import {readRetainedExperiment} from './prior.mjs';
+import {verifyAdmissionTrace} from './trace-binding.mjs';
 
 const REPLAY_BUDGET_MS=30000;
 const MAX_QUALIFIED_CONVERGENCES=20;
 const MAX_OBLIGATIONS=18;
 const VERSION='ophanim.efficiency/v1';
+const REPORT_SCHEMA='ophanim.efficiency-assessment/v2';
 const SHAPE=['check-artifact.mjs','check-contract.mjs','check-release.mjs','check-efficiency.mjs','check-efficiency-artifact.mjs'];
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const exists=fs.existsSync;
@@ -84,7 +89,7 @@ export async function chooseEfficiencySlots({root,scope,stateDir,baselineSlots,h
   },{dir:scopeDir,timeoutMs:60000});
 }
 
-function eligible({state,trace,output,scope,request,priorRuntime,analysis}) {
+function ineligible({state,trace,output,scope,request,priorRuntime}) {
   if(output.convergence==='blocked')return 'unsettled-obligations';
   if(output.convergence==='no_change'||!output.dispatches)return 'no-new-dispatch';
   if(state.activeRelease!=='baseline')return 'release-outside-fixture-replay-contract';
@@ -93,29 +98,51 @@ function eligible({state,trace,output,scope,request,priorRuntime,analysis}) {
   if(trace.scopeSha!==scope.scopeSha)return 'scope-differs-from-fresh-request';
   if(trace.obligations.length>MAX_OBLIGATIONS)return 'fixture-replay-size-budget';
   if(trace.obligations.filter(row=>row.dependsOn.length===0).length<2)return 'no-independent-ready-work';
-  // This experiment changes only slot width. A cheap screen uses the observed
-  // worker time outside the critical chain as its opportunity signal.
-  const parallelWorkMs=analysis.scheduling.workerMs-analysis.criticalPath.workMs;
-  if(parallelWorkMs<Math.max(100,output.durationMs*0.1))return 'insufficient-observed-parallel-work';
   return null;
 }
 
-function recordValue(use,output,trace,assessmentCostMs) {
-  const efficiency=use.promotion.efficiency;
-  const resultFile=use.use.replace(/\.json$/,'.result.json');
-  if(output.convergence==='accepted_change'&&!exists(resultFile))put(resultFile,{
-    traceSha:digest(trace),executionMs:output.durationMs,assessmentCostMs,
-    observedSavingMs:efficiency.baselineConservativeMs-output.durationMs-assessmentCostMs,
-  });
-  const realized=fs.readdirSync(path.dirname(use.use)).filter(name=>name.endsWith('.result.json')).map(name=>read(path.join(path.dirname(use.use),name)));
-  return {qualifiedConvergences:realized.length,originalOptimizationCostMs:efficiency.totalAssessmentCostMs,
-    measuredNetMs:realized.reduce((sum,row)=>sum+row.observedSavingMs,-efficiency.totalAssessmentCostMs)};
+function screen({trace,analysis,inputs}) {
+  if (inputs.blocker) return {schema:'ophanim.optimization-admission/v1',admitted:false,outcome:'no_change',
+    reason:inputs.blocker,replays:0,modelCalls:0,policyAuthorization:false};
+  return assessOptimizationAdmission({trace,analysis,priorOutcome:inputs.priorOutcome,
+    ...Object.hasOwn(inputs,'expectedQualifiedConvergences')?{expectedQualifiedConvergences:inputs.expectedQualifiedConvergences}:{}});
 }
 
-export async function assessConvergence({root,stateDir,scope,state,boardCommit,output,request,replayRequest,priorRuntime,attempts,verifications,events,governance,use}) {
+function recordValue(use,output,trace,assessmentCostMs,interrupted) {
+  const efficiency=use.promotion.efficiency;
+  const resultFile=use.use.replace(/\.json$/,'.result.json');
+  const traceSha=digest(trace);
+  if(output.convergence==='accepted_change'&&!exists(resultFile))put(resultFile,{
+    traceSha,executionMs:output.durationMs,assessmentCostMs,
+    observedSavingMs:efficiency.baselineConservativeMs-output.durationMs-assessmentCostMs,
+  });
+  const uses=path.dirname(use.use);
+  const costs=directory(path.join(uses,'assessment-costs'));
+  const costFile=path.join(costs,path.basename(use.use));
+  const debit=exists(costFile)?read(costFile):{additionalAssessmentCostMs:0,unmeasuredAssessments:0};
+  if(interrupted&&debit.lastInterruptedTraceSha!==interrupted.traceSha){
+    debit.lastInterruptedTraceSha=interrupted.traceSha;
+    debit.unmeasuredAssessments++;
+  }
+  if(debit.lastTraceSha!==traceSha){
+    debit.lastTraceSha=traceSha;
+    if(!exists(resultFile)||read(resultFile).traceSha!==traceSha)debit.additionalAssessmentCostMs+=assessmentCostMs;
+  }
+  writeJson(costFile,debit);
+  const realized=fs.readdirSync(uses).filter(name=>name.endsWith('.result.json')).map(name=>read(path.join(uses,name)));
+  const debits=fs.readdirSync(costs).filter(name=>name.endsWith('.json')).map(name=>read(path.join(costs,name)));
+  const additionalAssessmentCostMs=debits.reduce((sum,row)=>sum+row.additionalAssessmentCostMs,0);
+  const unmeasuredAssessments=debits.reduce((sum,row)=>sum+row.unmeasuredAssessments,0);
+  return {qualifiedConvergences:realized.length,originalOptimizationCostMs:efficiency.totalAssessmentCostMs,
+    additionalAssessmentCostMs,unmeasuredAssessments,measuredNetIsUpperBound:unmeasuredAssessments>0,
+    measuredNetMs:realized.reduce((sum,row)=>sum+row.observedSavingMs,-efficiency.totalAssessmentCostMs-additionalAssessmentCostMs)};
+}
+
+export async function assessConvergence({root,stateDir,scope,state,boardCommit,output,request,replayRequest,priorRuntime,attempts,verifications,events,governance,use,interrupted}) {
   const startedAt=now(),cpuStart=process.cpuUsage();
   const reportDir=directory(path.join(stateDir,'efficiency','convergences',boardCommit.replace(':','-')));
-  const verifiedState=readRuntimeSnapshot(stateDir,boardCommit).state;
+  const snapshot=readRuntimeSnapshot(stateDir,boardCommit);
+  const verifiedState=snapshot.state;
   if(!verifiedState||digest(verifiedState)!==digest(state))throw Error('Accepted snapshot differs from the Pantheon board');
   const obligations=acceptedGraph(verifiedState,scope);
   const trace={schema:'ophanim.efficiency.trace/v1',boardCommit,stateSha:digest(verifiedState),
@@ -128,22 +155,55 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
   put(path.join(reportDir,'trace.json'),trace);
   const traceSha=digest(trace);
   const analysis=analyzeTrace(trace);
-  const reason=eligible({state,trace,output,scope,request,priorRuntime,analysis});
-  const scopeDir=registryDir(directory(root),trace.scopeSha);
+  const contributionRegistry=buildContributionRegistry({trace,analysis});
+  const variables=discoverVariables({trace,analysis,registry:contributionRegistry});
+  const blocker=ineligible({state,trace,output,scope,request,priorRuntime});
+  const admissionInputs=Object.hasOwn(request,'expectedQualifiedConvergences')
+    ?{expectedQualifiedConvergences:request.expectedQualifiedConvergences}:{};
+  let admission,binding=null;
+  const admit=(inputs,started,startedCpu)=>{
+    const decision=screen({trace,analysis,inputs});
+    const cpu=process.cpuUsage(startedCpu);
+    admission={inputs,decision,binding,cost:{wallMs:performance.now()-started,controllerCpuMicros:cpu.user+cpu.system}};
+    return decision;
+  };
   const finish=(fields={})=>{
     const wallMs=Math.max(0,now()-startedAt),cpu=process.cpuUsage(cpuStart);
-    const report={schema:VERSION,scopeSha:trace.scopeSha,traceSha,analysis,outcome:'no_change',...fields,
+    const report={schema:REPORT_SCHEMA,scopeSha:trace.scopeSha,traceSha,analysis,contributionRegistry,variables,admission,outcome:'no_change',...fields,
       cost:{wallMs,controllerCpuMicros:cpu.user+cpu.system,replayBudgetMs:REPLAY_BUDGET_MS,modelCalls:0,providerSpend:0},
-      measuredValue:use?.promotion?recordValue(use,output,trace,wallMs):{
+      measuredValue:use?.promotion?recordValue(use,output,trace,wallMs,interrupted):{
         qualifiedConvergences:0,originalOptimizationCostMs:wallMs,measuredNetMs:-wallMs,
       }};
     put(path.join(reportDir,'assessment.json'),report);
-    return {outcome:report.outcome,reason:report.reason,traceSha,scopeSha:trace.scopeSha,boardCommit,reportFile:path.join(reportDir,'assessment.json')};
+    return {schema:REPORT_SCHEMA,outcome:report.outcome,reason:report.reason,traceSha,scopeSha:trace.scopeSha,boardCommit,reportFile:path.join(reportDir,'assessment.json')};
   };
-  if(reason)return finish({reason});
+  if(blocker){
+    admit({...admissionInputs,blocker},performance.now(),process.cpuUsage());
+    return finish({reason:blocker});
+  }
+  const scopeDir=registryDir(directory(root),trace.scopeSha);
   return withSeatLock('efficiency',async()=>{
+    const gateStarted=performance.now(),gateCpu=process.cpuUsage();
+    try {binding=verifyAdmissionTrace(trace,snapshot);}
+    catch(error){
+      const reason='admission-trace-held';
+      admit({...admissionInputs,blocker:reason},gateStarted,gateCpu);
+      return finish({reason,detail:String(error.message).slice(0,500)});
+    }
     const marker=path.join(scopeDir,'experiment.json');
-    if(exists(marker))return finish({reason:'exact-scope-experiment-already-recorded',prior:read(marker)});
+    if(exists(marker)){
+      let priorOutcome;
+      try {priorOutcome=readRetainedExperiment(marker,trace);}
+      catch(error){
+        const reason='retained-experiment-held';
+        admit({...admissionInputs,blocker:reason},gateStarted,gateCpu);
+        return finish({reason,priorMarker:marker,detail:String(error.message).slice(0,500)});
+      }
+      const decision=admit({...admissionInputs,priorOutcome},gateStarted,gateCpu);
+      return finish({reason:decision.reason,priorMarker:marker});
+    }
+    const decision=admit(admissionInputs,gateStarted,gateCpu);
+    if(!decision.admitted)return finish({reason:decision.reason});
     const evidenceRoot=directory(path.join(reportDir,'experiment'));
     put(marker,{schema:VERSION,traceSha,evidenceRoot,fromSlots:1,toSlots:3});
     const alternative={schema:'ophanim.scheduler-policy/v1',scopeSha:trace.scopeSha,baselineSlots:1,slots:3,baselineRelease:'baseline',
@@ -158,16 +218,25 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
       const candidate={...alternative,evidenceSha:replay.evidenceSha,originalResultSha:replay.originalResultSha};
       const checked=await governance.verifyEfficiencyCandidate({candidate,evidenceRoot});
       if(checked?.ok!==true)return finish({reason:checked?.reason??'independent-qualification-refused',alternative,evidenceRoot,experiment,qualification:checked?.efficiency??null});
+      const horizon=decision.forecast.expectedQualifiedConvergences;
+      const rolloutReserveMs=decision.estimates.rolloutReserveMs;
+      const grossSavedMs=checked.efficiency.conservativeSavedMs*horizon;
+      const economics=()=>{
+        const assessmentCostMs=Math.max(0,now()-startedAt);
+        return {horizon,rolloutReserveMs,grossSavedMs,assessmentCostMs,forecastNetSavedMs:grossSavedMs-assessmentCostMs-rolloutReserveMs};
+      };
+      const beforeAuthorization=economics();
+      if(beforeAuthorization.forecastNetSavedMs<=0)return finish({reason:'nonpositive-forecast-before-authorization',alternative,evidenceRoot,experiment,qualification:checked.efficiency,economics:beforeAuthorization});
       const expected={planRef:checked.planRef,policy:candidate,scopeSha:trace.scopeSha,fromSlots:1,toSlots:3,release:'baseline',evidenceRefs:checked.evidenceRefs};
-      const decision=await governance.issueEfficiencyDecision(expected);
-      const authorization=await governance.verifyEfficiencyDecision({decision,expected});
+      const signedDecision=await governance.issueEfficiencyDecision(expected);
+      const authorization=await governance.verifyEfficiencyDecision({decision:signedDecision,expected});
       if(authorization?.ok!==true)throw Error('Efficiency activation authorization refused');
-      const totalAssessmentCostMs=Math.max(0,now()-startedAt);
-      const forecastNetSavedMs=checked.efficiency.forecastGrossSavedMs-totalAssessmentCostMs;
-      if(forecastNetSavedMs<=0)return finish({reason:'nonpositive-forecast-after-full-assessment-cost',alternative,evidenceRoot,experiment,qualification:checked.efficiency});
-      const efficiency={...checked.efficiency,totalAssessmentCostMs,forecastNetSavedMs,realizedNetSavedMs:-totalAssessmentCostMs};
-      put(path.join(scopeDir,'promotion.json'),{schema:VERSION,authorityRoot:stateDir,expected,decision,efficiency});
-      return finish({outcome:'promoted',reason:'independently-authorized-slot-policy',alternative,evidenceRoot,experiment,efficiency,decisionId:authorization.decisionId,authorization:{expected,decision}});
+      const value=economics();
+      if(value.forecastNetSavedMs<=0)return finish({reason:'nonpositive-forecast-after-full-assessment-cost',alternative,evidenceRoot,experiment,qualification:checked.efficiency,economics:value});
+      const totalAssessmentCostMs=value.assessmentCostMs;
+      const efficiency={...checked.efficiency,totalAssessmentCostMs,realizedNetSavedMs:-totalAssessmentCostMs};
+      put(path.join(scopeDir,'promotion.json'),{schema:VERSION,authorityRoot:stateDir,expected,decision:signedDecision,efficiency,economics:value});
+      return finish({outcome:'promoted',reason:'independently-authorized-slot-policy',alternative,evidenceRoot,experiment,efficiency,economics:value,decisionId:authorization.decisionId,authorization:{expected,decision:signedDecision}});
     }catch(error){
       return finish({reason:'experiment-held',detail:String(error.message).slice(0,500),alternative,evidenceRoot});
     }
@@ -179,13 +248,29 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
   const expected=path.join(stateDir,'efficiency','convergences',record.boardCommit.replace(':','-'),'assessment.json');
   if(reportFile!==expected||fs.realpathSync(reportFile)!==expected)throw Error('Efficiency report path differs');
   const assessment=read(reportFile),trace=read(path.join(path.dirname(reportFile),'trace.json'));
-  const snapshot=readRuntimeSnapshot(stateDir,record.boardCommit).state;
-  if(digest(trace)!==record.traceSha||assessment.traceSha!==record.traceSha||trace.stateSha!==digest(snapshot)||
+  if(![VERSION,REPORT_SCHEMA].includes(assessment.schema)||record.schema&&record.schema!==assessment.schema)throw Error('Efficiency assessment schema differs');
+  const snapshot=readRuntimeSnapshot(stateDir,record.boardCommit);
+  if(digest(trace)!==record.traceSha||assessment.traceSha!==record.traceSha||trace.stateSha!==digest(snapshot.state)||
       trace.scopeSha!==record.scopeSha||assessment.scopeSha!==record.scopeSha||assessment.outcome!==record.outcome||
-      canonical(trace.accepted)!==canonical(acceptanceEvidence(snapshot)))throw Error('Efficiency evidence differs from the accepted board');
+      canonical(trace.accepted)!==canonical(acceptanceEvidence(snapshot.state)))throw Error('Efficiency evidence differs from the accepted board');
   if(output&&(trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects))||
       trace.original.durationMs!==output.durationMs||trace.original.convergence!==output.convergence||trace.original.slots!==output.slots))throw Error('Efficiency observation differs from the runtime result');
   if(canonical(assessment.analysis)!==canonical(analyzeTrace(trace)))throw Error('Efficiency analysis differs from retained trace');
+  if(assessment.schema===REPORT_SCHEMA){
+    const analysis=assessment.analysis;
+    const registry=buildContributionRegistry({trace,analysis});
+    const variables=discoverVariables({trace,analysis,registry});
+    const {inputs,decision,cost,binding}=assessment.admission??{};
+    if(!inputs||!decision||!cost)throw Error('Optimization admission receipt required');
+    if(Object.keys(inputs).some(key=>!['blocker','priorOutcome','expectedQualifiedConvergences'].includes(key)))throw Error('Unexpected optimization admission input');
+    if((!inputs.blocker||binding)&&canonical(binding)!==canonical(verifyAdmissionTrace(trace,snapshot)))throw Error('Optimization trace binding differs');
+    if(inputs.priorOutcome&&canonical(inputs.priorOutcome)!==canonical(readRetainedExperiment(assessment.priorMarker,trace)))throw Error('Retained optimization evidence differs');
+    if(canonical(registry)!==canonical(assessment.contributionRegistry)||canonical(variables)!==canonical(assessment.variables)||
+        canonical(decision)!==canonical(screen({trace,analysis,inputs}))||!Number.isFinite(cost.wallMs)||cost.wallMs<0||
+        !Number.isInteger(cost.controllerCpuMicros)||cost.controllerCpuMicros<0||
+        (!decision.admitted&&(assessment.experiment||assessment.evidenceRoot||assessment.outcome!=='no_change'||assessment.reason!==decision.reason)))
+      throw Error('Optimization admission differs from retained trace');
+  }
   if(assessment.experiment?.manifestFile){
     const manifest=path.join(path.dirname(reportFile),'experiment','manifest.json');
     if(assessment.experiment.manifestFile!==manifest||fs.realpathSync(manifest)!==manifest||

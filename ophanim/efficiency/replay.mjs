@@ -125,7 +125,15 @@ export async function verifyReplayTrial({stateDir,resultFile,request,boardCommit
 }
 
 function sources() {
-  return Object.fromEntries(['ophanim/cli.mjs','ophanim/runtime.mjs','ophanim/board.mjs','ophanim/fixtures.mjs','ophanim/watchdog.mjs','ophanim/governance.mjs','ophanim/governance/check-contract.mjs','ophanim/governance/check-artifact.mjs','ophanim/governance/check-release.mjs','ophanim/governance/check-efficiency.mjs','ophanim/efficiency/analyze.mjs','ophanim/efficiency/assessment.mjs','ophanim/efficiency/replay.mjs'].map(relative=>[relative,rawSha(fs.readFileSync(path.join(ROOT,relative)))]));
+  const files=[
+    'cli.mjs','runtime.mjs','board.mjs','fixtures.mjs','watchdog.mjs','governance.mjs',
+    ...['contract','artifact','release','efficiency'].map(name=>`governance/check-${name}.mjs`),
+    ...['analyze','assessment','admission','contributions','prior','trace-binding','replay'].map(name=>`efficiency/${name}.mjs`),
+  ];
+  return Object.fromEntries(files.map(file=>{
+    const relative=path.join('ophanim',file);
+    return [relative,rawSha(fs.readFileSync(path.join(ROOT,relative)))];
+  }));
 }
 
 function runBounded(args,{timeoutMs,guarded=false}={}) {
