@@ -32,7 +32,9 @@ export function chairModels(projection){
       {metric:'rework',unit:'events',value:rework,attribution:'board-derived'},
       {metric:'reseats',unit:'events',value:metrics.reseats,attribution:'board-derived'},
     ];
-    return {id:fnId(chair),observations,uncertainty:observations.map(({metric})=>({metric})),
+    const anomalies=(metrics.occupancy?.inconsistent??[]).map(({instance,why})=>({chair,instance,why}));
+    return {id:fnId(chair),observations,uncertainty:observations.map(({metric})=>({metric})),anomalies,
+      unrecordedInstances:(metrics.occupancy?.unrecorded??[]).length,
       dependencies:DEPENDS[chair].map(fnId),interactions:[],controllableVariables:[],
       occupants:(occupants??[]).map(({vendor,model,entries})=>({vendor,model,entries}))};
   });
@@ -48,6 +50,13 @@ export function chairModels(projection){
  */
 export function rankChairQuestions(projection,{economics=null,history=[],instrumentationCeilingMs=30000}={}){
   const models=chairModels(projection);
+  // A chair whose occupancy trail does not follow from its own entries is not a valid starting point:
+  // its counts cannot be trusted, however low its rework looks. Ranking stops and names it, so the
+  // record is verified before any question about it is valued.
+  const anomalies=models.functions.flatMap(fn=>fn.anomalies);
+  if(anomalies.length)return {models,decision:{schema:'ophanim.investigation-decision/v1',outcome:'blocked',reason:'occupancy-trail-inconsistent',
+    anomalies,selected:null,candidates:[],historyEntries:[],
+    limits:{executionAuthorized:false,promotionAuthorized:false,modelCalls:0,replays:0,effects:0}}};
   const discovery=selectInvestigation({models,history});
   // A method exists only for observable differences between the alternatives the discovery produced.
   const methods=discovery.candidates.filter(candidate=>candidate.hypotheses.length>1).map(candidate=>({

@@ -49,3 +49,14 @@ test('a projection carrying seat-change authority, or missing a chair, is refuse
   assert.throws(()=>chairModels({...projection(),chairs:projection().chairs.slice(1)}),/one row per chair/);
   assert.throws(()=>chairModels({...projection(),projectionSha:'x'}),/board-derived/);
 });
+
+test('a broken occupancy trail blocks ranking and names the chair, even with no rework anywhere',()=>{
+  const p=projection({implRework:0,checkRework:0});
+  p.chairs[2].metrics.occupancy={inconsistent:[{instance:'slot:alpha',why:'entry 1 has gen 1, expected 2'}],unrecorded:[]};
+  const {decision}=rankChairQuestions(p,{economics});
+  assert.equal(decision.outcome,'blocked');
+  assert.equal(decision.reason,'occupancy-trail-inconsistent');
+  assert.deepEqual(decision.anomalies,[{chair:'check@review',instance:'slot:alpha',why:'entry 1 has gen 1, expected 2'}]);
+  assert.equal(decision.selected,null);
+  assert.equal(decision.limits.promotionAuthorized,false);
+});
