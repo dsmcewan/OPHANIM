@@ -2,13 +2,15 @@
 
 Open the OPHANIM checkout and read [LESSONS.md](LESSONS.md), [FUNDAMENTALS.md](FUNDAMENTALS.md), [PLANNING_COACH.md](PLANNING_COACH.md) and [LEARNING_PROGRESS.md](LEARNING_PROGRESS.md).
 
-The persistent blackboard engine already exists in [ophanim/board.mjs](../../ophanim/board.mjs), reusing Pantheon's content-addressed store and fenced leases. Its [runtime](../../ophanim/runtime.mjs) dispatches dependency-ready obligations in bounded runs. This learning handoff has not initialized learning tickets or started a background learning loop. The current learning record is `LEARNING_PROGRESS.md`; saving a coach charter or itinerary does not start a worker. Reuse the existing engine if a later, explicit learning-workflow scope calls for it; do not treat subjective coach feedback as a deterministic runtime acceptance oracle.
+The [learning board](BOARD.md) is initialized in this workspace using Pantheon's existing storage APIs: LF-001 is ready and LF-002 through LF-006 are blocked. No background learning loop was started. Its local store is ignored by Git; on another checkout use the documented initialization command, which preserves existing state. `LEARNING_PROGRESS.md` retains attempts, assessments and next itineraries. The separate [OPHANIM runtime](../../ophanim/runtime.mjs) expects synthetic known-output obligations; do not route this qualitative curriculum through it or treat coach feedback as a deterministic acceptance oracle.
 
 Paste this into the CLI assistant:
 
 > Continue OPHANIM's planning-fundamentals learning exercise. OPHANIM is the learner. We are learning how to derive and evaluate a plan, not advancing an actual project's backlog.
 >
-> Read docs/planning/LESSONS.md, FUNDAMENTALS.md, PLANNING_COACH.md and LEARNING_PROGRESS.md. Use a separate read-only planning coach through the CLI's supported assistant facility if available, inheriting the current authorized configuration. A saved charter is not an installed agent; record any limitation and do not install providers.
+> Read docs/planning/LESSONS.md, FUNDAMENTALS.md, PLANNING_COACH.md and LEARNING_PROGRESS.md. Use the specialized planning_coach agent defined in .codex/agents/planning-coach.toml through the CLI's supported agent facility, inheriting the current authorized model configuration. Verify the named role is discovered; record any limitation and do not install providers. The coach is advisory/read-only by instruction and inherits parent permissions; use a read-only parent session when filesystem enforcement is needed.
+>
+> Read docs/planning/BOARD.md and inspect the local learning board. If absent, use its owner-authorized initialization procedure. Preserve existing board state and learning evidence. A ready item is not a running worker or a completed lesson; do not start the generic build runner.
 >
 > Start at the recorded phase. All phases currently say not_attempted. Preserve the learner's answer before hints; let the coach ask one diagnostic question at a time. Evaluate against the phase's observable criteria, record hints and revisions, and advance only with evidence. Final transfer requires a separate assessor and an uncoached unfamiliar example.
 >
@@ -16,6 +18,6 @@ Paste this into the CLI assistant:
 >
 > Keep the exercises hypothetical. No implementation tickets, paid calls, live experiments, signed-source optimization, authority changes or releases are authorized. The earlier docs/planning/phase0-2-evaluation packet is historical and superseded for this exercise. Do not resume it as an execution backlog.
 >
-> Follow the latest saved itinerary's exact resume point. If no learner attempt exists, begin by answering the first lesson in FUNDAMENTALS.md without supplying a coach hint first. Record the attempt and obtain feedback; preserve completed work on later resumes.
+> Follow the latest saved itinerary's exact resume point. The owner most recently asked to be told when learner and coach are ready: first provide a readiness-only check and the next itinerary, without answering the exercise. When the lesson begins, if no learner attempt exists, OPHANIM answers the first lesson in FUNDAMENTALS.md without a coach hint first. Record the attempt and obtain feedback; preserve completed work on later resumes.
 
 No native agent's running state transfers automatically between ChatGPT and the CLI. The charter, progress record and preserved attempts are the handoff. Preserve local changes and use a separate worktree if needed; do not reset or discard another session's work to load this branch.

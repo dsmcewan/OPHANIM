@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-16",
+  "agent_name": "planning_coach",
+  "definition": ".codex/agents/planning-coach.toml",
+  "source_sha256": {
+    ".codex/agents/planning-coach.toml": "fa832afde9ddb11288be46aa5c6c6a80a708c4ee4cb27c60a9d286872ad34da3",
+    "docs/planning/LESSONS.md": "2e795374e1fd15aa4539ac7a552c6deab4c7dc16d3afad815ee19ff2dd2319dc",
+    "docs/planning/FUNDAMENTALS.md": "d47a74300d09e5f128276f68432d41d0a5e62cdb53ce5bc96a456d7ead530741",
+    "docs/planning/PLANNING_COACH.md": "80ef0d383d4f25cf8b85416e3e5d6b40d114851e7eea2c70cf310309cd934082",
+    "docs/planning/BOARD.md": "d1e9619c6dd86d05636aadc0c9bfa9537e0181b9ee036ec4d1cd5bace6163773"
+  },
+  "native_session": {
+    "agent": "/root/planning_coach",
+    "status": "ready_for_lesson_1",
+    "charter_read": true,
+    "required_context_read": true,
+    "mission_understood": "OPHANIM learns to derive and evaluate plans through hypothetical exercises; this is not project execution.",
+    "discipline": [
+      "Preserve learner answer before hints.",
+      "One active exercise and one targeted diagnostic question.",
+      "Assess against observed criteria; preserve unknowns and coached/unassisted distinctions.",
+      "Create next itinerary at every assessment handoff/session end.",
+      "Coordinator writes records; coach is advisory.",
+      "Final transfer assessor must be separate."
+    ],
+    "missing_lesson_1_prerequisites": [],
+    "learner_attempt": "not_attempted",
+    "first_action": "Obtain OPHANIM unassisted first-lesson answer before any hint.",
+    "assessment_limit": "Readiness and charter comprehension only; no learning result or coaching-quality qualification."
+  },
+  "board_commit": "commit:dee497513720fa94f207ddc48dac96c64832f77cd8153809f71fa4eac844830c",
+  "next_itinerary": "docs/planning/LEARNING_PROGRESS.md#coach-readiness-itinerary--lf-001",
+  "cli": {
+    "definition_format": "project-local Codex custom agent",
+    "documentation": "https://learn.chatgpt.com/docs/agent-configuration/subagents",
+    "installed_version": "0.167.0-alpha.4",
+    "toml_parse": "passed",
+    "required_fields": "present; strings",
+    "model_override": false,
+    "permission_override": false,
+    "discovery": "unverified",
+    "external_agent_launched": false,
+    "negative_evidence": [
+      "app-server --print-startup-config returned zero for both valid and invalid scratch cards, so it is not a loader test.",
+      "Metadata-only app-server exited before initialization because the sandbox denied access to its session database.",
+      "debug prompt-input was not run: it creates an ephemeral thread outside the metadata-only probe scope."
+    ],
+    "next_check": "From an existing authorized CLI session, request the named planning_coach for a readiness-only check; verify discovery before claiming launch.",
+    "permissions": "Inherits parent permissions. Read-only role instruction is not independent filesystem isolation."
+  },
+  "external_provider_calls": 0,
+  "board_workers_started": 0,
+  "lesson_started": false,
+  "review_scope": "Native coach briefing plus separate native peer format/consumer investigation; not cross-vendor qualification."
+}

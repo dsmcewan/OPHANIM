@@ -2,6 +2,8 @@
 
 Goal: learn what a plan requires and how to evaluate it through hypothetical exercises. This is not the project qualification roadmap. No learning phase has yet been attempted or passed.
 
+The [learning board](BOARD.md) now tracks phase readiness in a local persistent store. LF-001 is ready; LF-002 through LF-006 are blocked. This file remains the record of attempts, hints, assessments and next itineraries. Initialization is not a learner attempt and started no background worker.
+
 | Phase | Status | Next prerequisite |
 | --- | --- | --- |
 | 1. Frame the problem | not_attempted | OPHANIM answers the first lesson in FUNDAMENTALS.md before the coach gives a hint. |
@@ -30,3 +32,16 @@ Append the coach's next itinerary after each assessment or handoff. Preserve pri
 - 2026-11-16: planning lessons saved and a six-phase curriculum prepared with a native read-only planning coach. This is curriculum preparation, not a learner attempt or external agent installation.
 - 2026-11-16: owner is moving to the CLI and requested the materials in the repository. Resume with Phase 1. No provider call, live experiment, optimization or project release follows from the handoff.
 - 2026-11-16: coach directive now requires a saved next itinerary at every assessment handoff or session end. The existing blackboard engine has not been initialized for this learning workflow, and this handoff has started no background learning worker. This Markdown record is the current learning state; no runtime ticket acceptance is claimed.
+- 2026-11-16, subsequent owner request “initialize”: created one curriculum ticket, one plan and six phase items through the existing board APIs. Reopened the persisted state and repeated initialization without changing its head. No phase passed, final acknowledgment remains pending, and no runner or model provider was invoked. See BOARD.md and board-initialization.json for the seed, status and verification limits.
+- 2026-11-16, owner requested a specialized Coach and a readiness notification: created `.codex/agents/planning-coach.toml`. The native `planning_coach` read the card and learning documents, correctly restated the mission and returned the next itinerary below. This establishes current-session briefing readiness, not learning success or a separate CLI launch. CLI format checks passed; discovery is unverified because its metadata process could not open the local session database. See coach-readiness.json.
+
+## Coach readiness itinerary — LF-001
+
+This appends to, rather than replaces, the initial itinerary. The new evidence is the initialized board and specialized coach briefing. There is still no learner attempt or hint.
+
+1. **Position:** Phase 1 / LF-001, first lesson in FUNDAMENTALS.md. All learning statuses remain `not_attempted`.
+2. **Objective:** distinguish observable success and consequential unknowns before selecting methods.
+3. **Actions:** present the saved lesson unchanged; OPHANIM supplies its unassisted answer; coordinator preserves the exact prompt/version and answer; coach checks Phase 1 criteria and asks one diagnostic question if needed; preserve the revision and assessment; coach creates the following itinerary.
+4. **Ownership:** OPHANIM reasons, the coach diagnoses, and the coordinator persists evidence and justified Board transitions. The owner observes and steers. A separate final assessor is needed at Phase 6, not before Lesson 1.
+5. **Pass/block/stop:** remain at LF-001 until every applicable criterion has support; use narrow remediation or `insufficient_evidence` if it does not. No automatic retry or acceptance.
+6. **Resume:** the owner requested notification of readiness. That check is complete for this native session. When the lesson starts, obtain OPHANIM's first answer before hints and append the attempt here. For a separate CLI session, first verify discovery of the named coach and inspect or initialize that checkout's local board.

@@ -17,6 +17,8 @@ The current [planning lessons](docs/planning/LESSONS.md) study how to derive and
 
 Continue with the [six-phase learning progression](docs/planning/FUNDAMENTALS.md), [planning coach charter](docs/planning/PLANNING_COACH.md), [progress record](docs/planning/LEARNING_PROGRESS.md) and [CLI resume prompt](docs/planning/CLI_HANDOFF.md). No phase is marked learned until its exercise supplies the required evidence.
 
+The [learning ticket board](docs/planning/BOARD.md) has a portable seed and local initialization/status commands. LF-001 is ready and later phases are blocked; initialization does not launch a background runner or satisfy learning acceptance. The specialized [planning_coach agent](.codex/agents/planning-coach.toml) keeps the learner on the fundamentals and must create the next itinerary at each assessment handoff or session end.
+
 ## Run the synthetic planning proof
 
 Use a separate TELOS checkout at `0c9b539ddbb08e1464603faf786e0d5cdfc33fb8` and set `OPHANIM_TELOS_ROOT` to its absolute path. Ophanim checks the TELOS source files against built-in digests before loading the governance code. The proof creates local fixture identities and a synthetic queue inside the output directory.

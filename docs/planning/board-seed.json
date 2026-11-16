@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "ref": "refs/board/planning-fundamentals",
+  "provenance": {
+    "owner_request": "initialize",
+    "date": "2026-11-16",
+    "source_commit": "931610cad84e68227c51461c4a4a392e63ea387d",
+    "author_meaning": "Owner-delegated initialization recorded by the coordinator; no human assessment or completion is asserted."
+  },
+  "entries": [
+    {
+      "kind": "ticket",
+      "payload": {
+        "title": "OPHANIM planning fundamentals",
+        "goal": "Learn to derive and evaluate what a plan requires through six hypothetical learning phases.",
+        "acceptance": [{
+          "type": "human_ack",
+          "prompt": "A human acknowledges the separate assessor's evidence from an unfamiliar uncoached transfer exercise and its demonstrated limits. Initialization, coaching feedback and document existence do not satisfy this criterion."
+        }],
+        "constraints": [
+          "OPHANIM is the learner; one exercise at a time.",
+          "Preserve original attempts, hints, revisions, evidence and negative outcomes in docs/planning/LEARNING_PROGRESS.md.",
+          "The coach must create the next itinerary at every assessment handoff and session end, including prerequisites and pass/block/stop conditions.",
+          "Qualitative learning criteria require assessment; the board schema does not prove understanding.",
+          "Initialization only: no worker, background scheduler, provider or experiment is started.",
+          "Use existing public board APIs for subsequent state changes with the expected current commit; never edit refs or stored objects directly."
+        ],
+        "forbidden": [
+          "No paid calls, implicit provider dispatch or invented numeric budget.",
+          "No project implementation tickets, optimization, release or authority changes.",
+          "No fabricated completion, automatic advancement or self-certified final transfer.",
+          "Do not pass this learning board to the build runner or OPHANIM's synthetic proof runtime."
+        ],
+        "references": [
+          "docs/planning/LESSONS.md",
+          "docs/planning/FUNDAMENTALS.md",
+          "docs/planning/PLANNING_COACH.md",
+          "docs/planning/LEARNING_PROGRESS.md"
+        ]
+      }
+    },
+    {
+      "kind": "plan",
+      "payload": {
+        "steps": [
+          { "item": "LF-001", "title": "Frame the problem" },
+          { "item": "LF-002", "title": "Ground the reasoning" },
+          { "item": "LF-003", "title": "Derive necessary work" },
+          { "item": "LF-004", "title": "Test adequacy and failure" },
+          { "item": "LF-005", "title": "Judge further investigation" },
+          { "item": "LF-006", "title": "Demonstrate transfer independently" }
+        ]
+      }
+    },
+    {
+      "kind": "work_item",
+      "payload": {
+        "key": "LF-001", "title": "Frame the problem", "state": "ready",
+        "depends_on": [], "artifact_slots": [],
+        "learning_status": "not_attempted",
+        "next_action": "OPHANIM records an unassisted answer to the first lesson in FUNDAMENTALS.md before the coach gives a hint.",
+        "assessment_criteria": ["Distinguish the objective from a method.", "State observable success and the learning-only boundary.", "Identify missing information that changes success."]
+      }
+    },
+    {
+      "kind": "work_item",
+      "payload": {
+        "key": "LF-002", "title": "Ground the reasoning", "state": "blocked",
+        "depends_on": ["LF-001"], "artifact_slots": [],
+        "learning_status": "not_attempted",
+        "block": { "reason": "Phase 1 criteria need evidence; the coach must supply a versioned fictional fact packet." },
+        "assessment_criteria": ["Trace material claims to supplied facts or label them assumptions/unknowns.", "Do not turn missing capacity or availability into a favorable fact."]
+      }
+    },
+    {
+      "kind": "work_item",
+      "payload": {
+        "key": "LF-003", "title": "Derive necessary work", "state": "blocked",
+        "depends_on": ["LF-002"], "artifact_slots": [],
+        "learning_status": "not_attempted",
+        "block": { "reason": "Phase 2 distinctions need evidence; a versioned flawed plan exercise must be supplied." },
+        "assessment_criteria": ["Explain the outcome or consumer served by each retained step.", "Justify removal, merging and ordering through actual dependencies."]
+      }
+    },
+    {
+      "kind": "work_item",
+      "payload": {
+        "key": "LF-004", "title": "Test adequacy and failure", "state": "blocked",
+        "depends_on": ["LF-003"], "artifact_slots": [],
+        "learning_status": "not_attempted",
+        "block": { "reason": "Phase 3 dependency reasoning needs evidence before introducing a changed constraint or cancellation." },
+        "assessment_criteria": ["Identify affected assumptions and dependencies while preserving constraints.", "Provide recovery/stop conditions and independently checkable success or failure evidence."]
+      }
+    },
+    {
+      "kind": "work_item",
+      "payload": {
+        "key": "LF-005", "title": "Judge further investigation", "state": "blocked",
+        "depends_on": ["LF-004"], "artifact_slots": [],
+        "learning_status": "not_attempted",
+        "block": { "reason": "Phase 4 adequacy reasoning needs evidence; investigation choices and missing-cost cases must be supplied." },
+        "assessment_criteria": ["Name the decision additional learning could change and a discriminating observation.", "Separate requirements, information value and authority.", "Retain justified no_change or insufficient_evidence outcomes."]
+      }
+    },
+    {
+      "kind": "work_item",
+      "payload": {
+        "key": "LF-006", "title": "Demonstrate transfer independently", "state": "blocked",
+        "depends_on": ["LF-005"], "artifact_slots": [],
+        "learning_status": "not_attempted",
+        "block": { "reason": "Earlier criteria need evidence; a separate assessor must supply an unfamiliar case and assess an uncoached answer." },
+        "assessment_criteria": ["Explain necessary and sufficient work, dependencies, feasibility, uncertainty and verification.", "Revise coherently when one condition changes.", "Record specific independent evidence and limits; preserve insufficient evidence if assessment is unavailable."]
+      }
+    }
+  ]
+}
