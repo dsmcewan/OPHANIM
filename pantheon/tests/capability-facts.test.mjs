@@ -23,9 +23,7 @@ test("every registry model has a record, and every figure is cited or UNRECORDED
 
 // The disagreements found on 2026-11-16. Each is a decision to make, not a fact to overwrite silently;
 // fixing one means removing it here, and a new one fails this test until it is examined.
-const KNOWN_DRIFT = [
-  "gemini-3.5-flash:deprecated",
-];
+const KNOWN_DRIFT = [];
 
 test("the code's disagreements with the cited facts are exactly the known list", () => {
   const drift = capabilityDrift();

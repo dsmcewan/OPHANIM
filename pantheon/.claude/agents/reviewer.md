@@ -153,7 +153,7 @@ implementer directly; the board is the only channel.
 `SEATING.reviewer` (`seating.mjs`): xai `grok-4.7` (hard, ISOLATION, "a
 contested diff, a security-relevant change"), xai `grok-4.6` (medium,
 ISOLATION, "the one this harness has actually called and had answer"), then
-the isolation tail — agy_google `gemini-3.5-flash` (its comment calls it "the
+the isolation tail — agy_google `gemini-3.6-flash` (its comment calls it "the
 reseat when the implementer holds the xai lab," but its `band: "easy"` makes
 `selectFor("reviewer", { difficulty: "easy" })` pick it FIRST for easy work;
 comment and band contradict each other — external review §9), then

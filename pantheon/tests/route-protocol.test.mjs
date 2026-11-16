@@ -115,3 +115,89 @@ test("a failed revision escalates the next one through the protocol, and the run
     assert.equal(verifyEscalation(run.escalations.map(({ slot, rev, ...record }) => record)).ok, true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Scripted clients for the run-path tests below. `review` decides the reviewer's verdict;
+// `cutAt` cuts an Anthropic reply off when its max_tokens is below that budget.
+function scripted({ review = () => "approve", cutAt = 0 } = {}) {
+  const sent = [];
+  let n = 0;
+  const promptOf = req => typeof req.input === "string" ? req.input : req.input?.at(-1)?.content ?? req.messages?.at(-1)?.content ?? "";
+  // The implementer's request is recognised first: once findings reach it, its prompt quotes a VERDICT too.
+  const answer = prompt => /Output ONLY the complete new contents/.test(prompt)
+      ? (/REQUESTED CHANGES/.test(prompt) ? "export const fixed = true; // boundary handled\n" : "export const fixed = true;\n")
+    : /VERDICT/i.test(prompt) ? `the boundary case is wrong\n\nVERDICT: ${review(prompt)}` : /TITLE:/i.test(prompt) ? "TITLE: fix"
+    : /RAN: nothing/i.test(prompt) ? "RAN: nothing" : "export const fixed = true;\n";
+  const stream = items => ({ async *[Symbol.asyncIterator]() { for (const i of items) yield i; } });
+  return { sent, makeClientFor: () => ({
+    responses: { inputTokens: { count: async () => ({ input_tokens: 10 }) }, create: async req => {
+      sent.push({ model: req.model, effort: req.reasoning?.effort ?? null, prompt: promptOf(req) });
+      const text = answer(promptOf(req)), id = `r${++n}`;
+      const response = { id, status: "completed", output_text: text, output: [{ type: "message", content: [{ type: "output_text", text }] }] };
+      return stream([{ type: "response.output_text.delta", delta: text }, { type: "response.completed", response }]);
+    } },
+    messages: { create: async req => {
+      sent.push({ model: req.model, max_tokens: req.max_tokens, prompt: promptOf(req) });
+      const cut = req.max_tokens < cutAt;
+      return stream([{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: cut ? "TITLE: fi" : answer(promptOf(req)) } },
+        { type: "message_delta", delta: { stop_reason: cut ? "max_tokens" : "end_turn" } }, { type: "message_stop" }]);
+    } },
+  }) };
+}
+async function runFixture(dir, clients, extraOpts = {}) {
+  mkdirSync(join(dir, "seed"), { recursive: true });
+  writeFileSync(join(dir, "seed", "keep.txt"), "seed\n");
+  const seat = (vendor, model) => ({ vendor, model, rank: 0, pool: vendor, band: null, basis: "OPERATOR", why: "scripted" });
+  return runOpenItem({ key: "escFixture", repo_root: dir, title: "one file", goal: "g", copy: ["seed"],
+    acceptance_cmd: "grep -q fixed alpha.mjs", question: "q", slots: [{ slot: "alpha", path: "alpha.mjs", goal: "g" }] },
+  { dir: join(dir, "board"), makeClientFor: clients.makeClientFor, scouts: ["xai"], revisions: 2, cooldown: openCooldownStore(join(dir, "cooldown")),
+    seatOverrides: { planner: seat("anthropic", "claude-sonnet-5"), implementer: seat("openai", "gpt-6-sol"), reviewer: seat("xai", "grok-4.6") }, ...extraOpts });
+}
+
+test("a cut-off reply is retried with a larger output budget within the documented ceiling, and recorded", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-cut-"));
+  try {
+    const clients = scripted({ cutAt: 2000 });
+    const result = await runFixture(dir, clients);
+    assert.equal(result.shipped, true, JSON.stringify(result.error));
+    const plan = clients.sent.filter(s => s.model === "claude-sonnet-5" && /TITLE:/.test(s.prompt));
+    assert.deepEqual(plan.map(s => s.max_tokens), [1024, 2048], "the direct default, then doubled");
+    const run = JSON.parse(readFileSync(join(result.board, "run.json"), "utf8"));
+    const cut = run.escalations.filter(e => e.purpose === "plan");
+    assert.deepEqual(cut.map(e => [e.decision.action, e.decision.to.output]), [["raise_output", 2048]]);
+    assert.equal(verifyEscalation(cut.map(({ purpose, ...r }) => r)).ok, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a reviewer's rejection of passing work escalates the maker, and resume revises at the decided effort", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-review-"));
+  try {
+    let reject = true;
+    const clients = scripted({ review: () => (reject ? "request_changes" : "approve") });
+    const first = await runFixture(dir, clients);
+    assert.equal(first.shipped, false, "the REVIEW gate refuses the rejected bytes");
+    let run = JSON.parse(readFileSync(join(first.board, "run.json"), "utf8"));
+    const decision = run.escalations.find(e => e.outcome.kind === "critique");
+    assert.deepEqual([decision.decision.action, decision.decision.to.effort], ["raise_effort", "high"]);
+    assert.equal(run.files[0].escalation.pending.reason, "review");
+    assert.equal(run.files[0].escalation.effort, "high");
+
+    reject = false;
+    const before = clients.sent.length;
+    const second = await runOpenItem({ key: "escFixture", repo_root: dir, title: "one file", goal: "g", copy: ["seed"],
+      acceptance_cmd: "grep -q fixed alpha.mjs", question: "q", slots: [{ slot: "alpha", path: "alpha.mjs", goal: "g" }] },
+    { dir: join(dir, "board"), makeClientFor: clients.makeClientFor, scouts: ["xai"], revisions: 2, resume: first.board,
+      cooldown: openCooldownStore(join(dir, "cooldown")),
+      seatOverrides: { planner: { vendor: "anthropic", model: "claude-sonnet-5", rank: 0, pool: "anthropic", band: null, basis: "OPERATOR", why: "s" },
+        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" },
+        reviewer: { vendor: "xai", model: "grok-4.6", rank: 0, pool: "xai", band: null, basis: "OPERATOR", why: "s" } } });
+    assert.equal(second.shipped, true, JSON.stringify(second.error));
+    const revised = clients.sent.slice(before).find(s => s.model === "gpt-6-sol" && /Output ONLY the complete new contents/.test(s.prompt));
+    assert.ok(revised, "resume revised the rejected slot instead of re-reviewing the same bytes");
+    assert.equal(revised.effort, "high");
+    assert.match(revised.prompt, /REQUESTED CHANGES/);
+    assert.match(revised.prompt, /the boundary case is wrong/, "the reviewer's findings reach the maker");
+    run = JSON.parse(readFileSync(join(second.board, "run.json"), "utf8"));
+    assert.equal(run.files[0].escalation.pending, null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

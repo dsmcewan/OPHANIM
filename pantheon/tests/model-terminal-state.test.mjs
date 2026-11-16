@@ -72,7 +72,7 @@ for (const { vendor, name, model } of ALL) {
 
 test("direct Gemini replay keeps the model's parts, thought signatures included", async () => {
   for (const onEvent of [undefined, () => {}]) {
-    const r = await sendTurn({ client: fakeClient("genai", true), vendor: "agy_google", model: "gemini-3.5-flash", prompt: "q", history: [], onEvent });
+    const r = await sendTurn({ client: fakeClient("genai", true), vendor: "agy_google", model: "gemini-3.6-flash", prompt: "q", history: [], onEvent });
     assert.equal(r.history.at(-1).role, "model");
     assert.deepEqual(r.history.at(-1).parts, [{ text: "answer", thoughtSignature: "SIG" }]);
     assert.equal(r.terminal_state, "STOP");

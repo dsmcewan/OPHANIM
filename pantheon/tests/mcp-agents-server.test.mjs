@@ -105,7 +105,7 @@ test("a missing required argument is refused with a usable message", async () =>
 test("install_agents writes the rendered card under the requested root", async () => {
   await withTmp(async dir => {
     const res = await call(srv(dir), "install_agents",
-      { ids: ["reviewer@agy_google/gemini-3.5-flash"], format: "antigravity", root: dir });
+      { ids: ["reviewer@agy_google/gemini-3.6-flash"], format: "antigravity", root: dir });
     const data = JSON.parse(text(res));
     assert.equal(data.written.length, 1);
     const f = join(dir, data.written[0].filename);

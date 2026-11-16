@@ -33,5 +33,5 @@ test("an unspecified anthropic call falls back to sonnet -- deliberately NOT the
 test("every vendor's default_model is already its cheapest recorded tier", () => {
   assert.equal(ADAPTERS.openai.default_model, modelId("openai", "luna"));
   assert.equal(ADAPTERS.xai.default_model, modelId("xai", "grok-4.6"));
-  assert.equal(ADAPTERS.agy_google.default_model, modelId("google", "gemini-3.5-flash"));
+  assert.equal(ADAPTERS.agy_google.default_model, modelId("google", "gemini-3.6-flash"));
 });

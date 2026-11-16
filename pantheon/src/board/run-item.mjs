@@ -94,6 +94,12 @@ function packageContext(repoRoot, copied, slots) {
 }
 
 /** An output cap in the vendor's own request shape; `extra` is { tokens } or undefined. */
+const ROLE_OF_PURPOSE = { plan: "planner", work: "implementer", critique: "reviewer", scout: "scout" };
+
+// What a resumed run needs to continue a slot's escalation trail.
+const escalationState = c => ({ effort: c.effort ?? null, forced: c.forced ?? null, steps: c.escalationSteps ?? 0,
+  model: c.ranModel ?? null, pending: c.pendingRevision ?? null });
+
 const capFor = (vendor, extra) => extra?.tokens == null ? undefined
   : vendor === "agy_google" ? { config: { maxOutputTokens: extra.tokens } }
   : vendor === "anthropic" ? { max_tokens: extra.tokens }
@@ -336,11 +342,28 @@ export async function runOpenItem(spec, opts = {}) {
       if (e.type === "delta" && e.text) { chars += e.text.length; if (Date.now() - lastNote > 10_000) { lastNote = Date.now(); progress({ event: "turn.progress", seat: vendor, model, detail: `${chars} chars so far` }); } }
       else if (e.type === "error") progress({ event: "turn.error", seat: vendor, model, detail: e.text ?? "stream error" });
     };
-    let r;
-    try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
-      architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(extra ? { extra } : {}),
-      ...(effort ? { effort } : {}) }); }
-    catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
+    let r, steps = 0, budget = extra;
+    for (;;) {
+      try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
+        architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
+        ...(effort ? { effort } : {}) }); }
+      catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
+      if (r.ok || !r.result) break;
+      // A reply cut off by its output budget is an outcome for the protocol: the only change it makes is
+      // a larger budget within the model's documented ceiling. The refused turn was not persisted, so
+      // the retry starts from the same conversation. Every decision is recorded on the run.
+      const output = budget?.max_tokens ?? budget?.max_output_tokens ?? budget?.config?.maxOutputTokens
+        ?? (isFrontier(model) ? 65536 : vendor === "anthropic" ? 1024 : null);
+      const rec = escalationRecord({ role: ROLE_OF_PURPOSE[purpose] ?? purpose, steps,
+        outcome: { kind: "turn", complete: false, terminal_state: r.result.terminal_state ?? null, why: r.why },
+        seat: { vendor, model, effort: effort ?? null, output } });
+      (run.escalations ??= []).push({ purpose, ...rec });
+      progress({ event: "escalate", seat: vendor, model, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
+      if (rec.decision.action !== "raise_output") break;
+      const raised = capFor(vendor, { tokens: rec.decision.to.output });
+      budget = { ...budget, ...raised, ...(raised.config ? { config: { ...budget?.config, ...raised.config } } : {}) };
+      steps++;
+    }
     if (!r.ok) { progress({ event: "turn.error", seat: vendor, model, detail: r.why }); throw new Error(`${vendor}/${purpose}: ${r.why}`); }
     const text = r.result.text ?? "";
     const ms = Date.now() - t0;
@@ -616,7 +639,11 @@ export async function runOpenItem(spec, opts = {}) {
         return { sl, seat: saved.seat, itemKey: itemKeyFor(sl), wip: saved.wip,
           model: sl.model ?? (OVERRIDES.implementer ?? chain.assigned.implementer).model,
           file: join(worktree, sl.path), artifactCid: saved.artifactCid, bytes: saved.bytes,
-          baseline: saved.baseline, code: contents.toString("utf8"), lease: null };
+          baseline: saved.baseline, code: contents.toString("utf8"), lease: null,
+          // The slot's escalation state, as recorded: the next revision continues the trail, not a fresh one.
+          effort: saved.escalation?.effort ?? null, forced: saved.escalation?.forced ?? null,
+          escalationSteps: saved.escalation?.steps ?? 0, ranModel: saved.escalation?.model ?? null,
+          pendingRevision: saved.escalation?.pending ?? null };
       });
       rev = Math.max(...run.files.map(f => f.rev));
       const exits = crew.map(c => {
@@ -633,7 +660,7 @@ export async function runOpenItem(spec, opts = {}) {
     record();
     // A failed acceptance resumes at revision, retaining every slot and its original baseline.
     // A late review/ship failure can reuse its byte-bound passing controller result.
-    if (!RESUME || recordedExit !== 0) {
+    if (!RESUME || recordedExit !== 0 || crew.some(c => c.pendingRevision)) {
     {
         for (const c of crew) {
           if (!board.refs.resolve(c.wip)) await board.refs.branch({ name: c.wip, from: REF, author: c.seat });
@@ -672,7 +699,9 @@ export async function runOpenItem(spec, opts = {}) {
                 work_item: `${c.itemKey}: ${slice.slots[`item:${c.itemKey}`]?.payload?.title ?? spec.title}`,
                 artifact: rev === 1
                   ? `Current contents of ${c.sl.path}:\n\n${current}${attached}`
-                  : `Your revision ${rev - 1} of ${c.sl.path}, which FAILED the executed acceptance shown under tests (fix it; do not start over):\n\n${c.code}${attached}`,
+                  : c.pendingRevision?.reason === "review"
+                    ? `Your revision ${rev - 1} of ${c.sl.path}, which passed the executed acceptance but the cross-lab reviewer REQUESTED CHANGES (address them; do not start over):\n\n${c.pendingRevision.findings}\n\n${c.code}${attached}`
+                    : `Your revision ${rev - 1} of ${c.sl.path}, which FAILED the executed acceptance shown under tests (fix it; do not start over):\n\n${c.code}${attached}`,
                 tests: `${implTests.text}\n\n${oracle ? `The acceptance test file ${spec.tests_file}, verbatim (it runs as part of the command above):\n\n${oracle}` : ""}` },
               NO_TOOLS + `Output ONLY the complete new contents of ${c.sl.path}. No prose before or after, no markdown fence. ` +
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
@@ -682,6 +711,7 @@ export async function runOpenItem(spec, opts = {}) {
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
             c.ranModel = made.seat.model;
+            c.pendingRevision = null;
             // A different vendor or model answering this chair is a reseat: the generation advances.
             const next = nextOccupancy(c.seat, made.seat, { seat_id: made.seat.vendor !== c.seat.vendor
               ? `${made.seat.vendor}-work-${c.sl.slot}` : c.seat.seat_id, mode: "work" });
@@ -710,7 +740,7 @@ export async function runOpenItem(spec, opts = {}) {
             c.bytes = board.store.get(c.artifactCid).links.bytes;
             run.files = crew.map(member => ({ slot: member.sl.slot, path: member.sl.path,
               baseline: member.baseline, seat: member.seat, wip: member.wip,
-              artifactCid: member.artifactCid, bytes: member.bytes, rev }));
+              artifactCid: member.artifactCid, bytes: member.bytes, rev, escalation: escalationState(member) }));
             record();
             check(true, `rev ${rev}: ${c.sl.slot} written by ${c.seat.vendor} (${shortCid(c.artifactCid)})`);
           }));
@@ -844,6 +874,24 @@ export async function runOpenItem(spec, opts = {}) {
       const back = await merge({ ...board, into: built.wip, from: rref, author: CONTROLLER, only: ["critique:"], msg: "collect the verdict" });
       if (!back.ok) throw new Error(`collect: ${back.why}`);
       await merge({ ...board, into: REF, from: built.wip, author: CONTROLLER, only: CARRY, msg: "carry the verdict" });
+      if (verdict === "request_changes") {
+        // The verdict is an outcome for the MAKER's seat: the protocol decides its next revision, which a
+        // resume then runs (a passing acceptance alone would otherwise just re-review the same bytes).
+        const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0,
+          seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null } });
+        const { action, to } = rec.decision;
+        if (action === "raise_effort") built.effort = to.effort;
+        if (action === "step_rung") { built.forced = { vendor: to.vendor, model: to.model }; built.effort = null; }
+        if (!["hold", "wait", "stop"].includes(action)) built.escalationSteps = (built.escalationSteps ?? 0) + 1;
+        // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work
+        // needs its own pending revision, with the findings the implementer must address.
+        if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000) };
+        (run.escalations ??= []).push({ slot: built.sl.slot, rev, ...rec });
+        const file = run.files.find(f => f.slot === built.sl.slot);
+        if (file) file.escalation = escalationState(built);
+        progress({ event: "escalate", rev, slot: built.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
+        record();
+      }
       }
     }
     run.review = { verdict };

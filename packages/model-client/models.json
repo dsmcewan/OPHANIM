@@ -14,7 +14,7 @@
     "grok-build-0.1": "grok-build-0.1"
   },
   "google": {
-    "gemini-3.5-flash": "gemini-3.5-flash",
+    "gemini-3.6-flash": "gemini-3.6-flash",
     "carbon": "gemini-4-carbon",
     "argon": "gemini-4-argon"
   },

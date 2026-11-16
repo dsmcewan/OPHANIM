@@ -152,7 +152,7 @@ for (const vendor of SCOUTS) {
   const seat = { vendor, seat_id: `${vendor}-scout`, mode: "explore", occupancy_gen: 1 };
   const p = promptFor("scout", { question: QUESTION }, "Answer in at most three sentences.");
   const text = await turn({ vendor, purpose: "scout", model: intake.assigned.scout.vendor === vendor
-    ? intake.assigned.scout.model : (vendor === "xai" ? modelId("xai", "grok-4.6") : modelId("google", "gemini-3.5-flash")), prompt: p.prompt });
+    ? intake.assigned.scout.model : (vendor === "xai" ? modelId("xai", "grok-4.6") : modelId("google", "gemini-3.6-flash")), prompt: p.prompt });
   // `search` with an empty url list: this scout consulted no external source, only itself. Recorded
   // that way on purpose -- a model-only scout is a real limitation and it should be visible on the board.
   const r = await publish({ ...board, ref: `refs/iso/${vendor}/scout`, author: seat, msg: `scout ${vendor}`,

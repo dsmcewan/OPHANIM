@@ -156,6 +156,36 @@
     "\"Gemini 3.5 Flash (`gemini-3.5-flash`) is deprecated and has been replaced by\" Gemini 3.6 Flash; it is the agy_google adapter's default model."
    ]
   },
+  "gemini-3.6-flash": {
+   "vendor": "agy_google",
+   "api_id": true,
+   "status": "stable; no shutdown date announced",
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.6-flash",
+    "quote": "Input token limit 1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.6-flash",
+    "quote": "Output token limit 65,536"
+   },
+   "efforts": {
+    "values": [
+     "minimal",
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "medium",
+    "source": "https://aistudio.google.com/docs/thinking",
+    "quote": "gemini-3.6-flash | On (medium) | minimal, low, medium, high"
+   },
+   "surface": "genai",
+   "notes": [
+    "Named replacement for gemini-3.5-flash (aistudio.google.com/docs/deprecations): \"API requests to `gemini-3.5-flash` are automatically routed to `gemini-3.6-flash`.\""
+   ]
+  },
   "gemini-3.8-flash-high": {
    "vendor": "agy_google",
    "api_id": false,

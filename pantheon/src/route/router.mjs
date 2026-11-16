@@ -74,13 +74,13 @@ export const SEAT_FACTS = {
   agy_google: {
     vendor: "agy_google", continuity: "replay", quota_pool: "agy_google",
     latency_class: "seconds",
-    models: { default: modelId("google", "gemini-3.5-flash") },
+    models: { default: modelId("google", "gemini-3.6-flash") },
     // This row describes the raw Gemini API adapter, which still requires GEMINI_API_KEY.
     // The board can opt into the Antigravity CLI's cached OAuth login instead;
     // sharing a vendor identity does not make these credentials or quota pools interchangeable.
     // Recorded 2026-09-28 from the operator's capability table; previously absent. The exact figure
     // is 1,048,576 (2^20) rather than a rounded 1M, and it is written as the vendor states it.
-    // gemini-3.5-flash: operator's capability table, 2026-09-28.
+    // gemini-3.6-flash: aistudio.google.com/docs/models/gemini-3.6-flash, 2026-11-16 (replaces the deprecated 3.5 Flash).
     // gemini-3.8-flash-high: INFERRED, NOT VERIFIED. The same table gives 3.5 Flash and 3.7 Flash
     // both 1,048,576, and 3.8 is the same family, so this is the family figure carried forward. No
     // source states it for 3.8 specifically and `agy models` prints names only. It is written down
@@ -94,7 +94,7 @@ export const SEAT_FACTS = {
     // generation (SEAT_FACTS.anthropic.windows, all 1,000,000) on the same reasoning as
     // gemini-3.8-flash-high just above: a live, routed-on seat should not report a null window, but
     // this number is weaker than its measured neighbours and should be corrected on sight.
-    windows: { "gemini-3.5-flash": 1_048_576, "gemini-3.8-flash-high": 1_048_576,
+    windows: { "gemini-3.6-flash": 1_048_576, "gemini-3.8-flash-high": 1_048_576,
       "claude-opus-4-6-thinking": 1_000_000, "claude-sonnet-4-6": 1_000_000 },
     notes: "Raw Gemini API adapter requires GEMINI_API_KEY; board agent turns can opt into agy CLI OAuth. Replay: every raw-API turn resends history",
   },
@@ -190,6 +190,7 @@ export const MODEL_FAMILY = {
   "gpt-6-luna": "gpt-6", "gpt-6-sol": "gpt-6", "gpt-6-astra": "gpt-6",
   "grok-4.6": "grok-4", "grok-4.20-multi-agent": "grok-4",
   "gemini-3.5-flash": "gemini-3",
+  "gemini-3.6-flash": "gemini-3",
   "claude-haiku-4-5-20251001": "claude-4-5", "claude-sonnet-5": "claude-5", "claude-opus-5": "claude-5",
 };
 

@@ -72,7 +72,7 @@ export const ADAPTERS = {
   agy_google: {
     base_url: null,
     key_env: "GEMINI_API_KEY",
-    default_model: modelId("google", "gemini-3.5-flash"),   // gemini-3-pro and gemini-3.1-pro both 404 here
+    default_model: modelId("google", "gemini-3.6-flash"),   // 3.5 Flash is deprecated and routed to 3.6 (aistudio deprecations, 2026-11-16)
     surface: "genai",
     continuity: "replay",
     continuity_modes: ["replay"],        // the Gemini API keeps no conversation to resume by id

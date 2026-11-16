@@ -5,7 +5,7 @@ import { getAgent } from "../src/agents/store.mjs";
 import { ROLES } from "../src/role/roles.mjs";
 
 const reviewer = getAgent("reviewer@xai/grok-4.7");
-const agyReviewer = getAgent("reviewer@agy_google/gemini-3.5-flash");
+const agyReviewer = getAgent("reviewer@agy_google/gemini-3.6-flash");
 const implementer = getAgent("implementer@openai/gpt-6-astra");
 
 test("every declared format renders every seat without throwing", () => {
@@ -26,7 +26,7 @@ test("an unknown format is refused rather than silently defaulting", () => {
 
 test("the antigravity filename is EXACTLY what agy-seat.py opens", () => {
   // scripts/agy-seat.py load_agent_card(): `repo / ".agents" / "agents" / f"pantheon-{role}" / "agent.md"`.
-  // The name is the contract, not a label. A card at pantheon-reviewer-agy-google-gemini-3-5-flash
+  // The name is the contract, not a label. A card at pantheon-reviewer-agy-google-gemini-3-6-flash
   // parses perfectly and is never found -- proven by running that loader against a generated card
   // on 2026-09-28 (FileNotFoundError on pantheon-reviewer/agent.md).
   for (const a of [agyReviewer, reviewer]) {

@@ -183,7 +183,7 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | Seat (conversation) records carry the model | Resolved | Recorded in `saveSeat`. A model change is refused unless it is an explicit, recorded reseat (`model_gen`). |
 | `all_turns` support on GPT-6 Astra, Sol and Luna | On Hold | The docs conflict on Astra and say nothing on Sol or Luna. These models use their default, and the recorded effective mode will show the answer once a live call is made. |
 | Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds cited figures for all 19 registry models, read 2026-11-16. Anything unstated stays UNRECORDED: xAI max output, and grok-build-0.1 and gemini-3.5-flash effort. |
-| Correcting the code-vs-docs disagreements | Resolved, except one | Effort lists, the router's `ultra`, and gemini-3.8-flash-high moved to the CLI lane are all applied. The deprecated gemini-3.5-flash default is On Hold as an operator decision. |
+| Correcting the code-vs-docs disagreements | Resolved | All applied, including replacing the deprecated gemini-3.5-flash with gemini-3.6-flash. That follows Google's deprecation notice, and live requests were already routed there. The known-drift list is now empty. |
 | Routing and escalation protocol | Resolved | See "Routing and escalation protocol" below. |
 | Moving direct-path models onto the frontier client | On Hold | Now possible for models whose window and output are cited (OpenAI 4, Anthropic 4). It changes the request path, so it is a separate, explicit step. | Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
 
@@ -232,6 +232,12 @@ All seven proposals add checks or record facts that already exist at runtime, so
 - effort mapping and refusal;
 - an end-to-end run where a `gpt-6-sol` slot fails acceptance, its second revision is sent at `reasoning.effort: "high"` and ships, and the recorded decision re-derives.
 
-**Not covered yet, and kept separate:**
-- **Reviewer verdicts and truncated turns on the run path.** The protocol classifies both, but only the implementer's acceptance loop acts on decisions today.
+**Also wired:**
+- **Cut-off replies.** A turn refused because its reply was cut off (`max_tokens`, `MAX_TOKENS` or `incomplete`) goes to the protocol. If the decision is `raise_output`, the turn is retried with the larger budget, within the documented ceiling. The refused turn was not persisted, so the retry starts from the same conversation. The frontier client now reports `terminal_state` like the direct path does, so its truncations are classified too.
+- **Reviewer verdicts.** A `request_changes` verdict is an outcome for the maker's seat. Its decision (effort, stepped rung, or stop) and a pending revision carrying the reviewer's findings are saved with the slot in `run.files[].escalation`. A resume then revises that slot at the decided effort, with the findings in the prompt, instead of re-reviewing the same bytes. A revision that produces identical bytes is not re-reviewed: those bytes already carry a rejection, so the Q4 gate refuses.
+- *Check:* `pantheon/tests/route-protocol.test.mjs` adds two cases:
+  - a direct-path planner cut off at its 1,024-token default is retried at 2,048 and ships, and the decision re-derives;
+  - a rejection of passing work records `raise_effort → high` and a pending review, and the resumed revision is sent at `high` with the findings and ships.
+
+**Not covered yet:**
 - **Stepping into the agy CLI lane.** The lane takes a model but no effort, so a stepped-to lane model runs at its own default.

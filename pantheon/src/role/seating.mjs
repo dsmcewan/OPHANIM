@@ -309,7 +309,7 @@ export const SEATING = {
         "harness has actually called and had answer (2026-09-27)" },
     // The isolation tail: if the implementer is ever seated on xai, grok cannot review its own lab.
     // These are RESEATS, not lesser reviewers -- the chair has to have somewhere to go.
-    { vendor: "agy_google", model: modelId("google", "gemini-3.5-flash"), band: "easy", basis: "ISOLATION",
+    { vendor: "agy_google", model: modelId("google", "gemini-3.6-flash"), band: "easy", basis: "ISOLATION",
       why: "the reseat when the implementer holds the xai lab; a reviewer may never share the maker's" },
     { vendor: "anthropic", tier: "default", basis: "ISOLATION",
       why: "last reseat, same reason: what disqualifies a reviewer is the lab it shares, never its size" },

@@ -26,7 +26,7 @@ test("modelId resolves a known vendor/name pair to its model string", () => {
   assert.equal(modelId("openai", "luna"), "gpt-6-luna");
   assert.equal(modelId("xai", "grok-4.7"), "grok-4.7");
   assert.equal(modelId("xai", "grok-4.20-multi-agent"), "grok-4.20-multi-agent");
-  assert.equal(modelId("google", "gemini-3.5-flash"), "gemini-3.5-flash");
+  assert.equal(modelId("google", "gemini-3.6-flash"), "gemini-3.6-flash");
 });
 
 test("modelId throws by naming the unknown vendor, never silently returns undefined", () => {

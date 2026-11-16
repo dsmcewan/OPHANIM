@@ -187,3 +187,13 @@ Disagreements between the code and these facts, as of this reading:
 - grok-4.7: `low…xhigh`.
 
 The router's OpenAI ladder is now `none…max` without `ultra`, with per-model support (6.1-sol and astra start at `low`; astra refuses `none`). `gemini-3.8-flash-high` moved to `lanes.json` (agy CLI). The only disagreement left is the deprecated `gemini-3.5-flash` default, which is an operator decision.
+
+**gemini-3.5-flash replaced by gemini-3.6-flash, 2026-11-16, decided from the docs.**
+
+The `gemini-3.5-flash` page (aistudio.google.com/docs/models/gemini-3.5-flash) says:
+
+> **Deprecated:** Gemini 3.5 Flash (`gemini-3.5-flash`) is deprecated and has been replaced by Gemini 3.6 Flash (`gemini-3.6-flash`). … API requests to `gemini-3.5-flash` are automatically routed to `gemini-3.6-flash`. Update your model string to `gemini-3.6-flash` (or Gemini 3.8 Flash).
+
+The deprecations table names `gemini-3.6-flash` as the recommended replacement. `gemini-3.6-flash` is stable, "remains available for production use", and has no shutdown date announced. Its limits are 1,048,576 input and 65,536 output tokens, and its thinking levels are `minimal`, `low`, `medium` (the default) and `high`.
+
+Every live `gemini-3.5-flash` request already ran on 3.6, so renaming the default makes the record match what runs, with no change in behaviour. Moving to `gemini-3.8-flash`, the newest Flash model (which does not support `minimal`), would be a real model change and is left as a separate decision. The tickets README's latency table records past runs on 3.5 and is kept as history.
