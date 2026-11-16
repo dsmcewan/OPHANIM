@@ -244,9 +244,11 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     const ledgerDir = join(dir, "ledger");
     mkdirSync(ledgerDir);
     const anchor = createLedger({ dir: ledgerDir, authority, operator, order: controller });
-    const ledger = openLedger({ dir: ledgerDir, kinds: defineKinds(pantheonKinds({
-      authors: { inputs: a => a.key_id === "operator", decisions: a => a.key_id === "controller" } })), anchor });
-    const recorder = escalationRecorder({ ledger, controller, order: controller, operator });
+    const { lineageKinds: lk } = await import("../../ophanim/ledger/lineage-kinds.mjs");
+    const ledger = openLedger({ dir: ledgerDir, kinds: defineKinds({ ...pantheonKinds({
+      authors: { inputs: a => a.key_id === "operator", decisions: a => a.key_id === "controller" } }), ...lk() }), anchor });
+    const { lineageKinds, lineageRecorder } = await import("../../ophanim/ledger/lineage-kinds.mjs");
+    const recorder = { ...escalationRecorder({ ledger, controller, order: controller, operator }), ...lineageRecorder({ ledger, operator, order: controller }) };
     const clients = scripted({ cutAt: 20000 });
     const result = await runFixture(dir, clients, { ledger: recorder });
     assert.equal(result.shipped, true, JSON.stringify(result.error));
@@ -255,11 +257,20 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     assert.equal(esc.length, 1, "the one truncation decision is on the ledger");
     assert.deepEqual(ledger.payloadOf(esc[0]).decision.to.output, 32768);
     assert.deepEqual(esc[0].derived_from.slice(0, 2), [recorder.inputs.facts, recorder.inputs.seating], "it cites the inputs it was decided under");
+    const turns = entries.filter(e => e.kind === "turn").map(e => ledger.payloadOf(e));
+    assert.ok(turns.some(t => t.purpose === "plan") && turns.some(t => t.purpose === "work") && turns.some(t => t.purpose === "critique"),
+      "every model turn of the run is on the ledger, each signed by its own seat");
+    assert.ok(new Set(entries.filter(e => e.kind === "turn").map(e => e.author.key_id)).size >= 3);
+    const reviews = entries.filter(e => e.kind === "review");
+    assert.equal(reviews.length, 1, "the critique is a review entry citing the work it judged");
+    const workTurn = ledger.read().find(e => ledger.hashOf(e) === reviews[0].derived_from[0]);
+    assert.equal(ledger.payloadOf(workTurn).purpose, "work");
+    assert.equal(ledger.payloadOf(entries.find(e => ledger.hashOf(e) === workTurn.derived_from[0])).purpose, "plan", "the work cites the plan it followed");
     assert.equal(ledger.verify().ok, true, "every entry re-derives on replay");
     // A ledger that no longer verifies stops the next run before it relies on anything.
     const file = join(ledgerDir, "chain.jsonl");
     const lines = readFileSync(file, "utf8").trimEnd().split("\n");
-    const forged = JSON.parse(lines.at(-1)); forged.derived_from = forged.derived_from.slice(0, 1);
+    const forged = JSON.parse(lines.at(-1)); forged.author.note = "rewritten";
     writeFileSync(file, [...lines.slice(0, -1), JSON.stringify(forged)].join("\n") + "\n");
     await assert.rejects(runFixture(join(dir, "again"), scripted(), { ledger: recorder }), /ledger does not verify, refusing to run/);
   } finally { rmSync(dir, { recursive: true, force: true }); }

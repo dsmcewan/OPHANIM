@@ -221,7 +221,42 @@ export function makeClient(vendor, opts = {}) {
 // Passing nothing starts a fresh one. There is deliberately no third mode -- "continue the most
 // recent" is the cwd-and-recency proxy that produced defect C1, and it is not reintroduced here
 // just because a vendor offers it.
-export async function sendTurn({
+// THE SERVED MODEL. What a turn asked for and what answered can differ (an alias, a fallback, a
+// snapshot), and provenance must record what answered. Each surface reports it on its own response:
+// Responses `model`, Messages `model` (on `message_start` when streamed), Gemini `modelVersion`. The
+// client is observed at one point, so both paths, unary and streamed, report it the same way.
+const reported = o => (o && typeof o === "object" ? (o.model ?? o.modelVersion ?? o.response?.model ?? o.message?.model ?? null) : null);
+async function* watched(stream, seen) { for await (const e of stream) { seen.model ??= reported(e); yield e; } }
+function observe(fn, seen) {
+  return async (...args) => {
+    const out = await fn(...args);
+    if (out && typeof out[Symbol.asyncIterator] === "function") return watched(out, seen);
+    seen.model ??= reported(out);
+    return out;
+  };
+}
+function observedClient(client, seen) {
+  const wrap = (resource, methods) => {
+    if (!resource) return resource;
+    const o = Object.create(resource);
+    for (const m of methods) if (typeof resource[m] === "function") o[m] = observe(resource[m].bind(resource), seen);
+    return o;
+  };
+  const c = Object.create(client);
+  if (client.responses) c.responses = wrap(client.responses, ["create"]);
+  if (client.messages) c.messages = wrap(client.messages, ["create"]);
+  if (client.beta?.messages) c.beta = Object.assign(Object.create(client.beta), { messages: wrap(client.beta.messages, ["create"]) });
+  if (client.models) c.models = wrap(client.models, ["generateContent", "generateContentStream"]);
+  return c;
+}
+
+export async function sendTurn(args) {
+  const seen = { model: null };
+  const result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client });
+  return { ...result, served_model: seen.model };
+}
+
+async function sendTurnOn({
   client, vendor, model, prompt, previousResponseId, history, onEvent, label, continuity, extra = {},
   scope, sessionId, effort, architecture, contractHeader, signal, deadline,
 }) {

@@ -92,7 +92,8 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
 | K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `ophanim/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
 | K3 `gate` kind (ship gate verdicts) | On Hold | `ship({dryRun})` reads live ref state, so a verdict cannot yet be re-derived as of the commit it judged. It needs ship's gates to evaluate against named heads, as contributions now do. |
-| K4–K5 | On Hold → next | Dependencies converged; they start in order. Neither changes the pinned TELOS. |
+| K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `ophanim/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
+| K5 | In progress | Independent of K4, so it runs in parallel rather than after it. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
@@ -175,6 +176,42 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - `pantheon/tests/route-protocol.test.mjs` adds an end-to-end run. A truncation is recorded on the ledger, citing its inputs, and verifies on replay. A ledger altered afterwards stops the next run before it starts.
 - Suites:
   - `npm run test:proof`: 146 of 146, with TELOS at the pin;
+  - Pantheon: 811 pass, plus the 1 known environment failure;
+  - model client: 48 pass.
+
+## K4 implemented (2026-11-16)
+
+**Ordering.** K4, K5 and the K3 `gate` kind depend on nothing between them, so they run in parallel. Numbering them implied a sequence that did not exist.
+
+**The served model** (`pantheon/src/sdk/adapter.mjs`).
+- `sendTurn` observes the client at one point and returns `served_model`: what the provider reported answering, read from Responses `model`, Messages `model` (on `message_start` when streamed) and Gemini `modelVersion`.
+- It covers both the frontier and the direct path, unary and streamed.
+- A provider that reports nothing yields `null`, never a guess.
+- `run.json` turns carry it too.
+
+**Kinds** (`ophanim/ledger/lineage-kinds.mjs`).
+
+| Kind | Re-derives by |
+|---|---|
+| `turn` | <ul><li>Signed by the key of the seat occupancy that answered (`seat:<seat_id>#<occupancy_gen>`).</li><li>The reply matches its digest.</li><li>A response id may not be a placeholder (TELOS's own rule).</li><li>The same occupancy may not change model: a reseat is a new occupancy, with a new key.</li><li>A seat's turns chain by citation.</li></ul> |
+| `review` | <ul><li>Signed by the reviewing seat's key.</li><li>It cites the turns it reviews.</li><li>**Cold review:** no seat, lab or response anywhere in the cited lineage may have made the review.</li><li>A lane model names its lab, so a Claude model served through an agy seat counts as Anthropic.</li></ul> |
+
+**Per-seat keys.** The recorder generates a key per seat occupancy on first use and admits it with an operator `authority` entry before that seat's first entry. A forged turn or review then needs that seat's private key. Another admitted key cannot sign as it, unlike TELOS's shared HMAC secrets.
+
+**On the run path.**
+- `runOpenItem({ledger})` records every model turn (plan, work, critique; agy turns with `served_model: null`).
+- Work turns cite the plan turn they followed.
+- The critique is recorded as a `review` citing the work turn, so cold review covers the planner's lab as well. That is the same rule `assertReviewCutsAcross` enforces live, now re-derivable from the ledger.
+
+*Check.*
+- `ophanim/ledger/lineage-kinds.test.mjs` (4 tests) covers:
+  - per-seat signing and refusal of another key;
+  - reply, placeholder and model-change refusals;
+  - cold review across direct, transitive and lane-model lineage, and self-review;
+  - the served model on all three surfaces, unary and streamed.
+- `pantheon/tests/route-protocol.test.mjs`: the ledger run records turns from at least three seats, and a review citing the work, which cites the plan.
+- Suites:
+  - `npm run test:proof`: 150 of 150, with TELOS at the pin;
   - Pantheon: 811 pass, plus the 1 known environment failure;
   - model client: 48 pass.
 

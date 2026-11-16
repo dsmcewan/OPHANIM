@@ -182,6 +182,15 @@ export async function runOpenItem(spec, opts = {}) {
     if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
   }
   let escalationWork = 0;
+  // Turn entries by prompt, so a critique can cite the work it reviews; work cites the plan it followed.
+  const ledgerTurns = new Map();
+  let planTurn = null;
+  const recordTurn = t => {
+    if (!LEDGER?.recordTurn) return;
+    const hash = LEDGER.recordTurn({ ...t, cites: t.purpose === "work" && planTurn ? [planTurn] : [] });
+    ledgerTurns.set(t.prompt, { hash, served_model: t.served_model, response_id: t.response_id });
+    if (t.purpose === "plan") planTurn = hash;
+  };
   const escalated = (work, rec) => { (run.escalations ??= []).push(rec); LEDGER?.record(work, rec); };
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
   const TIER = spec.difficulty ?? "medium";
@@ -347,6 +356,9 @@ export async function runOpenItem(spec, opts = {}) {
       // arrives anyway it is recorded as not carried rather than silently dropped.
       run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
         tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage, ...(effort ? { effort_not_carried: effort } : {}) });
+      // The agy transports report no served model; it is recorded as unreported (null), never guessed.
+      recordTurn({ seat: { seat_id: `${vendor}-${purpose}`, vendor, mode: purpose, occupancy_gen: 1 },
+        requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt });
       progress({ event: "turn.done", seat: vendor, model, ms, detail: `${r.text.length} chars, ${r.tool_calls} tool call(s), ${r.subagent_calls} subagent(s)` });
       return r.text;
     }
@@ -387,7 +399,12 @@ export async function runOpenItem(spec, opts = {}) {
     if (!r.ok) { progress({ event: "turn.error", seat: vendor, model, detail: r.why }); throw new Error(`${vendor}/${purpose}: ${r.why}`); }
     const text = r.result.text ?? "";
     const ms = Date.now() - t0;
-    run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false });
+    run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
+      served_model: r.result.served_model ?? null });
+    // On the ledger: signed by this seat occupancy (a recorded reseat is a new occupancy), with the
+    // served model the provider reported beside the requested one.
+    recordTurn({ seat: { seat_id: `${vendor}-${purpose}`, vendor, mode: purpose, occupancy_gen: r.seat?.model_gen ?? 1 },
+      requested_model: model, served_model: r.result.served_model ?? null, response_id: r.result.response_id ?? null, reply: text, purpose, prompt });
     progress({ event: "turn.done", seat: vendor, model, ms, detail: `${text.length} chars` });
     return text;
   }
@@ -726,6 +743,7 @@ export async function runOpenItem(spec, opts = {}) {
               NO_TOOLS + `Output ONLY the complete new contents of ${c.sl.path}. No prose before or after, no markdown fence. ` +
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
             writeFileSync(join(outDir, `implementer-prompt-${c.sl.slot}-rev${rev}.txt`), p.prompt);
+            c.workPrompt = p.prompt;
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
               ...(c.forced ? { seat: c.forced } : c.model ? { pin: c.model } : {}),
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
@@ -888,6 +906,15 @@ export async function runOpenItem(spec, opts = {}) {
       if (!m) progress({ event: "verdict", seat: seat.vendor, detail: "unparseable → request_changes" });
       progress({ event: "verdict", seat: seat.vendor, slot: built.sl.slot, detail: verdict });
       const findings = verdict === "approve" ? [] : [{ severity: "block", note: (m ? reviewText : `no parseable verdict after a re-ask; failing closed. Reviewer text: ${reviewText}`).slice(0, 400) }];
+      // On the ledger, the review cites the work turn it judged (which cites the plan). Cold review is then
+      // re-derivable: no lab, seat or response in that lineage may have made the review.
+      const workTurn = built.workPrompt && ledgerTurns.get(built.workPrompt);
+      const critiqueTurn = ledgerTurns.get(p.prompt);
+      if (LEDGER?.recordReview && workTurn && critiqueTurn) {
+        LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
+          model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
+          verdict, findings: findings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
+      }
       const c = await publish({ ...board, ref: rref, author: seat, msg: "review",
         entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict, findings } }] });
       if (!c.ok) throw new Error(`critique publish: ${c.why}`);
