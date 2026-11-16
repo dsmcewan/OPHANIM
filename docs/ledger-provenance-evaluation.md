@@ -88,6 +88,33 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | Item | Status | Basis |
 |---|---|---|
 | TELOS as the single ledger as is | Resolved: no | Limits T1–T6 above, read from the pinned source. |
-| K1–K5 | On Hold | Proposed; awaiting the order to implement. None changes the pinned TELOS. |
+| K1 chain core | Resolved | `ophanim/ledger/chain.mjs`. See "K1 implemented" below. |
+| K2–K5 | On Hold → next | Their dependencies have converged (K1 is in), so they start in order without waiting to be asked. None changes the pinned TELOS. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
+
+## K1 implemented (2026-11-16)
+
+`ophanim/ledger/chain.mjs`: one append-only chain (`chain.jsonl`) plus content-addressed payload objects.
+
+| Property | How |
+|---|---|
+| One chain, many kinds | `defineKinds` builds a closed registry. Each kind declares `authors()`, `validate()` and `rederive(entry, view)`. An unknown kind is refused. `checkpoint` is reserved for the orderer. |
+| Per-author signatures | Each entry's body is signed by its own author's Ed25519 key. The orderer co-signs only its position (seq, parent, body hash). A key cannot write as another seat, and a key outside the keyring is refused. |
+| Re-derivation before append | `append` verifies the chain, then checks the new entry, including `rederive`, before writing. A refused entry leaves the ledger unchanged. An append onto a ledger that no longer verifies is refused. |
+| Citations | `derived_from` may cite only earlier entries. A kind's re-deriver reads them through `view`. |
+| Strict reading | A torn or unparseable line is an error. An altered payload object is refused, never repaired. |
+| Checkpoints | Every N entries, the orderer writes a checkpoint committing to the hash of every earlier entry. `verify({mode: "frontier"})` re-hashes the whole prefix, so an edit anywhere is caught, but re-checks signatures and re-derives only after the last checkpoint. |
+
+One trust assumption is stated rather than hidden: in frontier mode, entries before a checkpoint are trusted to have been verified when the orderer signed it. `verify({mode: "full"})` re-derives everything.
+
+*Check.* `ophanim/ledger/chain.test.mjs` (8 tests, in `npm run test:proof`) covers:
+- multi-author chains re-deriving;
+- refusal before writing;
+- the closed registry and per-kind authorship;
+- per-author signing and foreign keys;
+- forward citations;
+- edits, reorders, deletions, truncation and payload tampering caught;
+- frontier verification after checkpoints, with a pre-checkpoint edit still caught;
+- an append refusing to extend a broken ledger.
+
