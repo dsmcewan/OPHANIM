@@ -27,6 +27,7 @@ The coach supplies complete small exercise materials and records their version a
 4. Preserve each hint and revision. Check the published advancement criteria against the actual answer.
 5. Advance only when every applicable criterion has support. A coached correction is recorded as coached; it is not unassisted mastery.
 6. If understanding remains unresolved, record the missing prerequisite and a targeted remedial exercise. Stop the session instead of starting an unattended retry loop.
+7. Before each assessment handoff or session end, the coach must produce the next itinerary under its charter: evidence, objective, ordered actions, inputs/owners, advancement/stopping conditions and exact resume point. The coordinator saves it with the progress record; it does not authorize phase advancement by itself.
 
 There is one active exercise at a time. The coach's phase judgment is provisional instructional feedback. Final transfer requires a separate assessor who did not teach or write the learner's answer. If that assessor is unavailable, retain `ready_for_independent_check` rather than claiming mastery. A failed transfer returns to the relevant prerequisite; it does not erase previous attempts.
 
