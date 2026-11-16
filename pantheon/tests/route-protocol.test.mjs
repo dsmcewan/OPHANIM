@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nextStep, escalationRecord, verifyEscalation, routeFor, classifyOutcome } from "../src/route/protocol.mjs";
+import { nextStep, escalationRecord, verifyEscalation, routeFor, classifyOutcome, carriesEffort } from "../src/route/protocol.mjs";
 import { withEffort } from "../src/sdk/adapter.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { openCooldownStore } from "../../packages/model-client/index.mjs";
@@ -43,6 +43,33 @@ test("a truncated reply raises only the output budget, within the documented cei
   assert.equal(nextStep({ role: "scout", seat: { vendor: "xai", model: "grok-4.6", output: 1000 }, outcome: cut }).action, "stop",
     "an undocumented ceiling is not guessed");
   assert.equal(classifyOutcome({ kind: "critique", verdict: "request_changes" }).cause, "work-rejected");
+});
+
+test("an agy seat's effort is not carried, so a rejection steps a rung instead of raising a dropped dial", () => {
+  assert.equal(carriesEffort({ vendor: "agy_google", model: "claude-sonnet-4-6" }), false, "CLI lane model");
+  assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-3.6-flash" }), false, "agy-seat.py takes no effort either");
+  assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-4-argon" }), true, "frontier client carries it");
+  assert.equal(carriesEffort(sol), true);
+  const seating = { implementer: [
+    { vendor: "agy_google", model: "gemini-3.6-flash", band: "easy", basis: "TASTE", why: "x" },
+    { vendor: "openai", model: "gpt-6-sol", band: "hard", basis: "TASTE", why: "x" },
+  ] };
+  const agy = { vendor: "agy_google", model: "gemini-3.6-flash" };
+  const d = nextStep({ role: "implementer", seat: agy, outcome: rejected, seating });
+  assert.deepEqual([d.action, d.to.model, d.to.effort], ["step_rung", "gpt-6-sol", null], "documented efforts exist, but the transport drops them");
+  assert.match(d.why, /not carried by the agy transport/);
+  const rec = escalationRecord({ role: "implementer", seat: agy, outcome: rejected, steps: 0, seating });
+  assert.equal(verifyEscalation([rec], { seating }).ok, true);
+  // The planner's default ladder: the Sonnet lane rung steps to the Opus lane rung, then stops.
+  const up = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "claude-sonnet-4-6" }, outcome: rejected });
+  assert.deepEqual([up.action, up.to.model], ["step_rung", "claude-opus-4-6-thinking"]);
+  const top = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "claude-opus-4-6-thinking" }, outcome: rejected });
+  assert.equal(top.action, "stop");
+  assert.match(top.why, /not carried by the agy transport and there is no higher banded rung/);
+  const frontier = nextStep({ role: "implementer", seat: { vendor: "agy_google", model: "gemini-4-argon" }, outcome: rejected,
+    seating: { implementer: [{ vendor: "agy_google", model: "gemini-4-argon", band: "easy", basis: "TASTE", why: "x" }] } });
+  assert.deepEqual([frontier.action, frontier.to.effort], ["raise_effort", "high"], "the frontier path still raises the dial");
+  assert.equal(routeFor("implementer", { difficulty: "easy", seating }).effort, null, "routing names no effort for an agy seat");
 });
 
 test("decisions are records that re-derive, and a tampered or skipped record is refused", () => {

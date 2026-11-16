@@ -185,7 +185,13 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds cited figures for all 19 registry models, read 2026-11-16. Anything unstated stays UNRECORDED: xAI max output, and grok-build-0.1 and gemini-3.5-flash effort. |
 | Correcting the code-vs-docs disagreements | Resolved | All applied, including replacing the deprecated gemini-3.5-flash with gemini-3.6-flash. That follows Google's deprecation notice, and live requests were already routed there. The known-drift list is now empty. |
 | Routing and escalation protocol | Resolved | See "Routing and escalation protocol" below. |
-| Moving direct-path models onto the frontier client | On Hold | Now possible for models whose window and output are cited (OpenAI 4, Anthropic 4). It changes the request path, so it is a separate, explicit step. | Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
+| Moving direct-path models onto the frontier client | On Hold | Now possible for models whose window and output are cited (OpenAI 4, Anthropic 4). It changes the request path, so it is a separate, explicit step. |
+| Escalation for agy seats (CLI lane and agy-seat.py) | Resolved | Those transports take no effort setting, so the protocol no longer decides a `raise_effort` there that would be dropped. A rejection steps to the role's next harder rung, or stops. See "Escalation on agy seats" below. |
+| Signed transitions | On Hold | A governance decision on the pinned TELOS verifier, like the Q7 adjustment and P8/P9 admission. Unchanged. |
+| A possible move to gemini-3.8-flash | On Hold | It is held as an agy CLI lane name (`gemini-3.8-flash-high`), not a Gemini API id, so it cannot replace gemini-3.6-flash as the API default. Re-read Google's model list before deciding. |
+| Live view treating a model switch as an explicit reseat | On Hold | Seat records already refuse an unrecorded model change (`model_gen`). Letting `src/view/server.mjs` record a switch as a reseat is a design choice about that view. |
+
+Pantheon full suite, run locally with bubblewrap installed: 805 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects; it passes in CI.
 
 Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared contracts and on the controller) → Q6 → Q7 (measured adjustment). After each one, `npm test` on the Pantheon suite (CI runs the `bwrap` cases this sandbox cannot), and for Q7 the OPHANIM `prove`, `verify` and `investigate` paths.
 
@@ -239,8 +245,7 @@ All seven proposals add checks or record facts that already exist at runtime, so
   - a direct-path planner cut off at its default budget is retried at double that budget and ships, and the decision re-derives (now 16,384 → 32,768 under the medium tier);
   - a rejection of passing work records `raise_effort → high` and a pending review, and the resumed revision is sent at `high` with the findings and ships.
 
-**Not covered yet:**
-- **Stepping into the agy CLI lane.** The lane takes a model but no effort, so a stepped-to lane model runs at its own default.
+**Stepping into or out of an agy seat.** Covered since: see "Escalation on agy seats" below.
 
 
 ## Swarms on the board (implemented 2026-11-16)
@@ -316,4 +321,26 @@ Items 1 and 3 are done here.
 The route-protocol and swarm escalation cases now start from the medium tier (16,384 → 32,768).
 
 Pantheon suite: 804 pass, plus the 1 known environment failure. Model client: 45 pass. OPHANIM proof: 104 pass, with the same 21 failures that need TELOS.
+
+
+## Escalation on agy seats (2026-11-16)
+
+**The gap.** `run-item.mjs` sends every non-frontier `agy_google` seat through the Antigravity transports: the CLI lane for planner and implementer, and `agy-seat.py` for scout and reviewer. Neither takes an effort setting. The protocol did not know that. For a seat whose model has documented efforts (for example gemini-3.6-flash), a rejection produced `raise_effort`. That value was then dropped, and the revision re-ran the same seat unchanged, spending one of the four escalation steps on nothing.
+
+**Implementation.**
+- `carriesEffort(seat)` in `pantheon/src/route/protocol.mjs` returns false for lane models (`lanes.json`, transport `agy-cli`) and for any non-frontier `agy_google` seat. Frontier models on `agy_google` (gemini-4-argon, gemini-4-carbon) still carry it.
+- On a rejection, a seat that cannot carry effort goes straight to the role's next harder rung, or stops. The decision says why ("not carried by the agy transport"), and `verifyEscalation` re-derives it as before.
+- `routeFor` names no effort for such a seat.
+- If an effort reaches the agy path anyway, the turn record carries `effort_not_carried` instead of dropping it silently.
+
+**The planner's default ladder now reads:** Sonnet 4.6 (lane) → Opus 4.6 thinking (lane), then stop.
+
+*Check.* `pantheon/tests/route-protocol.test.mjs` covers:
+- which seats carry effort;
+- an agy seat with documented efforts stepping a rung instead of raising effort, with the record re-deriving;
+- the planner's lane ladder;
+- a frontier model on `agy_google` still raising effort;
+- routing naming no effort for an agy seat.
+
+Pantheon suite: 805 pass, plus the 1 known environment failure.
 

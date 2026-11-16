@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { FACTS } from "../config/facts.mjs";
 import { LANES } from "../config/models.mjs";
 import { candidatesFor, selectFor, shouldFallThrough, SEATING, DIFFICULTY } from "../role/seating.mjs";
+import { isFrontier } from "../../../packages/model-client/index.mjs";
 
 export const PROTOCOL = "pantheon.escalation/v1";
 export const MAX_STEPS = 4;
@@ -43,6 +44,18 @@ export function documentedDefaultEffort(model, facts = FACTS) {
 /** The documented synchronous output ceiling, or null when unrecorded. */
 export function documentedOutput(model, facts = FACTS) {
   return cited(facts.models[model]?.output);
+}
+
+/**
+ * Whether the seat's transport can carry a reasoning-effort setting. The agy seats cannot: the CLI
+ * lane (lanes.json, transport agy-cli) and agy-seat.py both take a model and a role card, nothing
+ * else, and run-item.mjs sends every non-frontier agy_google seat through them. A raised effort there
+ * would be dropped and the revision would re-run the same seat unchanged, so the protocol does not
+ * offer one: the next step is the role's next harder rung.
+ */
+export function carriesEffort(seat) {
+  if (Object.values(LANES).some(lane => lane[seat.model]?.transport === "agy-cli")) return false;
+  return !(seat.vendor === "agy_google" && !isFrontier(seat.model));
 }
 
 /** What a recorded outcome means for the seat. Pure over the record. */
@@ -90,8 +103,10 @@ export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS,
     return decide("stop", null, ceiling ? `already at the documented output ceiling ${ceiling}` : "the model's output ceiling is not documented");
   }
 
-  // work-rejected: effort first, then the role's next banded rung.
-  const ladder = documentedEfforts(seat.model, facts);
+  // work-rejected: effort first (where the transport carries it), then the role's next banded rung.
+  const carried = carriesEffort(seat);
+  const ladder = carried ? documentedEfforts(seat.model, facts) : [];
+  const dial = !carried ? "not carried by the agy transport" : ladder.length ? "at its top" : "not documented";
   const start = seat.effort ?? documentedDefaultEffort(seat.model, facts);
   const i = start === null ? -1 : ladder.indexOf(start);
   if (i !== -1 && i + 1 < ladder.length) {
@@ -105,9 +120,9 @@ export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS,
   const next = here === -1 ? null : cands.filter(c => level(c) > here).sort((a, b) => level(a) - level(b))[0] ?? null;
   if (next) {
     return decide("step_rung", { vendor: next.vendor, model: next.model, effort: null, output: from.output },
-      `${seat.model}'s documented effort dial is ${ladder.length ? "at its top" : "not documented"}; up a rung to ${next.model}`);
+      `${seat.model}'s effort dial is ${dial}; up a rung to ${next.model}`);
   }
-  return decide("stop", null, `${seat.model} has no documented effort above ${start ?? "its default"} and no higher banded rung for ${role}`);
+  return decide("stop", null, `${seat.model}'s effort dial is ${dial} and there is no higher banded rung for ${role}`);
 }
 
 /** The decision as a record: inputs, decision, and a digest a later step checks against the trail. */
@@ -153,6 +168,6 @@ export function routeFor(role, { difficulty = "medium", needsContext = null, avo
   const current = table[role].filter(c => !deprecated(c));
   const pick = selectFor(role, { difficulty, seating: { ...table, [role]: current.length ? current : table[role] }, avoid });
   if (!pick.ok) return { ...pick, skipped };
-  return { ...pick, effort: pick.effort ?? documentedDefaultEffort(pick.model, facts), skipped,
+  return { ...pick, effort: carriesEffort(pick) ? (pick.effort ?? documentedDefaultEffort(pick.model, facts)) : null, skipped,
     deprecated: deprecated(pick), basis: facts.models[pick.model]?.window?.source ?? (isLane(pick.model) ? "lanes.json" : null) };
 }
