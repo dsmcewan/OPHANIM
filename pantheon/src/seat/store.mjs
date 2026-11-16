@@ -80,6 +80,12 @@ export function saveSeat(seat, patch, { home = pantheonHome() } = {}) {
     throw new Error("saveSeat: history_len must be a non-negative integer");
   }
   if(patch.history_generation!==undefined&&!/^[a-f0-9]{64}$/.test(patch.history_generation))throw new Error('Invalid history generation digest');
+  // The model that holds this conversation. Identity, not content: a model id string and a counter
+  // that advances only on an explicit reseat, so a silent model swap cannot hide inside one seat.
+  if (patch.model !== undefined && (typeof patch.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/.test(patch.model))) {
+    throw new Error("saveSeat: model must be a model id string");
+  }
+  if (patch.model_gen !== undefined && !(Number.isInteger(patch.model_gen) && patch.model_gen >= 1)) throw new Error("saveSeat: model_gen must be an integer >= 1");
 
   const existing = loadSeat(seat, { home });
   const next = {
@@ -96,6 +102,7 @@ export function saveSeat(seat, patch, { home = pantheonHome() } = {}) {
     // mark short of the truth. This number is the truth: the seat saw the tail, so the tail is real.
     history_len: existing?.history_len ?? null,
     ...(existing?.history_generation?{history_generation:existing.history_generation}:{}),
+    ...(existing?.model ? { model: existing.model, model_gen: existing.model_gen ?? 1 } : {}),
     updated_at: new Date().toISOString(),
   };
   if (patch.token) {
@@ -106,6 +113,8 @@ export function saveSeat(seat, patch, { home = pantheonHome() } = {}) {
   if (patch.exchanges) next.exchanges = patch.exchanges;
   if (patch.history_len !== undefined) next.history_len = patch.history_len;
   if (patch.history_generation !== undefined) next.history_generation = patch.history_generation;
+  if (patch.model !== undefined) next.model = patch.model;
+  if (patch.model_gen !== undefined) next.model_gen = patch.model_gen;
 
   const p = seatPath(seat, home);
   mkdirSync(join(home, "seats"), { recursive: true });

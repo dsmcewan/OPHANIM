@@ -103,6 +103,15 @@ Each of these needs a fact or a decision this change does not have.
 4. **Seat records don't record the model.**
    - A seat keyed on `vendor + purpose + cwd` can be continued by a different model of the same vendor. Replay history, including signatures produced by one model, is then sent to another.
    - Recording the model in the seat record would mean widening `saveSeat`'s field allowlist.
+   - **Implemented.**
+     - `saveSeat` accepts a validated `model` and a `model_gen` counter.
+     - `sdkTurn` resolves the answering model (the explicit one, or the adapter default) and records it.
+     - A turn by a different model is refused with `MODEL_CHANGED`, leaving the record untouched, unless the caller passes `reseatModel: true`. Then the change is recorded and `model_gen` advances.
+     - A legacy seat without a model adopts it on its next turn, without counting that as a reseat.
+   - **Who is affected:**
+     - `run-item` is not: it already keys each model to its own seat (`purpose@pool@model`).
+     - The live view is: it keys seats by `vendor/purpose`, so switching a pane's model now shows `MODEL_CHANGED` instead of continuing silently.
+   - *Check:* `pantheon/tests/seat-model.test.mjs`.
 
 ## 5. How to check
 

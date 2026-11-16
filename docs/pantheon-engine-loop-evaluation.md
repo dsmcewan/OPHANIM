@@ -180,6 +180,7 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | P8/P9 admission through the efficiency gate | On Hold | Same pinned verifier; unchanged. |
 | 1,024-token default on direct Messages calls | On Hold | A policy choice; truncation is now refused rather than silent (M1). |
 | OpenAI `reasoning.context` conflict | Resolved | Settled from the vendor docs. Both paths now share one rule: pass validated values through, request `all_turns` only where documented, never send the field to xAI, and record the effective mode. See `pantheon-model-loop-evaluation.md` §4.3. |
+| Seat (conversation) records carry the model | Resolved | Recorded in `saveSeat`. A model change is refused unless it is an explicit, recorded reseat (`model_gen`). |
 | `all_turns` support on GPT-6 Astra, Sol and Luna | On Hold | The docs conflict on Astra and say nothing on Sol or Luna. These models use their default, and the recorded effective mode will show the answer once a live call is made. |
 | Capability records for 13 direct-path models | On Hold | Vendor figures are UNRECORDED. Inventing them is refused by the facts spec. | Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
 
