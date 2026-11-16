@@ -1,8 +1,9 @@
 # Loop evaluation: OPHANIM against the loop operating principle
 
-Status: evaluation and proposals. P1, P3 and P4 are implemented on this branch
+Status: evaluation and proposals. P1, P2, P3, P4 and P5 are implemented on this branch
 (`ophanim/runtime.mjs`, `ophanim/cli.mjs`, `ophanim/efficiency/assessment.mjs`,
-`ophanim/governance.mjs`; tests in `ophanim/tests/loop-equilibrium.test.mjs`).
+`ophanim/governance.mjs`, `ophanim/board.mjs`, `ophanim/proof.mjs`; tests in
+`ophanim/tests/loop-equilibrium.test.mjs`).
 The remaining proposals are not yet implemented.
 Base commit: `3b00139` (main after PR #2).
 
@@ -129,6 +130,7 @@ Add a pure `verifyRuntimeChain(stateDir)` to `board.mjs`. It walks `refs/board/o
 Call it from `verifyProof` for every entry in `finalStates`, and make `status` print `{head, chainVerified}`.
 
 - *Keeps:* read-only, no new state.
+- *Implemented:* `verifyRuntimeChain` in `ophanim/board.mjs`. `verifyProof` checks every final state's chain and reports `chains`. `status` prints `chain` and reports a failed check instead of throwing. When a `work.started` event carries P4 assignment metadata, the verifier also recomputes the wave's ready set, the event's rank and the worker choice. Older events without assignment metadata are counted as `legacyAssignments`.
 - *Validate:* `verify` on a fresh `prove` output passes. A unit test that hand-edits a mid-chain snapshot (accepted output flipped, re-published under the controller) must fail.
 
 ### P3. One success shape and required governance (fixes G4)
@@ -149,6 +151,7 @@ Add an `assignment` object to the `work.started` event: `policy` (`ophanim.assig
 
 Replace the mutable `assessment-costs/<use>.json` with write-once `assessment-costs/<use>/<traceSha>.json` files, written with `put`, each holding `{traceSha, assessmentCostMs, interrupted}`. `recordValue` computes the totals by reading those records. Two runs over the same trace collapse to one file, because the record is keyed by `traceSha`. That removes the read-modify-write race.
 
+- *Implemented:* `recordAssessmentDebit` and `readAssessmentDebits` in `ophanim/efficiency/assessment.mjs`. The records are `debit-<traceSha>.json` and `interrupted-<traceSha>.json`, and each is written once. Existing aggregate files from the old mutable ledger are still read but never rewritten. An unexpected file in the ledger fails closed. `measuredValue.debitRecord` names this assessment's debit, and `verifyEfficiencyRecord` checks that the debit binds to the assessment's trace. The cumulative total grows as other states add debits, so it is derived at read time rather than re-verified later.
 - *Validate:* `verifyEfficiencyRecord` gains a check that `measuredValue` equals the recomputed sum. Run the `demo --efficiency-root` flow twice over a shared ledger and get identical totals. The existing `recovery.test.mjs` interruption cases still pass.
 
 ### P6. Delta snapshots with checkpoints (fixes G2; larger, versioned)

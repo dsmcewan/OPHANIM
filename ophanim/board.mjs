@@ -92,3 +92,71 @@ export async function publishWorkerCandidate({board,ref,id,worker,attempt,candid
     return {commit:result.commit,entry:result.written[0].cid,blob:board.store.get(result.written[0].cid).links.log};
   },async release(){return board.runtime.release({resource,holder:seat,gen:lease.gen});}};
 }
+
+// Walks the controller ref from its head and checks that every snapshot is a
+// single recorded transition of its parent: one event, revision+1, and no
+// rewrite of accepted obligations, confirmed effects, specs or releases.
+// Assignment metadata on work.started is recomputed from the wave's base state.
+export const CHAIN_LIMIT=100000;
+const ASSIGNMENT='ophanim.assignment.sorted-id-round-robin/v1';
+export function verifyRuntimeChain(stateDir,{head}={}){
+  const root=boardPath(stateDir);
+  const store=openStore(root,{readOnly:true}),refs=openRefs(root,{store,readOnly:true});
+  const tip=head??refs.resolve(REF);
+  if(!tip)return {ok:true,head:null,commits:0,assignmentsChecked:0,legacyAssignments:0};
+  const commits=[];
+  for(let cid=tip;cid;){
+    if(commits.length>=CHAIN_LIMIT)throw Error('Runtime chain bound exceeded');
+    const commit=store.get(cid);
+    if((commit.parents??[]).length>1)throw Error(`Runtime chain must be linear: ${cid}`);
+    commits.push(cid);cid=commit.parents?.[0]??null;
+  }
+  commits.reverse();
+  const same=(a,b)=>canonical(a)===canonical(b);
+  const fail=(cid,message)=>{throw Error(`Runtime chain ${cid}: ${message}`);};
+  let parent=null,waveBase=null,wave=null,assignmentsChecked=0,legacyAssignments=0;
+  for(const cid of commits){
+    const state=decode(store,cid);
+    const event=state.events.at(-1);
+    if(!parent){
+      if(state.revision!==1||state.events.length!==1)fail(cid,'chain must start at revision 1 with one event');
+    }else{
+      if(state.revision!==parent.revision+1)fail(cid,'revision must advance by one');
+      if(state.events.length!==parent.events.length+1||!same(state.events.slice(0,-1),parent.events))fail(cid,'events must be append-only, one per transition');
+      for(const [id,row] of Object.entries(parent.obligations)){
+        const next=state.obligations[id];
+        if(!next)fail(cid,`obligation removed: ${id}`);
+        if(!same(next.spec,row.spec))fail(cid,`obligation spec changed: ${id}`);
+        if(row.status==='accepted'&&!same(next,row))fail(cid,`accepted obligation changed: ${id}`);
+      }
+      for(const [key,effect] of Object.entries(parent.effects)){
+        const next=state.effects[key];
+        if(!next||next.sha256!==effect.sha256||next.obligationId!==effect.obligationId)fail(cid,`effect identity changed: ${key}`);
+        if(effect.status==='confirmed'&&!same(next,effect))fail(cid,`confirmed effect changed: ${key}`);
+      }
+      for(const [id,release] of Object.entries(parent.releases))if(!same(state.releases[id],release))fail(cid,`release changed: ${id}`);
+      if(state.activeRelease!==parent.activeRelease&&event.type!=='release.activated')fail(cid,'active release changed without activation');
+      if(state.releaseHistory.length<parent.releaseHistory.length||!same(state.releaseHistory.slice(0,parent.releaseHistory.length),parent.releaseHistory))fail(cid,'release history rewritten');
+    }
+    if(event.sequence!==state.revision)fail(cid,'event sequence differs from revision');
+    if(event.type==='work.started'){
+      const a=event.assignment;
+      if(a===undefined)legacyAssignments++;
+      else{
+        if(!parent)fail(cid,'assignment without a base state');
+        if(a.rank===0){waveBase=parent;wave=a.readySetSha;}
+        else if(!waveBase||wave!==a.readySetSha)fail(cid,'assignment rank outside its recorded wave');
+        const base=waveBase.obligations;
+        const ready=Object.values(base).filter(row=>row.status==='pending'&&row.spec.dependsOn.every(dep=>base[dep]?.status==='accepted')).map(row=>row.spec.id).sort();
+        const row=base[event.id],workers=state.releases[state.activeRelease].workers;
+        const eligible=row?workers.filter(w=>w.kinds.includes(row.spec.kind)&&w.scopes.includes(row.spec.scope)):[];
+        if(a.policy!==ASSIGNMENT||a.readySetSha!==digest(ready)||a.ready!==ready.length||ready[a.rank]!==event.id||
+          !Number.isInteger(a.slots)||a.rank>=a.slots||!eligible.length||a.choice!==row.releaseAttempts%eligible.length||eligible[a.choice].id!==event.worker)
+          fail(cid,`assignment does not follow from the recorded ready set: ${event.id}`);
+        assignmentsChecked++;
+      }
+    }else if(event.type!=='work.held'){waveBase=null;wave=null;}
+    parent=state;
+  }
+  return {ok:true,head:tip,commits:commits.length,assignmentsChecked,legacyAssignments};
+}

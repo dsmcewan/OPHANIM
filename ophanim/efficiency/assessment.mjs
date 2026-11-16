@@ -116,6 +116,52 @@ function boundAcceptedTrace(trace,snapshot) {
   catch{return false;}
 }
 
+// Each assessment leaves one write-once debit keyed by its trace, and each
+// interrupted assessment one marker keyed by the interrupted trace. Totals are
+// derived by reading them; no ledger file is ever rewritten.
+const DEBIT_SCHEMA='ophanim.efficiency-debit/v1';
+const INTERRUPTION_SCHEMA='ophanim.efficiency-interruption/v1';
+function once(file,value) {
+  if(exists(file))return read(file);
+  const temporary=`${file}.${process.pid}.debit.tmp`;
+  const fd=fs.openSync(temporary,'wx',0o600);
+  try{fs.writeFileSync(fd,canonical(value));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+  try{fs.linkSync(temporary,file);}
+  catch(error){if(error.code!=='EEXIST')throw error;}
+  finally{fs.unlinkSync(temporary);}
+  return read(file);
+}
+export function recordAssessmentDebit({usesDir,useFile,traceSha,assessmentCostMs,charged,interrupted}) {
+  const costs=directory(path.join(usesDir,'assessment-costs'));
+  const dir=directory(path.join(costs,path.basename(useFile,'.json')));
+  const debit=once(path.join(dir,`debit-${traceSha}.json`),{schema:DEBIT_SCHEMA,traceSha,assessmentCostMs:charged?assessmentCostMs:0});
+  if(debit.schema!==DEBIT_SCHEMA||debit.traceSha!==traceSha||!Number.isFinite(debit.assessmentCostMs)||debit.assessmentCostMs<0)throw Error('Retained efficiency debit differs');
+  if(interrupted)once(path.join(dir,`interrupted-${interrupted.traceSha}.json`),{schema:INTERRUPTION_SCHEMA,traceSha:interrupted.traceSha});
+  return {file:path.join(dir,`debit-${traceSha}.json`),debit};
+}
+export function readAssessmentDebits(usesDir) {
+  const costs=path.join(usesDir,'assessment-costs');
+  const totals={additionalAssessmentCostMs:0,unmeasuredAssessments:0};
+  if(!exists(costs))return totals;
+  for(const entry of fs.readdirSync(costs,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){
+    const file=path.join(costs,entry.name);
+    if(entry.isFile()&&entry.name.endsWith('.json')){
+      // Aggregate written by the earlier mutable ledger; read, never rewritten.
+      const legacy=read(file);
+      totals.additionalAssessmentCostMs+=legacy.additionalAssessmentCostMs??0;totals.unmeasuredAssessments+=legacy.unmeasuredAssessments??0;
+    }else if(entry.isDirectory()){
+      for(const name of fs.readdirSync(file).sort()){
+        if(!name.endsWith('.json'))continue;
+        const record=read(path.join(file,name));
+        if(record.schema===DEBIT_SCHEMA&&name===`debit-${record.traceSha}.json`)totals.additionalAssessmentCostMs+=record.assessmentCostMs;
+        else if(record.schema===INTERRUPTION_SCHEMA&&name===`interrupted-${record.traceSha}.json`)totals.unmeasuredAssessments++;
+        else throw Error('Unexpected efficiency ledger record');
+      }
+    }
+  }
+  return totals;
+}
+
 function recordValue(use,output,trace,assessmentCostMs,interrupted) {
   const efficiency=use.promotion.efficiency;
   const resultFile=use.use.replace(/\.json$/,'.result.json');
@@ -125,24 +171,13 @@ function recordValue(use,output,trace,assessmentCostMs,interrupted) {
     observedSavingMs:efficiency.baselineConservativeMs-output.durationMs-assessmentCostMs,
   });
   const uses=path.dirname(use.use);
-  const costs=directory(path.join(uses,'assessment-costs'));
-  const costFile=path.join(costs,path.basename(use.use));
-  const debit=exists(costFile)?read(costFile):{additionalAssessmentCostMs:0,unmeasuredAssessments:0};
-  if(interrupted&&debit.lastInterruptedTraceSha!==interrupted.traceSha){
-    debit.lastInterruptedTraceSha=interrupted.traceSha;
-    debit.unmeasuredAssessments++;
-  }
-  if(debit.lastTraceSha!==traceSha){
-    debit.lastTraceSha=traceSha;
-    if(!exists(resultFile)||read(resultFile).traceSha!==traceSha)debit.additionalAssessmentCostMs+=assessmentCostMs;
-  }
-  writeJson(costFile,debit);
+  // A realized result already deducts this trace's assessment cost.
+  const charged=!exists(resultFile)||read(resultFile).traceSha!==traceSha;
+  const {file}=recordAssessmentDebit({usesDir:uses,useFile:use.use,traceSha,assessmentCostMs,charged,interrupted});
   const realized=fs.readdirSync(uses).filter(name=>name.endsWith('.result.json')).map(name=>read(path.join(uses,name)));
-  const debits=fs.readdirSync(costs).filter(name=>name.endsWith('.json')).map(name=>read(path.join(costs,name)));
-  const additionalAssessmentCostMs=debits.reduce((sum,row)=>sum+row.additionalAssessmentCostMs,0);
-  const unmeasuredAssessments=debits.reduce((sum,row)=>sum+row.unmeasuredAssessments,0);
+  const {additionalAssessmentCostMs,unmeasuredAssessments}=readAssessmentDebits(uses);
   return {qualifiedConvergences:realized.length,originalOptimizationCostMs:efficiency.totalAssessmentCostMs,
-    additionalAssessmentCostMs,unmeasuredAssessments,measuredNetIsUpperBound:unmeasuredAssessments>0,
+    additionalAssessmentCostMs,unmeasuredAssessments,measuredNetIsUpperBound:unmeasuredAssessments>0,debitRecord:file,
     measuredNetMs:realized.reduce((sum,row)=>sum+row.observedSavingMs,-efficiency.totalAssessmentCostMs-additionalAssessmentCostMs)};
 }
 
@@ -317,6 +352,12 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
         verifyInvestigationReceipt({receipt,trace,registry,variables,traceTrusted:binding?.complete||boundAcceptedTrace(trace,snapshot)});
       }
     }
+  }
+  const debitRecord=assessment.measuredValue?.debitRecord;
+  if(debitRecord!==undefined){
+    const debit=read(debitRecord);
+    if(path.basename(debitRecord)!==`debit-${assessment.traceSha}.json`||debit.schema!==DEBIT_SCHEMA||debit.traceSha!==assessment.traceSha||
+      !Number.isFinite(debit.assessmentCostMs)||debit.assessmentCostMs<0)throw Error('Efficiency debit differs from the assessment');
   }
   if(assessment.experiment?.manifestFile){
     const manifest=path.join(path.dirname(reportFile),'experiment','manifest.json');

@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,canonical,digest,writeJson,outputProjection,intervalSummary} from './fixtures.mjs';
 import {runRuntime,loadRuntime,activateRelease,rollbackRelease} from './runtime.mjs';
-import {readRuntimeSnapshot} from './board.mjs';
+import {readRuntimeSnapshot,verifyRuntimeChain} from './board.mjs';
 import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
 import {assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord} from './efficiency/assessment.mjs';
 import {recoverInterruptedAssessment} from './efficiency/recovery.mjs';
@@ -228,7 +228,9 @@ async function main() {
   if(command==='status') {
     if(!opts.state)throw Error('status requires --state');
     const state=loadRuntime(path.resolve(opts.state));
-    process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,activeRelease:state.activeRelease,obligations:Object.fromEntries(Object.entries(state.obligations).map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),effects:state.effects}:null,null,2)+'\n');return;
+    let chain;
+    try{chain=verifyRuntimeChain(path.resolve(opts.state));}catch(error){chain={ok:false,reason:String(error.message).slice(0,500)};}
+    process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,chain,activeRelease:state.activeRelease,obligations:Object.fromEntries(Object.entries(state.obligations).map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),effects:state.effects}:null,null,2)+'\n');return;
   }
   if(command==='investigate') {
     if(opts['historical-report']){
