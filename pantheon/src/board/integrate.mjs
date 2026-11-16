@@ -93,6 +93,37 @@ export async function ship({
   store, refs, runtime = null, ref, from, actor, graft = [], table = SHIP_POLICY, now = Date.now(),
   dryRun = false,
 }) {
+  const ev = evaluateGates({ store, refs, runtime, ref, from, actor, graft, table, now });
+  const verdict = verdictOf(ev);
+  if (!verdict.ok || dryRun) return verdict;
+  const { head, fromCid, artifacts, reviews, plan, candidates, gates } = ev;
+
+  // One commit. Parents are the board head, the source, and anything explicitly grafted -- nothing
+  // else, so a scout orphan cannot become an ancestor by being reachable somewhere.
+  const parents = [...new Set([head, fromCid, ...graft].filter(Boolean))];
+  const tree = putTree(store, plan.slots);
+  const commit = putCommit(store, { parents, tree, author: actor, lease_gen: null, records: [],
+    msg: `ship ${from} into ${ref}: ${artifacts.map(a => a.slot).join(", ")}` });
+  const changed = changedSlots(store, head, commit);
+  // `ship: true` is what lets a bound-review slot land on a board ref; nothing else may say it.
+  const swap = await refs.swap({ name: ref, expected: head, next: commit, author: actor, changedSlots: changed, msg: "ship", ship: true });
+  if (!swap.ok) return { ok: false, refused: "CAS", gates, why: swap.why, head, unchanged: true };
+  if (runtime) { try { runtime.recordSpend({ commit, seat: actor.vendor, vendor: actor.vendor, turns: 0 }); } catch { /* side log */ } }
+  return { ok: true, commit, from: head, changed, gates, candidates, shipped: artifacts.map(a => a.slot),
+    acks: reviews.flatMap(r => r.acks) };
+}
+
+/**
+ * Every gate, evaluated synchronously and without writing anything. `ship` runs this and then, only
+ * when every gate holds and it is not a dry run, writes its one commit.
+ *
+ * The reads, all of them: `refs.resolve(ref)`, `refs.resolve(from)` and, inside boardState,
+ * `refs.list()` and `refs.resolve(offer_ref)` (neither of which any gate consumes); the content-
+ * addressed store; `runtime.leases()` for LEASE, judged against `now` (boardState also calls
+ * `runtime.occupancy()` and `runtime.budget()`, which no gate consumes). Nothing else. That list is
+ * what lets `gatesAt` below re-run the same gates against named heads.
+ */
+function evaluateGates({ store, refs, runtime, ref, from, actor, graft, table, now }) {
   const gates = [];
   const gate = (name, ok, why, extra) => { gates.push({ gate: name, ok, why: ok ? null : why, ...extra }); return ok; };
 
@@ -187,27 +218,16 @@ export async function ship({
       evaluated: (plan?.decisions ?? []).filter(d => candidates.includes(d.slot)).map(d => d.slot) });
 
   const failed = GATES.map(g => gates.find(x => x.gate === g)).filter(g => g && !g.ok);
+  return { gates, failed, head, fromCid, artifacts, reviews, plan, candidates };
+}
+
+/** What a refused or dry-run ship returns. A refusal is a no-op: nothing has been put and no name has moved. */
+function verdictOf({ gates, failed, head, artifacts, reviews, candidates }) {
   if (failed.length) {
-    // A no-op refusal. Nothing has been put and no name has moved.
     return { ok: false, refused: failed[0].gate, failed: failed.map(f => f.gate), gates, candidates,
       why: failed.map(f => `${f.gate}: ${f.why}`).join(" | "), head, unchanged: true };
   }
-
-  if (dryRun) return { ok: true, dryRun: true, gates, head, candidates, would_ship: artifacts.map(a => a.slot),
-    acks: reviews.flatMap(r => r.acks) };
-
-  // One commit. Parents are the board head, the source, and anything explicitly grafted -- nothing
-  // else, so a scout orphan cannot become an ancestor by being reachable somewhere.
-  const parents = [...new Set([head, fromCid, ...graft].filter(Boolean))];
-  const tree = putTree(store, plan.slots);
-  const commit = putCommit(store, { parents, tree, author: actor, lease_gen: null, records: [],
-    msg: `ship ${from} into ${ref}: ${artifacts.map(a => a.slot).join(", ")}` });
-  const changed = changedSlots(store, head, commit);
-  // `ship: true` is what lets a bound-review slot land on a board ref; nothing else may say it.
-  const swap = await refs.swap({ name: ref, expected: head, next: commit, author: actor, changedSlots: changed, msg: "ship", ship: true });
-  if (!swap.ok) return { ok: false, refused: "CAS", gates, why: swap.why, head, unchanged: true };
-  if (runtime) { try { runtime.recordSpend({ commit, seat: actor.vendor, vendor: actor.vendor, turns: 0 }); } catch { /* side log */ } }
-  return { ok: true, commit, from: head, changed, gates, candidates, shipped: artifacts.map(a => a.slot),
+  return { ok: true, dryRun: true, gates, head, candidates, would_ship: artifacts.map(a => a.slot),
     acks: reviews.flatMap(r => r.acks) };
 }
 
@@ -232,7 +252,10 @@ export const mayShip = actor => {
  * from. Pass the result straight to `enforce` -- never hand-build the action.
  */
 export async function shipClaim({ store, refs, runtime = null, ref, from, actor, graft = [], now = Date.now() }) {
-  const dry = await ship({ store, refs, runtime, ref, from, actor, graft, now, dryRun: true });
+  return claimOf(actor, await ship({ store, refs, runtime, ref, from, actor, graft, now, dryRun: true }));
+}
+
+function claimOf(actor, dry) {
   const g = name => dry.gates.find(x => x.gate === name);
   const review = g("REVIEW"), tests = g("TESTS");
   return {
@@ -248,4 +271,32 @@ export async function shipClaim({ store, refs, runtime = null, ref, from, actor,
     gates: dry.gates,
     why: dry.ok ? null : dry.why,
   };
+}
+
+/**
+ * A read-only refs view pinned to named heads ({name, cid}, as recorded). `resolve` answers from the
+ * record and nothing else; a name that was not recorded resolves to nothing, as a missing ref does.
+ * Names are still parsed, so a malformed name throws exactly where the live view would.
+ */
+export function pinnedRefs(heads) {
+  const at = new Map(heads.map(h => [h.name, h.cid]));
+  return {
+    resolve: name => { parseRef(name); return at.get(name) ?? null; },
+    list: () => heads.map(({ name, cid }) => ({ name, cid })),
+    swap: () => Promise.reject(new Error("pinnedRefs: a pinned view is read-only")),
+  };
+}
+
+/**
+ * `shipClaim`, as of named heads: the same gates (via the same evaluator a live ship runs), reading the
+ * board through `pinnedRefs(heads)` and the lease table through `leases` (the rows LEASE read, as
+ * recorded), judged at `now`. Synchronous and write-free, so a ledger can re-derive a recorded verdict
+ * after the board has moved on. A live ship is not changed by this; it is a second caller of the
+ * evaluator, never a second copy of it.
+ */
+export function gatesAt({ store, heads, ref, from, actor, graft = [], leases = {}, now }) {
+  if (!Number.isFinite(now)) throw new Error("gatesAt: `now` is part of the verdict (LEASE reads it); pass the recorded time");
+  const runtime = { leases: () => leases, occupancy: () => ({}), budget: () => ({ declared: null, spent_turns: 0, exhausted: false }) };
+  const ev = evaluateGates({ store, refs: pinnedRefs(heads), runtime, ref, from, actor, graft, table: SHIP_POLICY, now });
+  return claimOf(actor, verdictOf(ev));
 }
