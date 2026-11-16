@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {runRuntime,loadRuntime,activateRelease,ASSIGNMENT_POLICY} from '../runtime.mjs';
-import {readRuntimeSnapshot,digest,verifyRuntimeChain,withRuntimeBoard} from '../board.mjs';
+import {readRuntimeSnapshot,digest,canonical,verifyRuntimeChain,withRuntimeBoard,boardPath,diffState,CHECKPOINT_INTERVAL} from '../board.mjs';
+import {openBoard} from '../../pantheon/src/board/index.mjs';
+import {publish} from '../../pantheon/src/board/dag.mjs';
 import {recordAssessmentDebit,readAssessmentDebits} from '../efficiency/assessment.mjs';
 import {createGovernance} from '../governance.mjs';
 
@@ -143,4 +145,78 @@ test('efficiency debits are write-once per trace and totals are derived',()=>wit
   assert.deepEqual(readAssessmentDebits(usesDir),{additionalAssessmentCostMs:19,unmeasuredAssessments:3});
   fs.writeFileSync(path.join(usesDir,'assessment-costs','one','stray.json'),'{}');
   assert.throws(()=>readAssessmentDebits(usesDir),/Unexpected efficiency ledger record/);
+}));
+
+function recordKinds(stateDir){
+  const board=openBoard(boardPath(stateDir)),kinds=[];
+  for(let cid=board.refs.resolve('refs/board/ophanim');cid;){
+    const commit=board.store.get(cid);
+    kinds.unshift(commit.records.map(r=>board.store.get(r)).find(e=>e.kind==='trace').payload.test);
+    cid=commit.parents[0]??null;
+  }
+  return kinds;
+}
+
+test('intermediate commits are deltas and settled heads are full checkpoints',()=>withState(async stateDir=>{
+  const {governance}=stubGovernance(),obligations=[spec('a'),spec('b',['a']),spec('c',['b'])];
+  const result=await runRuntime({stateDir,obligations,workers:[worker],governance});
+  const kinds=recordKinds(stateDir);
+  assert.equal(kinds.length,result.state.revision);
+  assert.equal(kinds[0],'ophanim-state');assert.equal(kinds.at(-1),'ophanim-state');
+  assert.ok(kinds.slice(1,-1).every(kind=>kind==='ophanim-state-delta'));
+  assert.equal(digest(loadRuntime(stateDir)),digest(result.state));
+  const chain=verifyRuntimeChain(stateDir);
+  assert.equal(chain.deltas,kinds.length-2);
+  // Every intermediate head materializes to the state its delta recorded.
+  const board=openBoard(boardPath(stateDir));
+  for(let cid=board.refs.resolve('refs/board/ophanim');cid;cid=board.store.get(cid).parents[0]??null)
+    assert.equal(readRuntimeSnapshot(stateDir,cid).state.revision>0,true);
+}));
+
+test('an interrupted delta head materializes for recovery',()=>withState(async stateDir=>{
+  const {governance}=stubGovernance(),obligations=[spec('a'),spec('b',['a'])];
+  const fault=async event=>{if(event==='after-work-persisted')throw Error('controller died');};
+  await assert.rejects(runRuntime({stateDir,obligations,workers:[worker],governance,fault}),/controller died/);
+  assert.equal(recordKinds(stateDir).at(-1),'ophanim-state-delta');
+  assert.equal(loadRuntime(stateDir).obligations.a.status,'gating');
+  const resumed=await runRuntime({stateDir,obligations,workers:[worker],governance});
+  assert.equal(resumed.complete,true);assert.equal(verifyRuntimeChain(stateDir).ok,true);
+}));
+
+test('a long session takes a checkpoint every interval',()=>withState(async stateDir=>{
+  const {governance}=stubGovernance(),obligations=Array.from({length:20},(_,i)=>spec(`o${String(i).padStart(2,'0')}`));
+  const result=await runRuntime({stateDir,obligations,workers:[worker],governance,slots:4});
+  assert.ok(result.state.revision>CHECKPOINT_INTERVAL+2);
+  const kinds=recordKinds(stateDir);
+  let run=0,longest=0;for(const kind of kinds){run=kind==='ophanim-state-delta'?run+1:0;longest=Math.max(longest,run);}
+  assert.equal(longest,CHECKPOINT_INTERVAL);
+  assert.equal(verifyRuntimeChain(stateDir).ok,true);
+}));
+
+test('a delta whose recorded result differs is refused when materialized',()=>withState(async stateDir=>{
+  const {governance}=stubGovernance();
+  await runRuntime({stateDir,obligations:[spec('a')],workers:[worker],governance});
+  const prior=loadRuntime(stateDir),next=structuredClone(prior);
+  next.revision++;next.events.push({sequence:next.revision,type:'fixture.forged'});
+  const delta=diffState(prior,next);delta.changed.activeRelease='forged';
+  const board=openBoard(boardPath(stateDir));
+  const written=await publish({...board,ref:'refs/board/ophanim',author:{vendor:'controller'},budgetCheck:false,
+    entries:[{kind:'trace',payload:{test:'ophanim-state-delta'},blob:canonical(delta)}],msg:'forged'});
+  assert.equal(written.ok,true);
+  assert.throws(()=>loadRuntime(stateDir),/differs from its recorded state digest/);
+  assert.throws(()=>verifyRuntimeChain(stateDir),/differs from its recorded state digest/);
+}));
+
+test('boards written as full v1 snapshots still decode and verify',()=>withState(async stateDir=>{
+  const {governance}=stubGovernance();
+  await runRuntime({stateDir,obligations:[spec('a')],workers:[worker],governance});
+  const state=loadRuntime(stateDir),board=openBoard(boardPath(stateDir));
+  for(const type of ['fixture.one','fixture.two']){
+    state.revision++;state.events.push({sequence:state.revision,type});
+    const written=await publish({...board,ref:'refs/board/ophanim',author:{vendor:'controller'},budgetCheck:false,
+      entries:[{kind:'trace',payload:{test:'ophanim-state'},blob:canonical(state)}],msg:type});
+    assert.equal(written.ok,true);
+  }
+  assert.equal(digest(loadRuntime(stateDir)),digest(state));
+  assert.equal(verifyRuntimeChain(stateDir).ok,true);
 }));

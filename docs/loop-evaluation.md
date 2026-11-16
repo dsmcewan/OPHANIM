@@ -1,6 +1,6 @@
 # Loop evaluation: OPHANIM against the loop operating principle
 
-Status: evaluation and proposals. P1, P2, P3, P4 and P5 are implemented on this branch
+Status: evaluation and proposals. P1 to P6 are implemented on this branch
 (`ophanim/runtime.mjs`, `ophanim/cli.mjs`, `ophanim/efficiency/assessment.mjs`,
 `ophanim/governance.mjs`, `ophanim/board.mjs`, `ophanim/proof.mjs`; tests in
 `ophanim/tests/loop-equilibrium.test.mjs`).
@@ -166,6 +166,8 @@ Introduce `ophanim.runtime/v2` commits. Each commit's trace record carries:
 
 - *Expected effect:* bytes per transition fall from O(state) to O(one row + one event). In the N=18 probe this should drop from about 1.6 MB to roughly 2× the final state.
 - *Keeps:* the materialized state at every `runtime.settled` is byte-identical to v1, so `stateSha`, efficiency traces and `verifyEfficiencyRecord` are unaffected. v1 boards still decode.
+- *Implemented differently from the sketch above:* there is no new state schema. The materialized state keeps the `ophanim.runtime/v1` shape, so `stateSha`, traces and the pinned TELOS-side readers are unaffected. A commit's record is either a full snapshot (`ophanim-state`) or an `ophanim-state-delta` with `schema: ophanim.runtime-delta/v1`, `revision`, `prevStateSha`, `stateSha`, the one appended `event`, and the `changed` and `removed` entries. Full checkpoints are written at the first save of each controller session, at every `runtime.settled` and `release.activated`, and after at most 64 consecutive deltas. `decode` replays deltas from the nearest checkpoint, and every delta must reproduce its recorded `stateSha`. `verifyRuntimeChain` materializes each commit from its verified parent. Boards written as full v1 snapshots decode unchanged.
+- *Measured:* for the N=18 probe the board fell from 1,760,173 to 296,373 bytes (6×). That is still about 7.5× the 39.5 KB final state, not the ~2× estimated above, because the board also holds every worker candidate publication and the per-session checkpoints.
 - *Validate:* a differential test runs the same request under v1 and v2 and compares the `stateSha` at each settle. `prove` and `verify` then pass with the v2 runtime.
 
 ### P7. Close investigation capacity and bound verification (fixes G7)
