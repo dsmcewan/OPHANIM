@@ -89,7 +89,8 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 |---|---|---|
 | TELOS as the single ledger as is | Resolved: no | Limits T1–T6 above, read from the pinned source. |
 | K1 chain core | Resolved | `ophanim/ledger/chain.mjs`. See "K1 implemented" below. |
-| K2–K5 | On Hold → next | Their dependencies have converged (K1 is in), so they start in order without waiting to be asked. None changes the pinned TELOS. |
+| K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
+| K3–K5 | On Hold → next | Dependencies converged (K1, K2 in); they start in order. None changes the pinned TELOS. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
@@ -117,4 +118,35 @@ One trust assumption is stated rather than hidden: in frontier mode, entries bef
 - edits, reorders, deletions, truncation and payload tampering caught;
 - frontier verification after checkpoints, with a pre-checkpoint edit still caught;
 - an append refusing to extend a broken ledger.
+
+## K2 implemented (2026-11-16)
+
+**Genesis (fixes G8 for every reader of the chain).**
+- The first entry is a `genesis`. Its payload is `{keyring, orderer, operators, pins}`. One of its operators signs it, and its orderer co-signs it.
+- `openLedger` requires `anchor`, the genesis hash the reader pins. A ledger whose genesis is not that hash is refused: "a ledger may not name its own authority".
+- `createLedger` writes the genesis and returns the hash to pin.
+
+**Authority changes are entries.**
+- An `authority` entry signed by a current operator adds or revokes keys, or changes the orderer or operators, from that point on.
+- Earlier entries keep verifying under the authority they were signed under.
+- A revoked key signs nothing after the revocation.
+- A change that would leave no valid orderer or operator is refused.
+
+**Anchors** (`ophanim/ledger/anchors.mjs`). The pinned TELOS chains and the board DAG are not changed. They are anchored.
+
+| Kind | Payload | Re-derives by |
+|---|---|---|
+| `telos.anchor` | `{proposal_id, events, head}` | Reading the proposal chain with TELOS's own `proposal-ledger.mjs`, loaded only after its hash matches the pin for `0c9b539`. TELOS must verify the chain, and its event at the anchored position must be the anchored head. A chain that later grows still holds. A truncated or reordered one does not. |
+| `board.anchor` | `{ref, commit}` | Walking the ref's history: the commit must still be in it. The board moving on is fine; a rewrite is not. |
+
+*Check.*
+- `ophanim/ledger/chain.test.mjs` (10 tests) adds two genesis cases:
+  - a forged ledger under another authority verifies only against its own anchor, never the pinned one;
+  - only an operator changes the authority, and revocation takes effect from that entry.
+- `ophanim/ledger/anchors.test.mjs` (3 tests) covers:
+  - board anchoring through a real Pantheon board;
+  - TELOS anchoring with the real pinned TELOS (proposals created, grown, truncated and reordered);
+  - refusal of an unpinned TELOS source.
+
+With TELOS checked out at the pin (`OPHANIM_TELOS_ROOT`), `npm run test:proof` passes 141 of 141 here, including the 21 cases that previously could not run in this container.
 

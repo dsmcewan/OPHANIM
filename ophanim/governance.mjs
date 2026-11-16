@@ -11,7 +11,7 @@ const NODE_SIGNER = 'fixture-node-controller';
 const REVIEWERS = ['claude', 'agy', 'codex'];
 const DOMAIN = 'ophanim.fixture.release-decision/v1\n';
 const EFFICIENCY_DOMAIN = 'ophanim.fixture.scheduler-decision/v1\n';
-const TELOS_PINS = Object.freeze({
+export const TELOS_PINS = Object.freeze({
   'build-gate/check-registry.mjs': '3abf5bf0c430987aec6d2ed2f671e8a07444a4d74eaeb36c001aaac0cbdf55b9',
   'build-gate/concerns.mjs': 'f264abdfeca4b93cc282570f7c13aa62cc37a90f5a8903defdb8a2a16224b647',
   'build-gate/proposal-gate.mjs': '8b441983ee692f9f445ddb6af09e8f5dac6850c71aa0f9b9be497b0c55ebc2a3',
