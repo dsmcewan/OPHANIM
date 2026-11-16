@@ -150,7 +150,30 @@ test("recurring role verification accepts every recorded educational status", ()
 test("current role setup leaves Lesson 1 ready with a valid progress status", () => {
   const progress = readFileSync(resolve(ROOT, "docs/planning/LEARNING_PROGRESS.md"), "utf8");
   const board = readFileSync(resolve(ROOT, "docs/planning/BOARD.md"), "utf8");
-  assert.deepEqual(validatePhaseStatus(progress, 1), { ok: true, status: "not_attempted" });
+  assert.deepEqual(validatePhaseStatus(progress, 1), { ok: true, status: "needs_revision" });
   assert.match(board, /LF-001 \| Frame the problem \| ready/);
   assert.match(board, /LF-006 \| Demonstrate transfer \| blocked/);
+});
+
+test("Lesson 1 preserves its complete class handoff and the next package", () => {
+  const paths = [
+    "docs/planning/classes/LF-001-lesson-1-v1.md",
+    "docs/planning/classes/LF-001-lesson-1-record.md",
+    "docs/planning/classes/LF-001-lesson-1-evaluation.md",
+    "docs/planning/classes/LF-001-remedial-1-v2.md",
+  ];
+  const sources = paths.map((relativePath) => {
+    const absolutePath = resolve(ROOT, relativePath);
+    assert.equal(existsSync(absolutePath), true, `${relativePath} must exist`);
+    return readFileSync(absolutePath, "utf8");
+  });
+
+  assert.match(sources[0], /planning-fundamentals\/LF-001\/lesson-1\/v1/);
+  assert.match(sources[1], /Unassisted attempt 1/);
+  assert.match(sources[1], /Coached revision 1/);
+  assert.match(sources[1], /Mandatory next itinerary/);
+  assert.match(sources[2], /needs_revision/);
+  assert.match(sources[2], /Supported unassisted/);
+  assert.match(sources[3], /planning-fundamentals\/LF-001\/remedial-1\/v2/);
+  assert.match(sources[3], /Only after that commit may the next class begin/i);
 });

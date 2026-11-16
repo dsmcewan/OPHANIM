@@ -79,7 +79,7 @@ console.log(JSON.stringify({ commit: state.commit, items: state.items,
 JS
 ```
 
-## Initial state and next action
+## Initial state
 
 | Item | Phase | Board state | Dependency |
 | --- | --- | --- | --- |
@@ -90,8 +90,12 @@ JS
 | LF-005 | Judge further investigation | blocked | LF-004 evidence and investigation-choice exercise |
 | LF-006 | Demonstrate transfer | blocked | LF-005 evidence and separate assessor |
 
-All learning statuses remain `not_attempted`. `ready` means eligible for the next supervised learning session, not active or passed. The generic board status label can say `executing` when an item is ready; that is not evidence of a running process. Read the item states and runtime activity separately.
+At initialization all learning statuses were `not_attempted`. `ready` means eligible for the next supervised learning session, not active or passed. The generic board status label can say `executing` when an item is ready; that is not evidence of a running process. Read the item states and runtime activity separately.
 
-The next action is OPHANIM's unassisted answer to the first lesson, followed by coach feedback, independent twin evaluation, a saved next itinerary and a prepared following package. The coordinator records the exact attempt and assessment reference before any phase transition and commits the complete class record before calling it complete. Use the public `publish` API with the observed `expect` commit to record justified transitions; retain history, and on a compare-and-swap refusal re-read instead of blindly retrying. Later phases remain blocked until both their dependency and stated input conditions have evidence. The coach cannot mark its own final transfer assessment accepted.
+## Current local class state
+
+Lesson 1 was preserved, taught in the terminal and independently assessed as `needs_revision`. The coordinator recorded that judgment through the public `publish` API with the observed commit, producing local board commit `commit:a2521c2ee454a47988fa265d01e9ead575adaecf2b15c50086f412afbe49899d`. LF-001 remains `ready` with learning status `needs_revision`; LF-002 through LF-006 remain blocked, and leases and occupancy remain empty. The portable seed and initial read-back snapshot are intentionally unchanged.
+
+The commit containing the verified Lesson 1 record closes that class. After it exists, the next action is to begin the prepared [`LF-001 remedial package v2`](classes/LF-001-remedial-1-v2.md) in the next class. Use the public `publish` API with the observed `expect` commit for later justified transitions; retain history, and on a compare-and-swap refusal re-read instead of blindly retrying. Later phases remain blocked until both their dependency and stated input conditions have evidence. The coach cannot mark its own final transfer assessment accepted.
 
 No background loop was started during initialization. No spend budget was invented. The board's default undeclared budget is not a technical execution block, so do not feed this board to a build runner. `publish` records one bookkeeping turn even for an operator write; this is not a model request or a dollar charge. Initialization makes no claim about a daemon or checkout on another machine.

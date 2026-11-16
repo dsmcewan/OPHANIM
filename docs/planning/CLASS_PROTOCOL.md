@@ -38,4 +38,4 @@ The commit is the final step of the class, not work deferred to the next class. 
 
 ## Current position
 
-Lesson 1 remains unattempted. LF-001 is ready, LF-002 through LF-006 are blocked, and no learning worker, lease or occupancy is active. Role preparation does not start the lesson.
+The commit containing the verified Lesson 1 record closes that class. Its preserved unassisted attempt and coached revision were independently assessed as `needs_revision`: `C1` was supported unassisted, `C2` remained incomplete, and `C3` appeared only after coaching. The local board keeps LF-001 ready with learning status `needs_revision`; LF-002 through LF-006 remain blocked, and no worker, lease or occupancy is active. The next-class remedial package is prepared but cannot be taught before that Lesson 1 commit.

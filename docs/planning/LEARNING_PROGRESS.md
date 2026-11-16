@@ -1,12 +1,12 @@
 # Planning learning progress
 
-Goal: learn what a plan requires and how to evaluate it through hypothetical exercises. This is not the project qualification roadmap. No learning phase has yet been attempted or passed.
+Goal: learn what a plan requires and how to evaluate it through hypothetical exercises. This is not the project qualification roadmap. Lesson 1 has been attempted and independently assessed; no learning phase has passed.
 
-The [learning board](BOARD.md) now tracks phase readiness in a local persistent store. LF-001 is ready; LF-002 through LF-006 are blocked. This file remains the record of attempts, hints, assessments and next itineraries. Initialization is not a learner attempt and started no background worker.
+The [learning board](BOARD.md) tracks phase readiness in a local persistent store. LF-001 is ready with learning status `needs_revision`; LF-002 through LF-006 are blocked. This file remains the record of attempts, hints, assessments and next itineraries. Initialization was not a learner attempt and started no background worker.
 
 | Phase | Status | Next prerequisite |
 | --- | --- | --- |
-| 1. Frame the problem | not_attempted | OPHANIM answers the first lesson in FUNDAMENTALS.md before the coach gives a hint. |
+| 1. Frame the problem | needs_revision | Begin the committed remedial v2 package next class and preserve a fresh unassisted answer before any hint. |
 | 2. Ground the reasoning | not_attempted | Criterion-linked Phase 1 feedback and an exercise fact packet. |
 | 3. Derive necessary work | not_attempted | Evidence/assumption distinctions demonstrated in Phase 2. |
 | 4. Test adequacy and failure | not_attempted | Necessary contributions and dependencies demonstrated in Phase 3. |
@@ -55,3 +55,10 @@ This appends to, rather than replaces, the initial itinerary. The new evidence i
 4. **Ownership:** planner prepares, coach teaches, OPHANIM reasons, evaluator judges independently, and coordinator persists, transitions and commits. Owner standing approval covers this class protocol while the owner is away.
 5. **Pass/block/stop:** remain at LF-001 unless every applicable criterion has evidence and evaluator independence is intact. Missing evidence, role discovery or next-class preparation blocks completion. Production authority remains unchanged.
 6. **Resume:** verify the three named agents are discoverable in the terminal session, persist Lesson 1 package version 1, then obtain OPHANIM's unassisted answer. Do not provide a hint first.
+
+## Lesson 1 record — LF-001
+
+- Package `planning-fundamentals/LF-001/lesson-1/v1` was persisted before teaching in [`classes/LF-001-lesson-1-v1.md`](classes/LF-001-lesson-1-v1.md).
+- The bounded terminal coach presented the immutable prompt unchanged.
+- OPHANIM's exact first answer was captured before any hint or diagnostic question in [`classes/LF-001-lesson-1-record.md`](classes/LF-001-lesson-1-record.md).
+- LF-001 is attempted and independently assessed as `needs_revision`; it has not advanced. The evaluator found `C1` unassisted, `C2` incomplete and `C3` coached-only. See [`classes/LF-001-lesson-1-evaluation.md`](classes/LF-001-lesson-1-evaluation.md). The coach's mandatory next itinerary is preserved in the class record. The following remedial package is prepared in [`classes/LF-001-remedial-1-v2.md`](classes/LF-001-remedial-1-v2.md) for the next class and must not begin before the commit containing this record. Focused checks, the 102-test OPHANIM proof suite, the 42-test model-client suite, the 719-test Pantheon suite, TOML parsing, board read-back and whitespace verification passed. The commit containing these artifacts is the required Lesson 1 commit.
