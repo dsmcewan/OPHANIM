@@ -1,6 +1,6 @@
 # Loop evaluation: OPHANIM against the loop operating principle
 
-Status: evaluation and proposals. P1 to P6 are implemented on this branch
+Status: evaluation and proposals. P1 to P7 are implemented on this branch
 (`ophanim/runtime.mjs`, `ophanim/cli.mjs`, `ophanim/efficiency/assessment.mjs`,
 `ophanim/governance.mjs`, `ophanim/board.mjs`, `ophanim/proof.mjs`; tests in
 `ophanim/tests/loop-equilibrium.test.mjs`).
@@ -90,7 +90,7 @@ The Pantheon DAG holds the parents, but the "was → is" consistency of the trai
 ### G7. Investigation history doesn't close cleanly
 
 - **Capacity has no exit.** When a scope reaches 32 packets or 64 entries, every later decision becomes `blocked` / `retained-evidence-capacity` (`controller.mjs:154-156`). No loop step resolves that blocker, so the scope stays out of equilibrium for good.
-- **Quadratic re-derivation.** For every packet in history, `checkSources` re-runs `verifyAdmissionTrace` and the full `derive` with that packet's history (`controller.mjs:163-183`). That happens on every record and every verification, so verification cost is roughly O(packets²) in model derivations.
+- **Re-derivation on every call.** For every packet in the scope, `checkSources` re-runs `verifyAdmissionTrace` and the full `derive` with that packet's history (`controller.mjs:163-183`). That happens on every record and every verification. *Correction:* within one call this is linear in packets, not quadratic as first written here. The cost is quadratic only when summed over a growing scope's convergences. Verification also reopened every packet in the scope, not just those the receipt depends on.
 
 ### G8. Re-verification breadth on handoff
 
@@ -173,7 +173,10 @@ Introduce `ophanim.runtime/v2` commits. Each commit's trace record carries:
 ### P7. Close investigation capacity and bound verification (fixes G7)
 
 - **Exit from capacity.** When a scope is at capacity, write one deterministic `ophanim.investigation-scope-checkpoint/v1` packet. It names the retired packet ids, and its `entries` are the folded result of `derive` over them, which is already deterministic. Later history starts from the checkpoint. The blocker then resolves inside the loop instead of persisting.
-- **Memoize `checkSources`.** Packet ids are content digests, so within one call cache `id → verified`, and a packet whose `historyIds` are all verified needs one `derive` only. That makes the cost linear in packets.
+- **Bound verification to the receipt's evidence.** Packet ids are content digests. `verifyInvestigationReceipt` therefore reopens only the closure of the receipt's `historyIds` (and a checkpoint's `retiredIds`), each packet once.
+- *Implemented:* `retainWithinCapacity` in `controller.mjs` is the single capacity rule, shared by recording and verification. A scope may hold at most 32 *active* packets and up to 1024 retained files. At capacity, the active packets are folded into an `ophanim.investigation-scope-checkpoint/v1` packet. It names the retired ids and keeps the **latest** retained decision per `questionSha`, in chronological packet order. The decision is then re-derived from the checkpoint's entries. It stays `blocked`/`retained-evidence-capacity` only when the folded history plus the new entries would still exceed 64. `checkSources` recomputes each checkpoint's entries from its retired packets. A receipt whose history is at capacity, but which could have been folded, is refused.
+- *Semantic change to note:* keeping only the latest decision per question means a superseded earlier decision no longer suppresses duplicate work once folded. That matches "previous stability can be updated by later patches". Before folding, all entries still apply exactly as before.
+- *Coverage:* `retention.test.mjs` tests the rule with synthetic packets and a stand-in for `derive`. The end-to-end path (32+ TELOS-backed convergences with materially different decisions) is not exercised in the suite.
 - *Validate:* `controller.test.mjs` and `verify.test.mjs` gain a 33-packet case. The receipt from the checkpointed history must verify under `investigate --state`, and must be identical to a re-derivation from the checkpoint.
 
 ### P8. Re-verify only the frontier on handoff (fixes G8, after P2)

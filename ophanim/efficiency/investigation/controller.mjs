@@ -9,8 +9,10 @@ import {selectInvestigation} from './select.mjs';
 
 const RECEIPT = 'ophanim.investigation-receipt/v1';
 const MEMORY = 'ophanim.investigation-scope-evidence/v1';
+const CHECKPOINT = 'ophanim.investigation-scope-checkpoint/v1';
 const MAX_RECORDS = 32;
 const MAX_ENTRIES = 64;
+const MAX_FILES = 1024;
 const MAX_MEMORY_BYTES = 256 * 1024;
 const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const requireThat = (condition, reason) => { if (!condition) throw Error(reason); };
@@ -78,6 +80,13 @@ function readPacket(dir, id, scope) {
   const stat = fs.lstatSync(file);
   requireThat(stat.isFile() && stat.size <= MAX_MEMORY_BYTES && fs.realpathSync(file) === file, 'Bounded canonical investigation evidence required');
   const packet = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (packet?.schema === CHECKPOINT) {
+    requireThat(digest(packet) === id && packet.scopeSha === scope && Object.keys(packet).every(key => ['schema','scopeSha','retiredIds','entries'].includes(key)) &&
+      Array.isArray(packet.retiredIds) && packet.retiredIds.length >= 1 && packet.retiredIds.length <= MAX_RECORDS &&
+      packet.retiredIds.every(sha) && canonical(packet.retiredIds) === canonical([...new Set(packet.retiredIds)].sort()) && !packet.retiredIds.includes(id) &&
+      Array.isArray(packet.entries) && packet.entries.length <= MAX_ENTRIES, 'Retained investigation checkpoint differs');
+    return packet;
+  }
   requireThat(digest(packet) === id && packet.schema === MEMORY && packet.scopeSha === scope &&
     /^commit:[a-f0-9]{64}$/.test(packet.boardCommit) && sha(packet.traceSha) && path.isAbsolute(packet.stateDir) &&
     Array.isArray(packet.historyIds) && packet.historyIds.length <= MAX_RECORDS &&
@@ -107,6 +116,58 @@ function writePacket(dir, packet) {
     if (fd !== undefined) fs.closeSync(fd);
     try { fs.unlinkSync(temp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
+}
+
+// A scope keeps at most MAX_RECORDS active packets. At capacity the active
+// packets are folded into one content-addressed checkpoint that retires them
+// and keeps the latest retained decision for each question. Retired packets
+// stay on disk and the checkpoint is re-derived from them on verification.
+const cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+function activeIds(packets) {
+  const retired = new Set([...packets.values()].flatMap(packet => packet.schema === CHECKPOINT ? packet.retiredIds : []));
+  const active = [...packets.keys()].filter(id => !retired.has(id)).sort();
+  requireThat(active.filter(id => packets.get(id).schema === CHECKPOINT).length <= 1, 'At most one active investigation checkpoint');
+  requireThat(active.length <= MAX_RECORDS, 'Investigation evidence count bound');
+  return active;
+}
+function chronological(ids, packets) {
+  // Each packet lists every active packet before it, so the list length is its position.
+  const rank = id => packets.get(id).schema === CHECKPOINT ? -1 : packets.get(id).historyIds.length;
+  return [...ids].sort((a, b) => rank(a) - rank(b) || cmp(a, b));
+}
+function foldEntries(ids, packets) {
+  const latest = new Map();
+  for (const id of chronological(ids, packets)) for (const entry of packets.get(id).entries) latest.set(entry.questionSha, entry);
+  return [...latest.values()].sort((a, b) => cmp(a.questionSha, b.questionSha));
+}
+const atCapacity = (ids, history, entries) => entries.length > 0 && (ids.length >= MAX_RECORDS || history.length + entries.length > MAX_ENTRIES);
+const capacityBlocked = decision => ({...decision, outcome:'blocked', selected:null, historyEntries:[], reason:'retained-evidence-capacity'});
+function historyOf(ids, packets) { return ids.flatMap(id => packets.get(id).entries); }
+// Shared by recording and verification. `rederive(history)` returns
+// {modelSha, decision}. The result names the history the decision was made
+// from and, when the active packets had to be folded, the checkpoint to keep.
+export function retainWithinCapacity({scopeSha, ids, packets, rederive}) {
+  const first = rederive(historyOf(ids, packets));
+  if (!atCapacity(ids, historyOf(ids, packets), first.decision.historyEntries ?? []))
+    return {...first, historyIds:ids, checkpoint:null};
+  const checkpoint = {schema:CHECKPOINT, scopeSha, retiredIds:ids, entries:foldEntries(ids, packets)};
+  const folded = rederive(checkpoint.entries);
+  if (atCapacity([digest(checkpoint)], checkpoint.entries, folded.decision.historyEntries ?? []))
+    return {modelSha:first.modelSha, decision:capacityBlocked(first.decision), historyIds:ids, checkpoint:null};
+  return {...folded, historyIds:[digest(checkpoint)], checkpoint};
+}
+export {activeIds as activeInvestigationIds, foldEntries as foldInvestigationHistory};
+function closure(dir, ids, scope) {
+  const packets = new Map(), queue = [...ids];
+  while (queue.length) {
+    const id = queue.pop();
+    if (packets.has(id)) continue;
+    requireThat(packets.size < MAX_FILES, 'Investigation evidence file bound');
+    const packet = readPacket(dir, id, scope);
+    packets.set(id, packet);
+    queue.push(...(packet.schema === CHECKPOINT ? packet.retiredIds : packet.historyIds));
+  }
+  return packets;
 }
 
 function derive({trace, registry, variables, workload, traceTrusted, history, estimate}) {
@@ -141,23 +202,21 @@ export async function recordInvestigation({root, stateDir, trace, registry, vari
   directory(dir);
   return withSeatLock('investigation', async () => {
     const names = fs.readdirSync(dir).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(name => name.slice(0,-5)).sort();
-    requireThat(names.length <= MAX_RECORDS, 'Investigation evidence count bound');
+    requireThat(names.length <= MAX_FILES, 'Investigation evidence file bound');
     const packets = new Map(names.map(id => [id, readPacket(dir, id, trace.scopeSha)]));
     checkSources(packets);
-    const existing = names.find(id => packets.get(id).boardCommit === trace.boardCommit) ?? null;
+    const existing = names.find(id => packets.get(id).schema === MEMORY && packets.get(id).boardCommit === trace.boardCommit) ?? null;
     const ownPacket = packets.get(existing);
-    const historyIds = ownPacket ? ownPacket.historyIds : names;
-    const history = historyIds.flatMap(id => packets.get(id).entries);
-    const {modelSha, decision} = derive({trace, registry, variables, workload, traceTrusted, history, estimate});
-    const entries = decision.historyEntries ?? [];
+    const rederive = history => derive({trace, registry, variables, workload, traceTrusted, history, estimate});
     if (ownPacket) {
+      const {modelSha, decision} = rederive(historyOf(ownPacket.historyIds, packets));
       requireThat(ownPacket.traceSha === traceSha && ownPacket.workload === workload && canonical(ownPacket.estimate) === canonical(estimate) &&
-        canonical(ownPacket.entries) === canonical(entries), 'Recovered investigation decision differs');
-      return make({modelSha, decision, historyIds, retained:existing});
+        canonical(ownPacket.entries) === canonical(decision.historyEntries ?? []), 'Recovered investigation decision differs');
+      return make({modelSha, decision, historyIds:ownPacket.historyIds, retained:existing});
     }
-    if (entries.length && (names.length === MAX_RECORDS || history.length + entries.length > MAX_ENTRIES)) {
-      return make({modelSha, decision:{...decision, outcome:'blocked', selected:null, historyEntries:[], reason:'retained-evidence-capacity'}, historyIds});
-    }
+    const {modelSha, decision, historyIds, checkpoint} = retainWithinCapacity({scopeSha:trace.scopeSha, ids:activeIds(packets), packets, rederive});
+    if (checkpoint) requireThat(writePacket(dir, checkpoint) === historyIds[0], 'Investigation checkpoint identity differs');
+    const entries = decision.historyEntries ?? [];
     const retained = entries.length ? writePacket(dir, {schema:MEMORY, scopeSha:trace.scopeSha, boardCommit:trace.boardCommit, traceSha, stateDir, workload, estimate, historyIds, entries}) : null;
     return make({modelSha, decision, historyIds, retained});
   }, {dir, timeoutMs:5000});
@@ -165,6 +224,11 @@ export async function recordInvestigation({root, stateDir, trace, registry, vari
 
 function checkSources(packets) {
   for (const [id, packet] of packets) {
+    if (packet.schema === CHECKPOINT) {
+      requireThat(packet.retiredIds.every(previous => packets.has(previous)) &&
+        canonical(packet.entries) === canonical(foldEntries(packet.retiredIds, packets)), 'Retained investigation checkpoint differs from retired evidence');
+      continue;
+    }
     const stateDir = path.resolve(packet.stateDir);
     const file = path.join(stateDir,'efficiency','convergences',packet.boardCommit.replace(':','-'),'trace.json');
     const stat = fs.lstatSync(file);
@@ -193,13 +257,14 @@ export function verifyInvestigationReceipt({receipt, trace, registry, variables,
   const dir = memoryDirectory(receipt.evidenceRoot, trace.scopeSha);
   const ids = receipt.historyIds;
   requireThat(Array.isArray(ids) && ids.length <= MAX_RECORDS && new Set(ids).size === ids.length && canonical(ids) === canonical([...ids].sort()), 'Bounded investigation history required');
-  const packets = new Map(ids.map(id => [id, readPacket(dir, id, trace.scopeSha)]));
+  // Only the evidence this receipt depends on is reopened, each packet once.
+  const packets = closure(dir, ids, trace.scopeSha);
   checkSources(packets);
-  const history = [...packets.values()].flatMap(packet => packet.entries);
-  let {modelSha, decision} = derive({trace, registry, variables, workload:receipt.workload, traceTrusted, history, estimate:receipt.estimate});
-  if (decision.historyEntries?.length && (ids.length === MAX_RECORDS || history.length + decision.historyEntries.length > MAX_ENTRIES)) {
-    decision = {...decision, outcome:'blocked', selected:null, historyEntries:[], reason:'retained-evidence-capacity'};
-  }
+  const rederive = history => derive({trace, registry, variables, workload:receipt.workload, traceTrusted, history, estimate:receipt.estimate});
+  const retention = retainWithinCapacity({scopeSha:trace.scopeSha, ids, packets, rederive});
+  // A receipt at capacity must already name the checkpoint that folded it.
+  requireThat(retention.checkpoint === null, 'Investigation receipt should have folded its retained history');
+  const {modelSha, decision} = retention;
   const entries = decision.historyEntries ?? [];
   if (entries.length) {
     const retained = readPacket(dir, receipt.retained, trace.scopeSha);
