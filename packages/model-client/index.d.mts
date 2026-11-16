@@ -99,3 +99,8 @@ export interface TerminalState {complete:boolean;state:string|null;why:string|nu
 export const SUCCESSFUL_STOPS:readonly string[];
 export function successfulStop(reason:unknown):boolean;
 export function terminalState(surface:Surface,observed?:{status?:string|null;stopReason?:string|null;finishReason?:string|null;blocked?:boolean}):TerminalState;
+export type ReasoningContext='auto'|'current_turn'|'all_turns';
+export const REASONING_CONTEXTS:readonly ReasoningContext[];
+export const DOCUMENTED_ALL_TURNS:readonly string[];
+export function reasoningContextFor(options:{vendor:string;model:string;requested?:ReasoningContext;continuity?:string}):ReasoningContext|undefined;
+export function reasoningContextReport(requested:ReasoningContext|undefined,response:unknown):{requested:ReasoningContext|null;effective:string|null;honoured:boolean|null};

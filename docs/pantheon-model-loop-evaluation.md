@@ -86,6 +86,20 @@ Each of these needs a fact or a decision this change does not have.
    - The direct replay path sends `reasoning: {context: 'all_turns'}`.
    - The frontier client deletes `reasoning.context` for OpenAI.
    - One of them is wrong for the current API. Settling it needs the vendor documentation or a live check.
+   - **Resolved from the vendor documentation (2026-11-16), and both were wrong.** Sources on developers.openai.com: `guides/reasoning#preserve-reasoning-across-calls`, `guides/deployment-checklist#use-reasoningencrypted_content` and `guides/latest-model`.
+     - The values are `auto`, `current_turn` and `all_turns`. Omitting the field means `auto`, the model's default.
+     - `all_turns` is documented for the GPT-5.6 family and GPT-6.1 Sol.
+     - The docs conflict on GPT-6 Astra: the checklist shows it with `all_turns`, while the reasoning guide's supported list leaves it out. GPT-6 Sol and Luna are not stated.
+     - The response's own `reasoning.context` field reports the effective mode.
+     - Reasoning carries over only within one model family.
+     - Nothing in the docs covers xAI.
+   - **Implemented** in `packages/model-client/reasoning.mjs`, which both paths now use:
+     - `reasoningContextFor` validates a requested value and passes it through. The frontier client no longer strips it.
+     - With no request, it asks for `all_turns` on replay only for documented models (`gpt-6.1-sol`). Otherwise it omits the field, so the model's default applies. The direct path no longer sends `all_turns` to every OpenAI and xAI model.
+     - The field is never sent to xAI, and an explicit request for xAI is refused.
+     - `reasoningContextReport` records `{requested, effective, honoured}` from the response on the frontier and direct Responses paths, unary and streamed. A provider that used another mode is reported, not assumed.
+   - **Tests:** `packages/model-client/tests/reasoning-context.test.mjs`, plus a new case in `pantheon/tests/sdk-transport.test.mjs`. The transport test that asserted the blanket `all_turns` now asserts that no undocumented mode is sent.
+   - **Still unverified:** whether GPT-6 Astra, Sol and Luna accept `all_turns`. The docs do not settle it, so these models get their default until a live call or clearer docs show otherwise. The recorded effective mode is what would show it.
 4. **Seat records don't record the model.**
    - A seat keyed on `vendor + purpose + cwd` can be continued by a different model of the same vendor. Replay history, including signatures produced by one model, is then sent to another.
    - Recording the model in the seat record would mean widening `saveSeat`'s field allowlist.

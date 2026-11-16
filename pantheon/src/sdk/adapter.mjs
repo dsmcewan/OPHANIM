@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { streamTurn } from "./stream.mjs";
 import { modelId } from "../config/models.mjs";
-import { isFrontier, sendModelTurn, providerFetch, terminalState } from "../../../packages/model-client/index.mjs";
+import { isFrontier, sendModelTurn, providerFetch, terminalState, reasoningContextFor, reasoningContextReport } from "../../../packages/model-client/index.mjs";
 
 // SDK transport. Replaces spawning a vendor CLI and then going to find the transcript it wrote.
 //
@@ -239,7 +239,7 @@ export async function sendTurn({
   // Streaming is an OBSERVATION channel, not a second result format: streamTurn accumulates
   // into the same shape the non-streaming path returns, so the seat layer hashes one thing.
   if (onEvent) {
-    const req = buildRequest({ spec, model, prompt, previousResponseId, history, extra, mode });
+    const req = buildRequest({ spec, vendor, model, prompt, previousResponseId, history, extra, mode });
     // `label` names the pane these events belong to. It defaults to the vendor, so the base
     // row is unchanged, but a turn run on a different model under a different purpose can be
     // given its own identity instead of overwriting the vendor's pane with another model's
@@ -261,11 +261,14 @@ export async function sendTurn({
           : spec.surface === "messages" && acc.blocks?.length
             ? [...prior, { role: "user", content: prompt }, { role: "assistant", content: acc.blocks }]
             : appendReplay({ spec, history: prior, prompt, text: acc.text });
-      return replayResult({
-        vendor, text: acc.text, tools: acc.tools, resumed: prior.length > 0,
-        history: items, terminal: acc.terminal_state ? { state: acc.terminal_state } : null,
-        complete: acc.complete, why_incomplete: acc.why_incomplete,
-      });
+      return {
+        ...replayResult({
+          vendor, text: acc.text, tools: acc.tools, resumed: prior.length > 0,
+          history: items, terminal: acc.terminal_state ? { state: acc.terminal_state } : null,
+          complete: acc.complete, why_incomplete: acc.why_incomplete,
+        }),
+        ...(spec.surface === "responses" ? { reasoning_context: reasoningContextReport(req.reasoning?.context, acc.final) } : {}),
+      };
     }
     return {
       vendor, response_id: acc.response_id, text: acc.text, tools: acc.tools,
@@ -286,14 +289,9 @@ export async function sendTurn({
   // server-side, and ask for all_turns so earlier reasoning items are rendered again.
   if (spec.surface === "responses" && mode === "replay") {
     const items = [...(history ?? []), { role: "user", content: prompt }];
-    const res = await client.responses.create({
-      model: model ?? spec.default_model,
-      input: items,
-      store: false,                       // nothing retained vendor-side
-      reasoning: { context: "all_turns" },
-      ...extra,
-    });
-    const n = normalize(res, vendor, (history ?? []).length > 0);
+    const req = buildRequest({ spec, vendor, model, prompt, history, extra, mode });
+    const res = await client.responses.create(req);
+    const n = { ...normalize(res, vendor, (history ?? []).length > 0), reasoning_context: reasoningContextReport(req.reasoning?.context, res) };
     const hasOutput = Array.isArray(res?.output) && res.output.length > 0;
     return {
       ...n,
@@ -377,12 +375,15 @@ function readOauthToken(spec, home) {
 
 // One request builder for both paths, so a streamed turn and a blocking turn cannot drift into
 // sending different requests for the same inputs.
-function buildRequest({ spec, model, prompt, previousResponseId, history, extra, mode }) {
+function buildRequest({ spec, vendor, model, prompt, previousResponseId, history, extra, mode }) {
   const m = model ?? spec.default_model;
   if (spec.surface === "responses") {
     if (mode === "replay") {
+      // Earlier reasoning is requested only where the vendor documents it (see model-client reasoning.mjs);
+      // otherwise the model's own default applies. A caller's explicit `reasoning` still wins.
+      const context = reasoningContextFor({ vendor, model: m, continuity: "replay" });
       return { model: m, input: [...(history ?? []), { role: "user", content: prompt }],
-               store: false, reasoning: { context: "all_turns" }, ...extra };
+               store: false, ...(context ? { reasoning: { context } } : {}), ...extra };
     }
     return { model: m, input: prompt, ...(previousResponseId ? { previous_response_id: previousResponseId } : {}), ...extra };
   }

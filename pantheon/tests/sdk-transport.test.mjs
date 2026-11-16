@@ -280,7 +280,8 @@ test("replay on a Responses vendor sends the history and stores nothing vendor-s
   await sendTurn({ client, vendor: "openai", prompt: "first", continuity: "replay" });
   const req = client.seen[0];
   assert.equal(req.store, false, "store:false — the vendor must retain nothing");
-  assert.equal(req.reasoning.context, "all_turns", "earlier reasoning items must be rendered again");
+  // all_turns is documented for gpt-6.1-sol, not for the default model; elsewhere the model's default applies.
+  assert.equal(req.reasoning, undefined, "no undocumented reasoning.context is sent");
   assert.ok(Array.isArray(req.input), "input must be the replayed item list, not a bare string");
   assert.equal(req.previous_response_id, undefined, "replay must not also resume by id");
 });
@@ -347,4 +348,22 @@ test("every client is built with maxRetries: 0 — the harness owns the retry po
       assert.equal(seen.maxRetries, 0, `${vendor} client must disable the SDK's own retries`);
     }
   }
+});
+
+test("replay requests earlier reasoning only where it is documented, and records the effective mode", async () => {
+  const sol = fakeClient([{ id: "r1", output_text: "x", reasoning: { context: "all_turns" },
+    output: [{ type: "message", content: [{ type: "output_text", text: "x" }] }] }]);
+  const r = await sendTurn({ client: sol, vendor: "openai", model: "gpt-6.1-sol", prompt: "q", continuity: "replay" });
+  assert.equal(sol.seen[0].reasoning.context, "all_turns");
+  assert.deepEqual(r.reasoning_context, { requested: "all_turns", effective: "all_turns", honoured: true });
+
+  const downgraded = fakeClient([{ id: "r1", output_text: "x", reasoning: { context: "current_turn" },
+    output: [{ type: "message", content: [{ type: "output_text", text: "x" }] }] }]);
+  const d = await sendTurn({ client: downgraded, vendor: "openai", model: "gpt-6.1-sol", prompt: "q", continuity: "replay" });
+  assert.equal(d.reasoning_context.honoured, false, "a provider that used another mode is reported, not assumed");
+  assert.equal(d.usable_for_resume, true, "the turn itself is still complete");
+
+  const xai = fakeClient([{ id: "r1", output_text: "x", output: [{ type: "message", content: [{ type: "output_text", text: "x" }] }] }]);
+  await sendTurn({ client: xai, vendor: "xai", model: "grok-4.6", prompt: "q", continuity: "replay" });
+  assert.equal(xai.seen[0].reasoning, undefined, "nothing OpenAI-specific is sent to xAI");
 });

@@ -1,5 +1,6 @@
 // Injected SDKs own HTTP serialization. This module owns completion and opaque history.
 import {successfulStop} from './terminal.mjs';
+import {reasoningContextReport} from './reasoning.mjs';
 const textOf=parts=>parts.filter(p=>p.type==='text'||(!p.type&&!p.thought)).map(p=>p.text??'').join('');
 const responseText=res=>res.output_text??(res.output??[]).filter(x=>x.type==='message')
   .flatMap(x=>x.content??[]).filter(x=>x.type==='output_text').map(x=>x.text??'').join('');
@@ -120,6 +121,7 @@ export async function exchange(prepared,client,onEvent){
   const usable=complete&&(replay||typeof responseId==='string'&&responseId.length>0);
   emit(usable?'done':'error',usable?{}:{text:'Provider output incomplete; refusing truncated result'});
   return {vendor,response_id:responseId,text,tools:[...new Set(tools)].sort(),usage,complete,
+    ...(cap.surface==='responses'?{reasoning_context:reasoningContextReport(request.reasoning?.context,response)}:{}),
     resumed:replay?history.length>0:Boolean(request.previous_response_id),streamed:Boolean(onEvent),
     usable_for_resume:usable,why_unusable:usable?null:'Provider output incomplete or missing authoritative terminal state',
     ...(replay?{history:nextHistory}:{})};

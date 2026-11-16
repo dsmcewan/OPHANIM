@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {CAPABILITIES} from './registry.mjs';
+import {reasoningContextFor} from './reasoning.mjs';
 
 export const COMPACTION_BETA='compact-2026-09-04';
 const RESERVED=new Set(['model','input','messages','contents','previous_response_id','stream']);
@@ -74,7 +75,9 @@ export function prepareRequest({vendor,model,prompt,history=[],previousResponseI
     if(cap.output&&max>cap.output)throw new Error('Output token budget exceeds model limit');
     delete e.max_tokens;
     const reasoning={...e.reasoning};
-    if(vendor==='openai')delete reasoning.context;
+    // Documented for OpenAI, so it is passed through (validated) rather than stripped; see reasoning.mjs.
+    const context=reasoningContextFor({vendor,model,requested:reasoning.context,continuity});
+    if(context===undefined)delete reasoning.context;else reasoning.context=context;
     const depth=effort??reasoning.effort;
     if(depth&&!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
     if(depth)reasoning.effort=depth;
