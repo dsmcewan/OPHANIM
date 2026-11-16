@@ -64,7 +64,7 @@ test("responses: an unseen reasoning event NAME still counts (structure, not an 
 test("genai: Gemini thought parts count as thinking, not as text", async () => {
   const { res, thinking } = await run("genai", genaiClient([
     { candidates: [{ content: { parts: [{ text: "planning the check", thought: true }] } }] },  // 18
-    { candidates: [{ content: { parts: [{ text: "done" }] } }] },
+    { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "done" }] } }] },
   ]));
   assert.equal(thinking.length, 1, "a part marked `thought: true` must emit a thinking event");
   assert.equal(thinking[0].bytes, 18);
@@ -76,6 +76,7 @@ test("messages: Anthropic thinking_delta counts as thinking, not as text", async
   const { res, thinking } = await run("messages", messagesClient([
     { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "let me reproduce" } }, // 16
     { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
     { type: "message_stop" },
   ]));
   assert.equal(thinking.length, 1);
@@ -88,6 +89,7 @@ test("a turn with no reasoning reports zero, and nothing else changes", async ()
   const { res, thinking } = await run("messages", messagesClient([
     { type: "content_block_start", content_block: { type: "tool_use", name: "run_command" } },
     { type: "content_block_delta", delta: { type: "text_delta", text: "ran it" } },
+    { type: "message_delta", delta: { stop_reason: "tool_use" } },
     { type: "message_stop" },
   ]));
   assert.equal(thinking.length, 0);

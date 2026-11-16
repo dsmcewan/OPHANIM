@@ -86,6 +86,19 @@ export async function sdkTurn({
   return withSeatLock(seatKey(seat), async () => {
     const held = loadSeat(seat, opts);
 
+    // HANDOFF. A turn may build only on a record whose chain is the chain of its own exchanges.
+    // An edited or half-written record would otherwise be re-chained from whatever it now holds,
+    // and the next turn would report a resume of a conversation the record no longer proves.
+    if (held && (held.chain || held.exchanges)) {
+      const recomputed = Array.isArray(held.exchanges) && held.exchanges.length ? record(held.exchanges) : null;
+      if (!recomputed || recomputed.head !== held.chain?.head || recomputed.length !== held.chain?.length) {
+        return {
+          ok: false, code: "CHAIN_MISMATCH", persisted: false, seat: held,
+          why: "the stored chain does not match the chain of the stored exchanges; this seat record cannot be continued",
+        };
+      }
+    }
+
     // One decision, made once per turn and REPORTED, so a caller can never be left guessing
     // which mode actually ran. A request for a mode the vendor cannot do is honoured as far as
     // possible and flagged, not silently downgraded.

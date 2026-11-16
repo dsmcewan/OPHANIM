@@ -1,8 +1,8 @@
 // Injected SDKs own HTTP serialization. This module owns completion and opaque history.
+import {successfulStop} from './terminal.mjs';
 const textOf=parts=>parts.filter(p=>p.type==='text'||(!p.type&&!p.thought)).map(p=>p.text??'').join('');
 const responseText=res=>res.output_text??(res.output??[]).filter(x=>x.type==='message')
   .flatMap(x=>x.content??[]).filter(x=>x.type==='output_text').map(x=>x.text??'').join('');
-const successfulStop=reason=>['end_turn','tool_use','stop_sequence'].includes(reason);
 
 export async function exchange(prepared,client,onEvent){
   const {cap,request,options,vendor,continuity,history,prompt}=prepared;

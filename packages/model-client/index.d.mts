@@ -94,3 +94,8 @@ export function isFrontier(model:string):boolean;
 export const models:Record<string,Record<string,string>>;
 export const CAPABILITIES:Readonly<Record<string,ModelCapability>>;
 export function providerFetch(fetchImpl?:typeof fetch):typeof fetch;
+export type Surface='responses'|'messages'|'genai';
+export interface TerminalState {complete:boolean;state:string|null;why:string|null}
+export const SUCCESSFUL_STOPS:readonly string[];
+export function successfulStop(reason:unknown):boolean;
+export function terminalState(surface:Surface,observed?:{status?:string|null;stopReason?:string|null;finishReason?:string|null;blocked?:boolean}):TerminalState;

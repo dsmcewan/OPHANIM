@@ -27,11 +27,12 @@ function fakeClient(replies) {
   return {
     seen,
     responses: {
-      create: async req => { seen.push(req); return replies[i++] ?? replies.at(-1); },
+      // Real Responses replies always carry a status; a fake reply defaults to the successful one.
+      create: async req => { seen.push(req); return { status: "completed", ...(replies[i++] ?? replies.at(-1)) }; },
     },
   };
 }
-const reply = (id, text, output) => ({ id, output_text: text, ...(output ? { output } : {}) });
+const reply = (id, text, output) => ({ id, status: "completed", output_text: text, ...(output ? { output } : {}) });
 
 test("the adapter table covers the Responses-shaped vendors with distinct hosts", () => {
   assert.equal(ADAPTERS.openai.surface, "responses");

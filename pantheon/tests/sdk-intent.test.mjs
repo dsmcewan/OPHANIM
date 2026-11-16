@@ -17,7 +17,7 @@ const homes = [];
 after(() => { for (const h of homes) fs.rmSync(h, { recursive: true, force: true }); });
 const mkHome = () => { const h = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-intent-")); homes.push(h); return h; };
 const SEAT = { vendor: "openai", purpose: "intent-test", cwd: "/c" };
-const reply = n => ({ id: `resp_${n}`, output_text: `hi${n}`,
+const reply = n => ({ id: `resp_${n}`, status: "completed", output_text: `hi${n}`,
   output: [{ role: "assistant", type: "message", content: [{ type: "output_text", text: `hi${n}` }] }] });
 const client = () => { let n = 0; const c = { calls: 0, responses: { create: async () => { c.calls++; return reply(++n); } } }; return c; };
 const intents = home => fs.existsSync(path.join(home, "intents")) ? fs.readdirSync(path.join(home, "intents")) : [];
@@ -68,7 +68,7 @@ test("a turn the vendor REFUSED clears its intent: the failure is reported, the 
   const failing = { responses: { create: async () => { throw new Error("429 quota"); } } };
   await assert.rejects(sdkTurn({ ...SEAT, prompt: "one", client: failing, home, continuity: "replay" }), /429/);
   assert.deepEqual(intents(home), []);
-  const unusable = { responses: { create: async () => ({ id: null, output_text: "x", output: [] }) } };
+  const unusable = { responses: { create: async () => ({ id: null, status: "completed", output_text: "x", output: [] }) } };
   const r = await sdkTurn({ ...SEAT, prompt: "one", client: unusable, home, continuity: "replay" });
   assert.equal(r.ok, false);
   assert.deepEqual(intents(home), []);

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { streamTurn } from "./stream.mjs";
 import { modelId } from "../config/models.mjs";
-import { isFrontier, sendModelTurn, providerFetch } from "../../../packages/model-client/index.mjs";
+import { isFrontier, sendModelTurn, providerFetch, terminalState } from "../../../packages/model-client/index.mjs";
 
 // SDK transport. Replaces spawning a vendor CLI and then going to find the transcript it wrote.
 //
@@ -251,12 +251,19 @@ export async function sendTurn({
       // history from accumulated TEXT, so a streamed replay turn -- which is every turn the live view
       // runs -- silently lost reasoning continuity while STATE.md said it was kept. The terminal event
       // carries the completed response; use its items when the surface has them.
+      // Each surface's own output, as the unary path keeps it: Responses items,
+      // Gemini parts (thought signatures included) and Anthropic content blocks.
+      const prior = history ?? [];
       const items = spec.surface === "responses" && Array.isArray(acc.final?.output) && acc.final.output.length
-        ? [...(history ?? []), { role: "user", content: prompt }, ...acc.final.output]
-        : appendReplay({ spec, history: history ?? [], prompt, text: acc.text });
+        ? [...prior, { role: "user", content: prompt }, ...acc.final.output]
+        : spec.surface === "genai" && acc.parts?.length
+          ? [...prior, { role: "user", parts: [{ text: prompt }] }, { role: "model", parts: acc.parts }]
+          : spec.surface === "messages" && acc.blocks?.length
+            ? [...prior, { role: "user", content: prompt }, { role: "assistant", content: acc.blocks }]
+            : appendReplay({ spec, history: prior, prompt, text: acc.text });
       return replayResult({
-        vendor, text: acc.text, tools: acc.tools, resumed: (history ?? []).length > 0,
-        history: items,
+        vendor, text: acc.text, tools: acc.tools, resumed: prior.length > 0,
+        history: items, terminal: acc.terminal_state ? { state: acc.terminal_state } : null,
         complete: acc.complete, why_incomplete: acc.why_incomplete,
       });
     }
@@ -287,14 +294,15 @@ export async function sendTurn({
       ...extra,
     });
     const n = normalize(res, vendor, (history ?? []).length > 0);
+    const hasOutput = Array.isArray(res?.output) && res.output.length > 0;
     return {
       ...n,
       // Preserve EVERY output item, not the text. The reasoning items carry encrypted_content and
       // are what make all_turns work on the next turn; keeping only prose would silently drop
       // reasoning continuity while still looking like a working replay.
       history: [...items, ...(res?.output ?? [])],
-      usable_for_resume: Array.isArray(res?.output) && res.output.length > 0,
-      why_unusable: Array.isArray(res?.output) && res.output.length > 0
+      usable_for_resume: hasOutput && n.complete,
+      why_unusable: !n.complete ? n.why_unusable : hasOutput
         ? null
         : "vendor returned no output items; replay continuity would be broken on the next turn",
     };
@@ -322,10 +330,15 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     const res = await client.models.generateContent({
       model: model ?? spec.default_model, contents, ...extra,
     });
+    const candidate = res?.candidates?.[0];
     const text = typeof res?.text === "string" ? res.text : collectGenaiText(res);
+    const terminal = terminalState("genai", { finishReason: candidate?.finishReason ?? null, blocked: Boolean(res?.promptFeedback?.blockReason) });
+    // The model's own parts, thought signatures included, are what the next turn must replay.
+    const parts = Array.isArray(candidate?.content?.parts) && candidate.content.parts.length ? structuredClone(candidate.content.parts) : [{ text }];
     return replayResult({
-      vendor, text, resumed,
-      history: [...contents, { role: "model", parts: [{ text }] }],
+      vendor, text, resumed, terminal,
+      history: [...contents, { role: "model", parts }],
+      complete: terminal.complete, why_incomplete: terminal.why,
     });
   }
   if (spec.surface === "messages") {
@@ -338,9 +351,12 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     });
     const text = (res?.content ?? []).filter(b => b?.type === "text").map(b => b.text).join("");
     const tools = [...new Set((res?.content ?? []).filter(b => b?.type === "tool_use").map(b => b.name))].sort();
+    // A max_tokens stop is a truncated reply, not a complete exchange.
+    const terminal = terminalState("messages", { stopReason: res?.stop_reason ?? null });
     return replayResult({
-      vendor, text, tools, resumed,
+      vendor, text, tools, resumed, terminal,
       history: [...messages, { role: "assistant", content: res?.content ?? text }],
+      complete: terminal.complete, why_incomplete: terminal.why,
     });
   }
   throw new Error(`sendTurn: unhandled surface "${spec.surface}"`);
@@ -393,9 +409,11 @@ function collectGenaiText(res) {
 // the history we hold. `usable_for_resume` is therefore true whenever we captured a reply: the
 // thing that must exist is the history, not an id. Saying otherwise would make every replay turn
 // look like a continuity failure.
-function replayResult({ vendor, text, tools = [], resumed, history, complete = true, why_incomplete = null }) {
+function replayResult({ vendor, text, tools = [], resumed, history, complete, why_incomplete = null, terminal = null }) {
+  if (typeof complete !== "boolean") throw new Error("replayResult: completion must be decided from the provider's terminal state");
   const ok = Array.isArray(history) && history.length > 0 && complete;
   return {
+    terminal_state: terminal?.state ?? null,
     vendor,
     response_id: null,
     text: text ?? "",
@@ -420,17 +438,21 @@ export function normalize(res, vendor, wasResume) {
   const id = res?.id ?? null;
   const text = res?.output_text ?? collectText(res?.output);
   const tools = collectToolNames(res?.output);
+  const hasId = typeof id === "string" && id.length > 0;
+  // An id proves the vendor holds a response, not that the response finished.
+  const terminal = terminalState("responses", { status: res?.status ?? null });
   return {
     vendor,
     response_id: id,
     text: text ?? "",
     tools,
     resumed: wasResume,
+    complete: terminal.complete,
+    terminal_state: terminal.state,
     // Surfaced so a caller can refuse to continue rather than discover it a turn later.
-    usable_for_resume: typeof id === "string" && id.length > 0,
-    why_unusable: typeof id === "string" && id.length > 0
-      ? null
-      : "vendor returned no response id; the next turn cannot resume this conversation",
+    usable_for_resume: hasId && terminal.complete,
+    why_unusable: !hasId ? "vendor returned no response id; the next turn cannot resume this conversation"
+      : terminal.complete ? null : terminal.why,
     usage: res?.usage ?? null,
   };
 }
