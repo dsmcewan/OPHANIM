@@ -149,3 +149,36 @@ test('K2: only an operator changes the authority, and a revoked key signs nothin
   assert.equal(v.ok, true, 'entries signed before the revocation still verify');
   assert.equal(Object.hasOwn(v.authority.keys, 'seat:scout'), false);
 }));
+
+test('view.entries() lists only the entries before the one being checked, in chain order', () => {
+  // A `tally` must equal the number of measures written before it. It cites nothing, so it can only
+  // count through entries(). Later entries never leak into an earlier entry's view.
+  const seen = [];
+  const counting = defineKinds({
+    measure: {authors: () => true, validate: () => null, rederive: () => null},
+    tally: {
+      authors: () => true,
+      validate: p => (Number.isInteger(p?.n) ? null : 'n must be an integer'),
+      rederive: (e, view) => {
+        const hashes = view.entries();
+        seen.push(hashes.length);
+        const n = hashes.filter(h => view.entry(h).kind === 'measure').length;
+        return n === e.payload.n ? null : `there are ${n} earlier measures, not ${e.payload.n}`;
+      },
+    },
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-ledger-view-'));
+  try {
+    const anchor = createLedger({dir, authority, operator, order: orderer});
+    const L = openLedger({dir, kinds: counting, anchor});
+    const by = s => ({author: {key_id: s.key_id}, signer: s, order: orderer});
+    L.append({kind: 'measure', payload: {v: 1}, ...by(lead)});
+    L.append({kind: 'tally', payload: {n: 1}, ...by(lead)});
+    assert.throws(() => L.append({kind: 'tally', payload: {n: 2}, ...by(lead)}), /1 earlier measures, not 2/);
+    L.append({kind: 'measure', payload: {v: 2}, ...by(scout)});
+    L.append({kind: 'tally', payload: {n: 2}, ...by(lead)});
+    seen.length = 0;
+    assert.equal(L.verify().ok, true);
+    assert.deepEqual(seen, [2, 4], 'on replay each tally sees the genesis and what came before it, nothing after');
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});

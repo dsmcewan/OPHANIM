@@ -137,7 +137,9 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     const bad = k.validate(payload);
     if (bad) return `entry ${i}: ${bad}`;
     if (rederive) {
-      const view = {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? getObject(byHash.get(h).payload_ref) : null)};
+      // entries(): the hashes of every earlier entry, in chain order, for kinds that count what came before.
+      const view = {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? getObject(byHash.get(h).payload_ref) : null),
+        entries: () => [...byHash.keys()]};
       const why = k.rederive({...e, payload}, view);
       if (why) return `entry ${i}: does not re-derive: ${why}`;
     }

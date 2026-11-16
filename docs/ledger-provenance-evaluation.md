@@ -92,7 +92,9 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
 | K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `ophanim/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
 | K3 `gate` kind (ship gate verdicts) | On Hold | `ship({dryRun})` reads live ref state, so a verdict cannot yet be re-derived as of the commit it judged. It needs ship's gates to evaluate against named heads, as contributions now do. |
-| K4–K5 | On Hold → next | Dependencies converged; they start in order. Neither changes the pinned TELOS. |
+| K4 model turns as entries | On Hold → next | Dependencies converged. It does not change the pinned TELOS. |
+| K5 efficiency events as entries, and the debit loophole | Resolved | `ophanim/ledger/efficiency-kinds.mjs`; `assessConvergence({ledger})`, `chooseEfficiencySlots({ledger})`. See "K5 implemented" below. |
+| K5 `assessed` and `retained` kinds | On Hold | The assessment report and the retained-experiment marker stay files. Their verifiers (`verifyEfficiencyRecord`, `readRetainedExperiment`) read the trace and board from disk, so they need the trace cited as an entry first. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
@@ -178,3 +180,44 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
   - Pantheon: 811 pass, plus the 1 known environment failure;
   - model client: 48 pass.
 
+
+## K5 implemented (2026-11-16)
+
+**Interim hardening (file path, no ledger).** Both holes are closed in `ophanim/efficiency/assessment.mjs` on their own.
+
+| Hole | Was | Now |
+|---|---|---|
+| Legacy aggregate in `assessment-costs/` | Summed with `?? 0`, no sign or shape check. A file with `-100000` raised the measured saving. | Read only in the shape the earlier writer produced: `additionalAssessmentCostMs` and `unmeasuredAssessments` as non-negative safe integers, plus its optional bookkeeping hashes. Anything else is refused. Write-once debits get the same check. |
+| `.result.json` | Every file in `uses/` counted as a qualified convergence. | Counted only when bound (`resultBindsToUse`): its use intent exists under the same name, names the promotion's scope and the state directory the name is derived from, and that directory holds an accepted 3-slot trace with the result's `traceSha` and duration. The saving must re-derive from the promotion's figures. Unbound files are reported as `unboundResults`, never counted. |
+
+**Ledger kinds** (`ophanim/ledger/efficiency-kinds.mjs`).
+
+| Kind | Cites | Re-derives by |
+|---|---|---|
+| `efficiency.promotion` | nothing (its authority is the signed decision it names) | 1 → 3 slots only, `maxUses` = 20, non-negative integer figures, `conservativeSavedMs` = baseline − candidate. |
+| `efficiency.use` | exactly one promotion | `useId` = digest of the state directory. Scope and decision match the promotion. One use per state directory, and **at most 20 per promotion, counted from the earlier `efficiency.use` entries on the chain**. |
+| `efficiency.result` | exactly one use | `observedSavingMs` = the cited promotion's `baselineConservativeMs` − `executionMs` − `assessmentCostMs`. One result per use. |
+| `efficiency.debit` | exactly one use | Non-negative integer cost. One debit per trace per use. `charged` is false exactly when a result for the same trace is already on the chain, so a cost is never charged twice and never skipped. |
+
+- `chain.mjs` gains one accessor: `view.entries()` returns the hashes of every earlier entry, in chain order. The cap and the double-charge rule count through it.
+- `efficiencyTotals` (qualified convergences, debits, unmeasured assessments, measured net) is computed only from a ledger that verifies.
+
+**On the path.** `assessConvergence({ledger})` and `chooseEfficiencySlots({ledger})` take an `efficiencyRecorder`, as `runOpenItem` takes its `opts.ledger`. `executeRequest(request, {ledger})` passes it through; it holds signing keys, so it never comes from a request file.
+- The ledger is verified before anything is relied on. A ledger that does not verify stops the assessment.
+- A promotion is recorded on the ledger before `promotion.json` is written.
+- A use is granted only by the ledger's cap.
+- The result and the debit are recorded as entries citing the use, and `measuredValue` comes from the ledger totals, with the entry hashes beside it.
+- Without a ledger, the hardened file path is unchanged in shape.
+
+*Check.*
+- `ophanim/efficiency/measured-value.test.mjs` (2 tests): a negative or invented legacy aggregate and a negative debit are refused; forged result files (no use; a use whose state directory holds no such trace) are not counted. Both tests fail against the pre-change `assessment.mjs` (the `-100000` aggregate is accepted; 3 convergences counted instead of 1) and pass after.
+- `ophanim/ledger/efficiency-kinds.test.mjs` (5 tests): promotion figures, the 20-use cap counted on the chain, savings re-derived from the cited promotion, debits non-negative and never double-charged, totals refused on an edited ledger, and an assessment recording on the ledger and refusing an altered one.
+- `ophanim/ledger/chain.test.mjs` (11 tests) adds `view.entries()`: an entry sees only what came before it, on append and on replay.
+- Suites:
+  - `npm run test:proof`: 154 of 154, with TELOS at the pin;
+  - Pantheon: 811 pass, plus the 1 known environment failure.
+
+*Not done here.*
+- A fresh assessment is still not passed through `verifyEfficiencyRecord` before `cli.mjs` uses it. As written, that verifier refuses held investigation receipts, which a normal run can produce.
+- The promotion entry does not re-verify the signed decision. That check is async and governance-held (`verifyEfficiencyDecision`); the controller records the entry only after it passes.
+- `cli.mjs` creates no ledger of its own. Key custody stays with the caller, as for `runOpenItem`.

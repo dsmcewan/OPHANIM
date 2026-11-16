@@ -70,7 +70,17 @@ function acceptanceEvidence(state) {
 
 // A shared, explicitly selected evidence root allows reuse across fresh states with
 // identical inputs. The signed decision is checked under its original fixture authority.
-export async function chooseEfficiencySlots({root,scope,stateDir,baselineSlots,hasRuntime,telosRoot}) {
+// K5: an optional `ledger` (ophanim/ledger/efficiency-kinds.mjs efficiencyRecorder) is verified before
+// anything is relied on, and records the promotion, each use, result and debit as entries that re-derive.
+// Without one, the file-based records below are kept, as before.
+function verifiedLedger(ledger) {
+  if(!ledger)return;
+  const verified=ledger.verify();
+  if(!verified.ok)throw Error(`Efficiency ledger does not verify, refusing to rely on it: ${verified.why}`);
+}
+
+export async function chooseEfficiencySlots({root,scope,stateDir,baselineSlots,hasRuntime,telosRoot,ledger=null}) {
+  verifiedLedger(ledger);
   if(baselineSlots!==1)return {slots:baselineSlots};
   const scopeDir=registryDir(directory(root),scope.scopeSha);
   return withSeatLock('efficiency',async()=>{
@@ -85,6 +95,13 @@ export async function chooseEfficiencySlots({root,scope,stateDir,baselineSlots,h
     const checked=await authority.verifyEfficiencyDecision({decision:record.decision,expected:record.expected});
     if(checked?.ok!==true)throw Error('Efficiency policy authorization refused');
     const intent={schema:VERSION,stateDir,decisionId:checked.decisionId,scopeSha:scope.scopeSha};
+    if(ledger){
+      // The ledger counts the promotion's uses from its own earlier entries; a spent promotion is refused there.
+      const granted=ledger.use({scopeSha:scope.scopeSha,decisionId:checked.decisionId,stateDir,efficiency:record.efficiency});
+      if(!granted)return {slots:baselineSlots};
+      put(use,intent);
+      return {slots:3,use,promotion:record,ledger:granted};
+    }
     if(!exists(use)&&fs.readdirSync(usesDir(scopeDir)).filter(name=>name.endsWith('.json')&&!name.endsWith('.result.json')).length>=MAX_QUALIFIED_CONVERGENCES)return {slots:baselineSlots};
     put(use,intent);
     return {slots:3,use,promotion:record};
@@ -133,11 +150,29 @@ function once(file,value) {
   finally{fs.unlinkSync(temporary);}
   return read(file);
 }
+const SHA=/^[0-9a-f]{64}$/;
+const count=value=>Number.isSafeInteger(value)&&value>=0;
+const exactKeys=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&
+  Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+// The earlier mutable ledger wrote one aggregate per use. It is read, never rewritten, and only in the
+// shape that writer produced: two non-negative counters and its bookkeeping hashes. A negative, partial
+// or invented aggregate would otherwise lower the measured cost, so it is refused.
+const LEGACY_KEYS=['additionalAssessmentCostMs','unmeasuredAssessments','lastTraceSha','lastInterruptedTraceSha'];
+function legacyAggregate(value) {
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!LEGACY_KEYS.includes(key))||
+      !count(value.additionalAssessmentCostMs)||!count(value.unmeasuredAssessments)||
+      ['lastTraceSha','lastInterruptedTraceSha'].some(key=>Object.hasOwn(value,key)&&!SHA.test(value[key])))
+    throw Error('Legacy efficiency debit is not a non-negative aggregate');
+  return value;
+}
+const validDebit=(record,traceSha)=>exactKeys(record,['schema','traceSha','assessmentCostMs'])&&record.schema===DEBIT_SCHEMA&&
+  record.traceSha===traceSha&&count(record.assessmentCostMs);
 export function recordAssessmentDebit({usesDir,useFile,traceSha,assessmentCostMs,charged,interrupted}) {
+  if(!SHA.test(traceSha)||!count(assessmentCostMs)||interrupted&&!SHA.test(interrupted.traceSha))throw Error('Efficiency debit must be a non-negative cost for one trace');
   const costs=directory(path.join(usesDir,'assessment-costs'));
   const dir=directory(path.join(costs,path.basename(useFile,'.json')));
   const debit=once(path.join(dir,`debit-${traceSha}.json`),{schema:DEBIT_SCHEMA,traceSha,assessmentCostMs:charged?assessmentCostMs:0});
-  if(debit.schema!==DEBIT_SCHEMA||debit.traceSha!==traceSha||!Number.isFinite(debit.assessmentCostMs)||debit.assessmentCostMs<0)throw Error('Retained efficiency debit differs');
+  if(!validDebit(debit,traceSha))throw Error('Retained efficiency debit differs');
   if(interrupted)once(path.join(dir,`interrupted-${interrupted.traceSha}.json`),{schema:INTERRUPTION_SCHEMA,traceSha:interrupted.traceSha});
   return {file:path.join(dir,`debit-${traceSha}.json`),debit};
 }
@@ -149,22 +184,63 @@ export function readAssessmentDebits(usesDir) {
     const file=path.join(costs,entry.name);
     if(entry.isFile()&&entry.name.endsWith('.json')){
       // Aggregate written by the earlier mutable ledger; read, never rewritten.
-      const legacy=read(file);
-      totals.additionalAssessmentCostMs+=legacy.additionalAssessmentCostMs??0;totals.unmeasuredAssessments+=legacy.unmeasuredAssessments??0;
+      const legacy=legacyAggregate(read(file));
+      totals.additionalAssessmentCostMs+=legacy.additionalAssessmentCostMs;totals.unmeasuredAssessments+=legacy.unmeasuredAssessments;
     }else if(entry.isDirectory()){
       for(const name of fs.readdirSync(file).sort()){
         if(!name.endsWith('.json'))continue;
         const record=read(path.join(file,name));
-        if(record.schema===DEBIT_SCHEMA&&name===`debit-${record.traceSha}.json`)totals.additionalAssessmentCostMs+=record.assessmentCostMs;
-        else if(record.schema===INTERRUPTION_SCHEMA&&name===`interrupted-${record.traceSha}.json`)totals.unmeasuredAssessments++;
+        if(record?.schema===DEBIT_SCHEMA&&name===`debit-${record.traceSha}.json`&&validDebit(record,record.traceSha)&&SHA.test(record.traceSha))totals.additionalAssessmentCostMs+=record.assessmentCostMs;
+        else if(exactKeys(record,['schema','traceSha'])&&record.schema===INTERRUPTION_SCHEMA&&SHA.test(record.traceSha)&&name===`interrupted-${record.traceSha}.json`)totals.unmeasuredAssessments++;
         else throw Error('Unexpected efficiency ledger record');
       }
     }
   }
+  if(!count(totals.additionalAssessmentCostMs))throw Error('Efficiency debit total exceeds the safe integer range');
   return totals;
 }
 
-function recordValue(use,output,trace,assessmentCostMs,interrupted) {
+// A realized result counts only when it is bound to a recorded use: its use intent exists under the
+// same name, names this promotion's scope and the state directory the name is derived from, and the
+// result's trace is an accepted 3-slot convergence retained in that state directory whose duration is
+// the result's execution time. Its saving must re-derive from the promotion's own figures. An unbound
+// result is reported, never counted.
+const RESULT_KEYS=['traceSha','executionMs','assessmentCostMs','observedSavingMs'];
+function boundTrace(stateDir,traceSha) {
+  const convergences=path.join(stateDir,'efficiency','convergences');
+  if(!exists(convergences))return null;
+  for(const head of fs.readdirSync(convergences).sort()){
+    const file=path.join(convergences,head,'trace.json');
+    if(!exists(file))continue;
+    let trace;try{trace=read(file);}catch{continue;}
+    if(digest(trace)===traceSha)return trace;
+  }
+  return null;
+}
+export function resultBindsToUse({useFile,result,promotion}) {
+  const efficiency=promotion?.efficiency,expected=promotion?.expected;
+  if(!exactKeys(result,RESULT_KEYS)||!SHA.test(result.traceSha)||!count(result.executionMs)||!count(result.assessmentCostMs)||
+      !Number.isSafeInteger(result.observedSavingMs)||!count(efficiency?.baselineConservativeMs)||
+      result.observedSavingMs!==efficiency.baselineConservativeMs-result.executionMs-result.assessmentCostMs)return false;
+  if(!exists(useFile))return false;
+  let intent;try{intent=read(useFile);}catch{return false;}
+  if(!exactKeys(intent,['schema','stateDir','decisionId','scopeSha'])||intent.schema!==VERSION||typeof intent.stateDir!=='string'||
+      !path.isAbsolute(intent.stateDir)||path.basename(useFile)!==`${digest(intent.stateDir)}.json`||intent.scopeSha!==expected?.scopeSha)return false;
+  const trace=boundTrace(intent.stateDir,result.traceSha);
+  return !!trace&&trace.original?.convergence==='accepted_change'&&trace.original.slots===expected.toSlots&&
+    trace.original.durationMs===result.executionMs;
+}
+export function readRealizedResults(usesDir,promotion) {
+  const counted=[];let unbound=0;
+  for(const name of fs.readdirSync(usesDir).filter(name=>name.endsWith('.result.json')).sort()){
+    let result;try{result=read(path.join(usesDir,name));}catch{unbound++;continue;}
+    const useFile=path.join(usesDir,name.replace(/\.result\.json$/,'.json'));
+    if(resultBindsToUse({useFile,result,promotion}))counted.push(result);else unbound++;
+  }
+  return {counted,unbound};
+}
+
+function recordValue(use,output,trace,assessmentCostMs,interrupted,ledger) {
   const efficiency=use.promotion.efficiency;
   const resultFile=use.use.replace(/\.json$/,'.result.json');
   const traceSha=digest(trace);
@@ -176,15 +252,35 @@ function recordValue(use,output,trace,assessmentCostMs,interrupted) {
   // A realized result already deducts this trace's assessment cost.
   const charged=!exists(resultFile)||read(resultFile).traceSha!==traceSha;
   const {file}=recordAssessmentDebit({usesDir:uses,useFile:use.use,traceSha,assessmentCostMs,charged,interrupted});
-  const realized=fs.readdirSync(uses).filter(name=>name.endsWith('.result.json')).map(name=>read(path.join(uses,name)));
+  if(ledger)return ledgerValue({ledger,use,output,traceSha,assessmentCostMs,interrupted,resultFile,debitRecord:file});
+  const {counted:realized,unbound}=readRealizedResults(uses,use.promotion);
   const {additionalAssessmentCostMs,unmeasuredAssessments}=readAssessmentDebits(uses);
   return {qualifiedConvergences:realized.length,originalOptimizationCostMs:efficiency.totalAssessmentCostMs,
     additionalAssessmentCostMs,unmeasuredAssessments,measuredNetIsUpperBound:unmeasuredAssessments>0,debitRecord:file,
+    ...unbound?{unboundResults:unbound}:{},
     measuredNetMs:realized.reduce((sum,row)=>sum+row.observedSavingMs,-efficiency.totalAssessmentCostMs-additionalAssessmentCostMs)};
 }
 
-export async function assessConvergence({root,stateDir,scope,state,boardCommit,output,request,replayRequest,priorRuntime,attempts,verifications,events,governance,use,interrupted}) {
+// K5: with a ledger, the result and the debit are recorded as entries citing the use (which cites the
+// promotion), and the measured value is derived from the verified ledger, not from the side files. The
+// files are still written for display and for readers that predate the ledger.
+function ledgerValue({ledger,use,output,traceSha,assessmentCostMs,interrupted,resultFile,debitRecord}) {
+  if(!use.ledger?.use)throw Error('A ledger-recorded assessment needs the use entry it was granted under');
+  const entries={use:use.ledger.use};
+  if(output.convergence==='accepted_change'){
+    const result=read(resultFile);
+    // The file's result is the one this use realized; the ledger records it once, citing the use.
+    entries.result=ledger.result({use:use.ledger.use,result});
+  }
+  // `charged` is re-derived on the chain from the results it holds, not taken from the file path.
+  entries.debit=ledger.debit({use:use.ledger.use,traceSha,assessmentCostMs,interrupted:interrupted?.traceSha??null});
+  const totals=ledger.totals(use.ledger.promotion);
+  return {...totals,measuredNetIsUpperBound:totals.unmeasuredAssessments>0,debitRecord,ledger:{head:totals.head,...entries}};
+}
+
+export async function assessConvergence({root,stateDir,scope,state,boardCommit,output,request,replayRequest,priorRuntime,attempts,verifications,events,governance,use,interrupted,ledger=null}) {
   const startedAt=now(),cpuStart=process.cpuUsage();
+  verifiedLedger(ledger);
   const reportDir=directory(path.join(stateDir,'efficiency','convergences',boardCommit.replace(':','-')));
   const snapshot=readRuntimeSnapshot(stateDir,boardCommit);
   const verifiedState=snapshot.state;
@@ -230,7 +326,7 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
     const wallMs=Math.max(0,now()-startedAt),cpu=process.cpuUsage(cpuStart);
     const report={schema:REPORT_SCHEMA,scopeSha:trace.scopeSha,traceSha,analysis,contributionRegistry,variables,admission,investigation,outcome:'no_change',...fields,
       cost:{wallMs,controllerCpuMicros:cpu.user+cpu.system,replayBudgetMs:REPLAY_BUDGET_MS,modelCalls:0,providerSpend:0},
-      measuredValue:use?.promotion?recordValue(use,output,trace,wallMs,interrupted):{
+      measuredValue:use?.promotion?recordValue(use,output,trace,wallMs,interrupted,ledger):{
         qualifiedConvergences:0,originalOptimizationCostMs:wallMs,measuredNetMs:-wallMs,
       }};
     put(path.join(reportDir,'assessment.json'),report);
@@ -295,8 +391,11 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
       if(value.forecastNetSavedMs<=0)return finish({reason:'nonpositive-forecast-after-full-assessment-cost',alternative,evidenceRoot,experiment,qualification:checked.efficiency,economics:value});
       const totalAssessmentCostMs=value.assessmentCostMs;
       const efficiency={...checked.efficiency,totalAssessmentCostMs,realizedNetSavedMs:-totalAssessmentCostMs};
+      // On the ledger first: a promotion the ledger refuses is not written as a file either.
+      const ledgerPromotion=ledger?.promotion({scopeSha:expected.scopeSha,decisionId:authorization.decisionId,efficiency});
       put(path.join(scopeDir,'promotion.json'),{schema:VERSION,authorityRoot:stateDir,expected,decision:signedDecision,efficiency,economics:value});
-      return finish({outcome:'promoted',reason:'independently-authorized-slot-policy',alternative,evidenceRoot,experiment,efficiency,economics:value,decisionId:authorization.decisionId,authorization:{expected,decision:signedDecision}});
+      return finish({outcome:'promoted',reason:'independently-authorized-slot-policy',alternative,evidenceRoot,experiment,efficiency,economics:value,decisionId:authorization.decisionId,authorization:{expected,decision:signedDecision},
+        ...ledgerPromotion?{ledgerPromotion}:{}});
     }catch(error){
       return finish({reason:'experiment-held',detail:String(error.message).slice(0,500),alternative,evidenceRoot});
     }
@@ -358,8 +457,7 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
   const debitRecord=assessment.measuredValue?.debitRecord;
   if(debitRecord!==undefined){
     const debit=read(debitRecord);
-    if(path.basename(debitRecord)!==`debit-${assessment.traceSha}.json`||debit.schema!==DEBIT_SCHEMA||debit.traceSha!==assessment.traceSha||
-      !Number.isFinite(debit.assessmentCostMs)||debit.assessmentCostMs<0)throw Error('Efficiency debit differs from the assessment');
+    if(path.basename(debitRecord)!==`debit-${assessment.traceSha}.json`||!validDebit(debit,assessment.traceSha))throw Error('Efficiency debit differs from the assessment');
   }
   if(assessment.experiment?.manifestFile){
     const manifest=path.join(path.dirname(reportFile),'experiment','manifest.json');
