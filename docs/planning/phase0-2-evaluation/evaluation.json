@@ -1,0 +1,633 @@
+{
+  "document_kind": "Non-executable Phase 0–2 planning evaluation; not a runtime schema, plan-registration request or controller receipt",
+  "dated": "2026-11-16",
+  "source": {
+    "repository": "https://github.com/dsmcewan/OPHANIM",
+    "commit": "3b00139dd05dee0565e7c4ad95b7befdecf73db7",
+    "source_sha256": {
+      "README.md": "d6fb702a7ef7479a123e23b7b21a31d0f33d42dca3a5648623779b279afd5152",
+      "PROVENANCE.json": "59a343e1dd4b66e6cb431877f3b80b1db289f88956ae2e568df8d26bcdd874be",
+      ".github/workflows/qualification.yml": "5b62f9bcd6e647f803cd25e4f44359f0ab3bce3d7fce5c8d21157e6c70b7e2c7",
+      "ophanim/runtime.mjs": "98713d7560b6aee7c91245f4b217d6244e943277af206eb081801c2d4443b505",
+      "ophanim/board.mjs": "9e32e3ecfb1682483689b31db52a9c287dc2a42f1a3c6965ec2ee2803463b876",
+      "ophanim/watchdog.mjs": "2284155f79347e50e8d1a16b59cb823c4bfd8050e6e540e8224501fb2dbce406",
+      "ophanim/governance.mjs": "b15225a576104e399ef15aaf626c89a1855eef7f83c8cb79147997a30e0860cf",
+      "ophanim/governance/README.md": "359f52ff1e42cf50f7f59580320b8058134335ab8d83a13f882226ec4944f050",
+      "ophanim/governance/check-contract.mjs": "fe6429a9908b568c52f137fe7138fee52f0250aad74c8fbd175323706b9e0279",
+      "ophanim/fixtures.mjs": "51ae3483e233fda0452c8b01f3ec77a628814c3453913658fc6d8183560bda8a",
+      "ophanim/proof.mjs": "fc93b1e9321070b8bdb62a1797ccb77318fbc37800168a3f9048e5c22fbb7306",
+      "ophanim/tests/qualification.test.mjs": "68b8d54b8e345d7e9e688df2caca03122c9254cdddbc4f9c7fdc2c9101c80e54",
+      "ophanim/tests/fixtures.test.mjs": "6c7e06a577d24321c54dc22b6daddc0786f762dd59b49e0c736b6a4423a0336b",
+      "ophanim/tests/runtime-boundaries.test.mjs": "8498a64842043ff0476fba8ad4c3ca12422edb49fefe7cd11a6dabde0f7bf71d",
+      "ophanim/tests/watchdog.test.mjs": "e516dc7cb53ed147109f0d32008c93e12638fdc71377d0603400031ee5ce179f",
+      "ophanim/governance/governance.test.mjs": "88d63c851aeca66b1704c827149113e2083c5b33853dc5cd6729c7e6502d8062",
+      "ophanim/efficiency/admission.mjs": "ce7e2bccb37d244c6e1c96824e79512f6ba3e7c91cd4663d1b82cae384d46154",
+      "ophanim/efficiency/investigation/models.mjs": "31609bb1553b37d1f1463abbf097a1286765c2d7ad7fd68510409d8cf5ce3df6",
+      "ophanim/efficiency/investigation/select.mjs": "4fbaed9e40bb81ca320d0c7f2488cd261857b08010d8f678435892dab5534600",
+      "ophanim/efficiency/investigation/select.test.mjs": "ef0ffa9bab6c8d673568c88d037fe73fc30f2909976530614b6a2d2f8df33ae9",
+      "ophanim/efficiency/investigation/controller.mjs": "24d763cc59842c9b4030f6e30b7554ea7b50279973eff70ca94d3fdf1652db68",
+      "ophanim/efficiency/investigation/advisor.mjs": "2605fe1694e6d2deabde9d53204b200093adda13a195ac50b6038d0bbb3a5dba",
+      "ophanim/efficiency/investigation/measurement-plan.mjs": "60c7d0c030650f00575f5f3597a226e27d4b49dd621c07cae945d308ee5a21ed",
+      "packages/model-client/router.mjs": "bf1fee0ba6da30ed7ebfdd5cd11fa7caa971753103f0942ccdd90af85f161d0e",
+      "packages/model-client/request.mjs": "9c70406f2e2c3709ae1ef364428db5739b474d6f6bda1f4f9b325c4a25e2b516",
+      "pantheon/STATE.md": "3d7e82988dac087f15bd51021659a893beb6f03c4e6fb8827bb9f62b947fd218"
+    },
+    "telos_pin": "0c9b539ddbb08e1464603faf786e0d5cdfc33fb8"
+  },
+  "provenance_of_objective": {
+    "source": "Owner/liaison seven-phase summary in this conversation and approved planning exercise",
+    "original_conversation": "6af9f1a7-6604-83ea-8663-bda9442ecac9",
+    "original_message": "ca20634b-2c14-4d02-b366-65ffbb1634c6",
+    "full_original_accessed": false,
+    "limit": "No transcript reader was available; no additional criteria are inferred from the inaccessible message."
+  },
+  "evidence_levels": {
+    "source_inspection": "Code and test contracts read at the pinned source.",
+    "ci_execution": "GitHub run43776592976 job133004148103 reports successful npm test and npm run test:proof.",
+    "fresh_selector_tests": "Separate native peer executed existing pure selector suite:10passed,0failed,0skipped.",
+    "retained_proof_reverification": "Not performed; no original-path retained proof packet is present in this checkout.",
+    "document_review": "Independent native peers inspect this packet; this is not TELOS authorization or cross-vendor qualification."
+  },
+  "approval": {
+    "provider_calls_authorized": false,
+    "aggregate_currency_budget": null,
+    "aggregate_token_quota": null,
+    "experiment_allocation": null,
+    "scope": "Offline evaluation and documentation only",
+    "basis": "Owner explicitly limited previous work to no paid runs and approved this planning exercise.",
+    "public_api_changes": false,
+    "authority_changes": false
+  },
+  "statuses": {
+    "phase0": "incomplete",
+    "phase1": "blocked_on_phase0_and_explicit_qualification_authority",
+    "phase2": "blocked_on_phase1_and_independent_general_plan_acceptance",
+    "later_phases": "outside_current_scope"
+  },
+  "evaluation_contract": {
+    "mandatory_requirements": "Never remove a required acceptance/governance obligation because its cost is high or economic estimates are absent.",
+    "structural_checks": [
+      "Unique obligation IDs and output ownership",
+      "Existing dependency targets and no dependency cycles",
+      "Explicit scope and any cross-scope handoff requirement",
+      "Independent acceptance criteria and authority for executable work"
+    ],
+    "discretionary_information_value": "expectedConvergences × applicability × avoidableLossMsPerConvergence × decisionChangeProbability × confidence × discriminatingPairFraction − investigationMs − rolloutMs − regressionMs − opportunityCostMs",
+    "candidate_gain": "Reported separately and never substituted for avoidable decision loss.",
+    "unknowns": "Remain null/unresolved, not zero measurements.",
+    "selector_outcomes": [
+      "proposed",
+      "no_change",
+      "insufficient_evidence",
+      "blocked"
+    ],
+    "documentary_reuse": "reuse is an inventory disposition, not a new selector outcome or proof of phase exit.",
+    "selector_invoked_on_this_roadmap": false,
+    "execution_authorized_by_evaluation": false
+  },
+  "items": [
+    {
+      "id": "P0-IDENTITY",
+      "phase": 0,
+      "kind": "mandatory",
+      "purpose": "Bind this assessment to the actual OPHANIM source and its separate ARGO/Pantheon and TELOS provenance.",
+      "consumer": "Every subsequent eligibility decision",
+      "disposition": "reuse",
+      "depends_on": [],
+      "output": "source-and-scope-map",
+      "owner": "record coordinator",
+      "evidence": [
+        {
+          "path": "PROVENANCE.json",
+          "note": "Records filtered ARGO/Pantheon lineage; this is not the old ARGO accepted tree."
+        },
+        {
+          "path": ".github/workflows/qualification.yml",
+          "note": "Pinned TELOS source and exact-head CI command set."
+        }
+      ],
+      "alternatives": [
+        "Reuse exact source identities and CI metadata",
+        "Create an unrelated baseline"
+      ],
+      "decision": "Reuse the pinned OPHANIM baseline; supersede only the applicability of the earlier ARGO-only absence findings.",
+      "missing": [],
+      "acceptance": "Independent reader checks source commit, source hashes, lineage and TELOS pin; preserves the older ARGO findings as historical rather than rewriting them.",
+      "eligible_when": [
+        "This packet's source hashes match the pinned commit"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P0-CONTROLS",
+      "phase": 0,
+      "kind": "mandatory",
+      "purpose": "Determine which required orchestration functions already exist before specifying implementation or workers.",
+      "consumer": "Phase 0 readiness assessment",
+      "disposition": "reuse",
+      "depends_on": [
+        "P0-IDENTITY"
+      ],
+      "output": "capability-and-limit-map",
+      "owner": "independent evidence reader",
+      "evidence": [
+        {
+          "path": "ophanim/board.mjs",
+          "note": "Persistent Pantheon CAS/ref snapshots and fenced worker publications."
+        },
+        {
+          "path": "ophanim/runtime.mjs",
+          "note": "Plan admission, dependency-ready scheduling, exact candidate recovery and separate release activation."
+        },
+        {
+          "path": "ophanim/watchdog.mjs",
+          "note": "Separate process monitoring and bounded termination."
+        },
+        {
+          "path": "ophanim/efficiency/investigation/controller.mjs",
+          "note": "Existing retained investigation decisions and reconstruction."
+        }
+      ],
+      "alternatives": [
+        "Reuse the existing mechanisms with their tested scope",
+        "Build duplicate mechanisms"
+      ],
+      "decision": "Reuse. Source presence and successful synthetic CI support the bounded fixture capability, not current live-seat or general-plan qualification.",
+      "missing": [],
+      "acceptance": "Identify the actual consumers, source identities, failure boundaries and independent checks for each reused function; keep unexercised or unavailable evidence explicit.",
+      "eligible_when": [
+        "P0-IDENTITY remains valid"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P0-PROOF",
+      "phase": 0,
+      "kind": "mandatory",
+      "purpose": "Bind independent operational evidence to its actual source, environment and retained proof scope.",
+      "consumer": "Phase 0 exit decision",
+      "disposition": "insufficient_evidence",
+      "depends_on": [
+        "P0-IDENTITY",
+        "P0-CONTROLS"
+      ],
+      "output": "retained-qualification-evidence-review",
+      "owner": "independent qualification verifier",
+      "evidence": [
+        {
+          "path": "ophanim/tests/qualification.test.mjs",
+          "note": "Generates proof in a temporary original location, verifies there, prints location."
+        },
+        {
+          "path": "ophanim/proof.mjs",
+          "note": "Reconstructs source, signed evidence, dependent outputs, effects and release decisions."
+        },
+        {
+          "path": "ophanim/governance/README.md",
+          "note": "Retained proofs bind original workspace/checker/executable paths."
+        },
+        {
+          "path": ".github/workflows/qualification.yml",
+          "note": "Runs test suites but uploads no retained proof artifact."
+        }
+      ],
+      "alternatives": [
+        "Inspect and verify an already retained proof in its original supported location",
+        "Rely on the narrower exact-head CI execution evidence",
+        "Generate a new proof only after a separately justified bounded qualification decision"
+      ],
+      "decision": "Reuse the CI evidence already available and record its scope. Do not claim original-path proof re-verification in this clone or automatically regenerate a proof.",
+      "missing": [
+        "Accessible retained proof manifest and original supported workspace/checker/executable location",
+        "Identity of the intended current execution environment"
+      ],
+      "acceptance": "Independent verifier binds all cited claims to either actual CI execution evidence or an available exact proof; unavailable proof is an explicit limit. Any broader current-environment claim requires applicable evidence.",
+      "eligible_when": [
+        "Existing retained artifact and its supported verification environment are available",
+        "The verifier is independent of the artifact producer"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P0-AUTHORITY",
+      "phase": 0,
+      "kind": "mandatory",
+      "purpose": "Distinguish real pinned TELOS checks from fixture signing identities and establish authority for the intended live scope.",
+      "consumer": "Phase 1 authorization and subsequent release decisions",
+      "disposition": "blocked",
+      "depends_on": [
+        "P0-IDENTITY",
+        "P0-CONTROLS"
+      ],
+      "output": "planning-authorization-boundary",
+      "owner": "Drason-designated independent TELOS authority",
+      "evidence": [
+        {
+          "path": "ophanim/governance.mjs",
+          "note": "Real pinned TELOS implementation; local fixture reviewer/operator identities and fixtureOnly outputs."
+        },
+        {
+          "path": "ophanim/runtime.mjs",
+          "note": "Plan registration, candidate verification, signed release decision and activation are distinct operations."
+        },
+        {
+          "path": "ophanim/governance/check-contract.mjs",
+          "note": "Closed synthetic obligation kinds and trusted expected output."
+        }
+      ],
+      "alternatives": [
+        "Reuse the existing TELOS interfaces with an expressly approved live-scope binding",
+        "Treat fixture keys or CI success as live authorization"
+      ],
+      "decision": "Keep fixture capability and current live authority separate. No new authority, signing key adoption or release is granted by this record.",
+      "missing": [
+        "Owner-approved real-scope verifier/operator identity and authorization contract",
+        "Evidence and key-custody ownership for that scope"
+      ],
+      "acceptance": "Independent authority identifies the approved scope, authenticates its handoffs and documents who may authorize execution and release. The plan author cannot certify itself.",
+      "eligible_when": [
+        "The required authority binding is supplied by its authorized owner and independently checked"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P0-LIMITS",
+      "phase": 0,
+      "kind": "mandatory",
+      "purpose": "Bind intended providers, accounts, context, execution and experiment limits to actual owner approval and enforcement.",
+      "consumer": "Phase 1 live qualification admission",
+      "disposition": "blocked",
+      "depends_on": [
+        "P0-IDENTITY",
+        "P0-AUTHORITY"
+      ],
+      "output": "authorized-qualification-bounds",
+      "owner": "Drason via the liaison; independently checked by the execution authority",
+      "evidence": [
+        {
+          "path": "packages/model-client/router.mjs",
+          "note": "Existing bounded route/attempt/deadline interface; not an aggregate spend grant."
+        },
+        {
+          "path": "packages/model-client/request.mjs",
+          "note": "Existing request/context/token policies; configured caps are not owner budgets."
+        },
+        {
+          "path": "ophanim/efficiency/investigation/advisor.mjs",
+          "note": "Optional advice requires caller-supplied route and bounded policy; it is not an authorization oracle."
+        },
+        {
+          "path": "pantheon/STATE.md",
+          "note": "Historical live claims are evidence leads with older identities, not new permission."
+        }
+      ],
+      "alternatives": [
+        "Confirm an existing approval manifest and supported SDK route",
+        "Infer permission from credentials, historic calls or configured ceilings"
+      ],
+      "decision": "No paid calls remain permitted. Current monetary/quota allocations are unknown and unapproved; do not assign invented numerical values or install legacy CLIs as a default prerequisite.",
+      "missing": [
+        "Selected execution environment and authorized seats/accounts",
+        "Explicit aggregate spend/quota and experiment allocation",
+        "Explicit context/output/deadline/attempt limits and enforcement/accounting evidence",
+        "Independent verification ownership"
+      ],
+      "acceptance": "Each limit has an owner-approved source, unit, scope, enforcement point and accounting evidence. Provider invocation is ineligible if any mandatory field or enforcement is missing.",
+      "eligible_when": [
+        "P0-AUTHORITY is resolved",
+        "Drason supplies or confirms the scoped manifest and the independent authority verifies enforcement"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P1-QUALIFICATION",
+      "phase": 1,
+      "kind": "mandatory",
+      "purpose": "Establish that an authorized real seat can complete one governed synthetic planning obligation through existing interfaces without manual handoffs.",
+      "consumer": "Phase 1 exit and Phase 2 eligibility",
+      "disposition": "blocked",
+      "depends_on": [
+        "P0-PROOF",
+        "P0-AUTHORITY",
+        "P0-LIMITS"
+      ],
+      "output": "real-seat-qualification-evidence",
+      "owner": "authorized execution controller and separate verifier",
+      "evidence": [
+        {
+          "path": "ophanim/runtime.mjs",
+          "note": "Explicit planner plus independent validatePlan, immutable obligations and exact evidence handoffs."
+        },
+        {
+          "path": "ophanim/fixtures.mjs",
+          "note": "Known synthetic request and approved-template oracle can exercise a bounded transport path."
+        },
+        {
+          "path": "packages/model-client/router.mjs",
+          "note": "Existing model-client boundary to reuse."
+        }
+      ],
+      "alternatives": [
+        "Use the existing interfaces and independently judged synthetic obligation",
+        "Introduce a new provider harness or manual transfer path"
+      ],
+      "decision": "Prepare the eligibility and acceptance requirements only. No current live invocation or Phase 1 pass is asserted.",
+      "missing": [
+        "All unresolved mandatory Phase 0 qualification conditions",
+        "Authorized real model execution and accounting evidence at the selected current identities"
+      ],
+      "acceptance": "Verify seat identity and permitted capabilities, typed output, input/context/tool limits, accounting, exact authenticated handoffs, interruption/incomplete/quota/fallback recovery, and independent final acceptance. A normal successful reply alone is insufficient.",
+      "eligible_when": [
+        "Phase 0 exit is independently recorded for the intended scope",
+        "P0-LIMITS authorizes this particular bounded qualification"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P2-VALIDATION",
+      "phase": 2,
+      "kind": "mandatory",
+      "purpose": "Specify an independently checkable acceptance contract for plans derived from unfamiliar objectives.",
+      "consumer": "Phase 2 generated organization/plan acceptance",
+      "disposition": "blocked",
+      "depends_on": [
+        "P1-QUALIFICATION"
+      ],
+      "output": "unfamiliar-objective-plan-acceptance-contract",
+      "owner": "independent objective/contract verifier",
+      "evidence": [
+        {
+          "path": "ophanim/runtime.mjs",
+          "note": "Requires independent validatePlan and rejects missing/cyclic/cross-scope dependencies and duplicate output ownership."
+        },
+        {
+          "path": "ophanim/fixtures.mjs",
+          "note": "Current validator uses approved-template equality."
+        },
+        {
+          "path": "ophanim/governance/check-contract.mjs",
+          "note": "Trusted synthetic expected answers do not judge arbitrary plan quality."
+        }
+      ],
+      "alternatives": [
+        "Establish objective-derived independent acceptance and reuse structural checks",
+        "Present the existing synthetic template validator as a general plan oracle"
+      ],
+      "decision": "Do not invent a general semantic validator or expected answers in this packet. Record the independent acceptance contract as a required precondition, not an already delivered feature.",
+      "missing": [
+        "Selected unfamiliar objective and required outputs/constraints",
+        "Independent semantic and executable-plan acceptance criteria for that objective"
+      ],
+      "acceptance": "Every proposed function traces to objective requirements or downstream necessity; acceptance is independent of the producer's explanation. Missing prerequisites and unsupported obligations remain visible and block a complete-plan claim.",
+      "eligible_when": [
+        "Phase 1 has passed",
+        "Objective owner and independent verifier agree the acceptance contract before judging the generated plan"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "P2-ORGANIZATION",
+      "phase": 2,
+      "kind": "mandatory",
+      "purpose": "Derive sufficient functions, obligations, dependencies and resource assignments from an unfamiliar objective without prescribing a team.",
+      "consumer": "Phase 2 exit",
+      "disposition": "blocked",
+      "depends_on": [
+        "P1-QUALIFICATION",
+        "P2-VALIDATION"
+      ],
+      "output": "independently-verified-executable-plan",
+      "owner": "governed planning controller; independent acceptance remains separate",
+      "evidence": [
+        {
+          "path": "ophanim/runtime.mjs",
+          "note": "Automatic scheduling of registered ready obligations; registry is supplied, not autonomously constructed."
+        },
+        {
+          "path": "ophanim/efficiency/investigation/models.mjs",
+          "note": "Functions retain contracts, consumers, dependencies, uncertainty and protected requirements."
+        }
+      ],
+      "alternatives": [
+        "Reuse sufficient deterministic capabilities; justify additional specialists against actual unmet functions",
+        "Assign a fixed roster or infer specialization quality from model names"
+      ],
+      "decision": "No team is prescribed here. Existing scheduling is reusable, but unfamiliar-objective decomposition and justified registry construction are not proven by the fixture.",
+      "missing": [
+        "Qualified capabilities and authorized resource allocation for the selected objective",
+        "Evidence that each proposed specialist supplies a required unmet capability"
+      ],
+      "acceptance": "Independent verifier checks requirement coverage, unique outputs, explicit typed handoffs, dependency readiness, authorized budgets, challenge/reconciliation and executable obligations. Required unresolved work, cycles or unsupported cross-scope handoffs prevent Phase 2 exit.",
+      "eligible_when": [
+        "P2-VALIDATION is resolved",
+        "Every mandatory dependency and resource allocation is supported by evidence and authority"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "DUPLICATE-CONTROLS",
+      "phase": 0,
+      "kind": "discretionary",
+      "purpose": "Evaluate whether additional generic orchestration infrastructure is needed.",
+      "consumer": "Avoid unnecessary implementation work",
+      "disposition": "no_change",
+      "depends_on": [
+        "P0-CONTROLS"
+      ],
+      "output": "duplicate-work-decision",
+      "owner": "planning evaluator",
+      "evidence": [
+        {
+          "path": "ophanim/runtime.mjs",
+          "note": "Existing planning/scheduling and recovery boundaries."
+        },
+        {
+          "path": "ophanim/watchdog.mjs",
+          "note": "Existing watchdog."
+        },
+        {
+          "path": "ophanim/efficiency/investigation/controller.mjs",
+          "note": "Existing investigation controller."
+        }
+      ],
+      "alternatives": [
+        "Reuse the existing mechanisms",
+        "Build duplicates"
+      ],
+      "decision": "Do not schedule duplicate infrastructure without a scoped consumer requirement the existing mechanism cannot satisfy.",
+      "missing": [],
+      "acceptance": "A reviewer can identify the current implementation for each reused function; any proposed addition must name a concrete unsupported requirement.",
+      "eligible_when": [
+        "A materially new, independently supported requirement gap is recorded"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "INVESTIGATION-VALUE",
+      "phase": 0,
+      "kind": "discretionary",
+      "purpose": "Determine whether any further measurement should be admitted to resolve a concrete evidence-linked decision.",
+      "consumer": "Choice of the next justified investigation",
+      "disposition": "insufficient_evidence",
+      "depends_on": [
+        "P0-IDENTITY",
+        "P0-PROOF"
+      ],
+      "output": "investigation-admission-decision",
+      "owner": "deterministic evaluator with independently verified inputs",
+      "evidence": [
+        {
+          "path": "ophanim/efficiency/investigation/select.mjs",
+          "note": "Ranks discriminating methods by expected information value, retaining alternatives and negative outcomes."
+        },
+        {
+          "path": "ophanim/efficiency/investigation/controller.mjs",
+          "note": "Requires exact trace/forecast/history bindings and does not manufacture empirical inputs."
+        }
+      ],
+      "alternatives": [
+        "Retained observation",
+        "Instrumentation",
+        "Paired replay",
+        "Controlled ablation",
+        "No investigation"
+      ],
+      "decision": "No actual roadmap-specific selector receipt is claimed. The necessary scoped trace, competing predictions, method evidence and economics have not been supplied; do not fabricate hashes or gains to force a positive decision.",
+      "missing": [
+        "Applicable accepted trace and verified observations",
+        "A bounded decision question with at least two competing hypotheses",
+        "An evidenced method measuring a signal on which predictions differ",
+        "Sourced applicability/workload/confidence/decision-change/avoidable-loss and cost estimates"
+      ],
+      "acceptance": "Use existing selectInvestigation semantics only with compatible verified inputs. Keep candidate gain separate; unknown value stays insufficient_evidence, nonpositive net value stays no_change, and selection grants no execution authority.",
+      "eligible_when": [
+        "All required scope, evidence, discrimination and forecast inputs exist",
+        "No retained applicable decision suppresses the investigation",
+        "Execution requires its own later authorization"
+      ],
+      "stop": "Stop selection on invalid/missing inputs; any later authorized measurement stops on decisive discrimination, fixed limits, invariant violation or verifier refusal."
+    },
+    {
+      "id": "SIGNED-SOURCE-OPTIMIZATION",
+      "phase": 0,
+      "kind": "discretionary",
+      "purpose": "Evaluate whether the previously deferred signed-source optimization should be repeated.",
+      "consumer": "Preserve prior decisions and avoid repeated cost without new value",
+      "disposition": "no_change",
+      "depends_on": [
+        "P0-IDENTITY"
+      ],
+      "output": "optimization-deferral",
+      "owner": "planning evaluator",
+      "evidence": [
+        {
+          "path": "ophanim/efficiency/admission.mjs",
+          "note": "Pure admission screening retains applicable prior decisions; not optimization authority."
+        },
+        {
+          "path": "ophanim/efficiency/investigation/select.mjs",
+          "note": "Material-change rules prevent repetition on unchanged scope/evidence."
+        }
+      ],
+      "alternatives": [
+        "Preserve the owner's explicit deferral",
+        "Re-run because another phase or planning pass exists"
+      ],
+      "decision": "Retain deferral. This pass has not established materially new applicable evidence changing its value and runs no optimization or signed-source benchmark.",
+      "missing": [
+        "Any future materiality claim needs an exact prior decision and applicable new evidence, not just a timestamp or request"
+      ],
+      "acceptance": "For a future applicable selector decision, independently check its actual material-change rule and economics; do not present this documentary deferral as a reconstructed historic controller receipt.",
+      "eligible_when": [
+        "Materially new applicable evidence satisfies the relevant retained-decision rule",
+        "Independent admission and required authorization are obtained"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    },
+    {
+      "id": "MODEL-ADVICE",
+      "phase": 0,
+      "kind": "discretionary",
+      "purpose": "Determine whether optional model advice is justified in evaluating an investigation design.",
+      "consumer": "Only a positive unresolved design tradeoff",
+      "disposition": "blocked",
+      "depends_on": [
+        "INVESTIGATION-VALUE",
+        "P0-LIMITS"
+      ],
+      "output": "optional-advisor-admission",
+      "owner": "authorized caller; deterministic reevaluation and verification remain separate",
+      "evidence": [
+        {
+          "path": "ophanim/efficiency/investigation/advisor.mjs",
+          "note": "One bounded text-only turn only for a positive unresolved tradeoff with sufficient allowance; malformed/incomplete results preserve the deterministic decision."
+        }
+      ],
+      "alternatives": [
+        "Keep the deterministic result",
+        "Request one authorized bounded advisory turn"
+      ],
+      "decision": "Do not call the advisor. Positive-value tradeoff, adequate authorized allowance and a current approved route are not established.",
+      "missing": [
+        "Eligible positive-value unresolved designs",
+        "Authorized advice budget and current provider route"
+      ],
+      "acceptance": "Advice may supply provisional hypotheses only, never new authority or execution; existing limits and deterministic reevaluation remain mandatory.",
+      "eligible_when": [
+        "INVESTIGATION-VALUE is proposed under the existing rules",
+        "P0-LIMITS expressly permits the bounded advisory call",
+        "Conservative allowance exceeds cost and uncertainty reserve"
+      ],
+      "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
+    }
+  ],
+  "next_step": {
+    "action": "Locate an already retained synthetic proof and its original supported verifier environment, and obtain the existing intended live-scope authority/approval records; reconcile evidence before proposing any new implementation or run.",
+    "dependencies": [
+      "P0-PROOF",
+      "P0-AUTHORITY",
+      "P0-LIMITS"
+    ],
+    "fallback": "If those records cannot be supplied, retain explicit insufficient_evidence/blocked results; do not generate a substitute proof or assume authority.",
+    "not_required": "Do not merge ARGO PRs or install legacy CLIs merely to evaluate this separate OPHANIM baseline."
+  },
+  "history": [
+    {
+      "id": "D01",
+      "decision": "Supersede the earlier ARGO-only not-located claims for OPHANIM; preserve the historical record."
+    },
+    {
+      "id": "D02",
+      "decision": "Reuse current controller, watchdog, scheduler and TELOS fixture implementation."
+    },
+    {
+      "id": "D03",
+      "decision": "Do not claim current real-seat qualification or unfamiliar-objective organization construction."
+    },
+    {
+      "id": "D04",
+      "decision": "Keep no paid runs and unknown budgets; do not reinterpret software ceilings as approval."
+    },
+    {
+      "id": "D05",
+      "decision": "Preserve signed-source optimization deferral and legitimate no_change/insufficient_evidence outcomes."
+    },
+    {
+      "id": "D06",
+      "decision": "Prepare documentary records only; no registration, effects, release activation or runtime code changes."
+    }
+  ],
+  "economics": {
+    "actual_roadmap_estimates_supplied": false,
+    "expectedConvergences": null,
+    "applicability": null,
+    "confidence": null,
+    "decisionChangeProbability": null,
+    "avoidableLossMsPerConvergence": null,
+    "estimatedInvestigationMs": null,
+    "rolloutMs": null,
+    "regressionMs": null,
+    "opportunityCostMs": null,
+    "note": "Do not substitute synthetic selector test numbers or source ceilings into this record."
+  }
+}

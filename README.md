@@ -13,6 +13,8 @@ npm test
 
 The [provenance record](PROVENANCE.json) records the ARGO source and filtered Git lineage. ARGO retains the historical `pantheon-seat-core/` as an archive.
 
+The [evaluated Phase 0–2 plan](docs/planning/phase0-2-evaluation/README.md) applies the existing planning rules to the next qualification steps. It records capabilities to reuse, missing evidence, authority and budget dependencies, and the distinction between synthetic verification and live qualification. It is a non-executable decision record and authorizes no runs or releases.
+
 ## Run the synthetic planning proof
 
 Use a separate TELOS checkout at `0c9b539ddbb08e1464603faf786e0d5cdfc33fb8` and set `OPHANIM_TELOS_ROOT` to its absolute path. Ophanim checks the TELOS source files against built-in digests before loading the governance code. The proof creates local fixture identities and a synthetic queue inside the output directory.
