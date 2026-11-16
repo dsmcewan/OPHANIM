@@ -15,7 +15,6 @@
   },
   "google": {
     "gemini-3.5-flash": "gemini-3.5-flash",
-    "gemini-3.8-flash-high": "gemini-3.8-flash-high",
     "carbon": "gemini-4-carbon",
     "argon": "gemini-4-argon"
   },

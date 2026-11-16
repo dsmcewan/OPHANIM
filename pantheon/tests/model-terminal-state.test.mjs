@@ -48,7 +48,7 @@ function fakeClient(surface, ok) {
 }
 
 test("the registry walk covers every model and routes each one deliberately", () => {
-  assert.equal(ALL.length, 19);
+  assert.equal(ALL.length, 18);
   for (const { vendor, model } of ALL) assert.ok(ADAPTERS[vendor], `${model} has an adapter`);
   const frontier = ALL.filter(m => isFrontier(m.model)).map(m => m.model).sort();
   assert.deepEqual(frontier, ["claude-fable-5-2", "gemini-4-argon", "gemini-4-carbon", "gpt-6-astra", "grok-4.3", "grok-4.7"]);

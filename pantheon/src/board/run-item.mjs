@@ -38,6 +38,7 @@ import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder
 import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
+import { escalationRecord } from "../route/protocol.mjs";
 import { frontierCandidates, readPools } from "../route/frontier.mjs";
 import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
 
@@ -314,7 +315,7 @@ export async function runOpenItem(spec, opts = {}) {
     return { text, response_id: res.response_id, usage: res.usage, tool_calls: res.tool_calls, subagent_calls: res.subagent_calls };
   }
 
-  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal }) {
+  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null }) {
     const t0 = Date.now();
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
     if (vendor === "agy_google" && !isFrontier(model)) {
@@ -337,7 +338,8 @@ export async function runOpenItem(spec, opts = {}) {
     };
     let r;
     try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
-      architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(extra ? { extra } : {}) }); }
+      architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(extra ? { extra } : {}),
+      ...(effort ? { effort } : {}) }); }
     catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
     if (!r.ok) { progress({ event: "turn.error", seat: vendor, model, detail: r.why }); throw new Error(`${vendor}/${purpose}: ${r.why}`); }
     const text = r.result.text ?? "";
@@ -348,9 +350,12 @@ export async function runOpenItem(spec, opts = {}) {
   }
 
   /** Walk the seating table's fallbacks on a TRANSPORT failure only. */
-  async function roleTurn({ role, purpose, prompt, avoid = [], extra = undefined, pin = null }) {
+  async function roleTurn({ role, purpose, prompt, avoid = [], extra = undefined, pin = null, effort = null, seat = null }) {
     let candidates;
-    if (OVERRIDES[role]) {
+    // An escalation that stepped a rung names its seat outright: a lane model cannot be pinned through
+    // the API registry, and the decision is already recorded, so it is not re-derived from the table.
+    if (seat) candidates = [{ vendor: seat.vendor, model: seat.model, pool: seat.pool ?? seat.vendor }];
+    else if (OVERRIDES[role]) {
       const selected = OVERRIDES[role];
       candidates = [{ ...selected, pool: selected.pool ?? selected.vendor }];
       if (pin && pin !== selected.model) candidates = [forRole(role, { pin, avoid })[0], ...candidates];
@@ -362,7 +367,9 @@ export async function runOpenItem(spec, opts = {}) {
     if (!candidates.length || candidates.some(c => !c)) throw new Error(`no seated candidate for "${role}"`);
     const routed = await routeCall({ candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
-      invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra) }) });
+      // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
+      invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
+        effort: effort && candidate.model === effort.model ? effort.value : null }) });
     return { text: routed.value, seat: routed.seat };
   }
 
@@ -671,8 +678,10 @@ export async function runOpenItem(spec, opts = {}) {
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
             writeFileSync(join(outDir, `implementer-prompt-${c.sl.slot}-rev${rev}.txt`), p.prompt);
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
-              ...(c.model ? { pin: c.model } : {}) });
+              ...(c.forced ? { seat: c.forced } : c.model ? { pin: c.model } : {}),
+              effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
+            c.ranModel = made.seat.model;
             // A different vendor or model answering this chair is a reseat: the generation advances.
             const next = nextOccupancy(c.seat, made.seat, { seat_id: made.seat.vendor !== c.seat.vendor
               ? `${made.seat.vendor}-work-${c.sl.slot}` : c.seat.seat_id, mode: "work" });
@@ -725,7 +734,23 @@ export async function runOpenItem(spec, opts = {}) {
           run.revisions.push({ rev, exit: acc.exit, slots: crew.map(c => ({ slot: c.sl.slot, chars: c.code.length, artifact: c.artifactCid, bytes: c.bytes })) });
           record();
           if (acc.exit === 0) break;
-          if (attempt + 1 < revisions) progress({ event: "revise", rev: rev + 1 });
+          if (attempt + 1 < revisions) {
+            // ESCALATION, from the executed result: each slot's next revision is the protocol's decision
+            // (src/route/protocol.mjs) -- documented effort first, then the next harder rung -- and the
+            // decision is recorded with its inputs so it can be re-derived from the run.
+            for (const c of crew) {
+              const rec = escalationRecord({ role: "implementer", outcome: { kind: "acceptance", exit: acc.exit }, steps: c.escalationSteps ?? 0,
+                seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null } });
+              const { action, to } = rec.decision;
+              if (action === "raise_effort") c.effort = to.effort;
+              if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
+              if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
+              (run.escalations ??= []).push({ slot: c.sl.slot, rev, ...rec });
+              progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
+            }
+            record();
+            progress({ event: "revise", rev: rev + 1 });
+          }
         }
 
         for (const c of crew) {

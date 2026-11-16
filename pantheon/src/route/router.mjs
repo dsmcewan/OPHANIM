@@ -33,26 +33,18 @@ export const SEAT_FACTS = {
     vendor: "openai", continuity: "server", quota_pool: "openai",
     latency_class: "seconds",                       // measured 2026-09-27
     models: { default: modelId("openai", "luna"), strong: modelId("openai", "sol"), strongest: modelId("openai", "astra") },
-    // CORRECTED 2026-09-28 against the current GPT-6 guidance, which documents SIX levels:
-    // "`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. Available levels depend on the model
-    // and client." (config-file/config-reference.md, model_reasoning_effort; the subagents page
-    // lists the same six with per-level advice.)
-    //
-    // Three corrections, and only one of them was the obvious one:
-    //   - `minimal` is NOT a reasoning level. The only "minimal" in the current docs is `:minimal`,
-    //     a filesystem PERMISSION token -- an unrelated string that reads like a match.
-    //   - `none` is not in the documented list for these models either. It was carried alongside
-    //     minimal and is dropped with it, which also retires the `unsupported` entry below.
-    //   - `ultra` was MISSING, and that one cost something: raiseEffort() walks this array, so
-    //     escalation topped out at `max` and could never reach the deepest level the models offer,
-    //     while wasting two steps on levels they do not advertise.
+    // CORRECTED 2026-11-16 against each model's own page (cited in src/config/capability-facts.json).
+    // The 2026-09-28 list came from a CLIENT configuration reference ("Available levels depend on the
+    // model and client") and added `ultra`, which no GPT-6 model page lists: escalating past `max`
+    // would have sent an undocumented value. The model pages also restore `none` for Luna and Sol.
+    //   gpt-6-luna, gpt-6-sol    none low medium(default) high xhigh max
+    //   gpt-6.1-sol              low medium(default) high xhigh max        (no none/minimal)
+    //   gpt-6-astra              low medium high xhigh max                 (none -> HTTP 400; default not stated)
     effort: { param: "reasoning.effort",
-      values: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      default: { "gpt-6-sol": "medium", "gpt-6-luna": "medium" },
-      // Astra's own default is UNRECORDED: the reasoning guide names Sol's and Luna's only.
-      // `unsupported` is now empty: it recorded that astra rejects `none`, which is moot once
-      // `none` is not an advertised level at all. Kept as a key so the shape stays uniform.
-      unsupported: {} },
+      values: ["none", "low", "medium", "high", "xhigh", "max"],
+      default: { "gpt-6-sol": "medium", "gpt-6-luna": "medium", "gpt-6.1-sol": "medium" },
+      supports: { "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"], "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"] },
+      unsupported: { "gpt-6-astra": ["none"] } },
     // Recorded 2026-09-28 from the operator's capability table. Previously ABSENT entirely, so all
     // three implementer rungs reported a null window -- the ladder was routed on bands whose
     // context claim nothing backed. 1.05M, distinct from anthropic's 1M: close enough to have been

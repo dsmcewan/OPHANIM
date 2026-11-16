@@ -183,7 +183,8 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | Seat (conversation) records carry the model | Resolved | Recorded in `saveSeat`. A model change is refused unless it is an explicit, recorded reseat (`model_gen`). |
 | `all_turns` support on GPT-6 Astra, Sol and Luna | On Hold | The docs conflict on Astra and say nothing on Sol or Luna. These models use their default, and the recorded effective mode will show the answer once a live call is made. |
 | Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds cited figures for all 19 registry models, read 2026-11-16. Anything unstated stays UNRECORDED: xAI max output, and grok-build-0.1 and gemini-3.5-flash effort. |
-| Correcting the 9 named code-vs-docs disagreements (`tests/capability-facts.test.mjs`) | On Hold | Each one changes behaviour. The disagreements are: efforts on astra and grok-4.3/4.7; the router's `ultra` on four GPT-6 models; gemini-3.8-flash-high belonging to the agy CLI lane; and the deprecated gemini-3.5-flash default. |
+| Correcting the code-vs-docs disagreements | Resolved, except one | Effort lists, the router's `ultra`, and gemini-3.8-flash-high moved to the CLI lane are all applied. The deprecated gemini-3.5-flash default is On Hold as an operator decision. |
+| Routing and escalation protocol | Resolved | See "Routing and escalation protocol" below. |
 | Moving direct-path models onto the frontier client | On Hold | Now possible for models whose window and output are cited (OpenAI 4, Anthropic 4). It changes the request path, so it is a separate, explicit step. | Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
 
 Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared contracts and on the controller) → Q6 → Q7 (measured adjustment). After each one, `npm test` on the Pantheon suite (CI runs the `bwrap` cases this sandbox cannot), and for Q7 the OPHANIM `prove`, `verify` and `investigate` paths.
@@ -195,3 +196,42 @@ Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared cont
 - The DAG stays the record.
 
 All seven proposals add checks or record facts that already exist at runtime, so the underlying system keeps operating throughout. The loop stays the only process: Pantheon's stages are steps of it, the 1 + 4 chairs are its workers, and choosing and adjusting them is the same loop applied to coordination.
+
+
+## Routing and escalation protocol (implemented 2026-11-16)
+
+`seating.mjs` already had `selectFor`, `escalate` and `raiseEffort`, but nothing on the run path called them. A revision after a failed acceptance re-ran the same model at the same effort. The direct adapter also dropped `effort`. So for 12 of the 18 registry models, a raised effort would have been recorded and had no effect.
+
+`pantheon/src/route/protocol.mjs` applies the loop to the seat itself:
+
+| Recorded outcome (cause) | Action | Bound |
+|---|---|---|
+| success | **hold**: nothing changed, nothing moves | — |
+| 429 / 5xx with an interval | **wait**, same seat | the interval |
+| 429 with no interval, or a shut pool | **reseat** to another pool (`routeCall`) | the role's candidates |
+| 4xx request error | **stop**: a stronger model does not fix a wrong request | — |
+| truncated (`max_tokens`, `MAX_TOKENS`, `incomplete`) | **raise_output**: double the budget | the model's *documented* output ceiling |
+| work rejected (acceptance exit ≠ 0, or a checker's `request_changes`) | **raise_effort** along the model's *documented* ladder, from its documented default; then **step_rung** to the nearest harder band; then **stop** | 4 steps per item |
+
+- **Cheapest first.** Each action keeps more of what was already paid for than the next one does. Raising the output budget keeps the model and its reasoning. Raising effort keeps the model, lab and conversation. Stepping a rung keeps the role. Reseating keeps only the chair.
+- **Facts only.** Effort ladders, defaults and output ceilings come only from `capability-facts.json`. An undocumented value is never chosen, and the direct adapter refuses one if it is passed in.
+- **Routing.** `routeFor` is the existing band selection, gated by the facts. It skips an id that is neither an API id nor a declared lane model, uses a deprecated model only if nothing current fills the role, skips a model whose documented window is below the work's context, and reports the source it relied on.
+- **Records.** Each decision is `escalationRecord({role, seat, outcome, steps})`, carrying its inputs and a digest. `verifyEscalation` re-derives every decision, checks the step count continues the trail, and refuses a tampered or skipped record.
+
+**Wiring.**
+- The direct adapter applies effort per surface (`reasoning.effort`, `output_config.effort`, `thinkingLevel`), checked against the facts.
+- `runOpenItem` asks the protocol after each failed acceptance, for each slot. It applies the decision to that slot's next revision and keeps the records in `run.escalations`.
+- An escalated effort applies only to the model it was decided for; a fallback model gets its own default.
+- A stepped rung names its seat explicitly, because lane models are not in the API registry.
+
+**Check.** `pantheon/tests/route-protocol.test.mjs` covers:
+- every cause, the documented ladder and the harder band, and the bounds;
+- output raised within the ceiling, and an undocumented ceiling never guessed;
+- record tampering and step-count gaps;
+- routing gates;
+- effort mapping and refusal;
+- an end-to-end run where a `gpt-6-sol` slot fails acceptance, its second revision is sent at `reasoning.effort: "high"` and ships, and the recorded decision re-derives.
+
+**Not covered yet, and kept separate:**
+- **Reviewer verdicts and truncated turns on the run path.** The protocol classifies both, but only the implementer's acceptance loop acts on decisions today.
+- **Stepping into the agy CLI lane.** The lane takes a model but no effort, so a stepped-to lane model runs at its own default.

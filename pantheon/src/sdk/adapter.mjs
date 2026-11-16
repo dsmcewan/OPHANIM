@@ -239,7 +239,8 @@ export async function sendTurn({
   // Streaming is an OBSERVATION channel, not a second result format: streamTurn accumulates
   // into the same shape the non-streaming path returns, so the seat layer hashes one thing.
   if (onEvent) {
-    const req = buildRequest({ spec, vendor, model, prompt, previousResponseId, history, extra, mode });
+    const req = withEffort(spec.surface, model ?? spec.default_model, effort,
+      buildRequest({ spec, vendor, model, prompt, previousResponseId, history, extra, mode }));
     // `label` names the pane these events belong to. It defaults to the vendor, so the base
     // row is unchanged, but a turn run on a different model under a different purpose can be
     // given its own identity instead of overwriting the vendor's pane with another model's
@@ -289,7 +290,7 @@ export async function sendTurn({
   // server-side, and ask for all_turns so earlier reasoning items are rendered again.
   if (spec.surface === "responses" && mode === "replay") {
     const items = [...(history ?? []), { role: "user", content: prompt }];
-    const req = buildRequest({ spec, vendor, model, prompt, history, extra, mode });
+    const req = withEffort(spec.surface, model ?? spec.default_model, effort, buildRequest({ spec, vendor, model, prompt, history, extra, mode }));
     const res = await client.responses.create(req);
     const n = { ...normalize(res, vendor, (history ?? []).length > 0), reasoning_context: reasoningContextReport(req.reasoning?.context, res) };
     const hasOutput = Array.isArray(res?.output) && res.output.length > 0;
@@ -307,27 +308,27 @@ export async function sendTurn({
   }
 
   if (spec.surface === "responses") {
-    const res = await client.responses.create({
+    const res = await client.responses.create(withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model,
       input: prompt,
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...extra,
-    });
+    }));
     return normalize(res, vendor, Boolean(previousResponseId));
   }
-  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra });
+  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort });
 }
 
 // Replay surfaces. `history` is the prior conversation in the vendor's own message shape; the
 // caller owns it and gets an updated copy back. Returning the new history rather than mutating
 // the input keeps a failed turn from corrupting the caller's record.
-async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra }) {
+async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort }) {
   const resumed = history.length > 0;
   if (spec.surface === "genai") {
     const contents = [...history, { role: "user", parts: [{ text: prompt }] }];
-    const res = await client.models.generateContent({
+    const res = await client.models.generateContent(withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model, contents, ...extra,
-    });
+    }));
     const candidate = res?.candidates?.[0];
     const text = typeof res?.text === "string" ? res.text : collectGenaiText(res);
     const terminal = terminalState("genai", { finishReason: candidate?.finishReason ?? null, blocked: Boolean(res?.promptFeedback?.blockReason) });
@@ -341,12 +342,12 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
   }
   if (spec.surface === "messages") {
     const messages = [...history, { role: "user", content: prompt }];
-    const res = await client.messages.create({
+    const res = await client.messages.create(withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model,
       max_tokens: extra?.max_tokens ?? 1024,
       messages,
       ...extra,
-    });
+    }));
     const text = (res?.content ?? []).filter(b => b?.type === "text").map(b => b.text).join("");
     const tools = [...new Set((res?.content ?? []).filter(b => b?.type === "tool_use").map(b => b.name))].sort();
     // A max_tokens stop is a truncated reply, not a complete exchange.
@@ -358,6 +359,20 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     });
   }
   throw new Error(`sendTurn: unhandled surface "${spec.surface}"`);
+}
+
+// Effort on the direct path. The frontier client already applies effort; the direct path used to drop
+// it silently, so an escalation that raised effort here would be recorded and have no effect. A value
+// the cited capability facts do not document for the model is refused rather than sent.
+const CAPABILITY_FACTS = JSON.parse(readFileSync(new URL("../config/capability-facts.json", import.meta.url), "utf8"));
+export function withEffort(surface, model, effort, req) {
+  if (effort === undefined || effort === null) return req;
+  const documented = CAPABILITY_FACTS.models[model]?.efforts?.values ?? [];
+  if (!documented.includes(effort)) throw new Error(`sendTurn: effort "${effort}" is not documented for ${model}`);
+  if (surface === "responses") return { ...req, reasoning: { ...req.reasoning, effort } };
+  if (surface === "messages") return { ...req, output_config: { ...req.output_config, effort } };
+  if (surface === "genai") return { ...req, config: { ...req.config, thinkingConfig: { ...req.config?.thinkingConfig, thinkingLevel: effort.toUpperCase() } } };
+  throw new Error(`sendTurn: no effort mapping for surface "${surface}"`);
 }
 
 // Read a subscription token off disk. Returns null rather than throwing when absent, so the

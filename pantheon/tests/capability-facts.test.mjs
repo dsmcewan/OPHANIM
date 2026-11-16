@@ -25,14 +25,6 @@ test("every registry model has a record, and every figure is cited or UNRECORDED
 // fixing one means removing it here, and a new one fails this test until it is examined.
 const KNOWN_DRIFT = [
   "gemini-3.5-flash:deprecated",
-  "gemini-3.8-flash-high:not-an-api-id",
-  "gpt-6-astra:efforts",
-  "gpt-6-astra:router-effort",
-  "gpt-6-luna:router-effort",
-  "gpt-6-sol:router-effort",
-  "gpt-6.1-sol:router-effort",
-  "grok-4.3:efforts",
-  "grok-4.7:efforts",
 ];
 
 test("the code's disagreements with the cited facts are exactly the known list", () => {

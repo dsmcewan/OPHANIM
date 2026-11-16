@@ -180,3 +180,10 @@ Disagreements between the code and these facts, as of this reading:
 - **Registry:**
   - `gemini-3.8-flash-high` is registered as a Gemini API model but belongs to the agy CLI lane.
   - `gemini-3.5-flash`, the agy_google API default, is deprecated.
+
+**Applied 2026-11-16.** `CAPABILITIES` efforts now match the cited pages:
+- astra: `low…max`;
+- grok-4.3: `none…xhigh`;
+- grok-4.7: `low…xhigh`.
+
+The router's OpenAI ladder is now `none…max` without `ultra`, with per-model support (6.1-sol and astra start at `low`; astra refuses `none`). `gemini-3.8-flash-high` moved to `lanes.json` (agy CLI). The only disagreement left is the deprecated `gemini-3.5-flash` default, which is an operator decision.
