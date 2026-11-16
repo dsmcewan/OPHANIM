@@ -266,6 +266,16 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
   },{dir:scopeDir,timeoutMs:60000});
 }
 
+// The assessment retained for an unchanged head is the assessment of this run.
+export function reusedEfficiencyRecord({stateDir,boardCommit,output}) {
+  const reportFile=path.join(stateDir,'efficiency','convergences',boardCommit.replace(':','-'),'assessment.json');
+  if(!exists(reportFile))throw Error('Reused convergence has no retained efficiency assessment');
+  const assessment=read(reportFile);
+  const record={schema:assessment.schema,outcome:assessment.outcome,reason:assessment.reason,traceSha:assessment.traceSha,scopeSha:assessment.scopeSha,boardCommit,reportFile};
+  verifyEfficiencyRecord({stateDir,record,output});
+  return record;
+}
+
 export function verifyEfficiencyRecord({stateDir,record,output}) {
   const reportFile=path.resolve(record.reportFile);
   const expected=path.join(stateDir,'efficiency','convergences',record.boardCommit.replace(':','-'),'assessment.json');
@@ -276,7 +286,12 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
   if(digest(trace)!==record.traceSha||assessment.traceSha!==record.traceSha||trace.stateSha!==digest(snapshot.state)||
       trace.scopeSha!==record.scopeSha||assessment.scopeSha!==record.scopeSha||assessment.outcome!==record.outcome||
       canonical(trace.accepted)!==canonical(acceptanceEvidence(snapshot.state)))throw Error('Efficiency evidence differs from the accepted board');
-  if(output&&(trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects))||
+  if(output?.reusedConvergence){
+    // An equilibrium run binds to the head it found, not to a new observation.
+    if(output.reusedConvergence.boardCommit!==record.boardCommit||output.dispatches!==0||!['no_change','blocked'].includes(output.convergence)||
+        snapshot.state.events.at(-1)?.type!=='runtime.settled'||output.stateRevision!==snapshot.state.revision||
+        trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects)))throw Error('Reused convergence differs from the accepted board');
+  }else if(output&&(trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects))||
       trace.original.durationMs!==output.durationMs||trace.original.convergence!==output.convergence||trace.original.slots!==output.slots))throw Error('Efficiency observation differs from the runtime result');
   if(canonical(assessment.analysis)!==canonical(analyzeTrace(trace)))throw Error('Efficiency analysis differs from retained trace');
   if([ADMISSION_SCHEMA,REPORT_SCHEMA].includes(assessment.schema)){

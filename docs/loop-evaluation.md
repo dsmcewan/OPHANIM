@@ -1,6 +1,9 @@
 # Loop evaluation: OPHANIM against the loop operating principle
 
-Status: evaluation and proposals. No runtime behaviour has changed.
+Status: evaluation and proposals. P1, P3 and P4 are implemented on this branch
+(`ophanim/runtime.mjs`, `ophanim/cli.mjs`, `ophanim/efficiency/assessment.mjs`,
+`ophanim/governance.mjs`; tests in `ophanim/tests/loop-equilibrium.test.mjs`).
+The remaining proposals are not yet implemented.
 Base commit: `3b00139` (main after PR #2).
 
 This document maps the blackboard → scheduler → workers → TELOS → retained
@@ -109,6 +112,8 @@ At the start of `runRuntime`, after obligation intake, check five conditions:
 If all five hold, return `{convergence:'no_change', boardCommit:<existing head>}` without emitting `runtime.opened` or `runtime.settled`. `assessConvergence` then sees an unchanged `boardCommit`. Its `put` writes are already idempotent for the same commit, and `recoverInterruptedAssessment` already returns `null` when the report exists. So no new efficiency directory appears.
 
 - *Keeps:* accepted-row TELOS verification can still run read-only before returning, so nothing moves on an unverified claim, and in any case nothing moves.
+- *Implemented:* the reused result carries `reused:true` and the existing head commit. The CLI records `reusedConvergence` and reuses the head's retained assessment. `verifyEfficiencyRecord` checks a reused result against the board head rather than as a new observation. A pending row counts as unresolved only when its dependencies are all accepted, which is the same test the scheduler uses. So an unchanged `blocked` head is reused too.
+- *Measured after the change:* with N=18 the probe's resumes 1–3 keep `revision` 74 and the board bytes constant. The 18 handoff verifications still run, as intended. The final snapshot grew about 9% because of the P4 assignment fields.
 - *Validate:* the probe in Appendix A should show a constant `revision` and constant board bytes across runs 1–3. Add a test to `ophanim/tests/` that asserts `resume` twice yields identical head commits. `prove` and `verify` must still pass. If a proof scenario currently asserts a `runtime.opened` event on resume, rebind that assertion to the head commit.
 
 ### P2. Verify the transition chain (fixes G3)
@@ -135,7 +140,7 @@ Call it from `verifyProof` for every entry in `finalStates`, and make `status` p
 
 ### P4. Record the assignment decision (G5, evidence half)
 
-Add `readySetSha` (digest of the sorted ready ids at dispatch), `slots` and `policy:'sorted-id/round-robin'` to the `work.started` event. Assignment then becomes a checkable instance of the loop: given the parent snapshot, a verifier can recompute the ready set and the worker choice and compare them. Extend P2's chain check to do that recomputation.
+Add an `assignment` object to the `work.started` event: `policy` (`ophanim.assignment.sorted-id-round-robin/v1`), `readySetSha` (digest of the sorted ready ids at dispatch), `ready` (count), `rank` (position in the ready set), `slots`, and `choice` (index into the eligible worker list). Assignment then becomes a checkable instance of the loop: given the parent snapshot, a verifier can recompute the ready set and the worker choice and compare them. Extend P2's chain check to do that recomputation.
 
 - *Keeps:* the same dispatch order.
 - *Validate:* the P2 chain verifier recomputes and matches on every `prove` scenario.

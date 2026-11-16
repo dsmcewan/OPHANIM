@@ -61,8 +61,9 @@ function writeOnce(file, bytes) {
   try { fs.writeFileSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
-export async function createGovernance({root, telosRoot = '/home/colchis/Projects/TELOS', telosCommit = TELOS_COMMIT, fixtureOnly = true, readOnly = false} = {}) {
-  if (fixtureOnly !== true || telosCommit !== TELOS_COMMIT || !path.isAbsolute(root ?? '') || !path.isAbsolute(telosRoot)) fail('Explicit absolute fixture root and pinned TELOS commit required');
+export async function createGovernance({root, telosRoot, telosCommit = TELOS_COMMIT, fixtureOnly = true, readOnly = false} = {}) {
+  if (typeof telosRoot !== 'string' || !path.isAbsolute(telosRoot)) fail('Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot');
+  if (fixtureOnly !== true || telosCommit !== TELOS_COMMIT || !path.isAbsolute(root ?? '')) fail('Explicit absolute fixture root and pinned TELOS commit required');
   root = path.resolve(root); telosRoot = path.resolve(telosRoot);
   if (root === HERE || root.startsWith(HERE + path.sep)) fail('Fixture state cannot overwrite implementation source');
   const state = path.join(root, 'governance');

@@ -6,7 +6,7 @@ import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,can
 import {runRuntime,loadRuntime,activateRelease,rollbackRelease} from './runtime.mjs';
 import {readRuntimeSnapshot} from './board.mjs';
 import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
-import {assessConvergence,chooseEfficiencySlots,efficiencyScope} from './efficiency/assessment.mjs';
+import {assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord} from './efficiency/assessment.mjs';
 import {recoverInterruptedAssessment} from './efficiency/recovery.mjs';
 
 const FIXTURES=fileURLToPath(new URL('./fixtures.mjs',import.meta.url));
@@ -147,7 +147,10 @@ async function runRequest(request,replay) {
       workerContextBytes,
       verificationCalls,
     };
-    if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
+    // A reused convergence wrote nothing; its head already carries an assessment.
+    if(result.reused)output.reusedConvergence={boardCommit:result.boardCommit};
+    if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output});
+    else if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
       boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
       attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency});
     if(recoveredEfficiency)output.recoveredEfficiency=recoveredEfficiency;
