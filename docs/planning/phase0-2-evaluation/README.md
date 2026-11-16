@@ -1,4 +1,7 @@
 # Evaluated Phase 0–2 plan
+
+**Scope correction, 2026-11-16:** the owner clarified that the exercise is learning what a plan requires. This project-specific packet is historical and superseded as the exercise's direction. Use the [planning lessons](../LESSONS.md). The prior source reviews and results remain bound to their recorded Git candidates; they did not establish alignment with the intended learning objective.
+
 Date: 2026-11-16. Source: [OPHANIM `3b00139`](https://github.com/dsmcewan/OPHANIM/commit/3b00139dd05dee0565e7c4ad95b7befdecf73db7).
 
 This packet applies the repository's planning and investigation rules to the owner's Phase 0–2 roadmap. It is a non-executable decision record. It changes no runtime, public contract, authority, provider configuration or release. The original roadmap message was inaccessible; the owner's supplied seven-phase summary and approved planning exercise define the scope.

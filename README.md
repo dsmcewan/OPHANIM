@@ -13,7 +13,7 @@ npm test
 
 The [provenance record](PROVENANCE.json) records the ARGO source and filtered Git lineage. ARGO retains the historical `pantheon-seat-core/` as an archive.
 
-The [evaluated Phase 0–2 plan](docs/planning/phase0-2-evaluation/README.md) applies the existing planning rules to the next qualification steps. It records capabilities to reuse, missing evidence, authority and budget dependencies, and the distinction between synthetic verification and live qualification. It is a non-executable decision record and authorizes no runs or releases.
+The current [planning lessons](docs/planning/LESSONS.md) study how to derive and evaluate a plan's requirements. The owner clarified that this is a learning exercise. The earlier [Phase 0–2 packet](docs/planning/phase0-2-evaluation/README.md) is retained as historical, mis-scoped output and is superseded as the direction of this exercise; it is not an active execution backlog.
 
 ## Run the synthetic planning proof
 
