@@ -28,7 +28,7 @@ function writeJson(p, v) {
   renameSync(tmp, p);
 }
 
-export function openRuntime(root) {
+export function openRuntime(root, { store = null } = {}) {
   const dir = join(root, "runtime");
   mkdirSync(dir, { recursive: true });
   const leasesPath = join(dir, "leases.json");
@@ -153,13 +153,19 @@ export function openRuntime(root) {
     const rows = existsSync(spendPath)
       ? readFileSync(spendPath, "utf8").split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
       : [];
+    // Spend decides scheduling (an exhausted budget blocks everything but integrate), so it counts
+    // only what the board can vouch for: a row whose commit is in the store. A row naming a commit
+    // the board never made is reported, never silently counted -- in either direction.
+    const bound = store ? rows.filter(r => typeof r.commit === "string" && r.commit.startsWith("commit:") && store.has(r.commit)) : rows;
+    const unbound_rows = store ? rows.length - bound.length : null;
+    const binding = store ? "store" : "unchecked";
     // Derived, never stored. A stored counter is a second source of truth, and when it drifts it
     // drifts towards "still under budget".
-    const spent_turns = rows.reduce((n, r) => n + (r.turns ?? 1), 0);
-    const spent_usd = rows.reduce((n, r) => n + (r.usd ?? 0), 0);
-    if (!declared) return { declared: null, spent_turns, spent_usd, exhausted: false, why: "no budget declared" };
+    const spent_turns = bound.reduce((n, r) => n + (r.turns ?? 1), 0);
+    const spent_usd = bound.reduce((n, r) => n + (r.usd ?? 0), 0);
+    if (!declared) return { declared: null, spent_turns, spent_usd, exhausted: false, binding, unbound_rows, why: "no budget declared" };
     const exhausted = spent_turns >= declared.max_turns || (declared.max_usd !== undefined && spent_usd >= declared.max_usd);
-    return { declared, spent_turns, spent_usd, exhausted, rows: rows.length,
+    return { declared, spent_turns, spent_usd, exhausted, rows: rows.length, binding, unbound_rows,
       why: exhausted ? `budget exhausted: ${spent_turns}/${declared.max_turns} turns, ${spent_usd.toFixed(4)}/${declared.max_usd ?? "-"} usd` : null };
   }
 

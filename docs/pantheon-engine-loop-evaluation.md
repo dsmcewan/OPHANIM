@@ -144,14 +144,43 @@ Each proposal is a small was/is change whose acceptance the existing gates or te
 - `runtime.budget()` counts a spend row only if its `commit` resolves in the store. Rows that don't resolve are reported (`unbound_rows`) rather than counted silently.
 - *Check:* a runtime test with one bound row and one forged row.
 - `run.json` can be bound later by writing its digest into a controller trace entry at each stage. That is noted here, not proposed now.
+- **Implemented.**
+  - `openBoard` passes its store to `openRuntime`. `budget()` counts a spend row only if its `commit:` cid is in that store, and reports `binding` and `unbound_rows`.
+  - A runtime opened without a store reports `binding: "unchecked"` rather than claiming a check it did not make.
+  - *Check:* `tests/board-budget-binding.test.mjs`. Three forged rows (an absent commit, a malformed one, and another absent one) add nothing, cannot exhaust the budget, and are reported. Real spend still exhausts it and blocks the spending triggers.
 
 **Q7. Let the 1 + 4 arrangement be adjusted by OPHANIM's existing loop (fixes E7, once Q1 and Q2 exist).**
 - *Derive, don't store:* a per-chair contribution projection from the board. For each chair it gives the occupant model (Q1), the generation (Q2), revisions to the first green acceptance, critiques whose verdict disagreed with the later executed acceptance, turns, and reseats.
 - Feed it to `efficiency/contributions.mjs` as variables of a scope. Investigation then ranks which chair question is worth measuring, as it already does for scheduler latency.
 - A seating change remains a signed, scoped decision, admitted exactly like the 1 → 3 slot policy. Until the TELOS-side verifier admits that dimension (it is pinned), Q7 produces ranked questions and evidence only, never a seating change.
 - *Check:* `investigate --state` reproduces the receipt from the board.
+- **Measurement implemented; adjustment is On Hold** because it needs the pinned verifier to admit seat changes.
+  - `pantheon/src/board/contributions.mjs` derives each chair's projection from every entry reachable from the board's refs, and stores nothing. It covers:
+    - occupants, with vendor and model (Q1);
+    - reseats re-derived per chair instance by `occupancyTrail` (Q2), with inconsistent or pre-Q1 trails reported rather than counted as zero;
+    - implementer revisions per slot and the first revision an independent run passed;
+    - reviewer verdicts and approvals contradicted by executed acceptance;
+    - plans and scout forks.
+  - `verifyChairContributions` recomputes the projection and refuses one that does not match the board.
+  - `ophanim/efficiency/investigation/chairs.mjs` turns the projection into functional models, one per chair, with `rework` and `reseats` as board-derived observations. It ranks the questions through the existing `selectInvestigation`. Without a declared forecast the outcome is `insufficient_evidence`; with one, the question is ranked by information value.
+  - Every result keeps `executionAuthorized`, `promotionAuthorized`, `modelCalls`, `replays` and `effects` at false or zero.
+  - *Check:* `pantheon/tests/board-contributions.test.mjs` runs a real refused-then-revised two-slot ticket. It derives 2 revisions per slot (green on revision 2), verdicts of 2 approve and 2 request_changes, no contradicted approvals, and no reseats. It verifies the projection by recomputing it, refuses a forged one, and feeds it to the ranking. `ophanim/efficiency/investigation/chairs.test.mjs` covers the ranking itself.
 
-Status: Q1, Q2, Q3, Q4 and Q5 are implemented on this branch. Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
+Status: Q1–Q6 and Q7's measurement are implemented on this branch.
+
+### Dependency status
+
+Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item is re-checked for a change in circumstances before the loop concludes. Re-checked at this commit:
+
+| Dependency | Status | Basis |
+|---|---|---|
+| Q1 model in the author, Q2 occupancy transitions, Q3 chair gate, Q4 controller gate, Q5 lane registry, Q6 budget binding | Resolved | implemented; Pantheon suite 777 pass, plus 1 failure that also fails on unchanged code here |
+| Q7 measurement (projection, recomputation check, ranking) | Resolved | implemented and tested end to end on a real board |
+| Q7 adjustment (a seat change from evidence) | On Hold | Admission needs the pinned TELOS-side verifier to accept a seating dimension. Unchanged: it still admits only the 1→3 slot policy. |
+| P8/P9 admission through the efficiency gate | On Hold | Same pinned verifier; unchanged. |
+| 1,024-token default on direct Messages calls | On Hold | A policy choice; truncation is now refused rather than silent (M1). |
+| OpenAI `reasoning.context` conflict | On Hold | A factual question about the current API. It needs vendor documentation or a live call. No laws or records here can settle it. |
+| Capability records for 13 direct-path models | On Hold | Vendor figures are UNRECORDED. Inventing them is refused by the facts spec. | Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
 
 Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared contracts and on the controller) → Q6 → Q7 (measured adjustment). After each one, `npm test` on the Pantheon suite (CI runs the `bwrap` cases this sandbox cannot), and for Q7 the OPHANIM `prove`, `verify` and `investigate` paths.
 

@@ -6,7 +6,7 @@ import { openRuntime } from "./runtime.mjs";
 
 export function openBoard(root) {
   const store = openStore(root);
-  const runtime = openRuntime(root);
+  const runtime = openRuntime(root, { store });  // spend is bound to commits in this store
   const refs = openRefs(root, { runtime, store }); // refs verify lease generations and diff commits themselves
   return { root, store, refs, runtime };
 }
