@@ -12,7 +12,7 @@ The evaluation contains **12 items: 2 capabilities to reuse, 2 no-change decisio
 | --- | --- | --- |
 | P0-IDENTITY | Reuse | Exact OPHANIM/Pantheon/ARGO lineage and TELOS source pin are available. |
 | P0-CONTROLS | Reuse | Board, dependency scheduler, watchdog, recovery and investigation controller already exist. |
-| P0-PROOF | Insufficient evidence | Exact-head CI passed, but an original-path retained proof is not available here for fresh independent verification. |
+| P0-PROOF | Insufficient evidence | Exact-head CI passed; broader current-environment claims need an applicable retained proof or separately justified fresh qualification. |
 | P0-AUTHORITY | Blocked | Real pinned TELOS primitives use local fixture identities; an approved live-scope authority binding is not established. |
 | P0-LIMITS | Blocked | Intended environment, accounts, aggregate budget, limits and enforcement evidence need owner confirmation. |
 | P1-QUALIFICATION | Blocked | Depends on the applicable Phase 0 evidence and explicitly authorized live qualification. |
@@ -52,6 +52,8 @@ The selector's material-change rules require applicable changed evidence/method/
 
 ## Next justified step
 Locate an already retained synthetic proof and its original supported verifier environment, plus the existing intended live-scope authorization and budget records. Reconcile them against P0-PROOF, P0-AUTHORITY and P0-LIMITS. Do not silently regenerate a proof, adopt fixture keys, invent numerical allocations or treat old provider use as permission. If records are unavailable, leave the corresponding outcome unresolved.
+
+An expired CI proof directory is not a permanent prerequisite. The existing implementation supports fresh qualification in a new location. If retained proof is unavailable, preserve the narrower CI-bound claims and assess whether that alternative is necessary; it requires a separately justified bounded decision and authorization. This packet does not launch it.
 
 For Phase 1, the eventual evidence must bind current provider/seat identity, capability, context/tools, typed outputs, authenticated handoffs, accounting, interruption/incomplete/quota/fallback recovery and independent acceptance. For Phase 2, derive functions from the unfamiliar objective, reuse sufficient deterministic capabilities, justify any additional specialist, and preserve all unresolved dependencies. The existing registry does not supply that proof.
 

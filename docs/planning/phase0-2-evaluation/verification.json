@@ -40,13 +40,26 @@
   },
   "reviewed_document_sha256": {
     "README.md": "a74b1be7661ae8378d642744e76437b635f0c44d2900b7f3093758bf5eab42ea",
-    "docs/planning/phase0-2-evaluation/README.md": "e47a3c3f45983a5f0d117d64ebcb6bee2a2da93c58f6edf67985c7c73bd9066f",
-    "docs/planning/phase0-2-evaluation/evaluation.json": "dc2616ed95f9d8e6905704beffbc0324d0ae3865b649c2293d2a5e3428b0134a",
+    "docs/planning/phase0-2-evaluation/README.md": "1a304b06390e713119e35b389d08626422a1531fdbb2085722b50ed8f2e3ff6e",
+    "docs/planning/phase0-2-evaluation/evaluation.json": "ea19e2347afd2d6538dd8ee5b0828e5446c7abf8a552d27ec39f242a7eaf922f",
     "docs/planning/phase0-2-evaluation/VERIFICATION.md": "d2da379ffe9f3cc24c22a172f786604a02e4e696117bdd6239d70380c2a4ab41"
   },
   "independent_review": {
-    "status": "pending",
-    "scope": "Exact packet source/evidence/eligibility and coverage; separate native peers, not cross-vendor or TELOS authorization"
+    "status": "clarification_awaiting_rebind",
+    "initial_candidate": "691f1994df322f33aa0c7d17c0c5199a32d28138",
+    "scope": "Exact packet source/evidence/eligibility and coverage; separate native peers, not cross-vendor or TELOS authorization",
+    "initial_results": [
+      {
+        "reviewer": "phase0_budget_evidence",
+        "result": "bounded approval; no material findings"
+      },
+      {
+        "reviewer": "phase0_control_evidence",
+        "result": "bounded approval; one low clarification",
+        "finding": "Retained-proof eligibility must not make an expired CI directory a permanent prerequisite.",
+        "repair": "Clarified separately justified and authorized fresh qualification as an alternative; no run authorized."
+      }
+    ]
   },
   "limits": {
     "runtime_changes": false,

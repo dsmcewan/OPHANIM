@@ -201,10 +201,10 @@
         "Accessible retained proof manifest and original supported workspace/checker/executable location",
         "Identity of the intended current execution environment"
       ],
-      "acceptance": "Independent verifier binds all cited claims to either actual CI execution evidence or an available exact proof; unavailable proof is an explicit limit. Any broader current-environment claim requires applicable evidence.",
+      "acceptance": "Independent verifier binds each claim to actual CI execution evidence, an available original-path proof, or a separately justified and authorized fresh qualification. Missing retained evidence limits that route; an expired CI directory is not a permanent prerequisite. Any broader current-environment claim requires applicable evidence.",
       "eligible_when": [
-        "Existing retained artifact and its supported verification environment are available",
-        "The verifier is independent of the artifact producer"
+        "For retained-proof re-verification, the exact artifact and original supported environment are available. Otherwise preserve narrower CI-bound claims and assess the need for a separately justified bounded fresh qualification; this packet authorizes no proof execution.",
+        "The verifier is independent of the artifact producer and binds the chosen route to its actual source, environment and claim scope"
       ],
       "stop": "Stop on missing required evidence, a scope/source mismatch, independent verification refusal, or any need for new authority; preserve the unresolved dependency."
     },
@@ -588,7 +588,7 @@
       "P0-AUTHORITY",
       "P0-LIMITS"
     ],
-    "fallback": "If those records cannot be supplied, retain explicit insufficient_evidence/blocked results; do not generate a substitute proof or assume authority.",
+    "fallback": "If retained proof is unavailable, preserve the narrower CI evidence and record the limitation. A fresh qualification in a new location is a supported alternative only after a separately justified bounded decision and authorization; do not automatically run it or assume missing live authority/budgets.",
     "not_required": "Do not merge ARGO PRs or install legacy CLIs merely to evaluate this separate OPHANIM baseline."
   },
   "history": [
