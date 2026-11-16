@@ -232,8 +232,12 @@ export async function sendTurn({
   const { mode } = continuityMode(vendor, continuity);
   // The reusable client owns frontier policy on BOTH unary and streaming paths.
   if (isFrontier(model ?? spec.default_model)) {
-    return sendModelTurn({ client, vendor, model: model ?? spec.default_model, prompt,
-      previousResponseId, history, onEvent, continuity: mode, extra, scope, sessionId,
+    const m = model ?? spec.default_model;
+    // Messages needs max_tokens; a caller that names none gets the same default the direct path used.
+    const sent = spec.surface === "messages" && extra?.max_tokens == null && extra?.max_output_tokens == null
+      ? { ...extra, max_tokens: defaultOutputFor(vendor, m, "medium") } : extra;
+    return sendModelTurn({ client, vendor, model: m, prompt,
+      previousResponseId, history, onEvent, continuity: mode, extra: sent, scope, sessionId,
       effort, architecture, contractHeader, signal, deadline });
   }
 

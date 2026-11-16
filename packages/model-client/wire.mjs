@@ -127,6 +127,6 @@ export async function exchange(prepared,client,onEvent){
   return {vendor,response_id:responseId,text,tools:[...new Set(tools)].sort(),usage,complete,terminal_state:terminal,
     ...(cap.surface==='responses'?{reasoning_context:reasoningContextReport(request.reasoning?.context,response)}:{}),
     resumed:replay?history.length>0:Boolean(request.previous_response_id),streamed:Boolean(onEvent),
-    usable_for_resume:usable,why_unusable:usable?null:'Provider output incomplete or missing authoritative terminal state',
+    usable_for_resume:usable,why_unusable:usable?null:complete?'Provider returned no response id; server continuity has nothing to resume by':'Provider output incomplete or missing authoritative terminal state',
     ...(replay?{history:nextHistory}:{})};
 }

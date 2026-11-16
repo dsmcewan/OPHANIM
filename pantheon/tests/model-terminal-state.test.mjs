@@ -51,7 +51,8 @@ test("the registry walk covers every model and routes each one deliberately", ()
   assert.equal(ALL.length, 18);
   for (const { vendor, model } of ALL) assert.ok(ADAPTERS[vendor], `${model} has an adapter`);
   const frontier = ALL.filter(m => isFrontier(m.model)).map(m => m.model).sort();
-  assert.deepEqual(frontier, ["claude-fable-5-2", "gemini-4-argon", "gemini-4-carbon", "gpt-6-astra", "grok-4.3", "grok-4.7"]);
+  assert.deepEqual(frontier, ["claude-fable-5-2", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "gemini-4-argon", "gemini-4-carbon",
+    "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "grok-4.3", "grok-4.7"]);
 });
 
 for (const { vendor, name, model } of ALL) {

@@ -165,7 +165,9 @@ for (const [model, cap] of Object.entries(CAPABILITIES)) {
   if(facts.effort && cap.efforts){
     facts.effort.supports ??= {};
     facts.effort.supports[model]=cap.efforts;
-    if(cap.vendor==='anthropic')facts.effort.default[model]='high';
+    // The frontier client sends `high` when no effort is named; a providerDefaults model sends none,
+    // so its documented default stands.
+    if(cap.vendor==='anthropic'&&!cap.providerDefaults)facts.effort.default[model]='high';
   }
 }
 

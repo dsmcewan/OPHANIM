@@ -185,7 +185,7 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds cited figures for all 19 registry models, read 2026-11-16. Anything unstated stays UNRECORDED: xAI max output, and grok-build-0.1 and gemini-3.5-flash effort. |
 | Correcting the code-vs-docs disagreements | Resolved | All applied, including replacing the deprecated gemini-3.5-flash with gemini-3.6-flash. That follows Google's deprecation notice, and live requests were already routed there. The known-drift list is now empty. |
 | Routing and escalation protocol | Resolved | See "Routing and escalation protocol" below. |
-| Moving direct-path models onto the frontier client | On Hold | Now possible for models whose window and output are cited (OpenAI 4, Anthropic 4). It changes the request path, so it is a separate, explicit step. |
+| Moving direct-path models onto the frontier client | Resolved (6 models) | gpt-6-luna, gpt-6-sol, gpt-6.1-sol, claude-sonnet-5, claude-opus-5 and claude-opus-5-5 now run on the shared client with `providerDefaults`, so their requests keep the direct path's defaults. Not moved: claude-haiku (no effort dial; the Messages path would refuse it), gemini-3.6-flash (moving it would pull the agy seats off OAuth onto the metered API), and the xAI models without a cited output or effort record. See "Direct-path models on the frontier client" below. |
 | Escalation for agy seats (CLI lane and agy-seat.py) | Resolved | Those transports take no effort setting, so the protocol no longer decides a `raise_effort` there that would be dropped. A rejection steps to the role's next harder rung, or stops. See "Escalation on agy seats" below. |
 | Signed transitions | On Hold | A governance decision on the pinned TELOS verifier, like the Q7 adjustment and P8/P9 admission. Unchanged. |
 | A possible move to gemini-3.8-flash | On Hold | It is held as an agy CLI lane name (`gemini-3.8-flash-high`), not a Gemini API id, so it cannot replace gemini-3.6-flash as the API default. Re-read Google's model list before deciding. |
@@ -361,4 +361,43 @@ Pantheon suite: 805 pass, plus the 1 known environment failure.
 - the refusal's code and the reseat event on the bus, folded into the seat state.
 
 Pantheon suite: 808 pass, plus the 1 known environment failure.
+
+
+## Direct-path models on the frontier client (2026-11-16)
+
+**The gap.** Two request paths judged the same models differently. Six registry models whose window, output and efforts are all cited still ran on Pantheon's direct adapter instead of the shared client (`packages/model-client`). That split had costs:
+- Every rule had to be kept twice: terminal state, effort validation, reasoning context.
+- OpenAI replay on the direct path sent `store: false` without asking for `reasoning.encrypted_content`, so earlier reasoning was not carried between turns.
+
+**What moved.** `packages/model-client/registry.mjs` now lists gpt-6-luna, gpt-6-sol, gpt-6.1-sol, claude-sonnet-5, claude-opus-5 and claude-opus-5-5. Every figure is copied from `capability-facts.json`, and `capabilityDrift` reports no disagreement.
+
+**Same request, new path.** The frontier client imposes its own defaults: effort `high` on Messages and Gemini, and a 65,536-token output under its long-decode policy. The moved models carry `providerDefaults`, which turns those off:
+
+| Surface | When the caller names nothing |
+|---|---|
+| Responses (OpenAI) | No effort and no `max_output_tokens` are sent, so the provider's defaults apply, as before. Replay now also asks for `reasoning.encrypted_content`. |
+| Messages (Anthropic) | No effort is sent. `max_tokens` must be explicit: Pantheon's adapter and run path supply the output tier, as before. |
+
+The router's default-effort table also stops attributing `high` to these models, so escalation starts from the documented default (Opus 5.5: medium → high), as before.
+
+**Not moved, and why.**
+- **claude-haiku-4-5:** it documents no effort parameter, and the shared client's Messages path requires one unless `providerDefaults` applies. It can move under the same flag later; nothing is gained today.
+- **gemini-3.6-flash:** Pantheon routes every non-frontier `agy_google` seat through the Antigravity transports, which use OAuth. Marking it frontier would move those seats onto the metered Gemini API. That is a routing decision, not a path cleanup.
+- **grok-4.5, grok-4.6, grok-4.20-multi-agent, grok-build-0.1:** output is UNRECORDED for all four, and effort too for grok-build. Multi-agent does not accept `max_tokens` at all.
+
+**Also changed.** A Responses reply with output but no id, under server continuity, is now refused with that reason ("no response id"), not the generic incomplete message.
+
+*Check.*
+- `packages/model-client/tests/provider-defaults.test.mjs` covers:
+  - no effort and no output cap sent unless asked;
+  - encrypted reasoning kept on replay;
+  - Messages requiring an explicit `max_tokens`;
+  - undocumented efforts refused;
+  - the long-decode models (fable, astra) unchanged.
+- In Pantheon:
+  - the registry walk lists the twelve frontier models and checks every model's terminal state on both transports;
+  - `role-seating` pins Opus 5.5's ladder starting from its documented default;
+  - the transport tests use realistic Responses replies that carry output items.
+
+Pantheon suite: 808 pass, plus the 1 known environment failure. Model client: 48 pass. OPHANIM proof: 104 pass, with the same 21 failures that need TELOS.
 

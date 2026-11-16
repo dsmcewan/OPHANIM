@@ -4,7 +4,7 @@
 // a truncation is still escalated by the protocol (raise_output within that ceiling), and the run's
 // recorded truncations are the evidence for moving a tier (`truncationEvidence`).
 import { readFileSync } from "node:fs";
-import { isFrontier } from "../../../packages/model-client/index.mjs";
+import { isFrontier, CAPABILITIES } from "../../../packages/model-client/index.mjs";
 
 const FACTS = JSON.parse(readFileSync(new URL("./capability-facts.json", import.meta.url), "utf8"));
 export const TOKEN_TIERS = Object.freeze({ easy: 4096, medium: 16384, hard: 32768 });
@@ -31,8 +31,12 @@ export function outputBudgetFor(model, tier = "medium") {
  * default applies. Only paths that impose a default of their own are given one.
  */
 export function defaultOutputFor(vendor, model, tier = "medium") {
-  if (isFrontier(model)) return FRONTIER_DEFAULT_OUTPUT;
+  const cap = isFrontier(model) ? CAPABILITIES[model] : null;
+  // A frontier model with its own long-decode policy keeps it; a model moved onto the frontier client
+  // with providerDefaults is treated as it was on the direct path (see model-client registry.mjs).
+  if (cap && !cap.providerDefaults) return FRONTIER_DEFAULT_OUTPUT;
   if (vendor === "anthropic") return outputBudgetFor(model, tier).tokens;   // Messages requires max_tokens
+  if (cap?.surface === "genai") return cap.output;   // the client's long-decode bound, which is the documented ceiling
   return null;
 }
 

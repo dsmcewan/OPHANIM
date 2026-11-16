@@ -32,7 +32,9 @@ function fakeClient(replies) {
     },
   };
 }
-const reply = (id, text, output) => ({ id, status: "completed", output_text: text, ...(output ? { output } : {}) });
+// A real completed Responses reply carries its output items; the shared client refuses one without them.
+const reply = (id, text, output) => ({ id, status: "completed", output_text: text,
+  output: output ?? [{ type: "message", content: [{ type: "output_text", text }] }] });
 
 test("the adapter table covers the Responses-shaped vendors with distinct hosts", () => {
   assert.equal(ADAPTERS.openai.surface, "responses");
@@ -94,7 +96,7 @@ test("the persisted token carries sdk provenance, which outranks scrape", async 
 // NEXT turn look fresh, erasing the fact that continuity was lost.
 test("a response with no id is refused rather than persisted as a fresh conversation", async () => {
   await withHome(async home => {
-    const client = fakeClient([{ output_text: "no id here" }]);
+    const client = fakeClient([{ output_text: "no id here", output: [{ type: "message", content: [{ type: "output_text", text: "no id here" }] }] }]);
     const r = await sdkTurn({ vendor: "openai", purpose: "p", cwd: "/repo/a", prompt: "hi", client, home });
     assert.equal(r.ok, false);
     assert.equal(r.persisted, false);
@@ -304,7 +306,8 @@ test("a replayed turn with no output items is refused rather than breaking the n
   const client = fakeClient([{ id: "r1", output_text: "", output: [] }]);
   const r = await sendTurn({ client, vendor: "openai", prompt: "q", continuity: "replay" });
   assert.equal(r.usable_for_resume, false);
-  assert.match(r.why_unusable, /replay continuity would be broken/);
+  // OpenAI models run on the shared client, which refuses a reply with no output items as incomplete.
+  assert.match(r.why_unusable, /incomplete or missing authoritative terminal state/);
 });
 
 test("server mode still resumes by id and sends no history", async () => {

@@ -351,7 +351,7 @@ export async function runOpenItem(spec, opts = {}) {
     // The ticket's difficulty picks the output tier; the budget is sent explicitly, so what is recorded
     // is what was asked for. A caller's own budget (e.g. the reviewer's 4000) still wins.
     let r, steps = 0, budget = extra;
-    if (budget === undefined && vendor === "anthropic" && !isFrontier(model)) budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
+    if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
     for (;;) {
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
         architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
