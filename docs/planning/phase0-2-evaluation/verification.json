@@ -45,7 +45,7 @@
     "docs/planning/phase0-2-evaluation/VERIFICATION.md": "d2da379ffe9f3cc24c22a172f786604a02e4e696117bdd6239d70380c2a4ab41"
   },
   "independent_review": {
-    "status": "clarification_awaiting_rebind",
+    "status": "passed_documentary_review",
     "initial_candidate": "691f1994df322f33aa0c7d17c0c5199a32d28138",
     "scope": "Exact packet source/evidence/eligibility and coverage; separate native peers, not cross-vendor or TELOS authorization",
     "initial_results": [
@@ -59,7 +59,22 @@
         "finding": "Retained-proof eligibility must not make an expired CI directory a permanent prerequisite.",
         "repair": "Clarified separately justified and authorized fresh qualification as an alternative; no run authorized."
       }
-    ]
+    ],
+    "final_reviewed_candidate": "f34dcb8675dcce66cf2cce837ee706023ebc0be5",
+    "final_results": [
+      {
+        "reviewer": "phase0_control_evidence",
+        "result": "Bounded approval carries forward; clarification resolved; no additional findings.",
+        "scope": "Operational/source/evidence/qualification claims; exact initial candidate and narrow clarification rebind."
+      },
+      {
+        "reviewer": "phase0_budget_evidence",
+        "result": "Approval rebound; no findings; all four document hashes match.",
+        "scope": "Budget/authority/value/acceptance limits; exact initial candidate and narrow clarification rebind."
+      }
+    ],
+    "remaining_findings": [],
+    "record_only_update": "After the reviewed candidate, this file records returned peer results only; reviewed document hashes remain unchanged."
   },
   "limits": {
     "runtime_changes": false,
