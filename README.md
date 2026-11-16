@@ -15,6 +15,8 @@ The [provenance record](PROVENANCE.json) records the ARGO source and filtered Gi
 
 The current [planning lessons](docs/planning/LESSONS.md) study how to derive and evaluate a plan's requirements. The owner clarified that this is a learning exercise. The earlier [Phase 0–2 packet](docs/planning/phase0-2-evaluation/README.md) is retained as historical, mis-scoped output and is superseded as the direction of this exercise; it is not an active execution backlog.
 
+Continue with the [six-phase learning progression](docs/planning/FUNDAMENTALS.md), [planning coach charter](docs/planning/PLANNING_COACH.md), [progress record](docs/planning/LEARNING_PROGRESS.md) and [CLI resume prompt](docs/planning/CLI_HANDOFF.md). No phase is marked learned until its exercise supplies the required evidence.
+
 ## Run the synthetic planning proof
 
 Use a separate TELOS checkout at `0c9b539ddbb08e1464603faf786e0d5cdfc33fb8` and set `OPHANIM_TELOS_ROOT` to its absolute path. Ophanim checks the TELOS source files against built-in digests before loading the governance code. The proof creates local fixture identities and a synthetic queue inside the output directory.
