@@ -34,3 +34,20 @@ export function modelId(vendor, name) {
   if (!id) throw new Error(`modelId: unknown model "${name}" for vendor "${vendor}"`);
   return id;
 }
+
+// Models a seat can name that are NOT reached through a vendor API this registry describes: the agy
+// CLI lane serves them under its own OAuth session (src/board/agy-cli.mjs). They are declared here so
+// that every model the seating tables can choose is either a registry model or a named lane model,
+// and an evaluation that walks "every model" cannot silently miss the seats that run by default.
+export const LANES = JSON.parse(readFileSync(join(HERE, "lanes.json"), "utf8"));
+
+/** Where a seated model id is declared. Throws for a model neither the registry nor a lane names. */
+export function resolveSeatModel(model) {
+  for (const [vendor, names] of Object.entries(MODELS)) {
+    if (Object.values(names).includes(model)) return { model, source: "registry", vendor };
+  }
+  for (const [lane, models] of Object.entries(LANES)) {
+    if (models[model]) return { model, source: "lane", lane, ...models[model] };
+  }
+  throw new Error(`resolveSeatModel: "${model}" is in neither models.json nor lanes.json`);
+}

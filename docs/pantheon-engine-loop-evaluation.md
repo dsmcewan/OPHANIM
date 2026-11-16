@@ -86,11 +86,19 @@ Each proposal is a small was/is change whose acceptance the existing gates or te
 - Add an optional `model` string to the entry author schema (`board/schema.mjs` allowlist). `run-item` passes the routed `seat.model` when it publishes plan, work, critique and scout entries.
 - *Was/is:* new entries carry it, and old entries stay valid.
 - *Check:* the board-schema tests, plus one run-item test asserting that each artifact's and critique's author model equals the routed seat. Ship's REVIEW gate keeps judging labs by vendor.
+- **Implemented.**
+  - `schema.validateEntry` accepts an optional `author.model` (a model-id string) and still refuses any other author field. `dag.putCommit` keeps it on commit authors.
+  - `run-item` publishes scout, plan, work and critique entries under the occupant that *answered*, not the one the table offered first.
+  - Tests: `tests/board-occupancy.test.mjs` runs a whole scripted ticket and finds the model on every seat-authored entry (`openai/gpt-6-sol` built the slot, `anthropic/claude-fable-5-2` planned, `xai/grok-4.7` reviewed). Older entries without a model stay valid.
 
 **Q2. Derive `occupancy_gen` from the board (fixes E4).**
 - Compute it as 1 plus the number of distinct earlier occupants of the same seat mode on this board, read from the authors already in the DAG. Stop hard-coding 1.
 - *Was/is:* a reseat is visible as an incremented generation on the entry itself.
 - *Check:* a reseat test using the existing fallback fakes (`routeCall` with a 429 on the first pool).
+- **Implemented, as a transition rather than a count.** `src/board/occupancy.mjs`:
+  - `nextOccupancy` advances a chair's generation exactly when a different vendor or model answers it.
+  - `occupancyTrail` re-derives every generation from the authors in order, and names the first one that does not follow.
+- *Check:* `tests/board-occupancy.test.mjs` makes revision 1 fail acceptance and the pinned `gpt-6-sol` return 500 on revision 2. The chair falls through to `claude-opus-5-5`, and the trail shows `[rev 1, openai/gpt-6-sol, gen 1]` → `[rev 2, anthropic/claude-opus-5-5, gen 2]`, with one reseat. The test uses its own cooldown store: the default store is shared, and injected refusals would otherwise cool pools for concurrently running tests.
 
 **Q3. Make the chair contracts gate the run (fixes E1), as checks only.**
 - Before each stage, run three checks:
@@ -109,6 +117,11 @@ Each proposal is a small was/is change whose acceptance the existing gates or te
 - Add a `transport` section to `models.json` listing agy-lane model ids (`claude-sonnet-4-6`, `claude-opus-4-6-thinking`) under their CLI lane. Add a config test: every model named in `SEATING` resolves either in the registry or in that section.
 - The per-model walk (`model-terminal-state.test.mjs`) gains a case for the agy CLI lane's `SUCCESS` check.
 - *Check:* `config-models.test.mjs`.
+- **Implemented.**
+  - The lane list went into a separate `src/config/lanes.json`, not into `models.json`. Several callers iterate `models.json` as `vendor → models`, and a new top-level key would read there as a fifth vendor.
+  - `config/models.mjs` exports `LANES` and `resolveSeatModel`.
+  - `config-models.test.mjs` resolves every model in `SEATING` and `INTAKE`. It asserts that the lane models are exactly the seated models outside the registry.
+  - `tests/agy-cli-terminal.test.mjs` drives `runAgyCliTurn` with a fake `agy` executable for both lane models. `SUCCESS` is accepted; `ERROR`, `CANCELLED` and a missing status are refused.
 
 **Q6. Bind budget spend to commits that exist (fixes E6's load-bearing part).**
 - `runtime.budget()` counts a spend row only if its `commit` resolves in the store. Rows that don't resolve are reported (`unbound_rows`) rather than counted silently.
@@ -120,6 +133,8 @@ Each proposal is a small was/is change whose acceptance the existing gates or te
 - Feed it to `efficiency/contributions.mjs` as variables of a scope. Investigation then ranks which chair question is worth measuring, as it already does for scheduler latency.
 - A seating change remains a signed, scoped decision, admitted exactly like the 1 → 3 slot policy. Until the TELOS-side verifier admits that dimension (it is pinned), Q7 produces ranked questions and evidence only, never a seating change.
 - *Check:* `investigate --state` reproduces the receipt from the board.
+
+Status: Q1, Q2 and Q5 are implemented on this branch. Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
 
 Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared contracts and on the controller) → Q6 → Q7 (measured adjustment). After each one, `npm test` on the Pantheon suite (CI runs the `bwrap` cases this sandbox cannot), and for Q7 the OPHANIM `prove`, `verify` and `investigate` paths.
 

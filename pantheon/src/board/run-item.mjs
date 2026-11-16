@@ -36,6 +36,7 @@ import { tokenCapFor } from "../agents/store.mjs";
 import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
 import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
+import { nextOccupancy } from "./occupancy.mjs";
 import { frontierCandidates, readPools } from "../route/frontier.mjs";
 import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
 
@@ -505,7 +506,9 @@ export async function runOpenItem(spec, opts = {}) {
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;
-        const r = await publish({ ...board, ref: `refs/iso/${vendor}/scout`, author: seat, msg: `scout ${vendor}`,
+        // The author names the occupant that answered, not the one the table offered first.
+        const scoutSeat = nextOccupancy(null, routed.seat, { seat_id: seat.seat_id, mode: seat.mode });
+        const r = await publish({ ...board, ref: `refs/iso/${vendor}/scout`, author: scoutSeat, msg: `scout ${vendor}`,
           entries: [{ kind: "search", payload: { query: spec.question, urls: [] }, blob: text }] });
         if (!r.ok) throw new Error(`scout ${vendor} publish: ${r.why}`);
         scouts.push({ vendor, ref: `refs/iso/${vendor}/scout`, commit: r.commit, evidence: r.written[0].cid, text });
@@ -538,8 +541,9 @@ export async function runOpenItem(spec, opts = {}) {
           NO_TOOLS + "Reply with exactly one line and nothing else: TITLE: <a one-line work item title for the single change this ticket asks for>");
         const { text, seat: ran } = await roleTurn({ role: "planner", purpose: "plan", prompt: p.prompt });
         plannerVendor = ran.vendor;
-        if (ran.vendor !== seat.vendor) {
-          seat = { ...seat, vendor: ran.vendor, seat_id: `${ran.vendor}-plan` };
+        const vendorChanged = ran.vendor !== seat.vendor;
+        seat = nextOccupancy(null, ran, { seat_id: `${ran.vendor}-plan`, mode: "plan" });
+        if (vendorChanged) {
           planWip = `refs/seat/${seat.seat_id}/wip`;
           await board.refs.branch({ name: planWip, from: REF, author: seat });
         }
@@ -665,16 +669,22 @@ export async function runOpenItem(spec, opts = {}) {
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
               ...(c.model ? { pin: c.model } : {}) });
             c.code = strip(made.text);
+            // A different vendor or model answering this chair is a reseat: the generation advances.
+            const next = nextOccupancy(c.seat, made.seat, { seat_id: made.seat.vendor !== c.seat.vendor
+              ? `${made.seat.vendor}-work-${c.sl.slot}` : c.seat.seat_id, mode: "work" });
             if (made.seat.vendor !== c.seat.vendor) {
               await board.runtime.release({ resource: c.lease.resource, holder: c.seat, gen: c.lease.gen });
               const priorWip = c.wip;
-              c.seat = { ...c.seat, vendor: made.seat.vendor, seat_id: `${made.seat.vendor}-work-${c.sl.slot}` };
+              c.seat = next;
               c.wip = `refs/seat/${c.seat.seat_id}/wip`;
               if (!board.refs.resolve(c.wip)) await board.refs.branch({ name: c.wip, from: priorWip, author: c.seat });
               const held = await board.runtime.acquire({ resource: `item:${c.itemKey}`, holder: c.seat, ttlMs: 1_800_000 });
               if (!held.ok) throw new Error("could not acquire the reseated implementer's lease");
               c.lease = { resource: `item:${c.itemKey}`, gen: held.lease.gen };
               if (c === crew[0]) { maker = c.seat; wip = c.wip; }
+            } else {
+              c.seat = next;
+              if (c === crew[0]) maker = c.seat;
             }
             writeArtifact(worktree, c.sl.path, c.code.endsWith("\n") ? c.code : c.code + "\n");
             progress({ event: "wrote", rev, slot: c.sl.slot, detail: `${c.sl.path} (${c.code.length} chars)` });
@@ -778,6 +788,8 @@ export async function runOpenItem(spec, opts = {}) {
         rref = `refs/seat/${seat.seat_id}/wip`;
         await board.refs.branch({ name: rref, from: built.wip, author: seat });
       }
+      // The critique is authored by the reviewer that actually answered, model included.
+      seat = nextOccupancy(null, reviewed.seat, { seat_id: seat.seat_id, mode: "critique" });
       reviewText = reviewed.text;
       writeFileSync(join(outDir, toReview.length === 1 ? "review.md" : `review-${built.sl.slot}.md`), `# ${reviewed.seat.vendor} · ${reviewed.seat.model} reviewing ${built.seat.vendor} on ${built.sl.slot} (rev ${rev})\n\n${reviewText}\n`);
       let m = reviewText.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);

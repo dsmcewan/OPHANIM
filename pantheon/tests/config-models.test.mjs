@@ -36,3 +36,25 @@ test("modelId throws by naming the unknown vendor, never silently returns undefi
 test("modelId throws by naming the unknown model key for a real vendor", () => {
   assert.throws(() => modelId("anthropic", "bogus-model"), /unknown model "bogus-model" for vendor "anthropic"/);
 });
+
+// Q5: every model the seating tables can choose is declared somewhere a model walk can find it.
+import { resolveSeatModel, LANES } from "../src/config/models.mjs";
+import { SEATING, INTAKE, modelOf } from "../src/role/seating.mjs";
+
+test("every seated model resolves to the registry or a declared lane", () => {
+  const seated = [...Object.values(SEATING), ...Object.values(INTAKE)].flat().map(c => modelOf(c));
+  assert.ok(seated.length > 0);
+  const lanes = [];
+  for (const model of new Set(seated)) {
+    const r = resolveSeatModel(model);
+    if (r.source === "lane") lanes.push(model);
+  }
+  assert.deepEqual(lanes.sort(), Object.keys(LANES.agy_cli).sort(),
+    "the agy CLI lane models are exactly the seated models outside the registry");
+});
+
+test("a model neither the registry nor a lane declares is refused by name", () => {
+  assert.equal(resolveSeatModel("gpt-6-sol").source, "registry");
+  assert.equal(resolveSeatModel("claude-sonnet-4-6").transport, "agy-cli");
+  assert.throws(() => resolveSeatModel("claude-imaginary-9"), /claude-imaginary-9.*neither models.json nor lanes.json/);
+});

@@ -1,0 +1,6 @@
+{
+  "agy_cli": {
+    "claude-sonnet-4-6": { "vendor": "agy_google", "transport": "agy-cli", "lab": "anthropic", "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner and pantheon-implementer" },
+    "claude-opus-4-6-thinking": { "vendor": "agy_google", "transport": "agy-cli", "lab": "anthropic", "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner" }
+  }
+}
