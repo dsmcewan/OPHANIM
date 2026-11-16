@@ -114,4 +114,3 @@ Run the documented read-only learning-board status query and confirm LF-001 read
 - [ ] **Step 3: Review the staged diff and commit before ending**
 
 Commit message: `Add independent lesson planning and class evaluation`
-

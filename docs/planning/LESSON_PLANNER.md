@@ -6,7 +6,7 @@ Charter for the specialized [`lesson_planner`](../../.codex/agents/lesson-planne
 
 The planner reads [the learned scope rules](LESSONS.md), [the phase progression](FUNDAMENTALS.md), [the class protocol](CLASS_PROTOCOL.md), [the progress record](LEARNING_PROGRESS.md), the current read-only [learning board](BOARD.md) snapshot and the most recent independent evaluation. A checked-in board receipt is historical; it is not a live status query.
 
-If the prior evaluation, required fact packet, current itinerary or board snapshot is missing, the planner produces a blocked package. It does not repair missing evidence with a favorable assumption.
+The first class has no prior evaluation. For that bootstrap only, the saved curriculum, current itinerary and board snapshot are its evidence basis. After the first class, a missing prior evaluation blocks preparation. A missing required fact packet, current itinerary or board snapshot always produces a blocked package. The planner does not repair missing evidence with a favorable assumption.
 
 ## One output: the next class package
 
@@ -32,4 +32,3 @@ The planner can produce a remedial package, `no_change`, or a blocked/stop packa
 The planner and [`class_evaluator`](CLASS_EVALUATOR.md) are twins in the useful sense: they share the public rubric and evidence vocabulary as a gift to the learner. They do not share private reasoning or a defense of the class design. The planner never evaluates its own package and cannot revise it after seeing the learner answer; a correction is a new version with a recorded reason.
 
 The planner is advisory and read-only. The coordinator persists its package, checks links and versions, and commits it. Format discovery does not prove the role ran or that its lesson is adequate.
-

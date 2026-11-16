@@ -22,4 +22,3 @@ The evaluator returns a criterion-by-criterion matrix that cites supporting and 
 The evaluator may reject a class package as inadequate. It does not answer the exercise, give a remediation hint, create the next class, change the rubric after the attempt, transition the board or certify final transfer. Phase 6 still needs an assessor who did not plan, teach or write the learner's answer.
 
 The coordinator persists the evaluation, reconciles it with the teacher's mandatory next itinerary and asks [`lesson_planner`](LESSON_PLANNER.md) for the following package. The class is not complete until the full [class protocol](CLASS_PROTOCOL.md) is verified and committed.
-

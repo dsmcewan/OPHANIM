@@ -39,4 +39,3 @@ The commit is the final step of the class, not work deferred to the next class. 
 ## Current position
 
 Lesson 1 remains unattempted. LF-001 is ready, LF-002 through LF-006 are blocked, and no learning worker, lease or occupancy is active. Role preparation does not start the lesson.
-

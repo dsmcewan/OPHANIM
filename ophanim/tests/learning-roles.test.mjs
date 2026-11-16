@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { validatePhaseStatus } from "../learning/class-protocol.mjs";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const ROLE_FILES = {
@@ -61,6 +62,7 @@ test("the lesson planner prepares one class without teaching or grading it", () 
   assert.match(instructions, /class_evaluator/i);
   assert.match(instructions, /private reasoning|private defense/i);
   assert.match(instructions, /next itinerary/i);
+  assert.match(instructions, /first class.*does not require.*prior.*evaluation/i);
 });
 
 test("the class evaluator is an independent twin that cannot repair or redesign", () => {
@@ -131,11 +133,24 @@ test("learning role documentation exists and every local Markdown link resolves"
   }
 });
 
-test("Lesson 1 remains ready and unattempted during role setup", () => {
+test("recurring role verification accepts every recorded educational status", () => {
+  for (const status of [
+    "not_attempted", "attempted", "needs_revision", "ready_for_independent_check",
+    "demonstrated_with_limits", "insufficient_evidence",
+  ]) {
+    const progress = `| 1. Frame the problem | ${status} | evidence |`;
+    assert.deepEqual(validatePhaseStatus(progress, 1), { ok: true, status });
+  }
+  assert.deepEqual(validatePhaseStatus("| 1. Frame the problem | passed | evidence |", 1), {
+    ok: false,
+    reason: "unsupported educational status: passed",
+  });
+});
+
+test("current role setup leaves Lesson 1 ready with a valid progress status", () => {
   const progress = readFileSync(resolve(ROOT, "docs/planning/LEARNING_PROGRESS.md"), "utf8");
   const board = readFileSync(resolve(ROOT, "docs/planning/BOARD.md"), "utf8");
-  assert.match(progress, /1\. Frame the problem \| not_attempted/);
-  assert.match(progress, /LF-001 is ready; LF-002 through LF-006 are blocked/);
+  assert.deepEqual(validatePhaseStatus(progress, 1), { ok: true, status: "not_attempted" });
   assert.match(board, /LF-001 \| Frame the problem \| ready/);
   assert.match(board, /LF-006 \| Demonstrate transfer \| blocked/);
 });
