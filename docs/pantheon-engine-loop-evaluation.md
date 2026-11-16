@@ -420,7 +420,18 @@ Four independent reviews of commits `6c4f8d3..` ran in parallel: three code revi
 | `difficulty: "toString"` passed the tier check and produced `max_tokens: NaN`. | Own keys only, in `tiers.mjs`, `run-item.mjs` and `run-swarm.mjs`. |
 | `carriesEffort` decided lane models by name regardless of vendor. | Vendor and path only. |
 | Swarms ignored the ticket's difficulty, and their escalation records had no tier. | `runSwarmLayer({ difficulty })`; records carry the tier. |
+| The six moved models broke the live view: the shared client's stream named panes by vendor (ignoring the label) and sent no `start`, so turns ran together in one pane. Already true for fable and astra. | The shared client opens every stream with `start` and names the pane by label. A view test reproduces the failure on the old code. |
+| `architecture: true` sent `xhigh` effort to a moved Messages model, while the run recorded no effort. | Under `providerDefaults`, only a named effort is sent. |
 | Eight claims in this document were stale or overstated: model counts, UNRECORDED fields, test counts, default-output rows, test coverage wording, and non-standard statuses. | Corrected above. The unmoved models now have their own On Hold row. |
 
 Not changed: older records of a `raise_effort` on a non-frontier `agy_google` seat (for example gemini-3.6-flash) now re-derive as `step_rung` or `stop`. Those decisions were wrong: the effort was dropped. A verifier rightly refuses them. No caller verifies stored records today.
+
+**Request differences that remain on the moved models.** These are deliberate, and recorded here so they are not mistaken for "no change":
+- OpenAI turns carry `prompt_cache_key`, derived from the seat's scope and session. Replay asks for `reasoning.encrypted_content`.
+- The shared client's field allowlist applies.
+  - Messages drops `thinking`, a forced `tool_choice`, and the sampling fields.
+  - A field outside the list is refused rather than sent. For example, `user` on Responses is refused.
+  - No Pantheon caller passes any of these fields.
+- A `contractHeader`, when given, is prepended to the prompt; the direct path dropped it. No caller sets one today.
+- `sendModelTurn` caps a turn at 15 minutes unless the caller passes a deadline. `run-item.mjs`'s own turn timeout defaults to the same 15 minutes, so a longer `turnTimeoutMs` is cut there.
 

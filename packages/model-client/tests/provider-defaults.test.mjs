@@ -20,6 +20,8 @@ test('a moved Messages model needs an explicit max_tokens and sends no effort un
   const {request}=prepareRequest({vendor:'anthropic',model:'claude-sonnet-5',prompt:'q',extra:{max_tokens:16384}});
   assert.equal(request.max_tokens,16384);
   assert.equal(request.output_config,undefined,'the provider default effort applies');
+  const arch=prepareRequest({vendor:'anthropic',model:'claude-sonnet-5',prompt:'q',architecture:true,extra:{max_tokens:1000}}).request;
+  assert.equal(arch.output_config,undefined,'the architecture flag imposes no effort either');
   const asked=prepareRequest({vendor:'anthropic',model:'claude-opus-5-5',prompt:'q',effort:'max',extra:{max_tokens:1000}}).request;
   assert.equal(asked.output_config.effort,'max');
   assert.throws(()=>prepareRequest({vendor:'anthropic',model:'claude-sonnet-5',prompt:'q',extra:{max_tokens:200000}}),/exceeds model limit/);

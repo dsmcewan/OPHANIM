@@ -236,7 +236,7 @@ export async function sendTurn({
     // Messages needs max_tokens; a caller that names none gets the same default the direct path used.
     const sent = spec.surface === "messages" && extra?.max_tokens == null && extra?.max_output_tokens == null
       ? { ...extra, max_tokens: defaultOutputFor(vendor, m, "medium") } : extra;
-    return sendModelTurn({ client, vendor, model: m, prompt,
+    return sendModelTurn({ client, vendor, model: m, prompt, ...(label ? { label } : {}),
       previousResponseId, history, onEvent, continuity: mode, extra: sent, scope, sessionId,
       effort, architecture, contractHeader, signal, deadline });
   }

@@ -6,8 +6,11 @@ const responseText=res=>res.output_text??(res.output??[]).filter(x=>x.type==='me
   .flatMap(x=>x.content??[]).filter(x=>x.type==='output_text').map(x=>x.text??'').join('');
 
 export async function exchange(prepared,client,onEvent){
-  const {cap,request,options,vendor,continuity,history,prompt}=prepared;
-  const emit=(type,rest={})=>onEvent?.({seat:vendor,type,at:Date.now(),...rest});
+  const {cap,request,options,vendor,continuity,history,prompt,label}=prepared;
+  // Events name the pane they belong to (label, else vendor) and open with `start`, as the direct
+  // path's streams do: a viewer clears the pane on start, and without it turns run together.
+  const emit=(type,rest={})=>onEvent?.({seat:label??vendor,type,at:Date.now(),...rest});
+  emit('start');
   let response,complete=false,text='',output=[],tools=[],responseId=null,usage=null,terminal=null;
   if(cap.surface==='responses'){
     if(onEvent){

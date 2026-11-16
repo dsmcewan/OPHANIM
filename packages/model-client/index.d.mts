@@ -9,6 +9,8 @@ export interface ModelCapability {
   compaction?:boolean;
   inputCeiling?:number;
   combined?:boolean;
+  /** No frontier effort/output default is imposed where the caller names none. */
+  providerDefaults?:boolean;
 }
 export interface RequestOptions {
   vendor:Vendor;
@@ -26,6 +28,8 @@ export interface RequestOptions {
   signal?:AbortSignal;
   continuity?:'replay'|'server';
   previousResponseId?:string;
+  /** Names the pane streamed events belong to; defaults to the vendor. */
+  label?:string;
 }
 export interface PreparedRequest {
   vendor:Vendor;

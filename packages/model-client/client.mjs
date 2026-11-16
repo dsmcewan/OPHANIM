@@ -27,7 +27,7 @@ export async function sendModelTurn({client,onEvent,countTokens,beforeGenerate,r
     await beforeGenerate?.({signal});
     signal.throwIfAborted();
     if(Date.now()>=deadline)throw new Error('Request deadline exceeded');
-    return {...await exchange({...prepared,responseMode},client,onEvent),compacted};
+    return {...await exchange({...prepared,responseMode,...(args.label?{label:args.label}:{})},client,onEvent),compacted};
   },{signal:args.signal,deadline});
 }
 

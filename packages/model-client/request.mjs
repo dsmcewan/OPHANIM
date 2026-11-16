@@ -42,7 +42,8 @@ export function prepareRequest({vendor,model,prompt,history=[],previousResponseI
     delete e.thinking;
     if(['any','tool'].includes(e.tool_choice?.type))delete e.tool_choice;
     // A providerDefaults model sends no effort unless one is asked for: the provider's default applies.
-    const depth=effort??e.output_config?.effort??(architecture?'xhigh':cap.providerDefaults?null:'high');
+    // providerDefaults: the architecture flag imposes nothing either; only a named effort is sent.
+    const depth=effort??e.output_config?.effort??(cap.providerDefaults?null:architecture?'xhigh':'high');
     if(depth!==null&&!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
     if(cap.providerDefaults&&e.max_tokens==null&&e.max_output_tokens==null)
       throw new Error('This model takes no long-decode default: pass max_tokens explicitly');

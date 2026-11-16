@@ -77,3 +77,15 @@ test("an accepted reseat is announced on the bus and shown in the seat state", a
     assert.deepEqual([seat.model, seat.model_gen], ["gpt-6-luna", 2]);
   });
 });
+
+test("a moved model's turns stream to their own pane and each turn clears it", async () => {
+  // The shared client now opens every stream with `start` and names the pane by label, as the direct
+  // path always did; before, panes were keyed by vendor and turns ran together.
+  await withView(async ({ srv }) => {
+    await srv.runTurn({ vendor: "openai", model: "gpt-6-sol", prompt: "one", label: "left" });
+    await srv.runTurn({ vendor: "openai", model: "gpt-6-sol", prompt: "two", label: "left" });
+    const seats = reduceSeats(srv.bus.snapshot());
+    assert.deepEqual(Object.keys(seats), ["left"]);
+    assert.deepEqual([seats.left.turns, seats.left.text, seats.left.status], [2, "a", "done"]);
+  });
+});
