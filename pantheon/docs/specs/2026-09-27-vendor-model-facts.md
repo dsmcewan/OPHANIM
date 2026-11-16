@@ -152,3 +152,31 @@ credential/quota than `GEMINI_API_KEY`, an open question this file already marke
 
 Nothing here measures quality. Context window, effort defaults, price and API shape are facts;
 "which model is better at planning" remains in `UNMEASURED` in `src/route/router.mjs`.
+
+## Re-read 2026-11-16: cited records for every registry model
+
+The machine-readable record is `src/config/capability-facts.json`. Every figure in it carries the vendor URL and the quoted text; anything a vendor does not state is `UNRECORDED`. `src/config/facts.mjs` computes where the code disagrees, and `tests/capability-facts.test.mjs` pins that list. A new disagreement fails the test, and fixing one means removing it from the list. This section supersedes the figures above where they differ. For example, the current Fable is `claude-fable-5-2`, not `-5-1`.
+
+| model | window | max output | efforts (default) | note |
+|---|---|---|---|---|
+| gpt-6-luna, gpt-6-sol | 1,050,000 | 128,000 | none…max (medium) | max input 922,000; ×2 pricing over 272K input; 6-sol points to 6.1-sol as newer |
+| gpt-6.1-sol | 1,050,000 | 128,000 | low…max (medium) | the only GPT-6 model documented for `reasoning.context: all_turns` |
+| gpt-6-astra | 1,050,000 | 128,000 | low…max (not stated) | `none` returns HTTP 400 |
+| grok-4.3 | 1,000,000 | UNRECORDED | none…xhigh (low) | |
+| grok-4.5, grok-4.6, grok-4.7 | 500,000 | UNRECORDED | low…xhigh (high) | |
+| grok-4.20-multi-agent | 1,000,000 | `max_tokens` unsupported | low/medium = 4 agents, high/xhigh = 16 | alias of `-0309`; Responses or xAI SDK only; no custom tools |
+| grok-build-0.1 | 256,000 | UNRECORDED | UNRECORDED | |
+| gemini-3.5-flash | 1,048,576 | 65,536 | UNRECORDED | **deprecated; routed to Gemini 3.6 Flash** |
+| gemini-3.8-flash-high | — | — | — | **not a Gemini API id**; the agy CLI's name for gemini-3.8-flash at high thinking |
+| gemini-4-carbon, gemini-4-argon | 1,048,576 (input + output) | 65,536 sync, up to 1,048,576 with long decode | low…high (medium) | |
+| claude-haiku-4-5-20251001 | 200K | 64K | not supported (extended thinking) | legacy; retirement "not sooner than October 15, 2026" |
+| claude-sonnet-5, claude-opus-5 | 1M | 128K | five levels (high) | legacy; current lines are sonnet-5-5 and opus-5-5 |
+| claude-opus-5-5 | 1M | 128K | five levels (medium) | |
+| claude-fable-5-2 | 1M | 128K | five levels (high) | |
+
+Disagreements between the code and these facts, as of this reading:
+- **`CAPABILITIES` efforts:** `gpt-6-astra` allows `ultra`, which its page does not list. `grok-4.3` and `grok-4.7` allow only `low` and `high`, but the docs give `none…xhigh` and `low…xhigh`.
+- **Router escalation ladder:** for all four GPT-6 models the ladder climbs to `ultra`. No OpenAI model page lists `ultra`. It comes from a client configuration reference, not the API.
+- **Registry:**
+  - `gemini-3.8-flash-high` is registered as a Gemini API model but belongs to the agy CLI lane.
+  - `gemini-3.5-flash`, the agy_google API default, is deprecated.
