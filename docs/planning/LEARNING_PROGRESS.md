@@ -6,7 +6,7 @@ The [learning board](BOARD.md) tracks phase readiness in a local persistent stor
 
 | Phase | Status | Next prerequisite |
 | --- | --- | --- |
-| 1. Frame the problem | needs_revision | Begin the committed remedial v2 package next class and preserve a fresh unassisted answer before any hint. |
+| 1. Frame the problem | needs_revision | Await material falsifier evidence or an explicit owner-directed reopen after the v2 stop commit. |
 | 2. Ground the reasoning | not_attempted | Criterion-linked Phase 1 feedback and an exercise fact packet. |
 | 3. Derive necessary work | not_attempted | Evidence/assumption distinctions demonstrated in Phase 2. |
 | 4. Test adequacy and failure | not_attempted | Necessary contributions and dependencies demonstrated in Phase 3. |
@@ -62,3 +62,8 @@ This appends to, rather than replaces, the initial itinerary. The new evidence i
 - The bounded terminal coach presented the immutable prompt unchanged.
 - OPHANIM's exact first answer was captured before any hint or diagnostic question in [`classes/LF-001-lesson-1-record.md`](classes/LF-001-lesson-1-record.md).
 - LF-001 is attempted and independently assessed as `needs_revision`; it has not advanced. The evaluator found `C1` unassisted, `C2` incomplete and `C3` coached-only. See [`classes/LF-001-lesson-1-evaluation.md`](classes/LF-001-lesson-1-evaluation.md). The coach's mandatory next itinerary is preserved in the class record. The following remedial package is prepared in [`classes/LF-001-remedial-1-v2.md`](classes/LF-001-remedial-1-v2.md) for the next class and must not begin before the commit containing this record. Focused checks, the 102-test OPHANIM proof suite, the 42-test model-client suite, the 719-test Pantheon suite, TOML parsing, board read-back and whitespace verification passed. The commit containing these artifacts is the required Lesson 1 commit.
+
+## Remedial class 1 active record — LF-001
+
+- `planning_coach` exercised cross-class continuation ownership after commit `4e0112a` and successful CI, validated board commit `commit:a2521c2ee454a47988fa265d01e9ead575adaecf2b15c50086f412afbe49899d`, and presented package `planning-fundamentals/LF-001/remedial-1/v2` unchanged without another owner prompt.
+- OPHANIM's fresh unassisted response is preserved in [`classes/LF-001-remedial-1-v2-record.md`](classes/LF-001-remedial-1-v2-record.md). The independent evaluator retains `needs_revision`: C1 and C2 are supported, while C3 assumes the rejected request makes the separately-unknown printed schedule current. See [`classes/LF-001-remedial-1-v2-evaluation.md`](classes/LF-001-remedial-1-v2-evaluation.md). The board was reconciled at `commit:ec64db24fb21fe879d9e13769ff2501778f24ebd161d1b0b300f31375476f571`; LF-002 remains blocked. The explicit following package [`classes/LF-001-blocked-stop-v3.md`](classes/LF-001-blocked-stop-v3.md) records the required stop and owner-directed reopen gate. Focused checks, OPHANIM 103/103, model-client 42/42, Pantheon 719/719, TOML parsing, board read-back and whitespace verification passed. The commit containing these artifacts is the remedial-class completion commit.

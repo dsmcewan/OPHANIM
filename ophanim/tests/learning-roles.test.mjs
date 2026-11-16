@@ -133,6 +133,9 @@ test("learning role documentation exists and every local Markdown link resolves"
     "docs/planning/CLI_HANDOFF.md",
     "docs/planning/LEARNING_PROGRESS.md",
     "docs/planning/BOARD.md",
+    "docs/planning/classes/LF-001-remedial-1-v2-record.md",
+    "docs/planning/classes/LF-001-remedial-1-v2-evaluation.md",
+    "docs/planning/classes/LF-001-blocked-stop-v3.md",
   ];
 
   for (const relativePath of docs) {
