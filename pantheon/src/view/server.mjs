@@ -37,7 +37,10 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
   const running = new Set();
 
   // Run one turn on one seat, streaming its events onto the bus. Returns when the turn is done.
-  async function runTurn({ vendor, purpose = "view", prompt, model, label }) {
+  // A seat's conversation is held by the model that produced it (seat-sdk MODEL_CHANGED). Switching
+  // the model from the view is therefore a RESEAT: refused unless the operator asks for it, and when
+  // asked, recorded on the seat (model_gen) and announced on the bus, never applied silently.
+  async function runTurn({ vendor, purpose = "view", prompt, model, label, reseat = false }) {
     const key = `${vendor}/${purpose}`;
     // A second turn on the SAME seat while one is in flight would interleave two conversations
     // into one chain. Refused rather than queued, because silently queuing makes a slow seat
@@ -47,10 +50,14 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
     try {
       const client = makeClientFor(vendor);
       const r = await sdkTurn({
-        vendor, purpose, cwd, prompt, model, client, home, label,
+        vendor, purpose, cwd, prompt, model, client, home, label, reseatModel: reseat === true,
         onEvent: e => bus.publish(e),
       });
-      if (!r.ok) bus.publish({ seat: label ?? vendor, type: "error", at: Date.now(), text: r.why });
+      if (!r.ok) bus.publish({ seat: label ?? vendor, type: "error", at: Date.now(), text: r.why, ...(r.code ? { code: r.code } : {}) });
+      else if (reseat === true && (r.seat?.model_gen ?? 1) > 1 && r.seat?.model === (model ?? r.seat.model)) {
+        bus.publish({ seat: label ?? vendor, type: "reseat", at: Date.now(), model: r.seat.model, model_gen: r.seat.model_gen,
+          text: `reseated: ${r.seat.model} now holds this conversation (model_gen ${r.seat.model_gen})` });
+      }
       return r;
     } catch (err) {
       // The view must show a failure, not just stop updating. A pane frozen mid-stream is
@@ -186,12 +193,17 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
       // `models` is a per-vendor map. A single `model` applied across a fan-out sends one
       // vendor's model id to another, which 404s at best and silently runs the wrong model at
       // worst; `model` is kept only for the single-seat case.
-      const { vendor, prompt, purpose, model, models, seats, label, labels } = parsed;
+      // `reseat` (single seat) / `reseats` (per-vendor) are the operator's explicit consent to switch
+      // the model holding a seat's conversation. Booleans only: anything else is refused.
+      const { vendor, prompt, purpose, model, models, seats, label, labels, reseat, reseats } = parsed;
       const targets = Array.isArray(seats) && seats.length ? seats : (vendor ? [vendor] : []);
       if (!targets.length || !prompt) return json(res, 400, { error: "need prompt and vendor (or seats[])" });
       for (const v of targets) if (typeof v !== "string" || !ADAPTERS[v]) return json(res, 400, { error: `unknown vendor "${v}"` });
       if (badId(purpose) || badId(label)) return json(res, 400, { error: "purpose and label must be identifiers (letters, digits, . _ : -)" });
       for (const v of targets) if (badId(labels?.[v])) return json(res, 400, { error: `label for ${v} must be an identifier` });
+      if (reseat !== undefined && typeof reseat !== "boolean") return json(res, 400, { error: "reseat must be a boolean" });
+      if (reseats !== undefined && (typeof reseats !== "object" || reseats === null || Array.isArray(reseats)
+        || Object.values(reseats).some(x => typeof x !== "boolean"))) return json(res, 400, { error: "reseats must map vendors to booleans" });
 
       // Fan out concurrently: the whole point of a multi-seat view is watching seats run at the
       // same time. allSettled so one vendor's failure does not cancel the others.
@@ -200,6 +212,7 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
           vendor: v, purpose: purpose ?? "view", prompt,
           model: models?.[v] ?? (targets.length === 1 ? model : undefined),
           label: labels?.[v] ?? (targets.length === 1 ? label : undefined),
+          reseat: reseats?.[v] ?? (targets.length === 1 ? reseat === true : false),
         })),
       );
       return json(res, 200, {
@@ -207,6 +220,8 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
           vendor: v,
           ok: results[i].status === "fulfilled" && results[i].value?.ok === true,
           why: results[i].status === "rejected" ? String(results[i].reason) : (results[i].value?.why ?? null),
+          code: results[i].status === "fulfilled" ? (results[i].value?.code ?? null) : null,
+          model_gen: results[i].status === "fulfilled" ? (results[i].value?.seat?.model_gen ?? null) : null,
         })),
       });
     }

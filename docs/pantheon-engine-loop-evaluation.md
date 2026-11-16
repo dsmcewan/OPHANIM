@@ -189,9 +189,9 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | Escalation for agy seats (CLI lane and agy-seat.py) | Resolved | Those transports take no effort setting, so the protocol no longer decides a `raise_effort` there that would be dropped. A rejection steps to the role's next harder rung, or stops. See "Escalation on agy seats" below. |
 | Signed transitions | On Hold | A governance decision on the pinned TELOS verifier, like the Q7 adjustment and P8/P9 admission. Unchanged. |
 | A possible move to gemini-3.8-flash | On Hold | It is held as an agy CLI lane name (`gemini-3.8-flash-high`), not a Gemini API id, so it cannot replace gemini-3.6-flash as the API default. Re-read Google's model list before deciding. |
-| Live view treating a model switch as an explicit reseat | On Hold | Seat records already refuse an unrecorded model change (`model_gen`). Letting `src/view/server.mjs` record a switch as a reseat is a design choice about that view. |
+| Live view treating a model switch as an explicit reseat | Resolved | `POST /turn` takes `reseat` / `reseats` (booleans, per seat). Without consent the switch is refused with code `MODEL_CHANGED`; the page asks, re-sends only those seats, and the seat records `model_gen`. See "Reseat from the live view" below. |
 
-Pantheon full suite, run locally with bubblewrap installed: 805 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects; it passes in CI.
+Pantheon full suite, run locally with bubblewrap installed: 808 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects; it passes in CI.
 
 Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared contracts and on the controller) → Q6 → Q7 (measured adjustment). After each one, `npm test` on the Pantheon suite (CI runs the `bwrap` cases this sandbox cannot), and for Q7 the OPHANIM `prove`, `verify` and `investigate` paths.
 
@@ -343,4 +343,22 @@ Pantheon suite: 804 pass, plus the 1 known environment failure. Model client: 45
 - routing naming no effort for an agy seat.
 
 Pantheon suite: 805 pass, plus the 1 known environment failure.
+
+
+## Reseat from the live view (2026-11-16)
+
+**The gap.** Seat records refuse to continue a conversation under a different model unless the change is an explicit reseat (`MODEL_CHANGED`, `model_gen`). The live view had no way to give that consent. It never passed `reseatModel`, and it showed the refusal only as a generic error. So a seat held by an older model could not be moved on from the view, and a changed adapter default (as with gemini-3.5-flash → 3.6-flash) left that seat refusing every prompt.
+
+**Implementation.**
+- `src/view/server.mjs`: `POST /turn` accepts `reseat` (single seat) or `reseats` (vendor → boolean, for a fan-out). Anything other than a boolean is refused with 400. Consent is per seat: one seat's consent never reseats another.
+- Results now carry `code` and `model_gen`, so a caller can tell a refused switch from a failure.
+- An accepted reseat is announced on the bus (`type: "reseat"`, with the new model and `model_gen`), and the seat state in `bus.mjs` and the page shows it.
+- `src/view/app.html`: when a run returns `MODEL_CHANGED` for some seats, the page asks the operator, then re-sends the prompt to those seats only, with consent for each.
+
+*Check.* `pantheon/tests/view-reseat.test.mjs` covers:
+- a switch refused without consent, accepted with it, recorded as `model_gen` 2, then continued without another reseat;
+- per-seat consent in a fan-out, and non-boolean consent refused;
+- the refusal's code and the reseat event on the bus, folded into the seat state.
+
+Pantheon suite: 808 pass, plus the 1 known environment failure.
 

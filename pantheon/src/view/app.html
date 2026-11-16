@@ -64,6 +64,7 @@ function applyEvent(seats, e) {
     case "tool": s.tools = prev.tools.includes(e.name) ? prev.tools : [...prev.tools, e.name]; break;
     case "done": s.status = "done"; if (typeof e.text === "string" && e.text.length > s.text.length) s.text = e.text; break;
     case "error": s.status = "error"; s.error = e.text ?? "error"; break;
+    case "reseat": s.model = e.model ?? null; s.model_gen = e.model_gen ?? null; break;
     default: return seats;
   }
   return { ...seats, [e.seat]: s };
@@ -100,7 +101,8 @@ const Seat = React.memo(function Seat({ s, spec, board }) {
         // already knows.
         board?.branch ? h("span", { className: `branch ${board.branch}`, key: "b" }, board.branch) : null,
         " ",
-        `${spec.model ? spec.model + " · " : ""}${spec.continuity}${s?.turns ? ` · turn ${s.turns}` : ""} · ${status}`)),
+        `${spec.model ? spec.model + " · " : ""}${s?.model_gen > 1 ? `reseated to ${s.model} (gen ${s.model_gen}) · ` : ""}` +
+        `${spec.continuity}${s?.turns ? ` · turn ${s.turns}` : ""} · ${status}`)),
     h("div", { className: "body", ref: bodyRef, onScroll },
       s?.error
         ? h("span", { className: "err" }, s.error)
@@ -189,11 +191,15 @@ function App() {
     if (!prompt.trim()) return;
     setBusy(true);
     try {
-      await fetch("/turn", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ seats: specs.map(s => s.vendor), prompt }),
-      });
+      const post = body => fetch("/turn", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(body) }).then(r => r.json());
+      const r = await post({ seats: specs.map(s => s.vendor), prompt });
+      // A seat held by another model is not switched silently: the operator confirms the reseat,
+      // and only those seats are re-sent, with the consent recorded per seat.
+      const held = (r.results ?? []).filter(x => x.code === "MODEL_CHANGED").map(x => x.vendor);
+      if (held.length && window.confirm(`Reseat ${held.join(", ")} on the new model? Each conversation was held by another model; the switch is recorded.`)) {
+        await post({ seats: held, prompt, reseats: Object.fromEntries(held.map(v => [v, true])) });
+      }
     } finally { setBusy(false); }
   }, [prompt, specs]);
 
