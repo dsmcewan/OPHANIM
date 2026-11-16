@@ -105,6 +105,24 @@ test("the class protocol closes every class through an independent committed han
   assert.match(protocol, /does not authorize.*production|does not extend.*production/i);
 });
 
+test("the planning coach owns bounded activation of the prepared next class", () => {
+  const coach = parseToml(".codex/agents/planning-coach.toml").developer_instructions;
+  const protocol = readFileSync(resolve(ROOT, "docs/planning/CLASS_PROTOCOL.md"), "utf8");
+
+  for (const source of [coach, protocol]) {
+    assert.match(source, /planning_coach.*continuation owner|coach.*continuation owner/is);
+    assert.match(source, /without (?:waiting for|requiring) (?:another )?owner (?:message|prompt|reply)/i);
+    assert.match(source, /committed class|class commit/i);
+    assert.match(source, /prepared (?:following|next) class package/i);
+    assert.match(source, /board (?:head|identity|commit).*(?:match|agree|conflict)/is);
+  }
+
+  assert.match(coach, /do not.*(?:write|persist).*(?:record|board)|coordinator.*(?:writes|persists)/is);
+  assert.match(coach, /do not evaluate|independent twin/i);
+  assert.match(protocol, /missing.*commit|commit.*missing/i);
+  assert.match(protocol, /missing.*package|package.*missing/i);
+});
+
 test("learning role documentation exists and every local Markdown link resolves", () => {
   const docs = [
     "README.md",

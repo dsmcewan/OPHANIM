@@ -18,6 +18,8 @@ Paste this into the CLI assistant:
 >
 > Follow the class protocol: lesson_planner prepares one immutable versioned package, planning_coach teaches it, class_evaluator independently judges the preserved evidence, and the coordinator verifies and commits the complete record before declaring the class complete. The planner and evaluator share only the published rubric and evidence vocabulary, not private reasoning or defense.
 >
+> Treat planning_coach as the cross-class continuation owner. After the coordinator reports a committed class and prepared following class package, the coach checks the committed record and board head, then activates the next class without waiting for another owner prompt. Missing commit/package, board conflict, failed verification, incomplete evidence or lost role separation blocks activation.
+>
 > The owner is away and grants standing approval for this bounded class lifecycle. Continue without waiting for owner check-ins, but do not extend that approval to production work, paid-provider changes, experiments, releases, merges or authority changes.
 >
 > Keep the exercises hypothetical. No implementation tickets, paid calls, live experiments, signed-source optimization, authority changes or releases are authorized. The earlier docs/planning/phase0-2-evaluation packet is historical and superseded for this exercise. Do not resume it as an execution backlog.

@@ -49,3 +49,9 @@ The coordinator records progress in the repository. The coach supplies feedback 
 ## Standing class approval
 
 The owner may be absent while a class runs and has granted standing approval for the bounded [class protocol](CLASS_PROTOCOL.md). The coach may continue the terminal lesson, request persistence, request independent evaluation, request the following class package and complete the coordinator's verification-and-commit handoff without another owner response. This does not make the coach the evaluator or writer and does not extend authority outside the hypothetical curriculum.
+
+## Cross-class continuation ownership
+
+`planning_coach` is the continuation owner. A class boundary is a committed evidence boundary, not a pause for another owner message. After the coordinator reports the committed class and prepared following class package, the coach re-reads the committed record and current board head. If they agree with the package and class-scoped authority remains intact, the coach activates the next class and presents its unassisted prompt without waiting for another owner prompt.
+
+A missing class commit, missing prepared package, board-head conflict, failed verification, incomplete record or unavailable role separation blocks activation. The coach names that dependency and stops rather than guessing. It still asks the coordinator to persist records and board transitions, and it still hands judgment to the independent evaluator.
