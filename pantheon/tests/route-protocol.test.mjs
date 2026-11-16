@@ -157,15 +157,15 @@ async function runFixture(dir, clients, extraOpts = {}) {
 test("a cut-off reply is retried with a larger output budget within the documented ceiling, and recorded", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-cut-"));
   try {
-    const clients = scripted({ cutAt: 2000 });
+    const clients = scripted({ cutAt: 20000 });
     const result = await runFixture(dir, clients);
     assert.equal(result.shipped, true, JSON.stringify(result.error));
     const plan = clients.sent.filter(s => s.model === "claude-sonnet-5" && /TITLE:/.test(s.prompt));
-    assert.deepEqual(plan.map(s => s.max_tokens), [1024, 2048], "the direct default, then doubled");
+    assert.deepEqual(plan.map(s => s.max_tokens), [16384, 32768], "the medium tier, then doubled within the documented 128K");
     const run = JSON.parse(readFileSync(join(result.board, "run.json"), "utf8"));
     const cut = run.escalations.filter(e => e.purpose === "plan");
-    assert.deepEqual(cut.map(e => [e.decision.action, e.decision.to.output]), [["raise_output", 2048]]);
-    assert.equal(verifyEscalation(cut.map(({ purpose, ...r }) => r)).ok, true);
+    assert.deepEqual(cut.map(e => [e.tier, e.decision.action, e.decision.to.output]), [["medium", "raise_output", 32768]]);
+    assert.equal(verifyEscalation(cut.map(({ purpose, tier, ...r }) => r)).ok, true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -178,7 +178,7 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 | Q7 measurement (projection, recomputation check, ranking) | Resolved | implemented and tested end to end on a real board |
 | Q7 adjustment (a seat change from evidence) | On Hold | Admission needs the pinned TELOS-side verifier to accept a seating dimension. Unchanged: it still admits only the 1→3 slot policy. |
 | P8/P9 admission through the efficiency gate | On Hold | Same pinned verifier; unchanged. |
-| 1,024-token default on direct Messages calls | On Hold | A policy choice; truncation is now refused rather than silent (M1). |
+| 1,024-token default on direct Messages calls | Resolved (provisional) | Replaced by output-token tiers by difficulty (easy 4,096, medium 16,384, hard 32,768), each capped at the documented ceiling. The tiers are a starting policy, not a measurement: recorded truncations are the evidence for moving them. See "Output-token tiers" below. |
 | OpenAI `reasoning.context` conflict | Resolved | Settled from the vendor docs. Both paths now share one rule: pass validated values through, request `all_turns` only where documented, never send the field to xAI, and record the effective mode. See `pantheon-model-loop-evaluation.md` §4.3. |
 | Seat (conversation) records carry the model | Resolved | Recorded in `saveSeat`. A model change is refused unless it is an explicit, recorded reseat (`model_gen`). |
 | `all_turns` support on GPT-6 Astra, Sol and Luna | On Hold | The docs conflict on Astra and say nothing on Sol or Luna. These models use their default, and the recorded effective mode will show the answer once a live call is made. |
@@ -236,7 +236,7 @@ All seven proposals add checks or record facts that already exist at runtime, so
 - **Cut-off replies.** A turn refused because its reply was cut off (`max_tokens`, `MAX_TOKENS` or `incomplete`) goes to the protocol. If the decision is `raise_output`, the turn is retried with the larger budget, within the documented ceiling. The refused turn was not persisted, so the retry starts from the same conversation. The frontier client now reports `terminal_state` like the direct path does, so its truncations are classified too.
 - **Reviewer verdicts.** A `request_changes` verdict is an outcome for the maker's seat. Its decision (effort, stepped rung, or stop) and a pending revision carrying the reviewer's findings are saved with the slot in `run.files[].escalation`. A resume then revises that slot at the decided effort, with the findings in the prompt, instead of re-reviewing the same bytes. A revision that produces identical bytes is not re-reviewed: those bytes already carry a rejection, so the Q4 gate refuses.
 - *Check:* `pantheon/tests/route-protocol.test.mjs` adds two cases:
-  - a direct-path planner cut off at its 1,024-token default is retried at 2,048 and ships, and the decision re-derives;
+  - a direct-path planner cut off at its default budget is retried at double that budget and ships, and the decision re-derives (now 16,384 → 32,768 under the medium tier);
   - a rejection of passing work records `raise_effort → high` and a pending review, and the resumed revision is sent at `high` with the findings and ships.
 
 **Not covered yet:**
@@ -283,3 +283,37 @@ Items 1 and 3 are done here.
 - the judge refused when every candidate lab made a fork;
 - a cut-off turn escalated and verified;
 - all five chairs in the projection, verified by recomputation and ranked.
+
+
+## Output-token tiers (provisional, 2026-11-16)
+
+**The gap.** The direct Messages path sent `max_tokens: 1024` whenever the caller named no budget. Long replies were cut off. Since M1 they are refused rather than accepted silently, and the protocol could double the budget, but every long turn still paid for a first attempt that could not succeed.
+
+**Implementation.** `pantheon/src/config/tiers.mjs`:
+
+| Piece | Rule |
+|---|---|
+| `TOKEN_TIERS` | easy 4,096 · medium 16,384 · hard 32,768. Marked provisional. |
+| `outputBudgetFor(model, tier)` | The tier's budget, capped at the model's documented output ceiling from `capability-facts.json`. An unknown tier throws. |
+| `defaultOutputFor(vendor, model, tier)` | A budget only where a path imposes its own default. The frontier client gets 65,536 (its own `long_decode` default). The direct Anthropic path gets the tier. Every other direct path gets `null`, so the provider's default applies. |
+| `truncationEvidence(escalations)` | Groups recorded truncations by model and tier, with the budgets they were raised to and how many stopped at the ceiling. This is the evidence for moving a tier. |
+
+**Wiring.**
+- A ticket's `difficulty` (default `medium`) selects the tier for the run. An unknown value is refused.
+- The adapter's Messages default and `run-item.mjs`'s turn budget come from the tier. Each escalation record carries the tier it started from.
+- The swarm's seat default uses the same function.
+- An explicit budget still wins everywhere. A truncation is still escalated by the protocol (`raise_output` within the documented ceiling).
+
+**Why provisional.** No run has recorded truncations under these tiers yet. The values are a starting policy chosen to clear the 1,024 failure mode while staying well under every documented ceiling. They should be moved only on evidence from `truncationEvidence`, not on preference.
+
+*Check.* `pantheon/tests/config-tiers.test.mjs` covers:
+- tiers rising with difficulty and capped at the ceiling;
+- an unknown tier refused;
+- defaults per path (frontier, direct Anthropic, other providers);
+- the direct Messages path sending the medium tier, with an explicit budget still winning;
+- truncation evidence grouped by model and tier.
+
+The route-protocol and swarm escalation cases now start from the medium tier (16,384 → 32,768).
+
+Pantheon suite: 804 pass, plus the 1 known environment failure. Model client: 45 pass. OPHANIM proof: 104 pass, with the same 21 failures that need TELOS.
+

@@ -114,11 +114,11 @@ test("a judge is refused when every candidate lab produced a fork; the human tak
 
 test("a cut-off swarm turn is escalated by the protocol within the documented ceiling, and recorded", () => withBoard(async board => {
   const { ref } = await stuck(board);
-  const a = answers(({ vendor, output }) => vendor === "anthropic" && output < 2000);
+  const a = answers(({ vendor, output }) => vendor === "anthropic" && output < 20000);
   const r = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn, seating: SEATING });
   assert.equal(r.ok, true, r.why);
-  assert.deepEqual(a.calls.filter(c => c.vendor === "anthropic").map(c => c.output), [1024, 2048]);
-  assert.deepEqual(r.escalations.map(e => [e.decision.action, e.decision.to.output]), [["raise_output", 2048]]);
+  assert.deepEqual(a.calls.filter(c => c.vendor === "anthropic").map(c => c.output), [16384, 32768]);
+  assert.deepEqual(r.escalations.map(e => [e.decision.action, e.decision.to.output]), [["raise_output", 32768]]);
   assert.equal(verifyEscalation(r.escalations).ok, true);
 }));
 

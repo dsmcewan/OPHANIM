@@ -24,7 +24,7 @@ import { publish, treeSlots, entriesOfKind } from "./dag.mjs";
 import { merge } from "./merge.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
-import { isFrontier } from "../../../packages/model-client/index.mjs";
+import { defaultOutputFor } from "../config/tiers.mjs";
 import { candidatesFor } from "../role/seating.mjs";
 import { ROSTER } from "../team/roster.mjs";
 import { explorePrompt, refutePrompt, synthesizePrompt, SWARM_ROLES } from "../swarm/layered.mjs";
@@ -57,7 +57,7 @@ export function chairTurns({ store, refs }, chair) {
 async function seatTurn({ turn, seat, role, prompt }) {
   const records = [];
   // The budget a turn runs with when the caller names none: the same defaults the main path assumes.
-  let output = seat.output ?? (isFrontier(seat.model) ? 65536 : seat.vendor === "anthropic" ? 1024 : null);
+  let output = seat.output ?? defaultOutputFor(seat.vendor, seat.model, seat.tier ?? "medium");
   for (let steps = 0; ; steps++) {
     const r = await turn({ vendor: seat.vendor, model: seat.model, role, prompt, output });
     if (r.complete !== false) return { text: r.text, records };

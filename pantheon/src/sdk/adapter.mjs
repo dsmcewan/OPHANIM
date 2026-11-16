@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { streamTurn } from "./stream.mjs";
 import { modelId } from "../config/models.mjs";
+import { defaultOutputFor } from "../config/tiers.mjs";
 import { isFrontier, sendModelTurn, providerFetch, terminalState, reasoningContextFor, reasoningContextReport } from "../../../packages/model-client/index.mjs";
 
 // SDK transport. Replaces spawning a vendor CLI and then going to find the transcript it wrote.
@@ -344,7 +345,9 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     const messages = [...history, { role: "user", content: prompt }];
     const res = await client.messages.create(withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model,
-      max_tokens: extra?.max_tokens ?? 1024,
+      // Messages requires max_tokens. The default is the medium token tier, capped at the documented
+      // ceiling (config/tiers.mjs); it was a flat 1,024, which cut long replies off.
+      max_tokens: extra?.max_tokens ?? defaultOutputFor(vendor, model ?? spec.default_model, "medium"),
       messages,
       ...extra,
     }));
@@ -405,7 +408,7 @@ function buildRequest({ spec, vendor, model, prompt, previousResponseId, history
   if (spec.surface === "genai") {
     return { model: m, contents: [...(history ?? []), { role: "user", parts: [{ text: prompt }] }], ...extra };
   }
-  return { model: m, max_tokens: extra?.max_tokens ?? 1024,
+  return { model: m, max_tokens: extra?.max_tokens ?? defaultOutputFor("anthropic", m, "medium"),
            messages: [...(history ?? []), { role: "user", content: prompt }], ...extra };
 }
 

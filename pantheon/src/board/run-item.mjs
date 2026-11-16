@@ -39,6 +39,7 @@ import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
+import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools } from "../route/frontier.mjs";
 import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
 
@@ -172,6 +173,9 @@ export async function runOpenItem(spec, opts = {}) {
   // can never fire is not caution, it is a landmine for a future SEATING change that adds a role
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
+  // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
+  const TIER = spec.difficulty ?? "medium";
+  if (!TOKEN_TIERS[TIER]) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
   const root = RESUME ?? dir ?? join(homedir(), ".pantheon", "boards", `open-${spec.key}-${Date.now()}`);
   const worktree = join(root, "worktree");
   mkdirSync(worktree, { recursive: true });
@@ -342,7 +346,10 @@ export async function runOpenItem(spec, opts = {}) {
       if (e.type === "delta" && e.text) { chars += e.text.length; if (Date.now() - lastNote > 10_000) { lastNote = Date.now(); progress({ event: "turn.progress", seat: vendor, model, detail: `${chars} chars so far` }); } }
       else if (e.type === "error") progress({ event: "turn.error", seat: vendor, model, detail: e.text ?? "stream error" });
     };
+    // The ticket's difficulty picks the output tier; the budget is sent explicitly, so what is recorded
+    // is what was asked for. A caller's own budget (e.g. the reviewer's 4000) still wins.
     let r, steps = 0, budget = extra;
+    if (budget === undefined && vendor === "anthropic" && !isFrontier(model)) budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
     for (;;) {
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
         architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
@@ -353,11 +360,11 @@ export async function runOpenItem(spec, opts = {}) {
       // a larger budget within the model's documented ceiling. The refused turn was not persisted, so
       // the retry starts from the same conversation. Every decision is recorded on the run.
       const output = budget?.max_tokens ?? budget?.max_output_tokens ?? budget?.config?.maxOutputTokens
-        ?? (isFrontier(model) ? 65536 : vendor === "anthropic" ? 1024 : null);
+        ?? defaultOutputFor(vendor, model, TIER);
       const rec = escalationRecord({ role: ROLE_OF_PURPOSE[purpose] ?? purpose, steps,
         outcome: { kind: "turn", complete: false, terminal_state: r.result.terminal_state ?? null, why: r.why },
         seat: { vendor, model, effort: effort ?? null, output } });
-      (run.escalations ??= []).push({ purpose, ...rec });
+      (run.escalations ??= []).push({ purpose, tier: TIER, ...rec });
       progress({ event: "escalate", seat: vendor, model, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
       if (rec.decision.action !== "raise_output") break;
       const raised = capFor(vendor, { tokens: rec.decision.to.output });
