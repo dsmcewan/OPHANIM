@@ -90,7 +90,9 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | TELOS as the single ledger as is | Resolved: no | Limits T1–T6 above, read from the pinned source. |
 | K1 chain core | Resolved | `ophanim/ledger/chain.mjs`. See "K1 implemented" below. |
 | K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
-| K3–K5 | On Hold → next | Dependencies converged (K1, K2 in); they start in order. None changes the pinned TELOS. |
+| K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `ophanim/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
+| K3 `gate` kind (ship gate verdicts) | On Hold | `ship({dryRun})` reads live ref state, so a verdict cannot yet be re-derived as of the commit it judged. It needs ship's gates to evaluate against named heads, as contributions now do. |
+| K4–K5 | On Hold → next | Dependencies converged; they start in order. Neither changes the pinned TELOS. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
@@ -149,4 +151,30 @@ One trust assumption is stated rather than hidden: in frontier mode, entries bef
   - refusal of an unpinned TELOS source.
 
 With TELOS checked out at the pin (`OPHANIM_TELOS_ROOT`), `npm run test:proof` passes 141 of 141 here, including the 21 cases that previously could not run in this container.
+
+## K3 implemented (2026-11-16)
+
+Each kind is re-derived by a verifier that already existed but had no caller on the path.
+
+| Kind | Payload | Re-derives by |
+|---|---|---|
+| `facts` | the cited capability facts | Every recorded figure carries the `source` and `quote` it was read from, or is `UNRECORDED`. The evidence travels with the value. |
+| `seating` | the seating table, per role | It cites exactly one `facts` entry, and every seated model is a cited fact or a declared lane model. |
+| `escalation` | a protocol record (the run's notes kept outside) | `verifyEscalation` re-derives it from the `facts` and `seating` entries it **cites**, not from the code of the day. Decisions for the same work are chained by citation, so the step count must continue. |
+| `contribution` | `{heads, projection}` | `chairContributions` recomputed from the named board heads. They are content-addressed, so the entry still re-derives after the board moves on. |
+
+Inputs are entries, never edits. A changed fact is a new `facts` entry, and a decision cites the one it used. The test shows the consequence: under facts that listed `gpt-6-sol`'s efforts only up to `high`, a rejection at `high` correctly steps a rung. That entry still re-derives even though today's code would raise effort instead. The same decision citing nothing, or not following from what it cites, is refused.
+
+**On the run path.** `runOpenItem(spec, {ledger})` takes a recorder (`escalationRecorder` in `kinds.mjs`):
+- the run verifies the ledger before relying on anything, and refuses to run if it does not verify;
+- every escalation it makes (truncation, acceptance, review) is recorded as an entry citing the facts and seating it was decided under;
+- `run.json` keeps its copy for display; the ledger entry is the one that re-derives.
+
+*Check.*
+- `ophanim/ledger/kinds.test.mjs` (5 tests) covers uncited facts, seating citations, escalations re-deriving against cited facts, step continuity by citation, and contributions after the board moves on.
+- `pantheon/tests/route-protocol.test.mjs` adds an end-to-end run. A truncation is recorded on the ledger, citing its inputs, and verifies on replay. A ledger altered afterwards stops the next run before it starts.
+- Suites:
+  - `npm run test:proof`: 146 of 146, with TELOS at the pin;
+  - Pantheon: 811 pass, plus the 1 known environment failure;
+  - model client: 48 pass.
 

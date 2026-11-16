@@ -233,3 +233,34 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
     assert.equal(run.files[0].escalation.pending, null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("K3: with a ledger, the run verifies it first and records each escalation as an entry that re-derives", async () => {
+  const { openLedger, createLedger, defineKinds, generateSigner } = await import("../../ophanim/ledger/chain.mjs");
+  const { pantheonKinds, escalationRecorder } = await import("../../ophanim/ledger/kinds.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-ledger-"));
+  try {
+    const operator = generateSigner("operator"), controller = generateSigner("controller");
+    const authority = { keyring: { operator: operator.publicJwk, controller: controller.publicJwk }, orderer: "controller", operators: ["operator"] };
+    const ledgerDir = join(dir, "ledger");
+    mkdirSync(ledgerDir);
+    const anchor = createLedger({ dir: ledgerDir, authority, operator, order: controller });
+    const ledger = openLedger({ dir: ledgerDir, kinds: defineKinds(pantheonKinds({
+      authors: { inputs: a => a.key_id === "operator", decisions: a => a.key_id === "controller" } })), anchor });
+    const recorder = escalationRecorder({ ledger, controller, order: controller, operator });
+    const clients = scripted({ cutAt: 20000 });
+    const result = await runFixture(dir, clients, { ledger: recorder });
+    assert.equal(result.shipped, true, JSON.stringify(result.error));
+    const entries = ledger.read();
+    const esc = entries.filter(e => e.kind === "escalation");
+    assert.equal(esc.length, 1, "the one truncation decision is on the ledger");
+    assert.deepEqual(ledger.payloadOf(esc[0]).decision.to.output, 32768);
+    assert.deepEqual(esc[0].derived_from.slice(0, 2), [recorder.inputs.facts, recorder.inputs.seating], "it cites the inputs it was decided under");
+    assert.equal(ledger.verify().ok, true, "every entry re-derives on replay");
+    // A ledger that no longer verifies stops the next run before it relies on anything.
+    const file = join(ledgerDir, "chain.jsonl");
+    const lines = readFileSync(file, "utf8").trimEnd().split("\n");
+    const forged = JSON.parse(lines.at(-1)); forged.derived_from = forged.derived_from.slice(0, 1);
+    writeFileSync(file, [...lines.slice(0, -1), JSON.stringify(forged)].join("\n") + "\n");
+    await assert.rejects(runFixture(join(dir, "again"), scripted(), { ledger: recorder }), /ledger does not verify, refusing to run/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

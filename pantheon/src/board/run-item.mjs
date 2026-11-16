@@ -173,6 +173,16 @@ export async function runOpenItem(spec, opts = {}) {
   // can never fire is not caution, it is a landmine for a future SEATING change that adds a role
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
+  // The ledger (ophanim/ledger): when given, the run verifies it before relying on anything, and every
+  // escalation decision is recorded on it as an entry citing the facts and seating it was made under.
+  // run.json keeps its copy for display; the ledger entry is the one that re-derives.
+  const LEDGER = opts.ledger ?? null;
+  if (LEDGER) {
+    const v = LEDGER.verify();
+    if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
+  }
+  let escalationWork = 0;
+  const escalated = (work, rec) => { (run.escalations ??= []).push(rec); LEDGER?.record(work, rec); };
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
   const TIER = spec.difficulty ?? "medium";
   if (typeof TIER !== "string" || !Object.hasOwn(TOKEN_TIERS, TIER)) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
@@ -351,6 +361,7 @@ export async function runOpenItem(spec, opts = {}) {
     // The ticket's difficulty picks the output tier; the budget is sent explicitly, so what is recorded
     // is what was asked for. A caller's own budget (e.g. the reviewer's 4000) still wins.
     let r, steps = 0, budget = extra;
+    const work = `turn:${purpose}:${++escalationWork}`;   // one truncation trail per turn
     if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
     for (;;) {
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
@@ -366,7 +377,7 @@ export async function runOpenItem(spec, opts = {}) {
       const rec = escalationRecord({ role: ROLE_OF_PURPOSE[purpose] ?? purpose, steps,
         outcome: { kind: "turn", complete: false, terminal_state: r.result.terminal_state ?? null, why: r.why },
         seat: { vendor, model, effort: effort ?? null, output } });
-      (run.escalations ??= []).push({ purpose, tier: TIER, ...rec });
+      escalated(work, { purpose, tier: TIER, ...rec });
       progress({ event: "escalate", seat: vendor, model, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
       if (rec.decision.action !== "raise_output") break;
       const raised = capFor(vendor, { tokens: rec.decision.to.output });
@@ -784,7 +795,7 @@ export async function runOpenItem(spec, opts = {}) {
               if (action === "raise_effort") c.effort = to.effort;
               if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
               if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
-              (run.escalations ??= []).push({ slot: c.sl.slot, rev, ...rec });
+              escalated(`slot:${c.sl.slot}`, { slot: c.sl.slot, rev, ...rec });
               progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
             }
             record();
@@ -895,7 +906,7 @@ export async function runOpenItem(spec, opts = {}) {
         // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work
         // needs its own pending revision, with the findings the implementer must address.
         if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000) };
-        (run.escalations ??= []).push({ slot: built.sl.slot, rev, ...rec });
+        escalated(`slot:${built.sl.slot}`, { slot: built.sl.slot, rev, ...rec });
         const file = run.files.find(f => f.slot === built.sl.slot);
         if (file) file.escalation = escalationState(built);
         progress({ event: "escalate", rev, slot: built.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
