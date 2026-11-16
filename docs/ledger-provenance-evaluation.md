@@ -91,7 +91,7 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | K1 chain core | Resolved | `ophanim/ledger/chain.mjs`. See "K1 implemented" below. |
 | K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
 | K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `ophanim/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
-| K3 `gate` kind (ship gate verdicts) | On Hold | `ship({dryRun})` reads live ref state, so a verdict cannot yet be re-derived as of the commit it judged. It needs ship's gates to evaluate against named heads, as contributions now do. |
+| K3 `gate` kind (ship gate verdicts) | Resolved | Ship's gates now evaluate against named heads (`gatesAt`, `pinnedRefs` in `integrate.mjs`); `ophanim/ledger/gate-kind.mjs` records and re-derives the verdict. See "Gate kind implemented" below. |
 | K4–K5 | On Hold → next | Dependencies converged; they start in order. Neither changes the pinned TELOS. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
@@ -178,3 +178,37 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
   - Pantheon: 811 pass, plus the 1 known environment failure;
   - model client: 48 pass.
 
+## Gate kind implemented (2026-11-16)
+
+**What a ship's gates read** (`ship({dryRun})` and `shipClaim`), and how each is pinned:
+
+| Read | Gate(s) | Pinned by |
+|---|---|---|
+| `refs.resolve(ref)`, `refs.resolve(from)` | TICKET, GRAFT, LEASE, REVIEW, TESTS, MERGE | `heads`: the `{name, cid}` of both, recorded. `pinnedRefs(heads)` resolves from the record only. |
+| `refs.list()`, `refs.resolve(offer_ref)` (in `boardState`) | none | Answered from the record; no gate consumes them. |
+| Content-addressed store | all but ACTOR, TARGET | Nothing to pin: the cids mean the same thing after the refs move. |
+| `runtime.leases()`, judged at `now` | LEASE | `leases` (the active rows, the fields LEASE reads) and `now`, recorded. The lease file is not content-addressed, so these are a signed input, like `facts`. |
+| `runtime.occupancy()`, `runtime.budget()` | none | Neutral values; no gate consumes them. |
+
+**Change to `integrate.mjs` (behaviour-preserving).**
+- Ship's gate code moved into a synchronous `evaluateGates`; `ship` calls it, then writes its one commit exactly as before. Refusals and dry runs return the same objects.
+- `gatesAt({store, heads, ref, from, actor, graft, leases, now})` runs the same evaluator through `pinnedRefs(heads)` and returns the `shipClaim`. It is a second caller of the evaluator, not a copy. It is synchronous, as a re-deriver must be.
+
+**The kind** (`ophanim/ledger/gate-kind.mjs`; `kinds.mjs` is unchanged):
+
+| Kind | Payload | Re-derives by |
+|---|---|---|
+| `gate` | `{ref, from, heads, actor, now, leases, graft?, claim}` | Every head must be a commit in this board's store, and the board head must still be in the ref's history. Then `gatesAt` recomputes the claim, compared with `canonical`. |
+
+- `gateKinds({authors, board: {store, refs}})`: authors is the controller.
+- `gateRecord(...)` builds the payload from the live board. It reads the heads and leases once, computes the claim from that record, and refuses if a live `shipClaim` at the same moment disagrees.
+
+*Check.* `ophanim/ledger/gate-kind.test.mjs` (4 tests, on a real Pantheon board) covers:
+- a held-lease refusal and a green verdict recorded, the ship landing, the branch moving on, and both entries still re-deriving;
+- forgeries refused: `tests_passed` flipped, LEASE quietly green, lease rows dropped, a later `now`, a non-controller author;
+- heads refused when they are not on this board (a commit from another board, a made-up cid) or not in the ref's history;
+- `gatesAt` equal to the live `shipClaim`, for the controller and for a chair.
+
+Suites:
+- `npm run test:proof`: 150 of 150, with TELOS at the pin;
+- Pantheon: 811 pass, plus the 1 known environment failure.
