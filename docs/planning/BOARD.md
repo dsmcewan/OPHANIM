@@ -10,6 +10,7 @@ The owner requested initialization on 2026-11-16. The seed's `human` author mean
 - Board ref: `refs/board/planning-fundamentals`.
 - Portable initialization input: [board-seed.json](board-seed.json).
 - Attempts, hints, assessments and mandatory next itineraries: [LEARNING_PROGRESS.md](LEARNING_PROGRESS.md).
+- Planner, teacher, evaluator, coordinator and commit gate: [CLASS_PROTOCOL.md](CLASS_PROTOCOL.md).
 - Initial read-back evidence: [board-initialization.json](board-initialization.json). This is a setup snapshot, not a live status feed.
 
 Git transports the seed and instructions, not the mutable local board. A CLI on another machine must initialize its own local store. Existing progress must be preserved on resume; never rerun the seed as an update or use it to reset a board.
@@ -91,6 +92,6 @@ JS
 
 All learning statuses remain `not_attempted`. `ready` means eligible for the next supervised learning session, not active or passed. The generic board status label can say `executing` when an item is ready; that is not evidence of a running process. Read the item states and runtime activity separately.
 
-The next action is OPHANIM's unassisted answer to the first lesson, followed by coach feedback and a saved next itinerary. The coordinator records the exact attempt and assessment reference before any phase transition. Use the public `publish` API with the observed `expect` commit to record justified transitions; retain history, and on a compare-and-swap refusal re-read instead of blindly retrying. Later phases remain blocked until both their dependency and stated input conditions have evidence. The coach cannot mark its own final transfer assessment accepted.
+The next action is OPHANIM's unassisted answer to the first lesson, followed by coach feedback, independent twin evaluation, a saved next itinerary and a prepared following package. The coordinator records the exact attempt and assessment reference before any phase transition and commits the complete class record before calling it complete. Use the public `publish` API with the observed `expect` commit to record justified transitions; retain history, and on a compare-and-swap refusal re-read instead of blindly retrying. Later phases remain blocked until both their dependency and stated input conditions have evidence. The coach cannot mark its own final transfer assessment accepted.
 
 No background loop was started during initialization. No spend budget was invented. The board's default undeclared budget is not a technical execution block, so do not feed this board to a build runner. `publish` records one bookkeeping turn even for an operator write; this is not a model request or a dollar charge. Initialization makes no claim about a daemon or checkout on another machine.

@@ -17,7 +17,7 @@ The current [planning lessons](docs/planning/LESSONS.md) study how to derive and
 
 Continue with the [six-phase learning progression](docs/planning/FUNDAMENTALS.md), [planning coach charter](docs/planning/PLANNING_COACH.md), [progress record](docs/planning/LEARNING_PROGRESS.md) and [CLI resume prompt](docs/planning/CLI_HANDOFF.md). No phase is marked learned until its exercise supplies the required evidence.
 
-The [learning ticket board](docs/planning/BOARD.md) has a portable seed and local initialization/status commands. LF-001 is ready and later phases are blocked; initialization does not launch a background runner or satisfy learning acceptance. The specialized [planning_coach agent](.codex/agents/planning-coach.toml) keeps the learner on the fundamentals and must create the next itinerary at each assessment handoff or session end.
+The [learning ticket board](docs/planning/BOARD.md) has a portable seed and local initialization/status commands. LF-001 is ready and later phases are blocked; initialization does not launch a background runner or satisfy learning acceptance. The [class protocol](docs/planning/CLASS_PROTOCOL.md) separates a [lesson planner](.codex/agents/lesson-planner.toml), terminal [planning coach](.codex/agents/planning-coach.toml), independent twin [class evaluator](.codex/agents/class-evaluator.toml) and authorized coordinator. Every class retains its evidence, next itinerary and following package, then passes verification and is committed before completion.
 
 ## Run the synthetic planning proof
 
