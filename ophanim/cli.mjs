@@ -15,11 +15,13 @@ function workerArtifact(options,workers) {
   return {schema:'ophanim.synthetic-worker-artifact/v1',sourceSha:digest(fs.readFileSync(FIXTURES,'utf8')),options,workers:metadata(workers)};
 }
 
-export async function executeRequest(request) {
-  return execute(request,false);
+// `opts.ledger` (K5): an efficiencyRecorder from ophanim/ledger/efficiency-kinds.mjs. It carries signing
+// keys, so it is passed by the caller, never read from a request file.
+export async function executeRequest(request,opts={}) {
+  return execute(request,false,opts);
 }
 
-async function execute(request,replay) {
+async function execute(request,replay,opts={}) {
   if(!request || !path.isAbsolute(request.stateDir??''))throw Error('Absolute private synthetic stateDir required');
   if(Object.hasOwn(request,'expectedQualifiedConvergences')&&
       (!Number.isInteger(request.expectedQualifiedConvergences)||request.expectedQualifiedConvergences<1||request.expectedQualifiedConvergences>20))
@@ -27,10 +29,10 @@ async function execute(request,replay) {
   const stateDir=path.resolve(request.stateDir);
   fs.mkdirSync(stateDir,{recursive:true,mode:0o700});
   if(fs.realpathSync(stateDir)!==stateDir)throw Error('Canonical synthetic state directory required');
-  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay),{dir:path.join(stateDir,'locks'),timeoutMs:60000});
+  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay,replay?{}:opts),{dir:path.join(stateDir,'locks'),timeoutMs:60000});
 }
 
-async function runRequest(request,replay) {
+async function runRequest(request,replay,{ledger=null}={}) {
   const stateDir=request.stateDir;
   const intervals=[],startedAt=Date.now();
   const dispatchStarts=new Map(),acceptedLatencies=[];
@@ -103,7 +105,7 @@ async function runRequest(request,replay) {
     const recoveredEfficiency=replay?null:await recoverInterruptedAssessment({stateDir,priorRuntime,scope,governance:authority});
     const efficiencyRoot=path.resolve(request.efficiencyRoot??path.join(stateDir,'efficiency'));
     const use=replay||request.operation||request.fault||initialRelease&&initialRelease!=='baseline'||!request.efficiencyRoot
-      ?{slots:baselineSlots}:await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,hasRuntime:!!priorRuntime,telosRoot});
+      ?{slots:baselineSlots}:await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,hasRuntime:!!priorRuntime,telosRoot,ledger});
     const slots=use.slots;
     scope.configuration.slots=slots;
     const efficiencyContext=replay?null:{scopeSha:scope.scopeSha,configuration:scope.configuration,policy:scope.policy};
@@ -158,7 +160,7 @@ async function runRequest(request,replay) {
     if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output});
     else if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
       boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
-      attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency});
+      attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency,ledger});
     if(recoveredEfficiency)output.recoveredEfficiency=recoveredEfficiency;
     writeJson(request.resultFile??path.join(stateDir,'result.json'),output);
     return output;
