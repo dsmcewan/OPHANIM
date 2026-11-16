@@ -118,8 +118,18 @@ test("a cut-off swarm turn is escalated by the protocol within the documented ce
   const r = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn, seating: SEATING });
   assert.equal(r.ok, true, r.why);
   assert.deepEqual(a.calls.filter(c => c.vendor === "anthropic").map(c => c.output), [16384, 32768]);
-  assert.deepEqual(r.escalations.map(e => [e.decision.action, e.decision.to.output]), [["raise_output", 32768]]);
-  assert.equal(verifyEscalation(r.escalations).ok, true);
+  assert.deepEqual(r.escalations.map(e => [e.tier, e.decision.action, e.decision.to.output]), [["medium", "raise_output", 32768]]);
+  assert.equal(verifyEscalation(r.escalations).ok, true, "the tier is a note on the record, not part of it");
+}));
+
+test("a swarm runs at the ticket's difficulty tier, and an unknown difficulty is refused", () => withBoard(async board => {
+  const { ref } = await stuck(board);
+  const refused = await runSwarmLayer({ board, ref, question: QUESTION, turn: answers().turn, seating: SEATING, difficulty: "toString" });
+  assert.deepEqual([refused.ok, refused.refused], [false, "difficulty"]);
+  const a = answers(() => false);
+  const r = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn, seating: SEATING, difficulty: "easy" });
+  assert.equal(r.ok, true, r.why);
+  assert.deepEqual(a.calls.filter(c => c.vendor === "anthropic").map(c => c.output), [4096]);
 }));
 
 test("the contribution projection reports all five chairs, including the swarm's forks, refutations and syntheses", () => withBoard(async board => {

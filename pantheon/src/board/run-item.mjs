@@ -175,7 +175,7 @@ export async function runOpenItem(spec, opts = {}) {
   const RESUME = resume;
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
   const TIER = spec.difficulty ?? "medium";
-  if (!TOKEN_TIERS[TIER]) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
+  if (typeof TIER !== "string" || !Object.hasOwn(TOKEN_TIERS, TIER)) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
   const root = RESUME ?? dir ?? join(homedir(), ".pantheon", "boards", `open-${spec.key}-${Date.now()}`);
   const worktree = join(root, "worktree");
   mkdirSync(worktree, { recursive: true });

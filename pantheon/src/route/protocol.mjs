@@ -54,7 +54,8 @@ export function documentedOutput(model, facts = FACTS) {
  * offer one: the next step is the role's next harder rung.
  */
 export function carriesEffort(seat) {
-  if (Object.values(LANES).some(lane => lane[seat.model]?.transport === "agy-cli")) return false;
+  // Decided by the seat's vendor and path, which is what run-item routes on; every lane model is
+  // seated under agy_google and is not a frontier model, so it is covered by the same rule.
   return !(seat.vendor === "agy_google" && !isFrontier(seat.model));
 }
 
@@ -132,13 +133,21 @@ export function escalationRecord(input) {
   return { ...body, digest: digest(body) };
 }
 
+// Keys the run adds when it stores a record (where it was, which tier it started from). They are notes
+// about the record, not part of it, so the digest is checked over the record alone.
+export const RECORD_NOTES = Object.freeze(["purpose", "tier", "slot", "rev"]);
+// What a decision IS. Its `why` is the explanation, which may be reworded between versions; the digest
+// still binds the text as written, so a rewording never lets a record's substance change unnoticed.
+const substance = ({ action, cause, from, to, basis }) => ({ action, cause, from, to, basis });
+
 /** Re-derive every recorded decision from its own inputs. A record that does not follow is refused. */
 export function verifyEscalation(records, { facts = FACTS, seating = SEATING } = {}) {
-  for (const [i, r] of records.entries()) {
+  for (const [i, stored] of records.entries()) {
+    const r = Object.fromEntries(Object.entries(stored).filter(([k]) => !RECORD_NOTES.includes(k)));
     const { digest: d, ...body } = r;
     if (r.schema !== PROTOCOL || digest(body) !== d) throw new Error(`escalation record ${i} is not intact`);
     const again = nextStep({ role: r.role, seat: r.seat, outcome: r.outcome, steps: r.steps, facts, seating });
-    if (stable(again) !== stable(r.decision)) throw new Error(`escalation record ${i} does not follow from its inputs`);
+    if (stable(substance(again)) !== stable(substance(r.decision))) throw new Error(`escalation record ${i} does not follow from its inputs`);
     if (i > 0 && r.steps !== records[i - 1].steps + (["hold", "wait", "stop"].includes(records[i - 1].decision.action) ? 0 : 1)) {
       throw new Error(`escalation record ${i} step count does not continue the trail`);
     }

@@ -11,6 +11,8 @@ test("tiers rise with difficulty and never exceed a documented ceiling", () => {
   assert.equal(outputBudgetFor("claude-haiku-4-5-20251001", "hard").tokens, 32768, "64K ceiling, not reached");
   assert.equal(outputBudgetFor("gemini-3.6-flash", "hard").tokens, 32768);
   assert.throws(() => outputBudgetFor("claude-sonnet-5", "extreme"), /unknown token tier/);
+  for (const inherited of ["toString", "constructor", "__proto__"])
+    assert.throws(() => outputBudgetFor("claude-sonnet-5", inherited), /unknown token tier/, `${inherited} is not a tier`);
 });
 
 test("only paths that impose a default get one; the frontier client keeps its own", () => {

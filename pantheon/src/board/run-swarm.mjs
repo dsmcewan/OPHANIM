@@ -24,7 +24,7 @@ import { publish, treeSlots, entriesOfKind } from "./dag.mjs";
 import { merge } from "./merge.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
-import { defaultOutputFor } from "../config/tiers.mjs";
+import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { candidatesFor } from "../role/seating.mjs";
 import { ROSTER } from "../team/roster.mjs";
 import { explorePrompt, refutePrompt, synthesizePrompt, SWARM_ROLES } from "../swarm/layered.mjs";
@@ -54,16 +54,16 @@ export function chairTurns({ store, refs }, chair) {
 
 // One seat's turn, escalated on a truncated reply. `turn` is injected: {vendor, model, role, prompt,
 // output} -> {text, complete, terminal_state}. Returns the text and the escalation records it made.
-async function seatTurn({ turn, seat, role, prompt }) {
+async function seatTurn({ turn, seat, role, prompt, tier }) {
   const records = [];
   // The budget a turn runs with when the caller names none: the same defaults the main path assumes.
-  let output = seat.output ?? defaultOutputFor(seat.vendor, seat.model, seat.tier ?? "medium");
+  let output = seat.output ?? defaultOutputFor(seat.vendor, seat.model, tier);
   for (let steps = 0; ; steps++) {
     const r = await turn({ vendor: seat.vendor, model: seat.model, role, prompt, output });
     if (r.complete !== false) return { text: r.text, records };
     const rec = escalationRecord({ role, steps, outcome: { kind: "turn", complete: false, terminal_state: r.terminal_state ?? null },
       seat: { vendor: seat.vendor, model: seat.model, effort: null, output } });
-    records.push(rec);
+    records.push({ tier, ...rec });
     if (rec.decision.action !== "raise_output") {
       throw Object.assign(new Error(`${seat.vendor}/${seat.model} ${role}: ${rec.decision.why}`), { records });
     }
@@ -97,7 +97,11 @@ async function isoPublish(board, { seat, ref, key, claim, contradicts, from }) {
  * Run the next swarm step the board schedules. `ref` is the board ref; `question` is the swarm's task
  * statement; `turn` performs one model call. Returns what happened; refusals are results, not throws.
  */
-export async function runSwarmLayer({ board, ref, question, turn, seating, opened_by = "lead@orch" }) {
+export async function runSwarmLayer({ board, ref, question, turn, seating, opened_by = "lead@orch", difficulty = "medium" }) {
+  // The same output tier the ticket's other turns use (config/tiers.mjs); an unknown value is refused.
+  if (typeof difficulty !== "string" || !Object.hasOwn(TOKEN_TIERS, difficulty)) {
+    return { ok: false, refused: "difficulty", why: `unknown difficulty "${difficulty}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})` };
+  }
   const sched = schedule({ ...board, ref });
   const step = SWARM_STEPS.find(s => sched.ready.some(r => r.ks === s));
   if (!step) return { ok: true, done: true, status: sched.status, why: "no swarm step is scheduled; nothing changed" };
@@ -110,7 +114,7 @@ export async function runSwarmLayer({ board, ref, question, turn, seating, opene
 
   const round = turns + 1, escalations = [];
   const run = async (seat, role, prompt) => {
-    const out = await seatTurn({ turn, seat, role, prompt });
+    const out = await seatTurn({ turn, seat, role, prompt, tier: difficulty });
     escalations.push(...out.records);
     return out.text;
   };

@@ -79,6 +79,11 @@ test("decisions are records that re-derive, and a tampered or skipped record is 
   const forged = structuredClone(second); forged.decision.to.effort = "max";
   assert.throws(() => verifyEscalation([first, forged]), /not intact/);
   assert.throws(() => verifyEscalation([first, escalationRecord({ ...second, steps: 3 })]), /step count/);
+  // As the run stores them: with notes on where they were made. The notes are not part of the record.
+  const stored = [{ purpose: "work", tier: "medium", ...first }, { slot: "a.txt", rev: 2, ...second }];
+  assert.equal(verifyEscalation(stored).ok, true);
+  const swapped = structuredClone(stored[1]); swapped.decision.action = "step_rung";
+  assert.throws(() => verifyEscalation([stored[0], swapped]), /not intact/, "a note never shields the record itself");
 });
 
 test("routing skips ids that are not API or lane models, and uses a deprecated model only as a last resort", () => {

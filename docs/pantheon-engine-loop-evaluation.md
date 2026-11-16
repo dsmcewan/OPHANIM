@@ -174,18 +174,19 @@ Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item
 
 | Dependency | Status | Basis |
 |---|---|---|
-| Q1 model in the author, Q2 occupancy transitions, Q3 chair gate, Q4 controller gate, Q5 lane registry, Q6 budget binding | Resolved | implemented; Pantheon suite 777 pass, plus 1 failure that also fails on unchanged code here |
+| Q1 model in the author, Q2 occupancy transitions, Q3 chair gate, Q4 controller gate, Q5 lane registry, Q6 budget binding | Resolved | implemented; covered by the Pantheon suite (current count below the table) |
 | Q7 measurement (projection, recomputation check, ranking) | Resolved | implemented and tested end to end on a real board |
 | Q7 adjustment (a seat change from evidence) | On Hold | Admission needs the pinned TELOS-side verifier to accept a seating dimension. Unchanged: it still admits only the 1→3 slot policy. |
 | P8/P9 admission through the efficiency gate | On Hold | Same pinned verifier; unchanged. |
-| 1,024-token default on direct Messages calls | Resolved (provisional) | Replaced by output-token tiers by difficulty (easy 4,096, medium 16,384, hard 32,768), each capped at the documented ceiling. The tiers are a starting policy, not a measurement: recorded truncations are the evidence for moving them. See "Output-token tiers" below. |
+| 1,024-token default on direct Messages calls | Resolved | Replaced by provisional output-token tiers by difficulty (easy 4,096, medium 16,384, hard 32,768), each capped at the documented ceiling. The tiers are a starting policy, not a measurement: recorded truncations are the evidence for moving them. See "Output-token tiers" below. |
 | OpenAI `reasoning.context` conflict | Resolved | Settled from the vendor docs. Both paths now share one rule: pass validated values through, request `all_turns` only where documented, never send the field to xAI, and record the effective mode. See `pantheon-model-loop-evaluation.md` §4.3. |
 | Seat (conversation) records carry the model | Resolved | Recorded in `saveSeat`. A model change is refused unless it is an explicit, recorded reseat (`model_gen`). |
 | `all_turns` support on GPT-6 Astra, Sol and Luna | On Hold | The docs conflict on Astra and say nothing on Sol or Luna. These models use their default, and the recorded effective mode will show the answer once a live call is made. |
-| Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds cited figures for all 19 registry models, read 2026-11-16. Anything unstated stays UNRECORDED: xAI max output, and grok-build-0.1 and gemini-3.5-flash effort. |
+| Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds 20 records, read 2026-11-16: all 18 registry models, plus gemini-3.5-flash (deprecated, kept for the record) and the lane name gemini-3.8-flash-high. Anything unstated stays UNRECORDED: max output for grok-4.3, 4.5, 4.6, 4.7 and grok-build-0.1, and effort for grok-build-0.1 and gemini-3.5-flash. grok-4.20-multi-agent's output is a cited null: the model does not accept `max_tokens`. |
 | Correcting the code-vs-docs disagreements | Resolved | All applied, including replacing the deprecated gemini-3.5-flash with gemini-3.6-flash. That follows Google's deprecation notice, and live requests were already routed there. The known-drift list is now empty. |
 | Routing and escalation protocol | Resolved | See "Routing and escalation protocol" below. |
-| Moving direct-path models onto the frontier client | Resolved (6 models) | gpt-6-luna, gpt-6-sol, gpt-6.1-sol, claude-sonnet-5, claude-opus-5 and claude-opus-5-5 now run on the shared client with `providerDefaults`, so their requests keep the direct path's defaults. Not moved: claude-haiku (no effort dial; the Messages path would refuse it), gemini-3.6-flash (moving it would pull the agy seats off OAuth onto the metered API), and the xAI models without a cited output or effort record. See "Direct-path models on the frontier client" below. |
+| Moving direct-path models onto the frontier client | Resolved | gpt-6-luna, gpt-6-sol, gpt-6.1-sol, claude-sonnet-5, claude-opus-5 and claude-opus-5-5 now run on the shared client with `providerDefaults`, so their requests keep the direct path's defaults. Not moved: claude-haiku (no effort dial; the Messages path would refuse it), gemini-3.6-flash (moving it would pull the agy seats off OAuth onto the metered API), and the xAI models without a cited output or effort record. Those stay direct: see the next row and "Direct-path models on the frontier client" below. |
+| Models left on the direct path (claude-haiku-4-5, gemini-3.6-flash, grok-4.5, grok-4.6, grok-4.20-multi-agent, grok-build-0.1) | On Hold | Each needs a decision or a fact first. Haiku: nothing is gained until it needs the shared client. gemini-3.6-flash: a routing decision (OAuth agy seats vs the metered API). xAI: a cited output ceiling (and for grok-build, efforts); multi-agent accepts no `max_tokens`. |
 | Escalation for agy seats (CLI lane and agy-seat.py) | Resolved | Those transports take no effort setting, so the protocol no longer decides a `raise_effort` there that would be dropped. A rejection steps to the role's next harder rung, or stops. See "Escalation on agy seats" below. |
 | Signed transitions | On Hold | A governance decision on the pinned TELOS verifier, like the Q7 adjustment and P8/P9 admission. Unchanged. |
 | A possible move to gemini-3.8-flash | On Hold | It is held as an agy CLI lane name (`gemini-3.8-flash-high`), not a Gemini API id, so it cannot replace gemini-3.6-flash as the API default. Re-read Google's model list before deciding. |
@@ -300,13 +301,13 @@ Items 1 and 3 are done here.
 |---|---|
 | `TOKEN_TIERS` | easy 4,096 · medium 16,384 · hard 32,768. Marked provisional. |
 | `outputBudgetFor(model, tier)` | The tier's budget, capped at the model's documented output ceiling from `capability-facts.json`. An unknown tier throws. |
-| `defaultOutputFor(vendor, model, tier)` | A budget only where a path imposes its own default. The frontier client gets 65,536 (its own `long_decode` default). The direct Anthropic path gets the tier. Every other direct path gets `null`, so the provider's default applies. |
+| `defaultOutputFor(vendor, model, tier)` | A budget only where a path imposes its own default. A frontier model with its own long-decode policy (fable, astra, the Gemini 4 and Grok 4.3/4.7 entries) gets 65,536. Any Anthropic model otherwise gets the tier, including those moved onto the frontier client with `providerDefaults`. Every other path gets `null`, so the provider's default applies. |
 | `truncationEvidence(escalations)` | Groups recorded truncations by model and tier, with the budgets they were raised to and how many stopped at the ceiling. This is the evidence for moving a tier. |
 
 **Wiring.**
-- A ticket's `difficulty` (default `medium`) selects the tier for the run. An unknown value is refused.
-- The adapter's Messages default and `run-item.mjs`'s turn budget come from the tier. Each escalation record carries the tier it started from.
-- The swarm's seat default uses the same function.
+- A ticket's `difficulty` (default `medium`) selects the tier for `run-item.mjs`'s turns. `runSwarmLayer` takes the same `difficulty`. An unknown value, including an inherited key such as `toString`, is refused.
+- Escalation records from both paths carry the tier they started from, as a note that `verifyEscalation` keeps outside the digest.
+- The adapter's own default (`sendTurn` called with no budget and no ticket) is the medium tier.
 - An explicit budget still wins everywhere. A truncation is still escalated by the protocol (`raise_output` within the documented ceiling).
 
 **Why provisional.** No run has recorded truncations under these tiers yet. The values are a starting policy chosen to clear the 1,024 failure mode while staying well under every documented ceiling. They should be moved only on evidence from `truncationEvidence`, not on preference.
@@ -357,7 +358,9 @@ Pantheon suite: 805 pass, plus the 1 known environment failure.
 
 *Check.* `pantheon/tests/view-reseat.test.mjs` covers:
 - a switch refused without consent, accepted with it, recorded as `model_gen` 2, then continued without another reseat;
-- per-seat consent in a fan-out, and non-boolean consent refused;
+- per-seat consent in a fan-out: two seats both switched, consent for one, and only that one reseated;
+- non-boolean consent and inherited vendor names (`__proto__`) refused;
+- consent sent again on the model that already holds the seat is not announced as a reseat;
 - the refusal's code and the reseat event on the bus, folded into the seat state.
 
 Pantheon suite: 808 pass, plus the 1 known environment failure.
@@ -383,7 +386,7 @@ The router's default-effort table also stops attributing `high` to these models,
 **Not moved, and why.**
 - **claude-haiku-4-5:** it documents no effort parameter, and the shared client's Messages path requires one unless `providerDefaults` applies. It can move under the same flag later; nothing is gained today.
 - **gemini-3.6-flash:** Pantheon routes every non-frontier `agy_google` seat through the Antigravity transports, which use OAuth. Marking it frontier would move those seats onto the metered Gemini API. That is a routing decision, not a path cleanup.
-- **grok-4.5, grok-4.6, grok-4.20-multi-agent, grok-build-0.1:** output is UNRECORDED for all four, and effort too for grok-build. Multi-agent does not accept `max_tokens` at all.
+- **grok-4.5, grok-4.6, grok-4.20-multi-agent, grok-build-0.1:** output is UNRECORDED for grok-4.5, grok-4.6 and grok-build (and effort too for grok-build). grok-4.20-multi-agent's output is a cited null: it does not accept `max_tokens` at all.
 
 **Also changed.** A Responses reply with output but no id, under server continuity, is now refused with that reason ("no response id"), not the generic incomplete message.
 
@@ -395,9 +398,29 @@ The router's default-effort table also stops attributing `high` to these models,
   - undocumented efforts refused;
   - the long-decode models (fable, astra) unchanged.
 - In Pantheon:
-  - the registry walk lists the twelve frontier models and checks every model's terminal state on both transports;
+  - the registry walk lists the twelve frontier models and checks every model's terminal state, unary and streamed, on the path it actually runs (the frontier client or the direct adapter);
   - `role-seating` pins Opus 5.5's ladder starting from its documented default;
   - the transport tests use realistic Responses replies that carry output items.
 
 Pantheon suite: 808 pass, plus the 1 known environment failure. Model client: 48 pass. OPHANIM proof: 104 pass, with the same 21 failures that need TELOS.
+
+
+## Layered review of this round (2026-11-16)
+
+Four independent reviews of commits `6c4f8d3..` ran in parallel: three code reviewers on different models, each covering one area, and one auditor checking this document against the code. Each finding was reproduced or confirmed from the code before it was fixed.
+
+| Finding | Fix |
+|---|---|
+| The live view announced a reseat whenever consent was sent on an already-reseated seat. | It follows `sdkTurn`'s `model_reseated`. |
+| `__proto__` passed the view's vendor check. | Checked against own keys. |
+| The reseat confirm named seats but not models. | It shows held → requested model per seat. |
+| A non-JSON error body left an unhandled rejection in the page. | Caught. |
+| Stored escalation records (with `purpose`, `tier`, `slot` and `rev` notes) failed `verifyEscalation`'s digest check. | The notes are kept outside the record. |
+| Rewording a decision's `why` made every older record fail re-derivation. | Re-derivation compares the decision's substance (action, cause, from, to, basis). The digest still binds the text. |
+| `difficulty: "toString"` passed the tier check and produced `max_tokens: NaN`. | Own keys only, in `tiers.mjs`, `run-item.mjs` and `run-swarm.mjs`. |
+| `carriesEffort` decided lane models by name regardless of vendor. | Vendor and path only. |
+| Swarms ignored the ticket's difficulty, and their escalation records had no tier. | `runSwarmLayer({ difficulty })`; records carry the tier. |
+| Eight claims in this document were stale or overstated: model counts, UNRECORDED fields, test counts, default-output rows, test coverage wording, and non-standard statuses. | Corrected above. The unmoved models now have their own On Hold row. |
+
+Not changed: older records of a `raise_effort` on a non-frontier `agy_google` seat (for example gemini-3.6-flash) now re-derive as `step_rung` or `stop`. Those decisions were wrong: the effort was dropped. A verifier rightly refuses them. No caller verifies stored records today.
 

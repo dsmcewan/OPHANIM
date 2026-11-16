@@ -19,7 +19,8 @@ const ceilingOf = model => {
 
 /** The tier's budget for a model, capped at its documented ceiling. */
 export function outputBudgetFor(model, tier = "medium") {
-  const wanted = TOKEN_TIERS[tier];
+  // Own keys only: "toString" and the like are not tiers (they would yield a NaN budget).
+  const wanted = typeof tier === "string" && Object.hasOwn(TOKEN_TIERS, tier) ? TOKEN_TIERS[tier] : null;
   if (!wanted) throw new Error(`unknown token tier "${tier}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
   const ceiling = ceilingOf(model);
   const tokens = ceiling === null ? wanted : Math.min(wanted, ceiling);
@@ -36,7 +37,6 @@ export function defaultOutputFor(vendor, model, tier = "medium") {
   // with providerDefaults is treated as it was on the direct path (see model-client registry.mjs).
   if (cap && !cap.providerDefaults) return FRONTIER_DEFAULT_OUTPUT;
   if (vendor === "anthropic") return outputBudgetFor(model, tier).tokens;   // Messages requires max_tokens
-  if (cap?.surface === "genai") return cap.output;   // the client's long-decode bound, which is the documented ceiling
   return null;
 }
 

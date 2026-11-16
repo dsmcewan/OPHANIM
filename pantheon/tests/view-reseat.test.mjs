@@ -52,6 +52,13 @@ test("consent is per seat in a fan-out, and only booleans are accepted", async (
     await post({ seats: ["openai"], models: { openai: "gpt-6-sol" }, prompt: "one" });
     const r = await post({ seats: ["openai"], models: { openai: "gpt-6-luna" }, prompt: "two", reseats: { openai: true } });
     assert.deepEqual([r.body.results[0].ok, r.body.results[0].model_gen], [true, 2]);
+    // Two seats, both switched, consent for one: only that one is reseated; the other is refused.
+    await post({ seats: ["xai"], models: { xai: "grok-4.6" }, prompt: "one" });
+    const both = await post({ seats: ["openai", "xai"], models: { openai: "gpt-6-sol", xai: "grok-4.5" }, prompt: "three",
+      reseats: { openai: true } });
+    const by = Object.fromEntries(both.body.results.map(x => [x.vendor, x]));
+    assert.deepEqual([by.openai.ok, by.openai.model_gen], [true, 3]);
+    assert.deepEqual([by.xai.ok, by.xai.code], [false, "MODEL_CHANGED"], "consent for one seat never reseats another");
   });
 });
 
