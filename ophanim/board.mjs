@@ -173,7 +173,7 @@ export async function publishWorkerCandidate({board,ref,id,worker,attempt,candid
 // rewrite of accepted obligations, confirmed effects, specs or releases.
 // Assignment metadata on work.started is recomputed from the wave's base state.
 export const CHAIN_LIMIT=100000;
-const ASSIGNMENT='ophanim.assignment.sorted-id-round-robin/v1';
+const ASSIGNMENT='ophanim.assignment.sorted-id-round-robin/v1',REFILL='ophanim.assignment.sorted-id-refill/v1';
 export function verifyRuntimeChain(stateDir,{head}={}){
   const root=boardPath(stateDir);
   const store=openStore(root,{readOnly:true}),refs=openRefs(root,{store,readOnly:true});
@@ -226,11 +226,15 @@ export function verifyRuntimeChain(stateDir,{head}={}){
         if(a.rank===0){waveBase=parent;wave=a.readySetSha;}
         else if(!waveBase||wave!==a.readySetSha)fail(cid,'assignment rank outside its recorded wave');
         const base=waveBase.obligations;
-        const ready=Object.values(base).filter(row=>row.status==='pending'&&row.spec.dependsOn.every(dep=>base[dep]?.status==='accepted')).map(row=>row.spec.id).sort();
+        // Refill excludes attempts still in flight; each must be a started row.
+        const busy=a.policy===REFILL?(Array.isArray(a.inFlight)?a.inFlight:null):[];
+        if(!busy)fail(cid,`refill assignment must record attempts in flight: ${event.id}`);
+        const busyValid=busy.every(id=>typeof id==='string'&&base[id]?.attempt>=1)&&canonical(busy)===canonical([...new Set(busy)].sort());
+        const ready=Object.values(base).filter(row=>row.status==='pending'&&!busy.includes(row.spec.id)&&row.spec.dependsOn.every(dep=>base[dep]?.status==='accepted')).map(row=>row.spec.id).sort();
         const row=base[event.id],workers=state.releases[state.activeRelease].workers;
         const eligible=row?workers.filter(w=>w.kinds.includes(row.spec.kind)&&w.scopes.includes(row.spec.scope)):[];
-        if(a.policy!==ASSIGNMENT||a.readySetSha!==digest(ready)||a.ready!==ready.length||ready[a.rank]!==event.id||
-          !Number.isInteger(a.slots)||a.rank>=a.slots||!eligible.length||a.choice!==row.releaseAttempts%eligible.length||eligible[a.choice].id!==event.worker)
+        if(![ASSIGNMENT,REFILL].includes(a.policy)||(a.policy===ASSIGNMENT&&a.inFlight!==undefined)||!busyValid||a.readySetSha!==digest(ready)||a.ready!==ready.length||ready[a.rank]!==event.id||
+          !Number.isInteger(a.slots)||a.rank+busy.length>=a.slots||!eligible.length||a.choice!==row.releaseAttempts%eligible.length||eligible[a.choice].id!==event.worker)
           fail(cid,`assignment does not follow from the recorded ready set: ${event.id}`);
         assignmentsChecked++;
       }

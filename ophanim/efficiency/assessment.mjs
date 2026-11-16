@@ -96,6 +96,8 @@ function ineligible({state,trace,output,scope,request,priorRuntime}) {
   if(output.convergence==='no_change'||!output.dispatches)return 'no-new-dispatch';
   if(state.activeRelease!=='baseline')return 'release-outside-fixture-replay-contract';
   if(output.slots!==1)return 'slot-policy-outside-admitted-experiment';
+  // The admitted experiment compares wave scheduling with full handoff only.
+  if((request.schedule??'wave')!=='wave'||(request.handoffVerification??'full')!=='full')return 'policy-outside-admitted-experiment';
   if(priorRuntime||request.fault)return 'requires-fresh-uninterrupted-baseline';
   if(trace.scopeSha!==scope.scopeSha)return 'scope-differs-from-fresh-request';
   if(trace.obligations.length>MAX_OBLIGATIONS)return 'fixture-replay-size-budget';

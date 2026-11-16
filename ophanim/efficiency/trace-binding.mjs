@@ -133,7 +133,19 @@ export function verifyAdmissionTrace(trace,snapshot,{legacy=false}={}){
   const gates=afterOpen.filter(event=>['gate.accepted','gate.rejected'].includes(event.type));
   const gatesByAttempt=new Map();
   for(const gate of gates){const id=key(gate);if(!gatesByAttempt.has(id))gatesByAttempt.set(id,[]);gatesByAttempt.get(id).push(gate);}
-  const expectedReplays=new Map(Object.values(rows).filter(row=>row.status==='accepted'&&state.events.indexOf(acceptedEvent(state,row))<openedIndex).map(row=>[key({id:row.spec.id,attempt:row.accepted.attempt}),row]));
+  const acceptedBeforeOpening=new Set(Object.values(rows).filter(row=>row.status==='accepted'&&state.events.indexOf(acceptedEvent(state,row))<openedIndex).map(row=>row.spec.id));
+  let replayIds=acceptedBeforeOpening;
+  if(opened.handoff!==undefined){
+    // Frontier handoff: only accepted rows that work still open at the
+    // opening consumes were re-verified; recompute that set from the board.
+    if(opened.handoff?.mode!=='frontier'||!Array.isArray(opened.handoff.verified))fail('unknown committed handoff verification mode');
+    const frontier=new Set();
+    for(const row of Object.values(rows))if(!acceptedBeforeOpening.has(row.spec.id))
+      for(const dep of row.spec.dependsOn)if(acceptedBeforeOpening.has(dep))frontier.add(dep);
+    if(!same(opened.handoff.verified,[...frontier].sort()))fail('committed handoff frontier differs from the board');
+    replayIds=frontier;
+  }
+  const expectedReplays=new Map(Object.values(rows).filter(row=>replayIds.has(row.spec.id)).map(row=>[key({id:row.spec.id,attempt:row.accepted.attempt}),row]));
   const usedReplays=new Set();let gateChecks=0;
   for(const check of trace.verifications){
     if(typeof check.ok!=='boolean'||typeof check.candidateSha!=='string')fail('exact verification envelope required');

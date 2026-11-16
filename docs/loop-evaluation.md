@@ -1,6 +1,6 @@
 # Loop evaluation: OPHANIM against the loop operating principle
 
-Status: evaluation and proposals. P1 to P7 are implemented on this branch
+Status: evaluation and proposals. All nine proposals are implemented on this branch; P8 and P9 are opt-in
 (`ophanim/runtime.mjs`, `ophanim/cli.mjs`, `ophanim/efficiency/assessment.mjs`,
 `ophanim/governance.mjs`, `ophanim/board.mjs`, `ophanim/proof.mjs`; tests in
 `ophanim/tests/loop-equilibrium.test.mjs`).
@@ -190,12 +190,23 @@ Once `verify` runs the full chain and the TELOS sweep (P2), the per-run step-1 s
 `checkDependencyContext` still runs at every `finish`.
 
 - *Keeps:* every value a worker consumes is still TELOS-verified before use. This changes the *runtime* cost, not the trust model.
+- *Implemented as an opt-in mode:* `runRuntime({handoffVerification:'frontier'})`, or `demo --handoff-verification frontier`; the default stays `'full'`.
+  - Before skipping anything, frontier mode runs `verifyRuntimeChain` against the controller head. The local checks still run for every accepted row: publication lineage, dependency context and output digests.
+  - The `runtime.opened` event records `handoff:{mode:'frontier',verified:[ids]}`. The trace binding recomputes that frontier from the board and requires replay verifications for exactly those rows.
+  - Runs in frontier mode are excluded from the 1→3 slot admission experiment (`policy-outside-admitted-experiment`).
+- *Measured (stub authority):* adding one dependent to an accepted 18-step chain made 19 TELOS calls in full mode and 2 in frontier mode (1 handoff check and 1 new acceptance). A reused settled head makes no TELOS calls in frontier mode.
+- *Trade-off to note:* at runtime, frontier mode no longer re-runs TELOS on governance records (plans, ledgers) for skipped rows. The chain check proves those rows are unchanged since acceptance; it does not re-check the TELOS-side files. `verify` still re-runs TELOS for every accepted row.
 - *Validate:* the `verificationCalls` counter in `output.measurements` falls on resume scenarios, and `prove` and `verify` still pass. Gate this proposal behind P2, and treat it as an efficiency candidate under the existing admission discipline rather than a default flip.
 
 ### P9. Refill-on-completion scheduling as a qualified candidate (G5, throughput half)
 
 Don't change the default. Add a second scheduler policy, `ophanim.scheduler-policy/v2` with `mode:'refill'`. When any job settles, the policy recomputes the ready set and fills free slots in the same sorted-id order. Submit it through the existing efficiency admission path (replay, TELOS qualification, signed scoped decision) exactly as the 1→3 slot experiment works today. That keeps the optimization inside the same loop and still records P4's `readySetSha`, so it remains deterministic given completion order.
 
+- *Implemented as an opt-in schedule:* `runRuntime({schedule:'refill'})`, or `demo --schedule refill`; the default stays `'wave'`.
+  - Rows still in flight are excluded from the ready set, and each `work.started` assignment records them as `inFlight` under the policy `ophanim.assignment.sorted-id-refill/v1`.
+  - `verifyRuntimeChain` recomputes each refill assignment the same way, and also requires `rank + inFlight < slots`. `runtime.opened` records `schedule:'refill'`.
+- *Measured (stub authority, 3 slots):* 12 independent tasks (a quarter of them 80 ms, the rest 10 ms) followed by a join took 269–330 ms with refill and 442–479 ms with wave, over three runs each. Accepted outputs are identical.
+- *Not done:* admission through the signed efficiency gate. The scheduler authority (`governance/check-efficiency.mjs`) is pinned and admits only the 1→3 slot experiment. Admitting refill would mean changing that pinned verifier and its digests, which is a governance decision left to the maintainers. Refill runs are therefore excluded from that experiment rather than qualified by it.
 - *Validate:* `admission-proof.mjs report` with the refill policy, and the TELOS `check-efficiency` contrast against the wave baseline.
 
 ## 5. Suggested order
