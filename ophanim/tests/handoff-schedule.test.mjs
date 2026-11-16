@@ -16,6 +16,8 @@ function authority() {
     authorizePlan:async()=>({ok:true}),
     verifyCandidate:async({candidate,obligation,worker,evidence})=>{
       const startedAt=Date.now();
+      // Real verification takes time: replays before runtime.opened then end in an earlier millisecond.
+      await new Promise(resolve=>setTimeout(resolve,2));
       const request={candidate:{id:candidate.id,sha256:candidate.sha256,output:candidate.output},obligation,worker,evidence};
       const planRef='sha256:'+digest({plan:request});
       const result={ok:true,planRef,obligationId:obligation.id,obligationSha:digest(obligation),candidateSha:candidate.sha256,
@@ -64,10 +66,13 @@ function traceFor(snapshot,verifications){
       inputBytes:Buffer.byteLength(canonical(inputs)),contextBytes:Buffer.byteLength(canonical({obligation:brief,inputs,priorAttempts:start.attempt-1}))};
   });
   const outputs=Object.fromEntries(rows.filter(row=>row.status==='accepted').map(row=>[row.spec.id,row.accepted.output]));
+  const startedAt=Math.min(opened.atMs,...verifications.map(v=>v.startedAt));
   return {schema:'ophanim.efficiency.trace/v1',boardCommit:snapshot.commit,stateSha:digest(state),configuration,policy,
     scopeSha:applicabilityFingerprint({obligations,configuration}),release:state.releases[state.activeRelease],obligations,accepted,
-    events:after.map(eventValue),attempts,verifications,window:{startedAt:opened.atMs,endedAt:settled.atMs},
-    original:{convergence:settled.convergence,slots:1,outputSha:digest(outputs),effectSha:digest([]),durationMs:settled.atMs-opened.atMs,modelCalls:0}};
+    // As in a real assessment, the window opens with the run, which precedes the handoff
+    // verifications that happen before runtime.opened; it may not start at the opening event.
+    events:after.map(eventValue),attempts,verifications,window:{startedAt,endedAt:settled.atMs},
+    original:{convergence:settled.convergence,slots:1,outputSha:digest(outputs),effectSha:digest([]),durationMs:settled.atMs-startedAt,modelCalls:0}};
 }
 
 // a, b accepted first; then c (needs a) is added. Only a is on the frontier.
