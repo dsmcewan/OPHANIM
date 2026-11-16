@@ -107,11 +107,28 @@ Each proposal is a small was/is change whose acceptance the existing gates or te
   - before `ship`, call `enforce(shipClaim(...))`, the bridge `integrate.mjs` already provides and nothing calls.
 - A refusal is a recorded `run.error` at that stage and nothing moves. These are the existing declarations, put on the path that produces evidence.
 - *Check:* existing `team-*` and `board-run-item` tests, plus one test where a stage is attempted from a board status whose pattern excludes its chair.
+- **Implemented**, in `src/board/stage-gate.mjs`, and called from `runOpenItem`:
+  - **plan** must run under `lead@orch`, with the `plan` trigger ready.
+  - **work** must run under `impl@build`, with the `work` trigger ready for every slot's item, checked before any lease is taken.
+  - **critique** must run under `check@review`, with the `critique` trigger ready for these exact offered bytes. Law 3 is then checked against the reviewer that actually answered.
+  - **ship**: `assertLaw(shipClaim(...))`, so law 6 and law 7 run on facts the ship gates derive. A law check where no law applied is refused, not passed.
+  - A refusal is a `StageRefused`, recorded as that stage's `run.error`, and nothing moves.
+- **Corrected from the proposal:** the intake scouts are not `scout@opt`. They run before the board exists, with status `intake` and no pattern. They are the `INTAKE` fan-out, already bounded by `assertFanOutIsOutside`. `scout@opt` is the on-request explore chair the lead opens when the board is stuck, and `runOpenItem` never runs that mode. So the scout clause has no stage to apply to.
+- **On resume**, the plan and work gates do not apply, because those stages are not re-entered from scheduling. The critique and ship gates apply on every run.
 
 **Q4. Require the controller's predicate before each stage (fixes E2, without restructuring).**
 - Generalise the one existing check (`sched.ready.some(r => r.ks === "work")`). Before critique and before integrate, require the matching trigger (`critique`, `integrate`) in `schedule().ready` for the item being handled.
 - The stage order stays the same. A stage the controller would not schedule fails closed with the controller's own drop reason.
 - *Check:* `board-run-item` tests. A deliberately unbound repro must make the integrate stage refuse before `ship()` is called.
+- **Implemented.**
+  - Before `ship()`, the controller must schedule `integrate` for every built item. Otherwise the run is refused through the same record a gate refusal uses: `shipped:false`, the dry-run ship `gates`, and a `ship_why` naming the unscheduled items, the controller's reason and the failing gates.
+  - Integrate candidates that `schedule()` deferred only because another candidate already claims the shared `tree` resource still count as eligible, because `ship()` integrates every slot in one transaction.
+- *Check:* `tests/board-stage-gate.test.mjs` covers four cases:
+  - a planning board admits plan and refuses work and critique;
+  - an executing board admits work only for its ready item, and refuses a second plan and a ship;
+  - same-lab and assigner-lab reviews are refused by law 3, and an unknown action is never a pass;
+  - a full run whose acceptance never passes is refused at integrate. Its `ship_why` names the item and the TESTS gate, the gates are still recorded, and nothing is exported as certified.
+- **Results:** Pantheon's full suite gives 774 pass and the same 1 environment-only failure. OPHANIM is unchanged.
 
 **Q5. Keep the seating table inside the registry (fixes E5).**
 - Add a `transport` section to `models.json` listing agy-lane model ids (`claude-sonnet-4-6`, `claude-opus-4-6-thinking`) under their CLI lane. Add a config test: every model named in `SEATING` resolves either in the registry or in that section.
@@ -134,7 +151,7 @@ Each proposal is a small was/is change whose acceptance the existing gates or te
 - A seating change remains a signed, scoped decision, admitted exactly like the 1 → 3 slot policy. Until the TELOS-side verifier admits that dimension (it is pinned), Q7 produces ranked questions and evidence only, never a seating change.
 - *Check:* `investigate --state` reproduces the receipt from the board.
 
-Status: Q1, Q2 and Q5 are implemented on this branch. Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
+Status: Q1, Q2, Q3, Q4 and Q5 are implemented on this branch. Pantheon full suite, run locally with bubblewrap installed: 770 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects.
 
 Suggested order: Q1, Q2, Q5 (record facts) → Q3, Q4 (gate on the declared contracts and on the controller) → Q6 → Q7 (measured adjustment). After each one, `npm test` on the Pantheon suite (CI runs the `bwrap` cases this sandbox cannot), and for Q7 the OPHANIM `prove`, `verify` and `investigate` paths.
 

@@ -19,7 +19,8 @@ import { sdkTurn } from "../sdk/seat-sdk.mjs";
 import { openBoard } from "./index.mjs";
 import { publish, treeSlots } from "./dag.mjs";
 import { merge } from "./merge.mjs";
-import { ship } from "./integrate.mjs";
+import { ship, shipClaim } from "./integrate.mjs";
+import { assertStage, stageCheck, assertLaw } from "./stage-gate.mjs";
 import { boardState, boardStatus, schedule, testsBrief, acceptanceStatus } from "./controller.mjs";
 import { project, PROJECTION_FOR_ROLE } from "./project.mjs";
 import { seatingPlan, seatingReport, assertReviewCutsAcross, assertFanOutIsOutside, INTAKE,
@@ -539,6 +540,7 @@ export async function runOpenItem(spec, opts = {}) {
         const { slice } = project(board.store, board.refs.resolve(REF), PROJECTION_FOR_ROLE.planner);
         const p = promptFor("planner", { ticket: slice.slots.ticket.payload.goal },
           NO_TOOLS + "Reply with exactly one line and nothing else: TITLE: <a one-line work item title for the single change this ticket asks for>");
+        assertStage({ ...board, ref: REF, stage: "plan" });
         const { text, seat: ran } = await roleTurn({ role: "planner", purpose: "plan", prompt: p.prompt });
         plannerVendor = ran.vendor;
         const vendorChanged = ran.vendor !== seat.vendor;
@@ -564,8 +566,10 @@ export async function runOpenItem(spec, opts = {}) {
         const mg = await merge({ ...board, into: REF, from: planWip, author: CONTROLLER, only: CARRY, msg: "adopt the plan" });
         if (!mg.ok) throw new Error(`adopt: ${mg.why}`);
       }
-      const sched = schedule({ ...board, ref: REF });
-      check(sched.ready.some(r => r.ks === "work"), "the controller scheduled work from board state");
+      // Every slot's item must be scheduled as work, through impl@build, before any lease is taken.
+      const workGate = assertStage({ ...board, ref: REF, stage: "work" });
+      for (const sl of SLOTS) assertStage({ ...board, ref: REF, stage: "work", match: r => r.item === itemKeyFor(sl) });
+      check(workGate.ok, "the controller scheduled work from board state");
 
       // ---------------------------------------------------------------- work
       enter("work", `up to ${revisions} revisions`);
@@ -781,7 +785,10 @@ export async function runOpenItem(spec, opts = {}) {
         "Attack this change. Name the strongest specific flaw: a behaviour the ticket asked for that is missing, an existing " +
         "behaviour it broke, or a case the acceptance test does not cover that would fail. If the executed acceptance failed, " +
         "you must request changes. End your reply with a line reading exactly `VERDICT: approve` or `VERDICT: request_changes`.");
+      assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
       const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, avoid: [built.seat.vendor, plannerVendor], extra: { tokens: 4000 } });
+      // Law 3 on the reviewer that actually answered, not the one paired in advance.
+      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor } });
       if (reviewed.seat.vendor !== seat.vendor) {
         assertReviewCutsAcross({ assigner: { vendor: plannerVendor }, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
@@ -838,7 +845,20 @@ export async function runOpenItem(spec, opts = {}) {
       }
       progress({ event: "staged", detail: `${BUILT.length} slots staged onto ${shipFrom} for one ship transaction` });
     }
-    const r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER });
+    // The controller must schedule integrate for every built item, and law 7 must hold on facts the
+    // ship gates derive. A ship the controller would not schedule is refused here with its reason,
+    // through the same record a gate refusal takes; nothing moves.
+    const integrate = stageCheck({ ...board, ref: REF, stage: "ship" });
+    const unscheduled = (BUILT ?? []).filter(c => !integrate.candidates.some(r => r.item === c.itemKey));
+    let r;
+    if (unscheduled.length) {
+      const dry = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, dryRun: true });
+      r = { ok: false, gates: dry.gates, why: `the controller did not schedule integrate for ${unscheduled.map(c => c.itemKey).join(", ")}` +
+        ` (${integrate.dropped.join("; ") || integrate.why})${dry.ok ? "; the ship gates alone would have passed" : `; ship gates: ${dry.why}`}` };
+    } else {
+      assertLaw(await shipClaim({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER }));
+      r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER });
+    }
     for (const g of r.gates) progress({ event: "gate", stage: g.gate, detail: g.ok ? "pass" : `REFUSE — ${g.why}` });
     progress({ event: "ship", detail: r.ok ? `shipped ${r.shipped.join(", ")} as ${shortCid(r.commit)}` : `refused: ${r.why}` });
     run.gates = r.gates; run.shipped = r.ok; run.ship_why = r.ok ? null : r.why;
