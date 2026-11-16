@@ -8,8 +8,10 @@ import { createHash } from "node:crypto";
 import { occupancyTrail } from "./occupancy.mjs";
 
 export const CONTRIBUTIONS_SCHEMA = "pantheon.chair-contributions/v1";
-// Mode -> chair. `explore` here is the intake fan-out, reported under the scout chair it would occupy.
-export const CHAIR_OF_MODE = Object.freeze({ plan: "lead@orch", work: "impl@build", critique: "check@review", explore: "scout@opt" });
+// Mode -> chair. The scout chair covers the intake fan-out and the board's explore/refute forks; the
+// judge chair covers syntheses (board/run-swarm.mjs). All five chairs of the 1 + 4 arrangement report.
+export const CHAIR_OF_MODE = Object.freeze({ plan: "lead@orch", work: "impl@build", critique: "check@review",
+  explore: "scout@opt", refute: "scout@opt", synthesize: "arbiter@judge" });
 
 const stable = v => Array.isArray(v) ? `[${v.map(stable).join(",")}]`
   : v && typeof v === "object" ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`
@@ -45,7 +47,7 @@ export function chairContributions({ store, refs }) {
   const independentRuns = artifact => repros.filter(r => (r.links?.derived_from ?? []).includes(artifact.cid) &&
     (r.author?.vendor === "controller" || (r.author?.vendor && r.author.vendor !== artifact.author?.vendor)));
 
-  const chairs = Object.values(CHAIR_OF_MODE).map(chair => {
+  const chairs = [...new Set(Object.values(CHAIR_OF_MODE))].map(chair => {
     const mine = seat.filter(e => CHAIR_OF_MODE[e.author.mode] === chair);
     const occupants = {};
     for (const e of mine) {
@@ -54,9 +56,9 @@ export function chairContributions({ store, refs }) {
     }
     // A chair instance is the chair on one slot (work, critique) or one fork (scout): reseats are per instance.
     const instanceOf = e => e.kind === "artifact" ? `slot:${e.payload.slot}` : e.kind === "critique" ? `slot:${e.payload?.target?.slot}`
-      : e.author.mode === "explore" ? `fork:${e.author.vendor}` : "ticket";
+      : ["explore", "refute", "synthesize"].includes(e.author.mode) ? `${e.author.mode}:${e.author.vendor}` : "ticket";
     const instances = {};
-    for (const e of mine.filter(e => ["artifact", "critique", "plan", "search"].includes(e.kind))) (instances[instanceOf(e)] ??= []).push(e);
+    for (const e of mine.filter(e => ["artifact", "critique", "plan", "search", "hypothesis"].includes(e.kind))) (instances[instanceOf(e)] ??= []).push(e);
     let reseats = 0;
     const inconsistent = [], unrecorded = [];
     for (const [instance, list] of Object.entries(instances).sort(([a], [b]) => a.localeCompare(b))) {
@@ -85,8 +87,11 @@ export function chairContributions({ store, refs }) {
     } else if (chair === "lead@orch") {
       metrics.plans = mine.filter(e => e.kind === "plan").length;
       metrics.rework = Math.max(0, metrics.plans - 1);
+    } else if (chair === "arbiter@judge") {
+      metrics.syntheses = mine.filter(e => e.kind === "hypothesis").length;
     } else {
-      metrics.forks = Object.keys(instances).length;
+      metrics.forks = Object.keys(instances).filter(k => !k.startsWith("refute:")).length;
+      metrics.refutations = mine.filter(e => e.author.mode === "refute").length;
     }
     return { chair, occupants: Object.values(occupants).sort((a, b) => occupant(a).localeCompare(occupant(b))), metrics };
   });

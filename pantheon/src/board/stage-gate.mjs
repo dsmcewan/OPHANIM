@@ -18,6 +18,10 @@ export const STAGES = Object.freeze({
   work:     { chair: "impl@build",   ks: "work" },
   critique: { chair: "check@review", ks: "critique" },
   ship:     { chair: null,           ks: "integrate" },   // the controller's transaction, not a chair's
+  // The swarm layers, on the board: on-request chairs, opened by the lead and capped (team/roster.mjs).
+  explore:    { chair: "scout@opt",     ks: "explore" },
+  refute:     { chair: "scout@opt",     ks: "refute" },
+  synthesize: { chair: "arbiter@judge", ks: "synthesize" },
 });
 
 export class StageRefused extends Error {

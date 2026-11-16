@@ -11,9 +11,10 @@ import {selectInvestigation} from './select.mjs';
 
 const PROJECTION_SCHEMA='pantheon.chair-contributions/v1';
 const HEX=/^[a-f0-9]{64}$/;
-const CHAIRS=['lead@orch','impl@build','check@review','scout@opt'];
+const CHAIRS=['lead@orch','impl@build','check@review','scout@opt','arbiter@judge'];
 // Work flows down the chain: scouts inform the plan, the plan assigns the build, the check reads the build.
-const DEPENDS={'lead@orch':['scout@opt'],'impl@build':['lead@orch'],'check@review':['impl@build'],'scout@opt':[]};
+// The judge reads the scouts' forks.
+const DEPENDS={'lead@orch':['scout@opt'],'impl@build':['lead@orch'],'check@review':['impl@build'],'scout@opt':[],'arbiter@judge':['scout@opt']};
 const fnId=chair=>chair.replace('@','.');
 const fail=message=>{throw Error(`Chair investigation: ${message}`);};
 const count=value=>Number.isSafeInteger(value)&&value>=0;

@@ -7,14 +7,14 @@ function projection({implRework=2,checkRework=1,reseats=0}={}){
   const row=(chair,metrics)=>({chair,occupants:[{vendor:'openai',model:'gpt-6-sol',entries:2}],metrics:{entries:2,reseats,...metrics}});
   return {schema:'pantheon.chair-contributions/v1',boardSha:hex('b'),projectionSha:hex('a'),
     limits:{ranksModels:false,authorizesSeatChange:false,basis:'derived'},
-    chairs:[row('lead@orch',{plans:1,rework:0}),row('impl@build',{rework:implRework}),row('check@review',{rework:checkRework}),row('scout@opt',{forks:1})]};
+    chairs:[row('lead@orch',{plans:1,rework:0}),row('impl@build',{rework:implRework}),row('check@review',{rework:checkRework}),row('scout@opt',{forks:1}),row('arbiter@judge',{syntheses:0})]};
 }
 const economics={expectedConvergences:10,applicability:0.8,confidence:0.7,decisionChangeProbability:0.5,
   avoidableLossMsPerConvergence:60000,expectedCandidateGainMsPerConvergence:null,rolloutMs:1000,regressionMs:1000,opportunityCostMs:1000,sourceSha:hex('c')};
 
 test('each chair becomes one function whose observations are the board-derived counts',()=>{
   const models=chairModels(projection());
-  assert.deepEqual(models.functions.map(fn=>fn.id),['lead.orch','impl.build','check.review','scout.opt']);
+  assert.deepEqual(models.functions.map(fn=>fn.id),['lead.orch','impl.build','check.review','scout.opt','arbiter.judge']);
   assert.equal(models.traceSha,hex('a'));
   assert.deepEqual(models.functions.find(fn=>fn.id==='impl.build').observations.find(o=>o.metric==='rework').value,2);
   assert.equal(chairModels(projection({implRework:9})).scopeSha,models.scopeSha,'the scope is the arrangement, not one board');

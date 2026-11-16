@@ -241,3 +241,45 @@ All seven proposals add checks or record facts that already exist at runtime, so
 
 **Not covered yet:**
 - **Stepping into the agy CLI lane.** The lane takes a model but no effort, so a stepped-to lane model runs at its own default.
+
+
+## Swarms on the board (implemented 2026-11-16)
+
+**Priority.** The remaining items were ranked by the framework's own rule: converged dependencies first, then what each one unblocks.
+
+1. **Swarms on the board.** Every dependency had converged: controller triggers, chairs and laws, the Q3/Q4 stage gates, the protocol, and Q1 model recording. It unblocks measurement across all five chairs.
+2. **Token tiers.** Converged, except that its values are a policy choice.
+3. **Measured optimization across all chairs.** Depends on item 1.
+4. **Signed transitions.** On Hold as a governance decision.
+
+Items 1 and 3 are done here.
+
+**The gap.**
+- `swarm/layered.mjs` ran explore → refute → synthesize only from scripts: off the board, ungated, unrouted, unescalated.
+- The controller already scheduled exactly those modes on the board, and nothing executed them.
+
+**Implementation.** `pantheon/src/board/run-swarm.mjs` exports `runSwarmLayer`. Each call is one transition, and it re-reads the board:
+
+| Step | Rule |
+|---|---|
+| choose | The first swarm step the controller schedules (explore, then refute, then synthesize). If none is scheduled, it returns `done` and nothing changes. |
+| gate | The stage gate must find the step's chair in the board's pattern. Law 5 must hold: opened by `lead@orch` and within the chair's turn cap. Turns are counted from round numbers already on the board. |
+| explore (status `stuck`) | Distinct labs answer concurrently. Each fork is an isolated hypothesis on that lab's own `refs/iso/<vendor>/explore`, with its model recorded. The board ref does not move. |
+| synthesize (status `split` only) | The judge comes from a lab that produced no fork; otherwise it is refused and the human takes the seat. The synthesis cites the forks it read (`supports`), and the controller carries it to the board as an open claim. |
+| refute (an open board claim exists) | A lab other than the claim's author contradicts it (`contradicts`), in isolation. |
+| escalate | A cut-off turn goes through the protocol (`raise_output` within the documented ceiling), and the decision records are returned. |
+
+**Following the existing laws.**
+- A stuck board rents the timeboxed swarm (`scout@opt` only, cap 3). It never opens the judge, and it hands back to the lead at the cap.
+- Synthesis needs a recorded `split` decision, which a human or the controller writes.
+
+**Measurement across all five chairs.** `contributions.mjs` now maps refute to `scout@opt` and synthesize to `arbiter@judge`, so the projection reports all five chairs. Scout reports forks and refutations; judge reports syntheses. OPHANIM's `chairs.mjs` ranks across all five.
+
+*Check.* `pantheon/tests/board-swarm.test.mjs` covers:
+- no swarm step on an executing board;
+- isolated forks per lab with their models;
+- the scout cap refusing a fourth round, and a stuck board refusing the judge;
+- a split board getting a synthesis from an uninvolved lab, carried to the board and then refuted in isolation;
+- the judge refused when every candidate lab made a fork;
+- a cut-off turn escalated and verified;
+- all five chairs in the projection, verified by recomputation and ranked.
