@@ -54,7 +54,9 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
         onEvent: e => bus.publish(e),
       });
       if (!r.ok) bus.publish({ seat: label ?? vendor, type: "error", at: Date.now(), text: r.why, ...(r.code ? { code: r.code } : {}) });
-      else if (reseat === true && (r.seat?.model_gen ?? 1) > 1 && r.seat?.model === (model ?? r.seat.model)) {
+      // sdkTurn says exactly whether THIS turn moved the seat to another model; a seat already reseated
+      // earlier, sent consent again on an unchanged model, did not reseat now.
+      else if (r.model_reseated === true) {
         bus.publish({ seat: label ?? vendor, type: "reseat", at: Date.now(), model: r.seat.model, model_gen: r.seat.model_gen,
           text: `reseated: ${r.seat.model} now holds this conversation (model_gen ${r.seat.model_gen})` });
       }
@@ -198,7 +200,8 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
       const { vendor, prompt, purpose, model, models, seats, label, labels, reseat, reseats } = parsed;
       const targets = Array.isArray(seats) && seats.length ? seats : (vendor ? [vendor] : []);
       if (!targets.length || !prompt) return json(res, 400, { error: "need prompt and vendor (or seats[])" });
-      for (const v of targets) if (typeof v !== "string" || !ADAPTERS[v]) return json(res, 400, { error: `unknown vendor "${v}"` });
+      // Own keys only: "__proto__", "constructor" and the like are not vendors.
+      for (const v of targets) if (typeof v !== "string" || !Object.hasOwn(ADAPTERS, v)) return json(res, 400, { error: `unknown vendor "${v}"` });
       if (badId(purpose) || badId(label)) return json(res, 400, { error: "purpose and label must be identifiers (letters, digits, . _ : -)" });
       for (const v of targets) if (badId(labels?.[v])) return json(res, 400, { error: `label for ${v} must be an identifier` });
       if (reseat !== undefined && typeof reseat !== "boolean") return json(res, 400, { error: "reseat must be a boolean" });
@@ -222,6 +225,11 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
           why: results[i].status === "rejected" ? String(results[i].reason) : (results[i].value?.why ?? null),
           code: results[i].status === "fulfilled" ? (results[i].value?.code ?? null) : null,
           model_gen: results[i].status === "fulfilled" ? (results[i].value?.seat?.model_gen ?? null) : null,
+          // For a refused switch: which model holds the conversation, and which one was asked for, so the
+          // operator approving a reseat sees what they approve.
+          ...(results[i].status === "fulfilled" && results[i].value?.code === "MODEL_CHANGED" ? {
+            held_model: results[i].value.seat?.model ?? null,
+            model: models?.[v] ?? (targets.length === 1 ? model : undefined) ?? ADAPTERS[v].default_model ?? null } : {}),
         })),
       });
     }

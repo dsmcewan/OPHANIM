@@ -191,13 +191,16 @@ function App() {
     if (!prompt.trim()) return;
     setBusy(true);
     try {
+      // A non-JSON error body is reported as no results rather than an unhandled rejection.
       const post = body => fetch("/turn", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(body) }).then(r => r.json());
+        body: JSON.stringify(body) }).then(r => r.json()).catch(() => ({ results: [] }));
       const r = await post({ seats: specs.map(s => s.vendor), prompt });
       // A seat held by another model is not switched silently: the operator confirms the reseat,
       // and only those seats are re-sent, with the consent recorded per seat.
-      const held = (r.results ?? []).filter(x => x.code === "MODEL_CHANGED").map(x => x.vendor);
-      if (held.length && window.confirm(`Reseat ${held.join(", ")} on the new model? Each conversation was held by another model; the switch is recorded.`)) {
+      const refused = (r.results ?? []).filter(x => x.code === "MODEL_CHANGED");
+      const held = refused.map(x => x.vendor);
+      const lines = refused.map(x => `${x.vendor}: ${x.held_model ?? "?"} -> ${x.model ?? "?"}`).join("\n");
+      if (held.length && window.confirm(`Reseat these seats? Each conversation is held by another model; the switch is recorded.\n\n${lines}`)) {
         await post({ seats: held, prompt, reseats: Object.fromEntries(held.map(v => [v, true])) });
       }
     } finally { setBusy(false); }

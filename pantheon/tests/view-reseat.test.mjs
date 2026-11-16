@@ -36,6 +36,7 @@ test("switching a seat's model needs consent, and the consent is recorded", asyn
     const refused = await post({ vendor: "openai", model: "gpt-6-luna", prompt: "two" });
     assert.equal(refused.body.results[0].ok, false);
     assert.equal(refused.body.results[0].code, "MODEL_CHANGED", "the view reports why, so the page can ask");
+    assert.deepEqual([refused.body.results[0].held_model, refused.body.results[0].model], ["gpt-6-sol", "gpt-6-luna"], "and what it would approve");
     const reseated = await post({ vendor: "openai", model: "gpt-6-luna", prompt: "two", reseat: true });
     assert.deepEqual([reseated.body.results[0].ok, reseated.body.results[0].model_gen], [true, 2]);
     const same = await post({ vendor: "openai", model: "gpt-6-luna", prompt: "three" });
@@ -46,6 +47,7 @@ test("switching a seat's model needs consent, and the consent is recorded", asyn
 test("consent is per seat in a fan-out, and only booleans are accepted", async () => {
   await withView(async ({ post }) => {
     assert.equal((await post({ vendor: "openai", prompt: "x", reseat: "yes" })).status, 400);
+    assert.equal((await post({ seats: ["__proto__"], prompt: "x" })).status, 400, "an inherited key is not a vendor");
     assert.equal((await post({ seats: ["openai"], prompt: "x", reseats: { openai: 1 } })).status, 400);
     await post({ seats: ["openai"], models: { openai: "gpt-6-sol" }, prompt: "one" });
     const r = await post({ seats: ["openai"], models: { openai: "gpt-6-luna" }, prompt: "two", reseats: { openai: true } });
@@ -59,7 +61,10 @@ test("an accepted reseat is announced on the bus and shown in the seat state", a
     await post({ vendor: "openai", model: "gpt-6-luna", prompt: "two" });
     assert.ok(srv.bus.snapshot().some(e => e.type === "error" && e.code === "MODEL_CHANGED"), "the refusal carries its code");
     await post({ vendor: "openai", model: "gpt-6-luna", prompt: "two", reseat: true });
+    // Consent sent again on the model that already holds the seat is not a reseat, and is not announced.
+    await post({ vendor: "openai", model: "gpt-6-luna", prompt: "three", reseat: true });
     const events = srv.bus.snapshot();
+    assert.equal(events.filter(e => e.type === "reseat").length, 1, "one switch, one announcement");
     assert.ok(events.some(e => e.type === "reseat" && e.model === "gpt-6-luna" && e.model_gen === 2));
     const seat = Object.values(reduceSeats(events)).find(s => s.model_gen);
     assert.deepEqual([seat.model, seat.model_gen], ["gpt-6-luna", 2]);
