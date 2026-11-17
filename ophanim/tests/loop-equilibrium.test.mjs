@@ -133,6 +133,94 @@ test('the runtime chain refuses an assignment that does not follow from the read
   assert.throws(()=>verifyRuntimeChain(stateDir),/assignment does not follow/);
 }));
 
+// Independent review 2026-11-16, Components (mutant B4): the assignment's ready-set digest was never
+// the only thing wrong in a test, so deleting its recomputation failed nothing. Here the digest is the
+// sole defect: same count, same rank, same worker choice, but a digest of a ready set that is not the
+// one the base state yields. The honest assignment on the same base verifies.
+test('the runtime chain recomputes the ready-set digest an assignment records',async()=>{
+  const {governance}=stubGovernance();
+  // A pending `c` is committed first, so the base state's ready set is exactly ['c']; then `c` starts.
+  const startC=(stateDir,readySetSha)=>withRuntimeBoard(stateDir,async board=>{
+    board.state.obligations.c={spec:spec('c'),status:'pending',attempt:0,releaseAttempts:0,candidate:null,history:[],reason:null};
+    await board.save(board.state,{type:'fixture.pending'});
+    Object.assign(board.state.obligations.c,{status:'running',attempt:1,releaseAttempts:1});
+    await board.save(board.state,{type:'work.started',id:'c',attempt:1,worker:'w',
+      assignment:{policy:ASSIGNMENT_POLICY,readySetSha,ready:1,rank:0,slots:1,choice:0}});
+  });
+  await withState(async stateDir=>{
+    await runRuntime({stateDir,obligations:[spec('a')],workers:[worker],governance});
+    await startC(stateDir,digest(['c']));
+    assert.equal(verifyRuntimeChain(stateDir).ok,true,'the honest digest of the base ready set verifies');
+  });
+  await withState(async stateDir=>{
+    await runRuntime({stateDir,obligations:[spec('a')],workers:[worker],governance});
+    await startC(stateDir,digest(['z']));
+    assert.throws(()=>verifyRuntimeChain(stateDir),/assignment does not follow from the recorded ready set: c/);
+  });
+});
+
+// Independent review 2026-11-16, Components (mutant B3): every earlier refusal was of a delta, whose
+// own parent check also refuses a skipped revision. A full snapshot carries no parent check of its own,
+// so the chain verifier is the only thing that refuses one that skips a revision.
+test('the runtime chain refuses a full snapshot that skips a revision',()=>withState(async stateDir=>{
+  const {governance}=stubGovernance();
+  await runRuntime({stateDir,obligations:[spec('a')],workers:[worker],governance});
+  const state=loadRuntime(stateDir),board=openBoard(boardPath(stateDir));
+  state.revision+=2;state.events.push({sequence:state.revision,type:'fixture.skipped'});
+  const written=await publish({...board,ref:'refs/board/ophanim',author:{vendor:'controller'},budgetCheck:false,
+    entries:[{kind:'trace',payload:{test:'ophanim-state'},blob:canonical(state)}],msg:'skipped'});
+  assert.equal(written.ok,true);
+  assert.equal(loadRuntime(stateDir).revision,state.revision,'the snapshot itself decodes');
+  assert.throws(()=>verifyRuntimeChain(stateDir),/revision must advance by one/);
+}));
+
+// Independent review 2026-11-16, Components (mutant R2): the only tests that reached the handoff
+// re-verification needed TELOS, and their tampering was caught earlier, by the publication check. Here
+// the retained bytes are intact and only the verifier's answer changes: TELOS no longer accepts an
+// accepted row (a revoked plan, say). The run refuses before it writes anything.
+test('a run refuses an accepted dependency the verifier no longer accepts',()=>withState(async stateDir=>{
+  const {calls,governance}=stubGovernance(),obligations=[spec('a'),spec('b',['a'])];
+  const first=await runRuntime({stateDir,obligations,workers:[worker],governance});
+  assert.equal(first.complete,true);
+  const head=readRuntimeSnapshot(stateDir).commit;
+  calls.verifyCandidate=0;
+  const refusing={...governance,verifyCandidate:async()=>{calls.verifyCandidate++;return {ok:false,reason:'plan revoked'};}};
+  await assert.rejects(runRuntime({stateDir,obligations,workers:[worker],governance:refusing}),/Accepted dependency verification refused: a/);
+  assert.equal(calls.verifyCandidate,1,'refused at the first accepted row');
+  assert.equal(readRuntimeSnapshot(stateDir).commit,head,'nothing written');
+  // An answer that is not exactly ok:true is a refusal too.
+  await assert.rejects(runRuntime({stateDir,obligations,workers:[worker],governance:{...governance,verifyCandidate:async()=>({ok:'yes'})}}),/Accepted dependency verification refused/);
+}));
+
+// Independent review 2026-11-16, Components (mutant R4): effect confirmation was tested only through
+// the synthetic destination under TELOS, which never substitutes. Here the destination reports a
+// different outcome than the one applied: a substituted payload, or another key. Neither is confirmed
+// and the row is not accepted.
+test('an effect whose observed outcome differs from the applied one is not confirmed',async()=>{
+  const {governance}=stubGovernance();
+  const effectWorker={...worker,run:async({obligation})=>{const output={id:obligation.id};return {output,effects:[{key:`dest:${obligation.id}`,payload:output}]};}};
+  for(const [label,observe]of [
+    ['substituted payload',(key,payload)=>({key,payload:{...payload,id:'substituted'}})],
+    ['another key',(key,payload)=>({key:`${key}:other`,payload})],
+    ['nothing observed after apply',()=>null],
+  ])await withState(async stateDir=>{
+    const applied=new Map();
+    const effectAdapter={inspect:async key=>(applied.has(key)?observe(key,applied.get(key)):null),apply:async effect=>{applied.set(effect.key,effect.payload);}};
+    await assert.rejects(runRuntime({stateDir,obligations:[{...spec('a'),effectKey:'dest:a'}],workers:[effectWorker],governance,effectAdapter}),
+      /Synthetic effect outcome unconfirmed or substituted/,label);
+    const state=loadRuntime(stateDir);
+    assert.equal(state.effects['dest:a'].status,'intent',label);
+    assert.notEqual(state.obligations.a.status,'accepted',label);
+  });
+  // The honest destination confirms, so the refusals above are the observation's, not the fixture's.
+  await withState(async stateDir=>{
+    const applied=new Map();
+    const effectAdapter={inspect:async key=>(applied.has(key)?{key,payload:applied.get(key)}:null),apply:async effect=>{applied.set(effect.key,effect.payload);}};
+    const result=await runRuntime({stateDir,obligations:[{...spec('a'),effectKey:'dest:a'}],workers:[effectWorker],governance,effectAdapter});
+    assert.equal(result.complete,true);assert.equal(result.effects['dest:a'].status,'confirmed');
+  });
+});
+
 test('efficiency debits are write-once per trace and totals are derived',()=>withState(async stateDir=>{
   const usesDir=path.join(stateDir,'uses');fs.mkdirSync(usesDir);
   const sha=n=>String(n).repeat(64);
