@@ -25,7 +25,9 @@ test('active Google path budgets thinking/output and retains thought signatures'
   const part={text:'complete code',thoughtSignature:'opaque-google-signature'};
   const client={models:{countTokens:async()=>({totalTokens:10}),generateContent:async req=>{request=req;return {candidates:[{finishReason:'STOP',content:{role:'model',parts:[part]}}]};}}};
   const result=await sendTurn({client,vendor:'agy_google',model:modelId('google','carbon'),prompt:'code',extra:{config:{maxOutputTokens:2000}}});
-  assert.equal(request.config.maxOutputTokens,65536);
+  // The caller's 2,000 is a bound: it is sent as named (audit M4), not raised to the long-decode allowance.
+  assert.equal(request.config.maxOutputTokens,2000);
+  assert.equal(result.output_budget_policy,'explicit');
   assert.deepEqual(result.history.at(-1).parts,[part]);
   assert.equal(result.complete,true);
 });

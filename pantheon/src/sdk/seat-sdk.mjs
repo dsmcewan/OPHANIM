@@ -79,7 +79,7 @@ function readIntent(seat, home) {
 
 export async function sdkTurn({
   vendor, purpose, cwd, prompt, model, client, home, extra, onEvent, label, continuity, acknowledgeLost = false, reseatModel = false,
-  scope, sessionId, effort, architecture, contractHeader, signal, deadline, ledger = null,
+  scope, sessionId, effort, architecture, contractHeader, signal, deadline, ledger = null, outputBudgetPolicy,
 } = {}) {
   if (!vendor || !purpose || !cwd) throw new Error("sdkTurn: vendor, purpose and cwd are required");
   if (typeof prompt !== "string" || prompt === "") throw new Error("sdkTurn: prompt is required");
@@ -180,7 +180,8 @@ export async function sdkTurn({
       scope: scope ?? { tenant_id: 'pantheon', rights_lane: 'private_upload', workspace_id: sha256(cwd),
         workspace_tenant_id: `pantheon:private_upload:${sha256(cwd)}`, campaign_id: 'build', world_id: sha256(cwd),
         branch_id: 'build', actor_id: purpose }, sessionId: sessionId ?? sha256(`${homeDir}:${purpose}:${model}`),
-      effort, architecture, contractHeader, signal, deadline }); }
+      // The caller's output policy travels with the turn; omitted, the adapter derives it from the cap.
+      effort, architecture, contractHeader, signal, deadline, ...(outputBudgetPolicy ? { outputBudgetPolicy } : {}) }); }
     catch (e) { clearIntent(); throw e; }   // the failure is REPORTED to the caller; the intent's job is the silent case
 
     if (!result.usable_for_resume) {

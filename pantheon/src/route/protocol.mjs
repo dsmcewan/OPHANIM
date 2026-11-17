@@ -169,7 +169,10 @@ export function routeFor(role, { difficulty = "medium", needsContext = null, avo
     if (!f && !isLane(c.model)) { skipped.push({ model: c.model, why: "no capability record and not a declared lane model" }); return false; }
     if (f?.api_id === false && !isLane(c.model)) { skipped.push({ model: c.model, why: "not an API id" }); return false; }
     const window = cited(f?.window);
-    if (needsContext && window !== null && window < needsContext) { skipped.push({ model: c.model, why: `documented window ${window} < ${needsContext}` }); return false; }
+    // A stated context requirement is admitted only against a documented window: an unknown window is
+    // not evidence the work fits, so it is skipped with its reason rather than treated as unlimited.
+    if (needsContext && window === null) { skipped.push({ model: c.model, why: `window unrecorded; cannot admit a stated need of ${needsContext}` }); return false; }
+    if (needsContext && window < needsContext) { skipped.push({ model: c.model, why: `documented window ${window} < ${needsContext}` }); return false; }
     return true;
   };
   const deprecated = c => typeof facts.models[c.model]?.api_id === "string" && facts.models[c.model].api_id.startsWith("deprecated");

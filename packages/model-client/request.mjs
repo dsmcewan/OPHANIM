@@ -100,15 +100,63 @@ export function prepareRequest({vendor,model,prompt,history=[],previousResponseI
   return {vendor,model,cap,request,options,continuity,history:structuredClone(history),prompt:pinned,outputBudgetPolicy};
 }
 
+// The output a request may still generate, reserved before admission. A request that names no cap
+// (a providerDefaults model) is reserved at the model's documented output limit, not at zero.
+export const LONG_DECODE_RESERVE=65536;
+export const reservedOutput=(request,cap={})=>request?.config?.maxOutputTokens??request?.max_output_tokens??request?.max_tokens
+  ??cap.output??LONG_DECODE_RESERVE;
+
+// A QUALIFIED ESTIMATE, used only where no provider count is supported: an upper bound, never a count.
+// Byte-level tokenizers emit at least one UTF-8 byte per token, so the serialized input-bearing request
+// (system, tools, history and prompt; output caps and transport fields excluded) bounds the input tokens
+// from above. A per-item framing allowance covers role and message delimiters.
+export function estimateInputTokens(request){
+  if(!request||typeof request!=='object')throw new Error('Token estimate needs a request');
+  const drop=new Set(['model','max_tokens','max_output_tokens','stream','store','include','prompt_cache_key','metadata','service_tier']);
+  const body=Object.fromEntries(Object.entries(request).filter(([key])=>!drop.has(key)));
+  if(body.config&&typeof body.config==='object'){
+    const {maxOutputTokens,abortSignal,httpOptions,automaticContinuation,continuationToken,...rest}=body.config;
+    body.config=rest;
+  }
+  const items=(Array.isArray(request.messages)?request.messages:Array.isArray(request.contents)?request.contents
+    :Array.isArray(request.input)?request.input:[]).length+1;
+  return Buffer.byteLength(JSON.stringify(body))+items*16+64;
+}
+
+/**
+ * Context admission: the input (counted or estimated) plus the reserved output must fit a KNOWN
+ * window. Every refusal names its reason in `code` and carries the figures it was decided on.
+ */
+export function admitContext({model,window,inputCeiling=null,output,input,basis}){
+  const admission={model,window:window??null,inputCeiling:inputCeiling??null,output,input,basis};
+  const refuse=(code,message)=>{throw Object.assign(new Error(message),{code,admission});};
+  if(!Number.isSafeInteger(window)||window<=0)
+    refuse('CONTEXT_WINDOW_UNKNOWN',`${model}: no documented context window; the request cannot be admitted against an unknown bound`);
+  if(!Number.isSafeInteger(input)||input<0)refuse('CONTEXT_COUNT_INVALID','Invalid provider token count');
+  if(!Number.isSafeInteger(output)||output<0)refuse('CONTEXT_OUTPUT_UNKNOWN',`${model}: no output bound to reserve`);
+  if(inputCeiling&&input>=inputCeiling)refuse('INPUT_CEILING',`Input token policy requires fewer than ${inputCeiling} tokens`);
+  if(input+output>window)refuse('CONTEXT_WINDOW_EXCEEDED',
+    `Combined input and output exceeds model context window: ${input} input (${basis}) + ${output} reserved output > ${window}; decompose the request or choose a larger window`);
+  return admission;
+}
+
+// Every frontier capability is admitted before generation, not only those with an input ceiling or a
+// combined window. A provider count is used where one is supplied; a model whose policy requires one
+// (inputCeiling/combined) still refuses without it; elsewhere the qualified upper-bound estimate applies.
 export async function checkBudget(prepared,countTokens){
-  const {cap,request}=prepared;
-  if(!cap.inputCeiling&&!cap.combined)return null;
-  if(typeof countTokens!=='function')throw new Error('A trustworthy provider token count is required before generation');
-  const input=await countTokens(request);
-  if(!Number.isSafeInteger(input)||input<0)throw new Error('Invalid provider token count');
-  if(cap.inputCeiling&&input>=cap.inputCeiling)throw new Error(`Input token policy requires fewer than ${cap.inputCeiling} tokens`);
-  const output=request.config?.maxOutputTokens??request.max_output_tokens??request.max_tokens;
-  if(input+output>cap.window)throw new Error('Combined input and output exceeds model context window');
+  const {cap,request,model}=prepared;
+  let input,basis;
+  if(typeof countTokens==='function'){
+    input=await countTokens(request);
+    if(!Number.isSafeInteger(input)||input<0)throw new Error('Invalid provider token count');
+    basis='provider_count';
+  }else if(cap.inputCeiling||cap.combined){
+    throw new Error('A trustworthy provider token count is required before generation');
+  }else{
+    input=estimateInputTokens(request);
+    basis='byte_upper_bound';
+  }
+  admitContext({model,window:cap.window,inputCeiling:cap.inputCeiling,output:reservedOutput(request,cap),input,basis});
   return input;
 }
 
