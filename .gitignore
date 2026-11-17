@@ -9,3 +9,5 @@ outputs/
 
 # Agent worktrees (isolated checkouts used during a session; never committed)
 .claude/worktrees/
+# Status ledger private keys (only public keys are on the chain)
+status/ledger/keys/

@@ -1,0 +1,1 @@
+{"keyring":{"operator":{"crv":"Ed25519","kty":"OKP","x":"G-MPmXNcBUCKvYY6fFCr7Qcylgh6rnlRX4ZgJJlCUqY"},"status-orderer":{"crv":"Ed25519","kty":"OKP","x":"F7LzbpeEds8yarMInu-CTQW1QaUd4MsexSIcu4wc84Y"}},"operators":["operator"],"orderer":"status-orderer","pins":null}

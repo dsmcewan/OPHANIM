@@ -1,0 +1,1 @@
+{"basis":"pinned genesis, key custody, seat-key rotation; on by default for runOpenItem and the CLI (PR #6)","checked":"2026-11-17","item":"ledger-default","schema":"ophanim.status/v1","state":"Resolved","title":"The ledger by default","waiting_on":null}

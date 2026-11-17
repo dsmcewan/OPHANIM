@@ -173,12 +173,14 @@
 6. **Gaps in coverage:**
    - the retained-experiment positive path is not tested end to end, because it needs a full 1→3 qualification;
    - a held investigation receipt cannot show which failure produced it, where the decision depends on retained evidence.
-7. **The status is scattered.** Three evaluation documents each hold a status table. One board, itself a projection of the ledger, would be easier to keep true.
+7. **The status is scattered.** *(Addressed in cycle 8: one board, generated from a status ledger.)* Three evaluation documents each hold a status table. One board, itself a projection of the ledger, would be easier to keep true.
 8. **Process slips:**
    - one merge commit (`09926bf`) went out without the attribution lines;
    - `.claude/` worktrees were excluded locally, not in the repository. *(Fixed in cycle 8: `.gitignore`.)*
 
-## What remains On Hold (all external)
+## What remained On Hold at the end of cycle 7 (all external)
+
+The live status is on the status board, [docs/STATUS.md](STATUS.md), which is generated from the status ledger.
 
 | Item | Waiting on |
 |---|---|

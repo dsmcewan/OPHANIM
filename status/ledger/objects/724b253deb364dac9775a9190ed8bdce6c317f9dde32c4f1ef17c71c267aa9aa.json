@@ -1,0 +1,1 @@
+{"basis":"shared rule on both transports, unary and streamed (docs/pantheon-model-loop-evaluation.md)","checked":"2026-11-17","item":"terminal-state","schema":"ophanim.status/v1","state":"Resolved","title":"One terminal-state rule for every model","waiting_on":null}
