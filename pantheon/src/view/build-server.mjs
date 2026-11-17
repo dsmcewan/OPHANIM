@@ -169,6 +169,12 @@ export function createBuildServer({ makeClientFor, allowedRoot = join(homedir(),
         }
         scouts = parsed.scouts;
       }
+      // OPTIONAL PROVIDER-CALL BOUND (audit M5): at most this many provider calls for the build, checked by the
+      // pipeline before every call (retries and fallbacks included). Absent, no bound is imposed, as before.
+      const maxProviderCalls = parsed.max_provider_calls;
+      if (maxProviderCalls !== undefined && !(Number.isSafeInteger(maxProviderCalls) && maxProviderCalls > 0)) {
+        return json(res, 400, { error: "max_provider_calls must be a positive integer" });
+      }
       if (running.has(ticket.key)) {
         return json(res, 409, { error: `a build for "${ticket.key}" is already running; the same ticket twice at once would share one output directory` });
       }
@@ -184,7 +190,7 @@ export function createBuildServer({ makeClientFor, allowedRoot = join(homedir(),
       // Deliberately not awaited: the response is 202 and the result arrives on /events. A rejected
       // promise here would be an unhandled rejection, so runOpenItem's own contract (it returns a
       // result rather than throwing, once past its argument checks) is backed up with a catch.
-      run(ticket, { makeClientFor, progress: publish, ...(scouts ? { scouts } : {}) })
+      run(ticket, { makeClientFor, progress: publish, ...(scouts ? { scouts } : {}), ...(maxProviderCalls !== undefined ? { maxProviderCalls } : {}) })
         .then(result => publish({ event: "run.done", ok: result.ok, shipped: result.shipped, error: result.error, salvaged: result.salvaged, board: result.board, outDir: result.outDir }))
         .catch(e => publish({ event: "run.done", ok: false, shipped: false, error: { stage: "start", message: String(e?.message ?? e).slice(0, 400) } }))
         .finally(() => running.delete(ticket.key));

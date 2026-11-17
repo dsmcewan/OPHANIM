@@ -24,15 +24,16 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { openStatusLedger, propose, proposalRefusal, proposalDigest, STATES } from "../../../packages/ledger/status.mjs";
 import { digest } from "../../../packages/ledger/canonical.mjs";
-import { runOpenItem } from "./run-item.mjs";
+import { runOpenItem, providerCallsOf } from "./run-item.mjs";
 import { openBoard } from "./index.mjs";
 import { cidOf } from "./canon.mjs";
 import { certifiedArtifacts } from "./artifacts.mjs";
 import { ticketRuntimeRefusal, ticketContainmentRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
-import { frontierCandidates, readPools } from "../route/frontier.mjs";
-import { labOf } from "../config/models.mjs";
+import { readPools, selectSeat } from "../route/frontier.mjs";
+import { labOf, vendorsOfLab, modelId } from "../config/models.mjs";
+import { seatingPlan, INTAKE } from "../role/seating.mjs";
 import { TOKEN_TIERS } from "../config/tiers.mjs";
-import { taskProfile } from "../route/task-profile.mjs";
+import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
@@ -104,14 +105,62 @@ function ticketRefusal(t, { repo, item }) {
   return null;
 }
 
-/** The seats runOpenItem would put in each chair (its default routing profile), and the cycle reviewers. */
-export function seatTeam({ pools = [], overrides = {} } = {}) {
-  const seat = c => ({ vendor: c.vendor, model: c.model, lab: labOf(c.vendor, c.model), pool: c.pool ?? c.vendor });
-  // An operator reseat (--seat role=vendor/model) is the chair's only occupant for the run, as in runOpenItem.
-  const ladder = role => (overrides[role] ? [{ ...seat(overrides[role]), operator: true }] : frontierCandidates(role, { pools }).map(seat));
-  const team = Object.fromEntries(ROLES.map(r => [r, ladder(r)]));
-  const authors = { plan: [team.planner[0]?.lab].filter(Boolean), work: [team.implementer[0]?.lab].filter(Boolean) };
-  return { ...team, cycle_reviewers: cycleReviewers({ planLabs: authors.plan, workLabs: authors.work }) };
+/**
+ * The seats runOpenItem will put in each chair for `spec` under `profile`, and the cycle reviewers: the SAME
+ * selector the dispatch calls (selectSeat), with the same inputs -- the ticket's difficulty, under `fit` its task
+ * profile, the operator's seats, the pools -- in the dispatch's order: the scouts (argo: the configured scout
+ * vendors; legacy: the INTAKE fan-out; fit: explorer width, each avoiding the labs already seated), the planner,
+ * each slot's implementer, and each slot's reviewer(s), avoiding the maker's and the planner's vendors and labs.
+ * Each chair lists its seat first, then the fallbacks the selection admitted. It assumes every first seat
+ * answers (a fallback at dispatch changes what follows it), admits on a recorded window but not on the size of a
+ * prompt (known only at dispatch), and does not apply a producer lab reservation (it says so when one could).
+ */
+export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "argo", scouts: scoutVendors = ["xai"] } = {}) {
+  const slots = spec ? normalizeSlots(spec) : [{ slot: "file", path: null }];
+  const difficulty = spec?.difficulty ?? "medium";
+  const task = profile === "fit" ? taskProfile(spec ?? {}, { paths: slots.map(s => s.path).filter(Boolean), mode: "batch" }) : null;
+  const choose = (role, extra = {}) => selectSeat(role, { profile, difficulty, pools, needsContext: 1, roleOverride: overrides[role] ?? null,
+    ...(task ? { task } : {}), ...extra });
+  const seatOf = c => ({ vendor: c.vendor, model: c.model, lab: labOf(c.vendor, c.model), pool: c.pool ?? c.vendor, source: c.selection?.source ?? null,
+    ...(["operator-override", "slot-override"].includes(c.selection?.source) ? { operator: true } : {}),
+    ...(profile === "fit" ? { class: c.selection?.class?.value ?? null, effort: c.selection?.effort?.value ?? null } : {}) });
+  const ladder = choice => [...new Map(choice.candidates.map(c => [`${c.vendor}/${c.model}`, seatOf(c)])).values()];
+  const notes = [];
+  // Scouts, as the dispatch's intake seats them.
+  const scoutLadders = [];
+  if (profile === "fit") {
+    const width = requirementsOf(task).explorer_width.value, avoid = [], avoidLabs = [];
+    for (let k = 0; k < width; k++) {
+      const l = ladder(choose("scout", { avoid, avoidLabs, ...(k ? { roleOverride: null } : {}) }));
+      scoutLadders.push(l); avoid.push(l[0].vendor); avoidLabs.push(l[0].lab);
+    }
+  } else {
+    const intake = profile === "legacy" ? seatingPlan({ roles: ["scout"], seating: INTAKE }) : null;
+    for (const vendor of scoutVendors) {
+      if (profile === "argo") { scoutLadders.push(ladder(choose("scout")).filter(c => c.vendor === vendor)); continue; }
+      const model = intake.assigned.scout.vendor === vendor ? intake.assigned.scout.model : (vendor === "xai" ? modelId("xai", "grok-4.3") : modelId("google", "argon"));
+      scoutLadders.push(ladder(choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake", reason: `intake fan-out vendor ${vendor}` } })));
+    }
+  }
+  const reviewLabs = task ? requirementsOf(task).review_labs.value : 1;
+  if (reviewLabs > 1) notes.push(`stakes need ${reviewLabs} review labs: the dispatch may hold labs back from the planner and implementers to keep that panel possible, which this preview does not apply`);
+  const planner = ladder(choose("planner"));
+  const implementers = slots.map((sl, i) => ladder(choose("implementer", { pin: sl.model ?? null,
+    slotOverride: overrides[`implementer.${i}`] ?? overrides[`implementer.${sl.slot}`] ?? null })));
+  const p = planner[0];
+  const reviewPanels = implementers.map(im => {
+    const m = im[0];
+    const avoid = [...new Set([m.vendor, p.vendor, ...vendorsOfLab(m.lab), ...vendorsOfLab(p.lab)])], avoidLabs = [...new Set([m.lab, p.lab])];
+    const panel = [], usedVendors = [], usedLabs = [];
+    for (let k = 0; k < reviewLabs; k++) {
+      const l = ladder(choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], ...(k ? { roleOverride: null } : {}) }));
+      panel.push(l); usedVendors.push(l[0].vendor); usedLabs.push(l[0].lab);
+    }
+    return panel;
+  });
+  const team = { profile, scout: scoutLadders[0] ?? [], scouts: scoutLadders.map(l => l[0]), planner, implementer: implementers[0], implementers,
+    reviewer: reviewPanels[0][0], review_panels: reviewPanels.map(panel => panel.map(l => l[0])), ...(notes.length ? { notes } : {}) };
+  return { ...team, cycle_reviewers: cycleReviewers({ planLabs: [p.lab], workLabs: [...new Set(implementers.map(l => l[0].lab))] }) };
 }
 
 /**
@@ -160,15 +209,17 @@ export function dispatchable(board, item, { repo }) {
 }
 
 /** `next`: the dispatchable items, in dependency order, each with its ticket and the team it would seat. */
-export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor = null, pools = null, overrides = {} }) {
+export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor = null, pools = null, overrides = {}, profile = "argo" }) {
   const board = readBoard({ statusRoot, anchor });
-  const team = seatTeam({ pools: pools ?? readPools(), overrides });
+  const poolList = pools ?? readPools();
   const items = [], skipped = [];
   for (const it of dependencyOrder(board.items)) {
     if (it.state !== "Ready") continue;
     const d = dispatchable(board, it.item, { repo });
     if (d.why) { skipped.push({ item: it.item, why: d.why }); continue; }
     const t = d.ticket;
+    // The team this ticket's run will seat: the same selector, on this ticket, under the run's profile.
+    const team = seatTeam({ pools: poolList, overrides, spec: t.spec, profile });
     items.push({ item: it.item, title: it.title, entry: it.entry, basis: it.basis,
       ticket: { path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key,
         files: normalizeSlots(t.spec).map(s => s.path), acceptance_cmd: t.spec.acceptance_cmd, difficulty: t.spec.difficulty ?? "medium" },
@@ -412,6 +463,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
   pairFor({ ticketKey: "rate-check", policy: { pairRate } }); // a rate outside [0, 1] is refused before any work
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
+  checkBound(runOpts.maxProviderCalls);
   const board = readBoard({ statusRoot, anchor });
   const d = dispatchable(board, item, { repo });
   if (d.why) fail(`"${item}" is not dispatchable: ${d.why}`);
@@ -479,10 +531,16 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     run: { ledger: ledgerRoot, ledger_anchor: sys.anchor, ledger_head: v.head, run_json: existsSync(runJsonFile) ? runJsonFile : null,
       run_json_digest: existsSync(runJsonFile) ? sha256(readFileSync(runJsonFile)) : null, shipped: result.shipped === true,
       gate_entry: run?.ledger?.gate ?? null, error: result.error ?? null,
+      // A loaded practice decision this dispatcher does not implement (run.json `practice_warning`), surfaced.
+      practice_warning: run?.practice_warning ?? null,
+      // What the selector chose per role (run.json `seating`, run-item.mjs seatingOf).
+      profile: run?.profile ?? null, seating: run?.seating ?? [],
       tests: run?.acceptance ? { cmd: run.acceptance.cmd, exit: run.acceptance.exit } : null,
       seats: [...new Map((run?.turns ?? []).map(t => [`${t.purpose}|${t.vendor}|${t.model}`, { purpose: t.purpose, vendor: t.vendor, model: t.model,
         served_model: t.served_model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model) }])).values()] },
     review: null, proposal: null, pair: pairSummary,
+    provider_calls: { limit: runOpts.maxProviderCalls ?? null, basis: "run", pipeline: providerCallsOf(run?.attempts ?? []), review: 0,
+      made: providerCallsOf(run?.attempts ?? []), refused: run?.provider_calls?.refused ? [run.provider_calls.refused] : [] },
   };
   const save = () => writeFileSync(join(bundleDir, "evidence.json"), JSON.stringify(bundle, null, 2) + "\n");
   if (!result.shipped) { save(); progress({ event: "run.refused", why: result.error?.message ?? "not shipped" }); return { bundle, dir: bundleDir }; }
@@ -510,7 +568,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const changed = git(["diff", "--name-only", base, head]).split("\n").filter(Boolean);
   const scope = `board/${item}/${base.slice(0, 12)}`;
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
-    seats: chosen.seats, turn, n, policy: runPolicy(run) ?? undefined });
+    seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, ...(chosen.note ? { note: chosen.note } : {}), author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
@@ -519,6 +577,29 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     findings: r.reviews.reduce((n, x) => n + x.findings.length, 0) });
   const proposed = proposeFromBundle({ dir: bundleDir, statusRoot, anchor, sys, practice });
   return { bundle: proposed.bundle, dir: bundleDir, proposal: proposed.proposal, why: proposed.why };
+}
+
+// --- the board run's provider-call bound (audit M5) ---------------------------------------------------
+// `runOpts.maxProviderCalls` bounds every provider call made for the board run: the pipeline's (runOpenItem
+// enforces it at its generation boundary and records its attempts in run.json) and then the cycle reviewers',
+// each admitted here before it is called. A refused reviewer is a failed seat of the cycle, which stays open.
+// A resume inherits the recorded bound with the calls already counted against it, unless the operator passes
+// a new bound (basis "operator"), which then counts from zero. bundle.provider_calls records which.
+const BOUND_CODE = "PROVIDER_CALL_LIMIT";
+function checkBound(n, name = "maxProviderCalls") {
+  if (n !== null && n !== undefined && !(Number.isSafeInteger(n) && n > 0)) fail(`${name} is a positive integer`, "USAGE");
+}
+function boundedTurn(turn, calls) {
+  return args => {
+    if (calls.limit !== null && calls.made >= calls.limit) {
+      const why = `${BOUND_CODE}: this board run has made ${calls.made} of its ${calls.limit} permitted provider call(s); ` +
+        `the ${args.vendor}/${args.model} cycle review was not called`;
+      calls.refused.push({ code: BOUND_CODE, at: new Date().toISOString(), vendor: args.vendor, model: args.model, why });
+      return Promise.reject(Object.assign(new Error(why), { code: BOUND_CODE }));
+    }
+    calls.made++; calls.review++;
+    return turn(args);
+  };
 }
 
 const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.model, served_model: x.served_model, lab: x.lab, review: x.review, verdict: x.verdict,
@@ -533,8 +614,10 @@ const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.
  * re-derived from its run.json. Reviews already recorded are kept; each try is a recorded attempt, up to
  * the cycle's limit. Then, as after a run, the cycle closes if it can and the proposal is written.
  */
-export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {}, practice = null }) {
+export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {}, practice = null,
+  maxProviderCalls = null }) {
   if (typeof turn !== "function") fail("resumeBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
+  checkBound(maxProviderCalls);
   const file = join(dir, "evidence.json");
   if (!existsSync(file)) fail(`no evidence bundle at ${file}: resume names the --out DIR of the run`);
   const bundle = JSON.parse(readFileSync(file, "utf8"));
@@ -558,11 +641,22 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
     const git = gitIn(gitTop(repo));
     const diff = git(["diff", "--no-color", bundle.base, bundle.commit]);
     const files = git(["diff", "--name-only", bundle.base, bundle.commit]).split("\n").filter(Boolean);
-    progress({ event: "resume.start", cycle: bundle.review.cycle, reviews: state.reviews.length, reviewers: state.cycle.reviewers });
-    const r = await reviewCycle({ ledger: rec, resume: true, turn, max_attempts, seats: chosen.seats,
+    // The bound: inherited with the calls already counted against it (a bundle written before bounds were recorded
+    // counts its run.json attempts and the cycle's recorded attempts), or the operator's new one, from zero.
+    const recorded = bundle.provider_calls ?? null;
+    const prior = recorded?.made ?? providerCallsOf(run.attempts ?? []) + state.attempts.length;
+    const given = maxProviderCalls !== null && maxProviderCalls !== undefined;
+    const calls = given ? { limit: maxProviderCalls, basis: "operator", made: 0, review: 0, refused: [] }
+      : { limit: recorded?.limit ?? null, basis: "inherited", made: prior, review: 0, refused: [] };
+    progress({ event: "resume.start", cycle: bundle.review.cycle, reviews: state.reviews.length, reviewers: state.cycle.reviewers,
+      provider_calls: { limit: calls.limit, basis: calls.basis, made: calls.made } });
+    const r = await reviewCycle({ ledger: rec, resume: true, turn: boundedTurn(turn, calls), max_attempts, seats: chosen.seats,
       change: { scope: bundle.review.scope, base: bundle.base, head: bundle.commit, diff, files, author_labs: bundle.review.author_labs, author_turns: bundle.review.author_turns } });
     Object.assign(bundle.review, { reviews: bundleReviews(r.reviews), failed: r.failed,
-      resumes: [...(bundle.review.resumes ?? []), { retained: r.retained, attempted: r.attempted, failed: r.failed.length, complete: r.complete }] });
+      resumes: [...(bundle.review.resumes ?? []), { retained: r.retained, attempted: r.attempted, failed: r.failed.length, complete: r.complete,
+        provider_calls: { limit: calls.limit, basis: calls.basis, prior, made: calls.review, refused: calls.refused } }] });
+    bundle.provider_calls = { limit: calls.limit, basis: calls.basis, pipeline: recorded?.pipeline ?? providerCallsOf(run.attempts ?? []),
+      review: (recorded?.review ?? state.attempts.length) + calls.review, made: calls.made, refused: [...(recorded?.refused ?? []), ...calls.refused] };
     writeFileSync(file, JSON.stringify(bundle, null, 2) + "\n");
     progress({ event: "resumed", cycle: r.cycle, reviews: r.reviews.length, retained: r.retained.length, attempted: r.attempted.length, failed: r.failed.length });
   }

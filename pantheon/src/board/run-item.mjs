@@ -40,7 +40,7 @@ import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
-import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
+import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
@@ -133,12 +133,38 @@ function failureOutcome(e) {
 }
 // The run's resource summary, derived from its attempts. Cost is not estimated: no versioned price source
 // is attached, so USD is unknown (null) and says why.
+// The provider calls an attempt list made: every attempt but one the seat layer refused before sending any
+// request (`provider_requests: 0`), which reached no provider. Unknown (null) counts as a call.
+export function providerCallsOf(attempts = []) {
+  return attempts.filter(a => a?.provider_requests !== 0).length;
+}
+// THE SEATING REPORT: what the selector actually chose, per role, read from the turns the run made (each carries
+// its selection), not the legacy SEATING table. One row per role and seat that answered, in the order seated:
+// vendor/model, lab, the selection's source (profile, policy, operator-override, ticket-pin, ...), and under
+// `fit` the class and the effort the profile mapped onto that model's ladder.
+const ROLE_OF_TURN = { scout: "scout", plan: "planner", work: "implementer", critique: "reviewer" };
+export function seatingOf(run) {
+  const rows = [], seen = new Set();
+  for (const t of run?.turns ?? []) {
+    const role = ROLE_OF_TURN[t.purpose] ?? t.purpose, key = `${role}|${t.vendor}|${t.model}|${t.pool ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const sel = t.selection ?? null, fit = sel?.profile === "fit";
+    const row = { role, vendor: t.vendor, model: t.model, lab: labOf(t.vendor, t.model), pool: t.pool ?? t.vendor, transport: t.transport ?? null,
+      profile: sel?.profile ?? null, source: sel?.source ?? null, fallback: sel?.fallback === true,
+      ...(fit ? { class: sel.class?.value ?? null, effort: sel.effort?.value ?? null } : {}) };
+    row.line = `${role.padEnd(11)} ${t.vendor}/${t.model} (${row.lab})  source=${row.source ?? "unrecorded"}${row.fallback ? " fallback" : ""}` +
+      (fit ? `  class=${row.class ?? "-"} effort=${row.effort ?? "-"}` : "");
+    rows.push(row);
+  }
+  return rows;
+}
 function resourcesOf(attempts) {
   const by_outcome = {};
   for (const a of attempts) by_outcome[a.outcome] = (by_outcome[a.outcome] ?? 0) + 1;
   const sum = key => attempts.reduce((n, a) => n + (num(a.usage?.[key]) ?? 0), 0);
   const attempts_without_usage = attempts.filter(a => a.usage?.input_tokens == null || a.usage?.output_tokens == null).length;
-  return { provider_calls: attempts.length, by_outcome,
+  return { provider_calls: providerCallsOf(attempts), by_outcome,
     reported_input_tokens: sum("input_tokens"), reported_output_tokens: sum("output_tokens"),
     attempts_without_usage, usage_complete: attempts_without_usage === 0,
     usd: null, usd_basis: "unknown: no versioned price source is attached, so cost is not estimated" };
@@ -231,10 +257,24 @@ export async function runOpenItem(spec, opts = {}) {
     if (SHADOW_TASK === undefined) { try { SHADOW_TASK = taskProfile(spec, { paths: SLOTS.map(sl => sl.path), mode: "batch" }); } catch { SHADOW_TASK = null; } }
     return SHADOW_TASK;
   };
+  // A loaded decision that does not apply (its policy is not the one this dispatcher implements) is recorded
+  // `applies: false` on every selection and the dispatch continues under the policy it does implement; it is
+  // also surfaced: a `practice.warning` event and `practice_warning` at the top of run.json, naming the loaded
+  // disposition and why it does not apply.
+  const practiceNow = () => {
+    if (PRACTICE) return PRACTICE;
+    PRACTICE = loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools });
+    if (PRACTICE.applies === false) {
+      run.practice_warning = { code: "PRACTICE_NOT_APPLIED", disposition: PRACTICE.disposition, outcome: PRACTICE.outcome, scope: PRACTICE.scope,
+        loaded_policy: PRACTICE.policy, ran_policy: (id => ({ version: id.policy, hash: id.hash, profile }))(selectionPolicy(profile, { pools })), reason: PRACTICE.reason };
+      progress({ event: "practice.warning", detail: `loaded practice disposition ${PRACTICE.disposition} does not apply: ${PRACTICE.reason}` });
+      record();
+    }
+    return PRACTICE;
+  };
   const choose = (role, { chars = null, ...rest } = {}) => {
     const args = { difficulty: DIFFICULTY_OF_TICKET, pools, needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null };
-    const primary = withPractice(selectSeat(role, { profile, ...args, ...(TASK ? { task: TASK } : {}), ...rest }),
-      PRACTICE ??= loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools }));
+    const primary = withPractice(selectSeat(role, { profile, ...args, ...(TASK ? { task: TASK } : {}), ...rest }), practiceNow());
     const task = profile === "fit" ? null : shadowTask();
     const shadow = profile !== "fit" && !task ? { profile: "fit", error: "the ticket has no valid task profile for fit" }
       : shadowSeat(role, { profile, args: { ...args, ...rest }, task });
@@ -256,7 +296,11 @@ export async function runOpenItem(spec, opts = {}) {
   // `maxProviderCalls`: a bound on the provider calls this invocation may make, checked at the generation
   // boundary before EVERY call -- retries, fallbacks and truncation re-asks included -- rather than inferred
   // from commit bookkeeping (audit M5). It authorises nothing; omitted, no bound is imposed.
-  const MAX_PROVIDER_CALLS = opts.maxProviderCalls ?? null;
+  // On a RESUME the bound is the run's, not a fresh one: omitted, the limit recorded in run.json is inherited and
+  // the provider calls its attempts already made count against it (basis "inherited"); passed, it is the
+  // operator's explicit new bound for this invocation's calls (basis "operator"). Which applied is recorded.
+  const BOUND_GIVEN = opts.maxProviderCalls !== undefined && opts.maxProviderCalls !== null;
+  let MAX_PROVIDER_CALLS = opts.maxProviderCalls ?? null;
   if (MAX_PROVIDER_CALLS !== null && !(Number.isSafeInteger(MAX_PROVIDER_CALLS) && MAX_PROVIDER_CALLS > 0))
     throw new Error("maxProviderCalls is a positive integer");
   let providerCalls = 0;
@@ -359,22 +403,33 @@ export async function runOpenItem(spec, opts = {}) {
     if (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS) {
       const why = `PROVIDER_CALL_LIMIT: this run has made ${providerCalls} of its ${MAX_PROVIDER_CALLS} permitted provider call(s); ` +
         `${vendor}/${model} (${purpose}) was not called`;
-      run.provider_calls = { limit: MAX_PROVIDER_CALLS, made: providerCalls,
+      run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls,
         refused: { code: "PROVIDER_CALL_LIMIT", at: new Date().toISOString(), vendor, model, pool: pool ?? vendor, transport, purpose, why } };
       progress({ event: "turn.refused", seat: vendor, model, detail: why });
       record();
       throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT" });
     }
     providerCalls++;
-    run.provider_calls = { limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
+    run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
   }
   function recordAttempt(a) {
     const attempts = (run.attempts ??= []);
     attempts.push({ n: attempts.length + 1, at: new Date().toISOString(), ...a });
     run.resources = resourcesOf(attempts);
+    // Admitted before the call, but the seat layer refused it before any request was sent: no provider was
+    // called, so it does not count against the bound.
+    if (a.provider_requests === 0 && providerCalls > 0) {
+      providerCalls--;
+      run.provider_calls = { ...run.provider_calls, made: providerCalls };
+    }
   }
+  let seatingShown = 0;
   const record = () => {
     if (!recordAllowed) return;
+    // The seating report, as the selector chose it (seatingOf): kept on the run and streamed as each seat answers.
+    run.seating = seatingOf(run);
+    for (const row of run.seating.slice(seatingShown)) progress({ event: "seating", role: row.role, seat: row.vendor, model: row.model, detail: row.line });
+    seatingShown = run.seating.length;
     const text = JSON.stringify(run, null, 2);
     // The board owns recovery. The output copy is only a convenience index shared by a ticket key.
     writeArtifact(root, "run.json", text);
@@ -755,9 +810,18 @@ export async function runOpenItem(spec, opts = {}) {
           JSON.stringify(previous.package_context) !== JSON.stringify(packageBinding)) {
         throw new Error("resume: ticket/spec differs or this is a legacy run without isolated recovery state");
       }
-      // Earlier attempts stay on the record; the provider-call bound applies to this invocation's calls.
+      // Earlier attempts stay on the record. The provider-call bound is the run's: inherited with the calls
+      // already made counted against it, unless the operator passed a new one for this invocation.
+      // `counted_from` is the attempt index the bound in force counts from: 0 for the run's own bound, the attempts
+      // already recorded when an operator's new bound took effect (so a later inheriting resume counts from there).
+      const earlier = previous.attempts ?? [];
+      const basis = BOUND_GIVEN ? "operator" : "inherited";
+      const counted_from = BOUND_GIVEN ? earlier.length : (previous.provider_calls?.counted_from ?? 0);
+      const prior = providerCallsOf(earlier.slice(counted_from));
+      if (!BOUND_GIVEN) { MAX_PROVIDER_CALLS = previous.provider_calls?.limit ?? null; providerCalls = prior; }
       Object.assign(run, previous, { error: null, salvaged: null, resumed_from: { board: root, previous_error: previous.error ?? null },
-        attempts: previous.attempts ?? [], provider_calls: { limit: MAX_PROVIDER_CALLS, made: 0, refused: null } });
+        attempts: earlier, provider_calls: { limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null, basis, counted_from,
+          prior: providerCallsOf(earlier), previous_limit: previous.provider_calls?.limit ?? null } });
       run.resources = resourcesOf(run.attempts);
     } else if (existsSync(statePath)) {
       throw new Error("board already has a run; use resume instead of overwriting recovery state");
@@ -800,7 +864,8 @@ export async function runOpenItem(spec, opts = {}) {
     const intake = profile === "argo" ? { ok: true, assigned: { scout: forRole("scout")[0] } } : seatingPlan({ roles: ["scout"], seating: INTAKE });
     bar(`open item ${spec.key} — ${spec.title}`);
     progress({ event: "run.start", detail: `${spec.key}: ${spec.title} → ${SLOT}; acceptance: ${CMD}` });
-    for (const r of seatingReport(chain)) say(r.line);
+    // The legacy table's report is not what a `fit` run seats; the run's report is `run.seating` (seatingOf).
+    if (profile !== "fit") for (const r of seatingReport(chain)) say(r.line);
 
     let scouts = [], TICKET = null, plannerVendor = null, plannerModel = null, maker = null, wip = null;
     // One work item per slot. A single-slot ticket keeps the bare key it always had, so its board
