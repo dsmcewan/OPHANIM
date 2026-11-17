@@ -24,6 +24,14 @@ Dispatch names the selected specialist and qualification version, verifies eligi
 
 Reuse qualified instructions, tools, methods and scoped evidence, with handoff/version checks on resume. Keep separate author/reviewer/judge responsibilities and fresh review context where independence requires it. Model changes are explicit eligible reseats; an identity retained in the ledger does not permit an old writer's conversation to become independent review. Newly learned practices version and requalify affected specialists, preserving provenance and a rollback target.
 
+## Functional roles and valid worker escalation
+
+The owner clarified that worker planning and escalation must not be reclassified as orchestration merely because a seat is called `planner`. Record the function, task/artifact scope, contribution and authority of each invocation. In the inspected current implementation the `planner` model supplies a title; deterministic JavaScript builds the work items, schedules, gates and ships. The title still reaches worker context and signed lineage, so preserve that contribution evidence.
+
+A worker may plan, revise and escalate under its authorized bounds. A model reseat preserves its work identity, context/evidence lineage, resource accounting and independent-review obligations; it grants no controller authority. Review eligibility must follow the exact contribution being judged and the qualified reviewer contract. A model's role in another scope must not become a permanent role or lab prohibition.
+
+Do not force title/file workers onto one vendor merely to manufacture a numeric review panel. Current lab counts and role tables describe a configured pool; they are not universal capability limits. Qualify alternative reviewer pools, division of work and review designs through the same hypothesis/comparison/critique process. Missing review capacity produces an explicit pending/deferred review decision and preserves valid work; it does not prove the worker or its escalation was invalid. Changes to the existing independence/quorum policy need explicit, evidence-bound qualification and authorization.
+
 ## Empirical qualification replaces opinion-based policy promotion
 
 The owner rejects “my judgment calls, not measurements” as an acceptable basis for adopted routing or workflow policy. An unsupported choice remains a hypothesis with an explicit qualification task. Do not promote it by relabeling a preference, assigning arbitrary weights, repeating it across tickets, or collecting agreement.

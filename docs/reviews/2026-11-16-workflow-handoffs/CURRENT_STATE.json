@@ -1,6 +1,10 @@
 {
   "schema": "ophanim.current-state-evidence-audit/v1",
-  "source_commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+  "source_commits": [
+    "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+    "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+    "048b3ba41e3b81dc58d446bf9767ccf59d4571a9"
+  ],
   "routing": {
     "schema": "ophanim.current-policy-qualification-audit/v1",
     "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
@@ -1030,7 +1034,7 @@
       "domainQualification": "Injected fixture verifier tests snapshot/digest mechanics only; no independent model review or live domain execution claimed."
     }
   },
-  "follow_up_routing": {
+  "routing_delta": {
     "schema": "ophanim.latest-delta-routing-probe/v1",
     "commit": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
     "rows": [
@@ -1703,5 +1707,369 @@
     },
     "source_unchanged": true,
     "cross_lab_qualification_performed": false
+  },
+  "learning_delta": {
+    "schema": "ophanim.learning-delta-audit/v1",
+    "recordedAtUtc": "2026-11-17T05:22:15.483663+00:00",
+    "publicSource": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+    "sourcePins": [
+      {
+        "path": "pantheon/src/ledger/practice-kinds.mjs",
+        "baseGitBlob": "eeeb008d3234aadd24aa465ff1b58d79c7a112cc",
+        "baseSha256": "cc253e54713980abe3ea17fb10ac9b9072111d200ab37d22011a643c1dfcc9af"
+      },
+      {
+        "path": "pantheon/src/ledger/cycle-kinds.mjs",
+        "baseGitBlob": "7a7fb6a0afdf743c1be4d815475e9c12a693f035",
+        "baseSha256": "579fdd75be6b74aafb30a64905e75b38a86ffc1688e5c48467b74ac1c1a8300a"
+      },
+      {
+        "path": "pantheon/src/board/run-item.mjs",
+        "baseGitBlob": "b1c6ba8ead82b5c821dc304793ffc419a5eac30b",
+        "baseSha256": "b22eb52f168de6c158f7ec6178f36f89a99b3a0ed225bd67329b7e1472130825"
+      },
+      {
+        "path": "pantheon/src/board/operate.mjs",
+        "baseGitBlob": "b8fe3ca72eb8b03f9b7d730819dc27474af1c10d",
+        "baseSha256": "836bf8bf45ff1674346d5598208c7ab87cbcb260f4dfc54f7e46451023174645"
+      },
+      {
+        "path": "pantheon/bin/pantheon-review-cycle.mjs",
+        "baseGitBlob": "e88e6b917eddaf80a6c9a36bc6b9c91ca9010cee",
+        "baseSha256": "dc62636aa7f5bdb86c4afdebb1cde516f977aba26837e736c15626b933660381"
+      },
+      {
+        "path": "ophanim/efficiency/practice.mjs",
+        "baseGitBlob": "23d032f611732d1497c481fc24eb37ed9fe791e5",
+        "baseSha256": "773e476e51d6c87942d90f8a324f8ea1ddfe7dfca0c51ca46f5a74394e0b8b0f"
+      },
+      {
+        "path": "packages/ledger/chain.mjs",
+        "baseGitBlob": "8be028d6a91c9e9ceaf0eafc836e120b067bcb41",
+        "baseSha256": "46561760d1e2d7c21628388faa996dfc0a5c21c6a93d91b368c3854350045c06"
+      },
+      {
+        "path": "packages/ledger/home.mjs",
+        "baseGitBlob": "7a03f168f6f8c9b4008dd546c2b5341a385d940b",
+        "baseSha256": "f74813d6806c5ee005b67eb75f50d166fb7e3890bea82f985723fb37fdcc483c"
+      }
+    ],
+    "positiveEnforcement": [
+      "default v2 cycles require an assessment-stage disposition to close",
+      "close cites cycle dispositions; next cycle binds the historical prior",
+      "actual dispatch selections record loaded decision or named provisional default",
+      "unmeasured judgment must be provisional",
+      "unknown/unimplemented promoted policy hash is reported applies:false at public base",
+      "per-attempt provider usage/settings and unknown USD retained by M5"
+    ],
+    "qualifiedLimits": [
+      "explicit old-v1 writing path is retained for compatibility; only v2 enforces the assessment requirement",
+      "practiceAssessment/rankChairQuestions adapter has no production caller at this pin; operate takes caller-supplied assessment",
+      "provider resource accounting is not a comparison or independently reviewed promotion receipt"
+    ],
+    "finding": {
+      "id": "C3-promotion-qualification",
+      "priority": 2,
+      "title": "Current admission treats a measured flag, arbitrary ledger hash and uninvoked named decider as qualification",
+      "observed": {
+        "accepted": true,
+        "recordedMeasured": true,
+        "ledgerEvidenceKind": "cycle",
+        "declaredDecider": {
+          "lab": "xai",
+          "model": "model-never-invoked-for-this-decision",
+          "vendor": "xai"
+        },
+        "deciderWasInvoked": false,
+        "allRecordedTurnsAreEarlierCodeReviews": true,
+        "turnsBeforePromotion": 3,
+        "turnsAfterPromotion": 3,
+        "independentReviewOfPracticeDecision": false,
+        "executedComparison": false,
+        "cycleClose": "verified",
+        "fullLedgerVerifies": true,
+        "admitted": {
+          "outcome": "promote",
+          "provisional": false,
+          "policy": {
+            "hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "profile": "argo",
+            "version": "candidate-with-no-comparison"
+          }
+        },
+        "loaded": {
+          "outcome": "promote",
+          "applies": false,
+          "reason": "loaded the admitted promote sha256:0f84e1275a26, whose policy sha256:dddddddddddd is not the one this dispatcher implements (sha256:d055a577fcff); the dispatch ran pantheon.selection/v1 and records the difference"
+        }
+      },
+      "expected": "Promotion remains refused without a verifier that validates a scoped comparison and signed independent decision bound to exact candidate evidence",
+      "limits": "At public base the unimplemented candidate reports applies:false; this repro does not show arbitrary candidate tables executing."
+    },
+    "baselineFocusedTests": {
+      "practiceAndAssessment": {
+        "passed": 9,
+        "failed": 0
+      },
+      "resourceUsage": {
+        "passed": 13,
+        "failed": 0
+      }
+    },
+    "repair": {
+      "worktree": "/mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/ophanim-learning-delta-audit",
+      "commit": "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54",
+      "scope": "Fail closed while comparison/decision qualification is unimplemented; no research pipeline added",
+      "changes": [
+        "optional trusted write-only appendRefusal kind hook at core append and home pre-declaration",
+        "canonical payload snapshot and separate policy input prevent mutation after checking",
+        "practice kind refuses every new promote, measured:true or provisional:false disposition before object/chain writes",
+        "loadPractice rejects historical unsupported promote or measured/nonprovisional retain before hash equality; uses named provisional implemented policy",
+        "historical validate/rederive/admittedPractice semantics retained for old close and successor prior hashes"
+      ],
+      "redEvidence": {
+        "initialNewTests": {
+          "failed": 5,
+          "passed": 1
+        },
+        "removedHomeGuard": "refused write appended authority object/chain; regression failed",
+        "missingSnapshot": "caller/policy mutation stored value2 instead of stable0",
+        "followupNonpromotionTests": {
+          "failed": 3,
+          "passed": 0
+        }
+      },
+      "finalFocusedTests": {
+        "passed": 36,
+        "failed": 0,
+        "command": "/usr/bin/node --import /mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/workflow-audit/offline-guard.mjs --test packages/ledger/tests/append-policy.test.mjs packages/ledger/tests/chain.test.mjs pantheon/tests/practice-promotion-gate.test.mjs pantheon/tests/ledger-practice.test.mjs ophanim/efficiency/practice.test.mjs"
+      },
+      "historicalFixture": {
+        "schema": "pantheon.fixture.unqualified-practice-promotion/v1",
+        "sourceCommit": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+        "limitation": "Historical synthetic signature/shape acceptance; no comparison or independent practice decision was performed. No private keys retained.",
+        "anchor": "sha256:b53f8b06d1a507d17fe08f9509610a69f14cd6962426fa97ba2697829c329b9e",
+        "head": "sha256:48e53d3e60561c06ae3a91f1a5c8b26b240b73f59ef41691a479fab275d99883",
+        "entries": 20,
+        "cycle": "sha256:e050b545e4cef530442b5d28c49a64b1538c4ea620bd9192bd326b07359cae69",
+        "promoted": "sha256:a27d7bafcd7bc7bc5e190ebde4df982aee872662e95a5c5a1daa4d06c1f9a6ee",
+        "close": "sha256:3a1012ef352a6081efbbd864c0e045dc3d15cf6fec2121d93fb5cdc8a27ac503",
+        "next": "sha256:48e53d3e60561c06ae3a91f1a5c8b26b240b73f59ef41691a479fab275d99883",
+        "policy": {
+          "version": "pantheon.selection/v1",
+          "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+          "profile": "argo"
+        }
+      },
+      "reviewStatus": "internal same-family inspection only; independent cross-model review and root composed freeze remain required",
+      "sourcePins": [
+        {
+          "path": "packages/ledger/chain.mjs",
+          "sha256": "18df5dcd14227ecd7f7bb8d62f123055b0e83b0d93e1529ad68728213d80b131"
+        },
+        {
+          "path": "packages/ledger/home.mjs",
+          "sha256": "e0a8b2849574816a6f9298357113ecf13183bc9f5c8f6f59d5abb2f26652fd58"
+        },
+        {
+          "path": "pantheon/src/ledger/practice-kinds.mjs",
+          "sha256": "1bcef4662487a8e93faca3148f8739ddd06bbbbdb5082ba4f66b90ec7e5c6eba"
+        },
+        {
+          "path": "packages/ledger/tests/append-policy.test.mjs",
+          "sha256": "59187e4d351cee7b5bbd6df64bf79a24383c9be928235164781a8a97e792e5f5"
+        },
+        {
+          "path": "pantheon/tests/practice-promotion-gate.test.mjs",
+          "sha256": "6db3fbb00db3eb0efee834f6e2324a02eee4d28dfbf7979616c0736f777e6f8e"
+        }
+      ],
+      "commits": [
+        "a5f9c4ea001362c4f42a5a46828d16397803320f",
+        "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54"
+      ],
+      "retentionFollowup": {
+        "sourceCommit": "a5f9c4ea001362c4f42a5a46828d16397803320f",
+        "observed": {
+          "sourceCommit": "a5f9c4ea001362c4f42a5a46828d16397803320f",
+          "providerCalls": 0,
+          "fixtureReviews": 3,
+          "comparisonExecuted": false,
+          "practiceReviewExecuted": false,
+          "close": "verified",
+          "ledgerVerifies": true,
+          "loaded": {
+            "schema": "pantheon.practice/v1",
+            "scope": "routing-coordination",
+            "disposition": "sha256:9bbcb55f75abc8711d54c4b7c993a9c801ed3c70a52fcb2708b9c77280da239d",
+            "outcome": "retain",
+            "policy": {
+              "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "version": "pantheon.selection/v1"
+            },
+            "provisional": false,
+            "applies": true,
+            "reason": "loaded the admitted retain sha256:9bbcb55f75ab; it is the policy this dispatcher runs"
+          }
+        },
+        "fixCommit": "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54",
+        "historicalFixture": "pantheon/tests/fixtures/practice-unqualified-retain.json",
+        "rawMeasurementsUnaffected": "Only practice.disposition labels are restricted; measurement records in other kinds are unchanged."
+      }
+    },
+    "safety": {
+      "providerCalls": 0,
+      "ownerWrites": 0,
+      "preExistingPrivateKeysRead": false,
+      "disposableFixtureAuthority": true,
+      "fixtureExportContainsPrivateKeys": false,
+      "allNodeInvocationsGuarded": true
+    }
+  },
+  "roles": {
+    "schema": "ophanim.role-semantics-probe/v1",
+    "commit": "048b3ba41e3b81dc58d446bf9767ccf59d4571a9",
+    "configuredLabs": [
+      "openai",
+      "xai",
+      "google",
+      "anthropic"
+    ],
+    "inRunReviewerLabs": [
+      "xai",
+      "google",
+      "anthropic"
+    ],
+    "cycleWithoutAnthropic": [
+      {
+        "lab": "xai",
+        "role": "reviewer",
+        "model": "grok-4.7"
+      },
+      {
+        "lab": "google",
+        "role": "reviewer",
+        "model": "gemini-3.6-flash"
+      },
+      {
+        "lab": "openai",
+        "role": "planner",
+        "model": "gpt-6-sol"
+      }
+    ],
+    "rows": [
+      {
+        "forcedPlanner": false,
+        "result": {
+          "shipped": true,
+          "error": null
+        },
+        "plan": {
+          "vendor": "openai",
+          "model": "gpt-6-sol",
+          "reserved": [
+            "xai",
+            "google",
+            "anthropic"
+          ]
+        },
+        "work": {
+          "vendor": "openai",
+          "model": "gpt-6-sol",
+          "reserved": [
+            "xai",
+            "google",
+            "anthropic"
+          ]
+        },
+        "reviewLabs": [
+          "xai",
+          "google",
+          "anthropic"
+        ],
+        "workCalls": 1,
+        "planningTask": "exactly one TITLE line",
+        "workerPromptReceivesTitle": true
+      },
+      {
+        "forcedPlanner": true,
+        "result": {
+          "shipped": false,
+          "error": {
+            "stage": "work",
+            "message": "REVIEW_LABS_UNAVAILABLE: 3 independent review labs (stakes critical) are required, and with anthropic already producing, no producer lab leaves that many reviewer labs eligible (law 3 avoids every producer's lab); refusing rather than running fewer",
+            "at": "2026-11-17T05:26:55.814Z"
+          }
+        },
+        "plan": {
+          "vendor": "anthropic",
+          "model": "claude-fable-5-2"
+        },
+        "reviewLabs": [],
+        "workCalls": 0,
+        "planningTask": "exactly one TITLE line",
+        "workerPromptReceivesTitle": false
+      }
+    ],
+    "currentCycleFallback": {
+      "planner_excluded": false,
+      "author_labs": [
+        "openai"
+      ],
+      "reviewerLabs": [
+        "xai",
+        "google",
+        "anthropic"
+      ],
+      "note": "excluding the planner's lab (anthropic) as well leaves fewer than 3 labs: the planner's lab may review, and the author turns are not cited"
+    },
+    "assertionsPassed": 16,
+    "scope": "two real runOpenItem executions with scripted providers plus pure reviewer-pool/cycle-policy probes; no live provider or owner key",
+    "status": "read-only semantic audit; no policy implementation",
+    "role_interpretation": {
+      "orchestration_authority": "deterministic JavaScript controller",
+      "current_planner_call": "one TITLE line; no model scheduling authority",
+      "worker": "assigned artifact ownership, internal reasoning and bounded recovery",
+      "reviewer": "independent judgment of declared artifact/change contribution scope"
+    },
+    "findings": [
+      {
+        "id": "RS1",
+        "classification": "configured-pool/world-limit conflation",
+        "impact": "critical fit automatically co-seats title and implementation workers on OpenAI; explicit Anthropic title worker is refused before work",
+        "scope": "four configured labs, three fit in-run reviewer labs; cycle reviewer pool also includes OpenAI"
+      },
+      {
+        "id": "RS2",
+        "classification": "role/authority/contribution conflation",
+        "impact": "current title worker is called assigner despite controller performing scheduling; title still reaches worker and work cites plan",
+        "constraint": "do not delete actual contribution lineage while correcting terminology"
+      },
+      {
+        "id": "RS3",
+        "classification": "existing lineage-downgrade bypass still on audited remote",
+        "impact": "cycleReviewers drops planner lab and caller omits all author turns when three reviewers would otherwise be unavailable",
+        "constraint": "do not use this bypass to resolve reservation disagreement or lower quorum"
+      }
+    ],
+    "worker_escalation": {
+      "valid": true,
+      "focused_test_passed": true,
+      "observation": "fallback Carbon medium -> failed acceptance -> high on answering seat -> shipped",
+      "scope": "scripted provider mechanics, not live performance"
+    },
+    "authorized_changes": false,
+    "new_forced_coseating_implemented": false,
+    "quorum_lowered": false,
+    "source_unchanged": true,
+    "fit_fix_commit_preserved": "809d110272a40535cc0cb6edbf7a9c06e4ecb39f",
+    "acceptance": [
+      "Separate deterministic authority, worker task planning and independent artifact review in names and records.",
+      "Derive independence from actual contribution lineage within explicit review scope.",
+      "Treat reviewer pools as configured qualification sets; preserve required quorum and report unavailable capacity honestly.",
+      "Preserve worker escalation and actual-answerer handoff evidence.",
+      "Do not adopt vendor co-seating as a universal architecture requirement."
+    ]
   }
 }
