@@ -40,7 +40,7 @@ import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
-import { frontierCandidates, readPools, selectSeat, registryModels } from "../route/frontier.mjs";
+import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
@@ -707,23 +707,26 @@ export async function runOpenItem(spec, opts = {}) {
   // The distinct labs a role's selector can reach under the given exclusions: its admitted policy candidates,
   // plus the operator's role-wide seat when that seat's lab is not excluded. Used to refuse a `fit` fan-out
   // that cannot be as wide as its profile requires before any seat in it is called.
-  // Under `fit`, a PRODUCER (planner, maker) seat must leave the review panel its stakes require: a lab is held
-  // back from the producer when seating there would leave fewer than review_labs eligible reviewer labs, given the
-  // producer labs already seated (law 3 avoids every one of them). null when one reviewer suffices or not `fit`.
-  function reviewReserve(producerLabs = []) {
+  // Under `fit`, before any work call: can the review panel the stakes require be formed from the CONFIGURED
+  // in-run reviewer pool, given this slot's actual producers? Law 3 excludes the maker's and the planner's labs.
+  // Producers are chosen on their own merits and are never moved to make a panel possible (owner control
+  // contract, "Functional roles and valid worker escalation": do not force title/file workers onto one vendor to
+  // manufacture a numeric panel). A shortage is a named pending state that names the configured pool, not a claim
+  // about how many labs exist; the operator may reseat explicitly or qualify another reviewer pool. The plan stays
+  // on the board; no work generation is spent on a change that cannot be reviewed as required.
+  function reviewCapacity(slots, planLab) {
     const need = TASK ? requirementsOf(TASK).review_labs.value : 1;
-    if (need < 2) return null;
-    const labsOf = ls => [...new Set(ls.filter(Boolean))];
-    const universe = labsOf(registryModels().map(c => labOf(c.vendor, c.model)));
-    const left = used => labsReachable("reviewer", { avoid: used.flatMap(l => vendorsOfLab(l)), avoidLabs: used }).length;
-    const labs = universe.filter(l => left(labsOf([...producerLabs, l])) < need);
-    // Every lab reserved: the producers already seated (an operator's explicit seat is never moved) leave no seat
-    // for this producer that keeps the panel possible. Refuse now, by name, before any generation is spent.
-    if (labs.length === universe.length) throw Object.assign(new Error(`REVIEW_LABS_UNAVAILABLE: ${need} independent review labs ` +
-      `(stakes ${TASK.stakes.value}) are required, and with ${labsOf(producerLabs).join(", ") || "no lab"} already producing, no producer ` +
-      `lab leaves that many reviewer labs eligible (law 3 avoids every producer's lab); refusing rather than running fewer`),
-      { code: "REVIEW_LABS_UNAVAILABLE" });
-    return labs.length ? { labs, review_labs: need } : null;
+    if (need < 2) return;
+    for (const c of slots) {
+      const makerLab = labOf(c.seat.vendor, c.model ?? null);
+      const used = [...new Set([planLab, makerLab].filter(Boolean))];
+      const labs = labsReachable("reviewer", { avoid: used.flatMap(l => vendorsOfLab(l)), avoidLabs: used, chars: null });
+      if (labs.length < need) throw Object.assign(new Error(`REVIEW_CAPACITY_PENDING: ${c.sl.slot} needs ${need} independent review labs ` +
+        `(stakes ${TASK.stakes.value}); the configured in-run reviewer pool, excluding the producers' labs (${used.join(", ")}), ` +
+        `offers ${labs.length} (${labs.join(", ") || "none"}). This is a shortage of the configured pool, not of possible reviewers: ` +
+        `reseat a producer explicitly or qualify another reviewer pool. Refused before any work call; the plan is kept.`),
+        { code: "REVIEW_CAPACITY_PENDING", pending: { slot: c.sl.slot, need, offered: labs, producer_labs: used } });
+    }
   }
   function labsReachable(role, { avoid = [], avoidLabs = [], chars = null } = {}) {
     let policy = [];
@@ -884,7 +887,7 @@ export async function runOpenItem(spec, opts = {}) {
         const { slice } = project(board.store, board.refs.resolve(REF), PROJECTION_FOR_ROLE.planner);
         const p = promptFor("planner", { ticket: slice.slots.ticket.payload.goal },
           NO_TOOLS + "Reply with exactly one line and nothing else: TITLE: <a one-line work item title for the single change this ticket asks for>");
-        const planChoice = choose("planner", { chars: p.prompt.length, reserve: reviewReserve() });
+        const planChoice = choose("planner", { chars: p.prompt.length });
         const pl = planChoice.seat;
         plannerVendor = pl.vendor;
         let seat = { vendor: pl.vendor, seat_id: `${pl.vendor}-plan`, mode: "plan", occupancy_gen: 1 };
@@ -933,7 +936,7 @@ export async function runOpenItem(spec, opts = {}) {
       // the ticket's pin, the role-wide override, the policy) and that seat -- vendor, model, transport, pool,
       // pool configuration -- is what every revision of the slot is sent to until a recorded decision changes it.
       crew = SLOTS.map((sl, i) => {
-        const choice = choose("implementer", { pin: sl.model ?? null, slotOverride: slotOverrideFor(sl, i), chars: implementerChars(sl) , reserve: reviewReserve([labOf(plannerVendor, plannerModel)]) });
+        const choice = choose("implementer", { pin: sl.model ?? null, slotOverride: slotOverrideFor(sl, i), chars: implementerChars(sl) });
         const im = choice.seat;
         const seat = { vendor: im.vendor, seat_id: SLOTS.length === 1 ? `${im.vendor}-work` : `${im.vendor}-work-${sl.slot}`,
                        mode: "work", occupancy_gen: 1 };
@@ -950,6 +953,7 @@ export async function runOpenItem(spec, opts = {}) {
       maker = crew[0].seat;
       wip = crew[0].wip;
       progress({ event: "crew", detail: crew.map(c => `${c.sl.slot}:${c.seat.vendor}/${c.model}`).join(", ") });
+      reviewCapacity(crew, labOf(plannerVendor, plannerModel));
     } else {
       enter("resume", `from ${root}`);
       plannerVendor = run.planner_vendor;
@@ -976,7 +980,7 @@ export async function runOpenItem(spec, opts = {}) {
         const choice = override ? choose("implementer", { slotOverride: override, chars: implementerChars(sl) })
           : saved.selected?.seat ? { ...saved.selected, selection: { ...saved.selected.selection, resumed: true },
               candidates: saved.selected.candidates.map(c => ({ ...c, selection: { ...c.selection, resumed: true } })) }
-          : choose("implementer", { pin: sl.model ?? null, chars: implementerChars(sl) , reserve: reviewReserve([labOf(plannerVendor, plannerModel)]) });
+          : choose("implementer", { pin: sl.model ?? null, chars: implementerChars(sl) });
         const stopped = saved.escalation?.stopped ?? null;
         // Lifting a recorded stop is its own explicit, recorded action: a per-slot reseat at resume, or the
         // caller's `retryStopped` reason (same-seat repair, bounded by this resume's revision limit and the

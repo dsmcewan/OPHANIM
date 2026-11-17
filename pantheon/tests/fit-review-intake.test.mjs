@@ -16,8 +16,9 @@ const REVIEW = /VERDICT/;
 const SCOUT = /RAN: nothing/;
 const lab = t => labOf(t.vendor, t.model);
 const quota = () => Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" });
-// A planner seated on the maker's lab leaves the reviewer three labs (xai, google, anthropic): law 3 avoids
-// both the maker's and the assigner's lab, and four labs exist.
+// A planner the operator seats on the maker's lab leaves the configured in-run reviewer pool three labs (xai,
+// google, anthropic): law 3 avoids both the maker's and the assigner's lab. That is this configuration's pool,
+// not a count of possible reviewers.
 const SAME_LAB_PLANNER = { planner: seat("openai", "gpt-6-sol") };
 
 test("fit, critical stakes: three reviewers from three distinct labs, none the maker's, all approving, then ship", async () => {
@@ -62,20 +63,19 @@ test("fit, critical stakes: one of the three reviewers rejects, so the change is
   });
 });
 
-test("fit, critical stakes with too few eligible labs: a named refusal, and no reviewer is called", async () => {
+test("fit, critical stakes with too few eligible labs: a named pending state before any work call, and no reviewer is called", async () => {
   await withDispatch(async ({ spec, opts, calls }) => {
-    // The operator seats the planner on a reviewer lab (anthropic) and the maker lands on openai: only xai and
-    // google remain. An explicit seat is the operator's and is not moved to reserve labs, so this still refuses.
+    // The operator seats the planner on a reviewer lab (anthropic) and fit seats the maker on openai: the configured
+    // in-run reviewer pool then offers only xai and google.
     const r = await runOpenItem(spec("fitTooFewLabs", { stakes: "critical" }),
       opts({ profile: "fit", seatOverrides: { planner: seat("anthropic", "claude-fable-5-2") } }));
     assert.equal(r.shipped, false);
-    // Refused at the maker's seating, before any implementer or reviewer call: no producer lab can keep 3 review labs.
     assert.equal(r.error?.stage, "work");
-    assert.match(r.error.message, /REVIEW_LABS_UNAVAILABLE/);
+    assert.match(r.error.message, /REVIEW_CAPACITY_PENDING/);
     assert.match(r.error.message, /3 independent review labs/);
-    assert.equal(calls.filter(c => WORK.test(c.prompt)).length, 0, "no generation is spent on work that cannot be reviewed");
-    assert.equal(calls.filter(c => REVIEW.test(c.prompt)).length, 0, "it refuses rather than running fewer reviewers");
-    assert.equal(runJson(r).turns.filter(t => t.purpose === "critique").length, 0);
+    assert.match(r.error.message, /configured in-run reviewer pool/, "it names the configured pool, not a universal limit");
+    assert.equal(calls.filter(c => WORK.test(c.prompt)).length, 0, "no generation is spent on work that cannot be reviewed as required");
+    assert.equal(calls.filter(c => REVIEW.test(c.prompt)).length, 0, "it never runs fewer reviewers");
   });
 });
 
@@ -154,21 +154,18 @@ test("fit: when a fallback answered, the effort escalation starts from the ANSWE
   });
 });
 
-test("fit, critical stakes with NO overrides: producers are seated outside the reviewer labs, so three labs still review and it ships", async () => {
+test("fit, critical stakes with NO overrides: producers are chosen on their own merits, never co-seated to make a panel", async () => {
+  // Owner control contract: do not force title/file workers onto one vendor to manufacture a numeric review
+  // panel. fit's own planner (anthropic) and maker (openai) leave two in-run reviewer labs; the run is pending.
   await withDispatch(async ({ spec, opts, calls }) => {
     const r = await runOpenItem(spec("fitCriticalDefault", { stakes: "critical" }), opts({ profile: "fit" }));
-    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    assert.equal(r.shipped, false);
+    assert.match(r.error.message, /REVIEW_CAPACITY_PENDING/);
     const run = runJson(r);
-    const plan = run.turns.find(t => t.purpose === "plan"), work = run.turns.find(t => t.purpose === "work");
-    const critiques = run.turns.filter(t => t.purpose === "critique");
-    const labs = critiques.map(lab);
-    assert.equal(new Set(labs).size, 3, `three distinct review labs (${labs})`);
-    assert.ok(!labs.includes(lab(plan)) && !labs.includes(lab(work)), `no reviewer shares the planner's (${lab(plan)}) or maker's (${lab(work)}) lab`);
-    for (const t of [plan, work]) {
-      assert.ok(t.selection.excluded.some(e => /reserved for review/.test(e.why)), `${t.purpose}: the reservation is recorded with its reason`);
-      assert.equal(t.selection.reserved_review_labs, 3);
-    }
-    assert.equal(calls.filter(c => REVIEW.test(c.prompt)).length, 3);
+    const plan = run.turns.find(t => t.purpose === "plan");
+    assert.equal(lab(plan), "anthropic", "the planner is fit's own choice, not moved to openai");
+    for (const t of run.turns) assert.ok(!(t.selection.excluded ?? []).some(e => /reserved/.test(e.why)), "no lab is reserved");
+    assert.equal(calls.filter(c => WORK.test(c.prompt)).length, 0);
   });
 });
 
