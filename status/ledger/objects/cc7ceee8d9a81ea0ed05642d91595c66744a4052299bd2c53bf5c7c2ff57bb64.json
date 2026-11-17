@@ -1,0 +1,1 @@
+{"basis":"moving ophanim/ledger to packages/ledger so Pantheon does not import OPHANIM; first, because it moves the files the other Ready items change","checked":"2026-11-17","item":"shared-package","schema":"ophanim.status/v1","state":"In progress","title":"Ledger as a shared package","waiting_on":null}

@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node ophanim/ledger/status.mjs set ...`, then `node ophanim/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:4cddf4a50fc69c6d10195a052a303a897dca9737c4a04a39da03cde55137f68c` · 36 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:00cb542d9a92c57ebc342cc7d229fbde981be0a268c99b963b0bfbcd77a2e36c` · 44 entries.
 Verify it: `node ophanim/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 21 · In progress: 2 · Ready: 3 · On Hold: 9.
+**Counts:** Resolved: 23 · In progress: 1 · Ready: 4 · On Hold: 10.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -16,16 +16,17 @@ Verify it: `node ophanim/ledger/status.mjs verify`.
 | **xAI models on the shared client** (`direct-path-xai`) | On Hold | fact | xAI documents no output ceilings (re-checked 2026-11-17) | 2026-11-17 |
 | **gemini-3.6-flash off the agy seats** (`gemini-routing`) | On Hold | decision | would move OAuth agy seats onto the metered API | 2026-11-17 |
 | **TELOS reviewers bound to real seats (K6)** (`k6`) | On Hold | governance | pinned TELOS verifier admits ledger entries and seat-signed reviews | 2026-11-17 |
+| **Seat files from before the ledger** (`legacy-seat-files`) | On Hold | decision | a resumed board from before the ledger has seat turns that were never recorded; refused today. Adopting them as signed inputs is a choice about trust | 2026-11-17 |
 | **P8/P9 admission through the efficiency gate** (`p8-p9-admission`) | On Hold | depends on k6 | needs the pinned verifier to admit it | 2026-11-17 |
 | **Q7 seat adjustment from evidence** (`q7-adjustment`) | On Hold | depends on k6 | needs the pinned verifier to admit a seating dimension | 2026-11-17 |
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
 | **Hardware or remote signer** (`signer`) | On Hold | decision | which signer holds operator keys is a custody decision | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
-| **Remaining off-ledger records** (`off-ledger-records`) | In progress |  | lease rows, budget limits, ref moves, seat files checked against turns: being built | 2026-11-17 |
-| **Status board from a ledger** (`status-board`) | In progress |  | this board: status entries with the standing rule enforced; docs/STATUS.md generated | 2026-11-17 |
-| **One ledger across boards** (`board-resolver`) | Ready |  | gate and contribution kinds resolve their own board per entry; dependencies converged | 2026-11-17 |
-| **Review layer every cycle** (`review-every-cycle`) | Ready |  | review entries under cold-review rules by default; dependencies converged | 2026-11-17 |
-| **Ledger as a shared package** (`shared-package`) | Ready |  | move ophanim/ledger to packages/ledger so Pantheon does not import OPHANIM; dependencies converged | 2026-11-17 |
+| **Ledger as a shared package** (`shared-package`) | In progress |  | moving ophanim/ledger to packages/ledger so Pantheon does not import OPHANIM; first, because it moves the files the other Ready items change | 2026-11-17 |
+| **One ledger across boards** (`board-resolver`) | Ready | depends on shared-package | gate and contribution kinds resolve their own board per entry; after shared-package, which moves the same files | 2026-11-17 |
+| **Gate verdicts recorded on the run path** (`gate-on-run-path`) | Ready |  | the gate kind and its lease citations exist; runOpenItem does not yet record a gate entry at ship | 2026-11-17 |
+| **Ref recorded but its file write fails** (`ref-write-gap`) | Ready |  | a ref.move is recorded before the ref file is written; if that write fails, the next swap is refused until repaired. Needs a recorded repair path | 2026-11-17 |
+| **Review layer every cycle** (`review-every-cycle`) | Ready | depends on shared-package | review entries under cold-review rules by default; after shared-package, which moves the same files | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
 | **Six models on the shared client** (`frontier-move`) | Resolved |  | requests unchanged (providerDefaults); remaining models held (direct-path-xai, gemini-routing) | 2026-11-17 |
@@ -38,12 +39,14 @@ Verify it: `node ophanim/ledger/status.mjs verify`.
 | **Layered review findings** (`layered-review`) | Resolved |  | regression and defects fixed with fails-before tests; doc claims corrected | 2026-11-17 |
 | **The ledger by default** (`ledger-default`) | Resolved |  | pinned genesis, key custody, seat-key rotation; on by default for runOpenItem and the CLI (PR #6) | 2026-11-17 |
 | **Reseat from the live view** (`live-reseat`) | Resolved |  | explicit, consented, recorded per seat | 2026-11-17 |
+| **Remaining off-ledger records** (`off-ledger-records`) | Resolved |  | lease rows, budget caps and ref moves are ledger entries recorded before the file changes; seat files are checked against ledger turns at handoff (ophanim/ledger/board-kinds.mjs) | 2026-11-17 |
 | **OPHANIM loop P1-P7** (`p1-p7`) | Resolved |  | equilibrium reuse, chain verification, required gates, assignments, append-only debits, deltas, investigation checkpoints (docs/loop-evaluation.md) | 2026-11-17 |
 | **Frontier handoff and refill scheduling (P8, P9)** (`p8-p9`) | Resolved |  | implemented, opt-in; admission through the efficiency gate is held separately (p8-p9-admission) | 2026-11-17 |
 | **Routing and escalation protocol** (`protocol`) | Resolved |  | decisions re-derive; reviewer verdicts and truncations escalated | 2026-11-17 |
 | **Engine Q1-Q6** (`q1-q6`) | Resolved |  | model in the author, occupancy, chair and controller gates, lane registry, budget binding (docs/pantheon-engine-loop-evaluation.md) | 2026-11-17 |
 | **Q7 contribution measurement** (`q7-measurement`) | Resolved |  | projection, recomputation check and ranking across five chairs | 2026-11-17 |
 | **OpenAI reasoning.context** (`reasoning-context`) | Resolved |  | settled from the vendor docs; effective mode recorded | 2026-11-17 |
+| **Status board from a ledger** (`status-board`) | Resolved |  | status entries with the standing rule enforced on append; docs/STATUS.md generated from status/ledger | 2026-11-17 |
 | **Swarms on the board** (`swarms`) | Resolved |  | gated, recorded transitions; all five chairs measured | 2026-11-17 |
 | **One terminal-state rule for every model** (`terminal-state`) | Resolved |  | shared rule on both transports, unary and streamed (docs/pantheon-model-loop-evaluation.md) | 2026-11-17 |
 | **Output-token tiers** (`token-tiers`) | Resolved |  | provisional tiers by difficulty, capped at documented ceilings; adjustment held (tier-adjustment) | 2026-11-17 |
