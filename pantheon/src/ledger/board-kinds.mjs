@@ -17,9 +17,7 @@
 // `scope` names the board (its root), so a ledger shared by several boards keeps their chains apart.
 // The files stay for display and for the runtime's own reads; with a ledger, the runtime records here
 // first and refuses the change when the ledger does (pantheon/src/board/runtime.mjs, refs.mjs).
-import fs from 'node:fs';
-import path from 'node:path';
-import {openStore} from '../board/cas.mjs';
+import {boardScopes} from './scopes.mjs';
 
 export const LEASE = 'lease', BUDGET = 'budget', REF_MOVE = 'ref.move';
 const EVENTS = ['observed', 'granted', 'renewed', 'released', 'expired', 'fenced'];
@@ -101,20 +99,14 @@ function descends(store, commit, ancestor, limit = 100_000) {
 /**
  * The store a scope's ref moves are checked against: the board the ledger was opened with, else the
  * board at that root when one is there (read-only), else null (the move's chain is still checked, its
- * commits cannot be; see the doc's limits).
+ * commits cannot be, and the verify result says so). The same resolver the gate and contribution kinds
+ * use (scopes.mjs).
  */
-export function storeResolver(board = null) {
-  const opened = new Map();
-  return scope => {
-    if (board?.store && (board.root === undefined || board.root === scope)) return board.store;
-    if (opened.has(scope)) return opened.get(scope);
-    const s = typeof scope === 'string' && path.isAbsolute(scope) && fs.existsSync(path.join(scope, 'objects')) ? openStore(scope, {readOnly: true}) : null;
-    opened.set(scope, s);
-    return s;
-  };
+export function storeResolver(board = null, scopes = boardScopes(board)) {
+  return scope => scopes(scope)?.store ?? null;
 }
 
-export function boardKinds({authors = () => true, board = null, stores = storeResolver(board)} = {}) {
+export function boardKinds({authors = () => true, board = null, scopes = boardScopes(board), stores = storeResolver(board, scopes)} = {}) {
   return {
     [LEASE]: {
       authors,
@@ -176,7 +168,7 @@ export function boardKinds({authors = () => true, board = null, stores = storeRe
         if (c.why) return c.why;
         if (c.prev && p.from !== c.prev.to) return `${p.name} was left at ${String(c.prev.to).slice(0, 19)}, not ${String(p.from).slice(0, 19)}: it moved off the ledger`;
         const store = stores(p.scope);
-        if (!store) return null;
+        if (!store) { view.note?.(`no board at ${p.scope}: the move's chain re-derived, its commits not`); return null; }
         if (p.to !== null && !store.has(p.to)) return `${p.to.slice(0, 19)} is not a commit in this board's store`;
         if (p.from !== null && !store.has(p.from)) return `${p.from.slice(0, 19)} is not a commit in this board's store`;
         if (p.from !== null && !p.reset && !descends(store, p.to, p.from)) return `${p.to.slice(0, 19)} does not descend from ${p.from.slice(0, 19)}, and the move is not a recorded reset`;
@@ -241,6 +233,15 @@ export function boardRecorder({ledger, controller, order, scope}) {
         if (p?.scope === scope) out.set(p.resource, {hash: ledger.hashOf(e), payload: p});
       }
       return {scope, hashes: [...out.values()].filter(x => leaseActive(x.payload)).map(x => x.hash), rows: leaseRows(out)};
+    },
+    /**
+     * A ship's gate verdict (gate-kind.mjs `gateRecord(..., {scope, leaseLedger: this})`), citing the
+     * lease entries it read. Only this board's verdicts: the payload names this scope.
+     */
+    recordGate(p) {
+      if (p?.scope !== scope) throw Object.assign(new Error(`a gate verdict recorded for ${scope} names that board (scope), not ${p?.scope}`), {code: 'LEDGER_REFUSED'});
+      const cites = p.lease_scope === undefined ? [] : this.leaseCitations().hashes;
+      return ledger.append({kind: 'gate', payload: p, derivedFrom: cites, ...by}).hash;
     },
   };
 }

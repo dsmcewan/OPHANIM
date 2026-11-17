@@ -13,6 +13,15 @@
 //
 // Strict reading: a torn or unparseable line anywhere is an error, never skipped. Nothing here trusts a
 // record it has not re-derived.
+//
+// Domains (docs/ledger-provenance-evaluation.md, "Shared ledgers and the run-path gate"). One ledger can
+// hold the kinds of several domains (Pantheon's, OPHANIM's). The authority DECLARES them: genesis, or a
+// later operator-signed authority entry, names each domain and its kinds (`domains: {name: [kind]}`).
+// A reader whose registry supplies a domain re-derives its entries. An entry of a declared domain the
+// reader does not supply is checked structurally only (chain linkage, order and author signatures, a
+// keyring author, an intact payload): never re-derived, never appended by that reader, and reported in
+// `verify().foreign`. An entry of a kind no domain declared before it is refused, as before, so the
+// registry stays closed: what a reader passes over is exactly what the ledger's authority named.
 import fs from 'node:fs';
 import path from 'node:path';
 import {sign as edSign, verify as edVerify, createPrivateKey, createPublicKey, generateKeyPairSync} from 'node:crypto';
@@ -27,6 +36,7 @@ export const CHECKPOINT = 'checkpoint';
 export const GENESIS = 'genesis';
 export const AUTHORITY = 'authority';
 const RESERVED = new Set([CHECKPOINT, GENESIS, AUTHORITY]);
+const KIND_NAME = /^[a-z][a-z0-9.-]{0,63}$/, DOMAIN_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const H = value => 'sha256:' + digest(value);
 const fail = why => { throw Object.assign(new Error(why), {code: 'LEDGER_REFUSED'}); };
 
@@ -47,7 +57,7 @@ const verifyBytes = (value, sig, publicJwk) => {
 export function defineKinds(spec) {
   for (const r of RESERVED) if (Object.hasOwn(spec, r)) fail(`kind "${r}" is reserved`);
   for (const [kind, k] of Object.entries(spec)) {
-    if (!/^[a-z][a-z0-9.-]{0,63}$/.test(kind)) fail(`kind name "${kind}" is not an identifier`);
+    if (!KIND_NAME.test(kind)) fail(`kind name "${kind}" is not an identifier`);
     for (const fn of ['authors', 'validate', 'rederive']) if (typeof k[fn] !== 'function') fail(`kind "${kind}" lacks ${fn}()`);
   }
   return Object.freeze({...spec});
@@ -63,19 +73,44 @@ const rootOf = hashes => H({hashes});
 const validAuthority = p => p && typeof p === 'object' && p.keyring && typeof p.keyring === 'object'
   && typeof p.orderer === 'string' && Array.isArray(p.operators) && p.operators.length > 0;
 
+/** A domain declaration: {name: [kind, ...]}, names and kinds identifiers, no reserved kind. */
+const validDomains = d => d === undefined || d === null || (typeof d === 'object' && !Array.isArray(d)
+  && Object.entries(d).every(([name, ks]) => DOMAIN_NAME.test(name) && Array.isArray(ks)
+    && ks.every(k => typeof k === 'string' && KIND_NAME.test(k) && !RESERVED.has(k))));
+/** Declarations only grow: a domain's kinds are unioned. */
+function mergeDomains(current, add) {
+  const out = Object.fromEntries(Object.entries(current ?? {}).map(([d, ks]) => [d, [...ks]]));
+  for (const [d, ks] of Object.entries(add ?? {})) out[d] = [...new Set([...(out[d] ?? []), ...ks])].sort();
+  return out;
+}
+// A kind belongs to one domain only.
+const domainsDisjoint = d => {
+  const seen = new Set();
+  for (const ks of Object.values(d)) for (const k of ks) { if (seen.has(k)) return false; seen.add(k); }
+  return true;
+};
+/** The declared domain a kind belongs to, or null. */
+export const domainOf = (domains, kind) => Object.entries(domains ?? {}).find(([, ks]) => ks.includes(kind))?.[0] ?? null;
+
 // The authority as of a point in the chain: genesis, then each authority entry applied in order.
 function applyAuthority(auth, payload) {
   const keys = {...auth.keys, ...(payload.add ?? {})};
   for (const id of payload.revoke ?? []) delete keys[id];
-  return {keys, orderer: payload.orderer ?? auth.orderer, operators: payload.operators ?? auth.operators, pins: auth.pins};
+  return {keys, orderer: payload.orderer ?? auth.orderer, operators: payload.operators ?? auth.operators, pins: auth.pins,
+    domains: mergeDomains(auth.domains, payload.domains)};
 }
-const authorityValid = a => Object.hasOwn(a.keys, a.orderer) && a.operators.length > 0 && a.operators.every(o => Object.hasOwn(a.keys, o));
+const authorityValid = a => Object.hasOwn(a.keys, a.orderer) && a.operators.length > 0 && a.operators.every(o => Object.hasOwn(a.keys, o))
+  && domainsDisjoint(a.domains ?? {});
 
 /**
  * Open a ledger. `anchor` is the genesis hash the reader trusts; it is required, so a ledger is never
  * trusted on the strength of the authority it names for itself.
+ *
+ * `domains` (optional) names the declared domains this registry supplies. Without it, a reader supplies
+ * every declared domain its registry holds at least one kind of. A domain is supplied whole or not at
+ * all: a registry missing one kind of a domain it supplies is refused, not passed over.
  */
-export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
+export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = null}) {
   if (!dir || !path.isAbsolute(dir)) fail('an absolute ledger directory is required');
   if (typeof anchor !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(anchor)) fail('a pinned genesis hash (anchor) is required');
   const file = path.join(dir, 'chain.jsonl');
@@ -104,8 +139,20 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     return lines.slice(0, -1).map((line, i) => { try { return JSON.parse(line); } catch { return fail(`line ${i} is not JSON`); } });
   }
 
-  // One entry against everything before it. Returns the reason it is refused, or null.
-  function check(e, i, prev, byHash, auth, {rederive}) {
+  const supplies = (declared, d) => (domains ? domains.includes(d) : (declared[d] ?? []).some(k => Object.hasOwn(kinds, k)));
+  // A kind this registry does not hold, given the domains declared so far: {foreign: domain} when it
+  // belongs to a declared domain this reader does not supply, else {why} (refused).
+  function unknownKind(kind, auth) {
+    const d = domainOf(auth?.domains, kind);
+    if (d === null) return {why: `kind "${kind}" is not in the registry, and no domain declared before it names it`};
+    if (supplies(auth.domains, d)) return {why: `kind "${kind}" of domain "${d}" is not in the registry, which supplies that domain: the composition is incomplete`};
+    return {foreign: d};
+  }
+
+  // One entry against everything before it. Returns the reason it is refused, or null. `notes` collects
+  // what was accepted without full re-derivation: foreign-domain entries, and the parts a kind reports
+  // it could not re-derive (view.note).
+  function check(e, i, prev, byHash, auth, {rederive, notes = null}) {
     const keyOf = id => (typeof id === 'string' && auth && Object.hasOwn(auth.keys, id) ? auth.keys[id] : null);
     if (i === 0) return checkGenesis(e);
     if (e?.kind === GENESIS) return `entry ${i}: only the first entry is a genesis`;
@@ -122,8 +169,9 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     if (payload === null) return `entry ${i}: payload object missing or altered`;
     if (e.kind === AUTHORITY) {
       if (!auth.operators.includes(e.author.key_id)) return `entry ${i}: only an operator changes the authority`;
+      if (!validDomains(payload.domains)) return `entry ${i}: a domain declaration names {domain: [kind]}`;
       const next = applyAuthority(auth, payload);
-      return authorityValid(next) ? null : `entry ${i}: the resulting authority has no valid orderer or operator`;
+      return authorityValid(next) ? null : `entry ${i}: the resulting authority has no valid orderer or operator, or declares a kind in two domains`;
     }
     if (e.kind === CHECKPOINT) {
       if (e.author.key_id !== auth.orderer) return `entry ${i}: only the orderer writes checkpoints`;
@@ -131,17 +179,26 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
       if (payload.through !== i || payload.root !== rootOf(before)) return `entry ${i}: checkpoint does not commit to the chain before it`;
       return null;
     }
-    if (!Object.hasOwn(kinds, e.kind)) return `entry ${i}: kind "${e.kind}" is not in the registry`;
+    if (!Object.hasOwn(kinds, e.kind)) {
+      const u = unknownKind(e.kind, auth);
+      if (u.why) return `entry ${i}: ${u.why}`;
+      notes?.foreign.push({seq: e.seq, kind: e.kind, domain: u.foreign});
+      return null;
+    }
     const k = kinds[e.kind];
     if (!k.authors(e.author)) return `entry ${i}: ${e.author.key_id} may not author "${e.kind}"`;
     const bad = k.validate(payload);
     if (bad) return `entry ${i}: ${bad}`;
     if (rederive) {
       // entries(): the hashes of every earlier entry, in chain order, for kinds that count what came before.
+      // note(why): a part of this entry the kind could not re-derive because its input is not available
+      // (a board that is gone, say). The rest was re-derived; verify() reports the note in `partial`.
+      const partial = [];
       const view = {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? getObject(byHash.get(h).payload_ref) : null),
-        entries: () => [...byHash.keys()]};
+        entries: () => [...byHash.keys()], note: why => { partial.push(String(why)); }};
       const why = k.rederive({...e, payload}, view);
       if (why) return `entry ${i}: does not re-derive: ${why}`;
+      for (const p of partial) notes?.partial.push({seq: e.seq, kind: e.kind, why: p});
     }
     return null;
   }
@@ -150,14 +207,14 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     if (e?.schema !== LEDGER_SCHEMA || e.kind !== GENESIS || e.seq !== 1 || e.parent !== null) return 'entry 0: the chain must open with a genesis';
     if (hashOf(e) !== anchor) return 'entry 0: genesis is not the pinned anchor (a ledger may not name its own authority)';
     const payload = getObject(e.payload_ref);
-    if (!validAuthority(payload)) return 'entry 0: genesis payload is not an authority';
-    const a = {keys: payload.keyring, orderer: payload.orderer, operators: payload.operators};
+    if (!validAuthority(payload) || !validDomains(payload.domains)) return 'entry 0: genesis payload is not an authority';
+    const a = {keys: payload.keyring, orderer: payload.orderer, operators: payload.operators, domains: mergeDomains({}, payload.domains)};
     if (!authorityValid(a) || !a.operators.includes(e.author?.key_id)) return 'entry 0: genesis is not signed by one of its operators';
     if (!verifyBytes(bodyOf(e), e.author_sig, a.keys[e.author.key_id]) || !verifyBytes(orderOf(e), e.order_sig, a.keys[a.orderer])) return 'entry 0: genesis signatures invalid';
     return null;
   }
   const authorityAfter = (auth, e) => {
-    if (e.kind === GENESIS) { const p = getObject(e.payload_ref); return {keys: p.keyring, orderer: p.orderer, operators: p.operators, pins: p.pins ?? null}; }
+    if (e.kind === GENESIS) { const p = getObject(e.payload_ref); return {keys: p.keyring, orderer: p.orderer, operators: p.operators, pins: p.pins ?? null, domains: mergeDomains({}, p.domains)}; }
     if (e.kind === AUTHORITY) return applyAuthority(auth, getObject(e.payload_ref));
     return auth;
   };
@@ -165,6 +222,9 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
   /**
    * Verify the chain. mode "full" re-derives every entry; "frontier" re-hashes the whole prefix
    * (so any edit is caught) but re-checks signatures and re-derives only after the last checkpoint.
+   * Over the entries it checked, the result says what was accepted without full re-derivation:
+   * `foreign` (domain -> count of entries checked structurally only), `partial` ([{seq, kind, why}]),
+   * and `complete`, true only when both are empty.
    */
   function verify({mode = 'full'} = {}) {
     const entries = read();
@@ -175,6 +235,7 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     }
     if (!entries.length) return {ok: false, why: 'empty ledger: no genesis'};
     let rederived = 0, auth = null;
+    const notes = {foreign: [], partial: []};
     for (const [i, e] of entries.entries()) {
       const prev = entries[i - 1] ?? null;
       if (i > 0 && i < lastCheckpoint) {
@@ -182,14 +243,18 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
         if (e?.seq !== i + 1 || e.parent !== (prev ? hashOf(prev) : null)) return {ok: false, why: `entry ${i}: chain linkage broken before the checkpoint`};
         if ((e.kind === AUTHORITY) && getObject(e.payload_ref) === null) return {ok: false, why: `entry ${i}: authority payload missing or altered`};
       } else {
-        const why = check(e, i, prev, byHash, auth, {rederive: true});
+        const before = notes.foreign.length;
+        const why = check(e, i, prev, byHash, auth, {rederive: true, notes});
         if (why) return {ok: false, why};
-        if (!RESERVED.has(e.kind)) rederived++;
+        if (!RESERVED.has(e.kind) && notes.foreign.length === before) rederived++;
       }
       auth = authorityAfter(auth, e);
       byHash.set(hashOf(e), e);
     }
-    return {ok: true, entries: entries.length, rederived, head: hashOf(entries.at(-1)), authority: auth};
+    const foreign = {};
+    for (const f of notes.foreign) foreign[f.domain] = (foreign[f.domain] ?? 0) + 1;
+    return {ok: true, entries: entries.length, rederived, head: hashOf(entries.at(-1)), authority: auth,
+      foreign, partial: notes.partial, complete: notes.foreign.length === 0 && notes.partial.length === 0};
   }
 
   // Single writer: an exclusive lock file, then verify-before-append under it.
@@ -219,12 +284,18 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     return locked(() => {
       const state = verify({mode: 'frontier'});
       if (!state.ok) fail(`ledger does not verify, refusing to append: ${state.why}`);
+      // A reader appends only what it re-derives: never an entry of a domain it passes over.
+      if (kind !== AUTHORITY && !Object.hasOwn(kinds, kind)) {
+        const u = unknownKind(kind, state.authority);
+        fail(u.why ?? `kind "${kind}" belongs to domain "${u.foreign}", which this registry does not supply; only a composition that re-derives it may record it`);
+      }
       if (!order || order.key_id !== state.authority.orderer) fail('the orderer co-signs every entry');
       const entries = read();
       const byHash = new Map(entries.map(x => [hashOf(x), x]));
       const payload_ref = putObject(payload);
       const e = seal({kind, author, derived_from: [...derivedFrom], payload_ref}, signer, order, entries);
-      const why = check(e, entries.length, entries.at(-1) ?? null, byHash, state.authority, {rederive: true});
+      const notes = {foreign: [], partial: []};
+      const why = check(e, entries.length, entries.at(-1) ?? null, byHash, state.authority, {rederive: true, notes});
       if (why) fail(why);
       const written = [e];
       if ((entries.length + 1) % checkpointEvery === 0) {
@@ -234,7 +305,7 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
       }
       const fd = fs.openSync(file, 'a');
       try { fs.writeSync(fd, written.map(x => JSON.stringify(x) + '\n').join('')); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      return {hash: hashOf(e), seq: e.seq, checkpoint: written.length > 1 ? hashOf(written[1]) : null};
+      return {hash: hashOf(e), seq: e.seq, checkpoint: written.length > 1 ? hashOf(written[1]) : null, ...(notes.partial.length ? {partial: notes.partial} : {})};
     });
   }
 
@@ -243,19 +314,22 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
 
 /**
  * Create a ledger: write its genesis, signed by an operator and co-signed by the orderer, and return
- * the genesis hash for readers to pin. `authority` is {keyring, orderer, operators, pins?}.
+ * the genesis hash for readers to pin. `authority` is {keyring, orderer, operators, pins?, domains?};
+ * `domains` declares the kind sets the ledger is created for ({name: [kind]}).
  */
 export function createLedger({dir, authority, operator, order}) {
   if (!dir || !path.isAbsolute(dir)) fail('an absolute ledger directory is required');
   if (!validAuthority(authority)) fail('genesis needs {keyring, orderer, operators}');
-  const a = {keys: authority.keyring, orderer: authority.orderer, operators: authority.operators};
-  if (!authorityValid(a)) fail('genesis orderer and operators must be in its keyring');
+  if (!validDomains(authority.domains)) fail('genesis domains are {domain: [kind]}');
+  const a = {keys: authority.keyring, orderer: authority.orderer, operators: authority.operators, domains: mergeDomains({}, authority.domains)};
+  if (!authorityValid(a)) fail('genesis orderer and operators must be in its keyring, and a kind is in one domain only');
   if (!operator || !authority.operators.includes(operator.key_id)) fail('genesis is signed by one of its operators');
   if (!order || order.key_id !== authority.orderer) fail('genesis is co-signed by its orderer');
   const file = path.join(dir, 'chain.jsonl');
   if (fs.existsSync(file) && fs.statSync(file).size > 0) fail('a ledger already exists here');
   fs.mkdirSync(path.join(dir, 'objects'), {recursive: true});
-  const payload = {keyring: authority.keyring, orderer: authority.orderer, operators: authority.operators, pins: authority.pins ?? null};
+  const payload = {keyring: authority.keyring, orderer: authority.orderer, operators: authority.operators, pins: authority.pins ?? null,
+    ...(authority.domains ? {domains: mergeDomains({}, authority.domains)} : {})};
   const bytes = canonical(payload), ref = 'sha256:' + digest(payload);
   fs.writeFileSync(path.join(dir, 'objects', ref.slice(7) + '.json'), bytes);
   const e = {schema: LEDGER_SCHEMA, seq: 1, parent: null, kind: GENESIS, author: {key_id: operator.key_id}, derived_from: [], payload_ref: ref};

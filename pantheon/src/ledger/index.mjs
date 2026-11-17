@@ -4,4 +4,5 @@ export {lineageKinds, lineageRecorder, seatKeyId, labOf, lineageKey} from './lin
 export {gateKinds, gateRecord, gateLeaseCitations, leaseSnapshot} from './gate-kind.mjs';
 export {LEASE, BUDGET, REF_MOVE, leaseActive, latestFor, leaseTableAt, leaseRows, storeResolver, boardKinds, boardRecorder} from './board-kinds.mjs';
 export {boardAnchorKinds, boardResolver} from './anchors.mjs';
-export {OPERATOR, CONTROLLER, pantheonLedgerKinds, pantheonSystemKinds, openPantheonLedger} from './system.mjs';
+export {OPERATOR, CONTROLLER, PANTHEON_DOMAIN, pantheonLedgerKinds, pantheonSystemKinds, pantheonDomains, openPantheonLedger} from './system.mjs';
+export {boardScopes, scopeOf} from './scopes.mjs';

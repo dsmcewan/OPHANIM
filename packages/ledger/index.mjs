@@ -4,6 +4,6 @@
 // the kinds a domain records (Pantheon's in pantheon/src/ledger, OPHANIM's in ophanim/ledger) are
 // passed in by the caller.
 export {canonical, digest} from './canonical.mjs';
-export {LEDGER_SCHEMA, CHECKPOINT, GENESIS, AUTHORITY, generateSigner, defineKinds, openLedger, createLedger} from './chain.mjs';
+export {LEDGER_SCHEMA, CHECKPOINT, GENESIS, AUTHORITY, generateSigner, defineKinds, openLedger, createLedger, domainOf} from './chain.mjs';
 export {OPERATOR, CONTROLLER, keyStore, openLedgerHome} from './home.mjs';
 export {STATUS_SCHEMA, STATES, EXTERNAL, openStatusLedger, renderBoard} from './status.mjs';

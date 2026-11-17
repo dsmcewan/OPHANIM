@@ -12,6 +12,7 @@ import * as board from '../board.mjs';
 import * as core from '../../packages/ledger/canonical.mjs';
 import {openLedger} from '../../packages/ledger/chain.mjs';
 import {systemKinds, openSystemLedger, CONTROLLER} from './system.mjs';
+import {PROMOTION, MAX_USES} from './efficiency-kinds.mjs';
 import {pantheonSystemKinds, openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {openBoard} from '../../pantheon/src/board/index.mjs';
 import {publish} from '../../pantheon/src/board/dag.mjs';
@@ -102,5 +103,38 @@ test('a ledger written with Pantheon\'s composition verifies under OPHANIM\'s, a
     // Read without keys, as a verifier would: the bare chain with Pantheon's registry.
     const raw = openLedger({dir: ledgerRoot, kinds: pantheonSystemKinds({board: b}), anchor: P.anchor});
     assert.equal(raw.verify().ok, true);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+// "Shared ledgers and the run-path gate": before domains were declared, Pantheon's composition refused a
+// ledger holding OPHANIM's efficiency entries (kind "efficiency.promotion" is not in the registry).
+test('Pantheon opens a ledger that holds OPHANIM\'s entries: checked structurally, reported, never appended', () => {
+  const root = tmp();
+  try {
+    const ledgerRoot = path.join(root, 'ledger');
+    const O = openSystemLedger({root: ledgerRoot});
+    const promotion = {schema: PROMOTION, scopeSha: 'a'.repeat(64), decisionId: 'sha256:' + 'd'.repeat(64), fromSlots: 1, toSlots: 3, maxUses: MAX_USES,
+      efficiency: {baselineConservativeMs: 5000, candidateConservativeMs: 3000, conservativeSavedMs: 2000, totalAssessmentCostMs: 400}};
+    const by = {author: {key_id: CONTROLLER}, signer: O.keys.get(CONTROLLER), order: O.keys.get(CONTROLLER)};
+    O.ledger.append({kind: 'efficiency.promotion', payload: promotion, ...by});
+    assert.deepEqual(O.ledger.verify().authority.domains.ophanim.includes('efficiency.promotion'), true, 'the genesis declares OPHANIM\'s kind set');
+
+    const P = openPantheonLedger({root: ledgerRoot});
+    const v = P.ledger.verify();
+    assert.equal(v.ok, true, v.why);
+    assert.deepEqual([v.foreign, v.complete], [{ophanim: 1}, false], 'the efficiency entry is passed over, and the result says so');
+    assert.throws(() => P.ledger.append({kind: 'efficiency.promotion', payload: promotion, ...by}), /belongs to domain "ophanim"/);
+    P.recorder();                                       // Pantheon keeps recording its own kinds on it
+    const all = openSystemLedger({root: ledgerRoot}).ledger.verify();
+    assert.deepEqual([all.ok, all.complete], [true, true], 'OPHANIM re-derives everything, Pantheon\'s entries included');
+
+    // A forged OPHANIM entry is refused by Pantheon too: its payload edited in place.
+    const e = P.ledger.read().find(x => x.kind === 'efficiency.promotion');
+    const obj = path.join(ledgerRoot, 'objects', e.payload_ref.slice(7) + '.json');
+    const kept = fs.readFileSync(obj, 'utf8');
+    fs.writeFileSync(obj, JSON.stringify({...promotion, maxUses: 1000}));
+    assert.throws(() => openPantheonLedger({root: ledgerRoot}), /payload object missing or altered/);
+    fs.writeFileSync(obj, kept);
+    assert.equal(openPantheonLedger({root: ledgerRoot}).ledger.verify().ok, true);
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });

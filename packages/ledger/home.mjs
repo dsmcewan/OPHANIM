@@ -59,11 +59,23 @@ export function keyStore(dir) {
  * operator and controller keys, the controller ordering). `anchor` is the genesis hash the caller
  * expects; without one, the ledger's own ANCHOR file is used, which is only as trustworthy as the
  * directory holding it.
+ *
+ * `domains` ({name: [kind]}, optional) names the kind sets this composition supplies; every kind of the
+ * registry is in exactly one of them. A new ledger declares them in its genesis. On an existing ledger,
+ * a supplied domain (or kind) the authority has not declared yet is declared by an operator-signed
+ * authority entry just before its first entry is appended, so a reader that does not supply it can
+ * tell its entries from unknown ones (chain.mjs, "Domains"). Opening never writes.
  */
-export function openLedgerHome({root, kinds, anchor = null, checkpointEvery} = {}) {
+export function openLedgerHome({root, kinds, anchor = null, checkpointEvery, domains = null} = {}) {
   if (!root || !path.isAbsolute(root)) fail('an absolute ledger root is required');
   if (anchor !== null && !SHA.test(anchor)) fail('an expected anchor is a sha256 genesis hash');
   if (!kinds || typeof kinds !== 'object') fail('a kind registry is required');
+  if (domains !== null) {
+    for (const kind of Object.keys(kinds)) {
+      const n = Object.values(domains).filter(ks => ks.includes(kind)).length;
+      if (n !== 1) fail(`kind "${kind}" is in ${n} of the supplied domains; every kind is in exactly one`);
+    }
+  }
   fs.mkdirSync(root, {recursive: true, mode: 0o700});
   const keys = keyStore(path.join(root, 'keys'));
   const anchorFile = path.join(root, 'ANCHOR');
@@ -73,13 +85,27 @@ export function openLedgerHome({root, kinds, anchor = null, checkpointEvery} = {
     if (anchor) fail('the expected anchor names a ledger that does not exist here');
     const operator = keys.put(generateSigner(OPERATOR)), controller = keys.put(generateSigner(CONTROLLER));
     pinned = createLedger({dir: root, operator, order: controller,
-      authority: {keyring: {[OPERATOR]: operator.publicJwk, [CONTROLLER]: controller.publicJwk}, orderer: CONTROLLER, operators: [OPERATOR]}});
+      authority: {keyring: {[OPERATOR]: operator.publicJwk, [CONTROLLER]: controller.publicJwk}, orderer: CONTROLLER, operators: [OPERATOR],
+        ...(domains ? {domains} : {})}});
     fs.writeFileSync(anchorFile, pinned + '\n', {mode: 0o600});
   }
   if (anchor && anchor !== pinned) fail('this ledger is not the one the caller pinned');
-  const ledger = openLedger({dir: root, kinds: Object.isFrozen(kinds) ? kinds : defineKinds(kinds), anchor: pinned, ...(checkpointEvery ? {checkpointEvery} : {})});
-  const state = ledger.verify();
+  const chain = openLedger({dir: root, kinds: Object.isFrozen(kinds) ? kinds : defineKinds(kinds), anchor: pinned,
+    ...(checkpointEvery ? {checkpointEvery} : {}), ...(domains ? {domains: Object.keys(domains)} : {})});
+  const state = chain.verify();
   if (!state.ok) fail(`ledger does not verify: ${state.why}`);
+  // Declared lazily, before the first entry of a supplied domain the authority does not name yet.
+  let declared = state.authority.domains ?? {};
+  const append = args => {
+    const d = domains && args.kind !== AUTHORITY ? Object.entries(domains).find(([, ks]) => ks.includes(args.kind))?.[0] : null;
+    if (d && !(declared[d] ?? []).includes(args.kind)) {
+      const missing = domains[d].filter(k => !(declared[d] ?? []).includes(k));
+      chain.append({kind: AUTHORITY, payload: {domains: {[d]: missing}}, author: {key_id: OPERATOR}, signer: operator, order: controller});
+      declared = chain.verify({mode: 'frontier'}).authority.domains;
+    }
+    return chain.append(args);
+  };
+  const ledger = {...chain, append};
   const operator = keys.get(OPERATOR), controller = keys.get(CONTROLLER);
   if (!operator || !controller) fail('the operator and controller keys are not held here');
   const same = (a, b) => a && b && a.x === b.x && a.crv === b.crv;
