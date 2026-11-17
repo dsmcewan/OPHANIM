@@ -84,15 +84,8 @@ const practice = opts["practice-outcome"] || opts["practice-question"]
   ? { outcome: opts["practice-outcome"] ?? usage("--practice-question needs --practice-outcome"), question: opts["practice-question"] ?? usage("--practice-outcome needs --practice-question") }
   : null;
 
-async function liveClients() {
-  const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient }] = await Promise.all([
-    import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("../src/sdk/adapter.mjs")]);
-  const clients = {};
-  const make = (v, { pool = v, poolConfig } = {}) => (clients[`${v}:${pool}`] ??= makeClient(v, { OpenAI, GoogleGenAI, Anthropic, poolConfig }));
-  // The run records what answered: the vendor SDKs are live providers (continuous evaluation reads this).
-  make.providers = { kind: "live" };
-  return make;
-}
+// The live seats (src/sdk/live.mjs): the vendor SDKs are imported there, at the edge.
+const { liveClients, liveTurn } = await import("../src/sdk/live.mjs");
 // A positive integer flag, or null when absent.
 const intFlag = name => {
   if (opts[name] === undefined) return null;
@@ -144,18 +137,6 @@ function printPaired(e) {
       `${w.pairs_needed_at_observed ?? "not reachable"} for the expected 99% bound to clear -${e.thresholds.NONINFERIORITY_MARGIN}; ${w.pairs_needed_80 ?? "-"} for 80% power (Wald)`);
     console.log(`             ${x.why}`);
   }
-}
-async function liveTurn() {
-  // As bin/pantheon-review-cycle.mjs: the vendor SDKs are imported here, at the edge.
-  const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient, sendTurn }] = await Promise.all([
-    import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("../src/sdk/adapter.mjs")]);
-  const clients = new Map();
-  return async ({ vendor, model, prompt }) => {
-    if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
-    const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-cycle-review` });
-    if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
-    return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null };
-  };
 }
 const seatOverrides = Object.fromEntries(multi.seat.map(s => {
   const [role, vm] = s.split("="), [vendor, model] = (vm ?? "").split("/");

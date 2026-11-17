@@ -178,3 +178,32 @@ test('missing authority: with no controller key the tick refuses (NO_AUTHORITY) 
     assert.equal(openWorkLedger({root: f.workRoot}).verify().ok, true, 'the ledger still verifies; nothing was recorded without authority');
   } finally { f.done(); }
 });
+
+test('a plan pending on a transient failure is retried once due and within the attempt bound; a structural block is not re-dispatched', async () => {
+  const f = fixture([{item: 'flaky', title: 'Flaky', state: 'Ready'}, {item: 'short', title: 'Short', state: 'Ready'}]);
+  try {
+    let down = 2;
+    const {ex: base} = scripted(f);
+    const plan = async ctx => {
+      if (ctx.item === 'short') return {status: 'pending', usage: {provider_calls: 0}, outputs: {mode: ctx.gate.mode},
+        blocker: {what: 'REVIEW_CAPACITY_PENDING: two labs outside the planner', role: 'check@review', resume_when: 'a reviewer lab becomes available'}};
+      if (down-- > 0) return {status: 'pending', usage: {provider_calls: 3}, outputs: {mode: ctx.gate.mode},
+        blocker: {what: 'REVIEW_PENDING: a plan reviewer failed', role: 'check@review', resume_when: 'the reviewer is available', transient: true}};
+      return base.plan(ctx);
+    };
+    const ex = {...base, plan};
+    const L = {...LIMITS, retry_after_ms: 60_000};
+    let t = Date.parse('2026-11-17T00:00:00Z');
+    const run = async () => (await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: L, clock: () => t})).dispatched.map(d => `${d.item}:${d.stage}:${d.status}`);
+    assert.deepEqual(await run(), ['flaky:plan:pending', 'short:plan:pending'], 'each is recorded once in the tick');
+    t += 30_000;
+    assert.deepEqual(await run(), [], 'not before the retry is due');
+    t += 60_000;
+    assert.deepEqual(await run(), ['flaky:plan:pending'], 'the transient one is retried when due; the structural one waits');
+    t += 120_000;
+    assert.deepEqual((await run()).slice(0, 2), ['flaky:plan:passed', 'flaky:implement:passed']);
+    const w = openWorkLedger({root: f.workRoot});
+    assert.deepEqual(w.stages('flaky').filter(s => s.stage === 'plan').map(s => s.attempt), [1, 2, 3]);
+    assert.deepEqual(w.stages('short').map(s => s.status), ['pending']);
+  } finally { f.done(); }
+});

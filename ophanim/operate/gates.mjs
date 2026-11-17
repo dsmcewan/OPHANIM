@@ -95,6 +95,20 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
   const requirement = requirementOf(history);
   const t = ticket && !ticket.why ? ticket : null;
   const stale = [];
+  // A plan attempt that is pending or blocked on the present requirement decides, as a later attempt does after a
+  // valid chain below: a structural block waits (it is not re-dispatched on identical inputs), and a transient one is
+  // retried once due. A changed requirement makes it stale and the item is planned again.
+  const lastPlan = stages.filter(s => s.stage === 'plan').at(-1) ?? null;
+  if (lastPlan && (lastPlan.status === 'pending' || lastPlan.status === 'blocked') && lastPlan.identity?.requirement === requirementDigest(requirement)) {
+    const returnedBy = lastPlan.inputs?.returned_by ?? null;
+    if (lastPlan.status === 'pending' && lastPlan.blocker?.transient && Date.parse(lastPlan.blocker.retry_at ?? '') <= now) {
+      return {...base, gate: 'plan', mode: lastPlan.outputs?.mode ?? (t ? 'revalidate' : 'author'), requirement, retry_of: lastPlan.hash, stale,
+        ...(returnedBy ? {returned_by: returnedBy, findings: stages.find(x => x.hash === returnedBy)?.findings ?? []} : {}),
+        reason: `plan was pending on a transient failure (${lastPlan.blocker.what}); its retry is due`};
+    }
+    return {...base, gate: 'blocked', stage: 'plan', requirement, blocker: lastPlan.blocker, stale,
+      reason: `plan is ${lastPlan.status}: ${lastPlan.blocker?.what ?? lastPlan.next?.why ?? ''}`};
+  }
   const passedPlans = stages.filter(s => s.stage === 'plan' && s.status === 'passed');
   let valid = null;
   for (const p of [...passedPlans].reverse()) {

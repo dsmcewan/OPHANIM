@@ -327,8 +327,11 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const shortTurn = scriptedTurn();
     const short = {reviewer: SEATING.reviewer.filter(c => c.vendor !== 'anthropic')};
     const sx = makeExecutors({repo: g, makeClientFor, turn: shortTurn, stateDir: fg.stateDir, seating: short});
-    const rs = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: sx, limits: {...LIMITS, iterations: 1}});
+    // No iteration cap here: a structural pending is recorded once and is not re-dispatched on the same inputs.
+    const rs = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: sx, limits: LIMITS});
     assert.deepEqual(stagesOf(rs), ['plan:pending']);
+    assert.ok(rs.blocked.some(b => b.item === 'short-pool' && /^REVIEW_CAPACITY_PENDING/.test(b.blocker.what)));
+    assert.deepEqual(stagesOf(await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: sx, limits: LIMITS})), [], 'nor on the next tick');
     const ps = openWorkLedger({root: fg.workRoot}).stages('short-pool')[0];
     assert.match(ps.blocker.what, /^REVIEW_CAPACITY_PENDING/);
     assert.equal(ps.usage.provider_calls, 0);

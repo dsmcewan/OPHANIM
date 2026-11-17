@@ -235,3 +235,19 @@ test('the backlog markdown is generated from the view alone (no hardcoded counts
   assert.match(md, /Work ledger\*\* \(`status\/work`\): absent/);
   assert.match(md, /not checked \(no issues read\)/);
 });
+
+test('the CLI seats the REAL stage executors (stages.mjs): live seats by default, or --turn and --clients modules', async () => {
+  const f = fixture([{item: 'alpha', title: 'Alpha', state: 'Ready'}]);
+  // No stagesFile override: the checkout's own stages.mjs. Before, makeExecutors refused for want of a turn.
+  const live = await cli(['tick', '--init', ...at(f)]);
+  assert.equal(live.code, 0, live.err);
+  assert.deepEqual(JSON.parse(live.out).dispatched, [], 'the default total of 0 dispatches nothing, live seats or not');
+  const mods = path.join(f.repo, 'seats');
+  fs.mkdirSync(mods);
+  fs.writeFileSync(path.join(mods, 'turn.mjs'), 'export default async () => { throw new Error("scripted turn: no provider"); };');
+  fs.writeFileSync(path.join(mods, 'clients.mjs'), 'export default () => { throw new Error("scripted clients: no provider"); };');
+  const scripted = await cli(['tick', '--turn', path.join(mods, 'turn.mjs'), '--clients', path.join(mods, 'clients.mjs'), ...at(f)]);
+  assert.equal(scripted.code, 0, scripted.err);
+  fs.writeFileSync(path.join(mods, 'bad.mjs'), 'export default 1;');
+  assert.equal((await cli(['tick', '--turn', path.join(mods, 'bad.mjs'), ...at(f)])).code, 2);
+});

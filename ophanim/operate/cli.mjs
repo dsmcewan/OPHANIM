@@ -6,10 +6,11 @@
 //       candidates (issues with no item marker), orphan tickets, duplicate issue markers, issues naming no ledger
 //       item, projection drift (issue open/closed against the item's state), and the counts. Read-only: the work
 //       ledger is verified, never created; the controller authority held here is reported.
-//   node ophanim/operate/cli.mjs tick  [limits] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--json]
+//   node ophanim/operate/cli.mjs tick  [limits] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--turn MODULE] [--clients MODULE] [--json]
 //   node ophanim/operate/cli.mjs watch [limits] [--interval S] [--once] [same as tick]
 //       Run the scheduler (scheduler.mjs) with the stage executors of ophanim/operate/stages.mjs `makeExecutors`
-//       (refused, with the reason, when that module is absent). Limits, declared before dispatch:
+//       (refused, with the reason, when that module is absent), seated with the live SDK seats or with --turn and
+//       --clients modules (pantheon-board's convention). Limits, declared before dispatch:
 //       --total-provider-calls N   the whole run's provider-call budget. Default 0: nothing that may call a
 //                                  provider is dispatched (intake is still recorded).
 //       --stage-provider-calls N, --iterations N, --concurrency N, --elapsed-ms N  (scheduler DEFAULT_LIMITS otherwise)
@@ -268,6 +269,21 @@ export async function loadExecutors(ctx, {stagesFile = path.join(HERE, 'stages.m
 }
 
 /**
+ * The provider seats the stage executors use: `--clients MODULE` (default export makeClientFor(vendor)) for the work
+ * seats and `--turn MODULE` (default export turn({vendor, model, prompt})) for the planner, reviewers and validator;
+ * by default the live SDK seats (pantheon/src/sdk/live.mjs), which call nothing until a stage runs. The provider-call
+ * budget, not this choice, decides whether anything may call a provider.
+ */
+export async function seatsOf(opts) {
+  const load = async f => (await import(pathToFileURL(path.resolve(f)).href)).default;
+  const live = () => import(pathToFileURL(path.join(REPO_ROOT, 'pantheon/src/sdk/live.mjs')).href);
+  const makeClientFor = opts.clients ? await load(opts.clients) : await (await live()).liveClients();
+  const turn = opts.turn ? await load(opts.turn) : await (await live()).liveTurn({label: 'operate'});
+  if (typeof makeClientFor !== 'function' || typeof turn !== 'function') usage('--clients and --turn name modules whose default export is a function');
+  return {makeClientFor, turn};
+}
+
+/**
  * Prepare a dispatching run (tick or watch): the work ledger verified (created only with `init`), the controller
  * authority checked (a NO_AUTHORITY block, never a skip), then the executors. Returns {blocked} or {executors, ...}.
  */
@@ -281,7 +297,8 @@ export async function prepareDispatch({paths, opts, limits, stagesFile, progress
   const opened = openWorkReadOnly(paths.workRoot);
   const auth = authorityOf(opened.work, paths.workRoot);
   if (!auth.held) return {blocked: noAuthority(auth, opened.ledger)};
-  const executors = await loadExecutors({repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, limits, env: process.env, progress}, {stagesFile});
+  const executors = await loadExecutors({repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, limits, env: process.env, progress,
+    ...(await seatsOf(opts))}, {stagesFile});
   return {executors, ledger: opened.ledger, authority: auth};
 }
 
