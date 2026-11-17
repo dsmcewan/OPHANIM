@@ -14,14 +14,19 @@ test("every listed agent names a role that actually exists in ROLES", () => {
   }
 });
 
-test("the implementer ladder is the three openai rungs, in the seating table's order", () => {
+test("the implementer ladder is the three openai rungs then the two Antigravity Gemini fallbacks, in the seating table's order", () => {
   // The agy_google/claude-sonnet-4-6 rung (operator seating 2026-09-29) was removed 2026-11-17, owner
   // direction: Antigravity serves Gemini models only -- see seating.mjs's implementer table.
+  // The same day (owner direction: "seat Carbon and the other Gemini ids through Antigravity") two
+  // Antigravity Gemini rows were APPENDED after the openai rungs, as fallbacks.
   const impl = listAgents().filter(a => a.role === "implementer");
-  assert.deepEqual(impl.map(a => a.model), ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"],
+  assert.deepEqual(impl.map(a => a.model),
+    ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gemini-4-carbon-high", "gemini-4-argon-high"],
     "these are the rungs the ticket's per-slot model choice picks between");
-  assert.ok(impl.every(a => a.vendor === "openai"), "SURFACE seats this whole ladder on one lab");
-  assert.ok(!impl.some(a => a.vendor === "agy_google"), "no implementer rung runs through Antigravity");
+  assert.deepEqual(impl.map(a => a.vendor), ["openai", "openai", "openai", "agy_google", "agy_google"],
+    "SURFACE seats the three leading rungs on one lab; the Antigravity Gemini rows follow them");
+  assert.ok(!impl.some(a => a.vendor === "agy_google" && !a.model.startsWith("gemini-")),
+    "no Claude implementer rung runs through Antigravity");
 });
 
 test("scout is listed even though it sits OUTSIDE the board -- it comes from INTAKE, not SEATING", () => {

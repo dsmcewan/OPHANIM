@@ -241,7 +241,9 @@ test("the planner's last resort is another lab, and it is unreachable while the 
   //
   // The Claude-via-Antigravity rungs (operator seating 2026-09-29) were removed 2026-11-17, owner
   // direction: Antigravity serves Gemini models only. The planner ladder is again the two anthropic
-  // rungs with openai as the unbanded last resort.
+  // rungs with openai as the unbanded way out. The same day (owner direction: "seat Carbon and the other
+  // Gemini ids through Antigravity") an unbanded Antigravity Gemini row was APPENDED after it: it changes
+  // no pick above and is the new last resort, reached only when anthropic AND openai are both out.
   const hard = selectFor("planner", { difficulty: "hard" });
   assert.equal(hard.vendor, "anthropic", "a hard plan is the anthropic hard rung");
   assert.equal(hard.model, "claude-fable-5-2");
@@ -251,18 +253,27 @@ test("the planner's last resort is another lab, and it is unreachable while the 
     assert.equal(s.model, "claude-opus-5-5");
   }
 
-  // No planner rung runs through Antigravity, so avoiding agy_google changes nothing.
-  assert.ok(!candidatesFor("planner").some(c => c.vendor === "agy_google"), "no planner rung is seated on agy_google");
+  // The one planner row that runs through Antigravity is the appended, unbanded Gemini fallback, so
+  // avoiding agy_google changes nothing.
+  const agyRows = candidatesFor("planner").filter(c => c.vendor === "agy_google");
+  assert.deepEqual(agyRows.map(c => c.model), ["gemini-4-carbon-high"], "the only planner row on agy_google is the Gemini fallback");
+  assert.equal(agyRows[0].band, undefined, "it is unbanded, so no difficulty asks for it");
+  assert.equal(candidatesFor("planner").at(-1).vendor, "agy_google", "and it is appended last");
   for (const difficulty of ["easy", "medium", "hard"]) {
     const s = selectFor("planner", { difficulty, avoid: ["agy_google"] });
     assert.equal(s.vendor, "anthropic");
     assert.equal(s.model, difficulty === "hard" ? "claude-fable-5-2" : "claude-opus-5-5");
   }
 
-  // UNREACHABLE WHILE THE HOSE IS OPEN: with anthropic available, no difficulty lands on the openai seat.
+  // UNREACHABLE WHILE THE HOSE IS OPEN: with anthropic available, no difficulty lands on the openai seat
+  // or on the Antigravity Gemini one -- not even with openai avoided.
   for (const difficulty of ["easy", "medium", "hard"]) {
-    assert.notEqual(selectFor("planner", { difficulty }).vendor, "openai",
-      `a ${difficulty} plan must not reach the last resort while an anthropic rung is alive`);
+    for (const avoid of [[], ["openai"]]) {
+      const s = selectFor("planner", { difficulty, avoid });
+      assert.equal(s.vendor, "anthropic",
+        `a ${difficulty} plan must not reach a fallback while an anthropic rung is alive`);
+      assert.equal(s.model, difficulty === "hard" ? "claude-fable-5-2" : "claude-opus-5-5");
+    }
   }
 
   // THE SCENARIO THIS TEST PINS: the anthropic hose is shut. The run must not end; every difficulty
@@ -283,6 +294,19 @@ test("the planner's last resort is another lab, and it is unreachable while the 
   assert.equal(bothShut.model, "gpt-6-sol");
   assert.equal(bothShut.exact, false, "it is a fallback, not a rung anyone asked for");
   assert.match(bothShut.why_rung, /no banded rung/);
+
+  // The Antigravity Gemini row is the new last resort: with anthropic AND openai both shut, every
+  // difficulty reseats on it instead of ending the run, and with all three shut there is no seat.
+  for (const difficulty of ["easy", "medium", "hard"]) {
+    const last = selectFor("planner", { difficulty, avoid: ["anthropic", "openai"] });
+    assert.equal(last.ok, true, "anthropic and openai both shut must still not end the run");
+    assert.equal(last.vendor, "agy_google");
+    assert.equal(last.model, "gemini-4-carbon-high");
+    assert.equal(last.exact, false, "it is a fallback, not a rung anyone asked for");
+    assert.match(last.why_rung, /no banded rung/);
+  }
+  assert.deepEqual(selectFor("planner", { difficulty: "hard", avoid: ["anthropic", "openai", "agy_google"] }),
+    { ok: false, why: 'no seated candidate for "planner"' });
 });
 
 test("difficulty picks the rung; the cheap rung is the answer to an easy task, not a failure", () => {
@@ -312,8 +336,24 @@ test("difficulty picks the rung; the cheap rung is the answer to an easy task, n
   assert.equal(selectFor("implementer", { difficulty: "easy" }).model, "gpt-6-luna");
   assert.equal(selectFor("implementer", { difficulty: "medium" }).model, "gpt-6-sol");
   assert.equal(selectFor("implementer", { difficulty: "hard" }).model, "gpt-6-astra");
-  // The implementer ladder is one lab: with openai out there is no seat, and that is said, not defaulted.
-  assert.deepEqual(selectFor("implementer", { difficulty: "hard", avoid: ["openai"] }),
+  // The appended Antigravity Gemini rows move none of those picks: avoiding agy_google gives the same rungs.
+  for (const [difficulty, model] of [["easy", "gpt-6-luna"], ["medium", "gpt-6-sol"], ["hard", "gpt-6-astra"]]) {
+    const s = selectFor("implementer", { difficulty, avoid: ["agy_google"] });
+    assert.equal(s.model, model);
+    assert.equal(s.exact, true, `${model} is the ${difficulty} rung, asked for by name`);
+  }
+  // The implementer's banded ladder is one lab. With openai out, the Antigravity Gemini rows (appended
+  // 2026-11-17, unbanded) are the new last resort: every difficulty reseats on the first of them, as a
+  // fallback rather than a rung. With both out there is no seat, and that is said, not defaulted.
+  for (const difficulty of ["easy", "medium", "hard"]) {
+    const out = selectFor("implementer", { difficulty, avoid: ["openai"] });
+    assert.equal(out.ok, true);
+    assert.equal(out.vendor, "agy_google");
+    assert.equal(out.model, "gemini-4-carbon-high");
+    assert.equal(out.exact, false, "it is a fallback, not a rung anyone asked for");
+    assert.match(out.why_rung, /no banded rung/);
+  }
+  assert.deepEqual(selectFor("implementer", { difficulty: "hard", avoid: ["openai", "agy_google"] }),
     { ok: false, why: 'no seated candidate for "implementer"' });
 
   // Every rung holds a 1M window, so CONTEXT never ordered them and cost never did either.
@@ -658,7 +698,7 @@ test("the report leads with role and pack; the model is labelled staffing and co
   assert.notEqual(twice[0].role, twice[1].role, "two jobs");
 });
 
-test("the specified ladders are single-hose, so they can only be waited out", () => {
+test("the specified ladders' banded rungs are single-hose; the appended Antigravity Gemini rows are the only way off it", () => {
   // Planner: Fable -> Opus -> Sonnet. Implementer: Astra -> Sol -> Luna. Both ladders are inside one
   // lab, which is the operator's staffing choice and has a consequence worth asserting rather than
   // discovering: there is NO reseat. Every rung shares the hose, so a 429 with no retry-after can only
@@ -669,20 +709,33 @@ test("the specified ladders are single-hose, so they can only be waited out", ()
   //
   // The Claude-via-Antigravity rungs (operator seating 2026-09-29) were removed 2026-11-17, owner
   // direction: Antigravity serves Gemini models only. So the planner is two anthropic rungs plus the
-  // openai way out, and the implementer is single-hose again (Astra -> Sol -> Luna, all openai).
+  // openai way out, and the implementer's banded ladder is single-hose again (Astra -> Sol -> Luna, all openai).
+  //
+  // The same day (owner direction: "seat Carbon and the other Gemini ids through Antigravity") unbanded
+  // Antigravity Gemini rows were APPENDED to both ladders. They are the new last resort: a third pool
+  // after the planner's openai way out, and the implementer's only way off the openai hose.
   const planner = candidatesFor("planner");
-  assert.deepEqual(planner.map(c => c.model), ["claude-fable-5-2", "claude-opus-5-5", "gpt-6-sol"]);
-  assert.deepEqual(planner.map(c => c.pool), ["anthropic", "anthropic", "openai"], "two pools: the anthropic hose, and the way out");
+  assert.deepEqual(planner.map(c => c.model), ["claude-fable-5-2", "claude-opus-5-5", "gpt-6-sol", "gemini-4-carbon-high"]);
+  assert.deepEqual(planner.map(c => c.pool), ["anthropic", "anthropic", "openai", "agy_google"],
+    "three pools: the anthropic hose, the way out, and the Antigravity Gemini last resort");
   const plannerHose = planner[0].pool;
   assert.equal(planner[1].pool, plannerHose, "fable and opus-5-5 share the one anthropic hose");
   assert.notEqual(planner.at(-1).pool, plannerHose,
     "the last resort must not draw on the pool that just refused");
   assert.equal(planner.at(-1).band, undefined,
     "no band is how 'if and when' is enforced: selectFor reaches an unbanded seat only via cands[0]");
+  assert.deepEqual(planner.filter(c => c.band === undefined).map(c => c.model), ["gpt-6-sol", "gemini-4-carbon-high"],
+    "both ways out are unbanded, openai before Antigravity");
 
   const implementer = candidatesFor("implementer");
-  assert.deepEqual(implementer.map(c => c.model), ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
-  assert.deepEqual([...new Set(implementer.map(c => c.pool))], ["openai"], "one pool: the implementer ladder is single-hose");
+  assert.deepEqual(implementer.map(c => c.model),
+    ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gemini-4-carbon-high", "gemini-4-argon-high"]);
+  const banded = implementer.filter(c => c.band !== undefined);
+  assert.deepEqual(banded.map(c => c.model), ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
+  assert.deepEqual([...new Set(banded.map(c => c.pool))], ["openai"], "one pool: the implementer's banded ladder is single-hose");
+  assert.deepEqual(implementer.filter(c => c.band === undefined).map(c => [c.model, c.pool]),
+    [["gemini-4-carbon-high", "agy_google"], ["gemini-4-argon-high", "agy_google"]],
+    "the appended Antigravity Gemini rows are unbanded and draw on a pool of their own");
 
   // The property, which is NOT that the lower rungs are worse: it is that no rung may claim a MEASURED
   // basis it does not have. All three hold 1M, so CONTEXT cannot separate them, and the band each one
@@ -711,18 +764,32 @@ test("the specified ladders are single-hose, so they can only be waited out", ()
   const implHose = implementer[0].pool;
   assert.equal(implementer[0].basis, "SURFACE", "the Responses-API constraint is about the LAB, unchanged");
   for (const c of implementer.slice(1)) {
+    if (c.pool !== implHose) {
+      // The appended Antigravity Gemini rows: as with the planner's way out, being on another quota
+      // pool is the checkable fact that earns a MEASURED basis, and the whole reason the row exists.
+      assert.equal(c.band, undefined, `${c.model} is off the openai hose, so it must be an unbanded fallback`);
+      assert.equal(c.basis, "QUOTA",
+        `${c.model} sits on a different pool, and that -- not taste, not surface -- is why it is here`);
+      continue;
+    }
     assert.equal(c.pool, implHose, "astra/sol/luna all share the one openai hose");
     assert.ok(HONEST.includes(c.basis), "the rungs are banded by fit, never by a measurement");
     assert.ok(!MEASURED.includes(c.basis), `${c.model} must not claim a measured basis`);
   }
 
   const p = seatingPlan({ roles: ["planner", "implementer", "reviewer"] });
-  // The implementer is the one single-hose ladder in this set, and wait_only names it and only it. The
-  // planner stays out because its ladder ends on another pool; the reviewer's ladder always had several.
+  // Until 2026-11-17 the implementer was the one single-hose ladder in this set and wait_only named it
+  // and only it. The appended Antigravity Gemini rows put a second pool at the end of that ladder, so
+  // no ladder in this set is wait-only any more and wait_only says nothing. The planner stays out
+  // because its ladder ends on another pool; the reviewer's ladder always had several.
+  assert.equal(p.wait_only, null, "no ladder in the default tables is single-hose now");
   // Nothing in seatingPlan knows these names -- it reports the ladders whose every rung shares a pool --
-  // so this is the check that the planner's escape is real rather than described.
-  assert.equal(p.wait_only, "implementer: every rung is on one hose, so a 429 with no retry-after can only be waited out");
-  assert.doesNotMatch(p.wait_only, /planner|reviewer/, "only the single-hose ladder is named");
+  // so the report itself is still checked: the same tables with the implementer's banded (openai) rungs
+  // alone are single-hose, and wait_only names that ladder and only it.
+  const bandedOnly = seatingPlan({ roles: ["planner", "implementer", "reviewer"],
+    seating: { ...SEATING, implementer: SEATING.implementer.filter(c => c.band !== undefined) } });
+  assert.equal(bandedOnly.wait_only, "implementer: every rung is on one hose, so a 429 with no retry-after can only be waited out");
+  assert.doesNotMatch(bandedOnly.wait_only, /planner|reviewer/, "only the single-hose ladder is named");
 
   // And the rule the runtime applies to that: no interval means nothing to wait FOR, so the whole
   // ladder is out for the turn rather than tried rung by rung.

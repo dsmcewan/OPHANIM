@@ -100,7 +100,7 @@ async function askSeats({ledger, cycle, seats, prompt, turn, author_turns, tried
     const served_model = r.served_model ?? null, response_id = r.response_id ?? null, reply = r.text ?? '';
     let review = null;
     try {
-      const t = ledger.recordTurn({seat, requested_model: s.model, served_model, response_id, reply, purpose: 'cycle-review', prompt, cites: [cycle]});
+      const t = ledger.recordTurn({seat, requested_model: s.model, served_model, served_model_source: r.served_model_source ?? null, response_id, reply, purpose: 'cycle-review', prompt, cites: [cycle]});
       const parsed = parseReview(reply);
       review = ledger.recordReview({seat, model: s.model, served_model, response_id, verdict: parsed.verdict,
         findings: parsed.findings.map(f => `[${f.severity}] ${f.file ?? '-'}${f.line ? `:${f.line}` : ''} ${f.claim}`).join('\n'),

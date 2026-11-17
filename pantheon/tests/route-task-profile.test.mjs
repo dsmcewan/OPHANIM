@@ -82,13 +82,18 @@ test("fit: two tickets with the same legacy difficulty but different stakes/dept
   assert.notDeepEqual(firstSeat("implementer", { profile: "fit", difficulty: "easy" }), firstSeat("implementer", { profile: "fit", difficulty: "hard" }));
 });
 
-test("argo is unchanged since before fit existed; legacy was re-pinned 2026-11-17 when the Claude-via-Antigravity rungs were removed", () => {
+test("argo is unchanged since before fit existed; legacy was re-pinned 2026-11-17 when the Claude-via-Antigravity rungs were removed, and again when the Antigravity Gemini fallbacks were appended", () => {
   // argo: pinned from the tree before fit existed (e481e77), and still that value.
   assert.equal(selectionPolicy("argo").hash, "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56");
   // legacy: RE-PINNED 2026-11-17. It was sha256:276ee015...b07d (e481e77) until the three Claude rungs that ran
   // through Antigravity left the seating tables (owner direction: Antigravity serves Gemini models only). The
   // legacy policy hashes those tables, so the hash and the implementer candidates below changed with them.
-  assert.equal(selectionPolicy("legacy").hash, "sha256:ab6ad2bdb11347f3b79d188a78219e35c898c6db92eb4599e2a8f503f7ae2969");
+  // RE-PINNED AGAIN the same day, from sha256:ab6ad2bd...2969, when the unbanded Antigravity Gemini fallbacks
+  // were appended to the planner and implementer ladders (owner direction: "seat Carbon and the other Gemini
+  // ids through Antigravity"). They trail every candidate list below and lead none.
+  assert.equal(selectionPolicy("legacy").hash, "sha256:87225451d514070ffba7a5468174b8230aa3343988a58a73fc748f83b9208df9");
+  assert.notEqual(selectionPolicy("legacy").hash, "sha256:ab6ad2bdb11347f3b79d188a78219e35c898c6db92eb4599e2a8f503f7ae2969",
+    "the legacy policy from before the Antigravity Gemini fallbacks is a different policy and must not be reported under the same hash");
   assert.notEqual(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d",
     "the pre-2026-11-17 legacy policy is a different policy and must not be reported under the same hash");
   const ARGO = { planner: "claude-fable-5-2,gemini-4-carbon,gpt-6-astra", implementer: "gpt-6-astra,claude-fable-5-2,gemini-4-carbon",
@@ -100,13 +105,15 @@ test("argo is unchanged since before fit existed; legacy was re-pinned 2026-11-1
     assert.equal(s.candidates.map(c => c.model).join(","), [...new Set(frontierCandidates(role).map(c => c.model))].join(","));
     assert.ok(s.candidates.every(c => c.effort === undefined), "argo sets no up-front effort");
   }
-  const LEGACY = { easy: "gpt-6-luna,gpt-6-astra,gpt-6-sol", medium: "gpt-6-sol,gpt-6-astra,gpt-6-luna",
-    hard: "gpt-6-astra,gpt-6-sol,gpt-6-luna" };
+  const LEGACY = { easy: "gpt-6-luna,gpt-6-astra,gpt-6-sol,gemini-4-carbon-high,gemini-4-argon-high",
+    medium: "gpt-6-sol,gpt-6-astra,gpt-6-luna,gemini-4-carbon-high,gemini-4-argon-high",
+    hard: "gpt-6-astra,gpt-6-sol,gpt-6-luna,gemini-4-carbon-high,gemini-4-argon-high" };
   for (const [difficulty, want] of Object.entries(LEGACY)) {
     assert.equal(selectSeat("implementer", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
   }
-  const LEGACY_PLANNER = { easy: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol", medium: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol",
-    hard: "claude-fable-5-2,claude-opus-5-5,gpt-6-sol" };
+  const LEGACY_PLANNER = { easy: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol,gemini-4-carbon-high",
+    medium: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol,gemini-4-carbon-high",
+    hard: "claude-fable-5-2,claude-opus-5-5,gpt-6-sol,gemini-4-carbon-high" };
   for (const [difficulty, want] of Object.entries(LEGACY_PLANNER)) {
     assert.equal(selectSeat("planner", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
   }
@@ -174,7 +181,14 @@ test("fit fallbacks cross labs at the same class before stepping class, and neve
 
 test("fit candidates come from the whole registry the role's labs allow, and record which basis admitted each", () => {
   const registry = registryModels();
-  assert.equal(registry.length, 19, "18 API registry models + the 1 live lane model; retired lanes are never candidates");
+  assert.equal(registry.length, 31, "18 API registry models + the 13 live lane models; retired lanes are never candidates");
+  const laneModels = registry.map(r => r.model).filter(m => /^gemini-(3\.8-flash|4-(carbon|argon|hydrogen))-(low|medium|high|xhigh)$/.test(m));
+  assert.deepEqual(laneModels.sort(), [
+    "gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium",
+    "gemini-4-argon-high", "gemini-4-argon-low", "gemini-4-argon-medium",
+    "gemini-4-carbon-high", "gemini-4-carbon-low", "gemini-4-carbon-medium",
+    "gemini-4-hydrogen-high", "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-xhigh",
+  ], "the 13 live Antigravity Gemini lanes (declared 2026-11-17), seated or not, are fit candidates");
   for (const retired of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) assert.ok(!registry.some(r => r.model === retired), `${retired} is retired`);
   for (const { model } of registry) {
     const c = CLASSES.models[model];

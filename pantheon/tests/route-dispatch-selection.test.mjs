@@ -34,13 +34,16 @@ test("M1: easy and hard tickets through the real dispatcher (banded profile) req
     assert.equal(hard.shipped, true, JSON.stringify(hard.error));
     // What the providers were actually asked for: each band's own rung. The banded Claude lane seats that
     // used to lead these ladders (and were excluded under M7 for an unrecorded window) were removed
-    // 2026-11-17, owner direction: Antigravity serves Gemini models only -- so nothing is excluded and no
-    // lane is launched.
+    // 2026-11-17, owner direction: Antigravity serves Gemini models only. The same day unbanded Antigravity
+    // Gemini fallbacks were APPENDED to both ladders ("seat Carbon and the other Gemini ids through
+    // Antigravity"): no context window is documented for them, so with a context estimate in hand they are
+    // excluded under M7 ("window unrecorded") and no lane is launched.
     const asked = (cs, re) => cs.filter(c => re.test(c.prompt)).map(c => `${c.vendor}/${c.model}`);
     assert.deepEqual(asked(calls.slice(0, easyCalls), WORK), ["openai/gpt-6-luna"], "easy: Luna implements (easy band)");
     assert.deepEqual(asked(calls.slice(easyCalls), WORK), ["openai/gpt-6-astra"], "hard: Astra implements (hard band)");
-    assert.deepEqual(agy(), [], "no lane seat was launched: neither ladder seats one");
-    // And why, on every turn: the band, the policy and its hash, and what was excluded (nothing).
+    assert.deepEqual(agy(), [], "no lane seat was launched: the Antigravity Gemini fallbacks were excluded, not run");
+    // And why, on every turn: the band, the policy and its hash, and what was excluded (the unbounded lane seats).
+    const LANE_FALLBACKS = { plan: ["gemini-4-carbon-high"], work: ["gemini-4-carbon-high", "gemini-4-argon-high"] };
     for (const [result, band, planner] of [[easy, "easy", "claude-opus-5-5"], [hard, "hard", "claude-fable-5-2"]]) {
       const run = runJson(result);
       for (const t of run.turns) {
@@ -56,7 +59,10 @@ test("M1: easy and hard tickets through the real dispatcher (banded profile) req
         assert.equal(t.selection.difficulty, band);
         assert.equal(t.selection.band, band, `${purpose}: served by the ${band} band's own rung`);
         assert.match(t.selection.reason, new RegExp(`^difficulty band: ${t.model} is the ${band} rung`));
-        assert.deepEqual(t.selection.excluded, [], `${purpose}: no candidate was excluded -- the ladder holds no unbounded lane seat`);
+        assert.deepEqual(t.selection.excluded.map(e => e.model), LANE_FALLBACKS[purpose],
+          `${purpose}: exactly the ladder's Antigravity Gemini fallbacks were excluded`);
+        for (const e of t.selection.excluded) assert.match(e.why, /window unrecorded/, `${e.model}: excluded for its undocumented window (M7)`);
+        assert.ok(!LANE_FALLBACKS[purpose].includes(t.model), `${purpose}: no Antigravity lane served the turn`);
         assert.ok(!JSON.stringify(t.selection.excluded).includes("claude-sonnet-4-6"), "a removed rung is not a candidate, so it is not reported as excluded");
       }
     }

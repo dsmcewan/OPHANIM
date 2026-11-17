@@ -46,6 +46,18 @@
    "note": "ARGO's planner/implementer/reviewer fallback and synthesis seat. No positioning quote recorded." },
   "claude-sonnet-4-6": { "class": "standard", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json)." },
   "claude-opus-4-6-thinking": { "class": "frontier", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json)." },
-  "gemini-3.8-flash-high": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json)." }
+  "gemini-3.8-flash-high": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json)." },
+  "gemini-4-carbon-low": { "class": "frontier", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-4-carbon-medium": { "class": "frontier", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-4-carbon-high": { "class": "frontier", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-4-argon-low": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-4-argon-medium": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-4-argon-high": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-4-hydrogen-low": { "class": "standard", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json). Placed between Argon and Carbon as a guess from the plan tiers that offer it; no positioning quote recorded." },
+  "gemini-4-hydrogen-medium": { "class": "standard", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json). Placed between Argon and Carbon as a guess from the plan tiers that offer it; no positioning quote recorded." },
+  "gemini-4-hydrogen-high": { "class": "standard", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json). Placed between Argon and Carbon as a guess from the plan tiers that offer it; no positioning quote recorded." },
+  "gemini-4-hydrogen-xhigh": { "class": "standard", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json). Placed between Argon and Carbon as a guess from the plan tiers that offer it; no positioning quote recorded." },
+  "gemini-3.8-flash-low": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." },
+  "gemini-3.8-flash-medium": { "class": "fast", "basis": "TASTE", "status": "provisional", "note": "agy CLI lane model (lanes.json); the class of its base model." }
  }
 }

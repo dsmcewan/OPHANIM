@@ -19,6 +19,78 @@
       "transport": "agy-cli",
       "lab": "google",
       "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking. The lane name is not a Gemini API id; the API model `gemini-3.8-flash` is (aistudio.google.com/docs/models, read 2026-11-16)"
+    },
+    "gemini-4-carbon-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Carbon (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-carbon-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Carbon (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-carbon-high": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Carbon (High)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-argon-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Argon (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-argon-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Argon (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-argon-high": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Argon (High)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-hydrogen-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-hydrogen-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-hydrogen-high": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (High)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-4-hydrogen-xhigh": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (XHigh)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-3.8-flash-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 3.8 Flash (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
+    },
+    "gemini-3.8-flash-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 3.8 Flash (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. No context window is documented for Antigravity (antigravity.google/docs/models, read 2026-11-17), so none is recorded here."
     }
   }
 }

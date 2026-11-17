@@ -190,6 +190,17 @@ Owner direction, 2026-11-17, after the documentation and the owner's `agy models
 - What supports it: the CLI lane compares the model the CLI reports at start-up with the one requested and fails on a mismatch, and headless mode fails on an unknown model instead of falling back. What it does not cover: subagents inside the turn.
 - The identity policy itself never fills in a model. An answer that reaches admission with no served model is still refused on every route.
 
+**Decision 3: the Gemini ids are seated through Antigravity.** From the owner's `agy models` output:
+
+- **Declared as lanes** (`lanes.json`, CLI transport, lab google): `gemini-4-carbon-{low,medium,high}`, `gemini-4-argon-{low,medium,high}`, `gemini-4-hydrogen-{low,medium,high,xhigh}`, `gemini-3.8-flash-{low,medium,high}`.
+- **Identity.** Each lane name is its base model at a thinking level. `gemini-4-carbon-high` through Antigravity is `google/gemini-4-carbon`, the same identity as Carbon through the Gemini API. A contributor under one name is excluded under the other.
+- **Seated** as appended, unbanded fallbacks, so no existing pick changes: planner `gemini-4-carbon-high`; implementer `gemini-4-carbon-high`, then `gemini-4-argon-high`. The other ids are reachable by a ticket pin and by the `fit` profile.
+- **Single-turn seats** (planner, reviewers, validator) on a lane now run through the `agy` CLI (`pantheon/src/sdk/agy-turn.mjs`). Before this, a lane name chosen for such a seat would have been sent to the Gemini API, which does not know it.
+- **Not seated: the two Orchestrator ids.** The documentation describes each as two models working in one conversation (a planner model plus Gemini 4 Hydrogen). One answer has no single identity, so they are left undeclared and cannot be seated.
+- **Not seated: Hydrogen.** It is declared, but the project requires a recorded context window for every seated model, and no figure exists for it, even by inference from the Gemini API.
+- **Context windows.** Antigravity's documentation states no context window for any model. Under the documented-window rule, a lane without a cited window is excluded whenever the work has a context estimate. In practice these seats are admitted only when no estimate is supplied, until a window is cited for the lane.
+- **Default (`argo`) routing is unchanged.** Carbon there still goes to the Gemini API.
+
 **Versioning.** Cycles recorded under resolver 1 or 2 carry no `route_labs` and are checked without it. The `served_model_source` field is additive: turns recorded without it hash and verify as before. Escalation records cite the seating they were decided under, so removing seats does not change how recorded escalations verify.
 
 **Scope.** Only in-run turns use Antigravity. The single-turn seats (planner, plan reviewers, change reviewers, validator) call the provider APIs directly, including the Gemini API for `agy_google`, and are not affected by decision 2.

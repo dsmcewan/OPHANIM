@@ -224,6 +224,10 @@ export const SEATING = {
         "is available. gpt-6-sol rather than astra or luna because this is the middle of the " +
         "operator's openai ladder: a plan is structure, not a one-line edit and not the dearest " +
         "reasoning in the table. Quality here is unmeasured, like every other seat in this file" },
+    // Antigravity Gemini seat, owner direction 2026-11-17 ("seat Carbon and the other Gemini ids through Antigravity").
+    // Appended, unbanded: it changes no band's pick and is reached only as a fallback, by a pin, or by the fit profile.
+    { vendor: "agy_google", model: "gemini-4-carbon-high", basis: "QUOTA",
+      why: "the Antigravity subscription pool, separate from the metered provider APIs; the model is pinned by the lane id, thinking level included" },
   ],
   implementer: [
     // The Sonnet 4.6 rung through Antigravity (operator seating 2026-09-29) was removed on 2026-11-17, owner direction:
@@ -257,6 +261,14 @@ export const SEATING = {
     { vendor: "openai", model: modelId("openai", "luna"), band: "easy", basis: "TASTE",
       why: "same lab and surface again, and the better seating for a small mechanical edit, which it " +
         "turns around faster. The operator's band assignment; no measurement of code quality here" },
+    // Antigravity Gemini seat, owner direction 2026-11-17 ("seat Carbon and the other Gemini ids through Antigravity").
+    // Appended, unbanded: it changes no band's pick and is reached only as a fallback, by a pin, or by the fit profile.
+    { vendor: "agy_google", model: "gemini-4-carbon-high", basis: "QUOTA",
+      why: "the Antigravity subscription pool, separate from the metered provider APIs; the model is pinned by the lane id, thinking level included" },
+    // Antigravity Gemini seat, owner direction 2026-11-17 ("seat Carbon and the other Gemini ids through Antigravity").
+    // Appended, unbanded: it changes no band's pick and is reached only as a fallback, by a pin, or by the fit profile.
+    { vendor: "agy_google", model: "gemini-4-argon-high", basis: "QUOTA",
+      why: "the Antigravity subscription pool, separate from the metered provider APIs; the model is pinned by the lane id, thinking level included" },
   ],
   reviewer: [
     // GROK, and never the maker's lab. Those are two different statements and both are load-bearing:

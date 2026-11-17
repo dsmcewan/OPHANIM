@@ -41,7 +41,7 @@ test("modelId throws by naming the unknown model key for a real vendor", () => {
 import { resolveSeatModel, LANES } from "../src/config/models.mjs";
 import { SEATING, INTAKE, modelOf } from "../src/role/seating.mjs";
 
-test("every seated model resolves to the registry or a declared lane", () => {
+test("every seated model resolves to the registry or a declared, non-retired lane; a live lane may be declared and unseated", () => {
   const seated = [...Object.values(SEATING), ...Object.values(INTAKE)].flat().map(c => modelOf(c));
   assert.ok(seated.length > 0);
   const lanes = [];
@@ -53,9 +53,20 @@ test("every seated model resolves to the registry or a declared lane", () => {
   // still resolve its name to a lab, and is never seated.
   const live = Object.entries(LANES.agy_cli).filter(([, l]) => !l.retired).map(([m]) => m);
   const retired = Object.entries(LANES.agy_cli).filter(([, l]) => l.retired).map(([m]) => m);
-  assert.deepEqual(lanes.sort(), live.sort(),
-    "the non-retired agy CLI lane models are exactly the seated models outside the registry");
-  assert.deepEqual(live, ["gemini-3.8-flash-high"], "the only live lane is the Gemini one");
+  // 2026-11-17 (owner direction: "seat Carbon and the other Gemini ids through Antigravity"): twelve more live
+  // Gemini lanes were declared, and only two of them were seated. A live lane may be declared without a seat --
+  // it is still reachable by a pin and by the fit profile -- so the seated lanes are a SUBSET of the live ones,
+  // pinned here by name.
+  for (const model of lanes) assert.ok(live.includes(model), `seated lane ${model} is a declared, non-retired lane`);
+  assert.deepEqual(lanes.sort(), ["gemini-3.8-flash-high", "gemini-4-argon-high", "gemini-4-carbon-high"],
+    "the seated models outside the registry are exactly these three live agy CLI lanes");
+  assert.deepEqual(live.sort(), [
+    "gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium",
+    "gemini-4-argon-high", "gemini-4-argon-low", "gemini-4-argon-medium",
+    "gemini-4-carbon-high", "gemini-4-carbon-low", "gemini-4-carbon-medium",
+    "gemini-4-hydrogen-high", "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-xhigh",
+  ], "the live lanes are the thirteen Gemini ones");
+  for (const model of live) assert.equal(LANES.agy_cli[model].lab, "google", `live lane ${model} is a Gemini model`);
   assert.deepEqual(retired.sort(), ["claude-opus-4-6-thinking", "claude-sonnet-4-6"]);
   for (const model of retired) {
     assert.ok(!seated.includes(model), `retired lane ${model} must not be seated anywhere`);
