@@ -2,6 +2,7 @@
 // The caller verifies any retained prior proof before passing priorOutcome.
 // No filesystem, provider, clock, worker, or replay operation occurs here.
 import {createHash} from 'node:crypto';
+import {canonicalCodeUnit} from '../../packages/ledger/canonical.mjs';
 import {analyzeTrace} from './analyze.mjs';
 
 const MAX_CONVERGENCES=20,REPLAY_BUDGET_MS=30000,UNCERTAINTY_FLOOR=0.25;
@@ -11,12 +12,10 @@ const compare=(a,b)=>a<b?-1:a>b?1:0;
 const finite=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=Number.MAX_SAFE_INTEGER;
 const hex=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const requireThat=(condition,message)=>{if(!condition)throw Error(message);};
-function canonical(value){
-  if(Array.isArray(value))return `[${value.map(canonical).join(',')}]`;
-  if(value&&typeof value==='object')return `{${Object.keys(value).sort(compare).map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  if(value===null||['string','boolean'].includes(typeof value)||typeof value==='number'&&Number.isFinite(value))return JSON.stringify(value);
-  throw Error('Finite JSON admission evidence required');
-}
+// Admission digests are CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order they were always computed in.
+const canonical=value=>{
+  try{return canonicalCodeUnit(value);}catch(error){throw Error(`Finite JSON admission evidence required: ${error.message}`);}
+};
 export const admissionDigest=value=>createHash('sha256').update(canonical(value)).digest('hex');
 export function optimizationRecipeSha(recipe=RECIPE){
   requireThat(canonical(recipe)===canonical(RECIPE),'Only the slot-width 1 to 3 recipe is screened');

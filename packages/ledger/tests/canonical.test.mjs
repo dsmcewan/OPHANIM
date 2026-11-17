@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {canonical, digest, openStatusLedger} from '../index.mjs';
+import {canonicalCodeUnit, canonicalCas, canonicalizer, digestCodeUnit} from '../canonical.mjs';
 
 const VECTORS = [
   [null, '74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b'],
@@ -43,4 +44,63 @@ test('the committed status ledger, written before the move, verifies against its
   assert.equal(anchor, 'sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d');
   const b = openStatusLedger({root, anchor}).board();
   assert.ok(b.entries >= 44 && b.items.length > 0);
+});
+
+// The edge policy packages/ledger/canonical.mjs documents, line by line, for all three named forms.
+const FORMS = {canonical, canonicalCodeUnit, canonicalCas};
+
+test('edge policy: what every form accepts, and how it writes it', () => {
+  for (const [name, c] of Object.entries(FORMS)) {
+    assert.equal(c('é'), '"é"', `${name}: no Unicode normalisation`);
+    assert.notEqual(c('é'), c('é'), `${name}: NFC and NFD hash apart`);
+    assert.equal(c('\ud800'), '"\\ud800"', `${name}: a lone surrogate is escaped`);
+    assert.equal(c({'😀': '𝄞'}), '{"😀":"𝄞"}', `${name}: non-BMP written as is`);
+    assert.equal(c([1e21, 1e-7, 2 ** 53 + 1, 5e-324]), '[1e+21,1e-7,9007199254740992,5e-324]', `${name}: numbers as JSON.stringify writes them`);
+    assert.equal(c({o: {}, a: [], s: ''}), '{"a":[],"o":{},"s":""}', `${name}: empty containers`);
+    assert.equal(c(Object.assign(Object.create(null), {b: 1, a: 2})), '{"a":2,"b":1}', `${name}: a null-prototype object is plain`);
+    assert.equal(c({constructor: 1, prototype: 2}), '{"constructor":1,"prototype":2}', `${name}: ordinary data keys`);
+    assert.equal(c({[Symbol('k')]: 1, a: 1}), '{"a":1}', `${name}: symbol keys are not part of the value`);
+    assert.equal(c({toJSON: 1}), '{"toJSON":1}', `${name}: a toJSON data key is data`);
+  }
+});
+
+test('edge policy: the two key orders, and the only -0 difference', () => {
+  const v = {'10': 0, '9': 0, a: 0, '01': 0, '4294967295': 0, '4294967294': 0};
+  assert.equal(canonical(v), '{"9":0,"10":0,"4294967294":0,"01":0,"4294967295":0,"a":0}', 'LEDGER_V1: array indexes first, numerically');
+  assert.equal(canonicalCodeUnit(v), '{"01":0,"10":0,"4294967294":0,"4294967295":0,"9":0,"a":0}', 'CODE_UNIT_V1: code units throughout');
+  assert.equal(canonicalCas(v), canonicalCodeUnit(v));
+  assert.equal(canonical({b: 1, a: 2}), canonicalCodeUnit({b: 1, a: 2}), 'they agree without integer-like keys');
+  assert.equal(digestCodeUnit({b: 1}), digest({b: 1}));
+  assert.equal(canonical(-0), '0', 'LEDGER_V1 writes -0 as 0 (legacy, kept)');
+  assert.equal(canonicalCodeUnit({a: -0}), '{"a":0}');
+  assert.throws(() => canonicalCas({a: -0}), /Plain finite JSON required: \$\.a is -0/);
+  assert.throws(() => canonicalizer({keyOrder: 'locale'}), /unknown key order/);
+  assert.throws(() => canonicalizer({keyOrder: 'ledger', negativeZero: 'drop'}), /unknown -0 policy/);
+});
+
+test('edge policy: every form refuses what is not plain JSON, loudly and with the path', () => {
+  class P { constructor() { this.x = 1; } }
+  const cyc = []; cyc.push(cyc);
+  let deep = 0; for (let i = 0; i < 61; i++) deep = {d: deep};
+  const refused = [
+    [undefined, /\$ is undefined/], [{a: 1, b: undefined}, /\$\.b is undefined/], [[1, undefined], /\$\[1\] is undefined/],
+    [NaN, /not finite \(NaN\)/], [{a: Infinity}, /\$\.a is not finite/], [[-Infinity], /not finite/],
+    [{f() {}}, /\$\.f is a function/], [{s: Symbol('x')}, /is a symbol/], [{n: 1n}, /is a bigint/],
+    [[1, , 3], /\$\[1\] is a hole/],                                      // eslint-disable-line no-sparse-arrays
+    [new Date(0), /is a Date/], [{m: new Map()}, /\$\.m is a Map/], [new Set(), /is a Set/], [/x/, /is a RegExp/],
+    [Buffer.from('x'), /is a Buffer/], [{s: new String('x')}, /is a String/], [new P(), /is a P/],
+    [{toJSON() { return 1; }}, /\$\.toJSON is a function/],
+    [JSON.parse('{"__proto__":{"x":1}}'), /\$\.__proto__ is a prototype-polluting key/],
+    [cyc, /\$\[0\] is a cycle/],
+    [Object.defineProperty({}, 'x', {get: () => 1, enumerable: true}), /accessors refused at \$\.x/],
+    [Object.defineProperty([0], 0, {get: () => 1}), /accessors refused at \$\[0\]/],
+    [deep, /nesting bound exceeded/],
+  ];
+  for (const [name, c] of Object.entries(FORMS)) {
+    for (const [v, why] of refused) assert.throws(() => c(v), why, `${name} must refuse ${String(why)}`);
+    assert.throws(() => c(undefined), /Plain finite JSON required/);
+  }
+  // A shared (non-cyclic) reference is fine: it is written twice.
+  const shared = {k: 1};
+  assert.equal(canonical({a: shared, b: shared}), '{"a":{"k":1},"b":{"k":1}}');
 });

@@ -18,6 +18,7 @@
 // and some causes are not escalated at all: a rate limit with an interval WAITS, a malformed request
 // STOPS (a stronger model does not fix a wrong request), and the step budget is bounded.
 import { createHash } from "node:crypto";
+import { canonicalCodeUnit } from "../../../packages/ledger/canonical.mjs";
 import { FACTS } from "../config/facts.mjs";
 import { LANES } from "../config/models.mjs";
 import { candidatesFor, selectFor, shouldFallThrough, SEATING, DIFFICULTY } from "../role/seating.mjs";
@@ -26,8 +27,8 @@ import { isFrontier } from "../../../packages/model-client/index.mjs";
 export const PROTOCOL = "pantheon.escalation/v1";
 export const MAX_STEPS = 4;
 const TRUNCATED = new Set(["max_tokens", "MAX_TOKENS", "incomplete", "max_output_tokens"]);
-const stable = v => Array.isArray(v) ? `[${v.map(stable).join(",")}]`
-  : v && typeof v === "object" ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}` : JSON.stringify(v);
+// The record digest is CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order it was always computed in.
+const stable = v => canonicalCodeUnit(v);
 const digest = v => createHash("sha256").update(stable(v)).digest("hex");
 const cited = (field) => field && typeof field === "object" && "value" in field ? field.value : null;
 

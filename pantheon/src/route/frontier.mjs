@@ -1,5 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
+import {canonicalCodeUnit} from '../../../packages/ledger/canonical.mjs';
 import {modelId,models,isFrontier,CAPABILITIES} from '../../../packages/model-client/index.mjs';
 import {LANES,labOf} from '../config/models.mjs';
 import {FACTS} from '../config/facts.mjs';
@@ -125,8 +126,8 @@ export const SELECTION_POLICY='pantheon.selection/v1';
 export const PRECEDENCE=Object.freeze(['escalation','slot-override','ticket-pin','operator-override','policy']);
 // `argo` is the default (owner-approved); `fit` is a selectable candidate, unmeasured (docs/routing-task-profile.md).
 export const PROFILES=Object.freeze(['argo','legacy','fit']);
-const stable=v=>Array.isArray(v)?`[${v.map(stable).join(',')}]`
-  :v&&typeof v==='object'?`{${Object.keys(v).sort().map(k=>`${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`:JSON.stringify(v);
+// The policy hash is CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order it was always computed in.
+const stable=v=>canonicalCodeUnit(v);
 
 /** The policy's identity: its version and a hash over the tables, rules and pools it applies. */
 export function selectionPolicy(profile,{pools=[]}={}){
