@@ -14,7 +14,7 @@
 // Layout under `root` and the trust rules are the ledger home's (packages/ledger/home.mjs).
 import {defineKinds} from '../../packages/ledger/chain.mjs';
 import {keyStore, OPERATOR, CONTROLLER} from '../../packages/ledger/home.mjs';
-import {pantheonLedgerKinds, openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
+import {pantheonLedgerKinds, pantheonDomains, openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {efficiencyKinds, efficiencyRecorder} from './efficiency-kinds.mjs';
 
 export {keyStore, OPERATOR, CONTROLLER};
@@ -31,13 +31,22 @@ export function systemKinds({board = null} = {}) {
   });
 }
 
+export const OPHANIM_DOMAIN = 'ophanim';
+/**
+ * The kind sets this composition supplies, as the ledger's authority declares them: Pantheon's domain,
+ * and OPHANIM's (the efficiency kinds). A Pantheon reader passes over OPHANIM's entries structurally and
+ * reports them; it never re-derives or appends them (docs/ledger-provenance-evaluation.md, "Shared
+ * ledgers and the run-path gate").
+ */
+export const systemDomains = () => ({...pantheonDomains(), [OPHANIM_DOMAIN]: Object.keys(efficiencyKinds({})).sort()});
+
 /**
  * Open the ledger at `root`, creating it on first use. `anchor` (or OPHANIM_LEDGER_ANCHOR) is the
  * genesis hash the caller expects; without one, the ledger's own ANCHOR file is used, which is only as
  * trustworthy as the directory holding it.
  */
 export function openSystemLedger({root, board = null, anchor = process.env.OPHANIM_LEDGER_ANCHOR ?? null, checkpointEvery} = {}) {
-  const home = openPantheonLedger({root, board, anchor, checkpointEvery, kinds: systemKinds});
+  const home = openPantheonLedger({root, board, anchor, checkpointEvery, kinds: systemKinds, domains: systemDomains});
   const {ledger, controller} = home;
   /**
    * One recorder for every run path: escalations, turns and reviews, the board's records (Pantheon's

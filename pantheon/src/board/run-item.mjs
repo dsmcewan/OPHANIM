@@ -205,12 +205,18 @@ export async function runOpenItem(spec, opts = {}) {
     const { openPantheonLedger } = await import("../ledger/system.mjs");
     LEDGER = openPantheonLedger({ root: process.env.OPHANIM_LEDGER ?? join(root, "ledger"), board }).recorder();
   }
+  // The board's recorder on the ledger; at ship it also records the gate verdict.
+  let BOARD_LEDGER = null;
+  // What the verify accepted without re-deriving it: entries of a domain this registry does not supply
+  // (`foreign`), and parts of entries whose board is gone (`partial`). Reported in run.json, never hidden.
+  let LEDGER_UNDERIVED = null;
   if (LEDGER) {
     const v = LEDGER.verify();
     if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
+    if (v.complete === false) LEDGER_UNDERIVED = { foreign: v.foreign, partial: v.partial.length };
     // The board's own records on the same ledger: lease changes, budget limits and ref moves are entries
     // first (pantheon/src/ledger/board-kinds.mjs), and a change the ledger refuses does not happen.
-    if (typeof LEDGER.board === "function") board.useLedger(LEDGER.board(root));
+    if (typeof LEDGER.board === "function") { BOARD_LEDGER = LEDGER.board(root); board.useLedger(BOARD_LEDGER); }
   }
   const HUMAN = { vendor: "human" };
   const CONTROLLER = { vendor: "controller" };
@@ -993,14 +999,29 @@ export async function runOpenItem(spec, opts = {}) {
     // through the same record a gate refusal takes; nothing moves.
     const integrate = stageCheck({ ...board, ref: REF, stage: "ship" });
     const unscheduled = (BUILT ?? []).filter(c => !integrate.candidates.some(r => r.item === c.itemKey));
+    // The gates are judged once, at `shipNow`, and that verdict goes on the ledger before the ship acts
+    // on it: a `gate` entry naming this board, the heads it read and the lease entries it cites
+    // (pantheon/src/ledger/gate-kind.mjs). It re-derives after the board moves on, a refusal included.
+    const shipNow = Date.now();
+    let gateVerdict = null;
+    if (BOARD_LEDGER?.recordGate) {
+      const { gateRecord } = await import("../ledger/gate-kind.mjs");
+      const payload = await gateRecord({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, now: shipNow, leaseLedger: BOARD_LEDGER });
+      gateVerdict = { hash: BOARD_LEDGER.recordGate(payload), claim: payload.claim };
+      run.ledger = { gate: gateVerdict.hash, ...(LEDGER_UNDERIVED ? { underived: LEDGER_UNDERIVED } : {}) };
+    }
     let r;
     if (unscheduled.length) {
-      const dry = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, dryRun: true });
+      const dry = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, dryRun: true, now: shipNow });
       r = { ok: false, gates: dry.gates, why: `the controller did not schedule integrate for ${unscheduled.map(c => c.itemKey).join(", ")}` +
         ` (${integrate.dropped.join("; ") || integrate.why})${dry.ok ? "; the ship gates alone would have passed" : `; ship gates: ${dry.why}`}` };
     } else {
-      assertLaw(await shipClaim({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER }));
-      r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER });
+      assertLaw(await shipClaim({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, now: shipNow }));
+      r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, now: shipNow });
+    }
+    if (gateVerdict) {
+      check(gateVerdict.claim.gates.every(g => r.gates.find(x => x.gate === g.gate)?.ok === g.ok),
+        `the recorded gate verdict is the one the ship ran (${gateVerdict.hash.slice(0, 19)})`);
     }
     for (const g of r.gates) progress({ event: "gate", stage: g.gate, detail: g.ok ? "pass" : `REFUSE — ${g.why}` });
     progress({ event: "ship", detail: r.ok ? `shipped ${r.shipped.join(", ")} as ${shortCid(r.commit)}` : `refused: ${r.why}` });

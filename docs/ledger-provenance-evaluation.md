@@ -379,7 +379,7 @@ The cycle review named "the ledger is opt-in" as the largest remaining gap. It i
 
 **Still to do.**
 - **Layering:** Pantheon reaches the ledger through a dynamic import of `ophanim/ledger`. The ledger belongs in a shared package (`packages/ledger`). Done: see "Layering" below.
-- **Shared ledger:** gate and contribution kinds re-derive against the board the ledger was opened with, so one shared ledger across boards needs a board resolver per entry.
+- **Shared ledger:** gate and contribution kinds re-derive against the board the ledger was opened with, so one shared ledger across boards needs a board resolver per entry. Done: see "Shared ledgers and the run-path gate" below.
 - **Key custody:** it is a local key store; a hardware or remote signer would replace `keyStore`.
 
 
@@ -436,7 +436,7 @@ The cycle review (item 5) named the records still off the ledger or only signed 
 - A ref move is checked against its board's store only while that board exists (the opened board, or another board at its `scope`). For a removed board, only its move chain is checked.
 - Prompts are not on the ledger, only their digests. A turn recorded before `prompt_sha` existed matches any prompt.
 - A seat file from a run whose turns were not recorded (a board resumed from before the ledger) is refused, not adopted.
-- The gate's lease citations are available to callers; no gate entry is recorded on the run path yet, as before.
+- The gate's lease citations are available to callers; no gate entry is recorded on the run path yet, as before. Done: see "Shared ledgers and the run-path gate" below.
 
 ## Layering (2026-11-17)
 
@@ -450,7 +450,7 @@ The dependency ran both ways: Pantheon dynamic-imported `ophanim/ledger/system.m
 
 **A move, not a redesign.** No kind's name, authors, rules or payload shape changed, and `LEDGER_SCHEMA` is still `ophanim.ledger/v1`. `systemKinds` is `pantheonLedgerKinds` plus the efficiency kinds, so an entry a Pantheon run records re-derives the same way under OPHANIM's composition. No shims were left at the old `ophanim/ledger` paths; every import was updated. The status CLI is now `node packages/ledger/status.mjs verify|render|set`, and `docs/STATUS.md` was regenerated with `render` so its instructions name that path.
 
-**One consequence of the closed registry.** A ledger that already holds efficiency entries (an `OPHANIM_LEDGER` shared with the OPHANIM CLI) is refused by Pantheon's composition (`kind "efficiency.trace" is not in the registry`), where before the move Pantheon opened OPHANIM's. Such a run takes OPHANIM's recorder (`runOpenItem(spec, {ledger: openSystemLedger(...).recorder()})`). The other direction always works.
+**One consequence of the closed registry.** A ledger that already holds efficiency entries (an `OPHANIM_LEDGER` shared with the OPHANIM CLI) is refused by Pantheon's composition (`kind "efficiency.trace" is not in the registry`), where before the move Pantheon opened OPHANIM's. Such a run takes OPHANIM's recorder (`runOpenItem(spec, {ledger: openSystemLedger(...).recorder()})`). The other direction always works. Resolved for ledgers that declare their domains: see "Shared ledgers and the run-path gate" below.
 
 *Check.*
 - `ophanim/ledger/layering.test.mjs` (4 tests, in `npm run test:proof`):
@@ -523,3 +523,84 @@ The cycle review (items 2 and 5-6) found that a cycle checked only by its author
 - **The diff is bound by digest only.** `diff_sha` and `prompt_sha` are recorded, but the diff text is not kept on the ledger.
 - **Wiring.** Nothing in `runOpenItem` calls `reviewCycle`. The cycle boundary is the loop's step, run through the CLI, and the chain refusal is what makes skipping it visible.
 - **No live run yet.** The live `turn` (`sendTurn` per vendor) has not met a provider; the tests use scripted reviewers.
+
+## Shared ledgers and the run-path gate (2026-11-17)
+
+Two gaps left open above: a ledger shared by several boards could not verify (`board-resolver`), and a ship recorded no gate entry (`gate-on-run-path`).
+
+**One ledger, several boards.** `contribution` and `gate` entries now name their board, as the board kinds already did. Each entry is re-derived against the board it names, through one resolver (`pantheon/src/ledger/scopes.mjs`, `boardScopes`), which `ref.move` now uses too.
+
+| Entry names | Re-derived against |
+|---|---|
+| the opened board's root | the opened board |
+| another root, with a board there | that board, opened read-only |
+| a root with no board there | nothing that needs a store. The ledger-side checks still run (shape, the gate's lease rows and citations). The verify result lists the entry in `partial` |
+| no scope (recorded before this change) | the opened board, as before; refused when no board was opened |
+
+- Kind names are unchanged. `scope` is an optional, absolute payload field. A gate's `lease_scope` must equal its `scope`.
+- `gateRecord` fills `scope` from the board recorder, or else from the board's `root`.
+- `gate` and `contribution` are registered with or without an opened board.
+- Core: `view.note(why)` lets a kind report the part it could not re-derive. `verify()` returns `partial` ([{seq, kind, why}]), `foreign` and `complete`.
+
+**Another domain on the same ledger.** Before this change, a Pantheon run on a ledger that also held OPHANIM's efficiency entries was refused (`kind "efficiency.trace" is not in the registry`).
+
+| Option | Verdict |
+|---|---|
+| Kind sets pinned in genesis; a composition must supply all of them | Rejected. It only words the refusal better: the Pantheon run is still refused. It also blocks the order that works today, where a Pantheon-created ledger later receives OPHANIM records, unless the declaration can grow. |
+| **Declared domains; a reader checks a domain it does not supply structurally** | **Chosen.** It is the first option with growable declarations, plus a reader that passes over a domain without re-deriving it. |
+
+How the chosen option works:
+- **Declaration.** The authority declares each domain and its kinds: `domains: {name: [kind]}` in genesis, or in a later authority entry signed by an operator. Declarations only grow, and a kind belongs to one domain only.
+- **Who declares.** `openLedgerHome({domains})` writes them into a new genesis. On an existing ledger, it declares a missing domain just before that domain's first entry; opening never writes.
+- **Compositions.** Pantheon supplies `pantheon`. OPHANIM supplies `pantheon` and `ophanim` (the `efficiency.*` kinds).
+- **What a reader does with an entry outside its registry:**
+
+| The entry's kind is | The reader |
+|---|---|
+| in a declared domain the reader does not supply | Checks linkage, order and author signatures, a keyring author and an intact payload. Never re-derives or appends the entry. Counts it in `verify().foreign` |
+| in a domain the reader supplies, missing from its registry | Refuses it: the composition is incomplete |
+| in no domain declared before it | Refuses it, as before |
+
+- **Why this is sound for Pantheon.** No Pantheon kind reads a foreign entry, and the chain binds every entry, so a foreign entry cannot change what a Pantheon entry re-derives. What the reader does not check (the foreign entry's meaning) is reported, not implied: `complete` is false.
+- **Why the registry stays closed.** A reader passes over exactly the kinds an operator-signed authority named, and nothing else.
+- **On the run path.** `runOpenItem` records what the verify passed over in `run.json` (`ledger.underived`).
+
+**The ship's verdict on the ledger.** At ship, `runOpenItem` judges the gates once, at `shipNow`. It records that verdict as a `gate` entry, then ships at the same `now`:
+- the entry is built with `gateRecord({..., leaseLedger})` and appended with the board recorder's new `recordGate`;
+- it names the board and the heads it read, and cites the lease entries;
+- a refusal is recorded the same way, including the case where the controller did not schedule integrate (the entry holds the gate verdict);
+- a check confirms the recorded gates match the ones the ship ran;
+- `run.json` names the entry (`ledger.gate`).
+
+*Check.*
+- `packages/ledger/tests/domains.test.mjs` (5 tests):
+  - a foreign domain is checked structurally and reported, and the reader refuses to append it;
+  - foreign entries that were forged (an altered payload, a swapped payload with a stale signature, an unknown author) are refused;
+  - an undeclared kind, an incomplete composition, a kind in two domains and a non-operator declaration are refused;
+  - a declaration applies from its entry on, and `note` reaches `partial`;
+  - the home declares domains in genesis, and lazily before a domain's first entry.
+- `pantheon/tests/ledger-shared.test.mjs` (4 tests):
+  - two boards share one ledger, and each gate and contribution re-derives against its own board, with the ledger opened with either board. The same verdict without a scope is refused (the behaviour before this change);
+  - for the other board, a flipped claim, a verdict re-scoped onto the wrong board and a forged projection are refused;
+  - with a board removed, its gate, contribution and ref moves are listed in `partial`, and forged lease rows are still refused;
+  - an unscoped entry is checked against the opened board, and refused with none;
+  - another domain is checked structurally, its forged entries are refused, and an undeclared kind is still refused.
+- `pantheon/tests/route-protocol.test.mjs`:
+  - **default-ledger run:** one `gate` entry, scoped and citing its lease scope. It re-derives after the board moved on. A flipped claim and made-up heads are refused, and the entry edited on disk fails verification;
+  - **rejected review:** the refusal is recorded with REVIEW red, and after resume both verdicts re-derive;
+  - **two runs on two boards, one `OPHANIM_LEDGER` holding another domain's entry:** both ship, and both verdicts re-derive against their own boards. With the first board removed, its entries are listed in `partial`.
+- `ophanim/ledger/layering.test.mjs` adds a ledger holding a real `efficiency.promotion`. Pantheon opens it and reports `foreign: {ophanim: 1}`, refuses to append the efficiency kind, and refuses a forged one. OPHANIM still re-derives everything.
+- **Against the code before this change:**
+  - the new route-protocol checks fail (no gate entry; the shared run is refused);
+  - `ledger-shared` and `domains` fail to load.
+- Suites:
+  - `npm run test:proof`: 153 of 153, with TELOS at the pin;
+  - Pantheon: 842 pass, plus the 1 known environment failure;
+  - `packages/ledger`: 26 pass;
+  - model client: 48 pass.
+
+**Limits.**
+- **Ledgers without declarations.** On ledgers written before this change, nothing is declared, so their OPHANIM entries still stop a Pantheon reader. A declaration applies from its entry on, as keys do. Such a ledger is opened with OPHANIM's composition, as before.
+- **A scope with no board.** A verdict whose scope names a root with no board re-derives only its ledger side. The controller signs `scope`, and the result reports the entry rather than hiding it. Nothing refuses it.
+- **Frontier counts.** `foreign` and `partial` cover the entries a verify checked, so `mode: 'frontier'` counts only those after the last checkpoint.
+- **`board.anchor`** still re-derives against the opened board only.

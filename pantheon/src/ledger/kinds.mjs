@@ -17,6 +17,7 @@ import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {LANES} from '../config/models.mjs';
 import {FACTS} from '../config/facts.mjs';
 import {canonical, digest} from '../../../packages/ledger/canonical.mjs';
+import {boardScopes, scopeOf, validScope} from './scopes.mjs';
 
 // A figure is either UNRECORDED (never guessed) or carries the source and quote it was read from.
 const isCited = f => f === 'UNRECORDED' || f === undefined
@@ -37,9 +38,9 @@ export function currentSeating() {
 /**
  * Kind specs. `authors.inputs` decides who may record facts and seating (operators, typically);
  * `authors.decisions` who may record escalations and contributions (the controller, typically).
- * `board` is {store} for re-deriving contributions.
+ * `board` is the opened board ({root?, store}) or null, and `scopes` resolves the board a contribution names.
  */
-export function pantheonKinds({authors = {}, board = null} = {}) {
+export function pantheonKinds({authors = {}, board = null, scopes = boardScopes(board)} = {}) {
   const inputs = authors.inputs ?? (() => true), decisions = authors.decisions ?? (() => true);
   return {
     facts: {
@@ -78,19 +79,26 @@ export function pantheonKinds({authors = {}, board = null} = {}) {
         return null;
       },
     },
-    ...(board ? {
-      contribution: {
-        authors: decisions,
-        validate: p => (p?.projection?.schema === CONTRIBUTIONS_SCHEMA && Array.isArray(p.heads) ? null : 'a contribution names its board heads and projection'),
-        rederive: e => {
-          const refs = {list: () => e.payload.heads};
-          let again;
-          try { again = chairContributions({store: board.store, refs}); } catch (err) { return `the named heads are not on this board: ${err.message}`; }
-          return again.projectionSha === e.payload.projection.projectionSha && canonical(again) === canonical(e.payload.projection)
-            ? null : 'the projection is not the one these heads produce';
-        },
+    // A contribution names its board (`scope`, the board root) and re-derives against it (scopes.mjs);
+    // one recorded before entries carried a scope re-derives against the opened board.
+    contribution: {
+      authors: decisions,
+      validate: p => (p?.projection?.schema === CONTRIBUTIONS_SCHEMA && Array.isArray(p.heads) && validScope(p)
+        ? null : 'a contribution names its board heads and projection, and its board (scope) as an absolute root'),
+      rederive: (e, view) => {
+        const scope = scopeOf(e.payload), b = scopes(scope);
+        if (!b) {
+          if (scope === undefined) return 'the contribution names no board (scope), and no board was opened with this ledger';
+          view?.note?.(`no board at ${scope}: the projection was not re-derived`);
+          return null;
+        }
+        const refs = {list: () => e.payload.heads};
+        let again;
+        try { again = chairContributions({store: b.store, refs}); } catch (err) { return `the named heads are not on this board: ${err.message}`; }
+        return again.projectionSha === e.payload.projection.projectionSha && canonical(again) === canonical(e.payload.projection)
+          ? null : 'the projection is not the one these heads produce';
       },
-    } : {}),
+    },
   };
 }
 
