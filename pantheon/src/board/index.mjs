@@ -4,11 +4,16 @@ import { openStore } from "./cas.mjs";
 import { openRefs } from "./refs.mjs";
 import { openRuntime } from "./runtime.mjs";
 
-export function openBoard(root) {
+// `ledger` is a board recorder (ophanim/ledger/board-kinds.mjs boardRecorder, or the system ledger's
+// `recorder().board(root)`): with one, lease changes, budget limits and ref moves are ledger entries first.
+// It is injected, so this module never imports the ledger; `useLedger` attaches one after opening, for a
+// ledger opened with this board.
+export function openBoard(root, { ledger = null } = {}) {
   const store = openStore(root);
-  const runtime = openRuntime(root, { store });  // spend is bound to commits in this store
-  const refs = openRefs(root, { runtime, store }); // refs verify lease generations and diff commits themselves
-  return { root, store, refs, runtime };
+  const runtime = openRuntime(root, { store, ledger });  // spend is bound to commits in this store
+  const refs = openRefs(root, { runtime, store, ledger }); // refs verify lease generations and diff commits themselves
+  const useLedger = l => { runtime.useLedger(l); refs.useLedger(l); };
+  return { root, store, refs, runtime, useLedger };
 }
 
 export * from "./canon.mjs";
