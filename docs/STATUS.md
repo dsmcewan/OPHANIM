@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node ophanim/ledger/status.mjs set ...`, then `node ophanim/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:00cb542d9a92c57ebc342cc7d229fbde981be0a268c99b963b0bfbcd77a2e36c` · 44 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:16858786b4399cb99a0bd56097f44fdbabb8f7b43631ae6ba5eced706f6712e0` · 45 entries.
 Verify it: `node ophanim/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 23 · In progress: 1 · Ready: 4 · On Hold: 10.
+**Counts:** Resolved: 24 · In progress: 1 · Ready: 3 · On Hold: 10.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -25,7 +25,6 @@ Verify it: `node ophanim/ledger/status.mjs verify`.
 | **Ledger as a shared package** (`shared-package`) | In progress |  | moving ophanim/ledger to packages/ledger so Pantheon does not import OPHANIM; first, because it moves the files the other Ready items change | 2026-11-17 |
 | **One ledger across boards** (`board-resolver`) | Ready | depends on shared-package | gate and contribution kinds resolve their own board per entry; after shared-package, which moves the same files | 2026-11-17 |
 | **Gate verdicts recorded on the run path** (`gate-on-run-path`) | Ready |  | the gate kind and its lease citations exist; runOpenItem does not yet record a gate entry at ship | 2026-11-17 |
-| **Ref recorded but its file write fails** (`ref-write-gap`) | Ready |  | a ref.move is recorded before the ref file is written; if that write fails, the next swap is refused until repaired. Needs a recorded repair path | 2026-11-17 |
 | **Review layer every cycle** (`review-every-cycle`) | Ready | depends on shared-package | review entries under cold-review rules by default; after shared-package, which moves the same files | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
@@ -46,6 +45,7 @@ Verify it: `node ophanim/ledger/status.mjs verify`.
 | **Engine Q1-Q6** (`q1-q6`) | Resolved |  | model in the author, occupancy, chair and controller gates, lane registry, budget binding (docs/pantheon-engine-loop-evaluation.md) | 2026-11-17 |
 | **Q7 contribution measurement** (`q7-measurement`) | Resolved |  | projection, recomputation check and ranking across five chairs | 2026-11-17 |
 | **OpenAI reasoning.context** (`reasoning-context`) | Resolved |  | settled from the vendor docs; effective mode recorded | 2026-11-17 |
+| **Ref recorded but its file write fails** (`ref-write-gap`) | Resolved |  | the ref file is prepared before the move is recorded; if the final rename fails, an undo reset (to null for a creation) is recorded, so the ledger and the file agree. Test fails on the old code | 2026-11-17 |
 | **Status board from a ledger** (`status-board`) | Resolved |  | status entries with the standing rule enforced on append; docs/STATUS.md generated from status/ledger | 2026-11-17 |
 | **Swarms on the board** (`swarms`) | Resolved |  | gated, recorded transitions; all five chairs measured | 2026-11-17 |
 | **One terminal-state rule for every model** (`terminal-state`) | Resolved |  | shared rule on both transports, unary and streamed (docs/pantheon-model-loop-evaluation.md) | 2026-11-17 |

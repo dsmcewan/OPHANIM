@@ -167,7 +167,8 @@ export function boardKinds({authors = () => true, board = null, stores = storeRe
     [REF_MOVE]: {
       authors,
       validate: p => (typeof p?.scope === 'string' && typeof p.name === 'string' && p.name.startsWith('refs/')
-        && (p.from === null || COMMIT.test(p.from)) && COMMIT.test(p.to) && typeof p.msg === 'string' && typeof p.by === 'string'
+        // `to` is a commit, or null only for a recorded reset (an undone creation: the ref does not exist).
+        && (p.from === null || COMMIT.test(p.from)) && (COMMIT.test(p.to) || (p.to === null && p.reset === true)) && typeof p.msg === 'string' && typeof p.by === 'string'
         && typeof p.reset === 'boolean'
         ? null : 'a ref move names {scope, name, from, to, msg, by, reset}'),
       rederive: (e, view) => {
@@ -176,7 +177,7 @@ export function boardKinds({authors = () => true, board = null, stores = storeRe
         if (c.prev && p.from !== c.prev.to) return `${p.name} was left at ${String(c.prev.to).slice(0, 19)}, not ${String(p.from).slice(0, 19)}: it moved off the ledger`;
         const store = stores(p.scope);
         if (!store) return null;
-        if (!store.has(p.to)) return `${p.to.slice(0, 19)} is not a commit in this board's store`;
+        if (p.to !== null && !store.has(p.to)) return `${p.to.slice(0, 19)} is not a commit in this board's store`;
         if (p.from !== null && !store.has(p.from)) return `${p.from.slice(0, 19)} is not a commit in this board's store`;
         if (p.from !== null && !p.reset && !descends(store, p.to, p.from)) return `${p.to.slice(0, 19)} does not descend from ${p.from.slice(0, 19)}, and the move is not a recorded reset`;
         return null;

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
 import {openSystemLedger, CONTROLLER as CTL} from './system.mjs';
 import {gateRecord, gateLeaseCitations} from './gate-kind.mjs';
 import {openBoard} from '../../pantheon/src/board/index.mjs';
@@ -233,3 +234,25 @@ test('without a ledger the board behaves as before: no records, edits go uncheck
     assert.equal(fs.existsSync(path.join(root, 'ledger')), false);
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('a ref whose file cannot be written is undone on the ledger, so the ledger and the file never disagree', () => withBoard(async ({board, L}) => {
+  ok(await publish({...board, ref: REF, author: HUMAN, msg: 'ticket', entries: [{kind: 'ticket', payload: TICKET}]}));
+  const C = `refs/seat/${planner.seat_id}/c`;
+  // Fail only the final rename, after the move is on the ledger: the narrow window this closes.
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => { if (String(to) === board.refs.refPath(C)) throw Object.assign(new Error('disk full'), {code: 'ENOSPC'}); return rename(from, to); };
+  syncBuiltinESMExports();
+  let r;
+  try { r = await board.refs.branch({name: C, from: REF, author: planner}); }
+  finally { fs.renameSync = rename; syncBuiltinESMExports(); }
+  assert.equal(r.ok, false);
+  assert.equal(board.refs.resolve(C), null, 'the ref was not created');
+  const moves = L.read().filter(e => e.kind === 'ref.move' && L.payloadOf(e).name === C).map(e => L.payloadOf(e));
+  assert.deepEqual(moves.map(m => [m.reset, m.to === null]), [[false, false], [true, true]], 'recorded, then undone back to no ref');
+  assert.match(moves[1].msg, /^undo: the ref file could not be written/);
+  assert.equal(L.verify().ok, true);
+  // With the fault gone, the same creation goes through: the ledger agrees the ref does not exist.
+  ok(await board.refs.branch({name: C, from: REF, author: planner}));
+  assert.equal(board.refs.resolve(C), board.refs.resolve(REF));
+  assert.equal(L.verify().ok, true);
+}));

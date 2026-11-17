@@ -14,7 +14,7 @@
 import { shipOnlySlots } from "./policy.mjs";
 import { changedSlots as diffSlots, treeSlots } from "./dag.mjs";
 import { authorClassOf } from "./schema.mjs";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, appendFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, appendFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { isCid, shortCid } from "./canon.mjs";
 import { withSeatLock } from "../seat/lock.mjs";
@@ -238,17 +238,28 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false,
           if (!v.ok) return { ok: false, code: v.code, why: v.why, current };
         }
 
-        // On the ledger first: a move the ledger refuses does not happen.
-        if (L) {
-          try { L.recordRefMove({ name, from: current, to: next, msg, by: author.seat_id ?? author.vendor, reset: Boolean(reset) }); }
-          catch (e) { return { ok: false, code: "LEDGER_REFUSED", why: `the ledger refused this move of ${name}: ${e.message}`, current }; }
-        }
-
+        // The new ref file is prepared first, so after the ledger records the move only the atomic rename
+        // remains. On the ledger next: a move the ledger refuses does not happen.
         const p = refPath(name);
         mkdirSync(dirname(p), { recursive: true });
         const tmp = `${p}.tmp${process.pid}`;
         writeFileSync(tmp, next + "\n");
-        renameSync(tmp, p);
+        const by = author.seat_id ?? author.vendor;
+        if (L) {
+          try { L.recordRefMove({ name, from: current, to: next, msg, by, reset: Boolean(reset) }); }
+          catch (e) { rmSync(tmp, { force: true }); return { ok: false, code: "LEDGER_REFUSED", why: `the ledger refused this move of ${name}: ${e.message}`, current }; }
+        }
+        try { renameSync(tmp, p); }
+        catch (e) {
+          rmSync(tmp, { force: true });
+          // The ledger says the ref moved and the file says it did not. Record the truth: a reset back to
+          // where the ref still is, so the ledger and the file agree and the next swap is not wedged.
+          if (L) {
+            try { L.recordRefMove({ name, from: next, to: current, msg: `undo: the ref file could not be written (${e.code ?? e.message})`, by, reset: true }); }
+            catch (u) { return { ok: false, code: "LEDGER_DIVERGED", why: `the ref file write failed and the undo was refused: ${u.message}`, current }; }
+          }
+          return { ok: false, code: "WRITE_FAILED", why: `the ref file could not be written: ${e.message}`, current };
+        }
         // A reflog is runtime chrome, so it lives outside the DAG and is never load-bearing: the
         // commit parents are the audit trail. This only answers "which names moved, when".
         try {

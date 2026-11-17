@@ -1,0 +1,1 @@
+{"basis":"the ref file is prepared before the move is recorded; if the final rename fails, an undo reset (to null for a creation) is recorded, so the ledger and the file agree. Test fails on the old code","checked":"2026-11-17","item":"ref-write-gap","schema":"ophanim.status/v1","state":"Resolved","title":"Ref recorded but its file write fails","waiting_on":null}
