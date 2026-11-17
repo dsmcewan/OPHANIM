@@ -1,5 +1,7 @@
 # Loop evaluation: Pantheon's model paths
 
+> **Scope of what is proven** (added after the independent review of 2026-11-16, finding FW1). OPHANIM's `prove` and `verify` run against fixture authority: a candidate is accepted when its output equals the obligation's stored `expected` value (`ophanim/governance/check-contract.mjs`), and the three TELOS reviewer approvals are generated and signed by the same process that needs them (`ophanim/governance.mjs`). They therefore certify crash consistency and record integrity, not that work without a stored answer can be verified. Model turns in the suites run against scripted fakes; no live provider is called in CI. Binding real reviewers to the ledger is item K6 on the [status board](STATUS.md), a governance decision.
+
 Companion to [loop-evaluation.md](loop-evaluation.md). That document covered OPHANIM's controller. This one applies the same loop steps to how each of the 19 registered models is called, recorded and continued.
 
 Scope: `packages/model-client`, plus Pantheon's `src/sdk/{adapter,stream,seat-sdk}.mjs` and `src/seat`, `src/route`. Everything was evaluated and tested with injected fake clients. No live vendor calls were made.

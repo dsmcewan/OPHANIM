@@ -223,3 +223,28 @@ test('RU2: an authority entry before a checkpoint is verified, so a forger canno
       signer: {...mallory, key_id: 'seat'}, order: {...mallory, key_id: 'orderer'}}), /does not verify, refusing to append/);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+// Independent review 2026-11-16, ME1: deleting the author-signature check failed no test, because the
+// order signature also covers the body. The case only the author check catches: the ORDERER (who holds
+// a valid order key) writes an entry in a seat's name without that seat's key.
+test('ME1: the orderer cannot author an entry in a seat\'s name', async () => {
+  const {sign, createPrivateKey} = await import('node:crypto');
+  const {canonical} = await import('../canonical.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-me1-'));
+  try {
+    const anchor = createLedger({dir, authority, operator, order: orderer});
+    const L = openLedger({dir, kinds, anchor});
+    L.append({kind: 'measure', payload: {value: 1}, author: {key_id: scout.key_id}, signer: scout, order: orderer});
+    // Re-sign the last entry's body with the ORDERER's key in place of the scout's; the order signature
+    // stays valid because the body is unchanged.
+    const file = path.join(dir, 'chain.jsonl');
+    const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n');
+    const e = JSON.parse(lines.at(-1));
+    const body = {schema: e.schema, kind: e.kind, author: e.author, derived_from: e.derived_from, payload_ref: e.payload_ref};
+    e.author_sig = sign(null, Buffer.from(canonical(body)), createPrivateKey(orderer.privatePem)).toString('base64');
+    fs.writeFileSync(file, [...lines.slice(0, -1), JSON.stringify(e)].join('\n') + '\n');
+    const v = L.verify();
+    assert.equal(v.ok, false);
+    assert.match(v.why, /author signature invalid/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});

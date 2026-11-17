@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:e09347998af85d995d303d0719822ec9835bedc741efadd4132906b88722b510` · 59 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:7af40371063a3b2d2fa65546b78ed947292739e5e75deed18e8ebb6a0c43c8b0` · 65 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 30 · In progress: 1 · Ready: 1 · On Hold: 11.
+**Counts:** Resolved: 33 · In progress: 1 · Ready: 0 · On Hold: 12.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -14,6 +14,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 |---|---|---|---|---|
 | **all_turns on GPT-6 Astra, Sol, Luna** (`all-turns`) | On Hold | credential | docs conflict on Astra, silent on Sol and Luna; one live call settles it | 2026-11-17 |
 | **xAI models on the shared client** (`direct-path-xai`) | On Hold | fact | xAI documents no output ceilings (re-checked 2026-11-17) | 2026-11-17 |
+| **FW4: a threat model naming the adversary (independent review)** (`fw4-threat-model`) | On Hold | decision | the review assigns this to the decision authority: which adversary the controls must stop (careless owner, compromised agent session, malicious repo writer, provider substitution). A draft can be proposed for decision | 2026-11-17 |
 | **gemini-3.6-flash off the agy seats** (`gemini-routing`) | On Hold | decision | would move OAuth agy seats onto the metered API | 2026-11-17 |
 | **GitHub Projects view of the loop** (`github-projects`) | On Hold | credential | user-owned Projects need a token with project scope; neither GITHUB_TOKEN nor this session has one. The publisher syncs Projects only when that token is configured | 2026-11-17 |
 | **TELOS reviewers bound to real seats (K6)** (`k6`) | On Hold | governance | pinned TELOS verifier admits ledger entries and seat-signed reviews | 2026-11-17 |
@@ -21,14 +22,14 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **P8/P9 admission through the efficiency gate** (`p8-p9-admission`) | On Hold | depends on k6 | needs the pinned verifier to admit it | 2026-11-17 |
 | **Q7 seat adjustment from evidence** (`q7-adjustment`) | On Hold | depends on k6 | needs the pinned verifier to admit a seating dimension | 2026-11-17 |
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
-| **Hardware or remote signer** (`signer`) | On Hold | decision | which signer holds operator keys is a custody decision | 2026-11-17 |
+| **Operator key custody (hardware or remote signer)** (`signer`) | On Hold | decision | keys generated in an agent session stay there (independent review SY1/WF2); the status board key is the same question. Needs the owner to hold the operator key or name a signer | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
 | **GitHub as the public projection of the ledger** (`public-record`) | In progress |  | issues, labels, PR provenance, cycle reports and Actions summaries generated from committed ledgers; agent seats never shown as GitHub identities | 2026-11-17 |
-| **FW1: prove/verify certify against a stored answer (independent review)** (`fw1-stored-answer`) | Ready |  | reported in PR #7; not yet assessed here | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **One ledger across boards and domains** (`board-resolver`) | Resolved |  | entries name their board (scope) and re-derive against it; domains declared by operator-signed entries; a reader checks foreign-domain entries structurally and reports them as foreign, never re-derived | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
 | **Six models on the shared client** (`frontier-move`) | Resolved |  | requests unchanged (providerDefaults); remaining models held (direct-path-xai, gemini-routing) | 2026-11-17 |
+| **FW1: prove/verify certify against a stored answer (independent review)** (`fw1-stored-answer`) | Resolved |  | by design (fixture authority); the scope caveat is now in all five evaluation docs; real verification is K6 | 2026-11-17 |
 | **Gate verdicts recorded on the run path** (`gate-on-run-path`) | Resolved |  | runOpenItem records each ship verdict, including refusals, as a scoped gate entry that re-derives after the board moves on | 2026-11-17 |
 | **gemini-3.8-flash** (`gemini-3.8`) | Resolved |  | recorded as a stable API model; default stays on 3.6 (current, supports minimal) | 2026-11-17 |
 | **Ledger core (K1)** (`k1`) | Resolved |  | closed kinds, per-author signatures, re-derivation before append, checkpoints | 2026-11-17 |
@@ -39,6 +40,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Layered review findings** (`layered-review`) | Resolved |  | regression and defects fixed with fails-before tests; doc claims corrected | 2026-11-17 |
 | **The ledger by default** (`ledger-default`) | Resolved |  | pinned genesis, key custody, seat-key rotation; on by default for runOpenItem and the CLI (PR #6) | 2026-11-17 |
 | **Reseat from the live view** (`live-reseat`) | Resolved |  | explicit, consented, recorded per seat | 2026-11-17 |
+| **ME1: no test failed when the author-signature check was deleted (independent review)** (`me1-author-signature`) | Resolved |  | test where the orderer authors in a seat name; the deletion mutant now fails it | 2026-11-17 |
 | **Remaining off-ledger records** (`off-ledger-records`) | Resolved |  | lease rows, budget caps and ref moves are ledger entries recorded before the file changes; seat files are checked against ledger turns at handoff (ophanim/ledger/board-kinds.mjs) | 2026-11-17 |
 | **OPHANIM loop P1-P7** (`p1-p7`) | Resolved |  | equilibrium reuse, chain verification, required gates, assignments, append-only debits, deltas, investigation checkpoints (docs/loop-evaluation.md) | 2026-11-17 |
 | **Frontier handoff and refill scheduling (P8, P9)** (`p8-p9`) | Resolved |  | implemented, opt-in; admission through the efficiency gate is held separately (p8-p9-admission) | 2026-11-17 |
@@ -53,5 +55,6 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Ledger as a shared package** (`shared-package`) | Resolved |  | packages/ledger holds the domain-free core; Pantheon kinds under pantheon/src/ledger, OPHANIM kinds under ophanim/ledger; dependency runs OPHANIM -> Pantheon -> packages/ledger, enforced by layering.test | 2026-11-17 |
 | **Status board from a ledger** (`status-board`) | Resolved |  | status entries with the standing rule enforced on append; docs/STATUS.md generated from status/ledger | 2026-11-17 |
 | **Swarms on the board** (`swarms`) | Resolved |  | gated, recorded transitions; all five chairs measured | 2026-11-17 |
+| **SY1: the ledger had no shipped caller (independent review)** (`sy1-ledger-caller`) | Resolved |  | the ledger is on by default for runOpenItem and the OPHANIM CLI (PR #6); key custody is tracked under signer | 2026-11-17 |
 | **One terminal-state rule for every model** (`terminal-state`) | Resolved |  | shared rule on both transports, unary and streamed (docs/pantheon-model-loop-evaluation.md) | 2026-11-17 |
 | **Output-token tiers** (`token-tiers`) | Resolved |  | provisional tiers by difficulty, capped at documented ceilings; adjustment held (tier-adjustment) | 2026-11-17 |
