@@ -384,7 +384,7 @@ class _FakeClient:
 
 
 VALID_TICKET_JSON = """{
-  "key": "fixtureFeature", "repo_root": "/home/colchis/Projects/fixture",
+  "key": "fixtureFeature", "repo_root": "~/Projects/fixture",
   "title": "a fixture feature", "slot": "fixture.mjs", "path": "fixture.mjs",
   "copy": [], "acceptance_cmd": "true", "question": "fixture?", "goal": "do the fixture thing"
 }"""
@@ -394,7 +394,7 @@ def test_draft_ticket_returns_the_parsed_ticket_on_a_valid_model_reply():
     client = _FakeClient(VALID_TICKET_JSON)
     ticket = draft_ticket("# Fixture doc", [], client=client, model="claude-sonnet-5")
     assert ticket["key"] == "fixtureFeature"
-    assert ticket["repo_root"] == "/home/colchis/Projects/fixture"
+    assert ticket["repo_root"] == "~/Projects/fixture"
 
 
 def test_draft_ticket_returns_none_when_the_model_cannot_resolve_a_ticket():
@@ -481,7 +481,7 @@ def test_companion_build_route_reports_not_shipped_with_the_real_reason(monkeypa
     import companion_build
 
     def fake_draft_ticket(md_content, conversation_history, *, client, model):
-        return {"key": "x", "repo_root": "/home/colchis/Projects/x", "title": "t", "slot": "s",
+        return {"key": "x", "repo_root": "~/Projects/x", "title": "t", "slot": "s",
                 "path": "s", "copy": [], "acceptance_cmd": "true", "question": "q", "goal": "g"}
 
     monkeypatch.setattr(companion_build, "draft_ticket", fake_draft_ticket)

@@ -23,8 +23,9 @@
 // `verify().foreign`. An entry of a kind no domain declared before it is refused, as before, so the
 // registry stays closed: what a reader passes over is exactly what the ledger's authority named.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import {sign as edSign, verify as edVerify, createPrivateKey, createPublicKey, generateKeyPairSync} from 'node:crypto';
+import {sign as edSign, verify as edVerify, createPrivateKey, createPublicKey, generateKeyPairSync, createHash, randomBytes} from 'node:crypto';
 import {canonical, digest} from './canonical.mjs';
 
 export const LEDGER_SCHEMA = 'ophanim.ledger/v1';
@@ -110,7 +111,8 @@ const authorityValid = a => Object.hasOwn(a.keys, a.orderer) && a.operators.leng
  * every declared domain its registry holds at least one kind of. A domain is supplied whole or not at
  * all: a registry missing one kind of a domain it supplies is refused, not passed over.
  */
-export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = null}) {
+export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = null,
+  lockTimeoutMs = 10_000, lockStaleMs = 600_000, log = msg => process.emitWarning(msg, {code: 'LEDGER_LOCK'})}) {
   if (!dir || !path.isAbsolute(dir)) fail('an absolute ledger directory is required');
   if (typeof anchor !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(anchor)) fail('a pinned genesis hash (anchor) is required');
   const file = path.join(dir, 'chain.jsonl');
@@ -260,13 +262,37 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
       foreign, partial: notes.partial, complete: notes.foreign.length === 0 && notes.partial.length === 0};
   }
 
-  // Single writer: an exclusive lock file, then verify-before-append under it.
+  // Single writer: an exclusive lock file, then verify-before-append under it. The lock records who
+  // holds it ({pid, host, time, nonce}). A waiter backs off with jitter for up to `lockTimeoutMs`, and
+  // breaks, and logs, a lock whose holder is a dead process on this host or that is older than
+  // `lockStaleMs` (independent review 2026-11-16, SY5: 200 immediate retries, and a crash under the lock
+  // blocked every later append). A holder removes only its own lock.
   function locked(fn) {
     const lock = file + '.lock';
-    let fd = null;
-    for (let i = 0; i < 200 && fd === null; i++) { try { fd = fs.openSync(lock, 'wx'); } catch {} }
-    if (fd === null) fail('ledger lock held: one writer at a time');
-    try { return fn(); } finally { fs.closeSync(fd); fs.rmSync(lock, {force: true}); }
+    const token = JSON.stringify({pid: process.pid, host: LOCK_HOST, time: Date.now(), nonce: randomBytes(8).toString('hex')});
+    const deadline = Date.now() + lockTimeoutMs;
+    let fd = null, wait = 1;
+    for (;;) {
+      try {
+        fd = fs.openSync(lock, 'wx');
+        try { fs.writeSync(fd, token); fs.fsyncSync(fd); }
+        catch (e) { fs.closeSync(fd); fs.rmSync(lock, {force: true}); throw e; }
+        break;
+      } catch (e) { if (e.code !== 'EEXIST') throw e; }
+      const stale = staleLock(lock, lockStaleMs);
+      if (stale && breakLock(lock, stale)) { log(`ledger lock ${lock} broken: ${stale.why}`); continue; }
+      const left = deadline - Date.now();
+      if (left <= 0) fail('ledger lock held: one writer at a time');
+      sleepSync(Math.min(left, wait / 2 + Math.random() * wait));
+      wait = Math.min(wait * 2, 100);
+    }
+    try { return fn(); }
+    finally {
+      fs.closeSync(fd);
+      let held = null; try { held = fs.readFileSync(lock, 'utf8'); } catch {}
+      if (held === token) fs.rmSync(lock, {force: true});
+      else log(`ledger lock ${lock} was broken while this writer held it`);
+    }
   }
 
   function seal({kind, author, derived_from, payload_ref}, signer, order, entries) {
@@ -277,6 +303,68 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
     return e;
   }
 
+  // The verified head (SY5). Append used to re-read and re-hash the whole chain each time, so its cost
+  // grew with the chain. This instance remembers the chain as it last verified or wrote it (the entries
+  // and their hashes in order, the authority, the last checkpoint) with the file's identity (device,
+  // inode, size, mtime, ctime) and a digest of its last line. On the next append, if the file is still
+  // that file, the prefix is not re-read or re-hashed. What frontier verification checks against things
+  // OUTSIDE the chain file is still checked every time: the payload objects of the genesis, of every
+  // authority entry (RU2: authority is never taken on trust) and of the frontier, and the frontier's
+  // re-derivation. Any difference (an external edit, another writer's append, a replaced file) drops the
+  // cache, and the append runs full frontier verification as before.
+  let head = null;
+  const fileId = fd => {
+    try { const s = fd === undefined ? fs.statSync(file, {bigint: true}) : fs.fstatSync(fd, {bigint: true}); return {dev: s.dev, ino: s.ino, size: s.size, mtimeNs: s.mtimeNs, ctimeNs: s.ctimeNs}; }
+    catch { return null; }
+  };
+  const sameId = (a, b) => Boolean(a && b) && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+  const lineDigest = bytes => createHash('sha256').update(bytes).digest('hex');
+  function tailMatches(id, tailLen, tail) {
+    const size = Number(id.size), len = Math.min(size, tailLen + 1);
+    const buf = Buffer.alloc(len);
+    const fd = fs.openSync(file, 'r');
+    try { if (fs.readSync(fd, buf, 0, len, size - len) !== len) return false; } finally { fs.closeSync(fd); }
+    if (len > tailLen && buf[0] !== 0x0a) return false;              // the line before it still ends there
+    return lineDigest(buf.subarray(len - tailLen)) === tail;
+  }
+
+  // Full frontier verification, then a fresh head. The file must not change while it is read.
+  function verifyAndRemember() {
+    const before = fileId();
+    const state = verify({mode: 'frontier'});
+    if (!state.ok) fail(`ledger does not verify, refusing to append: ${state.why}`);
+    const raw = fs.readFileSync(file);
+    if (!sameId(before, fileId())) fail('ledger changed while it was verified, refusing to append');
+    const entries = raw.toString('utf8').split('\n').slice(0, -1).map(line => JSON.parse(line));
+    const hashes = entries.map(hashOf), last = raw.subarray(raw.lastIndexOf(0x0a, raw.length - 2) + 1);
+    return {id: before, tailLen: last.length, tail: lineDigest(last), entries, hashes, index: new Map(hashes.map((x, i) => [x, i])),
+      authority: state.authority, lastCheckpoint: entries.findLastIndex(e => e.kind === CHECKPOINT),
+      authorityAt: entries.flatMap((e, i) => (i === 0 || e.kind === AUTHORITY ? [i] : []))};
+  }
+
+  // The cached head, re-checked against everything outside the chain file; null when the file changed.
+  function cachedHead() {
+    const h = head;
+    if (!h) return null;
+    const id = fileId();
+    if (!sameId(id, h.id) || !tailMatches(id, h.tailLen, h.tail)) return null;
+    const from = Math.max(h.lastCheckpoint, 0);
+    for (const i of [...h.authorityAt, ...h.entries.keys().drop(from)]) {
+      if (getObject(h.entries[i].payload_ref) === null) fail(`ledger does not verify, refusing to append: entry ${i}: payload object missing or altered`);
+    }
+    // Re-derive the frontier as verify({mode: 'frontier'}) does: each entry sees only what came before it.
+    for (let i = from; i < h.entries.length; i++) {
+      const e = h.entries[i];
+      if (RESERVED.has(e.kind) || !Object.hasOwn(kinds, e.kind)) continue;
+      const earlier = x => (h.index.has(x) && h.index.get(x) < i ? h.entries[h.index.get(x)] : null);
+      const view = {entry: earlier, payload: x => (earlier(x) ? getObject(earlier(x).payload_ref) : null),
+        entries: () => h.hashes.slice(0, i), note: () => {}};
+      const why = kinds[e.kind].rederive({...e, payload: getObject(e.payload_ref)}, view);
+      if (why) fail(`ledger does not verify, refusing to append: entry ${i}: does not re-derive: ${why}`);
+    }
+    return h;
+  }
+
   /**
    * Append one entry. `signer` is the author's own key; `order` is the orderer's. The entry is checked,
    * including re-derivation, BEFORE it is written; a refused entry leaves the ledger unchanged.
@@ -285,34 +373,78 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
     if (kind === CHECKPOINT || kind === GENESIS) fail(`a ${kind} is not appended`);
     if (!signer || signer.key_id !== author?.key_id) fail('an entry is signed by its own author');
     return locked(() => {
-      const state = verify({mode: 'frontier'});
-      if (!state.ok) fail(`ledger does not verify, refusing to append: ${state.why}`);
+      let h;
+      try { h = cachedHead() ?? verifyAndRemember(); } catch (err) { head = null; throw err; }
+      head = h;
+      const {entries, authority} = h;
       // A reader appends only what it re-derives: never an entry of a domain it passes over.
       if (kind !== AUTHORITY && !Object.hasOwn(kinds, kind)) {
-        const u = unknownKind(kind, state.authority);
+        const u = unknownKind(kind, authority);
         fail(u.why ?? `kind "${kind}" belongs to domain "${u.foreign}", which this registry does not supply; only a composition that re-derives it may record it`);
       }
-      if (!order || order.key_id !== state.authority.orderer) fail('the orderer co-signs every entry');
-      const entries = read();
-      const byHash = new Map(entries.map(x => [hashOf(x), x]));
+      if (!order || order.key_id !== authority.orderer) fail('the orderer co-signs every entry');
+      const byHash = {has: x => h.index.has(x), get: x => (h.index.has(x) ? entries[h.index.get(x)] : undefined), keys: () => h.hashes.values()};
       const payload_ref = putObject(payload);
       const e = seal({kind, author, derived_from: [...derivedFrom], payload_ref}, signer, order, entries);
       const notes = {foreign: [], partial: []};
-      const why = check(e, entries.length, entries.at(-1) ?? null, byHash, state.authority, {rederive: true, notes});
+      const why = check(e, entries.length, entries.at(-1) ?? null, byHash, authority, {rederive: true, notes});
       if (why) fail(why);
       const written = [e];
       if ((entries.length + 1) % checkpointEvery === 0) {
-        const all = [...entries, e];
-        const cp = seal({kind: CHECKPOINT, author: {key_id: order.key_id}, derived_from: [], payload_ref: putObject({through: all.length, root: rootOf(all.map(hashOf))})}, order, order, all);
+        const all = [...h.hashes, hashOf(e)];
+        const cp = seal({kind: CHECKPOINT, author: {key_id: order.key_id}, derived_from: [], payload_ref: putObject({through: all.length, root: rootOf(all)})}, order, order, [...entries, e]);
         written.push(cp);
       }
+      const lines = written.map(x => JSON.stringify(x) + '\n');
+      head = null;                                       // a failed or partial write leaves no cache behind
       const fd = fs.openSync(file, 'a');
-      try { fs.writeSync(fd, written.map(x => JSON.stringify(x) + '\n').join('')); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      let id;
+      try { fs.writeSync(fd, lines.join('')); fs.fsyncSync(fd); id = fileId(fd); } finally { fs.closeSync(fd); }
+      // Extend the head with what was just written: the entry was checked above, the checkpoint is ours.
+      let auth = authority;
+      for (const x of written) {
+        auth = authorityAfter(auth, x);
+        h.index.set(hashOf(x), entries.length); h.hashes.push(hashOf(x)); entries.push(x);
+        if (x.kind === CHECKPOINT) h.lastCheckpoint = entries.length - 1;
+        if (x.kind === AUTHORITY) h.authorityAt.push(entries.length - 1);
+      }
+      const last = Buffer.from(lines.at(-1));
+      Object.assign(h, {id, tailLen: last.length, tail: lineDigest(last), authority: auth});
+      head = h;
       return {hash: hashOf(e), seq: e.seq, checkpoint: written.length > 1 ? hashOf(written[1]) : null, ...(notes.partial.length ? {partial: notes.partial} : {})};
     });
   }
 
   return {append, verify, read, payloadOf: e => getObject(e.payload_ref), hashOf};
+}
+
+// The lock holder's host: the hostname and, on Linux, the pid namespace, so a pid is judged dead only
+// where it was recorded.
+const LOCK_HOST = (() => { let ns = ''; try { ns = fs.readlinkSync('/proc/self/ns/pid'); } catch {} return os.hostname() + (ns ? ' ' + ns : ''); })();
+const sleepSync = ms => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+const pidAlive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+
+/** Why the ledger lock at `lock` is stale ({raw, why}, with the bytes judged), or null: live, or gone. */
+export function staleLock(lock, staleMs) {
+  let raw, st;
+  try { st = fs.statSync(lock); raw = fs.readFileSync(lock, 'utf8'); } catch { return null; }
+  let rec = null; try { rec = JSON.parse(raw); } catch {}
+  if (rec && rec.host === LOCK_HOST && Number.isInteger(rec.pid) && rec.pid > 0 && rec.pid !== process.pid && !pidAlive(rec.pid)) {
+    return {raw, why: `its holder, pid ${rec.pid} on this host, is not running`};
+  }
+  const age = Date.now() - (Number.isFinite(rec?.time) ? rec.time : st.mtimeMs);
+  if (age > staleMs) return {raw, why: `it has been held for ${Math.round(age)} ms, longer than the ${staleMs} ms bound${rec ? ` (pid ${rec.pid} on ${rec.host})` : ' (unreadable record)'}`};
+  return null;
+}
+// Break a stale lock: move it aside and remove it only if it is still the lock judged stale; a lock
+// taken in between is put back. True when the stale lock was removed.
+function breakLock(lock, stale) {
+  const aside = `${lock}.stale-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try { fs.renameSync(lock, aside); } catch { return false; }
+  let raw = null; try { raw = fs.readFileSync(aside, 'utf8'); } catch {}
+  if (raw !== stale.raw) { try { fs.linkSync(aside, lock); } catch {} fs.rmSync(aside, {force: true}); return false; }
+  fs.rmSync(aside, {force: true});
+  return true;
 }
 
 /**

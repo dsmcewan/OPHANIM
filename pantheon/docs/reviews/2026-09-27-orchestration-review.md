@@ -1,6 +1,6 @@
 # Pantheon — multi-model orchestration re-review
 
-Reviewed 2026-09-27 at `e34c0f4454096f38d412f99b503708270e241256` in `/home/colchis/Projects/pantheon`. The companion `/home/colchis/Projects/pantheon-seat-core` checkout remains the older `seat-core` worktree at `7beba20`, not a separate package. Current main passed **443 tests, zero failures**. Repository files were not modified. The existing untracked `docs/reviews/` directory was preserved. No credentials were loaded and no live provider calls were made.
+Reviewed 2026-09-27 at `e34c0f4454096f38d412f99b503708270e241256` in `~/Projects/pantheon`. The companion `~/Projects/pantheon-seat-core` checkout remains the older `seat-core` worktree at `7beba20`, not a separate package. Current main passed **443 tests, zero failures**. Repository files were not modified. The existing untracked `docs/reviews/` directory was preserved. No credentials were loaded and no live provider calls were made.
 
 **Assessment: Pantheon is a substantive multi-model orchestration prototype.** It implements multiple coordination patterns, separates roles from vendors, constrains information passed to each role, and makes cross-model criticism an explicit stage. Its most interesting direction is a persistent team whose jobs survive changes of model. That team layer is currently a tested set of components; the executable workflows have not yet connected it into a continuous lifecycle.
 

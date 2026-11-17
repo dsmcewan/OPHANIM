@@ -1,6 +1,6 @@
 {
   "key": "lexiModelConfig",
-  "repo_root": "/home/colchis/Projects/LEXI",
+  "repo_root": "../LEXI",
   "title": "claude_model_tiers.py: single source of truth for LEXI's Claude model-tier defaults, upgraded to the current top-tier models (currently the stale claude-sonnet-4-6/claude-opus-4-8 literal strings duplicated across main.py, cluster_endpoints.py, investigation_engine.py, and pinned into tests)",
 
   "slot": "lexi-dashboard-backend-claude-model-tiers",
