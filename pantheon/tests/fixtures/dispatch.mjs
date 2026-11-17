@@ -39,13 +39,14 @@ export async function withDispatch(fn) {
   const calls = [];
   let implement = () => "export const ok = true;\n";
   let fault = () => null;
-  const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call));
+  let review = () => null;
+  const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call), call => review(call));
   let n = 0;
   const agy = () => existsSync(agyLog) ? readFileSync(agyLog, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
   const spec = (key, extra = {}) => ({ key, repo_root: dir, title: "fixture", goal: "fixture goal", question: "q", copy: [],
     acceptance_cmd: "true", slot: "code", path: "code.mjs", ...extra });
   try {
-    return await fn({ dir, calls, agy, makeClientFor, spec, implement: f => { implement = f; }, fault: f => { fault = f; },
+    return await fn({ dir, calls, agy, makeClientFor, spec, implement: f => { implement = f; }, fault: f => { fault = f; }, review: f => { review = f; },
       opts: (extra = {}) => ({ dir: join(dir, `board-${++n}`), makeClientFor, scouts: ["xai"], ...extra }) });
   } finally {
     for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -63,24 +64,25 @@ const GOOGLE_USAGE = { promptTokenCount: 1234, candidatesTokenCount: 56, totalTo
  * makeClientFor(vendor, {pool, poolConfig}) over the three streaming surfaces, recording each request.
  * `fault({vendor, model, pool, prompt})` may refuse a request: `{ error }` throws it before any output
  * (the request is recorded with `failed: true`), and `{ incomplete: true }` ends the stream truncated
- * (with usage). Returning null serves the request normally.
+ * (with usage). Returning null serves the request normally. `review({vendor, model, pool, prompt})` may
+ * answer a reviewer's prompt itself (a reply text); returning null keeps the default verdict.
  */
-export function scriptedClients(calls = [], implement = () => "export const ok = true;\n", fault = () => null) {
+export function scriptedClients(calls = [], implement = () => "export const ok = true;\n", fault = () => null, review = () => null) {
   let n = 0;
-  const answer = prompt => {
-    if (/VERDICT/i.test(prompt)) return /exited 1\b/.test(prompt) ? "VERDICT: request_changes" : "VERDICT: approve";
+  const answer = (prompt, who = {}) => {
+    if (/VERDICT/i.test(prompt)) return review({ ...who, prompt }) ?? (/exited 1\b/.test(prompt) ? "VERDICT: request_changes" : "VERDICT: approve");
     if (/TITLE:/i.test(prompt)) return "TITLE: fixture change";
     if (/RAN: nothing/i.test(prompt)) return "RAN: nothing";
     return implement(prompt);
   };
   const makeClientFor = (vendor, { pool = null, poolConfig = null } = {}) => {
     const note = (req, prompt) => {
-      const row = { vendor, model: req.model, pool, poolConfig, prompt, effort: req.reasoning?.effort ?? req.output_config?.effort ?? null,
+      const row = { vendor, model: req.model, pool, poolConfig, prompt, effort: req.reasoning?.effort ?? req.output_config?.effort ?? req.config?.thinkingConfig?.thinkingLevel?.toLowerCase() ?? null,
         max_output_tokens: req.max_output_tokens ?? req.max_tokens ?? req.config?.maxOutputTokens ?? null };
       const f = fault({ vendor, model: req.model, pool, prompt });
       if (f?.error) { calls.push({ ...row, failed: true }); throw f.error; }
       calls.push(f?.incomplete ? { ...row, incomplete: true } : row);
-      return { text: answer(prompt), incomplete: Boolean(f?.incomplete) };
+      return { text: answer(prompt, { vendor, model: req.model, pool }), incomplete: Boolean(f?.incomplete) };
     };
     return {
       responses: { inputTokens: { count: async () => ({ input_tokens: 1000 }) }, create: async req => {

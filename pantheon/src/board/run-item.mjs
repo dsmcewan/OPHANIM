@@ -42,7 +42,7 @@ import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
-import { taskProfile } from "../route/task-profile.mjs";
+import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
 
 // This repo's own root (for Antigravity role-card discovery and PANTHEON_HEAD provenance) -- NOT the ticket's
@@ -578,13 +578,15 @@ export async function runOpenItem(spec, opts = {}) {
     choice ??= choose(role, { avoid, avoidLabs, chars: prompt.length });
     const candidates = choice.candidates;
     if (!candidates?.length || candidates.some(c => !c)) throw new Error(`no seated candidate for "${role}"`);
+    // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
+    // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
+    const effortFor = candidate => effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null;
     const routed = await routeCall({ candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
-      // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
       invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
-        // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
-        effort: effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null }) });
-    return { text: routed.value, seat: routed.seat };
+        effort: effortFor(candidate) }) });
+    // `effort` is what the seat that ANSWERED was sent, so a later escalation can start from it.
+    return { text: routed.value, seat: routed.seat, effort: effortFor(routed.seat) };
   }
 
   function repoHead() {
@@ -618,6 +620,70 @@ export async function runOpenItem(spec, opts = {}) {
       }
     }
     return result;
+  }
+
+  // ---------------------------------------------------------------- the `fit` explorer stage
+  // Under `fit`, intake breadth is the profile's `explorer_width` (ambiguity settled|open|contested -> 0|1|3
+  // DISTINCT labs), each scout chosen by the fit selector (selectSeat), never the legacy INTAKE table or the
+  // configured scout vendors. Width 0 is no explorer stage at all. Scouts are chosen one at a time, each
+  // avoiding the vendors and labs that already ANSWERED, so a fallback cannot put two scouts in one lab; too
+  // few eligible labs is a named refusal, not a narrower fan-out. Each scout's selection is recorded.
+  async function fitIntake() {
+    const width = requirementsOf(TASK).explorer_width;
+    run.intake = { profile, explorer_width: width, scouts: [] };
+    if (width.value === 0) {
+      run.intake.skipped = `explorer width 0 (${width.basis}): no explorer stage`;
+      progress({ event: "intake.skip", detail: run.intake.skipped });
+      record();
+      return [];
+    }
+    assertFanOutIsOutside({ stage: "intake", depth: 0, width: width.value });
+    enter("intake", `${width.value} distinct-lab scout(s): fit explorer width (${width.basis})`);
+    const p = promptFor("scout", { question: spec.question },
+      NO_TOOLS + "Answer from what you already know in at most four sentences, name the concrete failure rather than a " +
+      "category, and end with one line: `RAN: nothing`.");
+    const refuse = why => Object.assign(new Error(`EXPLORER_LABS_UNAVAILABLE: explorer width ${width.value} (${width.basis}) needs ` +
+      `${width.value} distinct-lab scouts; ${why}`), { code: "EXPLORER_LABS_UNAVAILABLE" });
+    // Refused before any scout is called when the selector cannot reach enough labs.
+    const reachable = labsReachable("scout", { chars: p.prompt.length });
+    if (reachable.length < width.value) throw refuse(`only ${reachable.length} lab(s) are eligible (${reachable.join(", ") || "none"})`);
+    const found = [], avoid = [], avoidLabs = [];
+    for (let k = 0; k < width.value; k++) {
+      // The operator's scout seat, if any, is the first scout; the others are the selector's, across labs.
+      let choice;
+      try { choice = choose("scout", { avoid, avoidLabs, chars: p.prompt.length, ...(k ? { roleOverride: null } : {}) }); }
+      catch (e) { throw refuse(`scout ${k + 1} has no candidate after avoiding labs ${avoidLabs.join(", ")}: ${e.message}`); }
+      const routed = await routeCall({ candidates: choice.candidates, cooldown, signal: opts.signal,
+        invoke: (candidate, { signal }) => {
+          const cap = tokenCapFor("scout", candidate.model);
+          return turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
+            extra: cap == null ? undefined : capFor(candidate.vendor, { tokens: cap }) });
+        } });
+      const vendor = routed.seat.vendor, lab = labOf(vendor, routed.seat.model);
+      if (avoidLabs.includes(lab) || avoid.includes(vendor)) throw refuse(`scout ${k + 1} answered from ${vendor}/${routed.seat.model}, a lab already used`);
+      // The author names the occupant that answered.
+      const scoutSeat = nextOccupancy(null, routed.seat, { seat_id: `${vendor}-scout`, mode: "explore" });
+      const r = await publish({ ...board, ref: `refs/iso/${vendor}/scout`, author: scoutSeat, msg: `scout ${vendor}`,
+        entries: [{ kind: "search", payload: { query: spec.question, urls: [] }, blob: routed.value }] });
+      if (!r.ok) throw new Error(`scout ${vendor} publish: ${r.why}`);
+      found.push({ vendor, ref: `refs/iso/${vendor}/scout`, commit: r.commit, evidence: r.written[0].cid, text: routed.value });
+      run.intake.scouts.push({ vendor, model: routed.seat.model, lab, pool: routed.seat.pool, selection: routed.seat.selection });
+      avoid.push(vendor); avoidLabs.push(lab);
+      record();
+    }
+    return found;
+  }
+
+  // The distinct labs a role's selector can reach under the given exclusions: its admitted policy candidates,
+  // plus the operator's role-wide seat when that seat's lab is not excluded. Used to refuse a `fit` fan-out
+  // that cannot be as wide as its profile requires before any seat in it is called.
+  function labsReachable(role, { avoid = [], avoidLabs = [], chars = null } = {}) {
+    let policy = [];
+    try { policy = choose(role, { avoid, avoidLabs, chars, roleOverride: null }).candidates; } catch { /* nothing admitted */ }
+    const labs = policy.map(c => labOf(c.vendor, c.model));
+    const o = OVERRIDES[role];
+    if (o && !avoid.includes(o.vendor) && !avoidLabs.includes(labOf(o.vendor, o.model ?? null))) labs.unshift(labOf(o.vendor, o.model ?? null));
+    return [...new Set(labs)];
   }
 
   // A CRASH IS RECORDED, NOT JUST THROWN. Whatever stage dies inside this run, the run record says
@@ -715,9 +781,11 @@ export async function runOpenItem(spec, opts = {}) {
       // real option rather than a law to amend -- and because a run with no Antigravity venv needs
       // to be able to say so.
       const SCOUTS = SCOUT_VENDORS;
+      scouts = [];
+      if (profile === "fit") scouts = await fitIntake();
+      else {
       assertFanOutIsOutside({ stage: "intake", depth: 0, width: SCOUTS.length });
       enter("intake", `${SCOUTS.length} scouts, independent pools`);
-      scouts = [];
       for (const vendor of SCOUTS) {
         const seat = { vendor, seat_id: `${vendor}-scout`, mode: "explore", occupancy_gen: 1 };
         const p = promptFor("scout", { question: spec.question },
@@ -745,6 +813,7 @@ export async function runOpenItem(spec, opts = {}) {
           entries: [{ kind: "search", payload: { query: spec.question, urls: [] }, blob: text }] });
         if (!r.ok) throw new Error(`scout ${vendor} publish: ${r.why}`);
         scouts.push({ vendor, ref: `refs/iso/${vendor}/scout`, commit: r.commit, evidence: r.written[0].cid, text });
+      }
       }
       writeFileSync(join(outDir, "scouts.md"), scouts.map(s => `## ${s.vendor}\n\n${s.text}\n`).join("\n"));
       check(board.refs.resolve(REF) === null, "intake really precedes the board");
@@ -962,6 +1031,9 @@ export async function runOpenItem(spec, opts = {}) {
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
             c.ranModel = made.seat.model;
+            // Under `fit`, the slot's effort is the one the answering seat ran with: when a fallback answered,
+            // the next escalation starts from the fallback's own mapped effort, not the primary's.
+            if (profile === "fit") c.effort = made.effort ?? null;
             c.pendingRevision = null;
             // A different vendor or model answering this chair is a reseat: the generation advances.
             const next = nextOccupancy(c.seat, made.seat, { seat_id: made.seat.vendor !== c.seat.vendor
@@ -1059,6 +1131,8 @@ export async function runOpenItem(spec, opts = {}) {
     // ---------------------------------------------------------------- check (other lab, on the bytes)
     enter("check", "another lab acks the bytes");
     let verdict = null, reviewText = "";
+    // `fit` only: each slot's review panel (its required lab count and every member's verdict and selection).
+    let reviewPanels = null;
     {
       // EVERY artifact needs its own cross-lab ack: ship's REVIEW gate is reviews.every(r => r.ok)
       // over the moving artifact slots (src/board/integrate.mjs), so a multi-slot change with one
@@ -1069,6 +1143,15 @@ export async function runOpenItem(spec, opts = {}) {
       // model served by agy is Anthropic's work, so Anthropic seats are avoided for it too.
       const reviewerAvoid = made => [...new Set([made.vendor, plannerVendor,
         ...vendorsOfLab(labOf(made.vendor, made.model ?? null)), ...vendorsOfLab(labOf(plannerVendor, plannerModel))].filter(Boolean))];
+      // Under `fit`, stakes state how many INDEPENDENT labs review each artifact (requirements.review_labs:
+      // low 1, normal 1, high 2, critical 3). The panel is chosen one reviewer at a time, each avoiding the maker's
+      // and the planner's labs (law 3) and every vendor and lab that already ANSWERED, so a fallback cannot seat two
+      // reviewers in one lab. Too few eligible labs is a named refusal before any reviewer is called; it never runs
+      // fewer. argo and legacy run one reviewer, as before.
+      const REVIEW_LABS = TASK ? requirementsOf(TASK).review_labs : null;
+      const panelRefusal = (built, why) => Object.assign(new Error(`REVIEW_LABS_UNAVAILABLE: ${built.sl.slot} needs ${REVIEW_LABS.value} ` +
+        `independent review labs (${REVIEW_LABS.basis}), none the maker's or the planner's; ${why}; refusing rather than running fewer`),
+        { code: "REVIEW_LABS_UNAVAILABLE" });
       for (const built of toReview) {
       // WAS reviewPlan({producers, assigner})[0] here. Found 2026-09-29: reviewPlan picks from
       // Object.keys(SEAT_FACTS) -- every vendor that exists, not SEATING.reviewer's actual curated
@@ -1081,9 +1164,24 @@ export async function runOpenItem(spec, opts = {}) {
       // Now: the pairing IS the selection roleTurn runs (selectSeat), admitted by lab independence as well.
       const avoid = reviewerAvoid(built.seat);
       const avoidLabs = [...new Set([labOf(built.seat.vendor, built.ranModel ?? built.seat.model ?? built.model ?? null), labOf(plannerVendor, plannerModel)])];
+      const reviewChars = (built.code ?? "").length + attached.length;
+      const need = REVIEW_LABS?.value ?? 1;
+      if (REVIEW_LABS) {
+        const reachable = labsReachable("reviewer", { avoid, avoidLabs, chars: reviewChars });
+        if (reachable.length < need) throw panelRefusal(built, `only ${reachable.length} lab(s) are eligible after avoiding ` +
+          `${avoidLabs.join(", ")} (${reachable.join(", ") || "none"})`);
+      }
+      // Each panel member's verdict, published on its own critique branch; collected once every member has judged.
+      const panel = [], usedVendors = [], usedLabs = [];
+      for (let k = 0; k < need; k++) {
       let reviewChoice;
-      try { reviewChoice = choose("reviewer", { avoid, avoidLabs, chars: (built.code ?? "").length + attached.length }); }
-      catch (e) { throw new Error(`no clean reviewer: no reviewer candidate left after avoiding ${avoid.join(", ")} (labs ${avoidLabs.join(", ")}): ${e.message}`); }
+      // The operator's reviewer seat, if any, is the first member; the others are the selector's, across labs.
+      try { reviewChoice = choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], chars: reviewChars,
+        ...(k ? { roleOverride: null } : {}) }); }
+      catch (e) {
+        if (k) throw panelRefusal(built, `reviewer ${k + 1} has no candidate after avoiding labs ${[...avoidLabs, ...usedLabs].join(", ")}: ${e.message}`);
+        throw new Error(`no clean reviewer: no reviewer candidate left after avoiding ${avoid.join(", ")} (labs ${avoidLabs.join(", ")}): ${e.message}`);
+      }
       const pairing = { reviewer: reviewChoice.seat.vendor, why: reviewChoice.selection.reason };
       assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
       let seat = { vendor: pairing.reviewer, seat_id: toReview.length === 1 ? `${pairing.reviewer}-critique` : `${pairing.reviewer}-critique-${built.sl.slot}`, mode: "critique", occupancy_gen: 1 };
@@ -1103,6 +1201,10 @@ export async function runOpenItem(spec, opts = {}) {
       const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
       // Law 3 on the reviewer that actually answered, not the one paired in advance.
       assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor, model: plannerModel } });
+      const reviewedLab = labOf(reviewed.seat.vendor, reviewed.seat.model ?? null);
+      if (usedLabs.includes(reviewedLab) || usedVendors.includes(reviewed.seat.vendor)) {
+        throw panelRefusal(built, `reviewer ${k + 1} answered from ${reviewed.seat.vendor}/${reviewed.seat.model}, a lab already on the panel`);
+      }
       if (reviewed.seat.vendor !== seat.vendor) {
         assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
@@ -1112,7 +1214,8 @@ export async function runOpenItem(spec, opts = {}) {
       // The critique is authored by the reviewer that actually answered, model included.
       seat = nextOccupancy(null, reviewed.seat, { seat_id: seat.seat_id, mode: "critique" });
       reviewText = reviewed.text;
-      writeFileSync(join(outDir, toReview.length === 1 ? "review.md" : `review-${built.sl.slot}.md`), `# ${reviewed.seat.vendor} · ${reviewed.seat.model} reviewing ${built.seat.vendor} on ${built.sl.slot} (rev ${rev})\n\n${reviewText}\n`);
+      const reviewFile = (toReview.length === 1 ? "review" : `review-${built.sl.slot}`) + (need > 1 ? `-${reviewed.seat.vendor}` : "");
+      writeFileSync(join(outDir, `${reviewFile}.md`), `# ${reviewed.seat.vendor} · ${reviewed.seat.model} reviewing ${built.seat.vendor} on ${built.sl.slot} (rev ${rev})\n\n${reviewText}\n`);
       let m = reviewText.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
       if (!m) {
         progress({ event: "reask", seat: seat.vendor, detail: "no VERDICT line; asking once more" });
@@ -1123,10 +1226,10 @@ export async function runOpenItem(spec, opts = {}) {
         reviewText += `\n\n[re-asked]\n${again}`;
         m = again.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
       }
-      verdict = m ? m[1].toLowerCase() : "request_changes";
+      const memberVerdict = m ? m[1].toLowerCase() : "request_changes";
       if (!m) progress({ event: "verdict", seat: seat.vendor, detail: "unparseable → request_changes" });
-      progress({ event: "verdict", seat: seat.vendor, slot: built.sl.slot, detail: verdict });
-      const findings = verdict === "approve" ? [] : [{ severity: "block", note: (m ? reviewText : `no parseable verdict after a re-ask; failing closed. Reviewer text: ${reviewText}`).slice(0, 400) }];
+      progress({ event: "verdict", seat: seat.vendor, slot: built.sl.slot, detail: memberVerdict });
+      const memberFindings = memberVerdict === "approve" ? [] : [{ severity: "block", note: (m ? reviewText : `no parseable verdict after a re-ask; failing closed. Reviewer text: ${reviewText}`).slice(0, 400) }];
       // On the ledger, the review cites the work turn it judged (which cites the plan). Cold review is then
       // re-derivable: no lab, seat or response in that lineage may have made the review.
       const workTurn = built.workPrompt && ledgerTurns.get(built.workPrompt);
@@ -1134,14 +1237,24 @@ export async function runOpenItem(spec, opts = {}) {
       if (LEDGER?.recordReview && workTurn && critiqueTurn) {
         LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique@${reviewed.seat.model}`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
           model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
-          verdict, findings: findings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
+          verdict: memberVerdict, findings: memberFindings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
       }
       const c = await publish({ ...board, ref: rref, author: seat, msg: "review",
-        entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict, findings } }] });
+        entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict: memberVerdict, findings: memberFindings } }] });
       if (!c.ok) throw new Error(`critique publish: ${c.why}`);
-      const back = await merge({ ...board, into: built.wip, from: rref, author: CONTROLLER, only: ["critique:"], msg: "collect the verdict" });
-      if (!back.ok) throw new Error(`collect: ${back.why}`);
-      await merge({ ...board, into: REF, from: built.wip, author: CONTROLLER, only: CARRY, msg: "carry the verdict" });
+      panel.push({ rref, seat: reviewed.seat, lab: reviewedLab, verdict: memberVerdict, findings: memberFindings });
+      usedVendors.push(reviewed.seat.vendor); usedLabs.push(reviewedLab);
+      }
+      for (const member of panel) {
+        const back = await merge({ ...board, into: built.wip, from: member.rref, author: CONTROLLER, only: ["critique:"], msg: "collect the verdict" });
+        if (!back.ok) throw new Error(`collect: ${back.why}`);
+        await merge({ ...board, into: REF, from: built.wip, author: CONTROLLER, only: CARRY, msg: "carry the verdict" });
+      }
+      // The slot's verdict: approve only when EVERY panel member approved.
+      verdict = panel.every(x => x.verdict === "approve") ? "approve" : "request_changes";
+      const findings = panel.flatMap(x => x.findings);
+      if (REVIEW_LABS) (reviewPanels ??= []).push({ slot: built.sl.slot, rev, required: need, basis: REVIEW_LABS.basis, verdict,
+        reviewers: panel.map(x => ({ vendor: x.seat.vendor, model: x.seat.model, lab: x.lab, pool: x.seat.pool, verdict: x.verdict, selection: x.seat.selection })) });
       if (verdict === "request_changes" && built.stopped) {
         progress({ event: "escalate", rev, slot: built.sl.slot, detail: `already stopped (${built.stopped.why}); no further revision`.slice(0, 300) });
       } else if (verdict === "request_changes") {
@@ -1162,7 +1275,7 @@ export async function runOpenItem(spec, opts = {}) {
       }
       }
     }
-    run.review = { verdict };
+    run.review = { verdict, ...(reviewPanels ? { panels: reviewPanels } : {}) };
     record();
 
     // ---------------------------------------------------------------- ship (controller only)
@@ -1202,11 +1315,19 @@ export async function runOpenItem(spec, opts = {}) {
       gateVerdict = { hash: BOARD_LEDGER.recordGate(payload), claim: payload.claim };
       run.ledger = { gate: gateVerdict.hash, ...(LEDGER_UNDERIVED ? { underived: LEDGER_UNDERIVED } : {}) };
     }
+    // Under `fit`, every slot ships only with its whole panel approving: the REVIEW gate already refuses a
+    // blocking finding, and this refuses a panel that is short of its required approvals for any other reason.
+    const shortPanels = (reviewPanels ?? []).filter(pn => pn.reviewers.filter(x => x.verdict === "approve").length < pn.required);
     let r;
     if (unscheduled.length) {
       const dry = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, dryRun: true, now: shipNow });
       r = { ok: false, gates: dry.gates, why: `the controller did not schedule integrate for ${unscheduled.map(c => c.itemKey).join(", ")}` +
         ` (${integrate.dropped.join("; ") || integrate.why})${dry.ok ? "; the ship gates alone would have passed" : `; ship gates: ${dry.why}`}` };
+    } else if (shortPanels.length) {
+      const dry = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, dryRun: true, now: shipNow });
+      r = { ok: false, gates: dry.gates, why: `REVIEW_PANEL: ${shortPanels.map(pn => `${pn.slot} has ${pn.reviewers.filter(x => x.verdict === "approve").length} ` +
+        `of ${pn.required} required approvals (${pn.reviewers.map(x => `${x.lab}: ${x.verdict}`).join(", ")})`).join("; ")}` +
+        `${dry.ok ? "" : `; ship gates: ${dry.why}`}` };
     } else {
       assertLaw(await shipClaim({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, now: shipNow }));
       r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, now: shipNow });
