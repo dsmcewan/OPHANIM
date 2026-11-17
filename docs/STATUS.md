@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:a02fdd8a74bdafad54290bdcb3f289682f5c5ec42d4a3e70645123b1dec37ecc` · 76 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:79860d3d2aedf8acde56ea6a4255da6245f713e84817e08ed3634f0a10cd8c8c` · 77 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 34 · In progress: 2 · Ready: 2 · On Hold: 18.
+**Counts:** Resolved: 35 · In progress: 1 · Ready: 2 · On Hold: 18.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -31,7 +31,6 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **SY3: proofs bind absolute paths and cannot be checked on another machine** (`sy3-portable-proofs`) | On Hold | decision | whether a retained proof must verify elsewhere is review decision 8 | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
 | **Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2** (`review-mutants`) | In progress |  | independent review: checks no test protects; each gets a killing test | 2026-11-17 |
-| **SY4 lockfile integrity, SY5 append cost and lock, WF3 sandbox python path, WF4 machine paths** (`supply-portability`) | In progress |  | independent review findings fixable without decisions | 2026-11-17 |
 | **CO1: ophanim/ is expensive to review (6% comments, long lines)** (`co1-readability`) | Ready |  | reformat and document without behaviour change | 2026-11-17 |
 | **ME3: nine canonical-JSON functions that disagree at the edges** (`me3-canonical`) | Ready |  | unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
@@ -64,6 +63,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **RU2: frontier verification accepted a keyless forgery (independent review)** (`ru2-frontier-forgery`) | Resolved |  | authority entries are always fully verified; regression test in packages/ledger fails on the old code | 2026-11-17 |
 | **Ledger as a shared package** (`shared-package`) | Resolved |  | packages/ledger holds the domain-free core; Pantheon kinds under pantheon/src/ledger, OPHANIM kinds under ophanim/ledger; dependency runs OPHANIM -> Pantheon -> packages/ledger, enforced by layering.test | 2026-11-17 |
 | **Status board from a ledger** (`status-board`) | Resolved |  | status entries with the standing rule enforced on append; docs/STATUS.md generated from status/ledger | 2026-11-17 |
+| **SY4 lockfile integrity, SY5 append cost and lock, WF3 sandbox python path, WF4 machine paths** (`supply-portability`) | Resolved |  | lockfile has integrity for every registry package (guarded in CI); appends stay constant-time with a verified cached head and a lock with backoff and stale-lock recovery; sandbox binds alternatives links (the long-standing env failure now passes); no /home/<user> paths, guarded | 2026-11-17 |
 | **Swarms on the board** (`swarms`) | Resolved |  | gated, recorded transitions; all five chairs measured | 2026-11-17 |
 | **SY1: the ledger had no shipped caller (independent review)** (`sy1-ledger-caller`) | Resolved |  | the ledger is on by default for runOpenItem and the OPHANIM CLI (PR #6); key custody is tracked under signer | 2026-11-17 |
 | **One terminal-state rule for every model** (`terminal-state`) | Resolved |  | shared rule on both transports, unary and streamed (docs/pantheon-model-loop-evaluation.md) | 2026-11-17 |
