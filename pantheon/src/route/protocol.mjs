@@ -156,6 +156,19 @@ export function verifyEscalation(records, { facts = FACTS, seating = SEATING } =
 }
 
 /**
+ * The documented context window for a model, or null. A capability record's cited window first; a
+ * declared lane (lanes.json) may carry its own cited `window` -- the bound of the LANE's transport,
+ * which is not assumed to be the API model's window. Uncited numbers are not windows. One lookup, so
+ * every selector admits context the same way (owner audit 2026-11-16, M7).
+ */
+export function documentedWindow(model, facts = FACTS) {
+  const api = cited(facts.models[model]?.window);
+  if (api !== null) return api;
+  for (const lane of Object.values(LANES)) if (lane[model]) { const w = cited(lane[model].window); if (w !== null) return w; }
+  return null;
+}
+
+/**
  * Routing: the seating choice for a difficulty, gated by the cited facts. A candidate that is neither
  * a documented API id nor a declared lane model is skipped; a deprecated one is used only when
  * nothing else in the role is; a model whose documented window is smaller than the context the work
@@ -168,7 +181,7 @@ export function routeFor(role, { difficulty = "medium", needsContext = null, avo
     const f = facts.models[c.model];
     if (!f && !isLane(c.model)) { skipped.push({ model: c.model, why: "no capability record and not a declared lane model" }); return false; }
     if (f?.api_id === false && !isLane(c.model)) { skipped.push({ model: c.model, why: "not an API id" }); return false; }
-    const window = cited(f?.window);
+    const window = documentedWindow(c.model, facts);
     // A stated context requirement is admitted only against a documented window: an unknown window is
     // not evidence the work fits, so it is skipped with its reason rather than treated as unlimited.
     if (needsContext && window === null) { skipped.push({ model: c.model, why: `window unrecorded; cannot admit a stated need of ${needsContext}` }); return false; }

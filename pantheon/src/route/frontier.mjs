@@ -4,7 +4,7 @@ import {modelId,models,isFrontier,CAPABILITIES} from '../../../packages/model-cl
 import {LANES,labOf} from '../config/models.mjs';
 import {FACTS} from '../config/facts.mjs';
 import {SEATING,INTAKE,candidatesFor,modelOf} from '../role/seating.mjs';
-import {routeFor} from './protocol.mjs';
+import {routeFor,documentedWindow} from './protocol.mjs';
 
 const seats={
   planner:[['anthropic','fable'],['google','carbon'],['openai','astra']],
@@ -93,9 +93,9 @@ export function frontierCandidates(role,{pools=[],avoid=[],pin}={}){
 // ONE policy for the initial seat of planning, implementation and review (owner audit 2026-11-16, M1).
 // It ADMITS first and chooses second:
 //
-//   admit   role capability (the role's own table); context fit (a documented window smaller than the
-//           work's estimated context is excluded; an undocumented window is admitted, and the estimate is
-//           recorded so that gap stays visible); lab independence (avoided vendors AND avoided labs, by
+//   admit   role capability (the role's own table); context fit (the work's estimated context needs a
+//           known bound: a documented window smaller than it, or no recorded window at all, is excluded
+//           with its reason -- audit M7; a lane's bound is its own cited lanes.json `window`); lab independence (avoided vendors AND avoided labs, by
 //           labOf, so a Claude lane served by agy is the anthropic lab); approved pool (seatPools).
 //   choose  `legacy`: the ticket's difficulty band (routeFor -> selectFor over the banded SEATING table).
 //           `argo`:   the approved static ARGO order. That profile IS the operator's approved policy where it
@@ -130,7 +130,7 @@ export function selectionPolicy(profile,{pools=[]}={}){
   return {policy:SELECTION_POLICY,profile,hash:'sha256:'+createHash('sha256').update(stable(body)).digest('hex')};
 }
 
-const windowOf=model=>FACTS.models[model]?.window?.value??CAPABILITIES[model]?.window??null;
+const windowOf=model=>documentedWindow(model)??CAPABILITIES[model]?.window??null;
 
 /**
  * The seat for a role, its ordered transport-failover candidates, and the recorded selection. Pure over its
@@ -174,7 +174,10 @@ function policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,
     const lab=labOf(c.vendor,c.model);
     if(avoidLabs.includes(lab)){excluded.push({model:c.model,why:`the ${lab} lab is avoided (independence)`});return false;}
     const w=windowOf(c.model);
-    if(needsContext!==null&&w!==null&&w<needsContext){excluded.push({model:c.model,why:`documented window ${w} < estimated ${needsContext}`});return false;}
+    // M7: an estimate is admitted only against a known bound. An unrecorded window is excluded with its
+    // reason, never treated as unlimited -- the same rule routeFor applies on the legacy path.
+    if(needsContext!==null&&w===null){excluded.push({model:c.model,why:`window unrecorded; cannot admit an estimated ${needsContext}`});return false;}
+    if(needsContext!==null&&w<needsContext){excluded.push({model:c.model,why:`documented window ${w} < estimated ${needsContext}`});return false;}
     return true;
   };
   if(profile==='argo'){

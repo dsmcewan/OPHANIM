@@ -24,31 +24,37 @@ const POOLS = [
 const SIDE = { planner: seat("anthropic", "claude-fable-5-2"), reviewer: seat("xai", "grok-4.6") };
 
 test("M1: easy and hard tickets through the real dispatcher (banded profile) request the models their bands name", async () => {
+  // The reviewer is held on a scripted API seat: the easy band's reviewer is an agy SDK seat, unreachable here.
   await withDispatch(async ({ spec, opts, calls, agy }) => {
-    const easy = await runOpenItem(spec("bandEasy", { difficulty: "easy" }), opts({ profile: "legacy" }));
+    const o = () => opts({ profile: "legacy", seatOverrides: { reviewer: SIDE.reviewer } });
+    const easy = await runOpenItem(spec("bandEasy", { difficulty: "easy" }), o());
     assert.equal(easy.shipped, true, JSON.stringify(easy.error));
-    const easyAgy = agy().length, easyCalls = calls.length;
-    const hard = await runOpenItem(spec("bandHard", { difficulty: "hard" }), opts({ profile: "legacy" }));
+    const easyCalls = calls.length;
+    const hard = await runOpenItem(spec("bandHard", { difficulty: "hard" }), o());
     assert.equal(hard.shipped, true, JSON.stringify(hard.error));
-    // What the providers were actually asked for.
-    assert.deepEqual(agy().slice(0, easyAgy), [{ agent: "pantheon-planner", model: "claude-sonnet-4-6" }], "easy: Sonnet plans (easy band)");
-    assert.deepEqual(workCalls(calls.slice(0, easyCalls)).map(c => `${c.vendor}/${c.model}`), ["openai/gpt-6-luna"], "easy: Luna implements (easy band)");
-    assert.deepEqual(agy().slice(easyAgy), [{ agent: "pantheon-planner", model: "claude-opus-4-6-thinking" },
-      { agent: "pantheon-implementer", model: "claude-sonnet-4-6" }], "hard: Opus plans, the Sonnet lane implements (hard bands)");
-    assert.equal(workCalls(calls.slice(easyCalls)).length, 0, "hard: no API implementer call");
-    // And why, on every turn: the band, the policy and its hash.
-    for (const [result, band] of [[easy, "easy"], [hard, "hard"]]) {
+    // What the providers were actually asked for. The banded lane seats (Sonnet, Opus 4.6 thinking) have no
+    // recorded context window, so under M7 they are not admitted for a stated estimate: each band's next
+    // admitted rung serves, and no lane is launched.
+    const asked = (cs, re) => cs.filter(c => re.test(c.prompt)).map(c => `${c.vendor}/${c.model}`);
+    assert.deepEqual(asked(calls.slice(0, easyCalls), WORK), ["openai/gpt-6-luna"], "easy: Luna implements (easy band)");
+    assert.deepEqual(asked(calls.slice(easyCalls), WORK), ["openai/gpt-6-astra"], "hard: Astra implements (hard band)");
+    assert.deepEqual(agy(), [], "no lane seat was launched without a known context bound");
+    // And why, on every turn: the band, the policy and its hash, and the lanes excluded with their reason.
+    for (const [result, band, planner] of [[easy, "easy", "claude-opus-5-5"], [hard, "hard", "claude-fable-5-2"]]) {
       const run = runJson(result);
       for (const t of run.turns) {
         assert.equal(t.selection?.policy, "pantheon.selection/v1", `${t.purpose} turn records its selection policy`);
         assert.match(t.selection.policy_hash, /^sha256:[0-9a-f]{64}$/);
         assert.equal(typeof t.selection.reason, "string");
       }
+      const [plan] = turnsOf(run, "plan");
+      assert.equal(plan.model, planner, `${band}: ${planner} plans`);
       for (const purpose of ["plan", "work"]) {
         const [t] = turnsOf(run, purpose);
         assert.equal(t.selection.source, "policy");
         assert.equal(t.selection.difficulty, band);
-        assert.equal(t.selection.band, band, `${purpose} on a ${band} ticket is the ${band} rung`);
+        assert.ok(t.selection.excluded.some(e => e.model === "claude-sonnet-4-6" && /window unrecorded/.test(e.why)),
+          `${purpose}: the Sonnet lane is excluded with its named reason`);
       }
     }
     assert.equal(runJson(easy).turns[0].selection.policy_hash, runJson(hard).turns[0].selection.policy_hash, "one policy, two tickets");
@@ -188,15 +194,16 @@ test("M3: resume continues the recorded seat -- model, pool and escalated effort
   });
 });
 
-test("M6: the unmodified legacy implementer (agy lane Sonnet) is dispatched through its lane transport, not an API pin", async () => {
+test("M6: a pinned lane implementer (agy lane Sonnet) is dispatched through its lane transport, not refused as an API pin", async () => {
   await withDispatch(async ({ spec, opts, agy, calls }) => {
-    const r = await runOpenItem(spec("legacyLane", { difficulty: "hard" }), opts({ profile: "legacy" }));
+    const r = await runOpenItem(spec("legacyLane", { difficulty: "hard", slots: [{ slot: "code", path: "code.mjs", goal: "g", model: "claude-sonnet-4-6" }],
+      slot: undefined, path: undefined }), opts({ profile: "legacy", seatOverrides: { reviewer: SIDE.reviewer } }));
     assert.equal(r.error, null, JSON.stringify(r.error));
     assert.equal(r.shipped, true);
     assert.ok(agy().some(a => a.agent === "pantheon-implementer" && a.model === "claude-sonnet-4-6"), JSON.stringify(agy()));
     assert.equal(workCalls(calls).length, 0, "no API request for a lane seat");
     const [t] = turnsOf(runJson(r), "work");
-    assert.deepEqual([t.vendor, t.model, t.transport], ["agy_google", "claude-sonnet-4-6", "agy-cli"]);
+    assert.deepEqual([t.vendor, t.model, t.transport, t.selection.source], ["agy_google", "claude-sonnet-4-6", "agy-cli", "ticket-pin"]);
   });
 });
 
@@ -219,4 +226,26 @@ test("M2: a plain resume never regenerates a stopped slot; lifting the stop is i
     assert.deepEqual(runJson(retried).retries.map(r => [r.slot, r.action, r.reason]), [["code", "retry_stopped", "operator: one same-seat repair"]]);
     await assert.rejects(() => runOpenItem(ticket, { ...o, retryStopped: "x" }), /applies only to a resume/);
   });
+});
+
+test("M7: one context rule for both selectors -- an estimate needs a cited window; a lane is admitted once its bound is cited", async () => {
+  const { routeFor, documentedWindow } = await import("../src/route/protocol.mjs");
+  const { FACTS } = await import("../src/config/facts.mjs");
+  assert.equal(documentedWindow("claude-sonnet-4-6"), null, "the Sonnet lane has no recorded window today");
+  assert.equal(documentedWindow("gpt-6-astra") > 0, true);
+  const lanePick = facts => routeFor("planner", { difficulty: "easy", needsContext: 500, facts });
+  assert.equal(lanePick(FACTS).model, "claude-opus-5-5", "unrecorded: the lane is skipped with its reason");
+  assert.match(lanePick(FACTS).skipped.find(s => s.model === "claude-sonnet-4-6").why, /window unrecorded/);
+  const cited = { ...FACTS, models: { ...FACTS.models, "claude-sonnet-4-6": { window: { value: 200000, source: "fixture", quote: "fixture" } } } };
+  assert.equal(lanePick(cited).model, "claude-sonnet-4-6", "a cited bound admits the lane");
+  const bare = { ...FACTS, models: { ...FACTS.models, "claude-sonnet-4-6": { window: 200000 } } };
+  assert.equal(lanePick(bare).model, "claude-opus-5-5", "an uncited number is not a window");
+  // The ARGO path applies the same rule: no seat in its order is admitted on an unknown window.
+  const { selectSeat } = await import("../src/route/frontier.mjs");
+  const { CAPABILITIES } = await import("../../packages/model-client/index.mjs");
+  for (const role of ["planner", "implementer", "reviewer", "scout"]) {
+    const s = selectSeat(role, { needsContext: 500 });
+    for (const c of s.candidates) assert.ok((documentedWindow(c.model) ?? CAPABILITIES[c.model]?.window ?? null) !== null, `${role}: ${c.model} admitted on a known window`);
+    for (const e of s.selection.excluded ?? []) assert.match(e.why, /window|avoided/, `${role}: exclusions carry their reason`);
+  }
 });
