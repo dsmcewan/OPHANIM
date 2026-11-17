@@ -24,6 +24,9 @@ import {keyStore} from './home.mjs';
 export const STATUS_SCHEMA = 'ophanim.status/v1';
 export const STATES = ['Resolved', 'In progress', 'Ready', 'On Hold'];
 export const EXTERNAL = ['governance', 'credential', 'evidence', 'fact', 'decision'];
+// Optional: who owns the item. One of Pantheon's five chairs (model seats, not people), or
+// `decision-authority`: an item only the human owner decides. Absent on entries recorded before it existed.
+export const OWNER_ROLES = ['impl@build', 'check@review', 'lead@orch', 'scout@opt', 'arbiter@judge', 'decision-authority'];
 const ID = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const fail = why => { throw Object.assign(new Error(why), {code: 'STATUS_REFUSED'}); };
@@ -38,6 +41,7 @@ function statusKind({operators}) {
         if (typeof p.basis !== 'string' || !p.basis) return 'a status names its basis';
         if (!DATE.test(p.checked ?? '')) return 'a status names the date it was checked';
         if (p.depends_on !== undefined && !(Array.isArray(p.depends_on) && p.depends_on.every(d => ID.test(d)))) return 'depends_on lists item ids';
+        if (p.owner_role !== undefined && !OWNER_ROLES.includes(p.owner_role)) return `owner_role must be one of ${OWNER_ROLES.join(', ')}`;
         return null;
       },
       rederive: (e, view) => {
@@ -107,10 +111,10 @@ export function openStatusLedger({root, anchor = null}) {
   return {
     ledger, anchor: pinned, root,
     /** Record a status for an item (a change cites the item's previous status). */
-    set({item, title, state: s, basis, checked, waiting_on = null, depends_on = undefined, cites = []}) {
+    set({item, title, state: s, basis, checked, waiting_on = null, depends_on = undefined, owner_role = undefined, cites = []}) {
       const {op, order} = signers();
       const prev = latestHash(view(), item);
-      const payload = {schema: STATUS_SCHEMA, item, title, state: s, basis, checked, waiting_on, ...(depends_on ? {depends_on} : {})};
+      const payload = {schema: STATUS_SCHEMA, item, title, state: s, basis, checked, waiting_on, ...(depends_on ? {depends_on} : {}), ...(owner_role !== undefined ? {owner_role} : {})};
       return ledger.append({kind: 'status', payload, author: {key_id: op.key_id}, signer: op, order, derivedFrom: [...(prev ? [prev] : []), ...cites]}).hash;
     },
     /** The board: the latest status of every item, from a ledger that verifies. */
@@ -160,5 +164,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (cmd === 'verify') { const b = S.board(); console.log(`ok: ${b.items.length} items, ${b.entries} entries, head ${b.head}`); }
   else if (cmd === 'render') { fs.writeFileSync(DEFAULT_BOARD, renderBoard(S.board())); console.log(`wrote ${path.relative(process.cwd(), DEFAULT_BOARD)}`); }
   else if (cmd === 'set' && flag === '--json') { console.log(S.set(JSON.parse(json))); }
-  else { console.error('usage: status.mjs verify | render | set --json \'{"item":..., "title":..., "state":..., "basis":..., "checked":"YYYY-MM-DD", "waiting_on":..., "depends_on":[...]}\''); process.exit(2); }
+  else { console.error('usage: status.mjs verify | render | set --json \'{"item":..., "title":..., "state":..., "basis":..., "checked":"YYYY-MM-DD", "waiting_on":..., "depends_on":[...], "owner_role":...}\''); process.exit(2); }
 }

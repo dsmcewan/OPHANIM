@@ -50,3 +50,15 @@ test('the board can be verified by anyone and changed only by a key holder; edit
   fs.writeFileSync(obj, fs.readFileSync(obj, 'utf8').replace('"merged"', '"forged"'));
   assert.throws(() => openStatusLedger({root}), /does not verify/);
 }));
+
+test('owner_role is optional, and when present names a chair or decision-authority', () => withRoot(root => {
+  const S = openStatusLedger({root});
+  S.set({...base, item: 'k1', title: 'Chain core', state: 'Ready', basis: 'converged'});
+  S.set({...base, item: 'k2', title: 'Genesis', state: 'In progress', basis: 'started', owner_role: 'impl@build'});
+  S.set({...base, item: 'signer', title: 'Signer', state: 'On Hold', basis: 'custody', waiting_on: 'decision', owner_role: 'decision-authority'});
+  assert.throws(() => S.set({...base, item: 'k3', title: 'X', state: 'Ready', basis: 'x', owner_role: 'octocat'}), /owner_role must be one of/);
+  const items = new Map(openStatusLedger({root}).board().items.map(i => [i.item, i]));
+  assert.equal(items.get('k1').owner_role, undefined, 'absent when not given');
+  assert.equal(items.get('k2').owner_role, 'impl@build');
+  assert.equal(items.get('signer').owner_role, 'decision-authority');
+}));
