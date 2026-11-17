@@ -1,0 +1,36 @@
+{
+  "schema": "ophanim.ticket/v1",
+  "item": "co1-readability",
+  "slice": "CO1 slice 1 of many: wrap the six lines over 120 characters in ophanim/efficiency/investigation/chairs.mjs; one file, no behaviour change",
+  "proposes": {
+    "state": "Ready",
+    "basis": "reformat and document without behaviour change; slice 1 done (ophanim/efficiency/investigation/chairs.mjs has no line over 120 characters), every other ophanim/ file still to do"
+  },
+  "key": "co1-readability",
+  "title": "CO1 slice 1: ophanim/efficiency/investigation/chairs.mjs has no line over 120 characters",
+  "question": "CO1 (independent review): ophanim/ is expensive to review, with few comments and long lines. This ticket is ONE bounded slice of that item, not the item: a single file, ophanim/efficiency/investigation/chairs.mjs, has six lines over 120 characters (lines 17, 23, 26, 27, 58 and 67 today). It is not pinned, not hashed into any replay or TELOS record (ophanim/efficiency/replay.mjs sources() does not list it) and not governance. Can those lines be wrapped, and the dense ones explained by a short comment, without changing what any function returns?",
+  "goal": "Rewrite ophanim/efficiency/investigation/chairs.mjs so that NO line is longer than 120 characters, with no change in behaviour. Keep every export (chairModels, rankChairQuestions) with the same signature, the same returned objects (same keys, same values, same order of array elements) and the same thrown messages, byte for byte. Keep the imports, the constants (PROJECTION_SCHEMA, HEX, CHAIRS, DEPENDS) and the logic as they are: only re-wrap long expressions across lines (break after a comma or an operator, indent continuation lines by two more spaces), and where a wrapped line is dense, add a one-line comment saying what it checks. Keep the file's existing style otherwise (no semicolon or quote style change, no renaming, no reordering of object keys: objects are hashed with digest(), so key order inside the literals that feed digest() must not change, and the registry and scope objects must stay identical). Do not add dependencies. The acceptance command runs the module's existing tests (ophanim/efficiency/investigation/chairs.test.mjs) and then checks that no line of the file exceeds 120 characters.",
+  "repo_root": ".",
+  "slot": "chairs",
+  "path": "ophanim/efficiency/investigation/chairs.mjs",
+  "copy": [
+    "package.json",
+    "pantheon/package.json",
+    "pantheon/src/board",
+    "pantheon/src/seat",
+    "ophanim/board.mjs",
+    "ophanim/efficiency/investigation"
+  ],
+  "acceptance_cmd": "node --test ophanim/efficiency/investigation/chairs.test.mjs && node -e \"const f='ophanim/efficiency/investigation/chairs.mjs',t=require('fs').readFileSync(f,'utf8').split('\\n'),bad=t.flatMap((l,i)=>l.length>120?[(i+1)+' ('+l.length+')']:[]);if(bad.length){console.error(f+': lines over 120 characters: '+bad.join(', '));process.exit(1)}console.log(f+': '+t.length+' lines, none over 120 characters')\"",
+  "difficulty": "easy",
+  "constraints": [
+    "one file changes: ophanim/efficiency/investigation/chairs.mjs",
+    "no behaviour change: same exports, same return values, same error messages, same object key order",
+    "ES module syntax; Node built-ins and the existing imports only"
+  ],
+  "forbidden": [
+    "do not edit any test file",
+    "do not edit ophanim/governance.mjs, ophanim/governance/check-*.mjs, or any file other than ophanim/efficiency/investigation/chairs.mjs",
+    "do not change the module's imports, exports or constants"
+  ]
+}
