@@ -17,6 +17,10 @@
 //       Without the controller key (status/work/keys) the run stops with a concrete NO_AUTHORITY block (exit 3):
 //       the work ledger is still verified first, nothing is recorded and nothing is skipped silently. A missing
 //       work ledger is created only with --init (it generates the controller key on this machine).
+//   node ophanim/operate/cli.mjs serve --config FILE [--max-ticks N]
+//       The execution service (service.mjs): watch under a validated config (declared provider-call cap, interval,
+//       issue source, seats), one instance per work ledger, status and log files under its state directory.
+//       Templates: ophanim/operate/service/ (systemd user unit, launchd agent, example config).
 //   node ophanim/operate/cli.mjs report --out FILE [--issues FILE | --github] [--issues-label TEXT] [--bundles DIR]
 //       The backlog reconciliation as Markdown (FILE) and JSON (FILE with .json): every item by earliest unmet
 //       gate with its ticket, issues, runs, blocker, responsible role and resume condition, and the evidence gap
@@ -306,7 +310,7 @@ export async function prepareDispatch({paths, opts, limits, stagesFile, progress
   return {executors, ledger: opened.ledger, authority: auth};
 }
 
-const tickSummary = (t, limits) => ({
+export const tickSummary = (t, limits) => ({
   dispatched: t.dispatched, released_expired: t.released_expired, intake: t.intake.length, recovery: t.recovery ?? [], blocked: t.blocked.length, skipped: t.skipped,
   stopped: t.stopped, spent: t.spent, by_gate: t.reconcile.counts.by_gate,
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
@@ -353,6 +357,20 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
       process.off('SIGINT', stop); process.off('SIGTERM', stop);
       log(JSON.stringify({ticks: ticks.map(t => tickSummary(t, limits))}, null, 2));
       return 0;
+    }
+    if (verb === 'serve') {
+      // The execution service (service.mjs): watch, with a config, a single-instance lock, status and log files.
+      if (!opts.config) usage('serve needs --config FILE (see ophanim/operate/service/service.example.json)');
+      const {readServiceConfig, runService} = await import('./service.mjs');
+      const config = readServiceConfig(opts.config);
+      const ac = new AbortController();
+      const stop = () => ac.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      const r = await runService({config, signal: ac.signal, fetchImpl, env, ...(opts['max-ticks'] ? {maxTicks: Number(opts['max-ticks'])} : {})});
+      process.off('SIGINT', stop); process.off('SIGTERM', stop);
+      log(JSON.stringify({code: r.code, stopped: r.stopped ?? null, refused: r.refused ?? null, blocked: r.blocked ?? null, ticks: r.ticks.length,
+        status: path.relative(paths.repo, path.join(config.stateDir, 'service-status.json'))}, null, 2));
+      return r.code;
     }
     usage(`unknown verb: ${verb}`);
   } catch (e) {

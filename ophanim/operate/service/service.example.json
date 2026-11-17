@@ -1,0 +1,17 @@
+{
+  "schema": "ophanim.operate-service/v1",
+  "repo": "../../..",
+  "bundles": null,
+  "issues": {"source": "github", "repository": "dsmcewan/OPHANIM"},
+  "seats": {},
+  "interval_s": 300,
+  "limits": {
+    "total_provider_calls": 200,
+    "stage_provider_calls": 40,
+    "iterations": 10,
+    "concurrency": 1,
+    "elapsed_ms": 3600000,
+    "stage_attempts": 3
+  },
+  "max_consecutive_errors": 5
+}

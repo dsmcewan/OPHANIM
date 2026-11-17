@@ -251,3 +251,18 @@ test('the CLI seats the REAL stage executors (stages.mjs): live seats by default
   fs.writeFileSync(path.join(mods, 'bad.mjs'), 'export default 1;');
   assert.equal((await cli(['tick', '--turn', path.join(mods, 'bad.mjs'), ...at(f)])).code, 2);
 });
+
+test('serve: the execution service from the command line; a config is required, and missing authority is exit 3 with nothing recorded', async () => {
+  const f = fixture([{item: 'alpha', title: 'Alpha', state: 'Ready'}]);
+  assert.equal((await cli(['serve', '--repo', f.repo])).code, 2, 'no --config is a usage error');
+  // A work ledger whose controller key is not held here.
+  openWorkLedger({root: f.workRoot});
+  fs.rmSync(path.join(f.workRoot, 'keys'), {recursive: true, force: true});
+  const file = path.join(f.repo, 'operate.json');
+  fs.writeFileSync(file, JSON.stringify({schema: 'ophanim.operate-service/v1', repo: '.', interval_s: 10, issues: {source: 'none'}, limits: {total_provider_calls: 10}}));
+  const r = await cli(['serve', '--config', file, '--max-ticks', '1', '--repo', f.repo]);
+  assert.equal(r.code, 3, r.err);
+  assert.equal(JSON.parse(r.out).blocked.blocked, 'NO_AUTHORITY');
+  fs.writeFileSync(file, JSON.stringify({schema: 'ophanim.operate-service/v1', interval_s: 10, limits: {}}));
+  assert.equal((await cli(['serve', '--config', file, '--repo', f.repo])).code, 1, 'an undeclared cap is refused');
+});

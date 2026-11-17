@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd agent for the OPHANIM execution service (ophanim/operate/service.mjs). Install: set the paths, copy to
+     ~/Library/LaunchAgents/, then `launchctl load ~/Library/LaunchAgents/com.ophanim.operate.plist`. Provider keys and
+     GITHUB_TOKEN are read from the environment launchd gives the agent (set them with `launchctl setenv` or a wrapper);
+     never put them in this file. KeepAlive restarts after any non-zero exit -- a crash, a refusal, and NO_AUTHORITY (3)
+     too, at most every ThrottleInterval seconds -- and not after a clean stop. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ophanim.operate</string>
+  <key>WorkingDirectory</key><string>/Users/YOU/OPHANIM</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string><string>node</string><string>ophanim/operate/cli.mjs</string>
+    <string>serve</string><string>--config</string><string>/Users/YOU/.config/ophanim/operate.json</string>
+  </array>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>/Users/YOU/.config/ophanim/operate.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOU/.config/ophanim/operate.err.log</string>
+</dict>
+</plist>

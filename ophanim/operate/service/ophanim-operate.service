@@ -1,0 +1,23 @@
+# systemd user unit for the OPHANIM execution service (ophanim/operate/service.mjs).
+# Install: copy to ~/.config/systemd/user/, set the two paths below, then
+#   systemctl --user daemon-reload && systemctl --user enable --now ophanim-operate
+# The provider keys and GITHUB_TOKEN come from EnvironmentFile (never committed). The controller key is
+# status/work/keys in the checkout. Stop with `systemctl --user stop ophanim-operate` (SIGTERM: stops between ticks).
+[Unit]
+Description=OPHANIM governed lifecycle (execution service)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/OPHANIM
+EnvironmentFile=%h/.config/ophanim/operate.env
+ExecStart=/usr/bin/env node ophanim/operate/cli.mjs serve --config %h/.config/ophanim/operate.json
+Restart=on-failure
+RestartSec=300
+# Exit 3 is NO_AUTHORITY (no controller key): do not restart into the same block.
+RestartPreventExitStatus=3
+KillSignal=SIGTERM
+TimeoutStopSec=1800
+
+[Install]
+WantedBy=default.target
