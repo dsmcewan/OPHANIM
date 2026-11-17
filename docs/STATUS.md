@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:8ac9bee9f51287d45c6c3a2caab42349cb0bf00438f5e241bdf42f72138145cc` · 51 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:fc717d25b33951d15624fdb9aec003aae32f756d681dc337f62d270f4a8c22f0` · 55 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 25 · In progress: 3 · Ready: 0 · On Hold: 10.
+**Counts:** Resolved: 28 · In progress: 2 · Ready: 1 · On Hold: 10.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -24,7 +24,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
 | **One ledger across boards and domains** (`board-resolver`) | In progress |  | per-entry board resolution for gate and contribution; a principled answer for ledgers holding several domains of kinds | 2026-11-17 |
 | **Gate verdicts recorded on the run path** (`gate-on-run-path`) | In progress |  | runOpenItem records the ship verdict as a gate entry citing its lease entries | 2026-11-17 |
-| **Review layer every cycle** (`review-every-cycle`) | In progress |  | cycle, review and finding entries; independent reviewers on distinct labs at every cycle end; close re-derives | 2026-11-17 |
+| **FW1: prove/verify certify against a stored answer (independent review)** (`fw1-stored-answer`) | Ready |  | reported in PR #7; not yet assessed here | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
 | **Six models on the shared client** (`frontier-move`) | Resolved |  | requests unchanged (providerDefaults); remaining models held (direct-path-xai, gemini-routing) | 2026-11-17 |
@@ -45,6 +45,9 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Q7 contribution measurement** (`q7-measurement`) | Resolved |  | projection, recomputation check and ranking across five chairs | 2026-11-17 |
 | **OpenAI reasoning.context** (`reasoning-context`) | Resolved |  | settled from the vendor docs; effective mode recorded | 2026-11-17 |
 | **Ref recorded but its file write fails** (`ref-write-gap`) | Resolved |  | the ref file is prepared before the move is recorded; if the final rename fails, an undo reset (to null for a creation) is recorded, so the ledger and the file agree. Test fails on the old code | 2026-11-17 |
+| **Review layer every cycle** (`review-every-cycle`) | Resolved |  | cycle, review, finding, resolution and close entries; independent reviewers on distinct labs; close re-derives (verified only when every finding has a reproduction); next cycle refused until the last is closed; npm run review-cycle | 2026-11-17 |
+| **RU1: cross-lab rule compared vendor strings (independent review)** (`ru1-cross-lab`) | Resolved |  | one labOf backs law 3, assertReviewCutsAcross and the ledger; reviewer seating avoids same-lab vendors; regression test fails on the old code | 2026-11-17 |
+| **RU2: frontier verification accepted a keyless forgery (independent review)** (`ru2-frontier-forgery`) | Resolved |  | authority entries are always fully verified; regression test in packages/ledger fails on the old code | 2026-11-17 |
 | **Ledger as a shared package** (`shared-package`) | Resolved |  | packages/ledger holds the domain-free core; Pantheon kinds under pantheon/src/ledger, OPHANIM kinds under ophanim/ledger; dependency runs OPHANIM -> Pantheon -> packages/ledger, enforced by layering.test | 2026-11-17 |
 | **Status board from a ledger** (`status-board`) | Resolved |  | status entries with the standing rule enforced on append; docs/STATUS.md generated from status/ledger | 2026-11-17 |
 | **Swarms on the board** (`swarms`) | Resolved |  | gated, recorded transitions; all five chairs measured | 2026-11-17 |
