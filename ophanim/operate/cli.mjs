@@ -277,8 +277,12 @@ export async function loadExecutors(ctx, {stagesFile = path.join(HERE, 'stages.m
 export async function seatsOf(opts) {
   const load = async f => (await import(pathToFileURL(path.resolve(f)).href)).default;
   const live = () => import(pathToFileURL(path.join(REPO_ROOT, 'pantheon/src/sdk/live.mjs')).href);
-  const makeClientFor = opts.clients ? await load(opts.clients) : await (await live()).liveClients();
-  const turn = opts.turn ? await load(opts.turn) : await (await live()).liveTurn({label: 'operate'});
+  // Without the vendor SDKs installed, the live seats are a refusal when a stage uses one -- recorded on that stage --
+  // not a failure to start: a tick within a zero budget, or one that dispatches nothing, needs no SDK.
+  const unavailable = e => { const f = () => { throw Object.assign(new Error(`the live provider SDKs are not available here: ${e.message}`), {code: 'NO_PROVIDER_SDK'}); }; return f; };
+  const orUnavailable = async build => { try { return await build(); } catch (e) { return unavailable(e); } };
+  const makeClientFor = opts.clients ? await load(opts.clients) : await orUnavailable(async () => (await live()).liveClients());
+  const turn = opts.turn ? await load(opts.turn) : await orUnavailable(async () => (await live()).liveTurn({label: 'operate'}));
   if (typeof makeClientFor !== 'function' || typeof turn !== 'function') usage('--clients and --turn name modules whose default export is a function');
   return {makeClientFor, turn};
 }
