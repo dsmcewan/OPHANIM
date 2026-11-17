@@ -18,7 +18,7 @@
 // Every vendor SDK stays at the edge: `makeClientFor` (the seats) and `turn` (the cycle reviewers) are
 // injected, as for runOpenItem and reviewCycle.
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { join, resolve, relative, isAbsolute } from "node:path";
+import { join, resolve, relative, isAbsolute, dirname, basename } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -36,6 +36,9 @@ import { taskProfile } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
+import { closeClaim } from "../ledger/cycle-kinds.mjs";
+import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
+import { DEFAULT_ELIGIBLE_STRATA } from "../practice/assign.mjs";
 
 export const TICKET_SCHEMA = "ophanim.ticket/v1";
 export const BUNDLE_SCHEMA = "pantheon.board-run/v1";
@@ -234,6 +237,35 @@ function recordPractice(rec, cycle, practice) {
   const { outcome, question, evidence = [], measured = false, provenance = { by: { role: "lead@orch" }, method: measured ? "measured comparison" : "operator-recorded assessment, unmeasured" } } = practice;
   return rec.recordDisposition({ cycle, outcome, question, evidence, measured, provenance });
 }
+
+/** The evidence store of a bundle: where its run was deposited, else `<run ledger dir>/../runs`. */
+const storeOf = bundle => bundle.evidence_store ?? join(dirname(resolve(bundle.review.ledger)), "runs");
+
+/**
+ * Every cycle close gets an assessment (audit C3; docs/routing-task-profile.md, "Continuous evaluation"): when
+ * the close waits on nothing but its practice assessment and none was stated, the controller records the one
+ * the continuous evaluation gives over the evidence store (src/practice/evaluate.mjs). The evaluation record is
+ * written to <store>/evaluations/<digest>.json and cited by its digest, synthetic-flagged. It is never a
+ * promote: an assessment cannot be one, and the strongest automatic outcome is propose_policy. A cycle that
+ * cannot close for another reason (a missing review, an open finding) gets nothing yet, so a stated assessment
+ * given when it can close (resume, propose) is still the one recorded.
+ */
+function recordAutomaticPractice(rec, cycle, store) {
+  const state = rec.cycleState(cycle);
+  if (state.cycle.contract !== CYCLE_CONTRACT || state.dispositions.some(d => d.payload.stage === "assessment")) return null;
+  const waiting = closeClaim(state).why;
+  if (!waiting || !/no practice assessment/.test(waiting)) return null;
+  const pools = readPools();
+  const record = evaluate({ runs: existsSync(store) ? store : [], pools, at: new Date().toISOString() });
+  const dir = join(store, "evaluations");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${record.digest.slice("sha256:".length)}.json`);
+  writeFileSync(file, JSON.stringify(record, null, 2) + "\n");
+  const a = automaticAssessment(record, { policy: state.cycle.policy, pools });
+  const disposition = rec.recordDisposition({ cycle, ...a });
+  return { disposition, digest: record.digest, file, store, evaluation: record.outcome, recorded: a.outcome, halted: record.halted,
+    synthetic: record.synthetic, measured: a.measured, runs: record.runs.length, excluded: record.excluded.length };
+}
 const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_model ?? t.model)))];
 
 /**
@@ -244,7 +276,7 @@ const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_mode
  * status proposal (`proposeFromBundle`). Never writes the status ledger.
  */
 export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(repo), anchor = null, makeClientFor, turn, n = 3,
-  dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null }) {
+  dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
   const board = readBoard({ statusRoot, anchor });
@@ -266,9 +298,22 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const ledgerRoot = resolve(process.env.OPHANIM_LEDGER ?? join(boardDir, "ledger"));
   const chainFile = join(ledgerRoot, "chain.jsonl");
   const entriesBefore = existsSync(chainFile) ? readFileSync(chainFile, "utf8").split("\n").filter(Boolean).length : 0;
+  // The evidence store the continuous evaluation reads (src/practice/evaluate.mjs): configured, else
+  // PANTHEON_EVIDENCE_STORE, else beside the run ledger (<OPHANIM_LEDGER>/../runs, or <board>/runs).
+  const store = evidenceStore ? resolve(evidenceStore) : defaultEvidenceStore({ ledgerRoot });
+  // Interleaving (opt-in) consults the store for the strata the stop rule has halted.
+  if (runOpts.interleave === true && !runOpts.assignmentPolicy) {
+    const halted = existsSync(store) ? evaluate({ runs: store }).halted : [];
+    runOpts = { ...runOpts, assignmentPolicy: { eligible: [...DEFAULT_ELIGIBLE_STRATA], halted } };
+  }
   const result = await runOpenItem(spec, { dir: boardDir, makeClientFor, progress: ev => progress({ ...ev, from: "pipeline" }), ...runOpts });
   const runJsonFile = join(boardDir, "run.json");
   const run = existsSync(runJsonFile) ? JSON.parse(readFileSync(runJsonFile, "utf8")) : null;
+  // Every run, shipped or not, is deposited in the store: a failed run is evidence too.
+  if (run) {
+    mkdirSync(join(store, basename(boardDir)), { recursive: true });
+    writeFileSync(join(store, basename(boardDir), "run.json"), readFileSync(runJsonFile));
+  }
   const sys = openPantheonLedger({ root: ledgerRoot, board: openBoard(boardDir) });
   const rec = sys.recorder();
   const v = rec.verify();
@@ -277,7 +322,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     schema: BUNDLE_SCHEMA, item, title: board.items.find(i => i.item === item).title, made_against: board.items.find(i => i.item === item).entry,
     status_ledger: { anchor: board.anchor, head: board.head }, checked,
     ticket: { path: ticketRel, digest: ticketDigest, slice: ticket.slice, proposes: ticket.proposes, key: spec.key },
-    board: boardDir, base, branch: null, commit: null,
+    board: boardDir, base, branch: null, commit: null, evidence_store: store,
     run: { ledger: ledgerRoot, ledger_anchor: sys.anchor, ledger_head: v.head, run_json: existsSync(runJsonFile) ? runJsonFile : null,
       run_json_digest: existsSync(runJsonFile) ? sha256(readFileSync(runJsonFile)) : null, shipped: result.shipped === true,
       gate_entry: run?.ledger?.gate ?? null, error: result.error ?? null,
@@ -389,7 +434,11 @@ export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnveri
   if (!bundle.review) return { bundle, why: "the change has not been reviewed" };
   sys ??= openPantheonLedger({ root: bundle.review.ledger, anchor: bundle.review.ledger_anchor, board: openBoard(bundle.board) });
   const rec = sys.recorder();
-  if (!rec.cycleState(bundle.review.cycle).close) recordPractice(rec, bundle.review.cycle, practice);
+  if (!rec.cycleState(bundle.review.cycle).close) {
+    recordPractice(rec, bundle.review.cycle, practice);
+    const auto = recordAutomaticPractice(rec, bundle.review.cycle, storeOf(bundle));
+    if (auto) bundle.review.evaluation = auto;
+  }
   const state = rec.cycleState(bundle.review.cycle);
   bundle.review.practice = state.dispositions.map(d => ({ disposition: d.hash, stage: d.payload.stage, outcome: d.payload.outcome, provisional: d.payload.provisional }));
   if (!state.close) {

@@ -57,6 +57,9 @@ export const CYCLE_CONTRACT_V1 = 'pantheon.cycle/v1';
 export const DEFAULT_PRACTICE_SCOPE = 'routing-coordination';
 /** A matched-comparison record's schema (pantheon/src/practice/compare.mjs), as a digest citation names it. */
 export const COMPARE_SCHEMA = 'pantheon.compare/v1';
+/** A continuous-evaluation record's schema (pantheon/src/practice/evaluate.mjs); cited like a comparison, with its synthetic flag. */
+export const EVALUATION_SCHEMA = 'pantheon.evaluation/v1';
+const FLAGGED = new Set([COMPARE_SCHEMA, EVALUATION_SCHEMA]);
 export const ASSESSMENT_OUTCOMES = Object.freeze(['retain', 'insufficient_evidence', 'propose_measurement', 'propose_policy']);
 export const CANDIDATE_OUTCOMES = Object.freeze(['promote', 'retain', 'reject']);
 const ADMITTING = ['promote', 'retain'];
@@ -78,7 +81,7 @@ const validSeat = s => plain(s) && str(s.vendor, 64) && str(s.model, 200) && str
 const seatLab = s => (labOf(s.vendor, s.model) === s.lab ? null : `the ${s.vendor}/${s.model} seat's lab is ${labOf(s.vendor, s.model)}, not ${s.lab}`);
 const validEvidence = e => plain(e) && (e.kind === 'ledger' ? ENTRY.test(e.hash ?? '')
   : e.kind === 'digest' ? str(e.schema, 200) && SHA.test(e.sha ?? '')
-    && (e.schema !== COMPARE_SCHEMA || typeof e.synthetic === 'boolean')
+    && (!FLAGGED.has(e.schema) || typeof e.synthetic === 'boolean')
   : e.kind === 'document' ? str(e.path, 500) && SHA.test(e.sha ?? '') : false);
 const validCandidate = c => plain(c) && str(c.id, 120) && validPolicy(c.policy) && str(c.change);
 const validConditions = c => plain(c) && ['applicability', 'rollback', 'reevaluate'].every(k => str(c[k]));
@@ -93,7 +96,7 @@ function validate(p) {
   if (!str(p.question)) return 'a practice disposition names the question it assessed';
   if (typeof p.measured !== 'boolean' || typeof p.provisional !== 'boolean') return 'a practice disposition says whether it was measured and whether it is provisional';
   if (!p.measured && !p.provisional) return 'unmeasured judgment is labelled provisional';
-  if (!Array.isArray(p.evidence) || p.evidence.length > 32 || !p.evidence.every(validEvidence)) return `evidence is a list of {kind: ledger, hash} | {kind: digest, schema, sha} | {kind: document, path, sha}; a ${COMPARE_SCHEMA} digest says whether it is synthetic (synthetic: true|false)`;
+  if (!Array.isArray(p.evidence) || p.evidence.length > 32 || !p.evidence.every(validEvidence)) return `evidence is a list of {kind: ledger, hash} | {kind: digest, schema, sha} | {kind: document, path, sha}; a ${COMPARE_SCHEMA} or ${EVALUATION_SCHEMA} digest says whether it is synthetic (synthetic: true|false)`;
   if (!plain(p.provenance) || !plain(p.provenance.by) || !str(p.provenance.by.role ?? p.provenance.by.vendor, 120) || !str(p.provenance.method)) {
     return 'provenance names who assessed (by) and how (method)';
   }

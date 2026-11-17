@@ -21,6 +21,15 @@
 // cycle opened under the practice contract does not close without one, as it does not with an open finding.
 // Richer dispositions (a policy proposal, a candidate's promote) go through pantheon-review-cycle assess.
 //
+// Continuous evaluation (docs/routing-task-profile.md, "Continuous evaluation"): `run` deposits its run.json in
+// the evidence store (--evidence-store DIR, else PANTHEON_EVIDENCE_STORE, else <run ledger dir>/../runs) and,
+// with --interleave, dispatches the ticket's hash-assigned arm (argo or fit; low and normal stakes only; an
+// explicit --profile wins). A cycle that closes with no stated assessment gets the evaluation's, recorded by
+// the controller (never a promote).
+//   node pantheon/bin/pantheon-board.mjs evaluate [--runs DIR] [--json]
+//       the current evaluation of the store (default PANTHEON_EVIDENCE_STORE, else <OPHANIM_LEDGER>/../runs)
+//       per stakes stratum, and the strata the stop rule has halted. Reads files only; no provider call.
+//
 // Common: --repo DIR (default: this repository), --status-ledger DIR (default OPHANIM_STATUS_LEDGER, else
 // <repo>/status/ledger), --anchor sha256:... (the status ledger's expected genesis).
 //
@@ -34,8 +43,9 @@
 // failed), 2 usage.
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { boardNext, runBoardItem, resumeBoardItem, proposeFromBundle, checkProposal, defaultStatusRoot } from "../src/board/operate.mjs";
+import { evaluate, defaultEvidenceStore } from "../src/practice/evaluate.mjs";
 
 const REPO_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const [verb, ...argv] = process.argv.slice(2);
@@ -44,12 +54,12 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith("--")) { args.push(a); continue; }
   const k = a.slice(2);
-  if (k === "json") { opts.json = true; continue; }
+  if (k === "json" || k === "interleave") { opts[k] = true; continue; }
   if (i + 1 >= argv.length) usage(`--${k} needs a value`);
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json>`);
+  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -64,7 +74,32 @@ async function liveClients() {
   const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient }] = await Promise.all([
     import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("../src/sdk/adapter.mjs")]);
   const clients = {};
-  return (v, { pool = v, poolConfig } = {}) => (clients[`${v}:${pool}`] ??= makeClient(v, { OpenAI, GoogleGenAI, Anthropic, poolConfig }));
+  const make = (v, { pool = v, poolConfig } = {}) => (clients[`${v}:${pool}`] ??= makeClient(v, { OpenAI, GoogleGenAI, Anthropic, poolConfig }));
+  // The run records what answered: the vendor SDKs are live providers (continuous evaluation reads this).
+  make.providers = { kind: "live" };
+  return make;
+}
+const pct = x => (x === null || x === undefined ? "-" : `${(x * 100).toFixed(1)}%`);
+const ci = c => (c ? `[${c[0].toFixed(3)}, ${c[1].toFixed(3)}]` : "-");
+function printEvaluation(e, store) {
+  console.log(`Continuous evaluation of ${store}`);
+  console.log(`  ${e.schema} ${e.digest}${e.synthetic ? "  SYNTHETIC" : ""}`);
+  console.log(`  ${e.candidate.profile} (${e.candidate.policy.hash.slice(0, 19)}) against ${e.baseline.profile} (${e.baseline.policy.hash.slice(0, 19)}); ` +
+    `${e.runs.length} interleaved run(s), ${e.excluded.length} excluded, providers: ${e.providers.join(", ") || "none"}`);
+  const t = e.thresholds;
+  console.log(`  rule: n >= ${t.MIN_N} per arm; non-inferior within ${t.NONINFERIORITY_MARGIN} at ${t.PROMOTION_CONFIDENCE * 100}%; stop at <= -${t.STOP_MARGIN} at ${t.STOP_CONFIDENCE * 100}% after ${t.STOP_MIN_N}`);
+  console.log("\n  stratum    outcome                n fit/argo   accepted fit/argo   diff CI           first_pass fit/argo");
+  for (const [s, x] of Object.entries(e.strata)) {
+    const r = x.rates ?? {};
+    console.log(`  ${s.padEnd(10)} ${(x.outcome + (x.halted ? " (halted)" : "")).padEnd(22)} ${`${x.n.fit}/${x.n.argo}`.padEnd(12)} ` +
+      `${`${pct(r.accepted?.fit)}/${pct(r.accepted?.argo)}`.padEnd(19)} ${ci(r.accepted?.diff_ci).padEnd(17)} ${pct(r.first_pass?.fit)}/${pct(r.first_pass?.argo)}`);
+    console.log(`             ${x.why}`);
+    if (x.cost) console.log(`             cost per accept: ${Object.entries(x.cost).map(([k, c]) => `${k} ${c.fit ?? "?"} vs ${c.argo ?? "?"} (${c.status})`).join("; ")}`);
+  }
+  if (!Object.keys(e.strata).length) console.log("  (no interleaved runs yet)");
+  console.log(`\n  overall: ${e.outcome}${e.measured ? " (measured)" : " (provisional)"}`);
+  console.log(`  halted strata: ${e.halted.length ? e.halted.join(", ") : "none"}`);
+  console.log(`  shadow: ${e.shadow.turns} turn(s), ${e.shadow.agree} agree, ${e.shadow.disagree} disagree, ${e.shadow.unavailable} unavailable (${e.shadow.note})`);
 }
 async function liveTurn() {
   // As bin/pantheon-review-cycle.mjs: the vendor SDKs are imported here, at the edge.
@@ -120,7 +155,9 @@ try {
     const r = await runBoardItem({ repo, item: args[0], statusRoot, anchor, makeClientFor, turn, n: Number(opts.n ?? 3),
       dir: opts.dir ? resolve(opts.dir) : null, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
       // --profile selects the routing profile for this run only; omitted, runOpenItem's default (argo) applies.
-      checked: opts.checked, runOpts: { seatOverrides, ...(opts.profile ? { profile: opts.profile } : {}) }, practice,
+      // --interleave: the ticket's hash-assigned arm for an eligible stratum; an explicit --profile still wins.
+      checked: opts.checked, runOpts: { seatOverrides, ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}) }, practice,
+      evidenceStore: opts["evidence-store"] ? resolve(opts["evidence-store"]) : null,
       progress: ev => {
         if (ev.from !== "pipeline") console.error(JSON.stringify(ev));
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  [${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
@@ -152,6 +189,15 @@ try {
     if (args.length !== 1) usage("check names one proposal file");
     const r = checkProposal({ proposal: JSON.parse(readFileSync(resolve(args[0]), "utf8")), repo });
     console.log(JSON.stringify(r, null, 2));
+    process.exit(0);
+  }
+  if (verb === "evaluate") {
+    const store = opts.runs ? resolve(opts.runs) : opts["evidence-store"] ? resolve(opts["evidence-store"]) : defaultEvidenceStore();
+    if (!store) usage("evaluate needs --runs DIR (or PANTHEON_EVIDENCE_STORE, or OPHANIM_LEDGER for <ledger>/../runs)");
+    if (!existsSync(store)) usage(`no evidence store at ${store}`);
+    const e = evaluate({ runs: store });
+    // A large record on a pipe: wait for stdout to drain before exiting, or the JSON is cut short.
+    if (opts.json) await new Promise(r => process.stdout.write(JSON.stringify(e, null, 2) + "\n", r)); else printEvaluation(e, store);
     process.exit(0);
   }
   usage(`unknown verb: ${verb ?? "(none)"}`);

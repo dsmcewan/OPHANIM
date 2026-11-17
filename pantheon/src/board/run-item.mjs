@@ -43,6 +43,8 @@ import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat, registryModels } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
+import { shadowSeat, withShadow } from "../practice/shadow.mjs";
+import { assignArm, explicitAssignment, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
 
 // This repo's own root (for Antigravity role-card discovery and PANTHEON_HEAD provenance) -- NOT the ticket's
@@ -198,7 +200,16 @@ export async function runOpenItem(spec, opts = {}) {
   const REPO_ROOT = resolveRepoRoot(REPO, spec.repo_root);
   const packageInputs = packageContext(REPO_ROOT, spec.copy, SLOTS);
   const packageBinding = packageInputs.map(({ path, bytes }) => ({ path, bytes }));
-  const profile = opts.profile ?? "argo";
+  // INTERLEAVED ASSIGNMENT (opt-in, `interleave: true`; src/practice/assign.mjs): an eligible ticket's arm is a
+  // deterministic hash of its key; `assignmentPolicy` ({eligible, halted}) names the eligible and halted strata.
+  // An explicit `profile` wins and is recorded as such, never as randomized.
+  const INTERLEAVE = opts.interleave === true;
+  const stakesOfTicket = () => { try { return taskProfile(spec, { paths: SLOTS.map(sl => sl.path), mode: "batch" }).stakes.value; } catch { return null; } };
+  const ASSIGNMENT_POLICY = { eligible: [...(opts.assignmentPolicy?.eligible ?? DEFAULT_ASSIGNMENT_POLICY.eligible)], halted: [...(opts.assignmentPolicy?.halted ?? [])] };
+  const ASSIGNMENT = !INTERLEAVE ? null
+    : opts.profile !== undefined && opts.profile !== null ? explicitAssignment({ profile: opts.profile, stakes: stakesOfTicket(), interleave: true })
+    : { ...assignArm({ ticketKey: spec.key, stakes: stakesOfTicket(), policy: ASSIGNMENT_POLICY }), policy: ASSIGNMENT_POLICY };
+  const profile = opts.profile ?? ASSIGNMENT?.arm ?? "argo";
   // `fit` is a selectable candidate (src/route/task-profile.mjs), never the default: argo is the approved policy.
   if (!["argo", "legacy", "fit"].includes(profile)) throw new Error("unknown routing profile");
   const pools = opts.pools ?? readPools();
@@ -211,11 +222,24 @@ export async function runOpenItem(spec, opts = {}) {
   // practice-kinds.mjs loadPractice): its entry hash, or null with the reason. Loaded once, on first use.
   // Under `fit` the ticket's task profile (its dimensions, the touched paths as the stakes signal) travels with
   // every selection; the legacy label is still what argo and legacy choose by.
-  let PRACTICE = null;
-  const choose = (role, { chars = null, ...rest } = {}) => withPractice(selectSeat(role, { profile, difficulty: DIFFICULTY_OF_TICKET, pools,
-    needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null,
-    ...(TASK ? { task: TASK } : {}), ...rest }),
-    PRACTICE ??= loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools }));
+  // SHADOW SELECTION (src/practice/shadow.mjs): beside each choice, the other profile's choice over the same
+  // inputs (argo <-> fit; legacy is shadowed by fit) is recorded on every selection as `shadow` and `agrees`.
+  // It is never dispatched: the caller gets the primary choice's candidates, which are exactly what they were.
+  let PRACTICE = null, SHADOW_TASK;
+  const shadowTask = () => {
+    if (TASK) return TASK;
+    if (SHADOW_TASK === undefined) { try { SHADOW_TASK = taskProfile(spec, { paths: SLOTS.map(sl => sl.path), mode: "batch" }); } catch { SHADOW_TASK = null; } }
+    return SHADOW_TASK;
+  };
+  const choose = (role, { chars = null, ...rest } = {}) => {
+    const args = { difficulty: DIFFICULTY_OF_TICKET, pools, needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null };
+    const primary = withPractice(selectSeat(role, { profile, ...args, ...(TASK ? { task: TASK } : {}), ...rest }),
+      PRACTICE ??= loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools }));
+    const task = profile === "fit" ? null : shadowTask();
+    const shadow = profile !== "fit" && !task ? { profile: "fit", error: "the ticket has no valid task profile for fit" }
+      : shadowSeat(role, { profile, args: { ...args, ...rest }, task });
+    return withShadow(primary, shadow, ASSIGNMENT);
+  };
   // WAS a synchronous refusal here for planner/implementer + agy_google unless
   // PANTHEON_AGY_TRANSPORT=cli was already set (scripts/agy-seat.py's --role choices are literally
   // ["reviewer", "scout", "fact-checker"] -- no "planner", no "implementer" -- so the SDK lane
@@ -322,7 +346,11 @@ export async function runOpenItem(spec, opts = {}) {
     key: spec.key, started_at: new Date().toISOString(), board: root, reseats: OVERRIDES,
     package_context: packageBinding, turns: [], gates: null, shipped: false, artifacts: [], files: [],
     // Every provider call this run made, successful or not, in order (audit M5); `resources` is derived from it.
-    attempts: [], resources: resourcesOf([]), provider_calls: { limit: MAX_PROVIDER_CALLS, made: 0, refused: null } };
+    attempts: [], resources: resourcesOf([]), provider_calls: { limit: MAX_PROVIDER_CALLS, made: 0, refused: null },
+    // What answered (continuous evaluation, src/practice/evaluate.mjs): only `kind: "live"` is live evidence, and
+    // a run that declares nothing counts as synthetic. Declared by the caller (`providers`) or on makeClientFor.
+    providers: { kind: String((opts.providers ?? makeClientFor.providers ?? null)?.kind ?? "undeclared") },
+    profile, ...(ASSIGNMENT ? { assignment: ASSIGNMENT } : {}) };
   // Admitted at the generation boundary, before the call: past the bound, nothing is sent and the refusal
   // is named (PROVIDER_CALL_LIMIT). The routers treat it as non-retryable, so it ends the role's routing.
   function admitProviderCall({ vendor, model, pool, transport, purpose }) {
