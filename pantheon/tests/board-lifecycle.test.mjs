@@ -28,7 +28,9 @@ test("refusal, revision on resume, all-slot review/ship/export, guarded apply an
       "refused work must never be exported as certified work");
     // Another run may overwrite the convenience output record; resume belongs to this BOARD.
     writeFileSync(join(first.outDir, "run.json"), '{"shipped":true,"wrongRun":true}');
-    const second = await runOpenItem(spec, { ...opts, resume: first.board });
+    // The first run's review recorded `stop` for the Astra seat. A plain resume does not regenerate a
+    // stopped slot (audit M2); the same-seat retry is its own explicit, recorded action.
+    const second = await runOpenItem(spec, { ...opts, resume: first.board, retryStopped: "fixture: retry the same seat once" });
     assert.equal(second.shipped, true, JSON.stringify(second.error));
     const run = JSON.parse(readFileSync(join(second.outDir, "run.json"), "utf8"));
     assert.equal(run.artifacts.length, 2);

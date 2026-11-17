@@ -24,7 +24,7 @@ import { assertStage, stageCheck, assertLaw } from "./stage-gate.mjs";
 import { boardState, boardStatus, schedule, testsBrief, acceptanceStatus } from "./controller.mjs";
 import { project, PROJECTION_FOR_ROLE } from "./project.mjs";
 import { seatingPlan, seatingReport, assertReviewCutsAcross, assertFanOutIsOutside, INTAKE,
-  candidatesFor, shouldFallThrough, cooldownPoolFor } from "../role/seating.mjs";
+  shouldFallThrough, cooldownPoolFor } from "../role/seating.mjs";
 import { shutPools, recordRefusal, recordSuccess } from "../route/cooldown.mjs";
 import { promptFor } from "../role/roles.mjs";
 import { shortCid, cidOf } from "./canon.mjs";
@@ -40,7 +40,7 @@ import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
-import { frontierCandidates, readPools } from "../route/frontier.mjs";
+import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
 import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
 
 // This repo's own root (for Antigravity role-card discovery and PANTHEON_HEAD provenance) -- NOT the ticket's
@@ -97,9 +97,15 @@ function packageContext(repoRoot, copied, slots) {
 /** An output cap in the vendor's own request shape; `extra` is { tokens } or undefined. */
 const ROLE_OF_PURPOSE = { plan: "planner", work: "implementer", critique: "reviewer", scout: "scout" };
 
-// What a resumed run needs to continue a slot's escalation trail.
+// What a resumed run needs to continue a slot's escalation trail. `stopped` is a recorded terminal decision:
+// the slot makes no further generation, in this run or a resumed one (audit M2).
 const escalationState = c => ({ effort: c.effort ?? null, forced: c.forced ?? null, steps: c.escalationSteps ?? 0,
-  model: c.ranModel ?? null, pending: c.pendingRevision ?? null });
+  model: c.ranModel ?? null, pending: c.pendingRevision ?? null, stopped: c.stopped ?? null });
+// A seat as run.json keeps it for resume: the whole selected seat (vendor, model, transport, pool and pool
+// configuration -- the pool's id and credential variable NAME, never a credential) and why it was chosen.
+const savedChoice = ch => ch && { seat: ch.seat, candidates: ch.candidates, selection: ch.selection };
+// The context a selection must admit, estimated from the characters the seat will be sent.
+const contextEstimate = chars => Math.ceil(chars / 4);
 
 const capFor = (vendor, extra) => extra?.tokens == null ? undefined
   : vendor === "agy_google" ? { config: { maxOutputTokens: extra.tokens } }
@@ -163,6 +169,10 @@ export async function runOpenItem(spec, opts = {}) {
   const cooldown = opts.cooldown ?? openCooldownStore(join(process.env.PANTHEON_COOLDOWN_DIR ?? join(homedir(), ".cache", "pantheon"), "v2"));
   const forRole = (role, options = {}) => frontierCandidates(role, { pools, ...options });
   const OVERRIDES = seatOverrides;
+  // The one effective role-selection policy (src/route/frontier.mjs selectSeat): admission, then the
+  // profile's choice, with explicit seats outranking it in a stated precedence. Every turn records it.
+  const choose = (role, { chars = null, ...rest } = {}) => selectSeat(role, { profile, difficulty: TIER, pools,
+    needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null, ...rest });
   // WAS a synchronous refusal here for planner/implementer + agy_google unless
   // PANTHEON_AGY_TRANSPORT=cli was already set (scripts/agy-seat.py's --role choices are literally
   // ["reviewer", "scout", "fact-checker"] -- no "planner", no "implementer" -- so the SDK lane
@@ -173,6 +183,9 @@ export async function runOpenItem(spec, opts = {}) {
   // can never fire is not caution, it is a landmine for a future SEATING change that adds a role
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
+  // `retryStopped: "<reason>"` (resume only): the explicit action that lifts recorded escalation stops.
+  const RETRY_STOPPED = typeof opts.retryStopped === "string" && opts.retryStopped.trim() ? opts.retryStopped.trim() : null;
+  if (opts.retryStopped !== undefined && (!RETRY_STOPPED || !RESUME)) throw new Error("retryStopped is a stated reason, and applies only to a resume");
   // The ledger (pantheon/src/ledger, on packages/ledger) is ON BY DEFAULT: a run records on the ledger
   // at OPHANIM_LEDGER (one ledger shared by every run) or, unset, at <board root>/ledger, opened with
   // Pantheon's kinds. `ledger: false` turns it off; a recorder passed in is used as is (OPHANIM passes
@@ -190,6 +203,15 @@ export async function runOpenItem(spec, opts = {}) {
     if (t.purpose === "plan") planTurn = hash;
   };
   const escalated = (work, rec) => { (run.escalations ??= []).push(rec); LEDGER?.record(work, rec); };
+  // A slot's recorded decision, applied. Each action is its own bounded effect: effort, rung, and a TERMINAL
+  // stop -- which ends that slot's generation (audit M2) instead of re-running it unchanged.
+  const applyDecision = (c, rec, rev) => {
+    const { action, to, cause, why } = rec.decision;
+    if (action === "raise_effort") c.effort = to.effort;
+    if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
+    if (action === "stop") c.stopped = { action, rev, cause, why };
+    if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
+  };
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
   const TIER = spec.difficulty ?? "medium";
   if (typeof TIER !== "string" || !Object.hasOwn(TOKEN_TIERS, TIER)) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
@@ -281,7 +303,7 @@ export async function runOpenItem(spec, opts = {}) {
   // zero with SUCCESS, zero turns and empty response on print timeout. Renaming an OAuth token
   // GEMINI_API_KEY cannot authenticate the SDK. PANTHEON_AGY_TRANSPORT=cli opts into the new lane.
   let agyN = 0;
-  async function agyTurn({ purpose, model, prompt, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900) }) {
+  async function agyTurn({ purpose, model, prompt, declared = null, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900) }) {
     const role = purpose === "critique" ? "reviewer" : purpose === "scout" ? "scout" : purpose === "plan" ? "planner"
       : purpose === "work" ? "implementer" : null;
     if (!role) throw new Error(`agy seat: no Antigravity agent is defined for purpose "${purpose}"`);
@@ -294,7 +316,8 @@ export async function runOpenItem(spec, opts = {}) {
     // GEMINI_API_KEY, exactly backwards from what today's seating change was for. Forcing CLI here,
     // unconditionally, for these two roles specifically, is the actual fix; PANTHEON_AGY_TRANSPORT
     // still governs scout/reviewer, which genuinely support both lanes.
-    const transport = (role === "planner" || role === "implementer") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "sdk");
+    // A declared lane (lanes.json: transport agy-cli) is served by that transport for every role (audit M6).
+    const transport = (role === "planner" || role === "implementer" || declared === "agy-cli") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "sdk");
     const dir = join(outDir, "agy_google", `${purpose}-${++agyN}`); mkdirSync(dir, { recursive: true });
     // The implementer keeps its real NO_TOOLS prompt untouched: it is genuinely tool-less on every
     // transport (run-item.mjs applies its text reply to disk itself -- see the WORK stage above),
@@ -359,21 +382,25 @@ export async function runOpenItem(spec, opts = {}) {
     return { text, response_id: res.response_id, usage: res.usage, tool_calls: res.tool_calls, subagent_calls: res.subagent_calls };
   }
 
-  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null }) {
+  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null, transport = null, selection = null }) {
     const t0 = Date.now();
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
-    if (vendor === "agy_google" && !isFrontier(model)) {
+    // The seat's own transport decides the path; a seat built before transports were recorded falls back
+    // to the rule the transports encode (a non-frontier agy_google model is not an API id).
+    const lane = transport ? transport !== "api" : vendor === "agy_google" && !isFrontier(model);
+    const chosen = selection ? { selection } : {};
+    if (lane) {
       let r;
-      try { r = await agyTurn({ purpose, model, prompt }); }
+      try { r = await agyTurn({ purpose, model, prompt, declared: transport }); }
       catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
       const ms = Date.now() - t0;
       // The agy transports take no effort. The protocol never decides one for these seats; if one
       // arrives anyway it is recorded as not carried rather than silently dropped.
-      run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
-        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage, ...(effort ? { effort_not_carried: effort } : {}) });
+      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "agy", purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
+        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage, ...(effort ? { effort_not_carried: effort } : {}), ...chosen });
       // The agy transports report no served model; it is recorded as unreported (null), never guessed.
       recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: 1 },
-        requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt });
+        requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt, ...chosen });
       progress({ event: "turn.done", seat: vendor, model, ms, detail: `${r.text.length} chars, ${r.tool_calls} tool call(s), ${r.subagent_calls} subagent(s)` });
       return r.text;
     }
@@ -418,35 +445,27 @@ export async function runOpenItem(spec, opts = {}) {
     if (!r.ok) { progress({ event: "turn.error", seat: vendor, model, detail: r.why }); throw new Error(`${vendor}/${purpose}: ${r.why}`); }
     const text = r.result.text ?? "";
     const ms = Date.now() - t0;
-    run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
-      served_model: r.result.served_model ?? null });
+    run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
+      served_model: r.result.served_model ?? null, ...chosen });
     // On the ledger: signed by this seat occupancy, with the served model the provider reported beside
     // the requested one. The seat is identified as the conversation layer keys it (vendor, purpose and
     // model: sdkTurn's seat is `${purpose}@${pool}@${model}`), so two slots running different models are
     // two seats, never one seat that "changed model".
     recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: r.seat?.model_gen ?? 1 },
       requested_model: model, served_model: r.result.served_model ?? null, response_id: r.result.response_id ?? null, reply: text, purpose, prompt,
-      tools: r.result.tools ?? [] });
+      tools: r.result.tools ?? [], ...chosen });
     progress({ event: "turn.done", seat: vendor, model, ms, detail: `${text.length} chars` });
     return text;
   }
 
   /** Walk the seating table's fallbacks on a TRANSPORT failure only. */
-  async function roleTurn({ role, purpose, prompt, avoid = [], extra = undefined, pin = null, effort = null, seat = null }) {
-    let candidates;
-    // An escalation that stepped a rung names its seat outright: a lane model cannot be pinned through
-    // the API registry, and the decision is already recorded, so it is not re-derived from the table.
-    if (seat) candidates = [{ vendor: seat.vendor, model: seat.model, pool: seat.pool ?? seat.vendor }];
-    else if (OVERRIDES[role]) {
-      const selected = OVERRIDES[role];
-      candidates = [{ ...selected, pool: selected.pool ?? selected.vendor }];
-      if (pin && pin !== selected.model) candidates = [forRole(role, { pin, avoid })[0], ...candidates];
-    } else if (profile === "argo") candidates = forRole(role, { avoid, pin });
-    else {
-      candidates = candidatesFor(role, { avoid });
-      if (pin) candidates = [forRole(role, { pin, avoid })[0], ...candidates];
-    }
-    if (!candidates.length || candidates.some(c => !c)) throw new Error(`no seated candidate for "${role}"`);
+  // `choice` is a selection already made (selectSeat): the implementer's slot seat, an escalation's rung, a
+  // reviewer paired in advance. It is used as selected -- model, transport, pool and pool configuration --
+  // and never re-resolved from a model pin through the first registry pool (audit M3, M6).
+  async function roleTurn({ role, purpose, prompt, avoid = [], avoidLabs = [], extra = undefined, effort = null, choice = null }) {
+    choice ??= choose(role, { avoid, avoidLabs, chars: prompt.length });
+    const candidates = choice.candidates;
+    if (!candidates?.length || candidates.some(c => !c)) throw new Error(`no seated candidate for "${role}"`);
     const routed = await routeCall({ candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
       // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
@@ -560,6 +579,10 @@ export async function runOpenItem(spec, opts = {}) {
     // specification in `copy`; the seat saw neither.) Directories and code in `copy` stay where
     // they are -- they exist for the acceptance command, not the prompt. Bounded per file so a
     // stray large document cannot swallow the context.
+    const slotOverrideFor = (sl, i) => OVERRIDES[`implementer.${i}`] ?? OVERRIDES[`implementer.${sl.slot}`] ?? null;
+    // What an implementer turn carries: the goal, the attached references and the current file.
+    const implementerChars = sl => (sl.goal ?? spec.goal).length + attached.length +
+      ((sl.source ?? sl.path) ? (readArtifact(REPO_ROOT, sl.source ?? sl.path)?.length ?? 0) : 0);
     const ATTACH_MAX_BYTES = 200_000;
     const attachable = [...new Set([...(spec.attach ?? []), ...(spec.copy ?? []).filter(rel => /\.(md|txt)$/i.test(rel))])]
       .filter(rel => existsSync(join(REPO_ROOT, rel)) && statSync(join(REPO_ROOT, rel)).isFile());
@@ -592,7 +615,11 @@ export async function runOpenItem(spec, opts = {}) {
         // model runs sixteen subagents whose whole output is a synthesis, so truncating it at 700
         // would pay for a research team and read four sentences of it.
         const cap = tokenCapFor("scout", model);
-        const routed = await routeCall({ candidates: profile === "argo" ? forRole("scout").filter(c => c.vendor === vendor) : [{ vendor, model, pool: vendor }],
+        // Intake is outside the chain: the scout vendors are the run's configured fan-out, recorded as such.
+        const scoutChoice = profile === "argo" ? choose("scout", { chars: p.prompt.length })
+          : choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake",
+            reason: `intake fan-out vendor ${vendor}: the INTAKE table's ${vendor} seat` } });
+        const routed = await routeCall({ candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;
@@ -620,17 +647,18 @@ export async function runOpenItem(spec, opts = {}) {
 
       // ---------------------------------------------------------------- plan
       enter("plan");
-      const pl = OVERRIDES.planner ?? chain.assigned.planner;
-      plannerVendor = pl.vendor;
       {
-        let seat = { vendor: pl.vendor, seat_id: `${pl.vendor}-plan`, mode: "plan", occupancy_gen: 1 };
-        let planWip = `refs/seat/${seat.seat_id}/wip`;
-        await board.refs.branch({ name: planWip, from: REF, author: seat });
         const { slice } = project(board.store, board.refs.resolve(REF), PROJECTION_FOR_ROLE.planner);
         const p = promptFor("planner", { ticket: slice.slots.ticket.payload.goal },
           NO_TOOLS + "Reply with exactly one line and nothing else: TITLE: <a one-line work item title for the single change this ticket asks for>");
+        const planChoice = choose("planner", { chars: p.prompt.length });
+        const pl = planChoice.seat;
+        plannerVendor = pl.vendor;
+        let seat = { vendor: pl.vendor, seat_id: `${pl.vendor}-plan`, mode: "plan", occupancy_gen: 1 };
+        let planWip = `refs/seat/${seat.seat_id}/wip`;
+        await board.refs.branch({ name: planWip, from: REF, author: seat });
         assertStage({ ...board, ref: REF, stage: "plan" });
-        const { text, seat: ran } = await roleTurn({ role: "planner", purpose: "plan", prompt: p.prompt });
+        const { text, seat: ran } = await roleTurn({ role: "planner", purpose: "plan", prompt: p.prompt, choice: planChoice });
         plannerVendor = ran.vendor;
         plannerModel = ran.model ?? null;
         const vendorChanged = ran.vendor !== seat.vendor;
@@ -668,12 +696,16 @@ export async function runOpenItem(spec, opts = {}) {
       // is decided per slot (the ticket's `model`, or a per-index --seat override, or the ladder),
       // so choosing between gpt-6-astra / gpt-6-sol / gpt-6-luna is a ticket-time decision rather
       // than a seating-table edit.
+      // The COMPLETE seat is selected once per slot (precedence in src/route/frontier.mjs: per-slot override,
+      // the ticket's pin, the role-wide override, the policy) and that seat -- vendor, model, transport, pool,
+      // pool configuration -- is what every revision of the slot is sent to until a recorded decision changes it.
       crew = SLOTS.map((sl, i) => {
-        const im = OVERRIDES[`implementer.${i}`] ?? OVERRIDES[`implementer.${sl.slot}`] ?? OVERRIDES.implementer ?? (sl.model ? forRole("implementer", { pin: sl.model })[0] : chain.assigned.implementer);
+        const choice = choose("implementer", { pin: sl.model ?? null, slotOverride: slotOverrideFor(sl, i), chars: implementerChars(sl) });
+        const im = choice.seat;
         const seat = { vendor: im.vendor, seat_id: SLOTS.length === 1 ? `${im.vendor}-work` : `${im.vendor}-work-${sl.slot}`,
                        mode: "work", occupancy_gen: 1 };
-        return { sl, seat, itemKey: itemKeyFor(sl), wip: `refs/seat/${seat.seat_id}/wip`,
-                 model: sl.model ?? im.model, file: join(worktree, sl.path),
+        return { sl, seat, itemKey: itemKeyFor(sl), wip: `refs/seat/${seat.seat_id}/wip`, choice,
+                 model: im.model, file: join(worktree, sl.path),
                  artifactCid: null, bytes: null, code: null, lease: null,
                  baseline: run.files.find(f => f.slot === sl.slot).baseline };
       });
@@ -689,7 +721,7 @@ export async function runOpenItem(spec, opts = {}) {
       if (!plannerVendor || run.files.length !== SLOTS.length) throw new Error("resume: incomplete per-slot recovery state");
       TICKET = board.store.get(treeSlots(board.store, board.refs.resolve(REF)).ticket)?.payload;
       if (!TICKET) throw new Error("resume: no board ticket");
-      crew = SLOTS.map(sl => {
+      crew = SLOTS.map((sl, i) => {
         const saved = run.files.find(f => f.slot === sl.slot && f.path === sl.path);
         if (!saved?.artifactCid || !saved.seat || !saved.wip) throw new Error(`resume: incomplete artifact for ${sl.slot}`);
         const art = board.store.get(saved.artifactCid);
@@ -697,15 +729,38 @@ export async function runOpenItem(spec, opts = {}) {
             art.links.bytes !== saved.bytes) throw new Error(`resume: artifact branch changed for ${sl.slot}`);
         const contents = board.store.get(saved.bytes);
         writeArtifact(worktree, sl.path, contents);
-        return { sl, seat: saved.seat, itemKey: itemKeyFor(sl), wip: saved.wip,
-          model: sl.model ?? (OVERRIDES.implementer ?? chain.assigned.implementer).model,
+        // RESUME CONTINUES THE RECORDED SEAT (audit M3): the selected seat as run.json saved it, not a
+        // re-resolution from the ticket or today's overrides. A per-slot override given at resume is an
+        // explicit new decision, recorded as such; it replaces the seat and lifts a recorded stop. The same
+        // override repeated (the seat already recorded) is not a new decision and changes nothing.
+        const given = slotOverrideFor(sl, i), was = saved.selected?.seat;
+        const poolOf = s => (s.pool && s.pool !== s.vendor ? s.pool : null);
+        const override = given && !(was && given.vendor === was.vendor && given.model === was.model &&
+          (poolOf(given) === null || poolOf(given) === was.pool)) ? given : null;
+        const choice = override ? choose("implementer", { slotOverride: override, chars: implementerChars(sl) })
+          : saved.selected?.seat ? { ...saved.selected, selection: { ...saved.selected.selection, resumed: true },
+              candidates: saved.selected.candidates.map(c => ({ ...c, selection: { ...c.selection, resumed: true } })) }
+          : choose("implementer", { pin: sl.model ?? null, chars: implementerChars(sl) });
+        const stopped = saved.escalation?.stopped ?? null;
+        // Lifting a recorded stop is its own explicit, recorded action: a per-slot reseat at resume, or the
+        // caller's `retryStopped` reason (same-seat repair, bounded by this resume's revision limit and the
+        // escalation step budget, which continues). A plain resume never regenerates a stopped slot.
+        if (stopped && (override || RETRY_STOPPED)) (run.retries ??= []).push({ at: new Date().toISOString(), slot: sl.slot,
+          action: override ? "reseat" : "retry_stopped", lifted: stopped,
+          reason: override ? `per-slot override at resume: ${override.vendor}/${override.model}` : RETRY_STOPPED });
+        return { sl, seat: saved.seat, itemKey: itemKeyFor(sl), wip: saved.wip, choice,
+          model: choice.seat.model,
           file: join(worktree, sl.path), artifactCid: saved.artifactCid, bytes: saved.bytes,
           baseline: saved.baseline, code: contents.toString("utf8"), lease: null,
           // The slot's escalation state, as recorded: the next revision continues the trail, not a fresh one.
-          effort: saved.escalation?.effort ?? null, forced: saved.escalation?.forced ?? null,
-          escalationSteps: saved.escalation?.steps ?? 0, ranModel: saved.escalation?.model ?? null,
-          pendingRevision: saved.escalation?.pending ?? null };
+          effort: override ? null : saved.escalation?.effort ?? null, forced: override ? null : saved.escalation?.forced ?? null,
+          escalationSteps: saved.escalation?.steps ?? 0, ranModel: override ? null : saved.escalation?.model ?? null,
+          pendingRevision: saved.escalation?.pending ?? null, stopped: override || RETRY_STOPPED ? null : stopped };
       });
+      if (crew.every(c => c.stopped)) {
+        throw new Error(`resume: every slot recorded a terminal escalation stop (${crew.map(c => `${c.sl.slot}: ${c.stopped.why}`).join("; ")}); ` +
+          "reseat a slot with a per-slot override, or pass retryStopped with a reason");
+      }
       rev = Math.max(...run.files.map(f => f.rev));
       const exits = crew.map(c => {
         const status = acceptanceStatus({ store: board.store, state: boardState({ ...board, ref: REF }),
@@ -722,7 +777,8 @@ export async function runOpenItem(spec, opts = {}) {
     record();
     // A failed acceptance resumes at revision, retaining every slot and its original baseline.
     // A late review/ship failure can reuse its byte-bound passing controller result.
-    if (!RESUME || recordedExit !== 0 || crew.some(c => c.pendingRevision)) {
+    // A resume whose every slot recorded a terminal stop has no revision to run (audit M2).
+    if (!RESUME || ((recordedExit !== 0 || crew.some(c => c.pendingRevision)) && crew.some(c => !c.stopped))) {
     {
         for (const c of crew) {
           if (!board.refs.resolve(c.wip)) await board.refs.branch({ name: c.wip, from: REF, author: c.seat });
@@ -735,11 +791,19 @@ export async function runOpenItem(spec, opts = {}) {
         const oracle = spec.tests_file ? readFileSync(join(REPO_ROOT, spec.tests_file), "utf8") : "";
 
         for (let attempt = 0; attempt < revisions; attempt++) {
+          // A RECORDED STOP IS TERMINAL (audit M2). A slot whose escalation decided `stop` makes no
+          // further generation; its last bytes stay in the combined change. The loop ends when no slot
+          // can proceed -- the revision limit is a bound, not a reason to repeat a terminal decision.
+          const active = crew.filter(c => !c.stopped);
+          if (!active.length) {
+            progress({ event: "revise.stop", rev, detail: `no slot can proceed: ${crew.map(c => `${c.sl.slot} stopped (${c.stopped.why})`).join("; ")}`.slice(0, 300) });
+            break;
+          }
           rev++;
           // FAN OUT THE WRITES. Every slot's implementer runs at the same time; none of them can
           // see another's output, which is the point -- they are building different files against
           // the same ticket, not reviewing each other.
-          await Promise.all(crew.map(async c => {
+          await Promise.all(active.map(async c => {
             const { slice } = project(board.store, board.refs.resolve(REF), PROJECTION_FOR_ROLE.implementer, { reader: c.seat, item: c.itemKey });
             const implTests = testsBrief({ store: board.store, state: boardState({ ...board, ref: REF }), from: board.refs.resolve(c.wip),
               ...(c.artifactCid ? { artifact: { cid: c.artifactCid } } : {}), maxOutput: 8000 });
@@ -769,8 +833,13 @@ export async function runOpenItem(spec, opts = {}) {
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
             writeFileSync(join(outDir, `implementer-prompt-${c.sl.slot}-rev${rev}.txt`), p.prompt);
             c.workPrompt = p.prompt;
+            // The slot's selected seat, or the rung a recorded escalation stepped to, resolved through its
+            // own transport (a lane rung is never an API pin). A rung on the same vendor keeps the pool the
+            // operator named for this slot; the decision changed the model, not the credential.
+            const keepPool = c.forced && c.forced.vendor === c.choice.seat.vendor && c.choice.seat.poolNamed ? { pool: c.choice.seat.pool } : {};
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
-              ...(c.forced ? { seat: c.forced } : c.model ? { pin: c.model } : {}),
+              choice: c.forced ? choose("implementer", { explicit: { seat: { vendor: c.forced.vendor, model: c.forced.model, ...keepPool }, source: "escalation",
+                reason: `recorded escalation step_rung to ${c.forced.model}${c.forced.why ? `: ${c.forced.why}` : ""}` } }) : c.choice,
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
             c.ranModel = made.seat.model;
@@ -803,7 +872,8 @@ export async function runOpenItem(spec, opts = {}) {
             c.bytes = board.store.get(c.artifactCid).links.bytes;
             run.files = crew.map(member => ({ slot: member.sl.slot, path: member.sl.path,
               baseline: member.baseline, seat: member.seat, wip: member.wip,
-              artifactCid: member.artifactCid, bytes: member.bytes, rev, escalation: escalationState(member) }));
+              artifactCid: member.artifactCid, bytes: member.bytes, rev, escalation: escalationState(member),
+              selected: savedChoice(member.choice) }));
             record();
             check(true, `rev ${rev}: ${c.sl.slot} written by ${c.seat.vendor} (${shortCid(c.artifactCid)})`);
           }));
@@ -831,18 +901,20 @@ export async function runOpenItem(spec, opts = {}) {
             // ESCALATION, from the executed result: each slot's next revision is the protocol's decision
             // (src/route/protocol.mjs) -- documented effort first, then the next harder rung -- and the
             // decision is recorded with its inputs so it can be re-derived from the run.
-            for (const c of crew) {
+            // A slot already stopped takes no new decision: its stop is the record.
+            for (const c of active) {
               const rec = escalationRecord({ role: "implementer", outcome: { kind: "acceptance", exit: acc.exit }, steps: c.escalationSteps ?? 0,
                 seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null } });
-              const { action, to } = rec.decision;
-              if (action === "raise_effort") c.effort = to.effort;
-              if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
-              if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
+              applyDecision(c, rec, rev);
               escalated(`slot:${c.sl.slot}`, { slot: c.sl.slot, rev, ...rec });
-              progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
+              progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
+            }
+            for (const f of run.files) {
+              const member = crew.find(c => c.sl.slot === f.slot);
+              if (member) f.escalation = escalationState(member);
             }
             record();
-            progress({ event: "revise", rev: rev + 1 });
+            if (crew.some(c => !c.stopped)) progress({ event: "revise", rev: rev + 1 });
           }
         }
 
@@ -887,12 +959,13 @@ export async function runOpenItem(spec, opts = {}) {
       // to X but the critique seat is Y" was, every time it fired, including with no operator
       // override at all once agy_google became the default maker for both planner and implementer.
       // Fix: compute the pairing from the SAME lookup roleTurn actually uses, so they cannot diverge.
-      const pairing = OVERRIDES.reviewer
-        ? { reviewer: OVERRIDES.reviewer.vendor, why: `operator reseat: ${OVERRIDES.reviewer.vendor}/${OVERRIDES.reviewer.model}` }
-        : (c => c ? { reviewer: c.vendor, why: `candidatesFor("reviewer"), first entry excluding the maker (${built.seat.vendor}) and planner (${plannerVendor})` }
-                  : { reviewer: null, why: `no reviewer candidate left after avoiding ${built.seat.vendor}, ${plannerVendor}` }
-          )(profile === "argo" ? forRole("reviewer", { avoid: reviewerAvoid(built.seat) })[0] : candidatesFor("reviewer", { avoid: reviewerAvoid(built.seat) })[0]);
-      if (!pairing.reviewer) throw new Error(`no clean reviewer: ${pairing.why}`);
+      // Now: the pairing IS the selection roleTurn runs (selectSeat), admitted by lab independence as well.
+      const avoid = reviewerAvoid(built.seat);
+      const avoidLabs = [...new Set([labOf(built.seat.vendor, built.ranModel ?? built.seat.model ?? built.model ?? null), labOf(plannerVendor, plannerModel)])];
+      let reviewChoice;
+      try { reviewChoice = choose("reviewer", { avoid, avoidLabs, chars: (built.code ?? "").length + attached.length }); }
+      catch (e) { throw new Error(`no clean reviewer: no reviewer candidate left after avoiding ${avoid.join(", ")} (labs ${avoidLabs.join(", ")}): ${e.message}`); }
+      const pairing = { reviewer: reviewChoice.seat.vendor, why: reviewChoice.selection.reason };
       assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
       let seat = { vendor: pairing.reviewer, seat_id: toReview.length === 1 ? `${pairing.reviewer}-critique` : `${pairing.reviewer}-critique-${built.sl.slot}`, mode: "critique", occupancy_gen: 1 };
       let rref = `refs/seat/${seat.seat_id}/wip`;
@@ -908,7 +981,7 @@ export async function runOpenItem(spec, opts = {}) {
         "behaviour it broke, or a case the acceptance test does not cover that would fail. If the executed acceptance failed, " +
         "you must request changes. End your reply with a line reading exactly `VERDICT: approve` or `VERDICT: request_changes`.");
       assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
-      const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, avoid: reviewerAvoid(built.seat), extra: { tokens: 4000 } });
+      const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
       // Law 3 on the reviewer that actually answered, not the one paired in advance.
       assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor, model: plannerModel } });
       if (reviewed.seat.vendor !== seat.vendor) {
@@ -950,15 +1023,15 @@ export async function runOpenItem(spec, opts = {}) {
       const back = await merge({ ...board, into: built.wip, from: rref, author: CONTROLLER, only: ["critique:"], msg: "collect the verdict" });
       if (!back.ok) throw new Error(`collect: ${back.why}`);
       await merge({ ...board, into: REF, from: built.wip, author: CONTROLLER, only: CARRY, msg: "carry the verdict" });
-      if (verdict === "request_changes") {
+      if (verdict === "request_changes" && built.stopped) {
+        progress({ event: "escalate", rev, slot: built.sl.slot, detail: `already stopped (${built.stopped.why}); no further revision`.slice(0, 300) });
+      } else if (verdict === "request_changes") {
         // The verdict is an outcome for the MAKER's seat: the protocol decides its next revision, which a
         // resume then runs (a passing acceptance alone would otherwise just re-review the same bytes).
         const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0,
           seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null } });
-        const { action, to } = rec.decision;
-        if (action === "raise_effort") built.effort = to.effort;
-        if (action === "step_rung") { built.forced = { vendor: to.vendor, model: to.model }; built.effort = null; }
-        if (!["hold", "wait", "stop"].includes(action)) built.escalationSteps = (built.escalationSteps ?? 0) + 1;
+        const { action } = rec.decision;
+        applyDecision(built, rec, rev);
         // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work
         // needs its own pending revision, with the findings the implementer must address.
         if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000) };

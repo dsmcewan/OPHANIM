@@ -19,7 +19,9 @@ test("a refused-then-revised ticket yields the contributions its board records",
       slots: [{ slot: "alpha", path: "alpha.mjs" }, { slot: "beta", path: "beta.mjs" }] };
     const first = await runOpenItem(spec, opts);
     assert.equal(first.shipped, false);
-    const second = await runOpenItem(spec, { ...opts, resume: first.board });
+    // The first run's review recorded `stop` for the Astra seat (no documented effort dial, no higher rung).
+    // A stop is terminal (audit M2); retrying the same seat is its own explicit, recorded action.
+    const second = await runOpenItem(spec, { ...opts, resume: first.board, retryStopped: "fixture: retry the same seat once" });
     assert.equal(second.shipped, true, JSON.stringify(second.error));
 
     const board = openBoard(second.board);

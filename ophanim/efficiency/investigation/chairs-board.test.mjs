@@ -26,7 +26,9 @@ test('the ranking reads a refused-then-revised ticket\'s real projection; rework
       slots: [{slot: 'alpha', path: 'alpha.mjs'}, {slot: 'beta', path: 'beta.mjs'}]};
     const first = await runOpenItem(spec, opts);
     assert.equal(first.shipped, false);
-    const second = await runOpenItem(spec, {...opts, resume: first.board});
+    // The first run's review recorded `stop` for the Astra seat; a stop is terminal (routing audit M2), and
+    // retrying the same seat is its own explicit, recorded action.
+    const second = await runOpenItem(spec, {...opts, resume: first.board, retryStopped: 'fixture: retry the same seat once'});
     assert.equal(second.shipped, true, JSON.stringify(second.error));
     const p = chairContributions(openBoard(second.board));
     const {models, decision} = rankChairQuestions(p);
