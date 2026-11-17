@@ -172,7 +172,7 @@ test("newcombe: the hybrid score interval for a difference of proportions (Newco
   const [lo, hi] = newcombe(56, 70, 48, 80);
   assert.ok(Math.abs(lo - 0.0524) < 5e-4 && Math.abs(hi - 0.3339) < 5e-4, `${lo} ${hi}`);
   assert.equal(newcombe(1, 0, 1, 1), null);
-  assert.deepEqual([PROMOTION_CONFIDENCE, STOP_CONFIDENCE, MIN_N, STOP_MIN_N, NONINFERIORITY_MARGIN, STOP_MARGIN], [0.99, 0.99, 20, 10, 0.05, 0.10]);
+  assert.deepEqual([PROMOTION_CONFIDENCE, STOP_CONFIDENCE, MIN_N, STOP_MIN_N, NONINFERIORITY_MARGIN, STOP_MARGIN], [0.95, 0.95, 20, 10, 0.05, 0.10]);  // 95%: owner decision 2026-11-17
 });
 
 test("evaluate: insufficient_evidence below MIN_N per arm; explicit-profile runs are never evidence", () => {

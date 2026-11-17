@@ -25,13 +25,14 @@
 //   retain               otherwise.
 // Intervals: Newcombe's hybrid score interval for a difference of proportions (method 10), from Wilson bounds.
 //
-// REPEATED LOOKS. This rule is applied at every cycle close to a growing sample, so a 95% interval looked at
-// again and again would declare a difference by chance far more often than 5% of the time. Both decisions
-// that change something (the stop rule and a policy proposal) therefore use 99% intervals (z = 2.576): a
-// simple conservative alpha per look, not a formal alpha-spending boundary. It is a named constant; the
-// owner may tighten it. The consequence is stated plainly: at 99%, even when both arms accept every ticket,
-// non-inferiority within 5 points needs about 126 decided runs per arm, so `propose_policy` is unreachable at
-// MIN_N alone. MIN_N is a floor below which nothing is claimed, not a sample size that decides.
+// REPEATED LOOKS. This rule is applied at every cycle close to a growing sample. The owner set the level to 95%
+// (decision 2026-11-17), for both decisions that change something (the stop rule and a policy proposal) and for
+// the paired cost test. That is a per-look level, not a formal alpha-spending boundary: looking again and again
+// at a growing sample declares a difference by chance more often than 5% overall, which is one reason a
+// proposal is never an adoption (independent evaluation precedes it, practice-kinds.mjs). The levels are named
+// constants. At 95%, when both arms accept every ticket, non-inferiority within 5 points still needs about 73
+// decided runs (or pairs) per stratum; MIN_N is a floor below which nothing is claimed, not a sample size that
+// decides.
 //
 // PAIRED RUNS (owner decision 2026-11-17). A sampled ticket (assign.mjs pairFor) is also run under the other
 // profile as a dry counterpart (board/operate.mjs), and the evidence store holds a `pantheon.pair/v1` record
@@ -76,9 +77,9 @@ export const MIN_N = MIN_N_PER_STRATUM;
 export const NONINFERIORITY_MARGIN = 0.05;
 export const STOP_MARGIN = 0.10;
 export const STOP_MIN_N = 10;
-/** Confidence per look (see REPEATED LOOKS above). */
-export const PROMOTION_CONFIDENCE = 0.99;
-export const STOP_CONFIDENCE = 0.99;
+/** Confidence per look (see REPEATED LOOKS above). Owner decision 2026-11-17: 95%. */
+export const PROMOTION_CONFIDENCE = 0.95;
+export const STOP_CONFIDENCE = 0.95;
 /** How much higher than argo's a fit median may be before it counts as worse (relative). */
 export const COST_WORSE_MARGIN = Object.freeze({ calls: 0.10, tokens: 0.10, elapsed_ms: 0.25 });
 /** The seat that authored the `fit` candidate (commits 6c0c12f, 26cbdcb), named as a proposal's proposer. */
@@ -103,7 +104,7 @@ export const MIN_PAIRS = 15;
 /** PROVISIONAL: the completed pairs per stratum after which the paired stop rule may halt it. */
 export const PAIR_STOP_MIN_N = 10;
 /** Two-sided level of the Wilcoxon signed-rank test for a paired cost difference (1 - PROMOTION_CONFIDENCE). */
-export const PAIRED_COST_ALPHA = 0.01;
+export const PAIRED_COST_ALPHA = 0.05;
 /** Up to this many non-zero differences the signed-rank p-value is exact; above it, the normal approximation. */
 export const WILCOXON_EXACT_MAX = 50;
 /** Power used by the Wald approximation of the pairs needed (pairsNeeded). */

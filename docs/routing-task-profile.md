@@ -209,7 +209,7 @@ For each stratum, with differences taken as fit minus argo:
 
 The intervals are Newcombe's hybrid score interval for a difference of proportions, built from Wilson bounds.
 
-**Repeated looks.** The rule runs at every cycle close, on a growing sample. At 95%, repeated looks would find a difference by chance well over 5% of the time. So both decisions that change something, the stop rule and a proposal, use 99% intervals (`STOP_CONFIDENCE`, `PROMOTION_CONFIDENCE`). This is a simple conservative alpha for each look, not a formal alpha-spending boundary. The cost is stated plainly: at 99%, even when both arms accept every ticket, non-inferiority within 5 points needs about 126 decided runs per arm. `MIN_N` is a floor below which nothing is claimed. It is not the sample size that decides.
+**Repeated looks.** The rule runs at every cycle close, on a growing sample. The owner set the level to 95% (2026-11-17) for the stop rule, a proposal and the paired cost test (`STOP_CONFIDENCE`, `PROMOTION_CONFIDENCE`, `PAIRED_COST_ALPHA`). It is a per-look level, not a formal alpha-spending boundary: repeated looks find a difference by chance more often than 5% overall, which is one reason a proposal is never an adoption. Even when both arms accept every ticket, non-inferiority within 5 points needs about 73 decided runs per arm. `MIN_N` is a floor below which nothing is claimed. It is not the sample size that decides.
 
 The thresholds are named, exported and provisional: `MIN_N`, `NONINFERIORITY_MARGIN`, `STOP_MARGIN`, `STOP_MIN_N`, `PROMOTION_CONFIDENCE`, `STOP_CONFIDENCE`, `COST_WORSE_MARGIN` and `DEFAULT_ELIGIBLE_STRATA`.
 
@@ -217,7 +217,7 @@ The overall outcome follows from the strata. It is `propose_policy` if any strat
 
 ### Paired runs
 
-The owner chose paired runs on 2026-11-17. The reason is the sample size above. Unpaired interleaving at 99% per look needs about 126 decided runs per arm per stratum to show non-inferiority within 5 points. Most of that variance is between tickets: some tickets are easy for both profiles and some are hard for both. A pair runs the same ticket under both profiles, so that variance drops out. What remains is the discordant pairs, the tickets one profile accepted and the other did not.
+The owner chose paired runs on 2026-11-17. The reason is the sample size above. Unpaired interleaving needed about 126 decided runs per arm per stratum at the original 99% level (about 73 at 95%) to show non-inferiority within 5 points. Most of that variance is between tickets: some tickets are easy for both profiles and some are hard for both. A pair runs the same ticket under both profiles, so that variance drops out. What remains is the discordant pairs, the tickets one profile accepted and the other did not.
 
 Code: `pairFor` in `pantheon/src/practice/assign.mjs`, `runCounterpart` in `pantheon/src/board/operate.mjs`, and the paired evaluation in `pantheon/src/practice/evaluate.mjs`. Tests: `pantheon/tests/practice-paired.test.mjs`.
 
@@ -267,10 +267,10 @@ A counterpart that fails, hits its bound or throws is kept as an outcome, and it
 
 The decision steps are:
 
-1. **Stop rule.** After `PAIR_STOP_MIN_N` = 10 pairs, if the upper 99% bound of the accepted difference is at or below −0.10, the stratum is halted. Its outcome is `retain`, its interleaving and pairing stop, and `fit` is flagged in the record's `flags`.
+1. **Stop rule.** After `PAIR_STOP_MIN_N` = 10 pairs, if the upper 95% bound of the accepted difference is at or below −0.10, the stratum is halted. Its outcome is `retain`, its interleaving and pairing stop, and `fit` is flagged in the record's `flags`.
 2. **`insufficient_evidence`** until there are `MIN_PAIRS` = 15 pairs.
 3. **`propose_policy`** only if both of these hold:
-   - The lower 99% bounds of the accepted and first-pass differences are both at or above −0.05.
+   - The lower 95% bounds of the accepted and first-pass differences are both at or above −0.05.
    - `fit` is significantly lower on at least one cost and significantly worse on none.
 4. **`retain`** otherwise.
 
@@ -279,10 +279,10 @@ The decision steps are:
 The overall outcome, the `synthetic` flag and `measured` follow as before. A pair is synthetic if either of its sides did not declare live providers. The automatic cycle assessment cites the same record, and its question names the paired strata with their pairs and discordant counts. It is still never `promote`.
 
 **Power note.** Each paired stratum reports `power` for accepted and first-pass:
-- `pairs_needed_at_observed`: the number of pairs at which the 99% interval on the expected table (the observed cell proportions) would clear −0.05. That is about an even chance.
+- `pairs_needed_at_observed`: the number of pairs at which the 95% interval on the expected table (the observed cell proportions) would clear −0.05. That is about an even chance.
 - `pairs_needed_80`: a Wald approximation for 80% power, (z₀.₉₉₅ + z₀.₈)² (p_disc − d²) / (d + 0.05)². It is null when no discordance was observed.
 
-For scale: with 12.5% discordance and an observed difference of +0.025, about 163 pairs reach the margin at an even chance and about 259 at 80% power. With no discordance and 80% accepted by both, 150 pairs already clear it. When both arms accept every ticket, method 10 still needs about 126 pairs, because its Wilson bound at p = 1 does not narrow faster. Pairing helps exactly when the tickets differ in difficulty.
+For scale at 95% (`pairsNeeded`): with 12.5% discordance and an observed difference of +0.025, about 95 pairs reach the margin at an even chance and about 174 at 80% power. With no discordance and 80% accepted by both, about 58 pairs clear it. When both arms accept every ticket, method 10 still needs about 73 pairs, because its Wilson bound at p = 1 does not narrow faster. Pairing helps exactly when the tickets differ in difficulty.
 
 The constants are named, exported and provisional: `MIN_PAIRS`, `PAIR_STOP_MIN_N`, `PAIRED_COST_ALPHA`, `WILCOXON_EXACT_MAX` and `DEFAULT_PAIR_POLICY.pairRate` (0).
 
