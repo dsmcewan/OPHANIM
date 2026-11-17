@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:628453802b90b64b4ec6aae56a083d1db630122a991c09c41667b2de30f267d0` · 80 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:76892bd2bff0f050c01591dc42b0241112c350d86df14f0ec94e676fd4b60503` · 81 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 36 · In progress: 1 · Ready: 2 · On Hold: 17.
+**Counts:** Resolved: 36 · In progress: 1 · Ready: 3 · On Hold: 17.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -32,6 +32,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2** (`review-mutants`) | In progress |  | independent review: checks no test protects; each gets a killing test | 2026-11-17 |
 | **CO1: ophanim/ is expensive to review (6% comments, long lines)** (`co1-readability`) | Ready |  | reformat and document without behaviour change | 2026-11-17 |
 | **ME3: nine canonical-JSON functions that disagree at the edges** (`me3-canonical`) | Ready |  | unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first | 2026-11-17 |
+| **Priority: qualify model routing and coordination practices every cycle** (`routing-coordination-practices`) | Ready |  | Owner-designated priority: determine effective model routing, escalation and coordination practices, with a bounded assessment and retained disposition every operating cycle and actual next-dispatch policy consumption. Audit at 94a115c reproduced static task routing, ignored stop decisions, lost overrides/usage, expanded output caps, same-lab swarm coordination and missing cycle recovery/learning. Start with deterministic repairs and per-attempt resource evidence; unknown cost stays unknown. Review and standing acceptance contract: docs/reviews/2026-11-16-routing-coordination/. Implementation remains Ready; this status entry records the requirement rather than dispatching teams. | 2026-11-16 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **One ledger across boards and domains** (`board-resolver`) | Resolved |  | entries name their board (scope) and re-derive against it; domains declared by operator-signed entries; a reader checks foreign-domain entries structurally and reports them as foreign, never re-derived | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
