@@ -94,7 +94,7 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | K3 `gate` kind (ship gate verdicts) | Resolved | Ship's gates now evaluate against named heads (`gatesAt`, `pinnedRefs` in `integrate.mjs`); `ophanim/ledger/gate-kind.mjs` records and re-derives the verdict. See "Gate kind implemented" below. |
 | K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `ophanim/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
 | K5 efficiency events as entries, and the debit loophole | Resolved | `ophanim/ledger/efficiency-kinds.mjs`; `assessConvergence({ledger})`, `chooseEfficiencySlots({ledger})`. See "K5 implemented" below. |
-| K5 `assessed` and `retained` kinds | On Hold | The assessment report and the retained-experiment marker stay files. Their verifiers (`verifyEfficiencyRecord`, `readRetainedExperiment`) read the trace and board from disk, so they need the trace cited as an entry first. |
+| K5 `assessed` and `retained` kinds | Resolved | `efficiency.trace`, `efficiency.assessed`, `efficiency.retained` in `ophanim/ledger/efficiency-kinds.mjs`, re-derived by the same computations the file verifiers run; a fresh assessment is verified before `cli.mjs` uses it. See "K5b implemented" below. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
@@ -289,6 +289,61 @@ Suites:
   - Pantheon: 811 pass, plus the 1 known environment failure.
 
 *Not done here.*
-- A fresh assessment is still not passed through `verifyEfficiencyRecord` before `cli.mjs` uses it. As written, that verifier refuses held investigation receipts, which a normal run can produce.
+- A fresh assessment is still not passed through `verifyEfficiencyRecord` before `cli.mjs` uses it. As written, that verifier refuses held investigation receipts, which a normal run can produce. (Resolved in K5b.)
 - The promotion entry does not re-verify the signed decision. That check is async and governance-held (`verifyEfficiencyDecision`); the controller records the entry only after it passes.
 - `cli.mjs` creates no ledger of its own. Key custody stays with the caller, as for `runOpenItem`.
+
+## K5b implemented (2026-11-17)
+
+**Why a fresh assessment was not verified (root cause, at `99a23d7`).**
+
+| Where | What |
+|---|---|
+| `ophanim/efficiency/assessment.mjs:315-322` | When `recordInvestigation` throws, the assessment records a held receipt (`ophanim.investigation-blocked/v1`) and carries on. |
+| `ophanim/efficiency/investigation/controller.mjs:31`, `:234`, `:203` | Normal runs make it throw: an operator forecast kept from another scope ("Exact scoped investigation forecast required"), a retired source state directory behind a retained packet (`lstatSync`), or the investigation lock timing out. |
+| `ophanim/efficiency/assessment.mjs:449-450` | `verifyEfficiencyRecord` threw on **every** held receipt ("Held investigation evidence does not qualify for independent verification"). |
+| `ophanim/cli.mjs:161-163` | So `cli.mjs` could not verify a fresh assessment without failing those runs, and used it unverified. |
+
+**The verifier fix.** A held receipt is accepted only when it is:
+- bound to its trace in the exact shape the catch writes (`scopeSha`, `traceSha`, `boardCommit`, the fixed reason, a detail string of at most 256 characters, nothing else);
+- for a decision that depends on retained evidence. Where the decision needs none (an untrusted or non-accepted trace), it is a pure function of the trace (`investigationWithoutEvidence` in `controller.mjs`), so a held receipt in its place is a substitution and is refused.
+
+`cli.mjs` now runs `verifyEfficiencyRecord` on the fresh record before it is put on the output or written to `result.json`.
+
+**Kinds** (`ophanim/ledger/efficiency-kinds.mjs`).
+
+| Kind | Payload | Cites | Re-derives by |
+|---|---|---|---|
+| `efficiency.trace` | `{stateDir, traceSha, trace}`, the trace whole | nothing; it names its board commit | `traceSha` is the trace's digest. `traceBinding`: the board commit's state digest, acceptance evidence and scope fingerprint match, and the analysis re-runs. One entry per trace. |
+| `efficiency.assessed` | `{traceSha, report}` | its trace first; then the `efficiency.retained` its admission read, and the `efficiency.debit` its measured value ends on, when there are | `rederiveAssessment` on the cited trace: the computation `verifyEfficiencyRecord` now delegates to. The measured value is either the unrecovered assessment cost (no use) or the promotion's totals over the chain up to the head it names. One entry per trace. |
+| `efficiency.retained` | `{marker}` | exactly one `efficiency.assessed` (the run that wrote the marker) | `retainedExperimentFrom`, the computation `readRetainedExperiment` now delegates to, given the cited report and trace instead of their files. One entry per experiment. |
+
+- The replay manifest, trial verifications and investigation packets stay content-addressed files. The board stays the board. Both are read by hash, as the `gate` kind reads its heads.
+- `efficiencyKinds({snapshot})` and `efficiencyRecorder({snapshot})` take the board reader; the default is `readRuntimeSnapshot`.
+
+**On the path** (`assessConvergence({ledger})`, through the existing `efficiencyRecorder`):
+- the trace is recorded as soon as `trace.json` is written;
+- the report is recorded after `assessment.json`, citing the trace, the debit and any retained experiment; a report that does not re-derive is refused there and the assessment fails;
+- with a ledger, a prior experiment is read from its `efficiency.retained` entry, not the marker's files. A marker with no retained entry holds the admission (`retained-experiment-held`), as an unreadable marker does on the file path;
+- the run that writes a marker records `efficiency.retained` only when its experiment completed as prior evidence;
+- the record carries `ledger: {trace, assessed, retained?}`.
+
+Without a ledger the file path is unchanged.
+
+*Check.*
+- `ophanim/efficiency/fresh-verification.test.mjs` (2 tests):
+  - a normal run with a stale forecast records a held receipt, is verified, and writes its result. It fails at `99a23d7` with the error above.
+  - a forged fresh assessment is refused: a held receipt rebound, re-reasoned, or given a decision; a held receipt substituted where the decision needs no evidence (a release activation); an admitted decision, an altered analysis, a changed outcome.
+- `ophanim/ledger/efficiency-kinds.test.mjs` (6 tests) adds a real run recording `efficiency.trace` and `efficiency.assessed`:
+  - the ledger still verifies after `trace.json` and `assessment.json` are deleted;
+  - forged traces (other state, other directory, wrong digest) and assessments (admitted, promoted, rebound receipt, invented measured value, uncited prior, other trace, wrong author, duplicate) are refused;
+  - a marker whose experiment never completed is refused as `efficiency.retained` and declined by the recorder.
+- The existing assessment-on-ledger test now also checks the report entry citing the trace and the debit.
+- Suites:
+  - `npm run test:proof`: 165 of 165, with TELOS at the pin;
+  - Pantheon: 811 pass, plus the 1 known environment failure.
+
+*Not done here.*
+- A **completed** experiment recorded as `efficiency.retained` is not exercised end to end. That needs a full 1 → 3 replay with independent qualification, which no test in the suite runs. The refusal paths are tested; the positive path shares `retainedExperimentFrom` with `readRetainedExperiment`.
+- In the evidence-dependent case, a held receipt cannot show which failure produced it (forecast, retired source, lock). It is bound to the trace and carries no authority, but substituting it for a real receipt there is not detectable.
+- `cli.mjs` still creates no ledger of its own (unchanged from K5).

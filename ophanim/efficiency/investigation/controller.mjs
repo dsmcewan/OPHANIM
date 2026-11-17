@@ -183,6 +183,15 @@ function derive({trace, registry, variables, workload, traceTrusted, history, es
     outcome:settled ? 'no_change' : 'blocked', reason:settled ? 'no-new-accepted-evidence' : 'accepted-trace-binding-required'}};
 }
 
+// The decision recordInvestigation makes without opening retained evidence: for a trace that cannot
+// initiate research it is a pure function of the trace and workload, so it is always obtainable. Returns
+// null when the decision depends on retained evidence (a trusted accepted trace), where a held receipt can
+// be the honest outcome of a normal run (an unusable forecast, a retired source state, a lock timeout).
+export function investigationWithoutEvidence({trace, registry, variables, workload = 1, traceTrusted = false}) {
+  if (traceTrusted && trace.original.convergence === 'accepted_change') return null;
+  return derive({trace, registry, variables, workload, traceTrusted, history:[]});
+}
+
 export async function recordInvestigation({root, stateDir, trace, registry, variables, workload = 1, traceTrusted = false, estimate = null} = {}) {
   const started = performance.now();
   const cpuStart = process.cpuUsage();
