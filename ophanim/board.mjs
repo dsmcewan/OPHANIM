@@ -1,5 +1,22 @@
+// ophanim/board.mjs -- the runtime's state, kept as controller commits on the Pantheon board.
+//
 // The extracted Pantheon store owns bytes, refs and fenced worker leases. Ophanim
 // adds a synthetic obligation snapshot, not a second mutable JSON task database.
+//
+// Purpose: persist and re-read the runtime state (`ophanim.runtime/v1`: obligations, effects, repairs,
+//   releases, the append-only event list) on the ref `refs/board/ophanim` under <stateDir>/pantheon,
+//   and verify that the ref's history is a lawful sequence of single transitions.
+// Inputs:  a state directory; the runtime's next state and the event that produced it (save); a worker
+//   attempt to stage on its own seat branch (publishWorkerCandidate).
+// Outputs: loadRuntime / readRuntimeSnapshot (the materialized state at the head or a given commit),
+//   withRuntimeBoard (the serialized writer), verifyRuntimeChain (a summary, or a thrown
+//   "Runtime chain <cid>: ..." error), and the delta codec (diffState / applyDelta / materializeCommit).
+// Invariants: every runtime commit is authored by the controller and holds exactly one state record,
+//   either a full snapshot or a delta whose before/after digests must reproduce exactly; a delta chain
+//   is at most MAX_DECODE_DEPTH long; revisions advance by one with one appended event per commit;
+//   accepted obligations, confirmed effects, specs, releases and release history are never rewritten.
+// Must never: let a worker write the controller ref (workers publish only to refs/seat/<seat>/wip under
+//   a fenced lease), keep a second mutable copy of state, or accept a delta whose digests do not match.
 import {resolve,join} from 'node:path';
 import {existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
@@ -29,13 +46,18 @@ const CHECKPOINT_EVENTS=new Set(['runtime.settled','release.activated']);
 const MAPS=['obligations','effects','repairs'];
 const MAX_DECODE_DEPTH=CHECKPOINT_INTERVAL*4;
 const rawSha=bytes=>createHash('sha256').update(bytes).digest('hex');
+// The single controller-authored state record of commit `cid`: its kind (FULL or DELTA) and parsed value.
 function controllerRecord(store,cid){
   const commit=store.get(cid);
-  const traces=(commit.records??[]).map(r=>store.get(r)).filter(e=>e.kind==='trace'&&[FULL,DELTA].includes(e.payload?.test));
+  const traces=(commit.records??[]).map(r=>store.get(r))
+    .filter(e=>e.kind==='trace'&&[FULL,DELTA].includes(e.payload?.test));
   if(traces.length!==1)throw Error('Runtime head lacks one controller state record');
-  if(commit.author.vendor!=='controller'||traces[0].author.vendor!=='controller')throw Error('Runtime state must be controller-authored');
+  if(commit.author.vendor!=='controller'||traces[0].author.vendor!=='controller')
+    throw Error('Runtime state must be controller-authored');
   return {commit,kind:traces[0].payload.test,value:JSON.parse(store.get(traces[0].links.log).toString('utf8'))};
 }
+// The delta from `prev` to `next` (which must append exactly one event): top-level keys and, inside the
+// obligations/effects/repairs maps, per-entry rows that were added or changed, plus removed paths.
 export function diffState(prev,next,{prevSha=digest(prev),nextSha=digest(next)}={}){
   if(next.events.length!==prev.events.length+1)throw Error('A delta records exactly one appended event');
   const changed={},removed=[];
@@ -43,16 +65,20 @@ export function diffState(prev,next,{prevSha=digest(prev),nextSha=digest(next)}=
     if(key==='events'||key==='revision')continue;
     if(MAPS.includes(key)){
       const before=prev[key]??{},after=next[key];
-      for(const id of Object.keys(after).sort())if(!Object.hasOwn(before,id)||canonical(before[id])!==canonical(after[id]))(changed[key]??={})[id]=after[id];
+      for(const id of Object.keys(after).sort())
+        if(!Object.hasOwn(before,id)||canonical(before[id])!==canonical(after[id]))(changed[key]??={})[id]=after[id];
       for(const id of Object.keys(before).sort())if(!Object.hasOwn(after,id))removed.push([key,id]);
     }else if(!Object.hasOwn(prev,key)||canonical(prev[key])!==canonical(next[key]))changed[key]=next[key];
   }
   for(const key of Object.keys(prev).sort())if(!Object.hasOwn(next,key))removed.push([key]);
-  return {schema:DELTA_SCHEMA,revision:next.revision,prevStateSha:prevSha,stateSha:nextSha,event:next.events.at(-1),changed,removed};
+  return {schema:DELTA_SCHEMA,revision:next.revision,prevStateSha:prevSha,stateSha:nextSha,
+    event:next.events.at(-1),changed,removed};
 }
+// Inverse of diffState: rebuild the next state from `prev`, refusing unless both digests match.
 export function applyDelta(prev,delta){
   if(delta?.schema!==DELTA_SCHEMA)throw Error('Unsupported runtime delta schema');
-  if(digest(prev)!==delta.prevStateSha||delta.revision!==prev.revision+1)throw Error('Runtime delta does not follow its parent state');
+  if(digest(prev)!==delta.prevStateSha||delta.revision!==prev.revision+1)
+    throw Error('Runtime delta does not follow its parent state');
   const next=clone(prev);
   next.revision=delta.revision;next.events.push(delta.event);
   for(const [key,value] of Object.entries(delta.changed)){
@@ -79,6 +105,8 @@ export function materializeCommit(store,cid,parentState){
   if(state.schema!==STATE_SCHEMA)throw Error('Unsupported runtime state schema');
   return {state,kind:record.kind,parents:record.commit.parents??[]};
 }
+// The state at `head`: walk back through deltas (at most MAX_DECODE_DEPTH) to the nearest full
+// snapshot, then re-apply them oldest first.
 function decode(store,head){
   if(!head)return null;
   const deltas=[];
@@ -95,12 +123,14 @@ function decode(store,head){
   if(state.schema!==STATE_SCHEMA)throw Error('Unsupported runtime state schema');
   return state;
 }
+// The current runtime state, or null when there is no board yet. Read-only.
 export function loadRuntime(stateDir){
   const root=boardPath(stateDir);
   if(!existsSync(root))return null;
   const store=openStore(root,{readOnly:true}),refs=openRefs(root,{store,readOnly:true});
   return decode(store,refs.resolve(REF));
 }
+// {commit, state} at `commit`, or at the ref's head when omitted. Read-only.
 export function readRuntimeSnapshot(stateDir, commit) {
   const root=boardPath(stateDir);
   const store=openStore(root,{readOnly:true});
@@ -108,6 +138,9 @@ export function readRuntimeSnapshot(stateDir, commit) {
   const head=commit??refs.resolve(REF);
   return {commit:head,state:decode(store,head)};
 }
+// Run `fn({board,state,save,ref})` holding the 'ophanim-controller' seat lock. `save(next,event)` bumps
+// next.revision, appends the event, and queues one controller commit (full or delta); it returns a
+// promise of the commit id. Writes are chained, so commits land in the order save was called.
 export async function withRuntimeBoard(stateDir,fn){
   return withSeatLock('ophanim-controller',async()=>{
     const board=openBoard(boardPath(stateDir));
@@ -122,6 +155,8 @@ export async function withRuntimeBoard(stateDir,fn){
       next.revision=(next.revision??0)+1;
       if(event)next.events.push({sequence:next.revision,...clone(event)});
       const bytes=canonical(next),snapshot=JSON.parse(bytes),sha=rawSha(bytes);
+      // A full checkpoint: first save of the session, a save without an event, every
+      // CHECKPOINT_INTERVAL saves, and on settlement or release activation.
       const full=!last||!event||sinceFull>=CHECKPOINT_INTERVAL||CHECKPOINT_EVENTS.has(event.type);
       const entry=full?{kind:'trace',payload:{test:FULL},blob:bytes}
         :{kind:'trace',payload:{test:DELTA},blob:canonical(diffState(last,snapshot,{prevSha:lastSha,nextSha:sha}))};
@@ -138,8 +173,12 @@ export async function withRuntimeBoard(stateDir,fn){
   },{dir:join(resolve(stateDir),'locks'),timeoutMs:30000});
 }
 
+// Stage one worker attempt: a synthetic seat, a fenced lease on `item:<id>` and a WIP branch from `ref`.
+// Returns {seat, lease, wip, publish(value), release()}; publish writes the candidate to the WIP branch
+// only, never to the controller ref.
 export async function publishWorkerCandidate({board,ref,id,worker,attempt,candidate}){
-  const seat={vendor:'openai',seat_id:`synthetic-${digest({id,worker:worker.id,attempt}).slice(0,24)}`,mode:'work',occupancy_gen:attempt};
+  const seat={vendor:'openai',seat_id:`synthetic-${digest({id,worker:worker.id,attempt}).slice(0,24)}`,
+    mode:'work',occupancy_gen:attempt};
   const resource=`item:${id}`;
   // This controller holds the sole runtime lock. An old running attempt can
   // only belong to a dead prior controller; explicitly fence it on takeover.
@@ -149,7 +188,8 @@ export async function publishWorkerCandidate({board,ref,id,worker,attempt,candid
   if(!branched.ok)throw Error(branched.why);
   return {seat,lease,wip,async publish(value){
     const result=await publish({...board,ref:wip,author:seat,lease,budgetCheck:false,
-      entries:[{kind:'trace',payload:{test:`candidate:${id}`},blob:canonical(value)}],msg:'synthetic worker candidate'});
+      entries:[{kind:'trace',payload:{test:`candidate:${id}`},blob:canonical(value)}],
+      msg:'synthetic worker candidate'});
     if(!result.ok)throw Error(`Worker fenced/refused: ${result.why}`);
     return {commit:result.commit,entry:result.written[0].cid,blob:board.store.get(result.written[0].cid).links.log};
   },async release(){return board.runtime.release({resource,holder:seat,gen:lease.gen});}};
@@ -188,7 +228,8 @@ export function verifyRuntimeChain(stateDir,{head}={}){
       if(state.revision!==1||state.events.length!==1)fail(cid,'chain must start at revision 1 with one event');
     }else{
       if(state.revision!==parent.revision+1)fail(cid,'revision must advance by one');
-      if(state.events.length!==parent.events.length+1||!same(state.events.slice(0,-1),parent.events))fail(cid,'events must be append-only, one per transition');
+      if(state.events.length!==parent.events.length+1||!same(state.events.slice(0,-1),parent.events))
+        fail(cid,'events must be append-only, one per transition');
       for(const [id,row] of Object.entries(parent.obligations)){
         const next=state.obligations[id];
         if(!next)fail(cid,`obligation removed: ${id}`);
@@ -197,12 +238,17 @@ export function verifyRuntimeChain(stateDir,{head}={}){
       }
       for(const [key,effect] of Object.entries(parent.effects)){
         const next=state.effects[key];
-        if(!next||next.sha256!==effect.sha256||next.obligationId!==effect.obligationId)fail(cid,`effect identity changed: ${key}`);
+        if(!next||next.sha256!==effect.sha256||next.obligationId!==effect.obligationId)
+          fail(cid,`effect identity changed: ${key}`);
         if(effect.status==='confirmed'&&!same(next,effect))fail(cid,`confirmed effect changed: ${key}`);
       }
-      for(const [id,release] of Object.entries(parent.releases))if(!same(state.releases[id],release))fail(cid,`release changed: ${id}`);
-      if(state.activeRelease!==parent.activeRelease&&event.type!=='release.activated')fail(cid,'active release changed without activation');
-      if(state.releaseHistory.length<parent.releaseHistory.length||!same(state.releaseHistory.slice(0,parent.releaseHistory.length),parent.releaseHistory))fail(cid,'release history rewritten');
+      for(const [id,release] of Object.entries(parent.releases))
+        if(!same(state.releases[id],release))fail(cid,`release changed: ${id}`);
+      if(state.activeRelease!==parent.activeRelease&&event.type!=='release.activated')
+        fail(cid,'active release changed without activation');
+      if(state.releaseHistory.length<parent.releaseHistory.length||
+        !same(state.releaseHistory.slice(0,parent.releaseHistory.length),parent.releaseHistory))
+        fail(cid,'release history rewritten');
     }
     if(event.sequence!==state.revision)fail(cid,'event sequence differs from revision');
     if(event.type==='work.started'){
@@ -216,12 +262,21 @@ export function verifyRuntimeChain(stateDir,{head}={}){
         // Refill excludes attempts still in flight; each must be a started row.
         const busy=a.policy===REFILL?(Array.isArray(a.inFlight)?a.inFlight:null):[];
         if(!busy)fail(cid,`refill assignment must record attempts in flight: ${event.id}`);
-        const busyValid=busy.every(id=>typeof id==='string'&&base[id]?.attempt>=1)&&canonical(busy)===canonical([...new Set(busy)].sort());
-        const ready=Object.values(base).filter(row=>row.status==='pending'&&!busy.includes(row.spec.id)&&row.spec.dependsOn.every(dep=>base[dep]?.status==='accepted')).map(row=>row.spec.id).sort();
+        const busyValid=busy.every(id=>typeof id==='string'&&base[id]?.attempt>=1)&&
+          canonical(busy)===canonical([...new Set(busy)].sort());
+        // The ready set: pending, not in flight, every dependency accepted; sorted by id.
+        const ready=Object.values(base)
+          .filter(row=>row.status==='pending'&&!busy.includes(row.spec.id)&&
+            row.spec.dependsOn.every(dep=>base[dep]?.status==='accepted'))
+          .map(row=>row.spec.id).sort();
         const row=base[event.id],workers=state.releases[state.activeRelease].workers;
         const eligible=row?workers.filter(w=>w.kinds.includes(row.spec.kind)&&w.scopes.includes(row.spec.scope)):[];
-        if(![ASSIGNMENT,REFILL].includes(a.policy)||(a.policy===ASSIGNMENT&&a.inFlight!==undefined)||!busyValid||a.readySetSha!==digest(ready)||a.ready!==ready.length||ready[a.rank]!==event.id||
-          !Number.isInteger(a.slots)||a.rank+busy.length>=a.slots||!eligible.length||a.choice!==row.releaseAttempts%eligible.length||eligible[a.choice].id!==event.worker)
+        // Known policy; the recorded ready set, rank and slot use match the recomputed ones; the worker is
+        // the round-robin choice among eligible workers of the active release.
+        if(![ASSIGNMENT,REFILL].includes(a.policy)||(a.policy===ASSIGNMENT&&a.inFlight!==undefined)||!busyValid||
+          a.readySetSha!==digest(ready)||a.ready!==ready.length||ready[a.rank]!==event.id||
+          !Number.isInteger(a.slots)||a.rank+busy.length>=a.slots||!eligible.length||
+          a.choice!==row.releaseAttempts%eligible.length||eligible[a.choice].id!==event.worker)
           fail(cid,`assignment does not follow from the recorded ready set: ${event.id}`);
         assignmentsChecked++;
       }

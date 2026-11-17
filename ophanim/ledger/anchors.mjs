@@ -1,3 +1,5 @@
+// ophanim/ledger/anchors.mjs -- anchor kinds that tie the system ledger to TELOS and to the board.
+//
 // K2: anchoring the ledgers that already exist, without changing them. The TELOS resolver is OPHANIM's
 // (it is read with TELOS's pinned code, checked against ophanim/governance.mjs); the board side is
 // Pantheon's and composed here.
@@ -7,6 +9,14 @@
 // re-derives by reading that ledger again: the anchored head must still be the n-th event of a chain
 // TELOS itself verifies, and the anchored commit must still be reachable from the ref. Rewriting either
 // underlying ledger then breaks the system chain's verification.
+//
+// Inputs:  resolvers -- `telos` (from telosResolver: a pinned TELOS checkout, a proposal directory per id
+//          and the TELOS public key) and `board` (Pantheon's boardResolver).
+// Outputs: ledger kind specs ({authors, validate, rederive}) for `telos.anchor` and `board.anchor`.
+// Invariants: TELOS code is loaded only after its bytes match TELOS_PINS (ophanim/governance.mjs);
+//          `validate` and `rederive` return null when valid and a reason string otherwise; a TELOS
+//          read that fails to verify becomes a reason, not an exception.
+// Must never: write to a TELOS chain or the board, or trust a TELOS checkout that differs from the pin.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -26,13 +36,18 @@ export function anchorKinds({telos = null, board = null, authors = () => true} =
   const kinds = {};
   if (telos) kinds['telos.anchor'] = {
     authors,
-    validate: p => (typeof p?.proposal_id === 'string' && Number.isInteger(p.events) && p.events > 0 && SHA.test(p.head) ? null
+    validate: p => (typeof p?.proposal_id === 'string' && Number.isInteger(p.events) && p.events > 0 &&
+        SHA.test(p.head) ? null
       : 'a TELOS anchor names {proposal_id, events, head}'),
+    // Re-derivation: TELOS must still verify the chain, and its n-th event must be the anchored head.
     rederive: e => {
       let hashes;
-      try { hashes = telos.events(e.payload.proposal_id); } catch (err) { return `TELOS chain does not verify: ${err.message}`; }
-      if (hashes.length < e.payload.events) return `TELOS chain has ${hashes.length} events, fewer than the ${e.payload.events} anchored`;
-      return hashes[e.payload.events - 1] === e.payload.head ? null : 'TELOS event at the anchored position is not the anchored head';
+      try { hashes = telos.events(e.payload.proposal_id); }
+      catch (err) { return `TELOS chain does not verify: ${err.message}`; }
+      if (hashes.length < e.payload.events)
+        return `TELOS chain has ${hashes.length} events, fewer than the ${e.payload.events} anchored`;
+      return hashes[e.payload.events - 1] === e.payload.head ? null :
+        'TELOS event at the anchored position is not the anchored head';
     },
   };
   // The board side is Pantheon's (pantheon/src/ledger/anchors.mjs): the same kind, the same rule.
@@ -45,10 +60,12 @@ export function anchorKinds({telos = null, board = null, authors = () => true} =
  * the pin before it is loaded, so the anchor is only ever re-derived by the reviewed TELOS.
  */
 export async function telosResolver({telosRoot, dirFor, publicJwk}) {
-  if (typeof telosRoot !== 'string' || !path.isAbsolute(telosRoot)) throw Error('an absolute pinned TELOS checkout is required');
+  if (typeof telosRoot !== 'string' || !path.isAbsolute(telosRoot))
+    throw Error('an absolute pinned TELOS checkout is required');
   const rel = 'merkle-dag/proposal-ledger.mjs';
   const bytes = fs.readFileSync(path.join(telosRoot, rel));
-  if (createHash('sha256').update(bytes).digest('hex') !== TELOS_PINS[rel]) throw Error(`TELOS ${rel} differs from the pin for ${TELOS_COMMIT}`);
+  if (createHash('sha256').update(bytes).digest('hex') !== TELOS_PINS[rel])
+    throw Error(`TELOS ${rel} differs from the pin for ${TELOS_COMMIT}`);
   const telos = await import(pathToFileURL(path.join(telosRoot, rel)).href);
   return {
     events(proposalId) {

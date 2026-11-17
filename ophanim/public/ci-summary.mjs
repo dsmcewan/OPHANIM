@@ -6,6 +6,10 @@
 //
 // A log holding several npm scripts (`npm test` runs three packages) is split at each `> name@version
 // script` header, so every suite is counted on its own. A log that is missing is reported, not skipped.
+//
+// Inputs:  LABEL=LOG arguments; the status ledger, verified by running packages/ledger/status.mjs verify.
+// Outputs: Markdown on stdout; exit code 1 if the status ledger does not verify.
+// Must never: invent a count it did not read, or hide a missing log or a failed ledger verification.
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -45,15 +49,23 @@ export function summary(logs, {statusVerify = null} = {}) {
     ...rows.map(r => (r.missing ? `| ${r.suite} | no result (the step did not run or did not finish) | | | | |`
       : `| ${r.suite} | ${n(r.tests)} | ${n(r.pass)} | ${n(r.fail)} | ${n(r.skipped)} | ${n(r.todo)} |`)),
     '',
-    ...(statusVerify ? ['### Status ledger', '', '`node packages/ledger/status.mjs verify`', '', '```', statusVerify.trim(), '```', ''] : []),
+    ...(statusVerify
+      ? ['### Status ledger', '', '`node packages/ledger/status.mjs verify`', '', '```', statusVerify.trim(), '```', '']
+      : []),
   ].join('\n');
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const logs = process.argv.slice(2).map(a => { const i = a.indexOf('='); return {label: a.slice(0, i), file: a.slice(i + 1)}; });
+  // Each argument is `label=file`, split at the first '='.
+  const logs = process.argv.slice(2).map(a => {
+    const i = a.indexOf('='); return {label: a.slice(0, i), file: a.slice(i + 1)};
+  });
   let statusVerify;
-  try { statusVerify = execFileSync(process.execPath, [path.resolve(HERE, '../../packages/ledger/status.mjs'), 'verify'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}); }
+  try {
+    statusVerify = execFileSync(process.execPath, [path.resolve(HERE, '../../packages/ledger/status.mjs'), 'verify'],
+      {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+  }
   catch (err) { statusVerify = `FAILED: ${(err.stderr || err.stdout || err.message).trim()}`; process.exitCode = 1; }
   console.log(summary(logs, {statusVerify}));
 }

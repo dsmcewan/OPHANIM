@@ -12,6 +12,15 @@
 // Nothing in pantheon/ imports ophanim/, and packages/ledger imports neither.
 //
 // Layout under `root` and the trust rules are the ledger home's (packages/ledger/home.mjs).
+//
+// Inputs:  a ledger root directory, optionally the board it records for, and the expected genesis
+//          anchor (argument or OPHANIM_LEDGER_ANCHOR).
+// Outputs: systemKinds/systemDomains (what this composition registers) and openSystemLedger (the
+//          opened ledger, its anchor and root, and recorder(): the single recorder every run path uses).
+// Invariants: efficiency entries (promotions, and uses, results and debits) may be authored only by
+//          the CONTROLLER key; the OPHANIM domain lists exactly the efficiency kinds, sorted.
+// Must never: be imported by pantheon/ or packages/ledger (layering.test.mjs checks this), or let a
+//          request file supply keys.
 import {defineKinds} from '../../packages/ledger/chain.mjs';
 import {keyStore, OPERATOR, CONTROLLER} from '../../packages/ledger/home.mjs';
 import {pantheonLedgerKinds, pantheonDomains, openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
@@ -45,7 +54,9 @@ export const systemDomains = () => ({...pantheonDomains(), [OPHANIM_DOMAIN]: Obj
  * genesis hash the caller expects; without one, the ledger's own ANCHOR file is used, which is only as
  * trustworthy as the directory holding it.
  */
-export function openSystemLedger({root, board = null, anchor = process.env.OPHANIM_LEDGER_ANCHOR ?? null, checkpointEvery} = {}) {
+export function openSystemLedger({
+  root, board = null, anchor = process.env.OPHANIM_LEDGER_ANCHOR ?? null, checkpointEvery
+} = {}) {
   const home = openPantheonLedger({root, board, anchor, checkpointEvery, kinds: systemKinds, domains: systemDomains});
   const {ledger, controller} = home;
   /**

@@ -8,6 +8,17 @@
 // Identity rule (the one that matters most): the roles named here are model seats operated under one
 // GitHub account. They are labels and text, never GitHub assignees, requested reviewers or approvals.
 // An assignee is only ever a real person, on a decision-authority item, and only when configured.
+//
+// Inputs:  the status ledger at status/ledger (or `root`), optionally pinned to an expected `anchor`;
+//          for plan(), the issue numbers already known and the configured human owner login.
+// Outputs: readStatusRecord (the verified board plus each item's signed history), plan (the desired
+//          labels and issues: title, body, labels, open/closed, assignees), and the pieces they are
+//          built from (labelCatalog, labelsFor, issueBody, evidenceSection, provenanceNotice).
+// Invariants: deterministic given the ledger; readStatusRecord throws unless the ledger verifies (it
+//          opens it with openStatusLedger's defaults, which create an empty ledger where none exists);
+//          everything after that read is pure; every generated body carries the provenance notice.
+// Must never: read or write GitHub (github.mjs does that), append to the ledger, make a model seat an
+//          assignee or reviewer, or claim independence the ledger does not show.
 import {openStatusLedger, STATES, EXTERNAL, OWNER_ROLES, DEFAULT_ROOT} from '../../packages/ledger/status.mjs';
 
 export const MARKER_PREFIX = 'ophanim:item=';
@@ -50,9 +61,12 @@ const ROLE_MEANS = {
 /** Every label the publisher owns, defined whether or not an item uses it today (so filters exist). */
 export function labelCatalog() {
   return [
-    ...STATES.map(s => ({name: stateLabel(s), color: STATE_COLOR[s], description: `${OWNED} state ${s}: ${STATE_MEANS[s]}`})),
-    ...EXTERNAL.map(w => ({name: waitingLabel(w), color: 'd93f0b', description: `${OWNED} on hold, waiting on ${WAITING_MEANS[w]}`})),
-    ...OWNER_ROLES.map(r => ({name: roleLabel(r), color: r === 'decision-authority' ? '5319e7' : 'c5def5', description: `${OWNED} ${ROLE_MEANS[r]}`})),
+    ...STATES.map(s => ({name: stateLabel(s), color: STATE_COLOR[s],
+      description: `${OWNED} state ${s}: ${STATE_MEANS[s]}`})),
+    ...EXTERNAL.map(w => ({name: waitingLabel(w), color: 'd93f0b',
+      description: `${OWNED} on hold, waiting on ${WAITING_MEANS[w]}`})),
+    ...OWNER_ROLES.map(r => ({name: roleLabel(r), color: r === 'decision-authority' ? '5319e7' : 'c5def5',
+      description: `${OWNED} ${ROLE_MEANS[r]}`})),
   ].map(l => ({...l, description: l.description.slice(0, 100)}));      // GitHub caps descriptions at 100 chars
 }
 
@@ -77,7 +91,8 @@ export function readStatusRecord({root = DEFAULT_ROOT, anchor = null} = {}) {
 /** The role an item is owned by: the recorded owner_role, else decision-authority for a decision hold. */
 export function ownerRoleOf(item) {
   if (item.owner_role) return {role: item.owner_role, source: 'owner_role on the latest status entry'};
-  if (item.state === 'On Hold' && item.waiting_on === 'decision') return {role: 'decision-authority', source: 'waiting_on: decision on the latest status entry'};
+  if (item.state === 'On Hold' && item.waiting_on === 'decision')
+    return {role: 'decision-authority', source: 'waiting_on: decision on the latest status entry'};
   return null;
 }
 
@@ -125,11 +140,17 @@ export function evidenceSection(ev) {
     `- **Run ledger:** anchor ${short(ev.run.ledger_anchor)}, head ${short(ev.run.ledger_head)}; run.json digest ${short(ev.run.run_json_digest)}; shipped: ${ev.run.shipped ? 'yes' : 'no'}; gate verdict entry ${short(ev.run.gate_entry)}`,
     `- **Review cycle:** ${rv ? `${short(rv.cycle)} on the ledger anchored at ${short(rv.cycle_ledger_anchor)}; close entry ${short(rv.close_entry)}; outcome **${rv.outcome ?? 'open'}**` : 'none cited'}`,
     ...(rv ? ['', '| Reviewer seat (vendor) | Requested model | Served model | Lab |', '|---|---|---|---|',
-      ...rv.reviewers.map(r => `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`), ''] : []),
+      ...rv.reviewers.map(r =>
+        `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`),
+      ''] : []),
     `- **Commit:** ${ev.commit ? `\`${ev.commit}\`` : 'none'}`,
     `- **Tests:** ${ev.tests ? `\`${cell(ev.tests.cmd)}\` exited ${ev.tests.exit}` : 'none recorded'}`,
-    ...(ev.ticket ? [`- **Ticket:** \`${ev.ticket.path}\` (\`${ev.ticket.digest}\`), slice: ${cell(ev.ticket.slice)}`] : []),
-    ...(ev.accept_unverified_reason ? [`- **Accepted although the review closed unverified:** ${cell(ev.accept_unverified_reason)}`] : []),
+    ...(ev.ticket
+      ? [`- **Ticket:** \`${ev.ticket.path}\` (\`${ev.ticket.digest}\`), slice: ${cell(ev.ticket.slice)}`]
+      : []),
+    ...(ev.accept_unverified_reason
+      ? [`- **Accepted although the review closed unverified:** ${cell(ev.accept_unverified_reason)}`]
+      : []),
     `- **Proposal:** \`${ev.proposal}\`; cited ledgers at apply: ${ev.checked === 'structural' ? 're-checked structurally (anchor, signatures, cited entries)' : 'not available on the applying machine'}`,
     '',
   ];
@@ -174,6 +195,7 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
     '',
     '| # | Date (checked) | State | Waits on | Basis | Ledger entry |',
     '|---|---|---|---|---|---|',
+    // One row per status entry, oldest first; "Waits on" falls back to the unresolved dependencies of a hold.
     ...item.history.map((h, i) => `| ${i + 1} | ${h.checked} | ${h.state} | ${cell(h.waiting_on ?? (h.depends_on?.length && h.state === 'On Hold' ? `depends on ${h.depends_on.join(', ')}` : ''))} | ${cell(h.basis)}${h.evidence ? ' (with evidence)' : ''} | \`${h.entry}\` (seq ${h.seq}) |`),
     '',
     provenanceNotice([
@@ -182,7 +204,8 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
         ? `Its latest status cites a review cycle that closed ${item.evidence.review.outcome} with reviews on distinct labs (${item.evidence.review.reviewers.map(r => r.lab).join(', ')}), none of them the lab that implemented the change; ` +
           'that independence rests on the cited cycle ledger, which re-derives the cold-review rule, and carries the limits in docs/public-record.md. The reviewers are model seats, not people.'
         : 'The status ledger records no model seat, review or served model for it, so **no independence is claimed here**.'),
-      ...(owner && owner.role !== 'decision-authority' ? ['', `The owner role \`${owner.role}\` is a chair (a model seat), not a person; it is a label, never an assignee.`] : []),
+      ...(owner && owner.role !== 'decision-authority'
+        ? ['', `The owner role \`${owner.role}\` is a chair (a model seat), not a person; it is a label, never an assignee.`] : []),
     ]),
     '',
     '### Verify this record',
@@ -224,7 +247,10 @@ export function dependencyOrder(items) {
  */
 export function plan(record, {numbers = new Map(), ownerLogin = null, ledgerPath = 'status/ledger'} = {}) {
   const ids = new Set(record.items.map(i => i.item));
-  const link = id => (numbers.has(id) ? `#${numbers.get(id)} (\`${id}\`)` : ids.has(id) ? `\`${id}\`` : `\`${id}\` (not on the status board)`);
+  // An item reference: its issue number once known, else its id (flagged when it is not on the board).
+  const link = id => (numbers.has(id) ? `#${numbers.get(id)} (\`${id}\`)`
+    : ids.has(id) ? `\`${id}\``
+    : `\`${id}\` (not on the status board)`);
   const dependents = new Map();
   for (const i of record.items) for (const d of i.depends_on ?? []) {
     if (!dependents.has(d)) dependents.set(d, []);
@@ -235,7 +261,8 @@ export function plan(record, {numbers = new Map(), ownerLogin = null, ledgerPath
     return {
       item: item.item,
       title: `${item.title} [${item.item}]`,
-      body: issueBody(item, {anchor: record.anchor, link, dependents: (dependents.get(item.item) ?? []).sort(), ledgerPath}),
+      body: issueBody(item, {anchor: record.anchor, link,
+        dependents: (dependents.get(item.item) ?? []).sort(), ledgerPath}),
       labels: labelsFor(item),
       state: item.state === 'Resolved' ? 'closed' : 'open',
       state_reason: item.state === 'Resolved' ? 'completed' : null,
@@ -249,7 +276,10 @@ export function plan(record, {numbers = new Map(), ownerLogin = null, ledgerPath
 
 /** A short text summary of a plan, for stdout or a workflow step summary. */
 export function planSummary(p) {
-  const by = k => Object.entries(p.issues.reduce((m, i) => { for (const l of i.labels.filter(x => x.startsWith(k))) m[l] = (m[l] ?? 0) + 1; return m; }, {}))
+  // "label count" pairs for every label with prefix k, counted over the planned issues.
+  const by = k => Object.entries(p.issues.reduce((m, i) => {
+    for (const l of i.labels.filter(x => x.startsWith(k))) m[l] = (m[l] ?? 0) + 1; return m;
+  }, {}))
     .sort().map(([l, n]) => `${l} ${n}`).join(', ');
   const open = p.issues.filter(i => i.state === 'open').length;
   return [
