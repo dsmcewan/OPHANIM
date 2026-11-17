@@ -26,9 +26,14 @@
 // with --interleave, dispatches the ticket's hash-assigned arm (argo or fit; low and normal stakes only; an
 // explicit --profile wins). A cycle that closes with no stated assessment gets the evaluation's, recorded by
 // the controller (never a promote).
+// With --pair-rate R (0..1, default 0) and --pair-max-provider-calls N (required with a rate), a ticket the
+// pair sample selects (sha256 of its key below R; every stakes stratum) is also run under the other profile in
+// a separate dry board on a snapshot of the repository: it never ships, merges, proposes or reviews, it makes
+// at most N provider calls, and its pair record goes to <store>/pairs/. At most R x tickets x N extra calls.
 //   node pantheon/bin/pantheon-board.mjs evaluate [--runs DIR] [--json]
 //       the current evaluation of the store (default PANTHEON_EVIDENCE_STORE, else <OPHANIM_LEDGER>/../runs)
-//       per stakes stratum, and the strata the stop rule has halted. Reads files only; no provider call.
+//       per stakes stratum, and the strata the stop rule has halted, then the paired section (discordant
+//       counts, paired intervals, Wilcoxon cost tests, pairs needed). Reads files only; no provider call.
 //
 // Common: --repo DIR (default: this repository), --status-ledger DIR (default OPHANIM_STATUS_LEDGER, else
 // <repo>/status/ledger), --anchor sha256:... (the status ledger's expected genesis).
@@ -59,7 +64,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -91,15 +96,38 @@ function printEvaluation(e, store) {
   console.log("\n  stratum    outcome                n fit/argo   accepted fit/argo   diff CI           first_pass fit/argo");
   for (const [s, x] of Object.entries(e.strata)) {
     const r = x.rates ?? {};
-    console.log(`  ${s.padEnd(10)} ${(x.outcome + (x.halted ? " (halted)" : "")).padEnd(22)} ${`${x.n.fit}/${x.n.argo}`.padEnd(12)} ` +
+    console.log(`  ${s.padEnd(10)} ${(x.outcome + (x.halted ? " (halted)" : "")).padEnd(22)} ${`${x.n.fit}/${x.n.argo}${x.basis === "paired" ? "p" : ""}`.padEnd(12)} ` +
       `${`${pct(r.accepted?.fit)}/${pct(r.accepted?.argo)}`.padEnd(19)} ${ci(r.accepted?.diff_ci).padEnd(17)} ${pct(r.first_pass?.fit)}/${pct(r.first_pass?.argo)}`);
     console.log(`             ${x.why}`);
+    if (x.basis === "paired") console.log(`             decided on paired runs (below); unpaired: ${x.unpaired.outcome}, n fit ${x.unpaired.n.fit}, argo ${x.unpaired.n.argo}: ${x.unpaired.why}`);
     if (x.cost) console.log(`             cost per accept: ${Object.entries(x.cost).map(([k, c]) => `${k} ${c.fit ?? "?"} vs ${c.argo ?? "?"} (${c.status})`).join("; ")}`);
   }
   if (!Object.keys(e.strata).length) console.log("  (no interleaved runs yet)");
   console.log(`\n  overall: ${e.outcome}${e.measured ? " (measured)" : " (provisional)"}`);
   console.log(`  halted strata: ${e.halted.length ? e.halted.join(", ") : "none"}`);
+  if (e.flags?.length) console.log(`  flagged: ${e.flags.map(f => `${f.profile} in ${f.stratum} (${f.basis})`).join("; ")}`);
+  printPaired(e);
   console.log(`  shadow: ${e.shadow.turns} turn(s), ${e.shadow.agree} agree, ${e.shadow.disagree} disagree, ${e.shadow.unavailable} unavailable (${e.shadow.note})`);
+}
+const pv = v => (v === null || v === undefined ? "-" : v < 1e-4 ? v.toExponential(1) : v.toFixed(4));
+function printPaired(e) {
+  const p = e.paired;
+  if (!p) return;
+  console.log(`\n  Paired runs: ${p.pairs.length} completed, ${p.refused.length} refused, ${p.invalid.length} invalid` +
+    ` (paired stratum decides when present; n >= ${e.thresholds.MIN_PAIRS} pairs; stop after ${e.thresholds.PAIR_STOP_MIN_N}; cost: Wilcoxon at p < ${e.thresholds.PAIRED_COST_ALPHA})`);
+  for (const r of p.refused) console.log(`    refused ${r.pair_id} (${r.ticket}): ${r.code}`);
+  for (const [s, x] of Object.entries(p.strata)) {
+    const a = x.accepted, f = x.first_pass;
+    console.log(`  ${s.padEnd(10)} ${(x.outcome + (x.halted ? " (halted)" : "")).padEnd(22)} ${x.n} pairs${x.synthetic ? ", synthetic" : ""}`);
+    console.log(`             accepted   fit ${pct(a.fit)} argo ${pct(a.argo)}; discordant fit only ${a.discordant.fit_only} / argo only ${a.discordant.argo_only}; diff ${a.diff.toFixed(3)} ${ci(a.diff_ci)} (99%)`);
+    console.log(`             first_pass fit ${pct(f.fit)} argo ${pct(f.argo)}; discordant fit only ${f.discordant.fit_only} / argo only ${f.discordant.argo_only}; diff ${f.diff.toFixed(3)} ${ci(f.diff_ci)} (99%)`);
+    console.log(`             cost (fit - argo, pairs both accepted): ${Object.entries(x.cost).map(([k, c]) =>
+      `${k} median ${c.median_diff ?? "?"} over ${c.n} (p ${pv(c.test.p_two_sided)}${c.test.exact ? " exact" : ""}${c.missing.fit ? `, ${c.missing.fit} lack fit's` : ""}) ${c.status}`).join("; ")}`);
+    const w = x.power.accepted;
+    console.log(`             pairs needed (accepted, discordance ${pct(w.discordance)}, observed diff ${w.observed_diff.toFixed(3)}): ` +
+      `${w.pairs_needed_at_observed ?? "not reachable"} for the expected 99% bound to clear -${e.thresholds.NONINFERIORITY_MARGIN}; ${w.pairs_needed_80 ?? "-"} for 80% power (Wald)`);
+    console.log(`             ${x.why}`);
+  }
 }
 async function liveTurn() {
   // As bin/pantheon-review-cycle.mjs: the vendor SDKs are imported here, at the edge.
@@ -149,6 +177,12 @@ try {
     process.exit(0);
   }
   if (verb === "run") {
+    // Paired runs: a rate in [0, 1], and never without the counterpart's provider-call bound.
+    const pairRate = opts["pair-rate"] === undefined ? 0 : Number(opts["pair-rate"]);
+    if (!(Number.isFinite(pairRate) && pairRate >= 0 && pairRate <= 1)) usage(`--pair-rate is a number in [0, 1], got ${opts["pair-rate"]}`);
+    const pairMax = opts["pair-max-provider-calls"] === undefined ? null : Number(opts["pair-max-provider-calls"]);
+    if (pairMax !== null && !(Number.isSafeInteger(pairMax) && pairMax > 0)) usage(`--pair-max-provider-calls is a positive integer, got ${opts["pair-max-provider-calls"]}`);
+    if (pairRate > 0 && pairMax === null) usage("--pair-rate needs --pair-max-provider-calls N: a counterpart never runs without an explicit provider-call bound (PAIR_UNBOUNDED)");
     if (args.length !== 1) usage("run names one item");
     const makeClientFor = opts.clients ? await load(opts.clients) : await liveClients();
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
@@ -158,11 +192,12 @@ try {
       // --interleave: the ticket's hash-assigned arm for an eligible stratum; an explicit --profile still wins.
       checked: opts.checked, runOpts: { seatOverrides, ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}) }, practice,
       evidenceStore: opts["evidence-store"] ? resolve(opts["evidence-store"]) : null,
+      pairRate, pairMaxProviderCalls: pairMax,
       progress: ev => {
-        if (ev.from !== "pipeline") console.error(JSON.stringify(ev));
-        else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  [${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
+        if (ev.from !== "pipeline" && ev.from !== "pair") console.error(JSON.stringify(ev));
+        else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  ${ev.from === "pair" ? "[pair] " : ""}[${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
       } });
-    console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null,
+    console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null, pair: r.bundle.pair ?? null,
       shipped: r.bundle.run.shipped, commit: r.bundle.commit, branch: r.bundle.branch, cycle: r.bundle.review?.cycle ?? null,
       outcome: r.bundle.review?.outcome ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
     process.exit(r.proposal ? 0 : 1);

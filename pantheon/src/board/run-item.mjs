@@ -302,7 +302,9 @@ export async function runOpenItem(spec, opts = {}) {
   const board = openBoard(root);
   if (opts.ledger === undefined) {
     const { openPantheonLedger } = await import("../ledger/system.mjs");
-    LEDGER = openPantheonLedger({ root: process.env.OPHANIM_LEDGER ?? join(root, "ledger"), board }).recorder();
+    // `ledgerRoot` names the ledger outright, ahead of OPHANIM_LEDGER: a paired run's dry counterpart
+    // (board/operate.mjs) records on a ledger of its own, never on the shared one.
+    LEDGER = openPantheonLedger({ root: opts.ledgerRoot ?? process.env.OPHANIM_LEDGER ?? join(root, "ledger"), board }).recorder();
   }
   // The board's recorder on the ledger; at ship it also records the gate verdict.
   let BOARD_LEDGER = null;

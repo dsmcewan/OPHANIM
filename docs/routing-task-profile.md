@@ -174,7 +174,7 @@ The live record comes out `synthetic: false`, and it is scoped to the tickets an
 
 ## Continuous evaluation
 
-The owner asked for routing to be evaluated continuously, from the current state, on the work that runs anyway (design: `docs/reviews/2026-11-17-routing-evaluation/DESIGN.md`). It adds no provider spend beyond the work itself. Nothing below runs an extra provider call: the shadow is a second pure selection, the assignment is a hash, and the evaluator reads files.
+The owner asked for routing to be evaluated continuously, from the current state, on the work that runs anyway (design: `docs/reviews/2026-11-17-routing-evaluation/DESIGN.md`). With pairing off (the default), it adds no provider spend beyond the work itself: the shadow is a second pure selection, the assignment is a hash, and the evaluator reads files. Paired runs (below, owner decision 2026-11-17) are the one exception, and only when the owner sets a pair rate: they spend at most `pairRate × tickets × pairMaxProviderCalls` extra provider calls.
 
 Code: `pantheon/src/practice/shadow.mjs`, `assign.mjs` and `evaluate.mjs`. The wiring is in `pantheon/src/board/run-item.mjs` (dispatch) and `pantheon/src/board/operate.mjs` (board runs and cycle close). Tests: `pantheon/tests/practice-continuous.test.mjs`.
 
@@ -215,6 +215,82 @@ The thresholds are named, exported and provisional: `MIN_N`, `NONINFERIORITY_MAR
 
 The overall outcome follows from the strata. It is `propose_policy` if any stratum proposes. Otherwise it is `retain` if any stratum retains, halts included. Otherwise it is `insufficient_evidence`. A record is `synthetic` if any included run did not declare live providers. The shadow selections of every run, excluded runs included, are summarised as a disagreement map. That map says nothing about quality.
 
+### Paired runs
+
+The owner chose paired runs on 2026-11-17. The reason is the sample size above. Unpaired interleaving at 99% per look needs about 126 decided runs per arm per stratum to show non-inferiority within 5 points. Most of that variance is between tickets: some tickets are easy for both profiles and some are hard for both. A pair runs the same ticket under both profiles, so that variance drops out. What remains is the discordant pairs, the tickets one profile accepted and the other did not.
+
+Code: `pairFor` in `pantheon/src/practice/assign.mjs`, `runCounterpart` in `pantheon/src/board/operate.mjs`, and the paired evaluation in `pantheon/src/practice/evaluate.mjs`. Tests: `pantheon/tests/practice-paired.test.mjs`.
+
+**Sampling.** `pairFor({ticketKey, stakes, policy: {pairRate}})` takes 48 bits of a sha256 of the ticket key, under its own salt, as a uniform number `u` in [0, 1). The ticket is paired iff `u < pairRate`.
+- The sample is deterministic: the same ticket is always paired, or not, at a given rate. Raising the rate only adds tickets.
+- It is independent of the interleaving hash, so paired tickets fall on both arms.
+- `pairRate` defaults to 0, which is off. The owner sets it.
+- Every stakes stratum is paired, including `high`, `critical` and unknown, because the counterpart never ships. The only exception is a stratum the stop rule has halted, which is not paired.
+- The decision and its basis are recorded in the pair record and in the bundle (`bundle.pair`).
+
+**The counterpart.** When a ticket is sampled, `runBoardItem` runs it again after the primary run, under the other profile: `argo` gets `fit`, and `fit` gets `argo`. This happens before anything of the primary is committed or reviewed. It uses `runOpenItem` with:
+- a separate dry board (`<board>/pair-<profile>`, or `pairDir`);
+- a snapshot of the ticket's paths at the base commit, which `git archive` extracts into the dry directory, so the target repository is only read;
+- a run ledger of its own (`<dry>/ledger`, through runOpenItem's `ledgerRoot`), never the shared `OPHANIM_LEDGER`;
+- the primary's `revisions`;
+- `maxProviderCalls = pairMaxProviderCalls`.
+
+As a result, the counterpart:
+- never ships to the real shipping ref (it ships, if at all, to its own board's ref);
+- never commits or merges into the target repository, and never writes its working tree (its outputs go to the snapshot);
+- never writes a status entry or a public record;
+- never opens or closes the real review cycle.
+
+A test proves this. Every byte of the target repository (`.git` included) and of its status ledger is hashed before and after the counterpart, and the two are identical. The counterpart shares two things with the primary: the provider cooldown store, which is the providers' real state, and `makeClientFor`. An operator reseat (`--seat`) is not passed on, because it would seat both arms alike.
+
+**Refusals.** A sampled ticket is never paired without an explicit `pairMaxProviderCalls` (a positive integer). The refusal is `PAIR_UNBOUNDED`: it is recorded in the store, no counterpart runs, and the primary is unaffected. `PAIR_PROFILE` (a `legacy` primary) and `PAIR_NO_PRIMARY` (no run record) are refused the same way. The CLI refuses `--pair-rate` without `--pair-max-provider-calls` before any work.
+
+**The pair record.** It goes to `<store>/pairs/<pair_id>/pair.json`, next to `primary.run.json` and `counterpart.run.json`. Each run file is checked against the digest the record names:
+
+```
+{schema: pantheon.pair/v1, pair_id, status: completed|refused, ticket: {key, item, path, digest}, stakes,
+ sampling: {basis, rate, u}, primary: {profile, run_digest, board},
+ counterpart: {profile, dry: true, board, snapshot, run_digest, outcome: {accepted, first_pass, shipped, status, why}, providers, error?},
+ bounds: {max_provider_calls, revisions}, refusal?}
+```
+
+A counterpart that fails, hits its bound or throws is kept as an outcome, and it is not accepted. A refused pair is listed under `paired.refused`. It is an outcome of neither arm, because nothing ran.
+
+**Spend.** Pairing costs at most `pairRate × tickets × pairMaxProviderCalls` extra provider calls. Each counterpart is refused at the generation boundary once it reaches its bound (`PROVIDER_CALL_LIMIT`).
+
+**The paired rule.** The rule applies per stratum, over completed pairs. A side is accepted iff its run was accepted (`metrics.mjs`). Differences are fit minus argo.
+- **Tables.** `accepted` and `first_pass` each get a 2×2 table: e (both), f (fit only), g (argo only), h (neither). The discordant counts are f and g. The difference is (f − g)/n, with Newcombe's paired score interval, method 10 (R. G. Newcombe, *Statistics in Medicine* 1998;17:2635–2650). The implementation reproduces the paper's Table III and StatsDirect's worked example.
+- **Cost.** Cost is compared only on pairs that both arms accepted, which compares the cost of the same accepted outcome on the same ticket. For calls, tokens and elapsed time, the per-pair differences are taken only over pairs where both sides have the value. They are tested with a Wilcoxon signed-rank test, which is exact up to 50 non-zero differences (mid-ranks for ties) and uses the normal approximation above that.
+  - A measure is `lower` only if it is significantly lower at `PAIRED_COST_ALPHA` = 0.01 (two-sided) and no pair lacks fit's value where argo's is known. Unknown never counts as cheaper.
+  - It is `worse` if it is significantly higher.
+  - It is `unknown` if no pair has both values.
+
+The decision steps are:
+
+1. **Stop rule.** After `PAIR_STOP_MIN_N` = 10 pairs, if the upper 99% bound of the accepted difference is at or below −0.10, the stratum is halted. Its outcome is `retain`, its interleaving and pairing stop, and `fit` is flagged in the record's `flags`.
+2. **`insufficient_evidence`** until there are `MIN_PAIRS` = 15 pairs.
+3. **`propose_policy`** only if both of these hold:
+   - The lower 99% bounds of the accepted and first-pass differences are both at or above −0.05.
+   - `fit` is significantly lower on at least one cost and significantly worse on none.
+4. **`retain`** otherwise.
+
+**Precedence.** When a stratum has completed pairs, the paired decision is the stratum's decision (`basis: paired`). The unpaired decision is still computed and reported under `unpaired`. A halt from either comparison halts the stratum, which is the conservative direction.
+
+The overall outcome, the `synthetic` flag and `measured` follow as before. A pair is synthetic if either of its sides did not declare live providers. The automatic cycle assessment cites the same record, and its question names the paired strata with their pairs and discordant counts. It is still never `promote`.
+
+**Power note.** Each paired stratum reports `power` for accepted and first-pass:
+- `pairs_needed_at_observed`: the number of pairs at which the 99% interval on the expected table (the observed cell proportions) would clear −0.05. That is about an even chance.
+- `pairs_needed_80`: a Wald approximation for 80% power, (z₀.₉₉₅ + z₀.₈)² (p_disc − d²) / (d + 0.05)². It is null when no discordance was observed.
+
+For scale: with 12.5% discordance and an observed difference of +0.025, about 163 pairs reach the margin at an even chance and about 259 at 80% power. With no discordance and 80% accepted by both, 150 pairs already clear it. When both arms accept every ticket, method 10 still needs about 126 pairs, because its Wilson bound at p = 1 does not narrow faster. Pairing helps exactly when the tickets differ in difficulty.
+
+The constants are named, exported and provisional: `MIN_PAIRS`, `PAIR_STOP_MIN_N`, `PAIRED_COST_ALPHA`, `WILCOXON_EXACT_MAX` and `DEFAULT_PAIR_POLICY.pairRate` (0).
+
+```sh
+node pantheon/bin/pantheon-board.mjs run <item> --pair-rate 0.2 --pair-max-provider-calls 60 [...]
+node pantheon/bin/pantheon-board.mjs evaluate [--runs DIR]   # prints the paired section after the strata
+```
+
 ### Every cycle close gets an assessment
 
 A cycle opened under `pantheon.cycle/v2` cannot close without a practice assessment (C3). When such a cycle is waiting on nothing but its assessment, and none was stated (`--practice-outcome`), the controller records one from `evaluate` over the evidence store:
@@ -241,3 +317,4 @@ Not done:
 
 - No live run has accumulated in a store from this checkout. Every record made here is synthetic.
 - Only `argo` and `fit` are interleaved. `legacy` is shadowed, never assigned.
+- No paired run has been made against live providers. The pair rate is 0 until the owner sets it.
