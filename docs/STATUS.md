@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:708cd7e6e338e3feef4753a178b59bcb11df73d094fb360bfa66f7c3ee8ba1c8` · 79 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:628453802b90b64b4ec6aae56a083d1db630122a991c09c41667b2de30f267d0` · 80 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 35 · In progress: 2 · Ready: 2 · On Hold: 17.
+**Counts:** Resolved: 36 · In progress: 1 · Ready: 2 · On Hold: 17.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -30,7 +30,6 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **SY3: proofs bind absolute paths and cannot be checked on another machine** (`sy3-portable-proofs`) | On Hold | decision | whether a retained proof must verify elsewhere is review decision 8 | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
 | **Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2** (`review-mutants`) | In progress |  | independent review: checks no test protects; each gets a killing test | 2026-11-17 |
-| **Operator key custody** (`signer`) | In progress |  | authority over the status ledger transferred by an operator-signed authority entry to owner-held successor keys (operator, status-orderer) prepared in the owner account; pending the owner's local verification. Run ledgers and seat keys are not covered | 2026-11-17 |
 | **CO1: ophanim/ is expensive to review (6% comments, long lines)** (`co1-readability`) | Ready |  | reformat and document without behaviour change | 2026-11-17 |
 | **ME3: nine canonical-JSON functions that disagree at the edges** (`me3-canonical`) | Ready |  | unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
@@ -62,6 +61,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **RU1: cross-lab rule compared vendor strings (independent review)** (`ru1-cross-lab`) | Resolved |  | one labOf backs law 3, assertReviewCutsAcross and the ledger; reviewer seating avoids same-lab vendors; regression test fails on the old code | 2026-11-17 |
 | **RU2: frontier verification accepted a keyless forgery (independent review)** (`ru2-frontier-forgery`) | Resolved |  | authority entries are always fully verified; regression test in packages/ledger fails on the old code | 2026-11-17 |
 | **Ledger as a shared package** (`shared-package`) | Resolved |  | packages/ledger holds the domain-free core; Pantheon kinds under pantheon/src/ledger, OPHANIM kinds under ophanim/ledger; dependency runs OPHANIM -> Pantheon -> packages/ledger, enforced by layering.test | 2026-11-17 |
+| **Status-ledger operator key custody** (`signer`) | Resolved |  | Owner-machine verification accepted the 79-entry authority transfer under the original genesis, with the original 76-entry prefix byte-identical. Both preserved f53a2b3 and current e26b84f readers fully verify it; successor public keys, private-key pairs, possession proofs and owner-only persistent storage match. This successor-signed acknowledgment completes status-ledger custody only. Run ledgers, seat keys, controller isolation and independent recovery backup are unchanged. | 2026-11-16 |
 | **Status board from a ledger** (`status-board`) | Resolved |  | status entries with the standing rule enforced on append; docs/STATUS.md generated from status/ledger | 2026-11-17 |
 | **SY4 lockfile integrity, SY5 append cost and lock, WF3 sandbox python path, WF4 machine paths** (`supply-portability`) | Resolved |  | lockfile has integrity for every registry package (guarded in CI); appends stay constant-time with a verified cached head and a lock with backoff and stale-lock recovery; sandbox binds alternatives links (the long-standing env failure now passes); no /home/<user> paths, guarded | 2026-11-17 |
 | **Swarms on the board** (`swarms`) | Resolved |  | gated, recorded transitions; all five chairs measured | 2026-11-17 |
