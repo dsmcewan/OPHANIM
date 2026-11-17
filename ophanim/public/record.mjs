@@ -107,6 +107,35 @@ export function provenanceNotice(evidence = []) {
 }
 
 /**
+ * The evidence a status entry carries when it was recorded from a Pantheon board run's proposal
+ * (packages/ledger/status.mjs `apply`, docs/operating-workflow.md): the run ledger it cites, the review
+ * cycle and its outcome, the reviewers (vendor, model, lab: model seats, never GitHub identities), the
+ * commit and the tests. The run and cycle ledgers live on the machine that ran them, not in the
+ * repository; the status entry pins their anchors and heads, so a holder can check them.
+ */
+export function evidenceSection(ev) {
+  if (!ev) return [];
+  const short = h => (h ? `\`${h}\`` : 'none');
+  const rv = ev.review ?? null;
+  return [
+    '## Evidence',
+    '',
+    'Recorded on the latest status entry, from a Pantheon board run\'s proposal (`docs/operating-workflow.md`).',
+    '',
+    `- **Run ledger:** anchor ${short(ev.run.ledger_anchor)}, head ${short(ev.run.ledger_head)}; run.json digest ${short(ev.run.run_json_digest)}; shipped: ${ev.run.shipped ? 'yes' : 'no'}; gate verdict entry ${short(ev.run.gate_entry)}`,
+    `- **Review cycle:** ${rv ? `${short(rv.cycle)} on the ledger anchored at ${short(rv.cycle_ledger_anchor)}; close entry ${short(rv.close_entry)}; outcome **${rv.outcome ?? 'open'}**` : 'none cited'}`,
+    ...(rv ? ['', '| Reviewer seat (vendor) | Requested model | Served model | Lab |', '|---|---|---|---|',
+      ...rv.reviewers.map(r => `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`), ''] : []),
+    `- **Commit:** ${ev.commit ? `\`${ev.commit}\`` : 'none'}`,
+    `- **Tests:** ${ev.tests ? `\`${cell(ev.tests.cmd)}\` exited ${ev.tests.exit}` : 'none recorded'}`,
+    ...(ev.ticket ? [`- **Ticket:** \`${ev.ticket.path}\` (\`${ev.ticket.digest}\`), slice: ${cell(ev.ticket.slice)}`] : []),
+    ...(ev.accept_unverified_reason ? [`- **Accepted although the review closed unverified:** ${cell(ev.accept_unverified_reason)}`] : []),
+    `- **Proposal:** \`${ev.proposal}\`; cited ledgers at apply: ${ev.checked === 'structural' ? 're-checked structurally (anchor, signatures, cited entries)' : 'not available on the applying machine'}`,
+    '',
+  ];
+}
+
+/**
  * The issue body for one item. `link(id)` renders a reference to another item (an issue number once the
  * publisher knows it). `dependents` are the items that depend on this one.
  */
@@ -140,15 +169,19 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
     `- **Depends on:** ${deps.length ? deps.map(link).join(', ') : 'none'}`,
     `- **Depended on by:** ${dependents.length ? dependents.map(link).join(', ') : 'none'}`,
     '',
+    ...evidenceSection(item.evidence),
     '## Status history',
     '',
     '| # | Date (checked) | State | Waits on | Basis | Ledger entry |',
     '|---|---|---|---|---|---|',
-    ...item.history.map((h, i) => `| ${i + 1} | ${h.checked} | ${h.state} | ${cell(h.waiting_on ?? (h.depends_on?.length && h.state === 'On Hold' ? `depends on ${h.depends_on.join(', ')}` : ''))} | ${cell(h.basis)} | \`${h.entry}\` (seq ${h.seq}) |`),
+    ...item.history.map((h, i) => `| ${i + 1} | ${h.checked} | ${h.state} | ${cell(h.waiting_on ?? (h.depends_on?.length && h.state === 'On Hold' ? `depends on ${h.depends_on.join(', ')}` : ''))} | ${cell(h.basis)}${h.evidence ? ' (with evidence)' : ''} | \`${h.entry}\` (seq ${h.seq}) |`),
     '',
     provenanceNotice([
       `For this item: its status entries are signed by the status ledger's operator key (${signers.map(s => `\`${s}\``).join(', ')}). ` +
-      'The status ledger records no model seat, review or served model for it, so **no independence is claimed here**.',
+      (item.evidence?.review?.close_entry
+        ? `Its latest status cites a review cycle that closed ${item.evidence.review.outcome} with reviews on distinct labs (${item.evidence.review.reviewers.map(r => r.lab).join(', ')}), none of them the lab that implemented the change; ` +
+          'that independence rests on the cited cycle ledger, which re-derives the cold-review rule, and carries the limits in docs/public-record.md. The reviewers are model seats, not people.'
+        : 'The status ledger records no model seat, review or served model for it, so **no independence is claimed here**.'),
       ...(owner && owner.role !== 'decision-authority' ? ['', `The owner role \`${owner.role}\` is a chair (a model seat), not a person; it is a label, never an assignee.`] : []),
     ]),
     '',

@@ -30,6 +30,14 @@ node packages/ledger/status.mjs verify
 node ophanim/public/github.mjs verify-item <item> <entry>
 ```
 
+When the item's latest status was recorded from a Pantheon board run's proposal (`docs/operating-workflow.md`)
+it carries an `evidence` object, and the body gains an **Evidence** section before the history: the run
+ledger's anchor and head, the run.json digest, the gate verdict entry, the review cycle with its close and
+outcome, a table of the reviewers (vendor, requested model, served model, lab), the commit, the tests and
+the ticket, and whether the cited ledgers were re-checked when it was applied. Only then does the
+provenance notice claim independence, from the cited cycle's distinct labs; the reviewers are still model
+seats, shown as text and never as GitHub identities. History rows recorded with evidence are marked so.
+
 Resolved items are closed as completed; every other item is open. The body is deterministic in the ledger
 (it carries no generation time and no ledger head), so an unchanged item is never rewritten.
 
