@@ -13,6 +13,7 @@ import {systemKinds} from '../ledger/system.mjs';
 import {deriveCycle, closeClaim, CYCLE, CLOSE} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {CHAIR_OF_MODE} from '../../pantheon/src/board/contributions.mjs';
+import {dispositionsOf, evidenceBasis} from '../../pantheon/src/ledger/practice-kinds.mjs';
 import {provenanceNotice} from './record.mjs';
 
 const fail = why => { throw Object.assign(new Error(why), {code: 'PUBLIC_RECORD_REFUSED'}); };
@@ -76,6 +77,14 @@ export function cycleRecord(view, cycle) {
     ...f.payload, resolution: state.resolutions.get(f.hash) ?? null,
   }));
   const close = state.close ? {entry: state.close, ...view.payload(state.close)} : null;
+  // The cycle's practice dispositions (CYCLE_CONTRACT steps 3 and 7), in chain order. `admitted`: the close
+  // lists it. `synthetic`: its comparison evidence is synthetic only (practice-kinds.mjs evidenceBasis).
+  const listed = new Set(close?.practice ?? []);
+  const practice = dispositionsOf(view, cycle).map(h => {
+    const p = view.payload(h), basis = evidenceBasis(view, p.evidence);
+    return {entry: h, stage: p.stage, outcome: p.outcome, question: p.question, measured: p.measured, provisional: p.provisional,
+      evidence_basis: basis, synthetic: basis === 'synthetic', policy: p.policy, candidate: p.candidate?.id ?? null, admitted: listed.has(h)};
+  });
   const pending = close ? null : closeClaim(state);
   const labs = reviews.map(r => r.lab);
   const independence = {
@@ -87,7 +96,7 @@ export function cycleRecord(view, cycle) {
     served_differs: reviews.filter(r => r.served_model !== null && r.served_model !== r.requested_model),
     reviews_expected: c.reviewers,
   };
-  return {hash: cycle, seq: e.seq, cycle: c, authors, reviews, findings, close, pending, independence};
+  return {hash: cycle, seq: e.seq, cycle: c, authors, reviews, findings, close, pending, independence, practice};
 }
 
 const LIMITS = [
@@ -126,6 +135,28 @@ function independenceLines(rec) {
   out.push(`- **Cold-review check:** passed for every recorded review (the ledger verified in full, and a review whose lab, seat or response is in the lineage of what it reviews does not re-derive).`);
   out.push(`- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} reviews${i.served_differs.length ? `; served differs from requested for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}.`);
   return out;
+}
+
+const BASIS = {
+  synthetic: '**synthetic** (mechanics only, not a measurement)',
+  live: 'live comparison',
+  none: 'none cited',
+};
+/** The cycle's practice dispositions: outcome, measured or provisional, what its comparison evidence is, admitted. */
+function practiceLines(rec) {
+  if (!rec.practice.length) {
+    return [rec.cycle.contract ? 'No practice disposition is recorded for this cycle yet; it cannot close without one.'
+      : 'This cycle opened under the old contract, which records no practice disposition.'];
+  }
+  const pol = rec.cycle.policy;
+  return [
+    ...(pol ? [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, ''] : []),
+    '| Stage | Outcome | Basis | Comparison evidence | Question | Admitted | Entry |',
+    '|---|---|---|---|---|---|---|',
+    ...rec.practice.map(d => `| ${d.stage} | \`${d.outcome}\`${d.candidate ? ` (candidate \`${cell(d.candidate)}\`)` : ''} | ${d.measured ? 'measured' : 'provisional'} | ${BASIS[d.evidence_basis]} | ${cell(d.question)} | ${d.admitted ? 'listed by the close' : rec.close ? 'not listed' : 'cycle open'} | \`${d.entry}\` |`),
+    '',
+    'A synthetic comparison verifies the comparison mechanics on fake providers; it measures no provider cost or quality, and the ledger refuses a promote resting on it alone. Provisional is unmeasured judgment.',
+  ];
 }
 
 function conclusion(rec) {
@@ -173,6 +204,10 @@ export function prProvenance(view, cycle, {anchor, ledgerLabel = 'review-cycle l
       '|---|---|---|---|---|---|',
       ...rec.findings.map(f => `| ${f.severity} | ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\`` : '—'} | ${cell(f.claim)} | ${reproText(f)} | ${resolutionText(f)} | \`${f.entry}\` |`),
     ] : ['No findings were reported.']),
+    '',
+    '### Practice dispositions',
+    '',
+    ...practiceLines(rec),
     '',
     '### Outcome',
     '',
@@ -228,6 +263,10 @@ export function cycleReport(view, cycle, {anchor, slug} = {}) {
     conclusion(rec),
     '',
     ...independenceLines(rec),
+    '',
+    '## Practice dispositions',
+    '',
+    ...practiceLines(rec),
     '',
     provenanceNotice(),
     '',

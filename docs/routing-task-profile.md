@@ -127,3 +127,46 @@ Until all three are done, `argo` stays the default, and any `fit` run is labelle
 Not done in this change:
 
 - The printed seating report for a `fit` run shows the legacy table.
+
+## Running the comparison
+
+`pantheon/bin/pantheon-compare.mjs` runs step 1 of the adoption path. Code: `pantheon/src/practice/compare.mjs`. The metric definitions are in `pantheon/src/practice/metrics.mjs` and are shared with any continuous evaluation over real runs.
+
+Each ticket runs through `runOpenItem` under `argo` and then under `fit`, with the same declared bounds: `--max-provider-calls` per run (required) and `--revisions`. Every run is reported, including failed and inconclusive ones. Each run reports:
+
+- whether it was accepted: shipped through every ship gate, `REVIEW` included
+- whether it passed first time, and how many revisions acceptance took
+- review rejections
+- provider calls by outcome
+- tokens, which are null unless every attempt reported usage
+- USD, which is null unless every attempt states a cost
+- elapsed time
+- escalations by action
+- fallbacks and retries
+- coordination overhead
+- the operating point of each turn: model, effort, and class under `fit`
+
+Rates are stratified by stakes and carry Wilson 95% intervals. A stratum with fewer than 20 runs per arm (`MIN_N_PER_STRATUM`) is marked `insufficient`. Review verdicts, including the approvals of an optional cycle review (`--turn`), count as agreement, not correctness. The record draws no conclusion: `interpretation.verdict` is null.
+
+The command writes the record to `--out`. It also prints the citation a practice disposition carries, `{kind: digest, schema: pantheon.compare/v1, sha, synthetic}`. A record is `synthetic: true` unless the providers are live. The ledger refuses a `promote` whose comparison evidence is synthetic only, so a synthetic record can support `propose_measurement` and nothing more.
+
+**Synthetic, in this checkout.** This needs no keys and makes no network calls. The fakes are the test fixtures. Write `clients.fixture.mjs` as `import { scriptedClients } from "<abs path>/pantheon/tests/fixtures/dispatch.mjs"; export default scriptedClients();`. A reviewer turn module is like the one in `pantheon/tests/practice-compare.test.mjs`. Run with the fixture environment of `withDispatch`: `PANTHEON_AGY_CLI` points at a fake, and no Google key is set. The CLI test does exactly this:
+
+```sh
+cd pantheon && node --test tests/practice-compare.test.mjs
+# or, with your own fake modules and tickets/<item>.json in REPO:
+node pantheon/bin/pantheon-compare.mjs --repo REPO --item easy-ticket --item hard-ticket \
+  --clients clients.fixture.mjs --turn turn.fixture.mjs --max-provider-calls 20 --revisions 2 \
+  --question "synthetic: fit against argo" --out comparison.json
+```
+
+**Live, on the owner's machine.** The owner runs this with real keys. Nobody has run it from this checkout. It uses the provider keys Pantheon already reads: `OPENAI_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, and an agy login. `--live` is never the default. At most it spends 2 × tickets × `--max-provider-calls` dispatcher calls, plus 3 cycle-review calls per shipped run:
+
+```sh
+node pantheon/bin/pantheon-compare.mjs --live --item <item-a> --item <item-b> \
+  --max-provider-calls 12 --revisions 3 \
+  --question "Does fit change accepted results, provider usage or elapsed time against argo on <scope>?" \
+  --out outputs/compare/fit-vs-argo-$(date +%Y%m%d).json
+```
+
+The live record comes out `synthetic: false`, and it is scoped to the tickets and bounds it names. Its USD stays null until a versioned price source is attached. With fewer than 20 runs per arm per stakes stratum, every rate is `insufficient`. Steps 2 and 3 of the adoption path still apply: an independent review, then a recorded disposition.
