@@ -17,8 +17,8 @@
 import {digest} from '../board.mjs';
 import {rankChairQuestions} from './investigation/chairs.mjs';
 
-export const PRACTICE_OUTCOME_OF = Object.freeze({proposed: 'propose_measurement', insufficient_evidence: 'insufficient_evidence',
-  blocked: 'insufficient_evidence', no_change: 'retain'});
+export const PRACTICE_OUTCOME_OF = Object.freeze({proposed: 'propose_measurement',
+  insufficient_evidence: 'insufficient_evidence', blocked: 'insufficient_evidence', no_change: 'retain'});
 const LEDGER_ENTRY = /^sha256:[0-9a-f]{64}$/;
 
 /**
@@ -27,20 +27,27 @@ const LEDGER_ENTRY = /^sha256:[0-9a-f]{64}$/;
  * projection, when there is one. Returns {outcome, question, measured, provisional, evidence, provenance,
  * investigation: {outcome, reason, selected}}; pass all but `investigation` to recordDisposition.
  */
-export function practiceAssessment(projection, {economics = null, history = [], contribution = null, role = 'lead@orch'} = {}) {
-  if (contribution !== null && !LEDGER_ENTRY.test(contribution)) throw Error('Practice assessment: a contribution is a ledger entry hash');
+export function practiceAssessment(projection,
+  {economics = null, history = [], contribution = null, role = 'lead@orch'} = {}) {
+  if (contribution !== null && !LEDGER_ENTRY.test(contribution))
+    throw Error('Practice assessment: a contribution is a ledger entry hash');
   const {decision} = rankChairQuestions(projection, {economics, history});
   const outcome = PRACTICE_OUTCOME_OF[decision.outcome];
   if (!outcome) throw Error(`Practice assessment: unknown investigation outcome ${decision.outcome}`);
+  // The question of the selected (or else the top-ranked) candidate; with none, a question that says
+  // why there is none.
   const top = decision.selected ?? decision.candidates[0] ?? null;
   const question = top?.question
-    ?? (decision.outcome === 'blocked' ? `Can the chair record be trusted? ranking stopped: ${decision.reason}` : 'Which chair practice question does this board\'s evidence raise? none was found');
+    ?? (decision.outcome === 'blocked'
+      ? `Can the chair record be trusted? ranking stopped: ${decision.reason}`
+      : 'Which chair practice question does this board\'s evidence raise? none was found');
   return {
     outcome, question, measured: false, provisional: true,
     evidence: [{kind: 'digest', schema: decision.schema, sha: digest(decision)},
       {kind: 'digest', schema: projection.schema, sha: projection.projectionSha},
       ...(contribution ? [{kind: 'ledger', hash: contribution}] : [])],
-    provenance: {by: {role}, method: `chair investigation ranking (ophanim/efficiency/investigation/chairs.mjs): ${decision.outcome}, ${decision.reason}`},
+    provenance: {by: {role},
+      method: `chair investigation ranking (ophanim/efficiency/investigation/chairs.mjs): ${decision.outcome}, ${decision.reason}`},
     investigation: {outcome: decision.outcome, reason: decision.reason, selected: decision.selected?.id ?? null},
   };
 }
