@@ -14,7 +14,7 @@
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V3, independenceRefusal} from './cycle-kinds.mjs';
-import {modelIdentity, contributorKeys, reviewerRefusal, IDENTITY_RULES_DIGEST} from '../review/identity.mjs';
+import {resolveModel, contributorKeys, reviewerRefusal, currentPolicy} from '../review/identity.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
 
@@ -52,15 +52,20 @@ export function reviewSeats({n = 3, avoidLabs = [], seating = SEATING, facts = u
  *   contributions  rows {vendor, model, served_model?, lab} (review/scope.mjs), or
  *   excluded       {models: [identity ids], labs: [labs], contributing_labs: [labs]} (a cycle's own record)
  */
-export function reviewSeatsByModel({n = 3, contributions = [], excluded = null, seating = SEATING, facts = undefined} = {}) {
-  const keys = excluded ?? contributorKeys(contributions);
+export function reviewSeatsByModel({n = 3, contributions = [], excluded = null, seating = SEATING, facts = undefined, policy = currentPolicy()} = {}) {
+  const keys = excluded ?? contributorKeys(contributions, policy);
+  // A contributor that cannot be identified: no reviewer can be shown not to be it, so no panel qualifies.
+  if ((keys.unresolved ?? []).length) {
+    throw Object.assign(new Error(`reviewSeatsByModel: a contributor's identity is unresolved (${keys.unresolved.map(u => `${u.vendor}/${u.model}: ${u.why}`).join('; ')}); declare it in the identity rules`),
+      {code: 'NO_SEATS', eligible_labs: [], unresolved: keys.unresolved});
+  }
   const contributing = new Set(keys.contributing_labs ?? [...keys.labs, ...keys.models.map(m => m.split('/')[0])]);
   const byLab = new Map();
   for (const role of ['reviewer', ...Object.keys(seating).filter(r => r !== 'reviewer')]) {
     for (const c of candidatesFor(role, {seating, ...(facts ? {facts} : {})})) {
-      if (!c.model || reviewerRefusal({vendor: c.vendor, model: c.model}, keys)) continue;
-      const lab = labOf(c.vendor, c.model);
-      if (!byLab.has(lab)) byLab.set(lab, {vendor: c.vendor, model: c.model, lab, role, why: c.why, identity: modelIdentity(c.vendor, c.model).id});
+      if (!c.model || reviewerRefusal({vendor: c.vendor, model: c.model}, keys, policy)) continue;   // contributors and unresolved candidates
+      const who = resolveModel(c.vendor, c.model, policy), lab = who.lab;
+      if (!byLab.has(lab)) byLab.set(lab, {vendor: c.vendor, model: c.model, lab, role, why: c.why, identity: who.id});
     }
   }
   const order = [...[...byLab.keys()].filter(l => !contributing.has(l)), ...[...byLab.keys()].filter(l => contributing.has(l))];
@@ -136,7 +141,9 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   // Model-level independence is asked for explicitly (change.independence: 'model', with the contributions); it opens
   // the cycle under pantheon.cycle/v3. Without it the cycle opens as before, under the lab rule.
   const byModel = change?.independence === 'model';
-  const keys = byModel ? contributorKeys(change.contributions ?? []) : null;
+  const pinned = byModel ? currentPolicy() : null;
+  const keys = byModel ? contributorKeys(change.contributions ?? [], pinned) : null;
+  if (byModel && keys.unresolved.length) throw refuse('UNRESOLVED_CONTRIBUTOR', `reviewCycle: a contributor's identity is unresolved (${keys.unresolved.map(u => `${u.vendor}/${u.model}`).join(', ')}); no review can qualify`);
   if (byModel && required_reviewers === undefined) required_reviewers = Math.max(n, REQUIRED_REVIEW_LABS);
   if (typeof diff !== 'string' || diff === '') throw new Error('reviewCycle: the change carries its diff text');
   const last = ledger.lastCycle(scope);
@@ -147,7 +154,8 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   if (!base) throw new Error(`reviewCycle: no base given and no earlier cycle of "${scope}" on the ledger`);
   const limit = max_attempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(limit) || limit < 1) throw new Error('reviewCycle: max_attempts is a positive integer');
-  const chosen = (seats ?? (byModel ? reviewSeatsByModel({n, excluded: keys}) : reviewSeats({n, avoidLabs: author_labs}))).map(s => ({...s, lab: labOf(s.vendor, s.model)}));
+  const chosen = (seats ?? (byModel ? reviewSeatsByModel({n, excluded: keys, policy: pinned}) : reviewSeats({n, avoidLabs: author_labs})))
+    .map(s => ({...s, lab: byModel ? resolveModel(s.vendor, s.model, pinned)?.lab ?? null : labOf(s.vendor, s.model)}));
   const labs = chosen.map(s => s.lab);
   if (new Set(labs).size !== labs.length) throw Object.assign(new Error(`reviewCycle: reviewers share a lab (${labs.join(', ')})`), {code: 'SAME_LAB'});
   if (required_reviewers !== undefined && !(Number.isInteger(required_reviewers) && required_reviewers >= REQUIRED_REVIEW_LABS && chosen.length >= required_reviewers)) {
@@ -155,7 +163,7 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
       `and ${chosen.length} reviewer seat(s) were given; a caller cannot lower it`);
   }
   if (byModel) {
-    for (const s of chosen) { const why = reviewerRefusal(s, keys); if (why) throw Object.assign(new Error(`reviewCycle: ${why}`), {code: 'CONTRIBUTOR'}); }
+    for (const s of chosen) { const why = reviewerRefusal(s, keys, pinned); if (why) throw Object.assign(new Error(`reviewCycle: ${why}`), {code: 'CONTRIBUTOR'}); }
   } else {
     const authored = labs.find(l => author_labs.includes(l));
     if (authored) throw Object.assign(new Error(`reviewCycle: the ${authored} lab authored the change and may not review it`), {code: 'SAME_LAB'});
@@ -164,7 +172,8 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   const prompt = reviewPrompt({brief, base, head, files, diff});
   const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs: byModel ? keys.contributing_labs : author_labs, author_turns, opened_at,
     contract: byModel ? CYCLE_CONTRACT_V3 : contract, policy, practice_scope, ...(required_reviewers !== undefined ? {required_reviewers} : {}),
-    ...(byModel ? {author_models: keys.models, excluded_labs: keys.labs, identity_rules: IDENTITY_RULES_DIGEST} : {})});
+    ...(byModel ? {author_models: keys.models, excluded_labs: keys.labs, identity_policy: pinned,
+      contributors: (change.contributions ?? []).flatMap(c => [...new Set([c.model, c.served_model, c.requested_model].filter(Boolean))].map(model => ({vendor: c.vendor ?? null, model})))} : {})});
   const {reviews, failed} = await askSeats({ledger, cycle, seats: chosen, prompt, turn, author_turns, max_attempts: limit, resumed: false, at});
   return {cycle, scope, base, head, prompt_sha: promptSha(prompt), reviews, failed, complete: failed.length === 0, max_attempts: limit};
 }
@@ -252,7 +261,7 @@ async function resumeCycle({ledger, change, seats, turn, brief, max_attempts, at
       // default seating, as the original review used it, on labs that have not reviewed.
       let defaults = [];
       try {
-        defaults = c.contract === CYCLE_CONTRACT_V3 ? reviewSeatsByModel({n: c.reviewers, excluded: {models: c.author_models, labs: c.excluded_labs, contributing_labs: c.author_labs}})
+        defaults = c.contract === CYCLE_CONTRACT_V3 ? reviewSeatsByModel({n: c.reviewers, excluded: {models: c.author_models, labs: c.excluded_labs, contributing_labs: c.author_labs}, policy: c.identity_policy.rules})
           : reviewSeats({n: c.reviewers, avoidLabs: c.author_labs});
       } catch { defaults = []; }
       for (const s of defaults) if (!reviewed.has(s.lab) && !chosen.some(x => x.lab === s.lab)) chosen.push(s);

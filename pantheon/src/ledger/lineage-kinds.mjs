@@ -10,7 +10,7 @@
 //     (`seat:<seat_id>#<occupancy_gen>`), admitted to the ledger by an operator's authority entry. A
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
-import {reviewerRefusal, modelIdentity} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, resolveModel} from '../review/identity.mjs';
 import {labOf} from '../config/models.mjs';
 import {promptSha, replySha} from '../context/chain.mjs';
 import {generateSigner, AUTHORITY} from '../../../packages/ledger/chain.mjs';
@@ -56,7 +56,7 @@ function cycleReview(e, view, cycle, lab) {
   // v1 and v2: the reviewer's LAB did not author the change. v3 (pantheon.cycle/v3): the reviewer is not a contributing
   // MODEL, by identity, whatever the effort, alias, session or route (cycle-kinds.mjs, review/identity.mjs).
   if (c.contract === 'pantheon.cycle/v3') {
-    const refused = reviewerRefusal({vendor: p.seat?.vendor, model: p.model, served_model: p.served_model ?? null}, {models: c.author_models, labs: c.excluded_labs});
+    const refused = reviewerRefusal({vendor: p.seat?.vendor, model: p.model, served_model: p.served_model ?? null}, {models: c.author_models, labs: c.excluded_labs}, c.identity_policy.rules);
     if (refused) return refused;
   } else if (c.author_labs.includes(lab)) return `the ${lab} lab authored the change under review`;
   const t = typeof p.turn === 'string' ? view.entry(p.turn) : null;
@@ -72,7 +72,9 @@ function cycleReview(e, view, cycle, lab) {
     const x = view.entry(h);
     if (x.kind === 'review' && x.derived_from.includes(cycle)) {
       const q = view.payload(h);
-      if (labOf(q.seat.vendor, q.served_model ?? q.model) === lab) return `the ${lab} lab has already reviewed this cycle`;
+      const theirs = c.contract === 'pantheon.cycle/v3' ? reviewerIdentity({vendor: q.seat.vendor, model: q.model, served_model: q.served_model ?? null}, c.identity_policy.rules).lab
+        : labOf(q.seat.vendor, q.served_model ?? q.model);
+      if (theirs === lab) return `the ${lab} lab has already reviewed this cycle`;
     }
   }
   return null;
@@ -114,9 +116,13 @@ export function lineageKinds() {
         const cycles = e.derived_from.filter(h => view.entry(h)?.kind === 'cycle');
         if (!targets.length && !cycles.length) return 'a review cites the turns it reviews';
         if (cycles.length > 1) return 'a review cites at most one cycle';
-        const lab = labOf(p.seat.vendor, p.served_model ?? p.model);
         const mine = lineageKey(p.seat.vendor, p.response_id);
         const v3 = cycles.length === 1 && view.payload(cycles[0])?.contract === 'pantheon.cycle/v3';
+        // Under v3 every name is resolved by the cycle's RECORDED identity policy; an unresolved reviewer does not qualify.
+        const pinned = v3 ? view.payload(cycles[0]).identity_policy.rules : null;
+        const who = v3 ? reviewerIdentity({vendor: p.seat.vendor, model: p.model, served_model: p.served_model ?? null}, pinned) : null;
+        if (who?.why) return who.why;
+        const lab = v3 ? who.lab : labOf(p.seat.vendor, p.served_model ?? p.model);
         for (const {entry, payload: t} of lineageOf(view, e.derived_from)) {
           if (entry.author.key_id === e.author.key_id) return 'a seat may not review its own turn';
           // Cold review. Under v1 and v2 (and for any review outside a cycle) no reviewer's LAB is in the lineage of what
@@ -124,8 +130,10 @@ export function lineageKinds() {
           // (the requested and the served model of each lineage turn, against the reviewer's own two names).
           if (t.seat && t.reply_sha) {
             if (v3) {
-              const theirs = [t.requested_model, t.served_model].filter(Boolean).map(m => modelIdentity(t.seat.vendor, m)?.id);
-              const same = [p.model, p.served_model].filter(Boolean).map(m => modelIdentity(p.seat.vendor, m)?.id).find(i => theirs.includes(i));
+              const theirs = [t.requested_model, t.served_model].filter(Boolean).map(m => resolveModel(t.seat.vendor, m, pinned));
+              const lost = theirs.find(x => !x.known);
+              if (lost) return `a model in the lineage of what it reviews is unresolved (${lost.why})`;
+              const same = who.ids.find(i => theirs.some(x => x.id === i));
               if (same) return `${same} is in the lineage of what it reviews`;
             } else if (labOf(t.seat.vendor, t.served_model ?? t.requested_model) === lab) return `the ${lab} lab is in the lineage of what it reviews`;
           }

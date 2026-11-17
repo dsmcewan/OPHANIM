@@ -1,70 +1,153 @@
 // MODEL IDENTITY for review independence (owner direction 2026-11-17: exclude the actual models that contributed to
 // the reviewed work, not every model of their lab; keep three distinct labs on the panel).
 //
-// A contributor is a MODEL. It stays the same model whatever the effort level, the alias or lane name, the dated
-// snapshot id, the session, or the route (vendor) that reached it. `modelIdentity` reduces a (vendor, model) pair to
-// `<lab>/<base model>`:
-//   - a name declared in config/model-identity.json `same_model` is the model it maps to (effort and lane variants);
-//   - a trailing date snapshot (-YYYYMMDD) is dropped;
-//   - the lab comes from labOf, so the same model through another vendor's lane is the same identity.
-// `known` says whether the base model is one this configuration declares (models.json, lanes.json, or the identity
-// file). A contributor whose model is NOT known cannot be told apart from its siblings, so it excludes its whole
-// lab: the old rule, kept as the safe fallback. The same holds for a contribution that names no model.
+// THE POLICY. Everything that decides "which model is this, and which lab made it" is one value, an identity policy
+// (IDENTITY_POLICY_SCHEMA): the same-model map, the lab of every declared model, the lab of every direct vendor, the
+// vendors that are routes, and the snapshot rule. `currentPolicy()` builds it from the configuration files. A cycle
+// opened under pantheon.cycle/v3 RECORDS the whole policy with its digest (cycle-kinds.mjs), and every check of that
+// cycle uses the recorded policy, never the files: editing the configuration cannot change how a recorded ledger
+// verifies. A later correction is new evidence (`reassess`), recorded as such.
 //
-// Must never: treat two effort levels, aliases, sessions or routes of one model as two reviewers; or guess that an
-// unknown name is a different model.
+// RESOLUTION. `resolveModel(vendor, model, policy)` -> {id, lab, base, known, why}:
+//   - the name is reduced to its base model: `same_model` (effort, thinking, lane and alias names), then a trailing
+//     date snapshot (-YYYYMMDD) is dropped;
+//   - the LAB is the base model's own (`model_lab`), whatever vendor or route reached it. It is never inferred from
+//     the transport: a model the policy does not declare is UNRESOLVED (known: false, lab: null, id: null);
+//   - a direct vendor (not a route) can only serve its own lab's models; any other pairing is unresolved.
+// An unresolved name is never treated as a different model, and never as a model of the vendor's lab.
+//
+// Must never: treat two effort levels, aliases, snapshots, sessions or routes of one model as two reviewers; take a
+// model's lab from the route that served it; qualify a reviewer whose identity is unresolved; or let the current
+// configuration change the verdict on a recorded cycle.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { MODELS, LANES, labOf } from "../config/models.mjs";
+import { canonical } from "../../../packages/ledger/canonical.mjs";
+import { MODELS, LANES } from "../config/models.mjs";
 
+export const IDENTITY_POLICY_SCHEMA = "pantheon.identity-policy/v1";
 const FILE = join(dirname(fileURLToPath(import.meta.url)), "../config/model-identity.json");
-const RAW = readFileSync(FILE, "utf8");
-export const IDENTITY_RULES = JSON.parse(RAW);
-/** The digest of the identity rules a cycle was opened under (recorded on the cycle, for audit). */
-export const IDENTITY_RULES_DIGEST = "sha256:" + createHash("sha256").update(RAW).digest("hex");
+const str = v => typeof v === "string" && v.trim() !== "";
+const SNAPSHOT = /-\d{8}$/;
 
-const baseOf = model => {
+/** A base model name under `policy`: lower case, through `same_model`, without a date snapshot (applied to a fixpoint). */
+function baseOf(model, policy) {
   let m = String(model).trim().toLowerCase();
-  for (let i = 0; i < 4 && IDENTITY_RULES.same_model[m]; i++) m = IDENTITY_RULES.same_model[m].model;
-  return m.replace(/-\d{8}$/, "");
-};
-const DECLARED = new Set([...Object.values(MODELS).flatMap(names => Object.values(names)), ...Object.values(LANES).flatMap(lane => Object.keys(lane)),
-  ...Object.values(IDENTITY_RULES.same_model).map(x => x.model), ...(IDENTITY_RULES.declared_elsewhere ?? [])].map(baseOf));
+  for (let i = 0; i < 8; i++) {
+    const next = (policy.same_model[m] ?? m).replace(SNAPSHOT, "");
+    if (next === m) break;
+    m = next;
+  }
+  return m;
+}
 
-/** {id, lab, base, known} for a model reached through `vendor`. */
-export function modelIdentity(vendor, model) {
-  if (typeof model !== "string" || !model.trim()) return null;
-  const lab = labOf(vendor, model), base = baseOf(model);
-  return { id: `${lab}/${base}`, lab, base, known: DECLARED.has(base) };
+/** The policy the configuration files describe now. Built once per process. */
+function build() {
+  const rules = JSON.parse(readFileSync(FILE, "utf8"));
+  const same_model = Object.fromEntries(Object.entries(rules.same_model ?? {}).map(([k, v]) => [k.toLowerCase(), String(v.model).toLowerCase()]));
+  const routes = [...(rules.routes ?? [])].sort();
+  const bare = { same_model };
+  const model_lab = {};
+  const declare = (model, lab, from) => {
+    const b = baseOf(model, bare);
+    if (model_lab[b] && model_lab[b] !== lab) throw new Error(`identity policy: ${b} is declared for ${model_lab[b]} and for ${lab} (${from})`);
+    model_lab[b] = lab;
+  };
+  for (const [m, lab] of Object.entries(rules.model_lab ?? {})) declare(m, lab, "model-identity.json");
+  // models.json: a vendor's own registry. A route has no registry of its own models here.
+  for (const [vendor, names] of Object.entries(MODELS)) for (const id of Object.values(names)) declare(id, vendor, "models.json");
+  // lanes.json: each lane model names its lab.
+  for (const lane of Object.values(LANES)) for (const [m, spec] of Object.entries(lane)) declare(m, spec.lab, "lanes.json");
+  const vendor_lab = Object.fromEntries(Object.keys(MODELS).filter(v => !routes.includes(v)).sort().map(v => [v, v]));
+  const policy = { schema: IDENTITY_POLICY_SCHEMA, resolver: 1, snapshot: "-YYYYMMDD", same_model, model_lab: Object.fromEntries(Object.entries(model_lab).sort()), vendor_lab, routes };
+  return Object.freeze(policy);
+}
+let CURRENT = null;
+export const currentPolicy = () => (CURRENT ??= build());
+export const policyDigest = policy => "sha256:" + createHash("sha256").update(canonical(policy)).digest("hex");
+/** Why `policy` is not a usable identity policy, or null. */
+export function policyRefusal(policy) {
+  const map = (o, ok) => o && typeof o === "object" && !Array.isArray(o) && Object.entries(o).every(([k, v]) => str(k) && ok(v));
+  return policy?.schema === IDENTITY_POLICY_SCHEMA && policy.resolver === 1 && map(policy.same_model, str) && map(policy.model_lab, str)
+    && map(policy.vendor_lab, str) && Array.isArray(policy.routes) && policy.routes.every(str) ? null
+    : `an identity policy is a ${IDENTITY_POLICY_SCHEMA} object {resolver, same_model, model_lab, vendor_lab, routes}`;
+}
+
+/** Resolve a model reached through `vendor`. Unresolved: {known: false, id: null, lab: null, why}. */
+export function resolveModel(vendor, model, policy = currentPolicy()) {
+  if (!str(model)) return null;
+  const base = baseOf(model, policy), lab = policy.model_lab[base] ?? null;
+  const no = why => ({ id: null, lab: null, base, known: false, why });
+  if (!lab) return no(`"${model}" is not a model this identity policy declares: its lab is not inferred from the ${vendor ?? "unknown"} route`);
+  if (str(vendor) && !policy.routes.includes(vendor)) {
+    const own = policy.vendor_lab[vendor] ?? null;
+    if (!own) return no(`"${vendor}" is not a vendor this identity policy declares`);
+    if (own !== lab) return no(`${base} is a ${lab} model and cannot have been served by the ${vendor} vendor directly`);
+  }
+  return { id: `${lab}/${base}`, lab, base, known: true, why: null };
+}
+/** Kept name: the identity of a model (see resolveModel). */
+export const modelIdentity = resolveModel;
+
+/**
+ * What a set of contributions excludes from reviewing:
+ *   models      the contributing models, by identity (the requested and the served model of a turn both count);
+ *   labs        the labs of contributions that name a lab and no model (an explicit lab, not an inference);
+ *   unresolved  contributions whose model name the policy cannot resolve. Nothing can be said about who may review
+ *               such work, so no panel qualifies until the name is declared.
+ * Returns {models, labs, unresolved, contributing_labs}, sorted.
+ */
+export function contributorKeys(contributions = [], policy = currentPolicy()) {
+  const models = new Set(), labs = new Set(), all = new Set(), unresolved = new Map();
+  for (const c of contributions) {
+    const names = [...new Set([c.model, c.served_model, c.requested_model].filter(str))];
+    if (!names.length) { if (str(c.lab)) { labs.add(c.lab); all.add(c.lab); } else unresolved.set(`${c.vendor ?? "?"}/-`, { vendor: c.vendor ?? null, model: null, why: "a contribution that names neither a model nor a lab" }); continue; }
+    for (const m of names) {
+      const r = resolveModel(c.vendor, m, policy);
+      if (r.known) { models.add(r.id); all.add(r.lab); } else unresolved.set(`${c.vendor ?? "?"}/${m}`, { vendor: c.vendor ?? null, model: m, why: r.why });
+    }
+  }
+  return { models: [...models].sort(), labs: [...labs].sort(), unresolved: [...unresolved.values()], contributing_labs: [...all].sort() };
 }
 
 /**
- * What a set of contributions excludes from reviewing: the contributing MODELS (by identity; the requested and the
- * served model of a turn both count), and the LABS of contributions whose model is unknown or unnamed.
- * Returns {models: [ids], labs: [labs], contributing_labs: [labs]}, each sorted.
+ * The identity a reviewer seat qualifies under, or why it does not. `seat` is {vendor, model, served_model?}: the
+ * model asked for and the model that answered. Both must resolve, to the SAME lab; the lab a review counts for is
+ * that lab. Returns {lab, ids} or {why, code}.
  */
-export function contributorKeys(contributions = []) {
-  const models = new Set(), labs = new Set(), all = new Set();
-  for (const c of contributions) {
-    const names = [...new Set([c.model, c.served_model, c.requested_model].filter(x => typeof x === "string" && x.trim()))];
-    const ids = names.map(m => modelIdentity(c.vendor, m));
-    const lab = c.lab ?? ids[0]?.lab ?? (c.vendor ? labOf(c.vendor) : null);
-    if (lab) all.add(lab);
-    if (!ids.length || ids.some(i => !i.known)) { if (lab) labs.add(lab); }
-    for (const i of ids) { models.add(i.id); all.add(i.lab); }
-  }
-  return { models: [...models].sort(), labs: [...labs].sort(), contributing_labs: [...all].sort() };
+export function reviewerIdentity(seat, policy = currentPolicy()) {
+  const asked = resolveModel(seat.vendor, seat.model, policy);
+  if (!asked?.known) return { code: "UNRESOLVED", why: `the reviewer's identity is unresolved: ${asked?.why ?? "no model is named"}` };
+  const served = str(seat.served_model) ? resolveModel(seat.vendor, seat.served_model, policy) : asked;
+  if (!served.known) return { code: "UNRESOLVED", why: `the model that answered is unresolved: ${served.why}` };
+  if (served.lab !== asked.lab) return { code: "LAB_MISMATCH", why: `${asked.id} was asked and ${served.id} answered: a review counts for one lab` };
+  return { lab: served.lab, ids: [...new Set([asked.id, served.id])] };
 }
 
-/** Why `seat` ({vendor, model, served_model?}) may not review under `keys` ({models, labs}), or null. */
-export function reviewerRefusal(seat, keys) {
-  const lab = labOf(seat.vendor, seat.served_model ?? seat.model);
-  if ((keys.labs ?? []).includes(lab)) return `the ${lab} lab is excluded: a contribution from it names no model this configuration can identify`;
-  for (const m of [...new Set([seat.model, seat.served_model].filter(Boolean))]) {
-    const i = modelIdentity(seat.vendor, m);
-    if (i && (keys.models ?? []).includes(i.id)) return `${i.id} contributed to the change under review and may not review it (${m} is that model)`;
+/** Why `seat` may not review work with contributor `keys` ({models, labs, unresolved?}), or null. */
+export function reviewerRefusal(seat, keys, policy = currentPolicy()) {
+  if ((keys.unresolved ?? []).length) return `a contributor's identity is unresolved (${keys.unresolved.map(u => u.model ?? u.vendor).join(", ")}): no reviewer can be shown not to be it`;
+  const who = reviewerIdentity(seat, policy);
+  if (who.why) return who.why;
+  if ((keys.labs ?? []).includes(who.lab)) return `the ${who.lab} lab is excluded: a contribution from it names no model`;
+  const hit = who.ids.find(i => (keys.models ?? []).includes(i));
+  return hit ? `${hit} contributed to the change under review and may not review it` : null;
+}
+
+/**
+ * NEW EVIDENCE, never a change of history: which recorded reviews of a v3 cycle would not qualify under another
+ * policy (by default the current one). `reviews` are {seat: {vendor}, model, served_model, hash}; `cycle` the cycle
+ * payload. Returns {policy: digest, recorded: digest, changed, findings: [{review, why}]}.
+ */
+export function reassess({ cycle, reviews, policy = currentPolicy() }) {
+  const keys = contributorKeys(cycle.contributors ?? [], policy);
+  const findings = [];
+  for (const r of reviews) {
+    const why = reviewerRefusal({ vendor: r.seat.vendor, model: r.model, served_model: r.served_model ?? null }, keys, policy);
+    if (why) findings.push({ review: r.hash, why });
   }
-  return null;
+  const labsNow = reviews.map(r => reviewerIdentity({ vendor: r.seat.vendor, model: r.model, served_model: r.served_model ?? null }, policy).lab ?? null);
+  if (new Set(labsNow.filter(Boolean)).size < labsNow.length && !findings.length) findings.push({ review: null, why: "under this policy two of the reviews count for one lab" });
+  return { policy: policyDigest(policy), recorded: cycle.identity_policy?.digest ?? null, changed: policyDigest(policy) !== (cycle.identity_policy?.digest ?? null), findings };
 }

@@ -199,6 +199,8 @@ export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n =
       return { ...by, seats, shared_labs: seats.filter(s => s.shared_lab).map(s => s.lab) };
     } catch (e) {
       if (e.code !== "NO_SEATS") throw e;
+      if (e.unresolved) return { ...by, seats: null, pending: { code: "REVIEW_CAPACITY_PENDING", need: n, eligible_labs: [], unresolved: e.unresolved,
+        why: `a contributor's identity is unresolved (${e.unresolved.map(u => `${u.vendor}/${u.model}`).join(", ")}): no reviewer can be shown not to be it; produced work and evidence are kept and the review is pending until the name is declared` } };
       return { ...by, seats: null, pending: { code: "REVIEW_CAPACITY_PENDING", need: n, eligible_labs: e.eligible_labs,
         why: `fewer than ${n} labs have a model that did not contribute to the change (eligible: ${e.eligible_labs.join(", ") || "none"}; contributing models: ` +
           `${keys.models.join(", ") || "none"}${keys.labs.length ? `; labs excluded outright: ${keys.labs.join(", ")}` : ""}); produced work and evidence are kept and the review is pending` } };

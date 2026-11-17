@@ -36,6 +36,7 @@ import {cidOf} from '../../pantheon/src/board/canon.mjs';
 import {openBoard} from '../../pantheon/src/board/index.mjs';
 import {ticketRuntimeRefusal, ticketContainmentRefusal, normalizeSlots} from '../../pantheon/src/board/ticket-safety.mjs';
 import {reviewCycle, reviewSeats, reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
+import {resolveModel, reviewerRefusal, contributorKeys} from '../../pantheon/src/review/identity.mjs';
 import {CYCLE_CONTRACT_V3} from '../../pantheon/src/ledger/practice-kinds.mjs';
 import {REVIEW_BRIEF} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
@@ -408,7 +409,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       resume = {doc: JSON.parse(G(['show', `${st.cycle.head}:${file}`])), base: st.cycle.base, head: st.cycle.head, author_turns: st.author_turns, author_labs: st.cycle.author_labs};
       // The open cycle's own contract says who may finish it.
       planSeats = st.cycle.contract === CYCLE_CONTRACT_V3
-        ? reviewSeatsByModel({n, excluded: {models: st.cycle.author_models, labs: st.cycle.excluded_labs, contributing_labs: st.cycle.author_labs}, ...pool})
+        ? reviewSeatsByModel({n, excluded: {models: st.cycle.author_models, labs: st.cycle.excluded_labs, contributing_labs: st.cycle.author_labs}, policy: st.cycle.identity_policy.rules, ...pool})
         : reviewSeats({n, avoidLabs: st.cycle.author_labs, ...pool});
     }
     for (let v = 1; v <= PLAN_VERSIONS; v++) {
@@ -578,23 +579,33 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const carried = [...(planRec.outputs.carry ?? []), ...critiques.map(f => `Fix ${String(f.id).slice(0, 19)} [${f.severity}${f.cause ? `, ${f.cause}` : ''}]: ${f.text}`)];
     const spec = {...t.spec, constraints: [...(t.spec.constraints ?? []), ...carried],
       ...(carried.length ? {goal: `${t.spec.goal}\n\nCarried from planning and review (keep to these):\n${carried.map(c => `- ${c}`).join('\n')}`} : {})};
-    const boardDir = dirOf(ctx, `implement-${ctx.attempt}-${Date.now()}`);
+    // A REVISION, not a restart. When the previous attempt on this same plan stopped because the in-run review
+    // requested changes of passing work, its board holds that finding as a pending revision. That run is RESUMED: the
+    // worker revises with the finding in its prompt (so the reviewer becomes a contributor), and the revised bytes are
+    // reviewed in-run again. Starting a fresh run would repeat the work and drop the finding.
+    const prior = [...ctx.work.stages(item)].reverse().find(x => x.stage === 'implement' && x.handoff?.from === planRec.hash && x.status === 'failed' && x.outputs?.board);
+    const priorRun = prior && fs.existsSync(path.join(prior.outputs.board, 'run.json')) ? JSON.parse(fs.readFileSync(path.join(prior.outputs.board, 'run.json'), 'utf8')) : null;
+    const resumable = priorRun && (priorRun.files ?? []).some(x => x.escalation?.pending?.reason === 'review') ? prior.outputs.board : null;
+    const callsBefore = resumable ? providerCallsOf(priorRun.attempts ?? []) : 0;
+    const boardDir = resumable ?? dirOf(ctx, `implement-${ctx.attempt}-${Date.now()}`);
     let res;
     try {
-      res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: ctx.budget.provider_calls, scouts, profile,
-        ...(revisions ? {revisions} : {}), progress: ev => progress({...ev, from: 'pipeline'})});
+      res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: callsBefore + ctx.budget.provider_calls, scouts, profile,
+        ...(resumable ? {resume: resumable} : {}), ...(revisions ? {revisions} : {}), progress: ev => progress({...ev, from: 'pipeline'})});
     } catch (e) {
       const runFile = path.join(boardDir, 'run.json');
-      const made = fs.existsSync(runFile) ? providerCallsOf(JSON.parse(fs.readFileSync(runFile, 'utf8')).attempts ?? []) : 0;
+      const made = Math.max(0, (fs.existsSync(runFile) ? providerCallsOf(JSON.parse(fs.readFileSync(runFile, 'utf8')).attempts ?? []) : 0) - callsBefore);
       // The ticket the plan wrote cannot be run as written: a plan defect.
       return result('returned', {outputs: {error: String(e.message).slice(0, 300)}, usage: usage(made), next: {stage: 'plan', why: `the planned ticket cannot be run: ${String(e.message).slice(0, 200)}`}});
     }
     const runFile = path.join(boardDir, 'run.json');
     const run = fs.existsSync(runFile) ? JSON.parse(fs.readFileSync(runFile, 'utf8')) : null;
-    const calls = providerCallsOf(run?.attempts ?? []);
+    // This attempt's own calls: a resumed run's record also holds the calls of the attempt it resumes.
+    const calls = Math.max(0, providerCallsOf(run?.attempts ?? []) - callsBefore);
     const team = [...new Map((run?.turns ?? []).map(x => [`${x.purpose}|${x.vendor}|${x.model}`, {role: x.purpose, vendor: x.vendor, model: x.served_model ?? x.model, lab: labOf(x.vendor, x.served_model ?? x.model)}])).values()];
     if (!res.shipped) {
-      return result('failed', {outputs: {board: boardDir, shipped: false, error: res.error ?? null, tests: run?.acceptance ? {cmd: run.acceptance.cmd, exit: run.acceptance.exit} : null},
+      return result('failed', {outputs: {board: boardDir, shipped: false, ...(resumable ? {resumed: true} : {}),
+        pending_revision: (run?.files ?? []).some(x => x.escalation?.pending?.reason === 'review'), error: res.error ?? null, tests: run?.acceptance ? {cmd: run.acceptance.cmd, exit: run.acceptance.exit} : null},
         team, contributions, usage: usage(calls), next: {stage: 'implement', why: `the run did not ship: ${res.error?.message ?? 'acceptance or review refused it'}`}});
     }
     const files = certifiedArtifacts(run, {repoRoot: t.spec.repo_root, outDir: res.outDir}).map(f => ({...f, path: path.relative(top, path.join(t.spec.repo_root, f.path))}));
@@ -621,6 +632,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           gate_entry: run?.ledger?.gate ?? null, tests: run?.acceptance ? {cmd: run.acceptance.cmd, exit: run.acceptance.exit} : null},
         ticket: {path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key},
         made_against: board.items.find(i => i.item === item)?.entry ?? null, contributions: dedupe([...contributions, ...work]),
+        ...(resumable ? {resumed_from: prior.hash} : {}),
         carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'the goal of the run (delivered to the worker)'},
         ...(critiques.length ? {answers: critiques.map(f => f.id)} : {})},
       team, contributions: dedupe([...contributions, ...work]), usage: usage(calls), next: {stage: 'review', why: `shipped as ${commit.slice(0, 12)} on ${branch}`}});
@@ -735,16 +747,26 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // 2. The validator: a lab that contributed to neither plan, implementation nor review findings, when the pool allows.
     const finderRows = ctx.work.stages(item).filter(s => s.stage === 'review' && s.findings?.length).flatMap(s => s.findings).filter(f => f.lab)
       .map(f => ({purpose: 'critique', vendor: f.vendor ?? null, model: f.model ?? null, ...withServed(f), lab: f.lab}));
-    const reviewFinders = finderRows.map(f => f.lab);
-    const contributors = [...new Set([...labsOfContribs(impl.outputs.contributions ?? []), ...reviewFinders])];
-    let seat, independent = true;
     // The validator contributed to nothing it judges: under the lab rule its lab did not, under the model rule it did not.
-    try { [seat] = byModel ? reviewSeatsByModel({n: 1, contributions: [...(impl.outputs.contributions ?? []), ...finderRows], ...pool}) : reviewSeats({n: 1, avoidLabs: contributors, ...pool}); }
-    catch {
-      independent = false;
-      const authors = (impl.outputs.contributions ?? []).filter(c => ['plan', 'work'].includes(c.purpose));
-      [seat] = byModel ? reviewSeatsByModel({n: 1, contributions: authors, ...pool}) : reviewSeats({n: 1, avoidLabs: labsOfContribs(authors), ...pool});
-    }
+    // `barred` are seats already tried whose answer could not be accepted (see below): they are not asked again.
+    const allContribs = [...(impl.outputs.contributions ?? []), ...finderRows];
+    const authorsOnly = allContribs.filter(c => ['plan', 'work'].includes(c.purpose));
+    const pickValidator = barred => {
+      const extra = barred.flatMap(x => [{purpose: 'barred', vendor: x.vendor, model: x.model, lab: x.lab}, ...(x.served_model ? [{purpose: 'barred', vendor: x.vendor, model: x.served_model, lab: x.lab}] : [])]);
+      const seatFor = rows => (byModel ? reviewSeatsByModel({n: 1, contributions: [...rows, ...extra.filter(e => resolveModel(e.vendor, e.model)?.known)], ...pool})
+        : reviewSeats({n: 1, avoidLabs: [...new Set([...labsOfContribs(rows), ...barred.map(x => x.lab)])], ...pool}))[0];
+      try { return {seat: seatFor(allContribs), independent: true, against: allContribs}; }
+      catch { try { return {seat: seatFor(authorsOnly), independent: false, against: authorsOnly}; } catch { return null; } }
+    };
+    /** Why the model that ANSWERED may not be this item's validator, or null. Asked-for and answering model both count. */
+    const servedRefusal = (seat, served, against) => {
+      if (byModel) return reviewerRefusal({vendor: seat.vendor, model: seat.model, served_model: served}, contributorKeys(against));
+      const lab = labOf(seat.vendor, served ?? seat.model);
+      return labsOfContribs(against).includes(lab) ? `the ${lab} lab contributed to the work and its model answered (${served})` : null;
+    };
+    let picked = pickValidator([]);
+    if (!picked) return result('failed', {outputs: {commit, tests, cause: 'validation-defect'}, usage: usage(), next: {stage: 'validate', why: 'no validator seat is available that did not write the plan or the code'}});
+    let {seat, independent} = picked;
     const team = [{role: 'validator', ...seatOf(seat)}];
     const diff = G(['diff', '--no-color', impl.outputs.base, commit]);
     const {dossier, retriever} = evidenceFor(ctx, {outputsDir});
@@ -766,8 +788,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       'implementation_defect: the code is wrong for a sound plan. plan_defect: a criterion or the scope does not cover the requirement or a consequence. diagnosis_defect: the plan\'s',
       'stated cause is wrong or unsupported. missing_evidence: you cannot judge because evidence is missing or unretrievable (say which). Keep these apart.'].join('\n');
     let judged = null;
-    const refusedJ = [];
-    for (let k = 0; k < 2 && !judged; k++) {
+    const refusedJ = [], rejected = [];
+    for (let k = 0; k < 3 && !judged; k++) {
       if (m.left() < 1) break;
       let reply;
       try {
@@ -777,6 +799,20 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         if (!reply) { refusedJ.push(`no judgment within the investigation bounds (${r.log.limit_reached})`); continue; }
       } catch (e) { refusedJ.push(`the validator call failed: ${e.message}`); continue; }
       const j = jsonOf(reply?.text);
+      // WHO ANSWERED is checked before the judgment is read as one. The seat was chosen by the model asked for; the
+      // model that served the turn must be eligible too: resolved, and not a contributor. An answer that fails this
+      // is kept on the record (requested and served names, the reason, the reply's digest) and is not a validation.
+      const served = reply.served_model ?? null;
+      const why = servedRefusal(seat, served, picked.against);
+      if (why) {
+        rejected.push({vendor: seat.vendor, model: seat.model, served_model: served, lab: seat.lab, why, verdict: j?.verdict ?? null, reply_sha: sha256(reply.text ?? '')});
+        refusedJ.push(`the answer of ${seat.vendor}/${seat.model} (served by ${served ?? 'an unnamed model'}) is not accepted: ${why}`);
+        picked = pickValidator(rejected);
+        if (!picked) break;
+        ({seat, independent} = picked);
+        team.push({role: 'validator', ...seatOf(seat)});
+        continue;
+      }
       const ids = planDoc.acceptance.map(a => a.id);
       if (!j || !VERDICTS.includes(j.verdict) || !strs(j.reasons) || !Array.isArray(j.criteria) || !ids.every(id => j.criteria.some(c => c?.id === id && typeof c.met === 'boolean'))) {
         refusedJ.push('the validator did not answer {verdict, reasons, criteria for every acceptance id}'); continue;
@@ -784,10 +820,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // What it says it checked, against what it was actually given: a source it never received is not "checked".
       const got = deliveryOf(dossier, {requests: investigations.filter(x => x.role === 'validator').flatMap(x => x.requests)});
       const sources = (Array.isArray(j.sources) ? j.sources : []).filter(x => typeof x === 'string').map(x => ({ref: refOf(x), delivered: got.has(refOf(x)), ...(got.has(refOf(x)) ? {complete: got.get(refOf(x)).complete} : {})}));
-      judged = {...j, sources, vendor: seat.vendor, model: seat.model, served_model: reply.served_model ?? null, lab: seat.lab};
+      judged = {...j, sources, vendor: seat.vendor, model: seat.model, served_model: served, lab: seat.lab};
     }
     const outputs = {commit, checkout: {commit, tree: G(['rev-parse', `${commit}^{tree}`]).trim(), method: 'git archive'}, tests, green,
-      validator: {...seatOf(seat), independent}, refused: refusedJ, context: {dossier: dossierRecord(dossier), investigations}};
+      // The accepted validator, by the model asked for AND the model that answered; answers that were not accepted stay on the record.
+      validator: {...seatOf(seat), served_model: judged?.served_model ?? null, independent,
+        ...(byModel && judged ? {identity: resolveModel(seat.vendor, seat.model)?.id ?? null, served_identity: resolveModel(seat.vendor, judged.served_model ?? seat.model)?.id ?? null} : {})},
+      refused: refusedJ, rejected_answers: rejected, context: {dossier: dossierRecord(dossier), investigations}};
     // No judgment is a defect of the validation itself, kept apart from a defect of the change.
     if (!judged) return result('failed', {outputs: {...outputs, cause: 'validation-defect'}, team, usage: usage(), next: {stage: 'validate', why: `no well-formed validator judgment (${refusedJ.join('; ')})`}});
     // A red test cannot be accepted, and a green test alone cannot pass: the judgment is required.

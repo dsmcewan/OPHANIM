@@ -12,7 +12,7 @@ import {reconcile} from './reconcile.mjs';
 import {makeExecutors, REVIEW_INDEPENDENCE, workContributions} from './stages.mjs';
 import {reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
 import {readServiceConfig, SERVICE_CONFIG_SCHEMA} from './service.mjs';
-import {modelIdentity, contributorKeys} from '../../pantheon/src/review/identity.mjs';
+import {modelIdentity, contributorKeys, currentPolicy, policyDigest, reassess} from '../../pantheon/src/review/identity.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {openBoard} from '../../pantheon/src/board/index.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
@@ -76,6 +76,23 @@ test('four real labs: an item without a ticket and one with an existing ticket c
       assert.equal(applied.checked.checked, 'structural');
     }
     assert.ok(reconcile({repo, statusRoot: f.statusRoot, workLedger: w}).items.every(i => i.gate.gate === 'complete'));
+    // A LATER alias correction: the shared-lab reviewer's model is declared to be the same model as a contributor.
+    // That is new evidence about the closed cycle, recorded as such; the cycle's ledger and the item's status are unchanged.
+    const [, impl, rev] = w.stages('fresh');
+    const sys = openPantheonLedger({root: impl.outputs.run.ledger, anchor: impl.outputs.run.ledger_anchor, board: openBoard(impl.outputs.run.board)});
+    const state = sys.recorder().cycleState(rev.outputs.cycle);
+    const shared = reviewers(rev).find(t => rev.outputs.shared_labs.includes(t.lab));
+    const sibling = contributorKeys(impl.contributions).models.find(m => m.startsWith(`${shared.lab}/`)).split('/')[1];
+    const corrected = {...currentPolicy(), same_model: {...currentPolicy().same_model, [shared.model]: sibling}};
+    const again = reassess({cycle: state.cycle, reviews: state.reviews, policy: corrected});
+    assert.equal(again.changed, true);
+    assert.equal(again.findings.length, 1);
+    assert.match(again.findings[0].why, new RegExp(`${shared.lab}/${sibling} contributed`));
+    w.recordReassessment({item: 'fresh', cycle: rev.outputs.cycle, recorded_policy: again.recorded, policy: again.policy, findings: again.findings});
+    assert.equal(openWorkLedger({root: f.workRoot}).reassessments('fresh').length, 1);
+    assert.equal(sys.recorder().verify().ok, true, 'the recorded cycle still verifies under the policy it recorded');
+    assert.equal(again.recorded, policyDigest(state.cycle.identity_policy.rules));
+    assert.throws(() => w.recordReassessment({item: 'fresh', cycle: rev.outputs.cycle, recorded_policy: again.recorded, policy: again.recorded, findings: []}), /another one/);
     assert.equal(openStatusLedger({root: f.statusRoot, create: false}).board().items.filter(i => i.state === 'Resolved').length, 2);
   });
 });

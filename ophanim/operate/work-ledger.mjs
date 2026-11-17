@@ -18,6 +18,10 @@
 //                 it was made against, the digest of the sources searched, every source with its result, and, when
 //                 evidence was recovered, the digest of the UNSIGNED proposal written for the owner. Only the owner
 //                 applies it to the status ledger (evidence-recovery.mjs).
+//   work.reassessment  NEW EVIDENCE about a closed review cycle, never a change to it: under a later identity policy
+//                 (an alias or lab correction), which of its recorded reviews would not qualify, and why. It names
+//                 the cycle, the policy the cycle recorded and the policy it was reassessed under. The cycle's own
+//                 ledger keeps verifying under its recorded policy; what follows from the evidence is the owner's.
 //
 // Inputs: an absolute root (default <repo>/status/work). Outputs: the API below. Must never: sign a status, read
 // the owner's keys, or accept a stage whose handoff does not re-derive.
@@ -84,6 +88,15 @@ function kinds({operators}) {
         const q = view.payload(h);
         return q.item === e.payload.item && q.status_entry === e.payload.status_entry && q.sources === e.payload.sources;
       }) ? `a recovery of "${e.payload.item}" against these sources and this status is already recorded` : null,
+    },
+    'work.reassessment': {
+      authors: byController,
+      validate: p => (p?.schema === WORK_SCHEMA && ID.test(p.item ?? '') && SHA.test(p.cycle ?? '') && SHA.test(p.recorded_policy ?? '') && SHA.test(p.policy ?? '')
+        && p.recorded_policy !== p.policy && Array.isArray(p.findings) && p.findings.every(x => plain(x) && (x.review === null || SHA.test(x.review ?? '')) && str(x.why)) && ISO(p.at)
+        ? null : 'a reassessment names {item, cycle, recorded_policy, policy (another one), findings: [{review, why}], at}'),
+      // One reassessment of a cycle per policy: the same evidence is not recorded twice.
+      rederive: (e, view) => (entriesOf(view, 'work.reassessment').some(h => { const q = view.payload(h); return q.cycle === e.payload.cycle && q.policy === e.payload.policy; })
+        ? 'this cycle is already reassessed under that policy' : null),
     },
     'work.intake': {
       authors: byController,
@@ -228,6 +241,10 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     recordRecovery: ({item, status_entry, sources, outcome, searched, proposal = undefined, at = new Date().toISOString()}) =>
       append('work.recovery', {item, status_entry, sources, outcome, searched, ...(proposal !== undefined ? {proposal} : {}), at}),
     recoveries: item => of('work.recovery', r => item === undefined || r.item === item),
+    /** Record what a later identity policy says about a closed cycle's reviews (pantheon review/identity.mjs `reassess`). */
+    recordReassessment: ({item, cycle, recorded_policy, policy, findings, at = new Date().toISOString()}) =>
+      append('work.reassessment', {item, cycle, recorded_policy, policy, findings, at}),
+    reassessments: item => of('work.reassessment', r => item === undefined || r.item === item),
     intakes: () => of('work.intake'),
     claims: item => of('work.claim', c => item === undefined || c.item === item),
     stages: item => of('work.stage', s => item === undefined || s.identity.item === item),

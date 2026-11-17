@@ -60,7 +60,7 @@ import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, carriesPractice, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
-import {reviewerRefusal} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, resolveModel, policyRefusal, policyDigest} from '../review/identity.mjs';
 
 export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 
@@ -70,12 +70,23 @@ export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 //                    under v1 or v2 re-derives, closes and hashes exactly as before, now and always.
 //   v3               no reviewer that IS a contributing MODEL (`author_models`, by identity: review/identity.mjs, so an
 //                    effort level, alias, snapshot, session or route does not make a contributor eligible), and none
-//                    from `excluded_labs` (labs of contributions whose model could not be identified). A reviewer
-//                    from a lab that contributed is allowed, and the close records it (`shared_labs`).
+//                    from `excluded_labs` (labs of contributions that name a lab and no model). A reviewer from a lab
+//                    that contributed is allowed, and the close records it (`shared_labs`).
+//   v3 IDENTITY      a v3 cycle carries `identity_policy: {digest, rules}`: the WHOLE policy that resolves a model
+//                    name to its identity and lab (review/identity.mjs), and `contributors`, the raw names it was
+//                    opened with. Every check of the cycle -- who may review, which lab a review counts for, the
+//                    seat's lab, the close -- uses those recorded rules, never the current configuration, so a later
+//                    alias correction cannot change this cycle's validity. A reviewer whose asked-for or answering
+//                    model the policy cannot resolve, or whose two names are of different labs, does not qualify.
 /** Why a reviewer seat may not review cycle `c`, or null. `seat` is {vendor, model, served_model?, lab}. */
 export function independenceRefusal(c, seat) {
   if (c.contract !== CYCLE_CONTRACT_V3) return c.author_labs.includes(seat.lab) ? `the ${seat.lab} lab authored the change and may not review it` : null;
-  return reviewerRefusal(seat, {models: c.author_models, labs: c.excluded_labs});
+  return reviewerRefusal(seat, {models: c.author_models, labs: c.excluded_labs}, c.identity_policy.rules);
+}
+/** The lab a review of cycle `c` counts for: under v3 the reviewer's resolved lab (recorded policy); else labOf. */
+export function reviewLab(c, {vendor, model, served_model = null}) {
+  if (c?.contract !== CYCLE_CONTRACT_V3) return labOf(vendor, served_model ?? model);
+  return reviewerIdentity({vendor, model, served_model}, c.identity_policy.rules).lab ?? null;
 }
 
 export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close', ATTEMPT = 'cycle.attempt';
@@ -163,7 +174,7 @@ export function deriveCycle(view, cycle) {
     if (e.kind === 'review' && e.derived_from.includes(cycle)) {
       const p = view.payload(h);
       const answer = view.payload(p.turn);
-      out.reviews.push({hash: h, seat: p.seat, lab: labOf(p.seat.vendor, p.served_model ?? p.model), verdict: p.verdict,
+      out.reviews.push({hash: h, seat: p.seat, lab: reviewLab(c, {vendor: p.seat.vendor, model: p.model, served_model: p.served_model ?? null}), verdict: p.verdict,
         model: p.model, served_model: p.served_model ?? null, turn: p.turn ?? null, reported: parseReview(answer?.reply ?? '')});
       reviews.add(h);
     } else if (e.kind === FINDING && e.derived_from.some(x => reviews.has(x))) {
@@ -238,8 +249,10 @@ export function cycleKinds({authors = () => true} = {}) {
             ? (p.contract !== CYCLE_CONTRACT_V3 ? (p.author_models === undefined && p.excluded_labs === undefined && p.independence === undefined ? null
                 : `only a ${CYCLE_CONTRACT_V3} cycle names author_models, excluded_labs and independence`)
               : p.independence === 'model' && Array.isArray(p.author_models) && p.author_models.every(str) && Array.isArray(p.excluded_labs) && p.excluded_labs.every(str)
-                && SHA.test(p.identity_rules ?? '') && Number.isInteger(p.required_reviewers) ? null
-                : `a ${CYCLE_CONTRACT_V3} cycle names {independence: "model", author_models, excluded_labs, identity_rules} and records required_reviewers`)
+                && Array.isArray(p.contributors) && p.contributors.every(x => x && (x.vendor === null || str(x.vendor)) && (x.model === null || str(x.model)))
+                && SHA.test(p.identity_policy?.digest ?? '') && policyRefusal(p.identity_policy?.rules) === null && policyDigest(p.identity_policy.rules) === p.identity_policy.digest
+                && Number.isInteger(p.required_reviewers) ? null
+                : `a ${CYCLE_CONTRACT_V3} cycle names {independence: "model", author_models, excluded_labs, contributors, identity_policy: {digest, rules}} (the digest is of the rules it carries) and records required_reviewers`)
             : `a ${CYCLE_CONTRACT} cycle also names {policy: {version, hash, profile}, practice_scope, prior}; a cycle without a contract field is the old contract`)
         : 'a cycle names {scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}'),
       rederive: (e, view) => {
@@ -324,8 +337,9 @@ export function cycleKinds({authors = () => true} = {}) {
         if (view.entry(cycle)?.kind !== CYCLE || rest.length) return 'an attempt cites its cycle, and the review it produced when it reviewed';
         if (p.outcome === 'reviewed' ? view.entry(review)?.kind !== 'review' : review !== undefined) return 'an attempt cites its cycle, and the review it produced when it reviewed';
         if (closedAt(view, cycle)) return 'the cycle is closed';
-        if (labOf(p.seat.vendor, p.seat.model) !== p.seat.lab) return `the seat's lab is ${labOf(p.seat.vendor, p.seat.model)}, not ${p.seat.lab}`;
         const c = view.payload(cycle);
+        const seatLab = c.contract === CYCLE_CONTRACT_V3 ? resolveModel(p.seat.vendor, p.seat.model, c.identity_policy.rules)?.lab ?? null : labOf(p.seat.vendor, p.seat.model);
+        if (seatLab !== p.seat.lab) return `the seat's lab is ${seatLab ?? 'unresolved'}, not ${p.seat.lab}`;
         const refused = independenceRefusal(c, {vendor: p.seat.vendor, model: p.seat.model, lab: p.seat.lab});
         if (refused) return refused;
         let tried = 0;
@@ -389,7 +403,7 @@ export function cycleRecorder({ledger, controller, order}) {
      */
     openCycle({scope, base, head, diff, files, prompt, brief = REVIEW_BRIEF, reviewers = 3, author_labs = [], author_turns = [], opened_at = new Date().toISOString(),
       contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE, required_reviewers = undefined, author_models = undefined, excluded_labs = undefined,
-      identity_rules = undefined}) {
+      identity_policy = undefined, contributors = undefined}) {
       if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT}, ${CYCLE_CONTRACT_V3} or ${CYCLE_CONTRACT_V1}`);
       const prev = lastCycle(scope);
       const payload = {scope, base, head, diff_sha: sha(diff), files: [...files], prompt_sha: promptSha(prompt),
@@ -397,7 +411,10 @@ export function cycleRecorder({ledger, controller, order}) {
       if (contract === CYCLE_CONTRACT_V1) return append(CYCLE, payload, [...(prev?.close ? [prev.close] : []), ...author_turns]);
       const inEffect = policy ?? currentPolicy('argo');
       const prior = admittedPractice(ledgerView(ledger), {scope: practice_scope, profile: inEffect.profile})?.disposition ?? null;
-      const model = contract === CYCLE_CONTRACT_V3 ? {independence: 'model', author_models: [...(author_models ?? [])].sort(), excluded_labs: [...(excluded_labs ?? [])].sort(), identity_rules} : {};
+      const model = contract === CYCLE_CONTRACT_V3 ? {independence: 'model', author_models: [...(author_models ?? [])].sort(), excluded_labs: [...(excluded_labs ?? [])].sort(),
+        contributors: [...new Map((contributors ?? []).map(x => [`${x.vendor}|${x.model}`, {vendor: x.vendor ?? null, model: x.model ?? null}])).values()],
+        // The identity policy travels WITH the cycle: its rules and their digest.
+        ...(identity_policy ? {identity_policy: {digest: policyDigest(identity_policy), rules: identity_policy}} : {})} : {};
       return append(CYCLE, {...payload, contract, policy: inEffect, practice_scope, prior, ...model},
         [...(prev?.close ? [prev.close] : []), ...(prior ? [prior] : []), ...author_turns]);
     },

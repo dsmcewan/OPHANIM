@@ -10,7 +10,7 @@ import path from 'node:path';
 import {openPantheonLedger} from '../src/ledger/system.mjs';
 import {reviewCycle, reviewSeats, reviewSeatsByModel} from '../src/ledger/review-cycle.mjs';
 import {CYCLE_CONTRACT, CYCLE_CONTRACT_V3} from '../src/ledger/cycle-kinds.mjs';
-import {modelIdentity, contributorKeys} from '../src/review/identity.mjs';
+import {modelIdentity, contributorKeys, currentPolicy} from '../src/review/identity.mjs';
 import {cycleReviewers} from '../src/board/operate.mjs';
 
 const C = n => String(n).repeat(40).slice(0, 40);
@@ -35,11 +35,13 @@ test('identity: effort levels, lane names, dated snapshots and routes are the sa
   assert.equal(id('anthropic', 'claude-haiku-4-5-20251001'), id('anthropic', 'claude-haiku-4-5'), 'a dated snapshot');
   assert.equal(id('anthropic', 'Claude-Fable-5-2'), id('anthropic', 'claude-fable-5-2'));
   assert.notEqual(id('anthropic', 'claude-fable-5-2'), id('anthropic', 'claude-opus-5-5'), 'two models of one lab are two models');
-  // A model this configuration does not declare cannot be told apart from its siblings: its whole lab is excluded.
+  // A model this configuration does not declare is UNRESOLVED: not another model, and not a model of its route's lab.
   assert.equal(modelIdentity('openai', 'gpt-6-astra-turbo-preview').known, false);
   const k = contributorKeys([PLAN, contrib('work', 'openai', 'gpt-6-astra-turbo-preview'), {purpose: 'critique', lab: 'xai'}]);
-  assert.deepEqual(k.labs, ['openai', 'xai']);
-  assert.deepEqual(k.contributing_labs, ['anthropic', 'openai', 'xai']);
+  assert.deepEqual(k.unresolved.map(u => u.model), ['gpt-6-astra-turbo-preview']);
+  assert.deepEqual(k.labs, ['xai'], 'a contribution that names only its lab excludes that lab');
+  assert.deepEqual(k.contributing_labs, ['anthropic', 'xai']);
+  assert.throws(() => reviewSeatsByModel({n: 3, contributions: [PLAN, contrib('work', 'openai', 'gpt-6-astra-turbo-preview')]}), /a contributor's identity is unresolved/);
   // The requested and the served model of one turn are both contributors.
   assert.deepEqual(contributorKeys([contrib('work', 'openai', 'gpt-6-sol', {requested_model: 'gpt-6-astra'})]).models, ['openai/gpt-6-astra', 'openai/gpt-6-sol']);
 });
@@ -134,7 +136,7 @@ test('the ledger enforces v3: a contributing model is refused under any of its n
     seats: [{vendor: 'xai', model: 'grok-4.7'}, {vendor: 'anthropic', model: 'claude-sonnet-5'}, {vendor: 'anthropic', model: 'claude-opus-5-5'}]}), e => e.code === 'SAME_LAB');
   await assert.rejects(reviewCycle({ledger: rec, change: change('two'), turn: approve, n: 2}), e => e.code === 'REVIEW_LABS_BELOW_REQUIRED' || e.code === 'NO_SEATS');
   assert.throws(() => rec.openCycle({scope: 'low', base: C('a'), head: C('b'), diff: DIFF, files: ['x'], prompt: 'p', contract: CYCLE_CONTRACT_V3, reviewers: 2, required_reviewers: 2,
-    author_models: [], excluded_labs: [], identity_rules: 'sha256:' + '0'.repeat(64)}), /at least 3; a caller cannot lower it/);
+    author_models: [], excluded_labs: [], contributors: [], identity_policy: currentPolicy()}), /at least 3; a caller cannot lower it/);
 }));
 
 test('history is verified under the rule it was recorded under: a v2 cycle on the same ledger still refuses the contributing lab, and v2 stays the default', () => withLedger(async (sys, rec) => {
