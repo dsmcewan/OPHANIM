@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {execFileSync} from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SKIP_DIRS = new Set(['.git', 'node_modules']);
@@ -17,12 +18,20 @@ const SOURCE = /\.(mjs|cjs|js|ts|py|sh|json|ya?ml|toml)$/;
 const FIXTURE_USERS = new Set(['u', 'x', 'fixture']);
 const HOME = /(?<![\w.-])\/home\/([A-Za-z0-9._-]+)/g;
 
+// The repository's own files: those git tracks (and not, say, an ignored agent worktree checked out
+// under .claude/worktrees, which is a copy of some other commit). Falls back to a walk outside git.
 function* files(dir, rel = '') {
+  let tracked = null;
+  try { tracked = execFileSync('git', ['-C', root, 'ls-files', '-z'], {encoding: 'utf8'}).split('\0').filter(Boolean); } catch {}
+  if (tracked) {
+    for (const r of tracked) if ((SOURCE.test(r) || /(^|\/)\.(claude|agents)\//.test(r)) && fs.existsSync(path.join(root, r))) yield r;
+    return;
+  }
   for (const d of fs.readdirSync(dir, {withFileTypes: true})) {
     if (SKIP_DIRS.has(d.name)) continue;
-    const r = rel ? `${rel}/${d.name}` : d.name;
-    if (d.isDirectory()) yield* files(path.join(dir, d.name), r);
-    else if (d.isFile() && (SOURCE.test(d.name) || /(^|\/)\.(claude|agents)\//.test(r))) yield r;
+    const r2 = rel ? `${rel}/${d.name}` : d.name;
+    if (d.isDirectory()) yield* files(path.join(dir, d.name), r2);
+    else if (d.isFile() && (SOURCE.test(d.name) || /(^|\/)\.(claude|agents)\//.test(r2))) yield r2;
   }
 }
 
