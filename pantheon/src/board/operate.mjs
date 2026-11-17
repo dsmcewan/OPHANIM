@@ -496,6 +496,10 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const boardDir = dir ?? join(homedir(), ".pantheon", "boards", `board-${item}-${Date.now()}`);
   const bundleDir = out ?? join(boardDir, "operating");
   mkdirSync(bundleDir, { recursive: true });
+  // The ticket as dispatched, beside the bundle: apply checks the proposal's ticket against it (its item, digest and
+  // key; status.mjs checkEvidenceLedgers), even after tickets/<item>.json moves on to the next slice.
+  const ticketCopy = join(bundleDir, "ticket.json");
+  writeFileSync(ticketCopy, JSON.stringify(ticket, null, 2) + "\n");
   progress({ event: "run.start", item, ticket: ticketRel, slice: ticket.slice, board: boardDir });
   const ledgerRoot = resolve(process.env.OPHANIM_LEDGER ?? join(boardDir, "ledger"));
   const chainFile = join(ledgerRoot, "chain.jsonl");
@@ -563,7 +567,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const bundle = {
     schema: BUNDLE_SCHEMA, item, title: board.items.find(i => i.item === item).title, made_against: board.items.find(i => i.item === item).entry,
     status_ledger: { anchor: board.anchor, head: board.head }, checked,
-    ticket: { path: ticketRel, digest: ticketDigest, slice: ticket.slice, proposes: ticket.proposes, key: spec.key },
+    ticket: { path: ticketRel, digest: ticketDigest, slice: ticket.slice, proposes: ticket.proposes, key: spec.key, file: ticketCopy },
     board: boardDir, base, branch: null, commit: null, evidence_store: store,
     run: { ledger: ledgerRoot, ledger_anchor: sys.anchor, ledger_head: v.head, run_json: existsSync(runJsonFile) ? runJsonFile : null,
       run_json_digest: existsSync(runJsonFile) ? sha256(readFileSync(runJsonFile)) : null, shipped: result.shipped === true,
@@ -772,7 +776,7 @@ export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnveri
   }
   const p = propose(board, { item: bundle.item, to: { state: bundle.ticket.proposes.state, basis, checked: bundle.checked }, evidence,
     ...(acceptUnverified ? { accept_unverified_reason: acceptUnverified } : {}),
-    locations: { run_ledger: bundle.run.ledger, cycle_ledger: bundle.review.ledger, run_json: bundle.run.run_json } });
+    locations: { run_ledger: bundle.run.ledger, cycle_ledger: bundle.review.ledger, run_json: bundle.run.run_json, ticket: bundle.ticket.file ?? null } });
   writeFileSync(join(dir, "proposal.json"), JSON.stringify(p, null, 2) + "\n");
   bundle.proposal = { file: join(dir, "proposal.json"), digest: proposalDigest(p), to: p.to.state };
   save();

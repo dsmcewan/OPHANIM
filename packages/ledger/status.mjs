@@ -155,11 +155,26 @@ export function openStatusLedger({root, anchor = null, create = true, keys = nul
 //               review: {cycle_ledger_anchor, cycle, close_entry, outcome,
 //                        reviewers: [{vendor, model, served_model, lab}]},
 //               commit, tests: {cmd, exit}, ticket?: {path, digest, slice}},
-//    accept_unverified_reason?, locations?: {run_ledger, cycle_ledger, run_json}}
-// `locations` are local hints for apply (where the cited ledgers are on this machine). They are not
-// part of the proposal's digest and are never recorded: a status entry names no machine path.
+//    accept_unverified_reason?, locations?: {run_ledger, cycle_ledger, run_json, ticket}}
+// `locations` are local hints for apply (where the cited ledgers, run.json and ticket are on this machine).
+// They are not part of the proposal's digest and are never recorded: a status entry names no machine path.
+//
+// THE EVIDENCE IS BOUND TO ITS ITEM (review of 86ce18a, defect 1). Nothing else stops a valid proposal for
+// item A from resolving item B with only `item` and `from` changed, so: every proposal names the item's own
+// ticket (evidence.ticket.path is tickets/<item>.json); where the ticket file is checked, its own `item` is
+// the proposal's and its digest the cited one; where run.json is checked, its key is the ticket's; and where
+// the review cycle is checked, its scope is the board scope of this item (board/<item>/<base12>) and its
+// head is the cited commit. A change to Resolved is applied only when all of it was checked here (the run
+// ledger, the cycle, run.json and the ticket): completion evidence is verifiable at apply, or not applied.
+// Statuses recorded from now on carry EVIDENCE_SCHEMA (v2), which states those rules; entries recorded
+// under v1 keep v1's rules and verify exactly as before.
 export const PROPOSAL_SCHEMA = 'ophanim.status-proposal/v1';
-export const EVIDENCE_SCHEMA = 'ophanim.status-evidence/v1';
+export const EVIDENCE_SCHEMA = 'ophanim.status-evidence/v2';
+export const EVIDENCE_SCHEMA_V1 = 'ophanim.status-evidence/v1';
+/** The repository-relative ticket of `item`, as the board dispatcher reads it (operate.mjs ticketPath). */
+export const itemTicketPath = item => `tickets/${item}.json`;
+/** The review-cycle scope a board run of `item` opens over `base` (operate.mjs runBoardItem). */
+export const boardScopeOf = (item, base) => `board/${item}/${String(base).slice(0, 12)}`;
 const SHA = /^sha256:[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const OUTCOMES = ['verified', 'unverified'];
@@ -231,12 +246,18 @@ function evidenceCore(ev) {
 const EVIDENCE_FIELDS = ['schema', 'proposal', 'run', 'review', 'commit', 'tests', 'ticket', 'accept_unverified_reason', 'checked'];
 /** The reason a status payload's `evidence` is refused, or null. */
 export function evidenceRefusal(ev, state) {
-  if (!plain(ev) || ev.schema !== EVIDENCE_SCHEMA) return `evidence is an ${EVIDENCE_SCHEMA} object`;
+  if (!plain(ev) || ![EVIDENCE_SCHEMA, EVIDENCE_SCHEMA_V1].includes(ev.schema)) return `evidence is an ${EVIDENCE_SCHEMA} object (or a recorded ${EVIDENCE_SCHEMA_V1} one)`;
   if (!only(ev, EVIDENCE_FIELDS)) return 'evidence carries only its named fields';
   if (!SHA.test(ev.proposal ?? '')) return 'evidence names the digest of the proposal it was applied from';
   if (!CHECKED.includes(ev.checked)) return `evidence.checked is one of ${CHECKED.join(', ')}`;
   if (ev.accept_unverified_reason !== undefined && !str(ev.accept_unverified_reason)) return 'accept_unverified_reason is a non-empty reason';
-  return evidenceCore(ev) ?? (state === 'Resolved' ? resolvedRefusal(ev, ev.accept_unverified_reason) : null);
+  const core = evidenceCore(ev) ?? (state === 'Resolved' ? resolvedRefusal(ev, ev.accept_unverified_reason) : null);
+  if (core || ev.schema === EVIDENCE_SCHEMA_V1) return core;
+  // v2 (statuses recorded from now on): the evidence names its ticket, and a Resolved one was checked where it was
+  // applied. A v1 entry keeps v1's rules, so the historical chain verifies exactly as before.
+  if (ev.ticket === undefined) return `${EVIDENCE_SCHEMA} evidence names the item's ticket`;
+  if (state === 'Resolved' && ev.checked !== 'structural') return `${EVIDENCE_SCHEMA} evidence for Resolved was checked structurally where it was applied`;
+  return null;
 }
 
 /** The proposal's digest: canonical JSON of everything but its local `locations`. */
@@ -260,8 +281,14 @@ export function proposalRefusal(p) {
   const ev = p.evidence;
   if (!plain(ev) || !only(ev, ['run', 'review', 'commit', 'tests', 'ticket'])) return 'a proposal carries evidence {run, review, commit, tests, ticket?}';
   const local = v => v === null || (str(v) && path.isAbsolute(v));
-  if (p.locations !== undefined && !(plain(p.locations) && Object.values(p.locations).every(local))) return 'locations are absolute local paths';
-  return evidenceCore(ev) ?? (t.state === 'Resolved' ? resolvedRefusal(ev, p.accept_unverified_reason) : null);
+  if (p.locations !== undefined && !(plain(p.locations) && only(p.locations, ['run_ledger', 'cycle_ledger', 'run_json', 'ticket'])
+    && Object.values(p.locations).every(local))) return 'locations are absolute local paths: {run_ledger, cycle_ledger, run_json, ticket}';
+  const core = evidenceCore(ev);
+  if (core) return core;
+  // Bound to the item: the evidence names this item's own ticket.
+  if (ev.ticket === undefined) return `a proposal carries evidence.ticket: the ticket of "${p.item}" (${itemTicketPath(p.item)})`;
+  if (ev.ticket.path !== itemTicketPath(p.item)) return `evidence.ticket is ${ev.ticket.path}, not the ticket of "${p.item}" (${itemTicketPath(p.item)})`;
+  return t.state === 'Resolved' ? resolvedRefusal(ev, p.accept_unverified_reason) : null;
 }
 
 /** Build a proposal against the item's latest status on `board` (from: that entry). Needs no key. */
@@ -288,8 +315,12 @@ function citedLedger(dir, anchor) {
   return {entry: h => at.get(h) ?? null, payload: h => (at.has(h) ? L.payloadOf(at.get(h)) : null), entries: () => [...at.keys()]};
 }
 
-function checkReview(cyc, review) {
+function checkReview(cyc, review, {item, commit}) {
   if (cyc.entry(review.cycle)?.kind !== 'cycle') fail('the review cycle the proposal cites is not a cycle on its ledger');
+  // Bound to the item and the change: the cycle is the board scope of THIS item, over the cited commit.
+  const c = cyc.payload(review.cycle);
+  if (c.scope !== boardScopeOf(item, c.base)) fail(`the review cycle's scope is ${c.scope}, not the board scope of "${item}" (${boardScopeOf(item, c.base)})`);
+  if (c.head !== commit) fail(`the review cycle reviewed ${String(c.head).slice(0, 12)}, not the cited commit ${String(commit).slice(0, 12)}`);
   if (review.close_entry) {
     const close = cyc.entry(review.close_entry);
     if (close?.kind !== 'cycle.close' || !close.derived_from.includes(review.cycle)) fail('the close entry the proposal cites does not close that cycle');
@@ -303,7 +334,7 @@ function checkReview(cyc, review) {
   if (canonical(recorded) !== canonical(review.reviewers.map(key).sort())) fail('the reviewers the proposal names are not the reviews recorded on the cycle');
 }
 
-/** Re-check the ledgers a proposal cites, where its `locations` say they are. Throws on any mismatch. */
+/** Re-check the ledgers, run.json and ticket a proposal cites, where its `locations` say they are. Throws on any mismatch. */
 export function checkEvidenceLedgers(p) {
   const ev = p.evidence, loc = p.locations ?? {};
   const run = loc.run_ledger ? citedLedger(loc.run_ledger, ev.run.ledger_anchor) : null;
@@ -312,18 +343,38 @@ export function checkEvidenceLedgers(p) {
     if (!run.entry(ev.run.ledger_head)) fail('the run ledger head the proposal cites is not in that ledger');
     if (ev.run.gate_entry && run.entry(ev.run.gate_entry)?.kind !== 'gate') fail('the gate entry the proposal cites is not a gate verdict on the run ledger');
   }
+  // The ticket: this item's, with the cited digest and slice. Its key is the one the run ran under.
+  let ticketKey = null;
+  if (loc.ticket) {
+    if (!ev.ticket) fail('the proposal names a ticket file but cites no ticket');
+    if (!fs.existsSync(loc.ticket)) fail(`the ticket named in the proposal is not at ${loc.ticket}`);
+    let t = null;
+    try { t = JSON.parse(fs.readFileSync(loc.ticket, 'utf8')); } catch { fail(`the ticket at ${loc.ticket} is not JSON`); }
+    if ('sha256:' + digest(t) !== ev.ticket.digest) fail('the ticket is not the one the proposal cites (its digest differs)');
+    if (t?.item !== p.item) fail(`the ticket is for "${t?.item}", not "${p.item}"`);
+    if (t.slice !== ev.ticket.slice) fail('the ticket\'s slice is not the one the proposal cites');
+    ticketKey = t.key ?? t.item;
+  }
   if (loc.run_json) {
     if (!fs.existsSync(loc.run_json)) fail(`the run.json named in the proposal is not at ${loc.run_json}`);
-    if (sha256(fs.readFileSync(loc.run_json)) !== ev.run.run_json_digest) fail('run.json is not the one the proposal cites');
+    const bytes = fs.readFileSync(loc.run_json);
+    if (sha256(bytes) !== ev.run.run_json_digest) fail('run.json is not the one the proposal cites');
+    let key = null;
+    try { key = JSON.parse(bytes.toString('utf8')).key ?? null; } catch { key = null; }
+    const expected = ticketKey ?? p.item;
+    if (key !== expected) fail(`run.json ran the ticket key "${key}", not "${expected}" of "${p.item}"`);
   }
   let cyc = null;
   if (ev.review && loc.cycle_ledger) {
     const same = loc.cycle_ledger === loc.run_ledger && ev.review.cycle_ledger_anchor === ev.run.ledger_anchor;
     cyc = same ? run : citedLedger(loc.cycle_ledger, ev.review.cycle_ledger_anchor);
     if (!cyc) fail(`the review-cycle ledger named in the proposal is not at ${loc.cycle_ledger}`);
-    checkReview(cyc, ev.review);
+    checkReview(cyc, ev.review, {item: p.item, commit: ev.commit});
   }
-  return {run: Boolean(run), review: Boolean(cyc), checked: run && (!ev.review || cyc) ? 'structural' : 'not-available'};
+  // `structural`: everything the evidence cites was checked here -- the run ledger, the review cycle when there is
+  // one, run.json and the ticket. Anything less is `not-available`, which a change to Resolved may not be.
+  const all = Boolean(run) && (!ev.review || Boolean(cyc)) && Boolean(loc.run_json) && Boolean(loc.ticket);
+  return {run: Boolean(run), review: Boolean(cyc), run_json: Boolean(loc.run_json), ticket: Boolean(loc.ticket), checked: all ? 'structural' : 'not-available'};
 }
 
 /**
@@ -342,6 +393,12 @@ export function applyProposal({root, proposal: p, keys = null, anchor = null}) {
     fail(`stale proposal: it was made against ${p.from.entry.slice(0, 19)} (${p.from.state}); the item's latest status is ${latest.entry.slice(0, 19)} (${latest.state})`);
   }
   const checks = checkEvidenceLedgers(p);
+  if (p.to.state === 'Resolved' && checks.checked !== 'structural') {
+    const missing = [['the run ledger', checks.run], ['the review-cycle ledger', checks.review], ['run.json', checks.run_json], ['the ticket', checks.ticket]]
+      .filter(([, ok]) => !ok).map(([what]) => what);
+    fail(`a change to Resolved is applied only when its completion evidence is verifiable at apply: ${missing.join(', ')} not available here ` +
+      '(name them in the proposal\'s locations, on this machine)');
+  }
   const {run, review = null, commit, tests, ticket} = p.evidence;
   const evidence = {schema: EVIDENCE_SCHEMA, proposal: proposalDigest(p), run, ...(review ? {review} : {}), commit: commit ?? null, tests: tests ?? null,
     ...(ticket ? {ticket} : {}), ...(p.accept_unverified_reason ? {accept_unverified_reason: p.accept_unverified_reason} : {}), checked: checks.checked};

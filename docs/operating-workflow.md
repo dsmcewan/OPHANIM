@@ -63,10 +63,16 @@ tickets/<item>.json --> run <item> --> evidence bundle + UNSIGNED proposal --> a
                review: {cycle_ledger_anchor, cycle, close_entry, outcome, reviewers: [{vendor, model, served_model, lab}]},
                commit, tests: {cmd, exit}, ticket: {path, digest, slice}},
     accept_unverified_reason?,
-    locations: {run_ledger, cycle_ledger, run_json}}     local hints only: not digested, never recorded
+    locations: {run_ledger, cycle_ledger, run_json, ticket}}  local hints only: not digested, never recorded
    ```
 
    A proposal to Resolved must cite a shipped run, a commit, tests that exited 0 and a review-cycle close.
+   Every proposal's evidence is bound to its item: `evidence.ticket.path` is `tickets/<item>.json`, and where
+   apply checks them, the ticket's own `item` is the proposal's (with the cited digest), run.json's key is the
+   ticket's, and the review cycle's scope is `board/<item>/<base12>` with the cited commit as its head. A
+   change to Resolved is applied only when the run ledger, the cycle, run.json and the ticket were all
+   checked on the applying machine (`checked: structural`); otherwise it is refused, and the owner records
+   the status directly (`status.mjs set`) if that is what they decide.
    `status.mjs propose --json ...` builds one by hand, with no key.
 8. **`check <proposal.json>`** re-derives the evidence with Pantheon's kinds: the run ledger verifies
    against its anchor, the cycle closed with the stated outcome on the stated labs, the commit is the
@@ -78,7 +84,7 @@ tickets/<item>.json --> run <item> --> evidence bundle + UNSIGNED proposal --> a
    anchor, every signature, link and payload verifies, the cited head, gate, cycle and close entries are
    there with the stated kinds, the close's outcome and labs match, and the reviews recorded on the cycle
    are the reviewers named); then records the status, signed with the owner's operator and orderer keys,
-   citing only the item's previous status, with an `evidence` object (`ophanim.status-evidence/v1`: the
+   citing only the item's previous status, with an `evidence` object (`ophanim.status-evidence/v2`; entries recorded under v1 keep v1's rules: the
    proposal's digest, the run, the review, the commit, the tests, the ticket and whether the cited ledgers
    were re-checked), and re-renders `docs/STATUS.md`. The keys are only read, never written or printed;
    a missing key directory is refused, not created.
