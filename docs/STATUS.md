@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:fc717d25b33951d15624fdb9aec003aae32f756d681dc337f62d270f4a8c22f0` · 55 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:e09347998af85d995d303d0719822ec9835bedc741efadd4132906b88722b510` · 59 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 28 · In progress: 2 · Ready: 1 · On Hold: 10.
+**Counts:** Resolved: 30 · In progress: 1 · Ready: 1 · On Hold: 11.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -15,6 +15,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **all_turns on GPT-6 Astra, Sol, Luna** (`all-turns`) | On Hold | credential | docs conflict on Astra, silent on Sol and Luna; one live call settles it | 2026-11-17 |
 | **xAI models on the shared client** (`direct-path-xai`) | On Hold | fact | xAI documents no output ceilings (re-checked 2026-11-17) | 2026-11-17 |
 | **gemini-3.6-flash off the agy seats** (`gemini-routing`) | On Hold | decision | would move OAuth agy seats onto the metered API | 2026-11-17 |
+| **GitHub Projects view of the loop** (`github-projects`) | On Hold | credential | user-owned Projects need a token with project scope; neither GITHUB_TOKEN nor this session has one. The publisher syncs Projects only when that token is configured | 2026-11-17 |
 | **TELOS reviewers bound to real seats (K6)** (`k6`) | On Hold | governance | pinned TELOS verifier admits ledger entries and seat-signed reviews | 2026-11-17 |
 | **Seat files from before the ledger** (`legacy-seat-files`) | On Hold | decision | a resumed board from before the ledger has seat turns that were never recorded; refused today. Adopting them as signed inputs is a choice about trust | 2026-11-17 |
 | **P8/P9 admission through the efficiency gate** (`p8-p9-admission`) | On Hold | depends on k6 | needs the pinned verifier to admit it | 2026-11-17 |
@@ -22,12 +23,13 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
 | **Hardware or remote signer** (`signer`) | On Hold | decision | which signer holds operator keys is a custody decision | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
-| **One ledger across boards and domains** (`board-resolver`) | In progress |  | per-entry board resolution for gate and contribution; a principled answer for ledgers holding several domains of kinds | 2026-11-17 |
-| **Gate verdicts recorded on the run path** (`gate-on-run-path`) | In progress |  | runOpenItem records the ship verdict as a gate entry citing its lease entries | 2026-11-17 |
+| **GitHub as the public projection of the ledger** (`public-record`) | In progress |  | issues, labels, PR provenance, cycle reports and Actions summaries generated from committed ledgers; agent seats never shown as GitHub identities | 2026-11-17 |
 | **FW1: prove/verify certify against a stored answer (independent review)** (`fw1-stored-answer`) | Ready |  | reported in PR #7; not yet assessed here | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
+| **One ledger across boards and domains** (`board-resolver`) | Resolved |  | entries name their board (scope) and re-derive against it; domains declared by operator-signed entries; a reader checks foreign-domain entries structurally and reports them as foreign, never re-derived | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
 | **Six models on the shared client** (`frontier-move`) | Resolved |  | requests unchanged (providerDefaults); remaining models held (direct-path-xai, gemini-routing) | 2026-11-17 |
+| **Gate verdicts recorded on the run path** (`gate-on-run-path`) | Resolved |  | runOpenItem records each ship verdict, including refusals, as a scoped gate entry that re-derives after the board moves on | 2026-11-17 |
 | **gemini-3.8-flash** (`gemini-3.8`) | Resolved |  | recorded as a stable API model; default stays on 3.6 (current, supports minimal) | 2026-11-17 |
 | **Ledger core (K1)** (`k1`) | Resolved |  | closed kinds, per-author signatures, re-derivation before append, checkpoints | 2026-11-17 |
 | **Genesis and anchors (K2)** (`k2`) | Resolved |  | genesis-pinned authority; TELOS and board anchors | 2026-11-17 |
