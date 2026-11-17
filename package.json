@@ -11,7 +11,7 @@
   },
   "scripts": {
     "test": "npm --prefix packages/model-client test && npm --prefix packages/ledger test && npm --prefix pantheon test -- --test-concurrency=2",
-    "test:proof": "node --test ophanim/governance/*.test.mjs ophanim/efficiency/*.test.mjs ophanim/efficiency/investigation/*.test.mjs ophanim/tests/*.test.mjs ophanim/ledger/*.test.mjs ophanim/public/*.test.mjs",
+    "test:proof": "node --test ophanim/governance/*.test.mjs ophanim/efficiency/*.test.mjs ophanim/efficiency/investigation/*.test.mjs ophanim/tests/*.test.mjs ophanim/ledger/*.test.mjs ophanim/public/*.test.mjs ophanim/lessons/*.test.mjs",
     "review-cycle": "node pantheon/bin/pantheon-review-cycle.mjs",
     "public-record": "node ophanim/public/github.mjs"
   },
