@@ -324,3 +324,15 @@ Not done:
 - No live run has accumulated in a store from this checkout. Every record made here is synthetic.
 - Only `argo` and `fit` are interleaved. `legacy` is shadowed, never assigned.
 - No paired run has been made against live providers. The pair rate is 0 until the owner sets it.
+
+## Seat triage (experimental, 2026-11-17)
+
+Owner request: instead of always seating the top model, ask the seat's cheap default model which model of its lab should take the seat.
+
+- `pantheon/src/route/triage.mjs`: `triageSeat({role, task, turn})`. Sonnet is asked for the planner seat and chooses among Anthropic's registry models; Luna is asked for the implementer seat and chooses among OpenAI's. One call each.
+- The answer is a routing input only. A model outside the listed options, an unparseable answer or a failed asker is not followed: the seat starts on the lowest-class option and the record says why. Escalation after a rejection is unchanged.
+- It is **not wired into the lifecycle or any default path.** The test (`pantheon/tests/route-triage.test.mjs`) feeds the answers into a board run as seat overrides.
+- Scripted only. Whether a live Sonnet or Luna triages well is unmeasured.
+- Open question before wiring it in: under model-level independence, should the asker count as a contributor to the work it routed?
+
+A trial of `fit` as the lifecycle default (not committed): 250 of 252 lifecycle tests passed. The two that failed assert behaviour specific to `argo` (a same-seat revision at the top of the dial). Under `fit` a medium item was planned by `claude-sonnet-5` and implemented by `gpt-6-astra`; an in-run rejection raised the worker's effort instead.
