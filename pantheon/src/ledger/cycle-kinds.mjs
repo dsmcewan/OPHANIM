@@ -59,9 +59,24 @@ import {createHash} from 'node:crypto';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
-import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
+import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, carriesPractice, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
+import {reviewerRefusal} from '../review/identity.mjs';
 
-export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1};
+export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
+
+// REVIEW INDEPENDENCE, by contract (owner direction 2026-11-17). Two rules were one; v3 separates them.
+//   every contract   three distinct labs on a qualifying panel: one review per lab per cycle, and required_reviewers.
+//   v1, v2           no reviewer from a LAB that authored the change (`author_labs`). Unchanged: a cycle opened
+//                    under v1 or v2 re-derives, closes and hashes exactly as before, now and always.
+//   v3               no reviewer that IS a contributing MODEL (`author_models`, by identity: review/identity.mjs, so an
+//                    effort level, alias, snapshot, session or route does not make a contributor eligible), and none
+//                    from `excluded_labs` (labs of contributions whose model could not be identified). A reviewer
+//                    from a lab that contributed is allowed, and the close records it (`shared_labs`).
+/** Why a reviewer seat may not review cycle `c`, or null. `seat` is {vendor, model, served_model?, lab}. */
+export function independenceRefusal(c, seat) {
+  if (c.contract !== CYCLE_CONTRACT_V3) return c.author_labs.includes(seat.lab) ? `the ${seat.lab} lab authored the change and may not review it` : null;
+  return reviewerRefusal(seat, {models: c.author_models, labs: c.excluded_labs});
+}
 
 export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close', ATTEMPT = 'cycle.attempt';
 export const ATTEMPT_OUTCOMES = ['reviewed', 'failed'];
@@ -172,8 +187,12 @@ export function closeClaim(state) {
   if (c.required_reviewers !== undefined && new Set(labs).size < Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)) {
     return {why: `the cycle requires ${Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)} independent labs and ${new Set(labs).size} reviewed`};
   }
-  const authored = labs.find(l => c.author_labs.includes(l));
-  if (authored) return {why: `the ${authored} lab authored the change and reviewed it`};
+  if (c.contract === CYCLE_CONTRACT_V3) {
+    for (const r of reviews) { const why = independenceRefusal(c, {vendor: r.seat.vendor, model: r.model, served_model: r.served_model, lab: r.lab}); if (why) return {why}; }
+  } else {
+    const authored = labs.find(l => c.author_labs.includes(l));
+    if (authored) return {why: `the ${authored} lab authored the change and reviewed it`};
+  }
   for (const r of reviews) {
     const recorded = findings.filter(f => f.review === r.hash).length;
     if (recorded !== r.reported.findings.length) return {why: `a review reported ${r.reported.findings.length} finding(s) and ${recorded} are recorded`};
@@ -188,7 +207,9 @@ export function closeClaim(state) {
   const claim = {outcome: unreproduced ? 'unverified' : 'verified', reviews: reviews.map(r => r.hash).sort(), labs: [...labs].sort(),
     findings: {total: findings.length, fixed, deferred, unreproduced}};
   // The old contract's close is exactly what it was. Under v2 the cycle also carries its practice decision.
-  if (c.contract !== CYCLE_CONTRACT) return {claim};
+  if (!carriesPractice(c.contract)) return {claim};
+  // v3: the reviewers that share a lab with a contributor are named in the close (the relationship is on the record).
+  if (c.contract === CYCLE_CONTRACT_V3) claim.shared_labs = [...new Set(labs.filter(l => c.author_labs.includes(l)))].sort();
   const dispositions = state.dispositions ?? [];
   if (!dispositions.some(d => d.payload.stage === 'assessment')) {
     return {why: `no practice assessment/disposition is recorded for this cycle (${CYCLE_CONTRACT} requires one; an explicit insufficient_evidence or retain is enough)`};
@@ -213,13 +234,18 @@ export function cycleKinds({authors = () => true} = {}) {
         && HEX.test(p.prompt_sha ?? '') && Array.isArray(p.files) && p.files.every(str) && Number.isInteger(p.reviewers) && p.reviewers >= 1
         && Array.isArray(p.author_labs) && p.author_labs.every(str) && ISO(p.opened_at)
         ? requirementRefusal(p) ?? (p.contract === undefined ? null
-          : p.contract === CYCLE_CONTRACT && validPolicy(p.policy) && str(p.practice_scope) && (p.prior === null || SHA.test(p.prior ?? '')) ? null
+          : carriesPractice(p.contract) && validPolicy(p.policy) && str(p.practice_scope) && (p.prior === null || SHA.test(p.prior ?? ''))
+            ? (p.contract !== CYCLE_CONTRACT_V3 ? (p.author_models === undefined && p.excluded_labs === undefined && p.independence === undefined ? null
+                : `only a ${CYCLE_CONTRACT_V3} cycle names author_models, excluded_labs and independence`)
+              : p.independence === 'model' && Array.isArray(p.author_models) && p.author_models.every(str) && Array.isArray(p.excluded_labs) && p.excluded_labs.every(str)
+                && SHA.test(p.identity_rules ?? '') && Number.isInteger(p.required_reviewers) ? null
+                : `a ${CYCLE_CONTRACT_V3} cycle names {independence: "model", author_models, excluded_labs, identity_rules} and records required_reviewers`)
             : `a ${CYCLE_CONTRACT} cycle also names {policy: {version, hash, profile}, practice_scope, prior}; a cycle without a contract field is the old contract`)
         : 'a cycle names {scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}'),
       rederive: (e, view) => {
         const p = e.payload;
         if (p.base === p.head) return 'a cycle reviews a change: its base and head differ';
-        const v2 = p.contract === CYCLE_CONTRACT;
+        const v2 = carriesPractice(p.contract);
         if (e.derived_from.some(h => ![CLOSE, 'turn', ...(v2 ? [PRACTICE] : [])].includes(view.entry(h)?.kind))) {
           return v2 ? 'a cycle cites only the author\'s turns, the previous cycle\'s close and the practice decision it loaded'
             : 'a cycle cites only the author\'s turns and the previous cycle\'s close';
@@ -230,7 +256,7 @@ export function cycleKinds({authors = () => true} = {}) {
           const admitted = admittedPractice(view, {scope: p.practice_scope, profile: p.policy.profile})?.disposition ?? null;
           if (p.prior !== admitted) return `the cycle's prior practice decision is ${admitted ?? 'none'} on this ledger, not ${p.prior ?? 'none'}`;
           if (canonical(cites(view, e, PRACTICE)) !== canonical(admitted ? [admitted] : [])) return 'a cycle cites the prior practice decision it loaded, and no other';
-        } else if (prev && view.payload(prev).contract === CYCLE_CONTRACT) {
+        } else if (prev && carriesPractice(view.payload(prev).contract)) {
           return `the previous cycle of this scope opened under ${CYCLE_CONTRACT}: the scope may not return to the old contract`;
         }
         if (!prev) return closes.length ? 'the first cycle of a scope cites no close' : null;
@@ -300,7 +326,8 @@ export function cycleKinds({authors = () => true} = {}) {
         if (closedAt(view, cycle)) return 'the cycle is closed';
         if (labOf(p.seat.vendor, p.seat.model) !== p.seat.lab) return `the seat's lab is ${labOf(p.seat.vendor, p.seat.model)}, not ${p.seat.lab}`;
         const c = view.payload(cycle);
-        if (c.author_labs.includes(p.seat.lab)) return `the ${p.seat.lab} lab authored the change and may not review it`;
+        const refused = independenceRefusal(c, {vendor: p.seat.vendor, model: p.seat.model, lab: p.seat.lab});
+        if (refused) return refused;
         let tried = 0;
         for (const h of view.entries()) {
           const x = view.entry(h);
@@ -361,15 +388,17 @@ export function cycleRecorder({ledger, controller, order}) {
      * the admitted practice decision (`prior`). CYCLE_CONTRACT_V1 writes the old payload, byte for byte.
      */
     openCycle({scope, base, head, diff, files, prompt, brief = REVIEW_BRIEF, reviewers = 3, author_labs = [], author_turns = [], opened_at = new Date().toISOString(),
-      contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE, required_reviewers = undefined}) {
-      if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT} or ${CYCLE_CONTRACT_V1}`);
+      contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE, required_reviewers = undefined, author_models = undefined, excluded_labs = undefined,
+      identity_rules = undefined}) {
+      if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT}, ${CYCLE_CONTRACT_V3} or ${CYCLE_CONTRACT_V1}`);
       const prev = lastCycle(scope);
       const payload = {scope, base, head, diff_sha: sha(diff), files: [...files], prompt_sha: promptSha(prompt),
         brief_sha: sha(brief), reviewers, author_labs: [...author_labs], opened_at, ...(required_reviewers !== undefined ? {required_reviewers} : {})};
       if (contract === CYCLE_CONTRACT_V1) return append(CYCLE, payload, [...(prev?.close ? [prev.close] : []), ...author_turns]);
       const inEffect = policy ?? currentPolicy('argo');
       const prior = admittedPractice(ledgerView(ledger), {scope: practice_scope, profile: inEffect.profile})?.disposition ?? null;
-      return append(CYCLE, {...payload, contract, policy: inEffect, practice_scope, prior},
+      const model = contract === CYCLE_CONTRACT_V3 ? {independence: 'model', author_models: [...(author_models ?? [])].sort(), excluded_labs: [...(excluded_labs ?? [])].sort(), identity_rules} : {};
+      return append(CYCLE, {...payload, contract, policy: inEffect, practice_scope, prior, ...model},
         [...(prev?.close ? [prev.close] : []), ...(prior ? [prior] : []), ...author_turns]);
     },
     recordFinding({review, index, finding}) { return append(FINDING, {index, ...findingOf(normalFinding(finding) ?? finding)}, [review]); },

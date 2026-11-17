@@ -140,6 +140,10 @@ No option both completes items and leaves every stated requirement unchanged. Ea
 
 A critique that reaches a revision adds a contributor under every option. So under A through F, revisions after findings still consume reviewer capacity. That is how the independence rule is written, and nothing here changes it.
 
+### Decision taken on 2026-11-17, not yet active
+
+The owner chose to split the two rules: keep three distinct labs on the panel, and exclude the contributing **models** instead of every model of their labs, with no fixed limit on seats from contributing labs. This is none of options A-F as written; it is closest to changing the independence scope (D) while keeping the full contribution history. It is implemented as review contract `pantheon.cycle/v3` and tested on the four real labs, where items complete the lifecycle. It stays switched off until another lab has reviewed it: `docs/review-independence.md`.
+
 ### What the branch does today
 
 Option A. Nothing has been weakened or moved, and no lab or pool has changed. The capacity report (`pantheon-board.mjs capacity`, `FOUR_LABS.md`) will measure, on live runs, how often each pending cause happens. That gives the data for choosing among B through E, if you want it before deciding.

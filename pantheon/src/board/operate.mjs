@@ -36,8 +36,9 @@ import { seatingPlan, INTAKE } from "../role/seating.mjs";
 import { TOKEN_TIERS } from "../config/tiers.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
-import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
-import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
+import { reviewCycle, reviewSeats, reviewSeatsByModel } from "../ledger/review-cycle.mjs";
+import { contributorKeys } from "../review/identity.mjs";
+import { carriesPractice } from "../ledger/practice-kinds.mjs";
 import { closeClaim, REQUIRED_REVIEW_LABS } from "../ledger/cycle-kinds.mjs";
 import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
 import { DEFAULT_ELIGIBLE_STRATA, BASELINE_ARM, CANDIDATE_ARM, PAIR_SCHEMA, pairFor, assignArm, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
@@ -183,10 +184,26 @@ export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "a
  * independence requirement; do not drop the planner's contribution or weaken the scope). When the configured pool
  * cannot supply n labs outside the contributors, the result is pending, with no seats, and says why.
  */
-export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined }) {
+export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined, independence = "lab" }) {
   const full = scope ?? { kind: "change", contributions: [...planLabs.map(lab => ({ purpose: "plan", lab })), ...workLabs.map(lab => ({ purpose: "work", lab }))],
     author_labs: [...new Set([...workLabs, ...planLabs])].sort() };
   const base = { author_labs: full.author_labs, planner_excluded: true, scope: full };
+  // MODEL-level independence (pantheon.cycle/v3), only when asked for: the contributing models are excluded, three
+  // distinct labs are still required, labs that did not contribute are seated first, and a seat that shares a lab with
+  // a contributor says so. The default is the lab rule below, unchanged.
+  if (independence === "model") {
+    const keys = contributorKeys(full.contributions ?? []);
+    const by = { ...base, independence: "model", author_models: keys.models, excluded_labs: keys.labs, author_labs: keys.contributing_labs, contributions: full.contributions ?? [] };
+    try {
+      const seats = reviewSeatsByModel({ n, excluded: keys, ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) });
+      return { ...by, seats, shared_labs: seats.filter(s => s.shared_lab).map(s => s.lab) };
+    } catch (e) {
+      if (e.code !== "NO_SEATS") throw e;
+      return { ...by, seats: null, pending: { code: "REVIEW_CAPACITY_PENDING", need: n, eligible_labs: e.eligible_labs,
+        why: `fewer than ${n} labs have a model that did not contribute to the change (eligible: ${e.eligible_labs.join(", ") || "none"}; contributing models: ` +
+          `${keys.models.join(", ") || "none"}${keys.labs.length ? `; labs excluded outright: ${keys.labs.join(", ")}` : ""}); produced work and evidence are kept and the review is pending` } };
+    }
+  }
   try {
     return { ...base, seats: reviewSeats({ n, avoidLabs: full.author_labs, ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) }) };
   } catch (e) {
@@ -310,7 +327,7 @@ const runPolicy = run => {
  */
 function recordPractice(rec, cycle, practice) {
   const state = rec.cycleState(cycle);
-  if (state.cycle.contract !== CYCLE_CONTRACT || !practice || state.dispositions.some(d => d.payload.stage === "assessment")) return null;
+  if (!carriesPractice(state.cycle.contract) || !practice || state.dispositions.some(d => d.payload.stage === "assessment")) return null;
   const { outcome, question, evidence = [], measured = false, provenance = { by: { role: "lead@orch" }, method: measured ? "measured comparison" : "operator-recorded assessment, unmeasured" } } = practice;
   return rec.recordDisposition({ cycle, outcome, question, evidence, measured, provenance });
 }
@@ -329,7 +346,7 @@ const storeOf = bundle => bundle.evidence_store ?? join(dirname(resolve(bundle.r
  */
 function recordAutomaticPractice(rec, cycle, store) {
   const state = rec.cycleState(cycle);
-  if (state.cycle.contract !== CYCLE_CONTRACT || state.dispositions.some(d => d.payload.stage === "assessment")) return null;
+  if (!carriesPractice(state.cycle.contract) || state.dispositions.some(d => d.payload.stage === "assessment")) return null;
   const waiting = closeClaim(state).why;
   if (!waiting || !/no practice assessment/.test(waiting)) return null;
   const pools = readPools();

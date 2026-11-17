@@ -10,6 +10,7 @@
 //     (`seat:<seat_id>#<occupancy_gen>`), admitted to the ledger by an operator's authority entry. A
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
+import {reviewerRefusal, modelIdentity} from '../review/identity.mjs';
 import {labOf} from '../config/models.mjs';
 import {promptSha, replySha} from '../context/chain.mjs';
 import {generateSigner, AUTHORITY} from '../../../packages/ledger/chain.mjs';
@@ -52,7 +53,12 @@ function lineageOf(view, hashes) {
 // the same seat that was given exactly the cycle's prompt, one review per lab, and none once it is closed.
 function cycleReview(e, view, cycle, lab) {
   const c = view.payload(cycle), p = e.payload;
-  if (c.author_labs.includes(lab)) return `the ${lab} lab authored the change under review`;
+  // v1 and v2: the reviewer's LAB did not author the change. v3 (pantheon.cycle/v3): the reviewer is not a contributing
+  // MODEL, by identity, whatever the effort, alias, session or route (cycle-kinds.mjs, review/identity.mjs).
+  if (c.contract === 'pantheon.cycle/v3') {
+    const refused = reviewerRefusal({vendor: p.seat?.vendor, model: p.model, served_model: p.served_model ?? null}, {models: c.author_models, labs: c.excluded_labs});
+    if (refused) return refused;
+  } else if (c.author_labs.includes(lab)) return `the ${lab} lab authored the change under review`;
   const t = typeof p.turn === 'string' ? view.entry(p.turn) : null;
   if (t?.kind !== 'turn' || t.author.key_id !== e.author.key_id || !t.derived_from.includes(cycle)) return 'a cycle review names the turn that answered it, by the same seat, on this cycle';
   const a = view.payload(p.turn);
@@ -110,9 +116,19 @@ export function lineageKinds() {
         if (cycles.length > 1) return 'a review cites at most one cycle';
         const lab = labOf(p.seat.vendor, p.served_model ?? p.model);
         const mine = lineageKey(p.seat.vendor, p.response_id);
+        const v3 = cycles.length === 1 && view.payload(cycles[0])?.contract === 'pantheon.cycle/v3';
         for (const {entry, payload: t} of lineageOf(view, e.derived_from)) {
           if (entry.author.key_id === e.author.key_id) return 'a seat may not review its own turn';
-          if (t.seat && t.reply_sha && labOf(t.seat.vendor, t.served_model ?? t.requested_model) === lab) return `the ${lab} lab is in the lineage of what it reviews`;
+          // Cold review. Under v1 and v2 (and for any review outside a cycle) no reviewer's LAB is in the lineage of what
+          // it reviews. Under pantheon.cycle/v3 the reviewer is not one of the MODELS in that lineage, by identity
+          // (the requested and the served model of each lineage turn, against the reviewer's own two names).
+          if (t.seat && t.reply_sha) {
+            if (v3) {
+              const theirs = [t.requested_model, t.served_model].filter(Boolean).map(m => modelIdentity(t.seat.vendor, m)?.id);
+              const same = [p.model, p.served_model].filter(Boolean).map(m => modelIdentity(p.seat.vendor, m)?.id).find(i => theirs.includes(i));
+              if (same) return `${same} is in the lineage of what it reviews`;
+            } else if (labOf(t.seat.vendor, t.served_model ?? t.requested_model) === lab) return `the ${lab} lab is in the lineage of what it reviews`;
+          }
           if (mine && lineageKey(t.seat.vendor, t.response_id) === mine) return 'the review response is part of the lineage it reviews';
         }
         return cycles.length ? cycleReview(e, view, cycles[0], lab) : null;

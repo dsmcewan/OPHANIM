@@ -1,0 +1,8 @@
+{
+  "note": "Which model ids name the SAME model for review independence (review/identity.mjs). An entry maps a name to the model it is: an effort or thinking variant, a lane or route name, or an alias. Entries are only ever added: merging two names can only exclude more reviewers, never admit one.",
+  "same_model": {
+    "claude-opus-4-6-thinking": {"model": "claude-opus-4-6", "basis": "the agy lane name for claude-opus-4-6 with thinking enabled: an effort setting, not another model (config/lanes.json)"},
+    "gemini-3.8-flash-high": {"model": "gemini-3.8-flash", "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking; the API model is gemini-3.8-flash (config/lanes.json basis)"}
+  },
+  "declared_elsewhere": ["claude-opus-4-6", "gemini-3.8-flash"]
+}

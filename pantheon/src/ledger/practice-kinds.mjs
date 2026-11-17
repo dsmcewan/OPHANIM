@@ -52,6 +52,11 @@ import {selectionPolicy} from '../route/frontier.mjs';
 export const PRACTICE = 'practice.disposition';
 export const PRACTICE_SCHEMA = 'pantheon.practice/v1';
 export const CYCLE_CONTRACT = 'pantheon.cycle/v2';
+// v3 is v2 with MODEL-level review independence (cycle-kinds.mjs): everything a v2 cycle carries and requires holds
+// for a v3 cycle. A cycle opens under v3 only when its caller asks for it; v2 stays the default.
+export const CYCLE_CONTRACT_V3 = 'pantheon.cycle/v3';
+/** Does a cycle opened under `contract` carry a practice decision (v2 and later)? */
+export const carriesPractice = contract => contract === CYCLE_CONTRACT || contract === CYCLE_CONTRACT_V3;
 /** The contract a cycle without a `contract` field opened under. Never written: an old cycle's payload is unchanged. */
 export const CYCLE_CONTRACT_V1 = 'pantheon.cycle/v1';
 export const DEFAULT_PRACTICE_SCOPE = 'routing-coordination';
@@ -122,7 +127,7 @@ function rederive(e, view) {
   const p = e.payload, [cycle, ...rest] = e.derived_from;
   if (view.entry(cycle)?.kind !== CYCLE) return 'a practice disposition cites its cycle first';
   const c = view.payload(cycle);
-  if (c.contract !== CYCLE_CONTRACT) return `a practice disposition belongs to a cycle opened under ${CYCLE_CONTRACT}`;
+  if (!carriesPractice(c.contract)) return `a practice disposition belongs to a cycle opened under ${CYCLE_CONTRACT}`;
   if (closedAt(view, cycle)) return 'the cycle is closed';
   if (p.scope !== c.practice_scope) return `the cycle's practice scope is ${c.practice_scope}, not ${p.scope}`;
   if (canonical(p.policy) !== canonical(c.policy)) return 'the policy in effect is the one the cycle opened under';
