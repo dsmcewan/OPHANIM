@@ -167,3 +167,14 @@ test('a handoff that does not re-derive is refused by the receiving stage and by
     assert.ok(outputsDigest(plan.outputs));
   } finally { f.done(); }
 });
+
+test('missing authority: with no controller key the tick refuses (NO_AUTHORITY) rather than skipping work', async () => {
+  const f = fixture([{item: 'iota', title: 'Iota', state: 'Ready'}]);
+  try {
+    const {ex} = scripted(f);
+    await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {}, limits: LIMITS}); // creates the ledger and records intake
+    fs.rmSync(path.join(f.workRoot, 'keys'), {recursive: true, force: true});
+    await assert.rejects(() => tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS}), e => e.code === 'NO_AUTHORITY');
+    assert.equal(openWorkLedger({root: f.workRoot}).verify().ok, true, 'the ledger still verifies; nothing was recorded without authority');
+  } finally { f.done(); }
+});

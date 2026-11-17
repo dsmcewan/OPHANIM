@@ -114,7 +114,8 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const attempt = attempts + 1;
       let claim;
       try { claim = work.claim({item, stage: gate.gate, attempt, inputs, holder, budget, lease_ms: L.lease_ms, at: new Date(clock()).toISOString()}); }
-      catch (e) { log.skipped.push({item, gate: gate.gate, why: e.message}); return; }
+      // Missing authority is a block on the whole tick, never a quiet skip of one item.
+      catch (e) { if (e.code === 'NO_AUTHORITY') throw e; log.skipped.push({item, gate: gate.gate, why: e.message}); return; }
       iterations++;
       progress({event: 'dispatch', item, stage: gate.gate, attempt, mode: gate.mode ?? null});
       let result;
