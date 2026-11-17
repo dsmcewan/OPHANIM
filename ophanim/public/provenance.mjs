@@ -1,3 +1,5 @@
+// ophanim/public/provenance.mjs -- pull-request provenance sections and review-cycle reports.
+//
 // Pull-request provenance and cycle reports: readable projections of a review-cycle ledger
 // (pantheon/src/ledger/cycle-kinds.mjs, review-cycle.mjs, lineage-kinds.mjs), for the public record
 // (docs/public-record.md).
@@ -6,6 +8,18 @@
 // entry is re-derived (cold review included) before anything is projected; no key is needed and nothing
 // is written. What these projections say about independence is only what the verified entries show,
 // and each claim names its evidence. Their limits are stated with them.
+//
+// Purpose: turn the verified entries of one review cycle into Markdown a reader can check: the PR body's
+//   "Provenance" section (prProvenance), a per-cycle report (cycleReport) and the cycles index.
+// Inputs:  an absolute ledger root and an optional anchor (openLedgerReadOnly); thereafter the read-only
+//   `view` it returns and a cycle entry hash. writeCycleReports also takes the output directory.
+// Outputs: Markdown strings; writeCycleReports writes docs/cycles/<slug>.md and index.md and returns the
+//   paths. Errors are thrown with code PUBLIC_RECORD_REFUSED.
+// Invariants: nothing is projected from a ledger that has not verified in full against its anchor;
+//   every table cell from ledger text goes through cell() (pipes escaped, newlines flattened); each
+//   independence claim is accompanied by LIMITS, which state what the evidence does not show.
+// Must never: write to or sign on the ledger, claim independence the entries do not show (distinct labs
+//   are vendors, not people), or present a GitHub review as one of these seats' reviews.
 import fs from 'node:fs';
 import path from 'node:path';
 import {openLedger} from '../../packages/ledger/chain.mjs';
@@ -16,6 +30,7 @@ import {CHAIR_OF_MODE} from '../../pantheon/src/board/contributions.mjs';
 import {dispositionsOf, evidenceBasis} from '../../pantheon/src/ledger/practice-kinds.mjs';
 import {provenanceNotice} from './record.mjs';
 
+// Refuse with the public-record error code; cell/code format ledger text for a Markdown table.
 const fail = why => { throw Object.assign(new Error(why), {code: 'PUBLIC_RECORD_REFUSED'}); };
 const cell = s => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 const code = s => (s == null ? '—' : `\`${s}\``);
@@ -35,7 +50,9 @@ export function openLedgerReadOnly({root, anchor = null}) {
   const v = ledger.verify();
   if (!v.ok) fail(`ledger does not verify: ${v.why}`);
   const byHash = new Map(ledger.read().map(e => [ledger.hashOf(e), e]));
-  const view = {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? ledger.payloadOf(byHash.get(h)) : null), entries: () => [...byHash.keys()]};
+  const view = {
+    entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? ledger.payloadOf(byHash.get(h)) : null),
+    entries: () => [...byHash.keys()]};
   return {ledger, view, anchor: pinned, head: v.head, entries: v.entries};
 }
 
@@ -47,13 +64,18 @@ export function listCycles(view) {
     if (e.kind !== CYCLE) continue;
     const p = view.payload(h);
     n.set(p.scope, (n.get(p.scope) ?? 0) + 1);
-    out.push({hash: h, scope: p.scope, ordinal: n.get(p.scope), seq: e.seq, base: p.base, head: p.head, opened_at: p.opened_at});
+    out.push(
+      {hash: h, scope: p.scope, ordinal: n.get(p.scope), seq: e.seq, base: p.base, head: p.head,
+        opened_at: p.opened_at});
   }
   return out;
 }
 export const cycleSlug = c => `${c.scope.replace(/[^A-Za-z0-9._-]+/g, '-')}-${String(c.ordinal).padStart(3, '0')}`;
 
-const roleOfMode = mode => (mode === 'cycle-review' ? 'reviewer (cycle-review seat)' : CHAIR_OF_MODE[mode] ? `${CHAIR_OF_MODE[mode]} (${mode})` : mode ?? 'unrecorded');
+// A seat's role as displayed: the cycle reviewer, a board chair (by the mode it ran in), or the raw mode.
+const roleOfMode = mode => (
+  mode === 'cycle-review' ? 'reviewer (cycle-review seat)'
+    : CHAIR_OF_MODE[mode] ? `${CHAIR_OF_MODE[mode]} (${mode})` : mode ?? 'unrecorded');
 
 /** Everything one cycle's verified entries say, shaped for the projections below. */
 export function cycleRecord(view, cycle) {
@@ -61,16 +83,21 @@ export function cycleRecord(view, cycle) {
   if (e?.kind !== CYCLE) fail(`${cycle} is not a cycle on this ledger`);
   const state = deriveCycle(view, cycle);
   const c = state.cycle;
+  // One seat row from an entry and its payload. The lab is judged from the served model when the provider
+  // reported one, else from the requested model.
   const seat = (h, p) => ({
-    entry: h, key_id: view.entry(h).author.key_id, seat_id: p.seat?.seat_id, vendor: p.seat?.vendor, role: roleOfMode(p.seat?.mode),
+    entry: h, key_id: view.entry(h).author.key_id, seat_id: p.seat?.seat_id, vendor: p.seat?.vendor,
+    role: roleOfMode(p.seat?.mode),
     requested_model: p.requested_model ?? p.model ?? null, served_model: p.served_model ?? null,
     lab: labOf(p.seat?.vendor, p.served_model ?? p.requested_model ?? p.model), response_id: p.response_id ?? null,
   });
+  // Authors: the turns the cycle entry cites. Reviews take the requested model from the turn they cite.
   const authors = e.derived_from.filter(h => view.entry(h)?.kind === 'turn').map(h => seat(h, view.payload(h)));
   const reviews = state.reviews.map(r => {
     const p = view.payload(r.hash), turn = p.turn ? view.payload(p.turn) : null;
-    return {...seat(r.hash, {...p, requested_model: turn?.requested_model ?? p.model}), turn: p.turn ?? null, verdict: r.verdict, lab: r.lab,
-      parsed: r.reported.parsed};
+    return {
+      ...seat(r.hash, {...p, requested_model: turn?.requested_model ?? p.model}), turn: p.turn ?? null,
+      verdict: r.verdict, lab: r.lab, parsed: r.reported.parsed};
   });
   const findings = state.findings.map(f => ({
     entry: f.hash, review: f.review, reviewer_lab: reviews.find(r => r.entry === f.review)?.lab ?? null,
@@ -82,11 +109,17 @@ export function cycleRecord(view, cycle) {
   const listed = new Set(close?.practice ?? []);
   const practice = dispositionsOf(view, cycle).map(h => {
     const p = view.payload(h), basis = evidenceBasis(view, p.evidence);
-    return {entry: h, stage: p.stage, outcome: p.outcome, question: p.question, measured: p.measured, provisional: p.provisional,
-      evidence_basis: basis, synthetic: basis === 'synthetic', policy: p.policy, candidate: p.candidate?.id ?? null, admitted: listed.has(h)};
+    return {
+      entry: h, stage: p.stage, outcome: p.outcome, question: p.question, measured: p.measured,
+      provisional: p.provisional,
+      evidence_basis: basis, synthetic: basis === 'synthetic', policy: p.policy, candidate: p.candidate?.id ?? null,
+      admitted: listed.has(h)};
   });
+  // An open cycle shows what its entries would close it as (or why they cannot yet).
   const pending = close ? null : closeClaim(state);
   const labs = reviews.map(r => r.lab);
+  // Independence as the verified reviews show it: one review per lab, no review from an author lab, and
+  // how many providers reported the served model (and where it differed from the request).
   const independence = {
     distinct_labs: new Set(labs).size === labs.length,
     labs: [...labs].sort(),
@@ -99,6 +132,7 @@ export function cycleRecord(view, cycle) {
   return {hash: cycle, seq: e.seq, cycle: c, authors, reviews, findings, close, pending, independence, practice};
 }
 
+// What the independence evidence does not show; printed with every provenance section.
 const LIMITS = [
   'Every seat runs under one operator and one GitHub account; distinct labs are distinct model vendors, not distinct people or organisations.',
   'Distinct labs do not establish independent training data or that the models share no blind spots.',
@@ -107,22 +141,29 @@ const LIMITS = [
   'A finding without a reproduction can be deferred; such a cycle closes `unverified`, never `verified`.',
 ];
 
+// A finding's resolution: the fixing commit with the test's fail-before / pass-after exit codes, the
+// deferral reason, or "unresolved".
 function resolutionText(f) {
   const r = f.resolution?.payload;
   if (!r) return 'unresolved';
-  if (r.status === 'fixed') return `fixed in \`${r.fix.commit.slice(0, 12)}\`; \`${cell(r.fix.test)}\` exited ${r.fix.before.exit} on \`${r.fix.before.commit.slice(0, 12)}\` (fail before) and ${r.fix.after.exit} on \`${r.fix.after.commit.slice(0, 12)}\` (pass after)`;
+  if (r.status === 'fixed')
+    return `fixed in \`${r.fix.commit.slice(0, 12)}\`; \`${cell(r.fix.test)}\` exited ${r.fix.before.exit} on \`${r.fix.before.commit.slice(0, 12)}\` (fail before) and ${r.fix.after.exit} on \`${r.fix.after.commit.slice(0, 12)}\` (pass after)`;
   return `deferred: ${cell(r.reason)}`;
 }
-const reproText = f => (f.reproduction ? `${f.reproduction.kind}: \`${cell(f.reproduction.run)}\`` : '**unreproduced**');
+const reproText = f => (
+  f.reproduction ? `${f.reproduction.kind}: \`${cell(f.reproduction.run)}\`` : '**unreproduced**');
 
+// Markdown table of seats (authors or reviews); `verdict` adds the review verdict column.
 function seatTable(rows, {verdict = false} = {}) {
   return [
     `| Role | Vendor | Requested model | Served model | Lab | Seat key id |${verdict ? ' Verdict |' : ''} Ledger entry |`,
     `|---|---|---|---|---|---|${verdict ? '---|' : ''}---|`,
-    ...rows.map(r => `| ${cell(r.role)} | ${code(r.vendor)} | ${code(r.requested_model)} | ${r.served_model ? code(r.served_model) : 'not reported'} | ${code(r.lab)} | ${code(r.key_id)} |${verdict ? ` ${r.verdict} |` : ''} \`${r.entry}\` |`),
+    ...rows.map(
+      r => `| ${cell(r.role)} | ${code(r.vendor)} | ${code(r.requested_model)} | ${r.served_model ? code(r.served_model) : 'not reported'} | ${code(r.lab)} | ${code(r.key_id)} |${verdict ? ` ${r.verdict} |` : ''} \`${r.entry}\` |`),
   ];
 }
 
+// The independence evidence as bullet points; a failed check is stated as NO with what failed.
 function independenceLines(rec) {
   const i = rec.independence, out = [];
   out.push(`- Reviews recorded: ${rec.reviews.length} of ${i.reviews_expected} expected.`);
@@ -132,8 +173,10 @@ function independenceLines(rec) {
   out.push(i.author_lab_reviewed.length
     ? `- **Author lab excluded:** NO (${i.author_lab_reviewed.join(', ')} authored and reviewed).`
     : `- **Author lab excluded:** yes; author lab(s) ${i.author_labs.map(code).join(', ') || 'none recorded'} did not review.`);
-  out.push(`- **Cold-review check:** passed for every recorded review (the ledger verified in full, and a review whose lab, seat or response is in the lineage of what it reviews does not re-derive).`);
-  out.push(`- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} reviews${i.served_differs.length ? `; served differs from requested for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}.`);
+  out.push(
+    `- **Cold-review check:** passed for every recorded review (the ledger verified in full, and a review whose lab, seat or response is in the lineage of what it reviews does not re-derive).`);
+  out.push(
+    `- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} reviews${i.served_differs.length ? `; served differs from requested for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}.`);
   return out;
 }
 
@@ -150,15 +193,19 @@ function practiceLines(rec) {
   }
   const pol = rec.cycle.policy;
   return [
-    ...(pol ? [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, ''] : []),
+    // The model-selection policy the cycle opened under, when it records one.
+    ...(pol ?
+      [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, ''] : []),
     '| Stage | Outcome | Basis | Comparison evidence | Question | Admitted | Entry |',
     '|---|---|---|---|---|---|---|',
-    ...rec.practice.map(d => `| ${d.stage} | \`${d.outcome}\`${d.candidate ? ` (candidate \`${cell(d.candidate)}\`)` : ''} | ${d.measured ? 'measured' : 'provisional'} | ${BASIS[d.evidence_basis]} | ${cell(d.question)} | ${d.admitted ? 'listed by the close' : rec.close ? 'not listed' : 'cycle open'} | \`${d.entry}\` |`),
+    ...rec.practice.map(
+      d => `| ${d.stage} | \`${d.outcome}\`${d.candidate ? ` (candidate \`${cell(d.candidate)}\`)` : ''} | ${d.measured ? 'measured' : 'provisional'} | ${BASIS[d.evidence_basis]} | ${cell(d.question)} | ${d.admitted ? 'listed by the close' : rec.close ? 'not listed' : 'cycle open'} | \`${d.entry}\` |`),
     '',
     'A synthetic comparison verifies the comparison mechanics on fake providers; it measures no provider cost or quality, and the ledger refuses a promote resting on it alone. Provisional is unmeasured judgment.',
   ];
 }
 
+// One sentence: the close entry's outcome and counts, or why/how the cycle is not yet closed.
 function conclusion(rec) {
   if (rec.close) {
     const f = rec.close.findings;
@@ -183,7 +230,8 @@ export function prProvenance(view, cycle, {anchor, ledgerLabel = 'review-cycle l
     '',
     '### Produced by',
     '',
-    ...(rec.authors.length ? seatTable(rec.authors) : [`No author turn is cited by the cycle; author lab(s) recorded: ${c.author_labs.map(code).join(', ') || 'none'}.`]),
+    ...(rec.authors.length ? seatTable(rec.authors) : [
+        `No author turn is cited by the cycle; author lab(s) recorded: ${c.author_labs.map(code).join(', ') || 'none'}.`]),
     '',
     '### Reviewed by',
     '',
@@ -202,7 +250,8 @@ export function prProvenance(view, cycle, {anchor, ledgerLabel = 'review-cycle l
     ...(rec.findings.length ? [
       '| Severity | Where | Claim | Reproduction | Resolution | Entry |',
       '|---|---|---|---|---|---|',
-      ...rec.findings.map(f => `| ${f.severity} | ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\`` : '—'} | ${cell(f.claim)} | ${reproText(f)} | ${resolutionText(f)} | \`${f.entry}\` |`),
+      ...rec.findings.map(
+        f => `| ${f.severity} | ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\`` : '—'} | ${cell(f.claim)} | ${reproText(f)} | ${resolutionText(f)} | \`${f.entry}\` |`),
     ] : ['No findings were reported.']),
     '',
     '### Practice dispositions',
@@ -225,12 +274,19 @@ export function cycleReport(view, cycle, {anchor, slug} = {}) {
   const rec = cycleRecord(view, cycle), c = rec.cycle;
   const deferred = rec.findings.filter(f => f.resolution?.payload.status === 'deferred');
   const unreproduced = rec.findings.filter(f => !f.reproduction);
+  // "What could be better": deferred and unreproduced findings, missing reviews, unreported served models
+  // and replies that failed closed.
   const better = [
-    ...deferred.map(f => `- Deferred (${f.severity}) ${cell(f.claim)}: ${cell(f.resolution.payload.reason)} (entry \`${f.entry}\`)`),
-    ...unreproduced.filter(f => !deferred.includes(f)).map(f => `- Unreproduced (${f.severity}) ${cell(f.claim)}: fixed without a reviewer reproduction (entry \`${f.entry}\`)`),
-    ...(rec.reviews.length < c.reviewers ? [`- ${c.reviewers - rec.reviews.length} of ${c.reviewers} reviews were not recorded; the range is re-reviewed in a new cycle.`] : []),
-    ...rec.reviews.filter(r => !r.served_model).map(r => `- ${r.vendor} did not report the served model; its lab is judged from the requested model.`),
-    ...rec.reviews.filter(r => !r.parsed).map(r => `- ${r.vendor}'s reply was not in the required form and failed closed as a blocking finding.`),
+    ...deferred.map(
+      f => `- Deferred (${f.severity}) ${cell(f.claim)}: ${cell(f.resolution.payload.reason)} (entry \`${f.entry}\`)`),
+    ...unreproduced.filter(f => !deferred.includes(f)).map(
+      f => `- Unreproduced (${f.severity}) ${cell(f.claim)}: fixed without a reviewer reproduction (entry \`${f.entry}\`)`),
+    ...(rec.reviews.length < c.reviewers ?
+      [`- ${c.reviewers - rec.reviews.length} of ${c.reviewers} reviews were not recorded; the range is re-reviewed in a new cycle.`] : []),
+    ...rec.reviews.filter(r => !r.served_model).map(
+      r => `- ${r.vendor} did not report the served model; its lab is judged from the requested model.`),
+    ...rec.reviews.filter(r => !r.parsed).map(
+      r => `- ${r.vendor}'s reply was not in the required form and failed closed as a blocking finding.`),
   ];
   return [
     `<!-- Generated from the review-cycle ledger by \`node ophanim/public/github.mjs cycles\`. Do not edit by hand. -->`,
@@ -256,7 +312,8 @@ export function cycleReport(view, cycle, {anchor, slug} = {}) {
     '',
     '## What could be better',
     '',
-    ...(better.length ? better : ['Nothing the ledger records: every finding was fixed with a reproduction, and every review reported its served model.']),
+    ...(better.length ?
+      better : ['Nothing the ledger records: every finding was fixed with a reproduction, and every review reported its served model.']),
     '',
     '## What the system concluded',
     '',
@@ -286,7 +343,8 @@ export function cycleIndex(cycles, {anchor = null} = {}) {
       '',
       '| Cycle | Range | Opened | Outcome |',
       '|---|---|---|---|',
-      ...cycles.map(c => `| [${cycleSlug(c)}](${cycleSlug(c)}.md) | \`${c.base.slice(0, 12)}..${c.head.slice(0, 12)}\` | ${c.opened_at} | ${c.close ? c.close.outcome : 'open'} |`),
+      ...cycles.map(
+        c => `| [${cycleSlug(c)}](${cycleSlug(c)}.md) | \`${c.base.slice(0, 12)}..${c.head.slice(0, 12)}\` | ${c.opened_at} | ${c.close ? c.close.outcome : 'open'} |`),
     ] : ['No review cycle is recorded on a ledger available to the generator yet. Cycles are recorded with `npm run review-cycle`; their reports appear here when this index is regenerated from that ledger.']),
     '',
   ].join('\n');
@@ -296,8 +354,10 @@ export function cycleIndex(cycles, {anchor = null} = {}) {
 export function writeCycleReports({opened = null, out}) {
   fs.mkdirSync(out, {recursive: true});
   const written = [];
+  // Each cycle with its close entry's payload (or null); with no ledger, only an empty index is written.
   const rows = opened ? listCycles(opened.view).map(c => {
-    const close = opened.view.entries().find(h => opened.view.entry(h).kind === CLOSE && opened.view.entry(h).derived_from.includes(c.hash));
+    const close = opened.view.entries().find(
+      h => opened.view.entry(h).kind === CLOSE && opened.view.entry(h).derived_from.includes(c.hash));
     return {...c, close: close ? opened.view.payload(close) : null};
   }) : [];
   for (const c of rows) {
