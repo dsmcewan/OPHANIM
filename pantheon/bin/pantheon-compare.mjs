@@ -5,6 +5,8 @@
 //   node pantheon/bin/pantheon-compare.mjs --item NAME [--item NAME]... --max-provider-calls N --out FILE
 //       (--clients MODULE [--turn MODULE] | --live) [--revisions R] [--baseline argo] [--candidate fit]
 //       [--question TEXT] [--repo DIR] [--dir WORKDIR] [--n 3]
+//   node pantheon/bin/pantheon-compare.mjs --measure plan-title --item NAME... --max-provider-calls N --total-provider-calls T
+//       --out FILE (--clients MODULE | --live) [--profile argo] [--plan FILE] [--revisions R]
 //
 // Each --item is a ticket (<repo>/tickets/<item>.json, ophanim.ticket/v1, as pantheon-board reads it). Each
 // runs through runOpenItem under the baseline and then the candidate profile, with the same declared bounds:
@@ -21,12 +23,12 @@
 // Writes the comparison record to --out and prints {record, digest, synthetic, evidence}: `evidence` is the
 // citation a practice disposition carries. It records nothing on any ledger and never writes the status
 // ledger. Exit codes: 0 written, 1 refused, 2 usage.
-import { dirname, resolve, join } from "node:path";
+import { dirname, resolve, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { readTicket } from "../src/board/operate.mjs";
-import { compareProfiles, dispatchRunner, comparisonEvidence } from "../src/practice/compare.mjs";
+import { compareProfiles, compareArms, dispatchRunner, comparisonEvidence } from "../src/practice/compare.mjs";
 
 const REPO_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const argv = process.argv.slice(2);
@@ -56,6 +58,15 @@ if (maxProviderCalls === null) usage("--max-provider-calls N is required: the co
 if (opts.live && (opts.clients || opts.turn)) usage("--live and --clients/--turn are exclusive");
 if (!opts.live && !opts.clients) usage("pass --clients MODULE (fake providers), or --live to spend on the live providers");
 const revisions = int("revisions", 3), n = int("n", 3);
+// --measure plan-title: the paired measurement declared in docs/reviews/2026-11-17-review-capacity/MEASUREMENT.md.
+// Two arms on one profile (--profile, default argo): planTitle model (baseline) and planTitle ticket (candidate).
+// It needs a TOTAL provider-call boundary (--total-provider-calls): a ticket count is not a spending cap.
+const MEASURES = { "plan-title": profile => [{ label: "model-title", profile, runOpts: { planTitle: "model" } }, { label: "ticket-title", profile, runOpts: { planTitle: "ticket" } }] };
+const measure = opts.measure ?? null;
+if (measure !== null && !Object.hasOwn(MEASURES, measure)) usage(`--measure is one of ${Object.keys(MEASURES).join(", ")}`);
+const totalProviderCalls = int("total-provider-calls", null);
+if (measure !== null && totalProviderCalls === null) usage("--measure needs --total-provider-calls N: the boundary for the whole measurement (a ticket count is not a spending cap)");
+if (measure !== null && opts.turn) usage("--measure measures in-run results; it takes no --turn cycle review");
 
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
 const load = async file => (await import(pathToFileURL(resolve(file)).href)).default;
@@ -93,6 +104,21 @@ try {
   const workDir = resolve(opts.dir ?? join(repo, "outputs", "compare", `compare-${Date.now()}`));
   mkdirSync(workDir, { recursive: true });
   const bounds = { maxProviderCalls, revisions, ...(cycleTurn ? { cycle_review: { n, max_attempts: 1 } } : {}) };
+  if (measure !== null) {
+    // The declared plan is pinned by its bytes: the record carries its path and sha256.
+    const planFile = opts.plan ? resolve(opts.plan) : resolve(repo, "docs/reviews/2026-11-17-review-capacity/MEASUREMENT.md");
+    const plan = existsSync(planFile) ? { path: relative(repo, planFile), sha256: "sha256:" + createHash("sha256").update(readFileSync(planFile)).digest("hex") } : null;
+    if (!plan) usage(`the declared measurement plan ${planFile} does not exist; a measurement runs only against a plan fixed beforehand`);
+    const record = await compareArms({ tickets, arms: MEASURES[measure](opts.profile ?? "argo"), bounds: { maxProviderCalls, revisions }, totalProviderCalls,
+      providers, plan, question: opts.question ?? "Does the work item's title from the ticket, instead of from a planner model, change in-run results, and at what cost?",
+      runner: dispatchRunner({ makeClientFor, dir: workDir }) });
+    const out = resolve(opts.out);
+    writeFileSync(out, JSON.stringify(record, null, 2) + "\n");
+    console.log(JSON.stringify({ record: out, digest: record.digest, synthetic: record.synthetic, evidence: comparisonEvidence(record), plan,
+      spent_provider_calls: record.spent_provider_calls, total_provider_calls: record.total_provider_calls,
+      pairs: record.paired.pairs, not_paired: record.paired.unpaired, accepted: record.paired.all.accepted ?? null }, null, 2));
+    process.exit(0);
+  }
   const record = await compareProfiles({ tickets, baseline: opts.baseline ?? "argo", candidate: opts.candidate ?? "fit", bounds, providers,
     question: opts.question ?? null, runner: dispatchRunner({ makeClientFor, dir: workDir, cycleTurn, n }) });
   const out = resolve(opts.out);

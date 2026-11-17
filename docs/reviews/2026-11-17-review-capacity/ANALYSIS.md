@@ -34,7 +34,15 @@ Why B is valid and not a way around the requirement: the scope is unchanged (the
 
 **Adopted, provisionally: B for board runs.** It is the only tested configuration that meets the requirement today without a new credential, it costs less (one frontier call fewer per run), and it keeps the full scope. `runBoardItem` and `next` default to `planTitle: "ticket"`. Rollback: `--plan-title model`, which the capacity check then admits only when the pool can review it (today it refuses before work). Standalone `runOpenItem`, which has no coordinated review, keeps the model-written title.
 
-What B does not establish, and the measurement that would: whether a model-written title improves the worker's results. Measure it with paired runs on the same tickets, model title against ticket title, on in-run acceptance, first-pass rate and rework (no cycle review is needed for that comparison), under an explicit total call budget. Until then B is retained provisionally. Revisit B if that comparison shows the model title raises acceptance, or if a ticket's own title is routinely missing or uninformative.
+What B does not establish, and the measurement that would: whether a model-written title improves the worker's results. The measurement is declared in `MEASUREMENT.md` (question, population, metrics, rule, conduct, spend) and runs with `compareArms` (`pantheon/src/practice/compare.mjs`): both arms on the same tickets and profile, one per-run bound, a required total boundary, the first arm alternating per ticket, failed and unrun arms kept, the plan pinned by its sha256 in the record, and a paired summary (Newcombe method 10; Wilcoxon for costs). Synthetic runs qualify the mechanics (`pantheon/tests/practice-measure-plan-title.test.mjs`). The live measurement, on the owner's machine, with the owner's tickets:
+
+```sh
+node pantheon/bin/pantheon-compare.mjs --measure plan-title --live \
+  --item <ticket> [--item <ticket> ...] --max-provider-calls 12 --total-provider-calls 360 \
+  --out outputs/compare/plan-title-$(date +%Y%m%d).json
+```
+
+Until then B is retained provisionally. Revisit B if that comparison shows the model title raises acceptance, or if a ticket's own title is routinely missing or uninformative.
 
 **Next, for robustness: D.** B leaves one pending case by design: a worker that escalates into a second lab. A fifth qualified reviewer lab removes it (the pool then tolerates two contributing labs). This is a qualification task, not a change to the review requirement. It needs a provider credential and network allowance, recorded capability facts from the provider's own documentation, and a qualification of the lab's reviews (for example, recall on a set of diffs with known defects, compared with the current reviewers) before it is admitted to the pool. Candidates found 2026-11-17, unconfirmed against primary documentation: Mistral (an OpenAI-compatible chat endpoint at api.mistral.ai; the newest flagship's context window is reported only by a single blog post) and DeepSeek (OpenAI-format API at api.deepseek.com; prices conflict across aggregators; sending code to it is also a data-governance decision). No lab is added by this change.
 

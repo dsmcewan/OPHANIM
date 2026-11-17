@@ -236,6 +236,13 @@
           "date": "2026-11-17",
           "ref": "review-capacity.test.mjs (pre-commit)",
           "note": "the escalation test returned early when only one lab wrote (argo's implementer fallbacks are one lab), so it passed without exercising escalation; caught by making the precondition an assertion, fixed by running it under fit"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "practice-measure-plan-title.test.mjs (pre-commit)",
+          "note": "a bare /TITLE:/ counted reviewer prompts (they quote the work item) as planner calls, and a total boundary of 30 was too loose to stop any run; caught by printing what matched and what ran, fixed with the planner's own instruction and a boundary that binds"
         }
       ],
       "fixed_in": null,

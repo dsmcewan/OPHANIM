@@ -36,7 +36,8 @@ import { cycleReviewers } from "../board/operate.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle } from "../ledger/review-cycle.mjs";
 import { labOf } from "../config/models.mjs";
-import { runMetrics, unobservedRun, aggregate, stakesOf, MIN_N_PER_STRATUM } from "./metrics.mjs";
+import { runMetrics, unobservedRun, aggregate, stakesOf, median, MIN_N_PER_STRATUM } from "./metrics.mjs";
+import { pairedNewcombe, wilcoxonSignedRank, pairsNeeded, Z, PROMOTION_CONFIDENCE } from "./evaluate.mjs";
 
 export { COMPARE_SCHEMA };
 export const PROFILES = Object.freeze(["argo", "legacy", "fit"]);
@@ -131,6 +132,120 @@ export async function compareProfiles({ tickets, baseline = "argo", candidate = 
   return { ...record, digest: comparisonDigest(record) };
 }
 
+// ---------------------------------------------------------------- arms: a run setting, paired per ticket
+//
+// compareArms compares two ARMS that differ in a run setting (for example planTitle model vs ticket under one
+// profile), not only in the routing profile. Owner condition 3 (2026-11-17): a TOTAL provider-call boundary is
+// required (a ticket count or sampling rate is not a cap); a run that could overrun it is not started and is
+// recorded as not run; the arm that runs first alternates per ticket; failed, refused and inconclusive runs are
+// kept. The record carries the declared measurement plan by hash and a paired summary (Newcombe method 10 for
+// accepted and first pass; Wilcoxon signed-rank for paired costs), and still draws no conclusion of its own.
+const armKey = a => canonical({ profile: a.profile, runOpts: a.runOpts ?? {} });
+
+export async function compareArms({ tickets, arms, bounds, totalProviderCalls, runner, providers, question = null, plan = null,
+  counterbalance = true, clock = () => Date.now(), at = new Date().toISOString(), pools = [] } = {}) {
+  if (!Array.isArray(tickets) || tickets.length === 0) throw new Error("compareArms: pass the tickets to compare");
+  if (typeof runner !== "function") throw new Error("compareArms: pass runner({spec, profile, runOpts, label, bounds}) -> {run, result}");
+  if (!providers || typeof providers.kind !== "string") throw new Error("compareArms: declare the providers ({kind: 'fake'|'live', ...identity})");
+  if (!Array.isArray(arms) || arms.length !== 2) throw new Error("compareArms: pass exactly two arms, baseline first");
+  for (const a of arms) {
+    if (!a?.label || !PROFILES.includes(a.profile)) throw new Error(`compareArms: an arm is {label, profile (${PROFILES.join(", ")}), runOpts?}`);
+  }
+  if (arms[0].label === arms[1].label || armKey(arms[0]) === armKey(arms[1])) throw new Error("compareArms: the two arms must differ, in label and in setting");
+  if (!(Number.isSafeInteger(totalProviderCalls) && totalProviderCalls > 0)) {
+    throw new Error("compareArms: a total provider-call boundary (totalProviderCalls) is required: a ticket count or sampling rate is not a spending cap");
+  }
+  const B = normalizeBounds(bounds);
+  const synthetic = providers.kind !== "live";
+  const specs = tickets.map(t => ({ spec: t.spec ?? t, digest: t.digest ?? sha(canonical(t.spec ?? t)) }));
+  if (specs.some(s => typeof s.spec?.key !== "string")) throw new Error("compareArms: every ticket has a key");
+  if (new Set(specs.map(s => s.spec.key)).size !== specs.length) throw new Error("compareArms: ticket keys are distinct");
+  const names = ["baseline", "candidate"];
+  let spent = 0;
+  const results = [];
+  for (const [i, { spec }] of specs.entries()) {
+    const order = counterbalance && i % 2 === 1 ? [1, 0] : [0, 1];
+    const row = { ticket: spec.key, order: order.map(k => names[k]) };
+    for (const k of order) {
+      const arm = arms[k], name = names[k];
+      if (spent + B.maxProviderCalls > totalProviderCalls) {
+        row[name] = { ...unobservedRun({ profile: arm.label, why: `not run: ${spent} calls spent + this run's bound ${B.maxProviderCalls} would exceed the total ${totalProviderCalls}`,
+          stakes: stakesOf(null, spec) }), status: "not_run", arm_profile: arm.profile, wall_ms: 0, provider_calls_counted: 0 };
+        continue;
+      }
+      const t0 = clock();
+      let out = null, error = null;
+      try { out = await runner({ spec, profile: arm.profile, runOpts: arm.runOpts ?? {}, label: arm.label, bounds: structuredClone(B), arm: name }); }
+      catch (e) { error = e; }
+      const wall_ms = Math.max(0, clock() - t0);
+      // What this run spent: its recorded provider calls; unknown counts at its bound, never as zero.
+      const made = out?.run?.resources?.provider_calls ?? (Array.isArray(out?.run?.attempts) ? out.run.attempts.length : null);
+      const counted = Number.isInteger(made) ? made : B.maxProviderCalls;
+      spent += counted;
+      row[name] = error || !out?.run
+        ? { ...unobservedRun({ profile: arm.label, why: error?.message ?? out?.result?.error?.message ?? "the runner returned no run record", stakes: stakesOf(null, spec) }),
+          arm_profile: arm.profile, wall_ms, provider_calls_counted: counted }
+        : { ...runMetrics(out.run, { ticket: spec, result: out.result ?? null, profile: arm.label }), arm_profile: arm.profile, wall_ms, provider_calls_counted: counted };
+    }
+    results.push(row);
+  }
+  const record = {
+    schema: COMPARE_SCHEMA, kind: "arms", synthetic, providers, question, plan,
+    arms: Object.fromEntries(arms.map((a, k) => [names[k], { label: a.label, profile: a.profile, runOpts: a.runOpts ?? {}, policy: currentPolicy(a.profile, { pools }) }])),
+    bounds: B, total_provider_calls: totalProviderCalls, spent_provider_calls: spent,
+    order: counterbalance ? "alternating per ticket: baseline first on even tickets, candidate first on odd" : "baseline then candidate",
+    tickets: specs.map(s => ({ key: s.spec.key, digest: s.digest })),
+    results,
+    aggregate: (g => ({ baseline: g[arms[0].label] ?? null, candidate: g[arms[1].label] ?? null }))(
+      aggregate(results.flatMap(r => [r.baseline, r.candidate]).filter(x => x && x.status !== "not_run"))),
+    paired: pairedSummary(results),
+    interpretation: INTERPRETATION(synthetic),
+    at,
+  };
+  return { ...record, digest: comparisonDigest(record) };
+}
+
+/**
+ * The paired view of an arms record: per stratum and `all`, over pairs whose two runs were both decided. Cells are
+ * candidate-first (e both accepted, f candidate only, g baseline only, h neither); intervals are of
+ * (candidate - baseline) at PROMOTION_CONFIDENCE. Costs: per-pair differences (candidate - baseline) where both
+ * sides have the value, with a Wilcoxon signed-rank test; unknown never counts as cheaper.
+ */
+export function pairedSummary(results) {
+  const decided = x => x && x.status !== "not_run" && x.accepted !== null && x.accepted !== undefined;
+  const pairs = results.filter(r => decided(r.baseline) && decided(r.candidate));
+  const z = Z[PROMOTION_CONFIDENCE];
+  const cells = (rows, key) => rows.reduce((c, r) => {
+    const a = r.candidate[key] === true, b = r.baseline[key] === true;
+    c[a && b ? "e" : a ? "f" : b ? "g" : "h"]++; return c;
+  }, { e: 0, f: 0, g: 0, h: 0 });
+  const diffOf = (rows, get) => rows.map(r => [get(r.candidate), get(r.baseline)]).filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b)).map(([a, b]) => a - b);
+  const summarize = rows => {
+    if (!rows.length) return { n: 0 };
+    const out = { n: rows.length };
+    for (const key of ["accepted", "first_pass"]) {
+      const t = cells(rows, key);
+      out[key] = { cells: t, candidate_rate: (t.e + t.f) / rows.length, baseline_rate: (t.e + t.g) / rows.length,
+        diff_ci: pairedNewcombe(t, z), pairs_needed: pairsNeeded({ e: t.e, f: t.f, g: t.g, h: t.h }) };
+    }
+    const both = rows.filter(r => r.candidate.accepted && r.baseline.accepted);
+    out.cost = Object.fromEntries([
+      ["provider_calls", r => r.provider_calls?.value],
+      ["tokens", r => (r.tokens_in?.value ?? NaN) + (r.tokens_out?.value ?? NaN)],
+      ["elapsed_ms", r => r.elapsed_ms?.value],
+    ].map(([k, get]) => {
+      const d = diffOf(both, get);
+      return [k, { pairs: d.length, missing: both.length - d.length, median_diff: d.length ? median(d) : null, wilcoxon: wilcoxonSignedRank(d) }];
+    }));
+    return out;
+  };
+  const strata = {};
+  for (const r of pairs) (strata[r.candidate.stakes?.value ?? "unknown"] ??= []).push(r);
+  return { pairs: pairs.length, unpaired: results.length - pairs.length, confidence: PROMOTION_CONFIDENCE,
+    note: "intervals are of (candidate - baseline); a declared plan applies the rule, this summary does not",
+    all: summarize(pairs), strata: Object.fromEntries(Object.entries(strata).map(([s, rows]) => [s, summarize(rows)])) };
+}
+
 // ---------------------------------------------------------------- the dispatcher runner
 
 const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_model ?? t.model)).filter(Boolean))];
@@ -170,11 +285,11 @@ async function cycleReviewOf({ run, result, spec, profile, turn, n, root }) {
 export function dispatchRunner({ makeClientFor, dir, runOpts = {}, cycleTurn = null, n = 3 }) {
   if (typeof makeClientFor !== "function") throw new Error("dispatchRunner: pass makeClientFor(vendor)");
   if (!dir) throw new Error("dispatchRunner: pass a working directory");
-  return async ({ spec, profile, bounds }) => {
-    const key = `${spec.key}.${profile}`;
+  return async ({ spec, profile, bounds, runOpts: armOpts = {}, label = null }) => {
+    const key = `${spec.key}.${label ?? profile}`;
     const board = join(dir, key);
-    // Board conditions: the work item's title is the ticket's own unless the caller says otherwise (operate.mjs).
-    const result = await runOpenItem({ ...spec, key }, { planTitle: "ticket", ...runOpts, dir: board, makeClientFor, profile,
+    // Board conditions: the work item's title is the ticket's own unless the caller (or the arm) says otherwise.
+    const result = await runOpenItem({ ...spec, key }, { planTitle: "ticket", ...runOpts, ...armOpts, dir: board, makeClientFor, profile,
       maxProviderCalls: bounds.maxProviderCalls, revisions: bounds.revisions });
     const file = join(board, "run.json");
     const run = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
