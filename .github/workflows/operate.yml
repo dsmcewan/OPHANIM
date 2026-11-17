@@ -2,7 +2,7 @@
 # public record whenever the inputs change -- a push to main, an issue opened/edited/labeled/closed, or the hour.
 # No provider is called and no model runs here: there are no provider keys and no controller key in CI, so the
 # work ledger is only verified and read. Dispatch with providers runs where the keys and the controller key are:
-# `node ophanim/operate/cli.mjs watch --total-provider-calls N` on the owner's machine is the dispatching trigger.
+# `node ophanim/operate/cli.mjs serve --config FILE` (docs/operate-service.md) on the owner's machine is the dispatching trigger.
 # Issue text is data, never authority: it links an issue to an item by marker; an unmarked issue is a candidate.
 # The `issues` event runs this file from the default branch, never from a pull request's code. The publisher's own
 # edits are made with GITHUB_TOKEN, whose events start no workflow run, so a projection never re-triggers itself.

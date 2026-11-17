@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-17T16:21:24.726Z",
+  "at": "2026-11-17T17:20:57.123Z",
   "ledger": {
     "head": "sha256:f8526a6753aaad321653ae2d232c36125b47081fd8177ad0735a8fb59ca0c009",
     "entries": 85
@@ -22,11 +22,11 @@
         "item": "p1-p7",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -47,11 +47,11 @@
         "item": "p8-p9",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -72,11 +72,11 @@
         "item": "terminal-state",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -97,11 +97,11 @@
         "item": "q1-q6",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -122,11 +122,11 @@
         "item": "q7-measurement",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -147,11 +147,11 @@
         "item": "facts",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -172,11 +172,11 @@
         "item": "protocol",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -197,11 +197,11 @@
         "item": "reasoning-context",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -222,11 +222,11 @@
         "item": "swarms",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -247,11 +247,11 @@
         "item": "token-tiers",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -272,11 +272,11 @@
         "item": "agy-escalation",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -297,11 +297,11 @@
         "item": "live-reseat",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -322,11 +322,11 @@
         "item": "frontier-move",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -347,11 +347,11 @@
         "item": "gemini-3.8",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -372,11 +372,11 @@
         "item": "layered-review",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -397,11 +397,11 @@
         "item": "k1",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -422,11 +422,11 @@
         "item": "k2",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -447,11 +447,11 @@
         "item": "k3",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -472,11 +472,11 @@
         "item": "k4",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -497,11 +497,11 @@
         "item": "k5",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -522,11 +522,11 @@
         "item": "ledger-default",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -547,11 +547,11 @@
         "item": "off-ledger-records",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -572,11 +572,11 @@
         "item": "status-board",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -597,11 +597,11 @@
         "item": "shared-package",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -622,11 +622,11 @@
         "item": "board-resolver",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -647,11 +647,11 @@
         "item": "review-every-cycle",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -878,11 +878,11 @@
         "item": "signer",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -903,11 +903,11 @@
         "item": "gate-on-run-path",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -928,11 +928,11 @@
         "item": "ref-write-gap",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -978,11 +978,11 @@
         "item": "ru2-frontier-forgery",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -1003,11 +1003,11 @@
         "item": "ru1-cross-lab",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -1028,11 +1028,11 @@
         "item": "fw1-stored-answer",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -1053,11 +1053,11 @@
         "item": "public-record",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -1103,11 +1103,11 @@
         "item": "me1-author-signature",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -1128,11 +1128,11 @@
         "item": "sy1-ledger-caller",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
@@ -1231,11 +1231,11 @@
         "item": "supply-portability",
         "state": "Resolved",
         "gate": "evidence-gap",
-        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "reason": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
         "blocker": {
-          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "what": "Resolved without recorded completion evidence (an attested basis only); evidence recovery has not searched yet",
           "role": "decision-authority",
-          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+          "resume_when": "applicable retained evidence appears (searched again automatically when the item's sources change), or the owner records the item Ready to re-verify it through the lifecycle"
         }
       }
     },
