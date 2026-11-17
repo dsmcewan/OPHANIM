@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
-import {efficiencyKinds, efficiencyRecorder, efficiencyTotals, MAX_USES, PROMOTION, USE, RESULT, DEBIT} from './efficiency-kinds.mjs';
+import {efficiencyKinds, efficiencyRecorder, efficiencyTotals, MAX_USES, PROMOTION, USE, RESULT, DEBIT, TRACE, ASSESSED, RETAINED} from './efficiency-kinds.mjs';
 import {digest, readRuntimeSnapshot} from '../board.mjs';
 import {runRuntime, loadRuntime} from '../runtime.mjs';
 import {assessConvergence} from '../efficiency/assessment.mjs';
@@ -115,7 +115,7 @@ test('the assessment records its result and debit on the ledger and measures fro
   fs.writeFileSync(path.join(usesDir, 'invented.result.json'), JSON.stringify({traceSha: sha('f'), executionMs: 1, assessmentCostMs: 0, observedSavingMs: 4999}));
   fs.mkdirSync(path.join(usesDir, 'assessment-costs'));
   const promotion = {expected: {scopeSha, fromSlots: 1, toSlots: 3}, efficiency};
-  const args = {root, stateDir, scope: {graph: [], configuration: {slots: 3, workerRegistry: [{id: 'w', version: '1', kinds: ['k'], scopes: ['s']}]}, policy: {}},
+  const args = {root, stateDir, scope: {graph: [], configuration: {slots: 3, workerRegistry: [{id: 'w', version: '1', kinds: ['k'], scopes: ['s']}]}, policy: {maxQualifiedConvergences: MAX_USES}},
     state: loadRuntime(stateDir), boardCommit: readRuntimeSnapshot(stateDir).commit,
     output: {convergence: 'accepted_change', slots: 3, dispatches: 2, durationMs: 1200, startedAt, endedAt: Date.now(), outputs: {}, effects: [], measurements: {}, limits: {modelCalls: 0}},
     request: {}, replayRequest: null, priorRuntime: null, attempts: [], verifications: [], events: [], governance: {identity: 'stub'},
@@ -128,15 +128,86 @@ test('the assessment records its result and debit on the ledger and measures fro
   assert.equal(value.unmeasuredAssessments, 1);
   assert.equal(value.measuredNetIsUpperBound, true);
   const kinds = L.read().map(e => e.kind);
-  assert.deepEqual(kinds.slice(1), ['efficiency.promotion', 'efficiency.use', 'efficiency.result', 'efficiency.debit']);
-  const debit = L.payloadOf(L.read().at(-1));
+  assert.deepEqual(kinds.slice(1), ['efficiency.promotion', 'efficiency.use', 'efficiency.trace', 'efficiency.result', 'efficiency.debit', 'efficiency.assessed']);
+  const debit = L.payloadOf(L.read().at(-2));
   assert.equal(debit.charged, false);
   assert.equal(debit.traceSha, record.traceSha);
-  assert.equal(value.ledger.result, L.hashOf(L.read().at(-2)));
+  assert.equal(value.ledger.result, L.hashOf(L.read().at(-3)));
+  // K5b: the report is an entry citing the trace entry and the debit its measured value ends on.
+  const assessed = L.read().at(-1);
+  assert.deepEqual(record.ledger, {trace: L.hashOf(L.read()[3]), assessed: L.hashOf(assessed)});
+  assert.deepEqual(assessed.derived_from, [record.ledger.trace, L.hashOf(L.read().at(-2))]);
+  assert.equal(L.payloadOf(assessed).report.measuredValue.measuredNetMs, value.measuredNetMs);
   assert.equal(L.verify().ok, true);
 
   // A ledger that no longer verifies stops the next assessment before it relies on anything.
-  const file = objectFile(dir, L.read().at(-1).payload_ref);
+  const file = objectFile(dir, L.read().at(-2).payload_ref);
   fs.writeFileSync(file, JSON.stringify({...debit, charged: true}));
   await assert.rejects(assessConvergence(args), /Efficiency ledger does not verify, refusing to rely on it/);
+}));
+
+// K5b: the trace, the assessment and the retained experiment are entries. The assessment re-derives from
+// the trace entry it cites (rederiveAssessment, the computation verifyEfficiencyRecord runs on the files),
+// so the report and trace files are no longer what a reader of the ledger trusts.
+const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+const runRequest = {fixture: {count: 2, namespace: 'efficiency-ledger'}, slots: 1, workerOptions: {delayMs: 15},
+  // A forecast kept from another scope: the investigation is held, as in a normal run with a stale forecast.
+  investigationEstimate: {schema: 'ophanim.investigation-estimate/v1', scopeSha: sha(0), basis: 'Forecast kept from an earlier scope', estimates: {applicability: 0.5}}};
+
+test('a run records its trace and assessment as entries; forged ones are refused and the files are not read', {timeout: 120000}, () => withLedger(async (L, dir) => {
+  const {executeRequest} = await import('../cli.mjs');
+  const stateDir = path.join(dir, 'state');
+  const r = efficiencyRecorder({ledger: L, controller, order: controller});
+  const output = await executeRequest({...runRequest, stateDir}, {ledger: r});
+  const record = output.efficiency, reportDir = path.dirname(record.reportFile);
+  assert.deepEqual(L.read().slice(1).map(e => e.kind), ['efficiency.trace', 'efficiency.assessed']);
+  const [traceEntry, assessedEntry] = L.read().slice(1);
+  assert.deepEqual(record.ledger, {trace: L.hashOf(traceEntry), assessed: L.hashOf(assessedEntry)});
+  assert.deepEqual(assessedEntry.derived_from, [record.ledger.trace]);
+  const trace = read(path.join(reportDir, 'trace.json')), report = read(record.reportFile);
+  assert.equal(report.investigation.schema, 'ophanim.investigation-blocked/v1', 'a held investigation is recorded and re-derives');
+  assert.deepEqual(L.payloadOf(traceEntry), {schema: TRACE, stateDir, traceSha: record.traceSha, trace});
+  assert.deepEqual(L.payloadOf(assessedEntry).report, report);
+
+  // The re-derivation reads the trace and report from the ledger: the files can go.
+  fs.rmSync(path.join(reportDir, 'trace.json'));
+  fs.rmSync(record.reportFile);
+  assert.equal(L.verify().ok, true);
+
+  // Forgeries, each against a ledger that holds only the genuine trace.
+  await withLedger(async F => {
+    const altered = {...trace, stateSha: sha(5)};
+    assert.throws(() => F.append({kind: 'efficiency.trace', payload: {schema: TRACE, stateDir, traceSha: digest(altered), trace: altered}, ...by(controller)}), /does not bind to its board/);
+    assert.throws(() => F.append({kind: 'efficiency.trace', payload: {schema: TRACE, stateDir, traceSha: sha(1), trace}, ...by(controller)}), /not the digest of the trace/);
+    assert.throws(() => F.append({kind: 'efficiency.trace', payload: {schema: TRACE, stateDir: path.join(dir, 'elsewhere'), traceSha: record.traceSha, trace}, ...by(controller)}), /does not bind to its board/);
+    const traceAt = F.append({kind: 'efficiency.trace', payload: L.payloadOf(traceEntry), ...by(controller)}).hash;
+    assert.throws(() => F.append({kind: 'efficiency.trace', payload: L.payloadOf(traceEntry), ...by(controller)}), /already on the chain/);
+
+    const assessed = (change = x => x, derivedFrom = [traceAt]) => {
+      const forged = change(structuredClone(report));
+      return F.append({kind: 'efficiency.assessed', payload: {schema: ASSESSED, traceSha: forged.traceSha, report: forged}, derivedFrom, ...by(controller)});
+    };
+    assert.throws(() => assessed(x => x, []), /cites its trace first/);
+    assert.throws(() => assessed(x => { x.admission.decision.admitted = true; return x; }), /does not re-derive from its trace: Optimization admission differs/);
+    assert.throws(() => assessed(x => { x.outcome = 'promoted'; return x; }), /does not re-derive from its trace/);
+    assert.throws(() => assessed(x => { x.investigation.traceSha = sha(2); return x; }), /Held investigation receipt differs/);
+    assert.throws(() => assessed(x => { x.measuredValue.measuredNetMs = 5000; return x; }), /assessment cost, unrecovered/);
+    assert.throws(() => assessed(x => { x.admission.inputs.priorOutcome = {verified: true}; return x; }), /retained experiment the assessment does not cite/);
+    assert.throws(() => assessed(x => { x.traceSha = sha(3); return x; }), /different trace/);
+    assert.throws(() => F.append({kind: 'efficiency.assessed', payload: {schema: ASSESSED, traceSha: report.traceSha, report}, derivedFrom: [traceAt], ...by(operator)}), /may not author/);
+    const genuine = assessed().hash;
+    assert.throws(() => assessed(), /already assessed/);
+
+    // This assessment ran no experiment, so its marker is not retained evidence: the kind refuses it and
+    // the recorder declines it, as readRetainedExperiment holds the marker on the file path.
+    const marker = {schema: 'ophanim.efficiency/v1', traceSha: record.traceSha, evidenceRoot: path.join(reportDir, 'experiment'), fromSlots: 1, toSlots: 3};
+    assert.throws(() => F.append({kind: 'efficiency.retained', payload: {schema: RETAINED, marker}, derivedFrom: [genuine], ...by(controller)}),
+      /does not re-derive as retained evidence: Completed independent evaluation evidence required/);
+    assert.throws(() => F.append({kind: 'efficiency.retained', payload: {schema: RETAINED, marker}, derivedFrom: [traceAt], ...by(controller)}), /cites exactly one efficiency.assessed/);
+    assert.throws(() => F.append({kind: 'efficiency.retained', payload: {schema: RETAINED, marker: {...marker, traceSha: sha(4)}}, derivedFrom: [genuine], ...by(controller)}), /different trace/);
+    const recorder = efficiencyRecorder({ledger: F, controller, order: controller});
+    assert.equal(recorder.retained({assessed: genuine, marker}), null);
+    assert.throws(() => recorder.retainedFor({marker, trace}), /No retained experiment/);
+    assert.equal(F.verify().ok, true);
+  });
 }));

@@ -6,7 +6,7 @@ import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,can
 import {runRuntime,loadRuntime,activateRelease,rollbackRelease} from './runtime.mjs';
 import {readRuntimeSnapshot,verifyRuntimeChain} from './board.mjs';
 import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
-import {assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord} from './efficiency/assessment.mjs';
+import {assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord,verifyEfficiencyRecord} from './efficiency/assessment.mjs';
 import {recoverInterruptedAssessment} from './efficiency/recovery.mjs';
 
 const FIXTURES=fileURLToPath(new URL('./fixtures.mjs',import.meta.url));
@@ -158,9 +158,15 @@ async function runRequest(request,replay,{ledger=null}={}) {
     // A reused convergence wrote nothing; its head already carries an assessment.
     if(result.reused)output.reusedConvergence={boardCommit:result.boardCommit};
     if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output});
-    else if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
-      boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
-      attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency,ledger});
+    else if(!replay){
+      const record=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
+        boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
+        attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency,ledger});
+      // A fresh assessment is re-derived from its retained trace and the accepted board before it is used or
+      // written, as a reused one is (reusedEfficiencyRecord). A record that does not re-derive stops the run.
+      verifyEfficiencyRecord({stateDir,record,output});
+      output.efficiency=record;
+    }
     if(recoveredEfficiency)output.recoveredEfficiency=recoveredEfficiency;
     writeJson(request.resultFile??path.join(stateDir,'result.json'),output);
     return output;

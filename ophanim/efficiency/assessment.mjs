@@ -11,7 +11,7 @@ import {assessOptimizationAdmission} from './admission.mjs';
 import {buildContributionRegistry,discoverVariables} from './contributions.mjs';
 import {readRetainedExperiment} from './prior.mjs';
 import {verifyAdmissionTrace} from './trace-binding.mjs';
-import {recordInvestigation,verifyInvestigationReceipt} from './investigation/controller.mjs';
+import {investigationWithoutEvidence,recordInvestigation,verifyInvestigationReceipt} from './investigation/controller.mjs';
 
 const REPLAY_BUDGET_MS=30000;
 const MAX_QUALIFIED_CONVERGENCES=20;
@@ -296,6 +296,9 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
       durationMs:output.durationMs,measurements:output.measurements,modelCalls:output.limits.modelCalls}};
   put(path.join(reportDir,'trace.json'),trace);
   const traceSha=digest(trace);
+  // K5b: with a ledger the trace is an entry, and the assessment and any retained experiment cite it.
+  const ledgerTrace=ledger?ledger.trace({stateDir,trace}):null;
+  let retainedEntry=null,retainMarker=null;
   const analysis=analyzeTrace(trace);
   const contributionRegistry=buildContributionRegistry({trace,analysis});
   const variables=discoverVariables({trace,analysis,registry:contributionRegistry});
@@ -330,7 +333,15 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
         qualifiedConvergences:0,originalOptimizationCostMs:wallMs,measuredNetMs:-wallMs,
       }};
     put(path.join(reportDir,'assessment.json'),report);
-    return {schema:REPORT_SCHEMA,outcome:report.outcome,reason:report.reason,traceSha,scopeSha:trace.scopeSha,boardCommit,reportFile:path.join(reportDir,'assessment.json')};
+    let entries=null;
+    if(ledger){
+      // The report is recorded only if it re-derives from the trace entry it cites (the ledger refuses it otherwise).
+      const assessed=ledger.assessed({trace:ledgerTrace,report,retained:retainedEntry,debit:report.measuredValue.ledger?.debit??null});
+      const retained=retainMarker?ledger.retained({assessed,marker:retainMarker}):null;
+      entries={trace:ledgerTrace,assessed,...retained?{retained}:{}};
+    }
+    return {schema:REPORT_SCHEMA,outcome:report.outcome,reason:report.reason,traceSha,scopeSha:trace.scopeSha,boardCommit,reportFile:path.join(reportDir,'assessment.json'),
+      ...entries?{ledger:entries}:{}};
   };
   if(blocker){
     admit({...admissionInputs,blocker},performance.now(),process.cpuUsage());
@@ -348,7 +359,11 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
     const marker=path.join(scopeDir,'experiment.json');
     if(exists(marker)){
       let priorOutcome;
-      try {priorOutcome=readRetainedExperiment(marker,trace);}
+      try {
+        // With a ledger the prior experiment is read from its `efficiency.retained` entry, not the marker's files.
+        if(ledger)({retained:retainedEntry,priorOutcome}=ledger.retainedFor({marker:read(marker),trace}));
+        else priorOutcome=readRetainedExperiment(marker,trace);
+      }
       catch(error){
         const reason='retained-experiment-held';
         admit({...admissionInputs,blocker:reason},gateStarted,gateCpu);
@@ -361,7 +376,8 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
     if(!decision.admitted)return finish({reason:decision.reason});
     await investigate();
     const evidenceRoot=directory(path.join(reportDir,'experiment'));
-    put(marker,{schema:VERSION,traceSha,evidenceRoot,fromSlots:1,toSlots:3});
+    retainMarker={schema:VERSION,traceSha,evidenceRoot,fromSlots:1,toSlots:3};
+    put(marker,retainMarker);
     const alternative={schema:'ophanim.scheduler-policy/v1',scopeSha:trace.scopeSha,baselineSlots:1,slots:3,baselineRelease:'baseline',
       workerArtifactSha:scope.configuration.workerArtifactSha,policySha:scope.configuration.policySha,
       stateSchema:STATE_SCHEMA,maxQualifiedConvergences:MAX_QUALIFIED_CONVERGENCES};
@@ -414,17 +430,59 @@ export function reusedEfficiencyRecord({stateDir,boardCommit,output}) {
 
 export function verifyEfficiencyRecord({stateDir,record,output}) {
   const reportFile=path.resolve(record.reportFile);
-  const expected=path.join(stateDir,'efficiency','convergences',record.boardCommit.replace(':','-'),'assessment.json');
+  const reportDir=path.join(stateDir,'efficiency','convergences',record.boardCommit.replace(':','-'));
+  const expected=path.join(reportDir,'assessment.json');
   if(reportFile!==expected||fs.realpathSync(reportFile)!==expected)throw Error('Efficiency report path differs');
-  const assessment=read(reportFile),trace=read(path.join(path.dirname(reportFile),'trace.json'));
-  if(![VERSION,ADMISSION_SCHEMA,REPORT_SCHEMA].includes(assessment.schema)||record.schema&&record.schema!==assessment.schema)throw Error('Efficiency assessment schema differs');
-  const snapshot=readRuntimeSnapshot(stateDir,record.boardCommit);
-  if(digest(trace)!==record.traceSha||assessment.traceSha!==record.traceSha||trace.stateSha!==digest(snapshot.state)||
-      trace.scopeSha!==record.scopeSha||assessment.scopeSha!==record.scopeSha||assessment.outcome!==record.outcome||
+  const assessment=read(reportFile),trace=read(path.join(reportDir,'trace.json'));
+  if(record.schema&&record.schema!==assessment.schema)throw Error('Efficiency assessment schema differs');
+  if(digest(trace)!==record.traceSha||trace.scopeSha!==record.scopeSha||assessment.outcome!==record.outcome)throw Error('Efficiency evidence differs from the accepted board');
+  rederiveAssessment({assessment,trace,snapshot:readRuntimeSnapshot(stateDir,record.boardCommit),boardCommit:record.boardCommit,reportDir,output,
+    priorOutcome:()=>readRetainedExperiment(assessment.priorMarker,trace)});
+  const debitRecord=assessment.measuredValue?.debitRecord;
+  if(debitRecord!==undefined){
+    const debit=read(debitRecord);
+    if(path.basename(debitRecord)!==`debit-${assessment.traceSha}.json`||!validDebit(debit,assessment.traceSha))throw Error('Efficiency debit differs from the assessment');
+  }
+  return assessment;
+}
+
+// The trace is bound to the accepted board snapshot it names: its state digest, acceptance evidence and
+// scope fingerprint, and its analysis re-runs. Shared by the file verifier and the `efficiency.trace` kind.
+export function traceBinding(trace,snapshot) {
+  if(trace?.schema!=='ophanim.efficiency.trace/v1'||!snapshot?.state||trace.boardCommit!==snapshot.commit||trace.stateSha!==digest(snapshot.state)||
+      canonical(trace.accepted)!==canonical(acceptanceEvidence(snapshot.state))||
+      trace.scopeSha!==applicabilityFingerprint({obligations:trace.obligations,configuration:trace.configuration}))
+    throw Error('Efficiency evidence differs from the accepted board');
+  analyzeTrace(trace);
+}
+
+// A held investigation receipt is what assessConvergence records when recordInvestigation throws. It is
+// accepted only bound to this trace, in the exact shape that catch writes, and only where the decision
+// depends on retained evidence: a decision that needs none is a pure function of the trace, so a held
+// receipt in its place is a substitution, not an outcome a run can produce.
+const HELD='ophanim.investigation-blocked/v1';
+function verifyHeldInvestigation({receipt,trace,registry,variables,workload,traceTrusted}) {
+  if(!exactKeys(receipt,['schema','scopeSha','traceSha','boardCommit','reason','detail'])||receipt.scopeSha!==trace.scopeSha||
+      receipt.traceSha!==digest(trace)||receipt.boardCommit!==trace.boardCommit||receipt.reason!=='investigation-evidence-unavailable'||
+      typeof receipt.detail!=='string'||receipt.detail.length>256)throw Error('Held investigation receipt differs from the retained trace');
+  let obtainable=false;
+  try{obtainable=investigationWithoutEvidence({trace,registry,variables,workload,traceTrusted})!==null;}catch{}
+  if(obtainable)throw Error('Held investigation receipt replaces a decision that needs no retained evidence');
+}
+
+/**
+ * Re-derive an assessment report from its trace and the accepted board snapshot, without reading either
+ * from a path: the computation verifyEfficiencyRecord runs on the retained files and the
+ * `efficiency.assessed` ledger kind runs on the cited trace entry. `priorOutcome()` supplies the retained
+ * experiment the admission read (from the marker file, or from the cited `efficiency.retained` entry).
+ */
+export function rederiveAssessment({assessment,trace,snapshot,boardCommit=trace.boardCommit,reportDir,output,priorOutcome}) {
+  if(![VERSION,ADMISSION_SCHEMA,REPORT_SCHEMA].includes(assessment?.schema))throw Error('Efficiency assessment schema differs');
+  if(digest(trace)!==assessment.traceSha||trace.stateSha!==digest(snapshot.state)||trace.scopeSha!==assessment.scopeSha||
       canonical(trace.accepted)!==canonical(acceptanceEvidence(snapshot.state)))throw Error('Efficiency evidence differs from the accepted board');
   if(output?.reusedConvergence){
     // An equilibrium run binds to the head it found, not to a new observation.
-    if(output.reusedConvergence.boardCommit!==record.boardCommit||output.dispatches!==0||!['no_change','blocked'].includes(output.convergence)||
+    if(output.reusedConvergence.boardCommit!==boardCommit||output.dispatches!==0||!['no_change','blocked'].includes(output.convergence)||
         snapshot.state.events.at(-1)?.type!=='runtime.settled'||output.stateRevision!==snapshot.state.revision||
         trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects)))throw Error('Reused convergence differs from the accepted board');
   }else if(output&&(trace.original.outputSha!==digest(output.outputs)||trace.original.effectSha!==digest(effectSummary(output.effects))||
@@ -438,7 +496,7 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
     if(!inputs||!decision||!cost)throw Error('Optimization admission receipt required');
     if(Object.keys(inputs).some(key=>!['blocker','priorOutcome','expectedQualifiedConvergences'].includes(key)))throw Error('Unexpected optimization admission input');
     if((!inputs.blocker||binding)&&canonical(binding)!==canonical(verifyAdmissionTrace(trace,snapshot)))throw Error('Optimization trace binding differs');
-    if(inputs.priorOutcome&&canonical(inputs.priorOutcome)!==canonical(readRetainedExperiment(assessment.priorMarker,trace)))throw Error('Retained optimization evidence differs');
+    if(inputs.priorOutcome&&canonical(inputs.priorOutcome)!==canonical(priorOutcome()))throw Error('Retained optimization evidence differs');
     if(canonical(registry)!==canonical(assessment.contributionRegistry)||canonical(variables)!==canonical(assessment.variables)||
         canonical(decision)!==canonical(screen({trace,analysis,inputs}))||!Number.isFinite(cost.wallMs)||cost.wallMs<0||
         !Number.isInteger(cost.controllerCpuMicros)||cost.controllerCpuMicros<0||
@@ -446,21 +504,16 @@ export function verifyEfficiencyRecord({stateDir,record,output}) {
       throw Error('Optimization admission differs from retained trace');
     if(assessment.schema===REPORT_SCHEMA){
       const receipt=assessment.investigation;
-      if(receipt?.schema==='ophanim.investigation-blocked/v1'){
-        throw Error('Held investigation evidence does not qualify for independent verification');
-      }else{
-        if(receipt?.workload!==(inputs.expectedQualifiedConvergences??1))throw Error('Investigation workload forecast differs');
-        verifyInvestigationReceipt({receipt,trace,registry,variables,traceTrusted:binding?.complete||boundAcceptedTrace(trace,snapshot)});
+      const workload=inputs.expectedQualifiedConvergences??1,traceTrusted=binding?.complete||boundAcceptedTrace(trace,snapshot);
+      if(receipt?.schema===HELD)verifyHeldInvestigation({receipt,trace,registry,variables,workload,traceTrusted});
+      else{
+        if(receipt?.workload!==workload)throw Error('Investigation workload forecast differs');
+        verifyInvestigationReceipt({receipt,trace,registry,variables,traceTrusted});
       }
     }
   }
-  const debitRecord=assessment.measuredValue?.debitRecord;
-  if(debitRecord!==undefined){
-    const debit=read(debitRecord);
-    if(path.basename(debitRecord)!==`debit-${assessment.traceSha}.json`||!validDebit(debit,assessment.traceSha))throw Error('Efficiency debit differs from the assessment');
-  }
   if(assessment.experiment?.manifestFile){
-    const manifest=path.join(path.dirname(reportFile),'experiment','manifest.json');
+    const manifest=path.join(reportDir,'experiment','manifest.json');
     if(assessment.experiment.manifestFile!==manifest||fs.realpathSync(manifest)!==manifest||
       createHash('sha256').update(fs.readFileSync(manifest)).digest('hex')!==assessment.experiment.evidenceSha)throw Error('Efficiency replay manifest differs');
   }
