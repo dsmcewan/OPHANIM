@@ -202,7 +202,7 @@ function policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,
     const order=[...new Map(frontierCandidates(role).map(c=>[`${c.vendor}/${c.model}`,c])).values()].filter(admit);
     return order.map((c,i)=>[{vendor:c.vendor,model:c.model,basis:'OPERATOR',why:'ARGO November model policy'},{...base,source:'profile',band:null,excluded,
       reason:`ARGO November model policy: the approved static ${role} order (operator profile); ${c.model} is ${i?`admitted fallback ${i}`:'the first admitted seat'}. `+
-        `Ticket difficulty "${difficulty}" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it`}]);
+        `Ticket difficulty "${difficulty}" does not choose the model under this profile, and no unmeasured ranking replaces the order. Output caps: a frontier seat keeps the frontier client's long-decode default whatever the difficulty, and the difficulty tier is sent only where the request needs a cap of its own (Anthropic Messages without a frontier default); neither cap is measured`}]);
   }
   const seating={...SEATING,[role]:(SEATING[role]??[]).filter(c=>admit({vendor:c.vendor,model:modelOf(c)}))};
   const pick=routeFor(role,{difficulty,needsContext,seating});

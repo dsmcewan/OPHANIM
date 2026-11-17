@@ -39,7 +39,7 @@ import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
-import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
+import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
@@ -531,7 +531,12 @@ export async function runOpenItem(spec, opts = {}) {
     // is what was asked for. A caller's own budget (e.g. the reviewer's 4000) still wins.
     let r, steps = 0, budget = extra;
     const work = `turn:${purpose}:${++escalationWork}`;   // one truncation trail per turn
-    if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
+    // Under `fit` the ticket's declared output size IS the cap, sent explicitly on every API seat (capped at the
+    // model's documented ceiling): the dimension must reach the serialized request, not only the selection record
+    // (owner audit CS3). Elsewhere, only Anthropic's Messages path needs a cap of its own; other frontier seats keep
+    // the client's long-decode default, and the argo selection reason says so.
+    if (budget === undefined && TASK) budget = capFor(vendor, { tokens: outputBudgetFor(model, TIER).tokens });
+    else if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
     // The settings an attempt ran with: as SENT where the adapter observed the request (after every default
     // and policy applied), otherwise as requested -- and `basis` says which (audit M5).
     const settingsOf = (res, asked) => {
