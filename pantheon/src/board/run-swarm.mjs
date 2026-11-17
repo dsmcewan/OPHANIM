@@ -26,6 +26,7 @@ import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { candidatesFor } from "../role/seating.mjs";
+import { labOf } from "../config/models.mjs";
 import { ROSTER } from "../team/roster.mjs";
 import { explorePrompt, refutePrompt, synthesizePrompt, SWARM_ROLES } from "../swarm/layered.mjs";
 
@@ -71,16 +72,28 @@ async function seatTurn({ turn, seat, role, prompt, tier }) {
   }
 }
 
-/** Distinct-lab seats for a role, as the seating table orders them, minus labs to avoid. */
-function labsFor(role, { avoid = [], count = 2, seating } = {}) {
-  const seen = new Set(), out = [];
-  for (const c of candidatesFor(role, { avoid, ...(seating ? { seating } : {}) })) {
-    if (seen.has(c.vendor)) continue;
-    seen.add(c.vendor); out.push({ vendor: c.vendor, model: c.model });
+/** The model lab a seat or author answered for: the lab of the model it names, not its transport. */
+export const seatLab = s => labOf(s?.vendor, s?.model ?? null);
+
+/**
+ * Distinct-LAB seats for a role, as the seating table orders them, minus labs to avoid. The lab is
+ * labOf(vendor, model): an agy_google seat serving a Claude lane model is Anthropic's lab, so it is
+ * neither a second explorer beside an Anthropic seat, nor a refuter or judge of an Anthropic fork
+ * (independent review 2026-11-16, C1). Comparing vendor strings counted transports, not labs.
+ */
+export function labsFor(role, { avoidLabs = [], count = 2, seating } = {}) {
+  const seen = new Set(avoidLabs), out = [];
+  for (const c of candidatesFor(role, { ...(seating ? { seating } : {}) })) {
+    const lab = labOf(c.vendor, c.model);
+    if (seen.has(lab)) continue;
+    seen.add(lab); out.push({ vendor: c.vendor, model: c.model, lab });
     if (out.length === count) break;
   }
   return out;
 }
+// Refs and keys are named per transport. Two distinct labs on one transport (agy_google serving
+// Claude and Gemini) are told apart by lab there, so neither fork overwrites the other's slot.
+const tagsOf = seats => seats.map(s => (seats.filter(o => o.vendor === s.vendor).length > 1 ? `${s.vendor}-${s.lab}` : s.vendor));
 
 async function isoPublish(board, { seat, ref, key, claim, contradicts, from }) {
   if (!board.refs.resolve(ref)) {
@@ -124,14 +137,15 @@ export async function runSwarmLayer({ board, ref, question, turn, seating, opene
     // Forks, concurrently, from distinct labs; none reads another's answer.
     const seats = labsFor(SWARM_ROLES.explore, { seating });
     if (seats.length < 2) return { ok: false, refused: "seating", step, why: "an explore round needs two distinct labs" };
-    const answers = await Promise.all(seats.map(async s => ({ seat: s, text: await run(s, SWARM_ROLES.explore, explorePrompt(question).prompt) })));
+    const tags = tagsOf(seats);
+    const answers = await Promise.all(seats.map(async (s, i) => ({ seat: s, tag: tags[i], text: await run(s, SWARM_ROLES.explore, explorePrompt(question).prompt) })));
     const published = [];
-    for (const { seat, text } of answers) {
-      const author = authored(seat, "explore", `${seat.vendor}-explore`);
-      published.push(await isoPublish(board, { seat: author, ref: `refs/iso/${seat.vendor}/explore`, from: ref,
-        key: `explore-r${round}-${slug(seat.vendor)}`, claim: text }));
+    for (const { seat, tag, text } of answers) {
+      const author = authored(seat, "explore", `${tag}-explore`);
+      published.push(await isoPublish(board, { seat: author, ref: `refs/iso/${tag}/explore`, from: ref,
+        key: `explore-r${round}-${slug(tag)}`, claim: text }));
     }
-    return { ok: true, step, chair, round, published, escalations };
+    return { ok: true, step, chair, round, published, escalations, labs: seats.map(s => s.lab) };
   }
 
   if (step === "refute") {
@@ -140,7 +154,8 @@ export async function runSwarmLayer({ board, ref, question, turn, seating, opene
     const claims = state.hypotheses.filter(h => h.status === "open");
     const published = [];
     for (const claim of claims) {
-      const [seat] = labsFor(SWARM_ROLES.refute, { avoid: [claim.author?.vendor].filter(Boolean), count: 1, seating });
+      // The claim's lab comes from the model its author retained, not from the transport it ran on.
+      const [seat] = labsFor(SWARM_ROLES.refute, { avoidLabs: claim.author?.vendor ? [seatLab(claim.author)] : [], count: 1, seating });
       if (!seat) continue;
       const text = await run(seat, SWARM_ROLES.refute, refutePrompt({ target: claim.author?.vendor ?? "a peer", answer: claim.claim, question }).prompt);
       const author = authored(seat, "refute", `${seat.vendor}-refute`);
@@ -156,11 +171,15 @@ export async function runSwarmLayer({ board, ref, question, turn, seating, opene
     for (const [slot, cid] of Object.entries(treeSlots(board.store, r.cid))) {
       if (!slot.startsWith("hypothesis:")) continue;
       const e = board.store.get(cid);
-      if (e.visibility === "isolated" && /^(explore|refute)-/.test(e.payload.key)) forks.push({ cid, vendor: e.author.vendor, key: e.payload.key, text: e.payload.claim });
+      if (e.visibility === "isolated" && /^(explore|refute)-/.test(e.payload.key)) {
+        // Each fork keeps the model its author named and the lab that model belongs to, so the judge
+        // below is excluded by lab, whichever transport served the fork.
+        forks.push({ cid, vendor: e.author.vendor, model: e.author.model ?? null, lab: seatLab(e.author), key: e.payload.key, text: e.payload.claim });
+      }
     }
   }
-  const forkLabs = [...new Set(forks.map(f => f.vendor))];
-  const [judge] = labsFor(SWARM_ROLES.synthesize, { avoid: forkLabs, count: 1, seating });
+  const forkLabs = [...new Set(forks.map(f => f.lab))];
+  const [judge] = labsFor(SWARM_ROLES.synthesize, { avoidLabs: forkLabs, count: 1, seating });
   if (!judge) return { ok: false, refused: "judge", step, why: `no judge outside the fork labs (${forkLabs.join(", ")}); the human takes the seat` };
   const answers = forks.filter(f => f.key.startsWith("explore-")).map(f => ({ seat: f.vendor, text: f.text }));
   const refutations = forks.filter(f => f.key.startsWith("refute-")).map(f => ({ reviewer: f.vendor, target: "a claim", text: f.text }));
@@ -177,7 +196,7 @@ export async function runSwarmLayer({ board, ref, question, turn, seating, opene
   if (!p.ok) throw new Error(`publish ${key}: ${p.why}`);
   const carried = await merge({ ...board, into: ref, from: wip, author: CONTROLLER, only: ["hypothesis:"], msg: "carry the synthesis" });
   if (!carried.ok) throw new Error(`carry ${key}: ${carried.why}`);
-  return { ok: true, step, chair, round, judge, forks: forks.length, published: [p.written[0].cid], escalations };
+  return { ok: true, step, chair, round, judge, forks: forks.length, fork_labs: forkLabs, published: [p.written[0].cid], escalations };
 }
 
 export { StageRefused, ROSTER };

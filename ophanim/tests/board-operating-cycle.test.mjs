@@ -203,3 +203,58 @@ test('REHEARSAL: a finding without a reproduction is deferred; the unverified cl
     } finally { fs.rmSync(work, {recursive: true, force: true}); fs.rmSync(ownerKeys, {recursive: true, force: true}); }
   });
 });
+
+// C2 (independent review 2026-11-16): a board run whose review cycle a failed reviewer left open had no
+// supported way on; `pantheon-board resume <item> --out DIR` asks again only the seat with no review.
+test('REHEARSAL: a reviewer that fails with a 503 is resumed through pantheon-board resume; only that seat is asked again', async () => {
+  await withPipeline(async ({repo, opts, implement}) => {
+    const {statusRoot, ownerKeys} = setUp(repo);
+    implement(() => 'export const ok = true;\n');
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-rehearsal-'));
+    const calls = [];
+    const turn = async a => { calls.push(a.vendor); if (a.vendor === 'openai') throw new Error('openai: 503 Service Unavailable'); return approve(a); };
+    try {
+      const seatOverrides = {...opts.seatOverrides, implementer: {...opts.seatOverrides.implementer, vendor: 'anthropic', model: modelId('anthropic', 'fable'), pool: 'anthropic'}};
+      const bundleDir = path.join(work, 'bundle');
+      const r = await runBoardItem({repo, item: ITEM, statusRoot, makeClientFor: opts.makeClientFor, turn,
+        dir: path.join(work, 'board'), out: bundleDir, runOpts: {scouts: opts.scouts, revisions: opts.revisions, seatOverrides}});
+      assert.equal(r.bundle.run.shipped, true, JSON.stringify(r.bundle.run.error));
+      assert.equal(r.proposal, undefined);
+      assert.match(r.why, /2 of 3 reviews are recorded/);
+      assert.deepEqual(r.bundle.review.failed.map(x => x.vendor), ['openai']);
+      assert.deepEqual([...calls].sort(), ['agy_google', 'openai', 'xai']);
+
+      const log = path.join(work, 'calls.log');
+      const resume = (...a) => {
+        const env = {...process.env, REVIEW_CYCLE_CALL_LOG: log};
+        delete env.OPHANIM_LEDGER;
+        try {
+          return {code: 0, out: JSON.parse(execFileSync(process.execPath, [BOARD_CLI, 'resume', ...a, '--repo', repo, '--status-ledger', statusRoot,
+            '--turn', path.join(REPO, 'pantheon/tests/fixtures/review-cycle-flaky-turn.mjs')], {encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe']}))};
+        } catch (e) { return {code: e.status, out: e.stdout ? JSON.parse(e.stdout) : null}; }
+      };
+      const wrong = resume('rehearsal-dep', '--out', bundleDir);
+      assert.equal(wrong.code, 1);
+      assert.match(wrong.out.refused, /is for "rehearsal-item"/);
+      assert.equal(fs.existsSync(log), false, 'a refused resume asks no reviewer');
+
+      const resumed = resume(ITEM, '--out', bundleDir);
+      assert.equal(resumed.code, 0, JSON.stringify(resumed.out));
+      assert.equal(resumed.out.cycle, r.bundle.review.cycle, 'the run\'s own cycle, not a new one');
+      assert.equal(resumed.out.outcome, 'verified');
+      assert.deepEqual(fs.readFileSync(log, 'utf8').split('\n').filter(Boolean), ['openai'], 'only the failed seat was asked again');
+      assert.deepEqual(resumed.out.resumes.map(x => [x.retained.length, x.attempted.map(s => s.vendor), x.complete]), [[2, ['openai'], true]]);
+      const bundle = JSON.parse(fs.readFileSync(path.join(bundleDir, 'evidence.json'), 'utf8'));
+      assert.deepEqual(bundle.review.reviews.map(x => x.lab).sort(), ['google', 'openai', 'xai']);
+      assert.ok(bundle.proposal, 'the resumed cycle closed and the proposal was written');
+      const sys = openPantheonLedger({root: bundle.review.ledger});
+      assert.equal(sys.ledger.read().filter(e => e.kind === 'cycle').length, 1);
+      assert.equal(sys.ledger.verify().ok, true);
+      assert.equal(checkProposal({proposal: JSON.parse(fs.readFileSync(path.join(bundleDir, 'proposal.json'), 'utf8')), repo}).ok, true);
+      // Nothing is left to resume: the cycle is closed, and a second resume asks no one.
+      const again = resume(ITEM, '--out', bundleDir);
+      assert.equal(again.code, 0, JSON.stringify(again.out));
+      assert.deepEqual(fs.readFileSync(log, 'utf8').split('\n').filter(Boolean), ['openai']);
+    } finally { fs.rmSync(work, {recursive: true, force: true}); fs.rmSync(ownerKeys, {recursive: true, force: true}); }
+  });
+});

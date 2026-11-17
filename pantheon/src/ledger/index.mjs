@@ -6,5 +6,5 @@ export {LEASE, BUDGET, REF_MOVE, leaseActive, latestFor, leaseTableAt, leaseRows
 export {boardAnchorKinds, boardResolver} from './anchors.mjs';
 export {OPERATOR, CONTROLLER, PANTHEON_DOMAIN, pantheonLedgerKinds, pantheonSystemKinds, pantheonDomains, openPantheonLedger} from './system.mjs';
 export {boardScopes, scopeOf} from './scopes.mjs';
-export {CYCLE, FINDING, RESOLUTION, CLOSE, SEVERITIES, REVIEW_BRIEF, reviewPrompt, parseReview, deriveCycle, closeClaim, cycleKinds, cycleRecorder, ledgerView} from './cycle-kinds.mjs';
-export {reviewCycle, reviewSeats} from './review-cycle.mjs';
+export {CYCLE, FINDING, RESOLUTION, CLOSE, ATTEMPT, SEVERITIES, REVIEW_BRIEF, reviewPrompt, parseReview, deriveCycle, closeClaim, cycleKinds, cycleRecorder, ledgerView} from './cycle-kinds.mjs';
+export {reviewCycle, reviewSeats, DEFAULT_MAX_ATTEMPTS} from './review-cycle.mjs';

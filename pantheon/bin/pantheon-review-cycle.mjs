@@ -2,6 +2,7 @@
 // The review layer at the end of every cycle (pantheon/src/ledger/review-cycle.mjs, cycle-kinds.mjs).
 //
 //   node pantheon/bin/pantheon-review-cycle.mjs [review] [--head HEAD] [--base X]   review the change
+//   node pantheon/bin/pantheon-review-cycle.mjs resume [--max-attempts N]   retry the open cycle's failed seats
 //   node pantheon/bin/pantheon-review-cycle.mjs fix --finding H --commit C --test CMD --before-exit N --after-exit 0
 //   node pantheon/bin/pantheon-review-cycle.mjs defer --finding H --reason TEXT
 //   node pantheon/bin/pantheon-review-cycle.mjs close [--cycle H]
@@ -16,6 +17,12 @@
 // Without --base, a cycle starts where the previous cycle of the scope ended; the first cycle of a scope
 // needs --base. A cycle cannot open while the previous one is open, so the review is not skippable: the
 // next cycle's review refuses until this one is closed.
+//
+// A reviewer that failed (a 503, a refused review) leaves the cycle open. `resume` reopens the scope's
+// open cycle (never a new one), re-reads its change from the repository at the cycle's own base and head,
+// and asks again only the seats with no review, keeping the reviews already recorded. Each try is a
+// recorded attempt; a seat stops at the cycle's attempt limit (--max-attempts on the first review, 3 by
+// default).
 //
 // Exit codes: 0 done, 1 refused (a reviewer failed, the cycle cannot close, a ledger refusal), 2 usage.
 import {execFileSync} from 'node:child_process';
@@ -35,7 +42,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(v); else opts[k] = v;
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-review-cycle [review|fix|defer|close|status] [--repo DIR] [--ledger DIR] [--scope NAME] ...`);
+  console.error(`${why}\nusage: pantheon-review-cycle [review|resume|fix|defer|close|status] [--repo DIR] [--ledger DIR] [--scope NAME] ...`);
   process.exit(2);
 }
 const out = (value, code = 0) => { console.log(JSON.stringify(value, null, 2)); process.exit(code); };
@@ -54,7 +61,10 @@ const show = state => ({
   reviews: state.reviews.map(r => ({review: r.hash, lab: r.lab, vendor: r.seat.vendor, verdict: r.verdict})),
   findings: state.findings.map(f => ({finding: f.hash, ...f.payload, resolution: state.resolutions.get(f.hash)?.payload ?? null})),
   closed: state.close,
+  attempts: (state.attempts ?? []).map(a => ({attempt: a.hash, vendor: a.seat.vendor, model: a.seat.model, lab: a.seat.lab, n: a.attempt,
+    max_attempts: a.max_attempts, outcome: a.outcome, why: a.why, resumed: a.resumed})),
 });
+const maxAttempts = opts['max-attempts'] === undefined ? undefined : Number(opts['max-attempts']);
 const cycleOf = h => h ?? rec.lastCycle(scope)?.hash ?? usage(`no cycle of "${scope}" on the ledger at ${ledgerRoot}`);
 const cycleOfFinding = f => {
   const e = sys.ledger.read().find(x => sys.ledger.hashOf(x) === f);
@@ -85,8 +95,21 @@ try {
     const files = git('diff', '--name-only', base, head).split('\n').filter(Boolean);
     const turn = opts.turn ? (await import(pathToFileURL(resolve(opts.turn)).href)).default : await liveTurn();
     const r = await reviewCycle({ledger: rec, change: {scope, base, head, diff, files, author_labs: multi['author-lab'].length ? multi['author-lab'] : ['anthropic']},
-      turn, n: Number(opts.n ?? 3)});
+      turn, n: Number(opts.n ?? 3), max_attempts: maxAttempts});
     out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), failed: r.failed}, r.complete ? 0 : 1);
+  }
+  if (verb === 'resume') {
+    // The change is the cycle's own: its base and head, re-read from the repository. reviewCycle checks
+    // the diff, files and prompt against the digests the cycle bound and refuses a change that differs.
+    const last = rec.lastCycle(scope);
+    if (!last) out({refused: `no cycle of "${scope}" on the ledger at ${ledgerRoot}; there is nothing to resume`, code: 'NO_OPEN_CYCLE'}, 1);
+    const c = rec.cycleState(last.hash).cycle;
+    const diff = git('diff', '--no-color', c.base, c.head);
+    const files = git('diff', '--name-only', c.base, c.head).split('\n').filter(Boolean);
+    const turn = opts.turn ? (await import(pathToFileURL(resolve(opts.turn)).href)).default : await liveTurn();
+    const r = await reviewCycle({ledger: rec, resume: true, turn, max_attempts: maxAttempts,
+      change: {scope, base: c.base, head: c.head, diff, files, ...(multi['author-lab'].length ? {author_labs: multi['author-lab']} : {})}});
+    out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), resumed: true, retained: r.retained, attempted: r.attempted, failed: r.failed}, r.complete ? 0 : 1);
   }
   if (verb === 'fix') {
     for (const k of ['finding', 'commit', 'test', 'before-exit', 'after-exit']) if (opts[k] === undefined) usage(`fix needs --${k}`);

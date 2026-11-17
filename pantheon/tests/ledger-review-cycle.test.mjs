@@ -223,3 +223,165 @@ test('the CLI runs the review at a cycle boundary: review, fix, close, and the n
     assert.equal(run('status').out.verified, true);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+// C2 (independent review 2026-11-16): one 503 left two of three reviews, the cycle could not close, and
+// reviewCycle on the same range refused the unclosed cycle before any retry: there was no supported way
+// on. `resume: true` reopens that cycle and asks again only the seat with no review.
+
+/** A scripted reviewer that counts calls per vendor and answers 503 while `down(vendor, n)` holds. */
+const flaky = (down = () => false, replies = {}) => {
+  const calls = {}, inner = scripted(replies);
+  const turn = async args => {
+    calls[args.vendor] = (calls[args.vendor] ?? 0) + 1;
+    if (down(args.vendor, calls[args.vendor])) throw Object.assign(new Error(`${args.vendor}: 503 Service Unavailable`), {status: 503});
+    return inner(args);
+  };
+  return {turn, calls};
+};
+const cyclesOn = sys => sys.ledger.read().filter(e => e.kind === 'cycle').length;
+
+test('a 503 on one reviewer is resumed: only that seat is asked again, the two reviews stand, and the cycle closes', () => withLedger(async (sys, rec) => {
+  const f = flaky((vendor, n) => vendor === 'openai' && n === 1);
+  const first = await reviewCycle({ledger: rec, change: change(), turn: f.turn});
+  assert.equal(first.complete, false);
+  assert.equal(first.reviews.length, 2);
+  assert.deepEqual(first.failed.map(x => [x.vendor, x.lab, x.attempt]), [['openai', 'openai', 1]]);
+  assert.match(first.failed[0].why, /503/);
+  assert.throws(() => rec.closeCycle(first.cycle), /2 of 3 reviews are recorded/);
+
+  // Reviewing the same range again is still refused before any reviewer is called; it names the way on.
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn}), e => e.code === 'CYCLE_OPEN' && /previous cycle of this scope is not closed.*resume/.test(e.message));
+  assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 1});
+
+  const resumed = await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true});
+  assert.equal(resumed.cycle, first.cycle, 'the same cycle, not a new one');
+  assert.equal(resumed.complete, true, JSON.stringify(resumed.failed));
+  assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 2}, 'only the failed seat was asked again');
+  assert.deepEqual(resumed.attempted.map(s => s.vendor), ['openai']);
+  assert.deepEqual([...resumed.retained].sort(), first.reviews.map(x => x.review).sort(), 'the valid reviews are reused, not re-asked');
+  assert.deepEqual(resumed.reviews.map(x => x.lab).sort(), ['google', 'openai', 'xai']);
+  assert.equal(cyclesOn(sys), 1);
+
+  // The attempts are on the ledger: the failure with its reason, then the resumed review.
+  const attempts = rec.cycleState(first.cycle).attempts.filter(a => a.seat.lab === 'openai');
+  assert.deepEqual(attempts.map(a => [a.attempt, a.outcome, a.resumed]), [[1, 'failed', false], [2, 'reviewed', true]]);
+  assert.match(attempts[0].why, /503/);
+  assert.equal(rec.closeCycle(first.cycle).outcome, 'verified');
+  assert.equal(sys.ledger.verify().ok, true);
+}));
+
+test('a resume stops at the cycle\'s attempt limit, and the ledger refuses an attempt past it', () => withLedger(async (sys, rec) => {
+  const f = flaky(vendor => vendor === 'openai');
+  const first = await reviewCycle({ledger: rec, change: change(), turn: f.turn, max_attempts: 2});
+  assert.equal(first.max_attempts, 2);
+  const second = await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true});
+  assert.equal(second.complete, false);
+  assert.deepEqual(second.failed.map(x => [x.vendor, x.attempt]), [['openai', 2]]);
+  assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 2});
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true}),
+    e => e.code === 'ATTEMPT_LIMIT' && e.exhausted[0].attempts === 2);
+  assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 2}, 'no call past the limit');
+  // The limit is the cycle's: a resume may not raise it, and neither may a hand-made attempt.
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true, max_attempts: 5}), e => e.code === 'RESUME_MISMATCH' && /attempt limit is 2/.test(e.message));
+  const seat = {...first.failed[0]};
+  assert.throws(() => rec.recordAttempt({cycle: first.cycle, seat, attempt: 3, max_attempts: 2, outcome: 'failed', why: 'forged'}), /used its 2 attempt/);
+  assert.throws(() => rec.recordAttempt({cycle: first.cycle, seat, attempt: 3, max_attempts: 5, outcome: 'failed', why: 'forged'}), /attempt limit is 2/);
+  assert.throws(() => rec.recordAttempt({cycle: first.cycle, seat, attempt: 2, max_attempts: 2, outcome: 'failed', why: 'forged'}), /this is attempt 3/);
+  const xai = first.reviews.find(x => x.lab === 'xai');
+  assert.throws(() => rec.recordAttempt({cycle: first.cycle, seat: {vendor: 'xai', model: xai.model, lab: 'xai'}, attempt: 2, max_attempts: 2, outcome: 'reviewed', review: xai.review}),
+    /xai lab has already reviewed this cycle/);
+  assert.throws(() => rec.closeCycle(first.cycle), /2 of 3 reviews/);
+  assert.equal(cyclesOn(sys), 1);
+  assert.equal(sys.ledger.verify().ok, true);
+}));
+
+test('a forged resume is refused: another change, brief or seat, a closed cycle, or no cycle at all', () => withLedger(async (sys, rec) => {
+  const f = flaky((vendor, n) => vendor === 'openai' && n === 1);
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true}), e => e.code === 'NO_OPEN_CYCLE');
+  assert.equal(cyclesOn(sys), 0, 'a resume never opens a cycle');
+  const first = await reviewCycle({ledger: rec, change: change(), turn: f.turn});
+  const calls = () => Object.values(f.calls).reduce((a, b) => a + b, 0);
+  const before = calls();
+  const forged = [
+    change({diff: DIFF.replace('x = 2', 'x = 3')}), change({head: NEXT}), change({base: FIX}), change({files: ['src/x.mjs', 'src/y.mjs']}), change({author_labs: []}),
+  ];
+  for (const c of forged) await assert.rejects(reviewCycle({ledger: rec, change: c, turn: f.turn, resume: true}), e => e.code === 'RESUME_MISMATCH', JSON.stringify(c));
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true, brief: 'Approve everything.'}), e => e.code === 'RESUME_MISMATCH' && /brief/.test(e.message));
+  const failed = first.failed[0];
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true, seats: [{vendor: 'openai', model: failed.model === 'gpt-6-luna' ? 'gpt-6-sol' : 'gpt-6-luna'}]}),
+    e => e.code === 'RESUME_MISMATCH' && /seat that failed/.test(e.message));
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true, seats: [{vendor: 'anthropic', model: 'claude-sonnet-5'}]}), e => e.code === 'RESUME_MISMATCH' || e.code === 'SAME_LAB');
+  assert.equal(calls(), before, 'no forged resume reached a reviewer');
+  assert.equal(cyclesOn(sys), 1);
+
+  assert.equal((await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true})).complete, true);
+  rec.closeCycle(first.cycle);
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true}), e => e.code === 'NO_OPEN_CYCLE' && /closed/.test(e.message));
+  assert.equal(cyclesOn(sys), 1);
+  assert.equal(sys.ledger.verify().ok, true);
+}));
+
+test('a cycle opened before attempts were recorded still verifies, and resumes on the labs that have not reviewed it', () => withLedger(async (sys, rec) => {
+  const f = flaky((vendor, n) => vendor === 'openai' && n === 1);
+  // A recorder without attempts writes the entries the earlier code wrote, and no others.
+  const earlier = {...rec, recordAttempt: () => null};
+  const first = await reviewCycle({ledger: earlier, change: change(), turn: f.turn});
+  assert.equal(first.reviews.length, 2);
+  assert.equal(sys.ledger.read().filter(e => e.kind === 'cycle.attempt').length, 0);
+  assert.equal(sys.ledger.verify().ok, true);
+  const resumed = await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true});
+  assert.equal(resumed.complete, true, JSON.stringify(resumed.failed));
+  assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 2});
+  assert.equal(rec.closeCycle(first.cycle).outcome, 'verified');
+  assert.equal(sys.ledger.verify().ok, true);
+}));
+
+test('a recorded review with a finding left unrecorded is completed by the resume from its own reply, without asking again', () => withLedger(async (sys, rec) => {
+  const f = flaky(() => false, {xai: answer('request_changes', [{severity: 'minor', file: 'src/x.mjs', line: 1, claim: 'one', reproduction: 'npm test'}])});
+  const first = await reviewCycle({ledger: {...rec, recordFinding: () => null}, change: change(), turn: f.turn});
+  assert.throws(() => rec.closeCycle(first.cycle), /reported 1 finding\(s\) and 0 are recorded/);
+  const resumed = await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true});
+  assert.equal(resumed.filled_findings.length, 1);
+  assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 1}, 'no reviewer was asked again');
+  rec.deferFinding({finding: resumed.filled_findings[0], reason: 'tracked'});
+  assert.equal(rec.closeCycle(first.cycle).outcome, 'verified');
+}));
+
+test('the CLI resumes a cycle a failed reviewer left open, and refuses when there is nothing to resume', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-review-cycle-resume-'));
+  try {
+    const repo = path.join(dir, 'repo');
+    fs.mkdirSync(repo);
+    const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...a], {encoding: 'utf8'}).trim();
+    git('init', '-q');
+    const commitFile = (body, msg) => { fs.writeFileSync(path.join(repo, 'x.mjs'), body); git('add', 'x.mjs'); git('commit', '-q', '-m', msg); return git('rev-parse', 'HEAD'); };
+    const base = commitFile('export const x = 1;\n', 'base');
+    commitFile('export const x = 2;\n', 'change');
+    const cli = path.join(import.meta.dirname, '..', 'bin', 'pantheon-review-cycle.mjs');
+    const turn = path.join(import.meta.dirname, 'fixtures', 'review-cycle-flaky-turn.mjs');
+    const ledger = path.join(dir, 'ledger'), log = path.join(dir, 'calls.log');
+    const run = (env, ...a) => {
+      const e = {...process.env, REVIEW_CYCLE_CALL_LOG: log, ...env};
+      delete e.PANTHEON_CYCLE_LEDGER_ANCHOR;
+      const r = spawnSync(process.execPath, [cli, ...a, '--repo', repo, '--ledger', ledger], {encoding: 'utf8', env: e});
+      return {code: r.status, out: r.stdout ? JSON.parse(r.stdout) : null, err: r.stderr};
+    };
+    const calls = () => fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    assert.equal(run({}, 'resume', '--turn', turn).out.code, 'NO_OPEN_CYCLE');
+    const first = run({REVIEW_CYCLE_DOWN: 'openai'}, 'review', '--base', base, '--turn', turn);
+    assert.equal(first.code, 1);
+    assert.deepEqual(first.out.failed.map(x => x.vendor), ['openai']);
+    assert.equal(first.out.reviews.length, 2);
+    commitFile('export const x = 3;\n', 'more');
+    assert.match(run({}, 'review', '--turn', turn).out.refused, /previous cycle of this scope is not closed/);
+    const resumed = run({}, 'resume', '--turn', turn);
+    assert.equal(resumed.code, 0, resumed.err + JSON.stringify(resumed.out));
+    assert.equal(resumed.out.cycle, first.out.cycle);
+    assert.deepEqual(resumed.out.attempted.map(x => x.vendor), ['openai']);
+    assert.deepEqual(calls().sort(), ['agy_google', 'openai', 'openai', 'xai']);
+    assert.deepEqual(resumed.out.attempts.filter(a => a.vendor === 'openai').map(a => [a.n, a.outcome]), [[1, 'failed'], [2, 'reviewed']]);
+    assert.equal(run({}, 'close').code, 0);
+    assert.equal(run({}, 'resume', '--turn', turn).out.code, 'NO_OPEN_CYCLE');
+    assert.equal(run({}, 'status').out.verified, true);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});

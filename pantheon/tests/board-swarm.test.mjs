@@ -147,3 +147,60 @@ test("the contribution projection reports all five chairs, including the swarm's
   assert.equal(verifyChairContributions(p, board).ok, true);
   // OPHANIM ranks this five-chair projection on its own side: ophanim/efficiency/investigation/chairs-board.test.mjs.
 }));
+
+// C1 (independent review 2026-11-16): the swarm deduplicated by VENDOR, so Anthropic/Sonnet and
+// AGY/Claude (an agy_google transport serving an Anthropic-lab lane model) counted as two labs.
+const AGY_CLAUDE = { vendor: "agy_google", model: "claude-sonnet-4-6", basis: "QUOTA", why: "test" };
+const XAI = { vendor: "xai", model: "grok-4.6", basis: "QUOTA", why: "test" };
+
+test("explore picks two different LABS when two transports serve the same lab", () => withBoard(async board => {
+  const { ref } = await stuck(board);
+  const a = answers();
+  const r = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn,
+    seating: { ...SEATING, explorer: [SEATING.explorer[0], AGY_CLAUDE, SEATING.explorer[1]] } });
+  assert.equal(r.ok, true, r.why);
+  assert.deepEqual(a.calls.map(c => `${c.vendor}/${c.model}`).sort(), ["anthropic/claude-sonnet-5", "openai/gpt-6-sol"],
+    "agy_google/claude-sonnet-4-6 is Anthropic's lab, so it is not the second explorer");
+  assert.deepEqual(r.labs, ["anthropic", "openai"]);
+  assert.equal(board.refs.resolve("refs/iso/agy_google/explore"), null);
+}));
+
+test("explore refuses when its only candidates are one lab on two transports", () => withBoard(async board => {
+  const { ref } = await stuck(board);
+  const a = answers();
+  const r = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn,
+    seating: { ...SEATING, explorer: [SEATING.explorer[0], AGY_CLAUDE] } });
+  assert.deepEqual([r.ok, r.refused], [false, "seating"]);
+  assert.equal(a.calls.length, 0);
+}));
+
+test("a judge sharing a fork's lab through another transport is refused; another lab on that transport is seated", () => withBoard(async board => {
+  const { ref } = await stuck(board);
+  await runSwarmLayer({ board, ref, question: QUESTION, turn: answers().turn, seating: SEATING });
+  await split(board, ref);
+  const a = answers();
+  const refused = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn, seating: { ...SEATING, judge: [AGY_CLAUDE] } });
+  assert.deepEqual([refused.ok, refused.refused], [false, "judge"], "AGY/Claude shares the Anthropic fork's lab");
+  assert.equal(a.calls.length, 0);
+  const seated = await runSwarmLayer({ board, ref, question: QUESTION, turn: answers().turn,
+    seating: { ...SEATING, judge: [AGY_CLAUDE, SEATING.judge[1]] } });
+  assert.equal(seated.ok, true, seated.why);
+  assert.deepEqual([seated.judge.vendor, seated.judge.model, seated.judge.lab], ["agy_google", "gemini-4-carbon", "google"]);
+  assert.deepEqual([...seated.fork_labs].sort(), ["anthropic", "openai"]);
+}));
+
+test("a refuter is excluded by the claim's lab, read from the model its author retained", () => withBoard(async board => {
+  const { ref } = await stuck(board);
+  // Forks from openai and xai; the judge is AGY/Claude (Anthropic's lab, which made no fork).
+  const s = { explorer: [SEATING.explorer[1], XAI], judge: [AGY_CLAUDE],
+    reviewer: [{ vendor: "anthropic", model: "claude-sonnet-5", basis: "ISOLATION", why: "test" }, SEATING.reviewer[0]] };
+  assert.equal((await runSwarmLayer({ board, ref, question: QUESTION, turn: answers().turn, seating: s })).ok, true);
+  await split(board, ref);
+  const synth = await runSwarmLayer({ board, ref, question: QUESTION, turn: answers().turn, seating: s });
+  assert.equal(synth.ok, true, synth.why);
+  assert.equal(synth.judge.lab, "anthropic");
+  const a = answers();
+  const refute = await runSwarmLayer({ board, ref, question: QUESTION, turn: a.turn, seating: s });
+  assert.equal(refute.ok, true, refute.why);
+  assert.deepEqual(a.calls.map(c => c.vendor), ["xai"], "the claim is Anthropic's lab (agy_google/claude), so Anthropic may not refute it");
+}));
