@@ -58,7 +58,7 @@ report.phases.A = {what: 'tick with no work ledger', exit: a.exit, refusal: (a.s
 const b = cli('tick', '--init');
 const bj = parse(b.stdout);
 report.phases.B = {what: 'tick --init at the default limits (total provider calls 0)', exit: b.exit,
-  dispatched: bj?.tick?.dispatched ?? bj?.dispatched ?? null, intake: (bj?.tick?.intake ?? bj?.intake ?? []).length,
+  dispatched: bj?.tick?.dispatched ?? bj?.dispatched ?? null, intake: (x => (Array.isArray(x) ? x.length : x ?? 0))(bj?.intake),
   stopped: bj?.tick?.stopped ?? bj?.stopped ?? null, note: bj?.note ?? null, refusal: b.exit ? (b.stderr || b.stdout).trim().split('\n')[0] : null};
 
 // C. A declared budget, recording executors.
