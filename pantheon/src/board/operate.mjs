@@ -435,6 +435,8 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
       gate_entry: run?.ledger?.gate ?? null, error: result.error ?? null,
       // A loaded practice decision this dispatcher does not implement (run.json `practice_warning`), surfaced.
       practice_warning: run?.practice_warning ?? null,
+      // What the selector chose per role (run.json `seating`, run-item.mjs seatingOf).
+      profile: run?.profile ?? null, seating: run?.seating ?? [],
       tests: run?.acceptance ? { cmd: run.acceptance.cmd, exit: run.acceptance.exit } : null,
       seats: [...new Map((run?.turns ?? []).map(t => [`${t.purpose}|${t.vendor}|${t.model}`, { purpose: t.purpose, vendor: t.vendor, model: t.model,
         served_model: t.served_model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model) }])).values()] },

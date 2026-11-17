@@ -138,6 +138,27 @@ function failureOutcome(e) {
 export function providerCallsOf(attempts = []) {
   return attempts.filter(a => a?.provider_requests !== 0).length;
 }
+// THE SEATING REPORT: what the selector actually chose, per role, read from the turns the run made (each carries
+// its selection), not the legacy SEATING table. One row per role and seat that answered, in the order seated:
+// vendor/model, lab, the selection's source (profile, policy, operator-override, ticket-pin, ...), and under
+// `fit` the class and the effort the profile mapped onto that model's ladder.
+const ROLE_OF_TURN = { scout: "scout", plan: "planner", work: "implementer", critique: "reviewer" };
+export function seatingOf(run) {
+  const rows = [], seen = new Set();
+  for (const t of run?.turns ?? []) {
+    const role = ROLE_OF_TURN[t.purpose] ?? t.purpose, key = `${role}|${t.vendor}|${t.model}|${t.pool ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const sel = t.selection ?? null, fit = sel?.profile === "fit";
+    const row = { role, vendor: t.vendor, model: t.model, lab: labOf(t.vendor, t.model), pool: t.pool ?? t.vendor, transport: t.transport ?? null,
+      profile: sel?.profile ?? null, source: sel?.source ?? null, fallback: sel?.fallback === true,
+      ...(fit ? { class: sel.class?.value ?? null, effort: sel.effort?.value ?? null } : {}) };
+    row.line = `${role.padEnd(11)} ${t.vendor}/${t.model} (${row.lab})  source=${row.source ?? "unrecorded"}${row.fallback ? " fallback" : ""}` +
+      (fit ? `  class=${row.class ?? "-"} effort=${row.effort ?? "-"}` : "");
+    rows.push(row);
+  }
+  return rows;
+}
 function resourcesOf(attempts) {
   const by_outcome = {};
   for (const a of attempts) by_outcome[a.outcome] = (by_outcome[a.outcome] ?? 0) + 1;
@@ -402,8 +423,13 @@ export async function runOpenItem(spec, opts = {}) {
       run.provider_calls = { ...run.provider_calls, made: providerCalls };
     }
   }
+  let seatingShown = 0;
   const record = () => {
     if (!recordAllowed) return;
+    // The seating report, as the selector chose it (seatingOf): kept on the run and streamed as each seat answers.
+    run.seating = seatingOf(run);
+    for (const row of run.seating.slice(seatingShown)) progress({ event: "seating", role: row.role, seat: row.vendor, model: row.model, detail: row.line });
+    seatingShown = run.seating.length;
     const text = JSON.stringify(run, null, 2);
     // The board owns recovery. The output copy is only a convenience index shared by a ticket key.
     writeArtifact(root, "run.json", text);
@@ -830,7 +856,8 @@ export async function runOpenItem(spec, opts = {}) {
     const intake = profile === "argo" ? { ok: true, assigned: { scout: forRole("scout")[0] } } : seatingPlan({ roles: ["scout"], seating: INTAKE });
     bar(`open item ${spec.key} — ${spec.title}`);
     progress({ event: "run.start", detail: `${spec.key}: ${spec.title} → ${SLOT}; acceptance: ${CMD}` });
-    for (const r of seatingReport(chain)) say(r.line);
+    // The legacy table's report is not what a `fit` run seats; the run's report is `run.seating` (seatingOf).
+    if (profile !== "fit") for (const r of seatingReport(chain)) say(r.line);
 
     let scouts = [], TICKET = null, plannerVendor = null, plannerModel = null, maker = null, wip = null;
     // One work item per slot. A single-slot ticket keeps the bare key it always had, so its board

@@ -211,13 +211,16 @@ try {
         if (ev.from !== "pipeline" && ev.from !== "pair") console.error(JSON.stringify(ev));
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  ${ev.from === "pair" ? "[pair] " : ""}[${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
       } });
+    // The seating report: what the selector chose per role (class and effort under fit), from the run's turns.
+    const seating = r.bundle.run.seating ?? [];
+    if (seating.length) console.error(`Seating (${r.bundle.run.profile ?? "argo"}; what the selector chose):\n${seating.map(x => `  ${x.line}`).join("\n")}`);
     const pw = r.bundle.run.practice_warning;
     if (pw) console.error(`warning: ${pw.code}: the loaded practice disposition ${pw.disposition} (${pw.outcome}, policy ${pw.loaded_policy?.hash}) ` +
       `does not apply; this run dispatched under ${pw.ran_policy.version} (${pw.ran_policy.hash}): ${pw.reason}`);
     console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null, pair: r.bundle.pair ?? null,
       practice_warning: pw ?? null,
       provider_calls: r.bundle.provider_calls ?? null,
-      shipped: r.bundle.run.shipped, commit: r.bundle.commit, branch: r.bundle.branch, cycle: r.bundle.review?.cycle ?? null,
+      seating: (r.bundle.run.seating ?? []).map(({ line, ...row }) => row), shipped: r.bundle.run.shipped, commit: r.bundle.commit, branch: r.bundle.branch, cycle: r.bundle.review?.cycle ?? null,
       outcome: r.bundle.review?.outcome ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
     process.exit(r.proposal ? 0 : 1);
   }
