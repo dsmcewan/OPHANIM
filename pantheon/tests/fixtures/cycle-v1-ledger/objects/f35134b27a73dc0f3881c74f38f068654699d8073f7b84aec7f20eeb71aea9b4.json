@@ -1,0 +1,1 @@
+{"findings":"","model":"gemini-3.6-flash","response_id":"resp_agy_google_5","seat":{"mode":"cycle-review","occupancy_gen":1,"seat_id":"agy_google-cycle-review@gemini-3.6-flash","vendor":"agy_google"},"served_model":"gemini-3.6-flash","turn":"sha256:6f0e424061ce475a843573d0f65e07cdb5dbc2a8ea77d3f372f36855ba4b54ff","verdict":"approve"}

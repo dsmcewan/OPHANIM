@@ -36,6 +36,11 @@ async function withLedger(fn) {
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 }
 const ctl = sys => ({author: {key_id: CONTROLLER}, signer: sys.controller, order: sys.controller});
+// Audit C3: a cycle opened under the practice contract (pantheon.cycle/v2, now the default) closes only with
+// a recorded practice assessment. These tests are about the review gates, so each records the honest
+// assessment of a fixture with no practice evidence, insufficient_evidence, before the close it checks.
+const assess = (rec, cycle) => rec.recordDisposition({cycle, outcome: 'insufficient_evidence', question: 'fixture: no practice question is assessed here',
+  provenance: {by: {role: 'lead@orch'}, method: 'fixture; no practice telemetry'}});
 
 test('three reviewers on three labs are recorded, each citing the cycle, and the cycle closes verified', () => withLedger(async (sys, rec) => {
   const r = await reviewCycle({ledger: rec, change: change(), turn: scripted()});
@@ -49,6 +54,7 @@ test('three reviewers on three labs are recorded, each citing the cycle, and the
     assert.equal(e.author.key_id, byHash.get(x.turn).author.key_id, 'signed by the seat whose turn answered');
     assert.equal(L.payloadOf(byHash.get(x.turn)).prompt_sha, L.payloadOf(byHash.get(r.cycle)).prompt_sha, 'each reviewer was given the cycle\'s prompt');
   }
+  assess(rec, r.cycle);
   const closed = rec.closeCycle(r.cycle);
   assert.equal(closed.outcome, 'verified');
   assert.deepEqual(closed.findings, {total: 0, fixed: 0, deferred: 0, unreproduced: 0});
@@ -59,6 +65,7 @@ test('three reviewers on three labs are recorded, each citing the cycle, and the
   assert.equal(next.base, HEAD);
   // No cycle opens while the previous one is open, and none skips a range.
   assert.throws(() => rec.openCycle({scope: 'ophanim', base: NEXT, head: C('e'), diff: DIFF, files: [], prompt: 'p'}), /previous cycle of this scope is not closed/);
+  assess(rec, next.cycle);
   rec.closeCycle(next.cycle);
   assert.throws(() => rec.openCycle({scope: 'ophanim', base: C('e'), head: C('f'), diff: DIFF, files: [], prompt: 'p'}), /a range would go unreviewed/);
   assert.equal(L.verify().ok, true);
@@ -108,8 +115,9 @@ test('a finding without a reproduction keeps the cycle from closing as verified'
   assert.throws(() => rec.closeCycle(r.cycle), /neither fixed nor deferred/);
   rec.deferFinding({finding: f.hash, reason: 'the reviewer gave no reproduction; tracked for the next cycle'});
   // The controller may not claim verified.
+  const practice = [assess(rec, r.cycle)];
   const forged = {outcome: 'verified', reviews: r.reviews.map(x => x.review).sort(), labs: ['google', 'openai', 'xai'],
-    findings: {total: 1, fixed: 0, deferred: 1, unreproduced: 0}};
+    findings: {total: 1, fixed: 0, deferred: 1, unreproduced: 0}, practice};
   assert.throws(() => sys.ledger.append({kind: CLOSE, payload: forged, derivedFrom: [r.cycle], ...ctl(sys)}), /without a reproduction keeps the cycle from closing as verified/);
   const closed = rec.closeCycle(r.cycle);
   assert.equal(closed.outcome, 'unverified');
@@ -131,6 +139,7 @@ test('a fixed finding with fail-before and pass-after evidence lets the cycle cl
   assert.throws(() => rec.fixFinding({finding: f, commit: HEAD, test, before: {commit: HEAD, exit: 1}, after: {commit: HEAD, exit: 0}}), /commit after the reviewed change/);
   rec.fixFinding({finding: f, commit: FIX, test, before: {commit: HEAD, exit: 1}, after: {commit: FIX, exit: 0}});
   assert.throws(() => rec.deferFinding({finding: f, reason: 'changed my mind'}), /already resolved/);
+  assess(rec, r.cycle);
   const closed = rec.closeCycle(r.cycle);
   assert.equal(closed.outcome, 'verified');
   assert.deepEqual(closed.findings, {total: 1, fixed: 1, deferred: 0, unreproduced: 0});
@@ -148,8 +157,9 @@ test('a forged close, an invented or omitted finding, and a late entry are refus
     derivedFrom: [xai.review], ...ctl(sys)}), /not the one the reviewer's reply reports/);
   assert.throws(() => rec.recordFinding({review: xai.review, index: 0, finding: reported[0]}), /already recorded/);
   for (const f of xai.findings) rec.deferFinding({finding: f.hash, reason: 'out of scope for this cycle'});
+  const practice = [assess(rec, r.cycle)];
 
-  const claim = {outcome: 'verified', reviews: r.reviews.map(x => x.review).sort(), labs: ['google', 'openai', 'xai'], findings: {total: 2, fixed: 0, deferred: 2, unreproduced: 0}};
+  const claim = {outcome: 'verified', reviews: r.reviews.map(x => x.review).sort(), labs: ['google', 'openai', 'xai'], findings: {total: 2, fixed: 0, deferred: 2, unreproduced: 0}, practice};
   // Tampered counts, a dropped review, a close by a seat key, a close citing more than its cycle.
   assert.throws(() => sys.ledger.append({kind: CLOSE, payload: {...claim, findings: {...claim.findings, fixed: 2, deferred: 0}}, derivedFrom: [r.cycle], ...ctl(sys)}), /not the one the cycle's entries derive/);
   assert.throws(() => sys.ledger.append({kind: CLOSE, payload: {...claim, reviews: claim.reviews.slice(1)}, derivedFrom: [r.cycle], ...ctl(sys)}), /not the one the cycle's entries derive/);
@@ -210,6 +220,11 @@ test('the CLI runs the review at a cycle boundary: review, fix, close, and the n
     const fix = commitFile('export const x = 1;\n', 'fix');
     const fixed = run('fix', '--finding', f.finding, '--commit', fix, '--test', 'node --test', '--before-exit', '1', '--after-exit', '0');
     assert.equal(fixed.code, 0, JSON.stringify(fixed.out));
+    // C3: the practice gate is the last one; the CLI records the cycle's assessment, then it closes.
+    assert.match(run('close').out.refused, /no practice assessment/);
+    const assessed = run('assess', '--outcome', 'insufficient_evidence', '--question', 'fixture: no practice question is assessed here');
+    assert.equal(assessed.code, 0, JSON.stringify(assessed.out));
+    assert.equal(assessed.out.contract, 'pantheon.cycle/v2');
     const closed = run('close');
     assert.equal(closed.code, 0, JSON.stringify(closed.out));
     assert.equal(closed.out.outcome, 'verified');
@@ -266,6 +281,7 @@ test('a 503 on one reviewer is resumed: only that seat is asked again, the two r
   const attempts = rec.cycleState(first.cycle).attempts.filter(a => a.seat.lab === 'openai');
   assert.deepEqual(attempts.map(a => [a.attempt, a.outcome, a.resumed]), [[1, 'failed', false], [2, 'reviewed', true]]);
   assert.match(attempts[0].why, /503/);
+  assess(rec, first.cycle);
   assert.equal(rec.closeCycle(first.cycle).outcome, 'verified');
   assert.equal(sys.ledger.verify().ok, true);
 }));
@@ -315,6 +331,7 @@ test('a forged resume is refused: another change, brief or seat, a closed cycle,
   assert.equal(cyclesOn(sys), 1);
 
   assert.equal((await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true})).complete, true);
+  assess(rec, first.cycle);
   rec.closeCycle(first.cycle);
   await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true}), e => e.code === 'NO_OPEN_CYCLE' && /closed/.test(e.message));
   assert.equal(cyclesOn(sys), 1);
@@ -332,6 +349,7 @@ test('a cycle opened before attempts were recorded still verifies, and resumes o
   const resumed = await reviewCycle({ledger: rec, change: change(), turn: f.turn, resume: true});
   assert.equal(resumed.complete, true, JSON.stringify(resumed.failed));
   assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 2});
+  assess(rec, first.cycle);
   assert.equal(rec.closeCycle(first.cycle).outcome, 'verified');
   assert.equal(sys.ledger.verify().ok, true);
 }));
@@ -344,6 +362,7 @@ test('a recorded review with a finding left unrecorded is completed by the resum
   assert.equal(resumed.filled_findings.length, 1);
   assert.deepEqual(f.calls, {xai: 1, agy_google: 1, openai: 1}, 'no reviewer was asked again');
   rec.deferFinding({finding: resumed.filled_findings[0], reason: 'tracked'});
+  assess(rec, first.cycle);
   assert.equal(rec.closeCycle(first.cycle).outcome, 'verified');
 }));
 
@@ -380,6 +399,7 @@ test('the CLI resumes a cycle a failed reviewer left open, and refuses when ther
     assert.deepEqual(resumed.out.attempted.map(x => x.vendor), ['openai']);
     assert.deepEqual(calls().sort(), ['agy_google', 'openai', 'openai', 'xai']);
     assert.deepEqual(resumed.out.attempts.filter(a => a.vendor === 'openai').map(a => [a.n, a.outcome]), [[1, 'failed'], [2, 'reviewed']]);
+    assert.equal(run({}, 'assess', '--outcome', 'insufficient_evidence', '--question', 'fixture: no practice question is assessed here').code, 0);
     assert.equal(run({}, 'close').code, 0);
     assert.equal(run({}, 'resume', '--turn', turn).out.code, 'NO_OPEN_CYCLE');
     assert.equal(run({}, 'status').out.verified, true);

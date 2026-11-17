@@ -34,6 +34,7 @@ import { labOf } from "../config/models.mjs";
 import { TOKEN_TIERS } from "../config/tiers.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
+import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
 
 export const TICKET_SCHEMA = "ophanim.ticket/v1";
 export const BUNDLE_SCHEMA = "pantheon.board-run/v1";
@@ -212,6 +213,23 @@ export function commitShipped({ repo, base, files, branch, message }) {
 
 // --- the run -----------------------------------------------------------------------------------------
 const turnsOf = (run, purpose) => (run.turns ?? []).filter(t => t.purpose === purpose);
+// The selection policy the run actually dispatched under, from its recorded turns (audit C3): the cycle
+// that reviews the run names it as the policy in effect. Null when no turn recorded one.
+const runPolicy = run => {
+  const s = (run?.turns ?? []).map(t => t.selection).find(x => x?.policy && x?.policy_hash && x?.profile);
+  return s ? { version: s.policy, hash: s.policy_hash, profile: s.profile } : null;
+};
+/**
+ * The cycle's practice assessment (audit C3, practice-kinds.mjs), recorded when the cycle opened under the
+ * practice contract has none and the caller states one: `practice` is {outcome, question, evidence?,
+ * measured?, provenance?}. Without one, the cycle stays open, as with an unresolved finding.
+ */
+function recordPractice(rec, cycle, practice) {
+  const state = rec.cycleState(cycle);
+  if (state.cycle.contract !== CYCLE_CONTRACT || !practice || state.dispositions.some(d => d.payload.stage === "assessment")) return null;
+  const { outcome, question, evidence = [], measured = false, provenance = { by: { role: "lead@orch" }, method: measured ? "measured comparison" : "operator-recorded assessment, unmeasured" } } = practice;
+  return rec.recordDisposition({ cycle, outcome, question, evidence, measured, provenance });
+}
 const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_model ?? t.model)))];
 
 /**
@@ -222,7 +240,7 @@ const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_mode
  * status proposal (`proposeFromBundle`). Never writes the status ledger.
  */
 export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(repo), anchor = null, makeClientFor, turn, n = 3,
-  dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {} }) {
+  dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
   const board = readBoard({ statusRoot, anchor });
@@ -290,14 +308,14 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const changed = git(["diff", "--name-only", base, head]).split("\n").filter(Boolean);
   const scope = `board/${item}/${base.slice(0, 12)}`;
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
-    seats: chosen.seats, turn, n });
+    seats: chosen.seats, turn, n, policy: runPolicy(run) ?? undefined });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, ...(chosen.note ? { note: chosen.note } : {}), author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
   save();
   progress({ event: "reviewed", cycle: r.cycle, reviews: r.reviews.length, failed: r.failed.length,
     findings: r.reviews.reduce((n, x) => n + x.findings.length, 0) });
-  const proposed = proposeFromBundle({ dir: bundleDir, statusRoot, anchor, sys });
+  const proposed = proposeFromBundle({ dir: bundleDir, statusRoot, anchor, sys, practice });
   return { bundle: proposed.bundle, dir: bundleDir, proposal: proposed.proposal, why: proposed.why };
 }
 
@@ -313,7 +331,7 @@ const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.
  * re-derived from its run.json. Reviews already recorded are kept; each try is a recorded attempt, up to
  * the cycle's limit. Then, as after a run, the cycle closes if it can and the proposal is written.
  */
-export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {} }) {
+export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {}, practice = null }) {
   if (typeof turn !== "function") fail("resumeBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
   const file = join(dir, "evidence.json");
   if (!existsSync(file)) fail(`no evidence bundle at ${file}: resume names the --out DIR of the run`);
@@ -346,7 +364,7 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
     writeFileSync(file, JSON.stringify(bundle, null, 2) + "\n");
     progress({ event: "resumed", cycle: r.cycle, reviews: r.reviews.length, retained: r.retained.length, attempted: r.attempted.length, failed: r.failed.length });
   }
-  const proposed = proposeFromBundle({ dir, statusRoot, anchor, sys });
+  const proposed = proposeFromBundle({ dir, statusRoot, anchor, sys, practice });
   return { bundle: proposed.bundle, dir, proposal: proposed.proposal, why: proposed.why };
 }
 
@@ -354,9 +372,11 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
  * Close the bundle's review cycle if its entries allow it, and write the unsigned proposal. A cycle with
  * open findings stays open: fix or defer each (pantheon-review-cycle fix|defer --ledger <run ledger>),
  * then call this again (`pantheon-board.mjs propose --bundle DIR`). A cycle that closes `unverified` can
- * propose Resolved only with `acceptUnverified` (a stated reason, recorded).
+ * propose Resolved only with `acceptUnverified` (a stated reason, recorded). A cycle opened under the
+ * practice contract also needs its practice assessment (audit C3): `practice` ({outcome, question, ...})
+ * records it here (`pantheon-board.mjs propose --practice-outcome O --practice-question TEXT`).
  */
-export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnverified = undefined, sys = null }) {
+export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnverified = undefined, sys = null, practice = null }) {
   const file = join(dir, "evidence.json");
   const bundle = JSON.parse(readFileSync(file, "utf8"));
   if (bundle.schema !== BUNDLE_SCHEMA) fail(`${file} is not a ${BUNDLE_SCHEMA} bundle`);
@@ -365,7 +385,9 @@ export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnveri
   if (!bundle.review) return { bundle, why: "the change has not been reviewed" };
   sys ??= openPantheonLedger({ root: bundle.review.ledger, anchor: bundle.review.ledger_anchor, board: openBoard(bundle.board) });
   const rec = sys.recorder();
+  if (!rec.cycleState(bundle.review.cycle).close) recordPractice(rec, bundle.review.cycle, practice);
   const state = rec.cycleState(bundle.review.cycle);
+  bundle.review.practice = state.dispositions.map(d => ({ disposition: d.hash, stage: d.payload.stage, outcome: d.payload.outcome, provisional: d.payload.provisional }));
   if (!state.close) {
     try { const c = rec.closeCycle(bundle.review.cycle); bundle.review.close = c.hash; bundle.review.outcome = c.outcome; }
     catch (e) {

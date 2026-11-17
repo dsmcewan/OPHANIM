@@ -41,6 +41,7 @@ import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
+import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
 
 // This repo's own root (for Antigravity role-card discovery and PANTHEON_HEAD provenance) -- NOT the ticket's
@@ -171,8 +172,12 @@ export async function runOpenItem(spec, opts = {}) {
   const OVERRIDES = seatOverrides;
   // The one effective role-selection policy (src/route/frontier.mjs selectSeat): admission, then the
   // profile's choice, with explicit seats outranking it in a stated precedence. Every turn records it.
-  const choose = (role, { chars = null, ...rest } = {}) => selectSeat(role, { profile, difficulty: TIER, pools,
-    needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null, ...rest });
+  // Each selection also names the admitted practice decision this dispatch loaded from the ledger (audit C3,
+  // practice-kinds.mjs loadPractice): its entry hash, or null with the reason. Loaded once, on first use.
+  let PRACTICE = null;
+  const choose = (role, { chars = null, ...rest } = {}) => withPractice(selectSeat(role, { profile, difficulty: TIER, pools,
+    needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null, ...rest }),
+    PRACTICE ??= loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools }));
   // WAS a synchronous refusal here for planner/implementer + agy_google unless
   // PANTHEON_AGY_TRANSPORT=cli was already set (scripts/agy-seat.py's --role choices are literally
   // ["reviewer", "scout", "fact-checker"] -- no "planner", no "implementer" -- so the SDK lane

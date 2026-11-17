@@ -1,0 +1,54 @@
+{
+  "generated_by": "pantheon/src/ledger at e481e77, before the practice contract (pantheon.cycle/v2)",
+  "anchor": "sha256:b87fbd474702dab5450acbd39c3030694ee6e3cb07d6fe1aae8064da92fc1d0a",
+  "head": "sha256:1be34b893deff0139df7b2dbfdc34b393ae526b38d81f55649794a599c5bffc2",
+  "entries": 30,
+  "cycles": [
+    "sha256:9619a66e4be33be8884709777f948b4289cefece3fe5bb0a4aacbd3d7ad4638f",
+    "sha256:aa93f4bb2a0400b6aeb3a23bc03433349ca670778dce8c3ebbfae59bd6fe7616"
+  ],
+  "closes": [
+    "sha256:f5cd541d5d02f45628d899b46f105d3b98cbf51d6f56a8e59390790c86008473",
+    "sha256:1be34b893deff0139df7b2dbfdc34b393ae526b38d81f55649794a599c5bffc2"
+  ],
+  "claims": [
+    {
+      "outcome": "verified",
+      "reviews": [
+        "sha256:756d92ac385da4a07b2a7eae3ff5ecf648fe594cf0156fd209d4062e724a1d67",
+        "sha256:a196da86e9ab44a0a5a30dcda712f90c68353485c9faaa613399b497e71447e0",
+        "sha256:eef7ace6be4c63229e049b41648f1a24a904eb18dad3d893149690cb23286ba6"
+      ],
+      "labs": [
+        "google",
+        "openai",
+        "xai"
+      ],
+      "findings": {
+        "total": 1,
+        "fixed": 1,
+        "deferred": 0,
+        "unreproduced": 0
+      }
+    },
+    {
+      "outcome": "verified",
+      "reviews": [
+        "sha256:0a29b094baba110b081d650eae0dcc9d56d456c0c1a21c95827107d2610607b4",
+        "sha256:708c89905a01772eb36ef25e60c047f906544fd39cefaa9950bbbe837099b66a",
+        "sha256:d70e193e3937ff98a3f3cea8786b362454a3cccb070f79f42c8b6026c517bb87"
+      ],
+      "labs": [
+        "google",
+        "openai",
+        "xai"
+      ],
+      "findings": {
+        "total": 0,
+        "fixed": 0,
+        "deferred": 0,
+        "unreproduced": 0
+      }
+    }
+  ]
+}

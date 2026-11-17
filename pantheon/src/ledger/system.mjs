@@ -18,6 +18,7 @@ import {gateKinds} from './gate-kind.mjs';
 import {boardAnchorKinds, boardResolver} from './anchors.mjs';
 import {boardKinds, boardRecorder} from './board-kinds.mjs';
 import {cycleKinds, cycleRecorder} from './cycle-kinds.mjs';
+import {practiceKinds, practiceRecorder} from './practice-kinds.mjs';
 import {boardScopes} from './scopes.mjs';
 
 export {OPERATOR, CONTROLLER};
@@ -38,6 +39,7 @@ export function pantheonLedgerKinds({board = null} = {}) {
     ...lineageKinds(),
     ...boardKinds({authors: ctl, board, scopes}),
     ...cycleKinds({authors: ctl}),
+    ...practiceKinds({authors: ctl}),
     ...gateKinds({authors: ctl, board, scopes}),
     ...(board ? boardAnchorKinds({board: boardResolver(board), authors: ctl}) : {}),
   };
@@ -75,7 +77,8 @@ export function openPantheonLedger({root, board = null, anchor = process.env.OPH
     const lineage = lineageRecorder({ledger, operator, order: controller, keys});
     const board = scope => boardRecorder({ledger, controller, order: controller, scope});
     const cycle = cycleRecorder({ledger, controller, order: controller});
-    return {...escalation, ...lineage, ...cycle, board, verify: () => ledger.verify(), ledger, anchor: home.anchor, rotateSeatKey};
+    const practice = practiceRecorder({ledger, controller, order: controller});
+    return {...escalation, ...lineage, ...cycle, ...practice, board, verify: () => ledger.verify(), ledger, anchor: home.anchor, rotateSeatKey};
   }
   return {ledger, anchor: home.anchor, root: home.root, recorder, rotateSeatKey, keys, operator, controller};
 }

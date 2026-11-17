@@ -5,7 +5,9 @@
 //   node pantheon/bin/pantheon-review-cycle.mjs resume [--max-attempts N]   retry the open cycle's failed seats
 //   node pantheon/bin/pantheon-review-cycle.mjs fix --finding H --commit C --test CMD --before-exit N --after-exit 0
 //   node pantheon/bin/pantheon-review-cycle.mjs defer --finding H --reason TEXT
+//   node pantheon/bin/pantheon-review-cycle.mjs assess --outcome O --question TEXT [--by ROLE] [--method TEXT] [--evidence H]...
 //   node pantheon/bin/pantheon-review-cycle.mjs close [--cycle H]
+//   node pantheon/bin/pantheon-review-cycle.mjs practice [--profile P]
 //   node pantheon/bin/pantheon-review-cycle.mjs status [--cycle H]
 //
 // Common options: --repo DIR (default: cwd), --ledger DIR (default: PANTHEON_CYCLE_LEDGER, else
@@ -24,17 +26,31 @@
 // recorded attempt; a seat stops at the cycle's attempt limit (--max-attempts on the first review, 3 by
 // default).
 //
+// A cycle opens under the practice contract (pantheon.cycle/v2, audit C3): `review` records the selection
+// policy in effect (--profile, default argo, with the pools PANTHEON_POOLS_FILE configures) and the admitted
+// practice decision it loaded, and `close` refuses until `assess` has recorded the cycle's practice
+// assessment: --outcome retain | insufficient_evidence | propose_measurement | propose_policy (the last with
+// --candidate-id, --candidate-version, --candidate-hash, --candidate-change and --proposer vendor/model). A
+// qualified candidate's disposition is `assess --proposal H --outcome promote|retain|reject --decided-by
+// vendor/model` (a promote adds --measured true, --evidence H, --applicability, --rollback, --reevaluate),
+// refused when the deciding seat is of the proposer's lab. `practice` prints what a dispatch would load.
+// --evidence names ledger entries (repeatable); `--measured true` marks measured evidence, otherwise the
+// assessment is recorded as provisional judgment.
+//
 // Exit codes: 0 done, 1 refused (a reviewer failed, the cycle cannot close, a ledger refusal), 2 usage.
 import {execFileSync} from 'node:child_process';
 import {basename, isAbsolute, join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {openPantheonLedger} from '../src/ledger/system.mjs';
 import {reviewCycle} from '../src/ledger/review-cycle.mjs';
+import {currentPolicy, loadPractice, DEFAULT_PRACTICE_SCOPE} from '../src/ledger/practice-kinds.mjs';
+import {readPools} from '../src/route/frontier.mjs';
+import {labOf} from '../src/config/models.mjs';
 
 const [first, ...more] = process.argv.slice(2);
 const verb = first && !first.startsWith('--') ? first : 'review';
 const argv = first && !first.startsWith('--') ? more : process.argv.slice(2);
-const opts = {}, multi = {'author-lab': []};
+const opts = {}, multi = {'author-lab': [], evidence: []};
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith('--') || i + 1 >= argv.length) usage(`unexpected argument: ${a}`);
@@ -42,7 +58,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(v); else opts[k] = v;
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-review-cycle [review|resume|fix|defer|close|status] [--repo DIR] [--ledger DIR] [--scope NAME] ...`);
+  console.error(`${why}\nusage: pantheon-review-cycle [review|resume|fix|defer|assess|close|status|practice] [--repo DIR] [--ledger DIR] [--scope NAME] ...`);
   process.exit(2);
 }
 const out = (value, code = 0) => { console.log(JSON.stringify(value, null, 2)); process.exit(code); };
@@ -60,6 +76,8 @@ const show = state => ({
   cycle: state.hash, scope: state.cycle.scope, base: state.cycle.base, head: state.cycle.head, reviewers: state.cycle.reviewers,
   reviews: state.reviews.map(r => ({review: r.hash, lab: r.lab, vendor: r.seat.vendor, verdict: r.verdict})),
   findings: state.findings.map(f => ({finding: f.hash, ...f.payload, resolution: state.resolutions.get(f.hash)?.payload ?? null})),
+  contract: state.cycle.contract ?? 'pantheon.cycle/v1', prior: state.cycle.prior ?? null,
+  practice: (state.dispositions ?? []).map(d => ({disposition: d.hash, stage: d.payload.stage, outcome: d.payload.outcome, provisional: d.payload.provisional})),
   closed: state.close,
   attempts: (state.attempts ?? []).map(a => ({attempt: a.hash, vendor: a.seat.vendor, model: a.seat.model, lab: a.seat.lab, n: a.attempt,
     max_attempts: a.max_attempts, outcome: a.outcome, why: a.why, resumed: a.resumed})),
@@ -95,7 +113,8 @@ try {
     const files = git('diff', '--name-only', base, head).split('\n').filter(Boolean);
     const turn = opts.turn ? (await import(pathToFileURL(resolve(opts.turn)).href)).default : await liveTurn();
     const r = await reviewCycle({ledger: rec, change: {scope, base, head, diff, files, author_labs: multi['author-lab'].length ? multi['author-lab'] : ['anthropic']},
-      turn, n: Number(opts.n ?? 3), max_attempts: maxAttempts});
+      turn, n: Number(opts.n ?? 3), max_attempts: maxAttempts, policy: currentPolicy(opts.profile ?? 'argo', {pools: readPools()}),
+      practice_scope: opts['practice-scope'] ?? DEFAULT_PRACTICE_SCOPE});
     out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), failed: r.failed}, r.complete ? 0 : 1);
   }
   if (verb === 'resume') {
@@ -125,6 +144,22 @@ try {
     rec.deferFinding({finding: opts.finding, reason: opts.reason});
     out(show(rec.cycleState(cycle)));
   }
+  if (verb === 'assess') {
+    if (!opts.outcome || !opts.question) usage('assess needs --outcome and --question');
+    const seatOf = v => { const [vendor, ...m] = String(v).split('/'); return {vendor, model: m.join('/'), lab: labOf(vendor, m.join('/'))}; };
+    const measured = opts.measured === 'true';
+    const cycle = cycleOf(opts.cycle);
+    const hash = rec.recordDisposition({cycle, stage: opts.proposal ? 'candidate' : 'assessment', outcome: opts.outcome, question: opts.question, measured,
+      evidence: multi.evidence.map(h => ({kind: 'ledger', hash: h})),
+      provenance: {by: {role: opts.by ?? 'lead@orch'}, method: opts.method ?? (measured ? 'measured comparison' : 'recorded judgment, unmeasured')},
+      ...(opts.proposal ? {proposal: opts.proposal, by: seatOf(opts['decided-by'] ?? usage('a candidate disposition needs --decided-by vendor/model'))} : {}),
+      ...(opts.outcome === 'propose_policy' ? {candidate: {id: opts['candidate-id'], change: opts['candidate-change'],
+        policy: {version: opts['candidate-version'], hash: opts['candidate-hash'], profile: opts.profile ?? 'argo'}},
+        proposer: seatOf(opts.proposer ?? usage('propose_policy needs --proposer vendor/model'))} : {}),
+      ...(opts.applicability || opts.rollback || opts.reevaluate ? {conditions: {applicability: opts.applicability, rollback: opts.rollback, reevaluate: opts.reevaluate}} : {})});
+    out({disposition: hash, ...show(rec.cycleState(cycle))});
+  }
+  if (verb === 'practice') out(loadPractice({ledger: sys.ledger, scope: opts['practice-scope'] ?? DEFAULT_PRACTICE_SCOPE, profile: opts.profile ?? 'argo', pools: readPools()}));
   if (verb === 'close') out({...rec.closeCycle(cycleOf(opts.cycle))});
   if (verb === 'status') out({ledger: ledgerRoot, verified: sys.ledger.verify().ok, ...show(rec.cycleState(cycleOf(opts.cycle)))});
   usage(`unknown verb: ${verb}`);

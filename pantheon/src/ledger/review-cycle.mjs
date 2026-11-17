@@ -86,10 +86,13 @@ async function askSeats({ledger, cycle, seats, prompt, turn, author_turns, tried
  *   seats   [{vendor, model}], default reviewSeats({n, avoidLabs: author_labs})
  *   turn    async ({vendor, model, prompt, seat}) -> {text, response_id, served_model}
  *   max_attempts  tries per seat for the cycle, the first included (default DEFAULT_MAX_ATTEMPTS)
+ *   contract, policy, practice_scope  the cycle contract it opens under (default pantheon.cycle/v2), the
+ *           selection policy in effect and the practice scope (cycleRecorder.openCycle)
  * Returns the cycle, each recorded review with its findings, and the seats that failed. A failed seat
  * leaves the cycle unable to close; `resume: true` with the same change tries it again.
  */
-export async function reviewCycle({ledger, change, seats = null, turn, n = 3, brief = REVIEW_BRIEF, opened_at, resume = false, max_attempts, at}) {
+export async function reviewCycle({ledger, change, seats = null, turn, n = 3, brief = REVIEW_BRIEF, opened_at, resume = false, max_attempts, at,
+  contract, policy, practice_scope}) {
   if (typeof turn !== 'function') throw new Error('reviewCycle: pass turn({vendor, model, prompt, seat}) -> {text, response_id, served_model}');
   if (resume) return resumeCycle({ledger, change, seats, turn, brief, max_attempts, at});
   const {scope, head, diff, files = [], author_labs = [], author_turns = []} = change ?? {};
@@ -109,7 +112,7 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   if (authored) throw Object.assign(new Error(`reviewCycle: the ${authored} lab authored the change and may not review it`), {code: 'SAME_LAB'});
 
   const prompt = reviewPrompt({brief, base, head, files, diff});
-  const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs, author_turns, opened_at});
+  const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs, author_turns, opened_at, contract, policy, practice_scope});
   const {reviews, failed} = await askSeats({ledger, cycle, seats: chosen, prompt, turn, author_turns, max_attempts: limit, resumed: false, at});
   return {cycle, scope, base, head, prompt_sha: promptSha(prompt), reviews, failed, complete: failed.length === 0, max_attempts: limit};
 }

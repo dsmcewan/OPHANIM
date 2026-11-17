@@ -1,0 +1,1 @@
+{"findings":"","model":"grok-4.7","response_id":"resp_xai_4","seat":{"mode":"cycle-review","occupancy_gen":1,"seat_id":"xai-cycle-review@grok-4.7","vendor":"xai"},"served_model":"grok-4.7","turn":"sha256:ddb9bce0ec7d4d237c457609a9a692f77c5c2558992fad0648bb497a3272c386","verdict":"approve"}
