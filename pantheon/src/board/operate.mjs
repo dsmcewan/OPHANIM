@@ -32,6 +32,7 @@ import { ticketRuntimeRefusal, ticketContainmentRefusal, normalizeSlots, isUnder
 import { frontierCandidates, readPools } from "../route/frontier.mjs";
 import { labOf } from "../config/models.mjs";
 import { TOKEN_TIERS } from "../config/tiers.mjs";
+import { taskProfile } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
@@ -40,7 +41,9 @@ export const TICKET_SCHEMA = "ophanim.ticket/v1";
 export const BUNDLE_SCHEMA = "pantheon.board-run/v1";
 const ID = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 const RUN_FIELDS = ["key", "title", "goal", "question", "repo_root", "slot", "path", "slots", "source", "copy", "attach",
-  "tests_file", "acceptance_cmd", "difficulty", "constraints", "forbidden"];
+  "tests_file", "acceptance_cmd", "difficulty", "constraints", "forbidden",
+  // The `fit` profile's declared dimensions (src/route/task-profile.mjs). Ignored by argo and legacy.
+  "depth", "output", "stakes", "ambiguity", "latency", "kind"];
 const TICKET_FIELDS = ["schema", "item", "slice", "proposes", ...RUN_FIELDS];
 const ROLES = ["scout", "planner", "implementer", "reviewer"];
 const fail = (why, code = "BOARD_REFUSED") => { throw Object.assign(new Error(why), { code }); };
@@ -88,6 +91,7 @@ function ticketRefusal(t, { repo, item }) {
   const root = resolve(repo, t.repo_root ?? ".");
   if (!isUnder(repo, root)) return "repo_root is outside the repository";
   if (t.difficulty !== undefined && !Object.hasOwn(TOKEN_TIERS, t.difficulty)) return `difficulty is one of ${Object.keys(TOKEN_TIERS).join(", ")}`;
+  try { taskProfile(t); } catch (e) { return e.message; }
   for (const k of ["constraints", "forbidden"]) if (t[k] !== undefined && !(Array.isArray(t[k]) && t[k].every(str))) return `${k} lists strings`;
   const spec = { ...t, key: t.key ?? item, repo_root: root };
   const refused = ticketRuntimeRefusal(spec) ?? ticketContainmentRefusal(spec);

@@ -42,6 +42,7 @@ import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
+import { taskProfile } from "../route/task-profile.mjs";
 import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
 
 // This repo's own root (for Antigravity role-card discovery and PANTHEON_HEAD provenance) -- NOT the ticket's
@@ -198,7 +199,8 @@ export async function runOpenItem(spec, opts = {}) {
   const packageInputs = packageContext(REPO_ROOT, spec.copy, SLOTS);
   const packageBinding = packageInputs.map(({ path, bytes }) => ({ path, bytes }));
   const profile = opts.profile ?? "argo";
-  if (!["argo", "legacy"].includes(profile)) throw new Error("unknown routing profile");
+  // `fit` is a selectable candidate (src/route/task-profile.mjs), never the default: argo is the approved policy.
+  if (!["argo", "legacy", "fit"].includes(profile)) throw new Error("unknown routing profile");
   const pools = opts.pools ?? readPools();
   const cooldown = opts.cooldown ?? openCooldownStore(join(process.env.PANTHEON_COOLDOWN_DIR ?? join(homedir(), ".cache", "pantheon"), "v2"));
   const forRole = (role, options = {}) => frontierCandidates(role, { pools, ...options });
@@ -207,9 +209,12 @@ export async function runOpenItem(spec, opts = {}) {
   // profile's choice, with explicit seats outranking it in a stated precedence. Every turn records it.
   // Each selection also names the admitted practice decision this dispatch loaded from the ledger (audit C3,
   // practice-kinds.mjs loadPractice): its entry hash, or null with the reason. Loaded once, on first use.
+  // Under `fit` the ticket's task profile (its dimensions, the touched paths as the stakes signal) travels with
+  // every selection; the legacy label is still what argo and legacy choose by.
   let PRACTICE = null;
-  const choose = (role, { chars = null, ...rest } = {}) => withPractice(selectSeat(role, { profile, difficulty: TIER, pools,
-    needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null, ...rest }),
+  const choose = (role, { chars = null, ...rest } = {}) => withPractice(selectSeat(role, { profile, difficulty: DIFFICULTY_OF_TICKET, pools,
+    needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null,
+    ...(TASK ? { task: TASK } : {}), ...rest }),
     PRACTICE ??= loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools }));
   // WAS a synchronous refusal here for planner/implementer + agy_google unless
   // PANTHEON_AGY_TRANSPORT=cli was already set (scripts/agy-seat.py's --role choices are literally
@@ -258,8 +263,11 @@ export async function runOpenItem(spec, opts = {}) {
     if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
   };
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
-  const TIER = spec.difficulty ?? "medium";
-  if (typeof TIER !== "string" || !Object.hasOwn(TOKEN_TIERS, TIER)) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
+  // Under `fit` the tier is the profile's own `output` dimension (xs..xl, or the legacy label's default).
+  const DIFFICULTY_OF_TICKET = spec.difficulty ?? "medium";
+  if (typeof DIFFICULTY_OF_TICKET !== "string" || !Object.hasOwn(TOKEN_TIERS, DIFFICULTY_OF_TICKET)) throw new Error(`unknown ticket difficulty "${DIFFICULTY_OF_TICKET}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
+  const TASK = profile === "fit" ? taskProfile(spec, { paths: SLOTS.map(sl => sl.path), mode: "batch" }) : null;
+  const TIER = TASK ? TASK.output.value : DIFFICULTY_OF_TICKET;
   const root = RESUME ?? dir ?? join(homedir(), ".pantheon", "boards", `open-${spec.key}-${Date.now()}`);
   const worktree = join(root, "worktree");
   mkdirSync(worktree, { recursive: true });
@@ -574,7 +582,8 @@ export async function runOpenItem(spec, opts = {}) {
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
       // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
       invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
-        effort: effort && candidate.model === effort.model ? effort.value : null }) });
+        // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
+        effort: effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null }) });
     return { text: routed.value, seat: routed.seat };
   }
 
@@ -814,7 +823,10 @@ export async function runOpenItem(spec, opts = {}) {
         return { sl, seat, itemKey: itemKeyFor(sl), wip: `refs/seat/${seat.seat_id}/wip`, choice,
                  model: im.model, file: join(worktree, sl.path),
                  artifactCid: null, bytes: null, code: null, lease: null,
-                 baseline: run.files.find(f => f.slot === sl.slot).baseline };
+                 baseline: run.files.find(f => f.slot === sl.slot).baseline,
+                 // A `fit` seat starts at its profile's mapped effort, so a recorded raise_effort climbs from
+                 // there rather than from the documented default (which could be below it).
+                 ...(im.effort ? { effort: im.effort, ranModel: im.model } : {}) };
       });
       // The old single-slot names still point at the first member, so the resume branch, the run
       // record and the check stage keep working unchanged for a one-file ticket.
