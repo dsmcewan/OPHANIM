@@ -528,10 +528,15 @@ export function automaticAssessment(record, { policy, proposer = FIT_PROPOSER, p
   const onBaseline = policy?.profile === record.baseline.profile;
   let outcome = record.outcome;
   if (!onBaseline && outcome !== "insufficient_evidence") outcome = "propose_measurement";
-  const measured = outcome !== "propose_measurement" && record.measured;
+  // Never `measured` / non-provisional (owner audit, learning P2): a sufficient sample is not a qualified
+  // measurement. Qualification needs a validated comparison and a signed independent decision, which this controller
+  // is not; until that verifier exists every automatic disposition is provisional, with sample sufficiency stated in
+  // the question and the cited record.
+  const measured = false;
   const question = `continuous evaluation: does ${record.candidate.profile} match ${record.baseline.profile} on accepted and first-pass results, at lower calls, tokens or elapsed per accept, by stakes stratum? ` +
     `Evaluation ${record.digest.slice(0, 19)} says ${record.outcome}${record.halted.length ? `; halted: ${record.halted.join(", ")}` : ""}${flagged}${paired} [${strata}]` +
     (outcome !== record.outcome ? `; recorded as ${outcome} because this cycle's policy in effect is ${policy?.profile}, not the baseline` : "") +
+    (record.measured ? "; the sample is sufficient for the rule, which is not qualification: provisional until an independent decision" : "") +
     (record.synthetic ? "; SYNTHETIC evidence" : "");
   const out = { outcome, question: question.slice(0, 2000), measured, provisional: !measured, evidence: [evaluationEvidence(record)],
     provenance: { by: { role: "controller" }, method: "automatic continuous evaluation (pantheon/src/practice/evaluate.mjs) over the evidence store" } };

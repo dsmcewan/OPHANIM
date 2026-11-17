@@ -346,7 +346,11 @@ test("cycle close: without a stated assessment the controller records the evalua
       const view = { entry: h => sysC.ledger.read().find(e => sysC.ledger.hashOf(e) === h) };
       const proposal = c.bundle.review.practice[0].disposition;
       const p = sysC.ledger.payloadOf(view.entry(proposal));
-      assert.deepEqual([p.stage, p.candidate.policy.profile, p.proposer.lab, p.evidence[0].synthetic, p.measured], ["assessment", "fit", "anthropic", true, true]);
+      // Provisional even with a sufficient sample: a sufficient sample is not a qualified measurement (owner audit,
+      // learning P2), and the controller is not an independent decision.
+      assert.deepEqual([p.stage, p.candidate.policy.profile, p.proposer.lab, p.evidence[0].synthetic, p.measured, p.provisional],
+        ["assessment", "fit", "anthropic", true, false, true]);
+      assert.match(p.question, /not qualification: provisional until an independent decision/);
       assert.ok(!sysC.ledger.read().some(e => e.kind === "practice.disposition" && sysC.ledger.payloadOf(e).outcome === "promote"));
       // Nobody can promote it on this evidence: not the proposer's lab, and not another lab (synthetic).
       const rec = sysC.recorder();

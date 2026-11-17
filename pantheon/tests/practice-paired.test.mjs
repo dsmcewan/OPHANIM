@@ -315,7 +315,7 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
       let before = null, after = null, pairDir = null;
       const skipFor = () => [join(repo, "store"), pairDir, join(repo, "cooldowns")].filter(Boolean);
       const r = await runBoardItem({ repo, item: "pair-a", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-a"), out: join(repo, "bundles", "pair-a"),
-        runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40,
+        runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, pairBudgetCalls: 200,
         progress: ev => {
           if (ev.event === "pair.start") { pairDir = ev.board; before = snapshot(repo, skipFor()); }
           if (ev.event === "pair.end") after = snapshot(repo, skipFor());
@@ -338,7 +338,13 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
       assert.equal(rec.ticket.key, "pair-a");
       assert.equal(rec.ticket.digest, r.bundle.ticket.digest);
       assert.deepEqual([rec.primary.profile, rec.counterpart.profile, rec.counterpart.dry], ["argo", "fit", true]);
-      assert.deepEqual(rec.bounds, { max_provider_calls: 40, revisions: 2 });
+      assert.deepEqual(rec.bounds, { max_provider_calls: 40, revisions: 2, total_provider_calls: 200 });
+      // Comparable starting conditions are recorded: same base, ticket, revisions and bound; order; cooldown state.
+      assert.deepEqual([rec.starting.order, rec.starting.revisions, rec.starting.primary_bound, rec.starting.counterpart_bound],
+        ["primary-first", 2, 40, 40], "the sampled primary ran under the counterpart's bound");
+      assert.equal(rec.starting.ticket_digest, r.bundle.ticket.digest);
+      assert.match(rec.starting.base, /^[0-9a-f]{40}$/);
+      assert.ok("cooldown_at_counterpart_start" in rec.starting);
       assert.equal(rec.sampling.basis, PAIR_BASIS.hash);
       const sha = f => "sha256:" + createHash("sha256").update(readFileSync(f)).digest("hex");
       assert.equal(rec.primary.run_digest, r.bundle.run.run_json_digest);
@@ -361,7 +367,7 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
       // Pairing without a bound: refused by name, recorded, and no provider is called for a counterpart.
       const n0 = calls.length;
       const b = await runBoardItem({ repo, item: "pair-b", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-b"), out: join(repo, "bundles", "pair-b"),
-        runOpts: { scouts: ["xai"], revisions: 2, profile: "fit" }, evidenceStore: store, pairRate: 1 });
+        runOpts: { scouts: ["xai"], revisions: 2, profile: "fit" }, evidenceStore: store, pairRate: 1, pairBudgetCalls: 200 });
       assert.equal(b.bundle.pair.status, "refused");
       assert.equal(b.bundle.pair.refusal.code, "PAIR_UNBOUNDED");
       const brec = JSON.parse(readFileSync(join(store, "pairs", b.bundle.pair.pair_id, "pair.json"), "utf8"));
@@ -381,8 +387,10 @@ test("counterpart: a failure under its bound is kept as an outcome (not accepted
     const store = join(repo, "store");
     try {
       const r = await runBoardItem({ repo, item: "pair-c", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-c"), out: join(repo, "bundles", "pair-c"),
-        runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 1 });
-      assert.equal(r.bundle.run.shipped, true);
+        runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 1, pairBudgetCalls: 100 });
+      // Both arms run under the same 1-call bound (comparable starting conditions), so both fail alike; the
+      // counterpart's failure is still kept as an outcome of the pair, not dropped.
+      assert.equal(r.bundle.run.shipped, false, "the sampled primary ran under the counterpart's bound too");
       assert.equal(r.bundle.pair.status, "completed");
       const rec = JSON.parse(readFileSync(join(store, "pairs", r.bundle.pair.pair_id, "pair.json"), "utf8"));
       const crun = JSON.parse(readFileSync(join(store, "pairs", r.bundle.pair.pair_id, "counterpart.run.json"), "utf8"));
@@ -392,12 +400,43 @@ test("counterpart: a failure under its bound is kept as an outcome (not accepted
       const e = evaluate({ runs: store });
       const s = Object.values(e.paired.strata)[0];
       assert.equal(s.n, 1);
-      assert.deepEqual(s.accepted.discordant, { fit_only: 0, argo_only: 1 });
+      assert.deepEqual(s.accepted.discordant, { fit_only: 0, argo_only: 0 }, "a concordant failure: neither arm accepted");
+    } finally { rmSync(keys, { recursive: true, force: true }); }
+  });
+});
+
+test("owner condition 3: no total boundary, an exhausted boundary, or a different primary bound refuses the counterpart, by name, with no counterpart call", async () => {
+  await withDispatch(async ({ dir: repo, makeClientFor, calls }) => {
+    const { statusRoot, keys } = boardRepo(repo, ["pt-a", "pt-b", "pt-c", "pt-d"]);
+    const store = join(repo, "store");
+    const go = (item, extra) => runBoardItem({ repo, item, statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", item), out: join(repo, "bundles", item),
+      runOpts: { scouts: ["xai"], revisions: 2, ...(extra.runOpts ?? {}) }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, ...extra.top });
+    const primaryCalls = item => JSON.parse(readFileSync(join(repo, "boards", item, "run.json"), "utf8")).attempts.filter(a => a.vendor !== "agy_google").length;
+    try {
+      let n0 = calls.length;
+      const a = await go("pt-a", { top: {} });
+      assert.equal(a.bundle.pair.refusal?.code, "PAIR_NO_TOTAL");
+      assert.equal(calls.length - n0, primaryCalls("pt-a"), "a sampling rate alone runs no counterpart");
+      const b = await go("pt-b", { top: { pairBudgetCalls: 100 } });
+      assert.equal(b.bundle.pair.status, "completed");
+      const { pairSpend } = await import("../src/board/operate.mjs");
+      const spent = pairSpend(store).calls;
+      assert.ok(spent > 0 && spent <= 40, `spent ${spent}`);
+      n0 = calls.length;
+      const c = await go("pt-c", { top: { pairBudgetCalls: spent + 39 } });
+      assert.equal(c.bundle.pair.refusal?.code, "PAIR_BUDGET_EXHAUSTED", "spent + this bound would exceed the total");
+      assert.equal(calls.length - n0, primaryCalls("pt-c"));
+      const d = await go("pt-d", { top: { pairBudgetCalls: 1000 }, runOpts: { maxProviderCalls: 25 } });
+      assert.equal(d.bundle.pair.refusal?.code, "PAIR_NOT_COMPARABLE", "an explicit different primary bound is kept and the pair refused");
     } finally { rmSync(keys, { recursive: true, force: true }); }
   });
 });
 
 test("CLI: run refuses --pair-rate without --pair-max-provider-calls; evaluate prints the paired section", () => {
+  const noTotal = spawnSync(process.execPath, [BOARD_CLI, "run", "some-item", "--pair-rate", "0.2", "--pair-max-provider-calls", "10"], { encoding: "utf8" });
+  assert.equal(noTotal.status, 2);
+  assert.match(noTotal.stderr, /--pair-budget-calls/);
+  assert.match(noTotal.stderr, /not a spending cap/);
   const usage = spawnSync(process.execPath, [BOARD_CLI, "run", "some-item", "--pair-rate", "0.2"], { encoding: "utf8" });
   assert.equal(usage.status, 2);
   assert.match(usage.stderr, /--pair-max-provider-calls/);

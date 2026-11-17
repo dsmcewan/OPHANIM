@@ -64,7 +64,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -183,6 +183,9 @@ try {
     const pairMax = opts["pair-max-provider-calls"] === undefined ? null : Number(opts["pair-max-provider-calls"]);
     if (pairMax !== null && !(Number.isSafeInteger(pairMax) && pairMax > 0)) usage(`--pair-max-provider-calls is a positive integer, got ${opts["pair-max-provider-calls"]}`);
     if (pairRate > 0 && pairMax === null) usage("--pair-rate needs --pair-max-provider-calls N: a counterpart never runs without an explicit provider-call bound (PAIR_UNBOUNDED)");
+    const pairTotal = opts["pair-budget-calls"] === undefined ? null : Number(opts["pair-budget-calls"]);
+    if (pairTotal !== null && !(Number.isSafeInteger(pairTotal) && pairTotal > 0)) usage(`--pair-budget-calls is a positive integer, got ${opts["pair-budget-calls"]}`);
+    if (pairRate > 0 && pairTotal === null) usage("--pair-rate needs --pair-budget-calls N: the total provider calls all counterparts in the evidence store may make. A sampling rate is not a spending cap (PAIR_NO_TOTAL)");
     if (args.length !== 1) usage("run names one item");
     const makeClientFor = opts.clients ? await load(opts.clients) : await liveClients();
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
@@ -192,7 +195,7 @@ try {
       // --interleave: the ticket's hash-assigned arm for an eligible stratum; an explicit --profile still wins.
       checked: opts.checked, runOpts: { seatOverrides, ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}) }, practice,
       evidenceStore: opts["evidence-store"] ? resolve(opts["evidence-store"]) : null,
-      pairRate, pairMaxProviderCalls: pairMax,
+      pairRate, pairMaxProviderCalls: pairMax, pairBudgetCalls: pairTotal,
       progress: ev => {
         if (ev.from !== "pipeline" && ev.from !== "pair") console.error(JSON.stringify(ev));
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  ${ev.from === "pair" ? "[pair] " : ""}[${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);

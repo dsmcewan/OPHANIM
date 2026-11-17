@@ -17,7 +17,7 @@
 //
 // Every vendor SDK stays at the edge: `makeClientFor` (the seats) and `turn` (the cycle reviewers) are
 // injected, as for runOpenItem and reviewCycle.
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, dirname, basename } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -277,7 +277,40 @@ export const PAIR_REFUSAL = Object.freeze({
   PAIR_UNBOUNDED: "pairing needs an explicit provider-call bound for the counterpart (pairMaxProviderCalls, --pair-max-provider-calls N): no counterpart runs without one",
   PAIR_PROFILE: "the primary ran a profile that is neither argo nor fit: there is no counterpart profile",
   PAIR_NO_PRIMARY: "the primary produced no run record: there is nothing to pair with",
+  // Owner condition 3 (2026-11-17): a sampling rate is not a spending cap. Live pairing needs a TOTAL boundary.
+  PAIR_NO_TOTAL: "pairing needs a total provider-call boundary across all counterparts (pairBudgetCalls, --pair-budget-calls N): a sampling rate is not a spending cap",
+  PAIR_BUDGET_EXHAUSTED: "the counterparts already recorded in this evidence store, plus this counterpart's bound, would exceed the total pairing boundary",
+  PAIR_NOT_COMPARABLE: "the primary ran under a different provider-call bound than the counterpart would: the two arms would not start from comparable conditions",
 });
+
+/** Provider calls the store's completed counterparts actually made (their own run.json attempts), plus the bounds
+ * of any counterpart with no readable record (counted at its bound: unknown spend is never counted as zero). */
+export function pairSpend(store) {
+  const root = join(store, "pairs");
+  if (!existsSync(root)) return { calls: 0, pairs: 0, unknown_counted_at_bound: 0 };
+  let calls = 0, pairs = 0, unknown = 0;
+  for (const id of readdirSync(root)) {
+    const f = join(root, id, "pair.json");
+    if (!existsSync(f)) continue;
+    const rec = JSON.parse(readFileSync(f, "utf8"));
+    if (rec.status !== "completed") continue;
+    pairs++;
+    const cf = join(root, id, "counterpart.run.json");
+    const crun = existsSync(cf) ? JSON.parse(readFileSync(cf, "utf8")) : null;
+    const made = crun?.resources?.provider_calls ?? (Array.isArray(crun?.attempts) ? crun.attempts.length : null);
+    if (Number.isInteger(made)) calls += made; else { calls += rec.bounds?.max_provider_calls ?? 0; unknown++; }
+  }
+  return { calls, pairs, unknown_counted_at_bound: unknown };
+}
+
+/** A digest of the provider cooldown state a run starts from, or null when there is none. */
+function cooldownDigest() {
+  const d = join(process.env.PANTHEON_COOLDOWN_DIR ?? join(homedir(), ".cache", "pantheon"), "v2");
+  if (!existsSync(d)) return null;
+  const h = createHash("sha256");
+  for (const f of readdirSync(d).sort()) { try { h.update(f + "\0" + readFileSync(join(d, f)) + "\0"); } catch { /* not a file */ } }
+  return "sha256:" + h.digest("hex");
+}
 const RUN_DEFAULT_REVISIONS = 3; // runOpenItem's own default (run-item.mjs), used when the primary named none
 // Options of the primary that the counterpart does not inherit: its profile is the other one, it is never
 // interleaved, an operator reseat would seat both arms alike, and its bound, ledger and board are its own.
@@ -302,7 +335,7 @@ function ticketPaths(spec, top) {
  * opens or closes the real review cycle. It runs under an explicit provider-call bound and the primary's
  * revisions. Its failure or refusal is an outcome, recorded. The pair record goes to <store>/pairs/<pair_id>/.
  */
-async function runCounterpart({ spec, ticket, top, base, boardDir, store, runOpts, run, runJsonFile, makeClientFor, sampling, bound, pairDir, progress }) {
+async function runCounterpart({ spec, ticket, top, base, boardDir, store, runOpts, run, runJsonFile, makeClientFor, sampling, bound, total = null, pairDir, progress }) {
   const primaryProfile = run?.profile ?? runOpts.profile ?? BASELINE_ARM;
   const other = primaryProfile === BASELINE_ARM ? CANDIDATE_ARM : primaryProfile === CANDIDATE_ARM ? BASELINE_ARM : null;
   const revisions = runOpts.revisions ?? RUN_DEFAULT_REVISIONS;
@@ -312,10 +345,16 @@ async function runCounterpart({ spec, ticket, top, base, boardDir, store, runOpt
   const dir = join(store, "pairs", pair_id);
   mkdirSync(dir, { recursive: true });
   if (primaryBytes) writeFileSync(join(dir, "primary.run.json"), primaryBytes);
-  const bounds = { max_provider_calls: bound, revisions };
+  const bounds = { max_provider_calls: bound, revisions, total_provider_calls: total };
+  const spent = pairSpend(store);
+  // What both arms start from, so a reader can judge comparability: same base, ticket, revisions and bound; the
+  // order they ran in; the provider cooldown state the counterpart met (it runs after the primary, so it can differ).
+  const starting = { base, ticket_digest: ticket.digest, order: "primary-first", revisions,
+    primary_bound: run?.provider_calls?.limit ?? runOpts.maxProviderCalls ?? null, counterpart_bound: bound,
+    cooldown_at_counterpart_start: cooldownDigest(), spent_before: spent };
   const record = { schema: PAIR_SCHEMA, pair_id, ticket: { key: spec.key, item: ticket.item, path: ticket.path, digest: ticket.digest },
     stakes: sampling.stakes, sampling: { basis: sampling.basis, rate: sampling.rate, u: sampling.u },
-    primary: { profile: primaryProfile, run_digest: primaryDigest, board: boardDir }, bounds };
+    primary: { profile: primaryProfile, run_digest: primaryDigest, board: boardDir }, bounds, starting };
   const write = rec => { writeFileSync(join(dir, "pair.json"), JSON.stringify(rec, null, 2) + "\n"); return rec; };
   const refuse = code => {
     progress({ event: "pair.refused", pair_id, code, why: PAIR_REFUSAL[code] });
@@ -324,6 +363,9 @@ async function runCounterpart({ spec, ticket, top, base, boardDir, store, runOpt
   if (!run) return refuse("PAIR_NO_PRIMARY");
   if (!other) return refuse("PAIR_PROFILE");
   if (!(Number.isSafeInteger(bound) && bound > 0)) return refuse("PAIR_UNBOUNDED");
+  if (!(Number.isSafeInteger(total) && total > 0)) return refuse("PAIR_NO_TOTAL");
+  if (spent.calls + bound > total) return refuse("PAIR_BUDGET_EXHAUSTED");
+  if (starting.primary_bound !== bound) return refuse("PAIR_NOT_COMPARABLE");
 
   let dry = pairDir ?? join(boardDir, `pair-${other}`);
   if (existsSync(dry)) dry = `${dry}-${Date.now()}`;
@@ -366,7 +408,7 @@ async function runCounterpart({ spec, ticket, top, base, boardDir, store, runOpt
  */
 export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(repo), anchor = null, makeClientFor, turn, n = 3,
   dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null,
-  pairRate = 0, pairMaxProviderCalls = null, pairDir = null }) {
+  pairRate = 0, pairMaxProviderCalls = null, pairBudgetCalls = null, pairDir = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
   pairFor({ ticketKey: "rate-check", policy: { pairRate } }); // a rate outside [0, 1] is refused before any work
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
@@ -401,6 +443,11 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   let stakes = null;
   try { stakes = taskProfile(spec, { paths: normalizeSlots(spec).map(s => s.path), mode: "batch" }).stakes.value; } catch { stakes = null; }
   const sampling = pairFor({ ticketKey: spec.key, stakes, policy: { pairRate, halted: pairRate > 0 ? haltedNow() : [] } });
+  // A sampled ticket's primary runs under the counterpart's bound, so both arms start from the same limit; an
+  // explicit, different primary bound is kept and the pair is refused as not comparable (PAIR_NOT_COMPARABLE).
+  if (sampling.sampled && runOpts.maxProviderCalls === undefined && Number.isSafeInteger(pairMaxProviderCalls)) {
+    runOpts = { ...runOpts, maxProviderCalls: pairMaxProviderCalls };
+  }
   const result = await runOpenItem(spec, { dir: boardDir, makeClientFor, progress: ev => progress({ ...ev, from: "pipeline" }), ...runOpts });
   const runJsonFile = join(boardDir, "run.json");
   const run = existsSync(runJsonFile) ? JSON.parse(readFileSync(runJsonFile, "utf8")) : null;
@@ -414,7 +461,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   let pairRecord = null;
   if (sampling.sampled) {
     pairRecord = await runCounterpart({ spec, ticket: { item, path: ticketRel, digest: ticketDigest }, top, base, boardDir, store, runOpts, run, runJsonFile,
-      makeClientFor, sampling, bound: pairMaxProviderCalls, pairDir, progress });
+      makeClientFor, sampling, bound: pairMaxProviderCalls, total: pairBudgetCalls, pairDir, progress });
   }
   const pairSummary = pairRecord ? { pair_id: pairRecord.pair_id, status: pairRecord.status, file: join(store, "pairs", pairRecord.pair_id, "pair.json"),
     ...(pairRecord.refusal ? { refusal: pairRecord.refusal } : {}),

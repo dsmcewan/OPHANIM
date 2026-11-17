@@ -174,7 +174,7 @@ The live record comes out `synthetic: false`, and it is scoped to the tickets an
 
 ## Continuous evaluation
 
-The owner asked for routing to be evaluated continuously, from the current state, on the work that runs anyway (design: `docs/reviews/2026-11-17-routing-evaluation/DESIGN.md`). With pairing off (the default), it adds no provider spend beyond the work itself: the shadow is a second pure selection, the assignment is a hash, and the evaluator reads files. Paired runs (below, owner decision 2026-11-17) are the one exception, and only when the owner sets a pair rate: they spend at most `pairRate × tickets × pairMaxProviderCalls` extra provider calls.
+The owner asked for routing to be evaluated continuously, from the current state, on the work that runs anyway (design: `docs/reviews/2026-11-17-routing-evaluation/DESIGN.md`). With pairing off (the default), it adds no provider spend beyond the work itself: the shadow is a second pure selection, the assignment is a hash, and the evaluator reads files. Paired runs (below, owner decision 2026-11-17) are the one exception, and only when the owner sets a pair rate: their extra provider calls are bounded by the total `pairBudgetCalls` the owner sets, and each counterpart by `pairMaxProviderCalls`. A sampling rate is not a spending cap.
 
 Code: `pantheon/src/practice/shadow.mjs`, `assign.mjs` and `evaluate.mjs`. The wiring is in `pantheon/src/board/run-item.mjs` (dispatch) and `pantheon/src/board/operate.mjs` (board runs and cycle close). Tests: `pantheon/tests/practice-continuous.test.mjs`.
 
@@ -245,6 +245,12 @@ A test proves this. Every byte of the target repository (`.git` included) and of
 
 **Refusals.** A sampled ticket is never paired without an explicit `pairMaxProviderCalls` (a positive integer). The refusal is `PAIR_UNBOUNDED`: it is recorded in the store, no counterpart runs, and the primary is unaffected. `PAIR_PROFILE` (a `legacy` primary) and `PAIR_NO_PRIMARY` (no run record) are refused the same way. The CLI refuses `--pair-rate` without `--pair-max-provider-calls` before any work.
 
+Owner condition 3 (2026-11-17): live paired tests need explicit resource limits, a total spending boundary and comparable starting conditions; a sampling rate is not a spending cap. So:
+- `PAIR_NO_TOTAL`: no counterpart runs without a total boundary, `pairBudgetCalls` (`--pair-budget-calls N`): the provider calls all counterparts in the evidence store may make together.
+- `PAIR_BUDGET_EXHAUSTED`: the calls the store's completed counterparts actually recorded (`pairSpend`; a counterpart with no readable record counts at its bound, never as zero), plus this counterpart's bound, would exceed the total. The boundary is in provider calls because cost in USD is unknown without a price source; a USD boundary cannot be enforced and is not claimed.
+- `PAIR_NOT_COMPARABLE`: a sampled ticket's primary runs under the counterpart's bound, so both arms start from the same limit. An explicit, different primary bound is kept and the pair is refused.
+- Each pair record carries `starting`: base commit, ticket digest, revisions, both bounds, the order (`primary-first`), a digest of the provider cooldown state the counterpart met, and the spend recorded before it. The order is fixed, so an order effect is not removed, only recorded.
+
 **The pair record.** It goes to `<store>/pairs/<pair_id>/pair.json`, next to `primary.run.json` and `counterpart.run.json`. Each run file is checked against the digest the record names:
 
 ```
@@ -256,7 +262,7 @@ A test proves this. Every byte of the target repository (`.git` included) and of
 
 A counterpart that fails, hits its bound or throws is kept as an outcome, and it is not accepted. A refused pair is listed under `paired.refused`. It is an outcome of neither arm, because nothing ran.
 
-**Spend.** Pairing costs at most `pairRate × tickets × pairMaxProviderCalls` extra provider calls. Each counterpart is refused at the generation boundary once it reaches its bound (`PROVIDER_CALL_LIMIT`).
+**Spend.** Pairing costs at most `pairBudgetCalls` extra provider calls in total, whatever the rate. Each counterpart is refused at the generation boundary once it reaches its bound (`PROVIDER_CALL_LIMIT`).
 
 **The paired rule.** The rule applies per stratum, over completed pairs. A side is accepted iff its run was accepted (`metrics.mjs`). Differences are fit minus argo.
 - **Tables.** `accepted` and `first_pass` each get a 2×2 table: e (both), f (fit only), g (argo only), h (neither). The discordant counts are f and g. The difference is (f − g)/n, with Newcombe's paired score interval, method 10 (R. G. Newcombe, *Statistics in Medicine* 1998;17:2635–2650). The implementation reproduces the paper's Table III and StatsDirect's worked example.
@@ -287,7 +293,7 @@ For scale at 95% (`pairsNeeded`): with 12.5% discordance and an observed differe
 The constants are named, exported and provisional: `MIN_PAIRS`, `PAIR_STOP_MIN_N`, `PAIRED_COST_ALPHA`, `WILCOXON_EXACT_MAX` and `DEFAULT_PAIR_POLICY.pairRate` (0).
 
 ```sh
-node pantheon/bin/pantheon-board.mjs run <item> --pair-rate 0.2 --pair-max-provider-calls 60 [...]
+node pantheon/bin/pantheon-board.mjs run <item> --pair-rate 0.2 --pair-max-provider-calls 60 --pair-budget-calls 600 [...]
 node pantheon/bin/pantheon-board.mjs evaluate [--runs DIR]   # prints the paired section after the strata
 ```
 
