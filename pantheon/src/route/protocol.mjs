@@ -12,7 +12,7 @@
 //
 // Cheapest first, because each step keeps more of what was already paid for:
 //   raise_output  same model, same reasoning; only a truncated reply is fixed by a larger budget
-//   raise_effort  same model, lab and conversation; the dial is cheaper than the occupant
+//   raise_effort  same model, lab and conversation; effort-first is a provisional, unqualified recovery policy (CS2)
 //   step_rung     same role's next banded rung (seating.mjs bands)
 //   reseat        another quota pool, same chair -- for a pool that is shut, never for a hard task
 // and some causes are not escalated at all: a rate limit with an interval WAITS, a malformed request
@@ -112,8 +112,14 @@ export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS,
   const start = seat.effort ?? documentedDefaultEffort(seat.model, facts);
   const i = start === null ? -1 : ladder.indexOf(start);
   if (i !== -1 && i + 1 < ladder.length) {
-    return decide("raise_effort", { ...from, effort: ladder[i + 1] },
-      `effort ${start} -> ${ladder[i + 1]} on ${seat.model}: the dial is cheaper than the occupant`, facts.models[seat.model].efforts.source);
+    // CS2 (owner audit): `basis` is the source of the PERMITTED effort values only. That trying the dial before a
+    // reseat is cheaper or more successful is a provisional policy hypothesis, recorded as unqualified beside it.
+    return { ...decide("raise_effort", { ...from, effort: ladder[i + 1] },
+      `effort ${start} -> ${ladder[i + 1]} on ${seat.model}: provisional effort-first recovery (unqualified: no matched comparison shows it cheaper or more successful than reseating)`,
+      facts.models[seat.model].efforts.source),
+      basis_supports: "the permitted effort values for this model",
+      hypothesis: { claim: "raising effort before reseating recovers more cheaply or more often", status: "unqualified", evidence: null,
+        qualification: "matched successful-recovery rate, total cost and latency: effort-first against reseat-first" } };
   }
   // "Up" is the nearest HARDER band, not an earlier position: tables are not ordered by difficulty.
   const cands = candidatesFor(role, { seating });

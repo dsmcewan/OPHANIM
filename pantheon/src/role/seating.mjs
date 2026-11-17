@@ -669,8 +669,8 @@ export function escalate(role, current, { facts = SEAT_FACTS, seating = SEATING 
     // Spread FIRST, then the fields this step sets -- the other order let a previous step's `kind`
     // overwrite this one's, so a rung change kept reporting itself as an effort change.
     return { ...current, ok: true, kind: "effort", effort: up,
-      why: `effort ${current.effort ?? "(default)"} -> ${up} on ${current.model}: the dial is cheaper to ` +
-        `turn than the occupant is to change, and it keeps the lab and the pack` };
+      why: `effort ${current.effort ?? "(default)"} -> ${up} on ${current.model}: provisional effort-first recovery; it keeps ` +
+        `the lab and the pack (unqualified: no matched comparison shows it cheaper than changing the occupant)` };
   }
   const cands = candidatesFor(role, { facts, seating });
   // A BAND IS A FIT, NOT A TIER -- and a role with no bands has no ladder. Falling back to declared-array

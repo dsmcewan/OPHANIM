@@ -4,7 +4,7 @@ import {canonicalCodeUnit} from '../../../packages/ledger/canonical.mjs';
 import {modelId,models,isFrontier,CAPABILITIES} from '../../../packages/model-client/index.mjs';
 import {LANES,labOf} from '../config/models.mjs';
 import {FACTS} from '../config/facts.mjs';
-import {SEATING,INTAKE,candidatesFor,modelOf} from '../role/seating.mjs';
+import {SEATING,INTAKE,BASIS,candidatesFor,modelOf} from '../role/seating.mjs';
 import {ROSTER} from '../team/roster.mjs';
 import {routeFor,documentedWindow} from './protocol.mjs';
 import {taskProfile,classFloor,requirementsOf,effortForDepth,PROFILE_MAPPING,LATENCY_CLIMB} from './task-profile.mjs';
@@ -122,6 +122,26 @@ export function frontierCandidates(role,{pools=[],avoid=[],pin}={}){
 // An explicit seat is its chair's only occupant; its pools, in order, are the only transport failover. On
 // resume the RECORDED seat continues; only a per-slot override given at resume replaces it (run-item.mjs).
 // Every turn records the selection's source, reason, policy version and policy hash.
+// CLAIMS (owner audit CS1). A selection separates what made a seat ELIGIBLE (constraints: the admission checks,
+// and a constraint tag such as SURFACE or ISOLATION with its stated meaning) from why it is ORDERED where it is
+// (preference). A constraint tag establishes eligibility only; it never orders candidates. No candidate ordering
+// in this repository has matched evidence, so every preference is `unqualified` with no evidence reference; a
+// preference may claim `qualified` only with one. Recorded beside the existing reason, which is left as written.
+export const CONSTRAINT_TAGS=Object.freeze(['SURFACE','ISOLATION','QUOTA','CONTEXT','CONTINUITY']);
+export function claimsOf(c,selection){
+  const tag=c.basis??null;
+  const constraints=[{check:'role',why:`a candidate in the ${selection.role} role's tables`},
+    ...(selection.context?[{check:'context',why:`documented window admits the estimated ${selection.context.estimate_tokens} tokens`}]:[]),
+    ...((selection.excluded??[]).some(e=>/lab is avoided|vendor .* is avoided/.test(e.why))?[{check:'independence',why:'avoided vendors and labs excluded'}]:[]),
+    ...(CONSTRAINT_TAGS.includes(tag)?[{check:'tag',tag,why:BASIS[tag]}]:[])];
+  const explicit=['slot-override','ticket-pin','operator-override','escalation'].includes(selection.source);
+  return {constraints,preference:{source:selection.source,
+    basis:CONSTRAINT_TAGS.includes(tag)?null:tag,
+    kind:explicit?'operator or recorded decision (an authorization, not a ranking)':'declared order (not a measured ranking)',
+    status:'unqualified',evidence:null,
+    ...(CONSTRAINT_TAGS.includes(tag)?{note:`${tag} establishes eligibility only; it does not order this seat above its alternatives`}:{})}};
+}
+
 export const SELECTION_POLICY='pantheon.selection/v1';
 export const PRECEDENCE=Object.freeze(['escalation','slot-override','ticket-pin','operator-override','policy']);
 // `argo` is the default (owner-approved); `fit` is a selectable candidate, unmeasured (docs/routing-task-profile.md).
@@ -166,7 +186,7 @@ export function selectSeat(role,{profile='argo',difficulty='medium',needsContext
   };
   const finish=groups=>{
     const candidates=groups.flatMap(([c,selection])=>rows(c,selection)).map((c,rank)=>({...c,rank,
-      selection:{...c.selection,rank,...(rank?{fallback:true}:{})}}));
+      selection:{...c.selection,rank,...(rank?{fallback:true}:{}),claims:claimsOf(c,c.selection)}}));
     if(!candidates.length)throw new Error(`no admitted candidate for "${role}"`);
     return {seat:candidates[0],candidates,selection:candidates[0].selection};
   };
