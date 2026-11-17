@@ -1,0 +1,49 @@
+# The operating trigger (ophanim/operate/cli.mjs, docs/public-record.md): reconcile the backlog and refresh the
+# public record whenever the inputs change -- a push to main, an issue opened/edited/labeled/closed, or the hour.
+# No provider is called and no model runs here: there are no provider keys and no controller key in CI, so the
+# work ledger is only verified and read. Dispatch with providers runs where the keys and the controller key are:
+# `node ophanim/operate/cli.mjs watch --total-provider-calls N` on the owner's machine is the dispatching trigger.
+# Issue text is data, never authority: it links an issue to an item by marker; an unmarked issue is a candidate.
+# The `issues` event runs this file from the default branch, never from a pull request's code. The publisher's own
+# edits are made with GITHUB_TOKEN, whose events start no workflow run, so a projection never re-triggers itself.
+name: Operate
+on:
+  push:
+    branches: [main]
+  issues:
+    types: [opened, edited, labeled, closed]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  # Shared with public-record.yml: one publisher at a time.
+  group: public-record
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Verify the status ledger
+        run: node packages/ledger/status.mjs verify
+      - name: Reconcile the backlog (read-only, no provider calls)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node ophanim/operate/cli.mjs reconcile --github > reconcile.txt
+          cat reconcile.txt
+          { echo '## Backlog reconciliation'; echo '```'; cat reconcile.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Project the public record (status, work ownership and progress)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPHANIM_OWNER_LOGIN: ${{ vars.OPHANIM_OWNER_LOGIN }}
+          PROJECT_URL: ${{ vars.OPHANIM_PROJECT_URL }}
+          OPHANIM_PROJECT_TOKEN: ${{ secrets.OPHANIM_PROJECT_TOKEN }}
+        run: node ophanim/public/github.mjs apply

@@ -1,0 +1,2031 @@
+{
+  "at": "2026-11-17T16:13:59.992Z",
+  "ledger": {
+    "head": "sha256:f8526a6753aaad321653ae2d232c36125b47081fd8177ad0735a8fb59ca0c009",
+    "entries": 85
+  },
+  "items": [
+    {
+      "item": "p1-p7",
+      "title": "OPHANIM loop P1-P7",
+      "status": "Resolved",
+      "entry": "sha256:820879fa77c66d85b9a79288d31ddfc2e160f92e9517881ac7b6668cb1288de6",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        39
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "p1-p7",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "p8-p9",
+      "title": "Frontier handoff and refill scheduling (P8, P9)",
+      "status": "Resolved",
+      "entry": "sha256:38333cdf77ac9b0d8f358743e1fdd0cf36390294bb692db1b578f1c2955c3bbf",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        40
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "p8-p9",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "terminal-state",
+      "title": "One terminal-state rule for every model",
+      "status": "Resolved",
+      "entry": "sha256:4ed6a99d173022e7ac76e0eb7fd4f1cf4a771b3b0dd9802dc0c2281ea95f2113",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        63
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "terminal-state",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "q1-q6",
+      "title": "Engine Q1-Q6",
+      "status": "Resolved",
+      "entry": "sha256:75dd44ea0d85f43ccfa20668e1b2de44c3a917dcbd757d7cfe85db7a806ab7cb",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        44
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "q1-q6",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "q7-measurement",
+      "title": "Q7 contribution measurement",
+      "status": "Resolved",
+      "entry": "sha256:46517055282bbcd5e6c1ae2e3f021c2ea6f45b9b3d2599019028ea55e96fd24b",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        46
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "q7-measurement",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "facts",
+      "title": "Cited capability facts",
+      "status": "Resolved",
+      "entry": "sha256:baffb69653cd4bacefd52a8b541218b6a5135f67036a9fdf6d923a78e38f83a4",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        16
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "facts",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "protocol",
+      "title": "Routing and escalation protocol",
+      "status": "Resolved",
+      "entry": "sha256:02887a2f2d5b403227d1a8a90f3fc6d9b6de986b8195e6187bc48c73aab02b8e",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        42
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "protocol",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "reasoning-context",
+      "title": "OpenAI reasoning.context",
+      "status": "Resolved",
+      "entry": "sha256:1d4ae2ca86935979857da87c1dd15a768cc06af27767d41097b7565f8ac910c9",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        47
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "reasoning-context",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "swarms",
+      "title": "Swarms on the board",
+      "status": "Resolved",
+      "entry": "sha256:9d934f56a85e652230360e6c4aa2622cbe7b6691c5cd058c611bdd9754777046",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        60
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "swarms",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "token-tiers",
+      "title": "Output-token tiers",
+      "status": "Resolved",
+      "entry": "sha256:f067f0d2c06877dc5fb9bf84a753d5fc33a77ea5ed994f4f9f6198ed651385dd",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        65
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "token-tiers",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "agy-escalation",
+      "title": "Escalation on agy seats",
+      "status": "Resolved",
+      "entry": "sha256:155bfd7dcb8f071c81b248cb4a34489e61c3b033bad03e87af1c572487dd87cc",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        9
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "agy-escalation",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "live-reseat",
+      "title": "Reseat from the live view",
+      "status": "Resolved",
+      "entry": "sha256:099dded2f8a7a88edc128551848ee740812fc225d184ad30755abaa525187f8b",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        34
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "live-reseat",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "frontier-move",
+      "title": "Six models on the shared client",
+      "status": "Resolved",
+      "entry": "sha256:bc80175411e27c7b0470b061fb0e90e2c131d9bf405de47bb2f0d224096f320d",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        17
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "frontier-move",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "gemini-3.8",
+      "title": "gemini-3.8-flash",
+      "status": "Resolved",
+      "entry": "sha256:3a0784b4bb1422ad28b57825fe5272a22776f5c58b3f86fd623f3107a7f235fd",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        22
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "gemini-3.8",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "layered-review",
+      "title": "Layered review findings",
+      "status": "Resolved",
+      "entry": "sha256:08d15825f93f413145d1bc45831e49d25f04663b655a282885480e5a554b1a04",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        31
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "layered-review",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "k1",
+      "title": "Ledger core (K1)",
+      "status": "Resolved",
+      "entry": "sha256:02ba63f38ecb18e6f696ec0f3d42ccbad2ee7ebaeecc57d58d716af3f3b37b73",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        25
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "k1",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "k2",
+      "title": "Genesis and anchors (K2)",
+      "status": "Resolved",
+      "entry": "sha256:568b30a92a40ec5cded3c829acd6f6caa053ec335c045514e42285f183c335be",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        26
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "k2",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "k3",
+      "title": "First ledger kinds (K3)",
+      "status": "Resolved",
+      "entry": "sha256:cd5f299b412a17e8471e32fe65b8b3bfdf6555a43d4c9e73e3ffa44690ffe343",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        27
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "k3",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "k4",
+      "title": "Turns, cold review, seat keys (K4)",
+      "status": "Resolved",
+      "entry": "sha256:2d6bcfbfe776a3774df2870f20c2131163ddda8872b1206c05d9921401be484a",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        28
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "k4",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "k5",
+      "title": "Efficiency records (K5, K5b)",
+      "status": "Resolved",
+      "entry": "sha256:d31123ed4ff9f6a2cd2d43c179b3aaa822b59fd6efe08f143bace8d6287ee309",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        29
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "k5",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "ledger-default",
+      "title": "The ledger by default",
+      "status": "Resolved",
+      "entry": "sha256:2df871e80b108e3e38f530e5435685191816476ac3c74ebf0e1d43dbc015e06c",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        32
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "ledger-default",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "off-ledger-records",
+      "title": "Remaining off-ledger records",
+      "status": "Resolved",
+      "entry": "sha256:e14741687ab34b69fb0be00d5b68cd41152c67fd3d9976ea7f00913c8edf8fc8",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        38
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "off-ledger-records",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "status-board",
+      "title": "Status board from a ledger",
+      "status": "Resolved",
+      "entry": "sha256:5c6092062861fdede410fe817effb41672ede4ec7265650151677404197002f0",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        58
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "status-board",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "shared-package",
+      "title": "Ledger as a shared package",
+      "status": "Resolved",
+      "entry": "sha256:276563cb44a7ac547a869d1c7851e1006fe20b90007f3c5454a281247bcc6468",
+      "depends_on": [],
+      "history": 3,
+      "ticket": null,
+      "issues": [
+        55
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "shared-package",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "board-resolver",
+      "title": "One ledger across boards and domains",
+      "status": "Resolved",
+      "entry": "sha256:ba3917cd0e1c4abbc55ef3be914adef9b3bc02d1601b08ea35393b56d7a1406a",
+      "depends_on": [],
+      "history": 5,
+      "ticket": null,
+      "issues": [
+        11
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "board-resolver",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "review-every-cycle",
+      "title": "Review layer every cycle",
+      "status": "Resolved",
+      "entry": "sha256:d0dae2debde4dd296492113a61e509d57416a853ee8133786f7d8c34b71fdba9",
+      "depends_on": [],
+      "history": 5,
+      "ticket": null,
+      "issues": [
+        49
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "review-every-cycle",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "k6",
+      "title": "TELOS reviewers bound to real seats (K6)",
+      "status": "On Hold",
+      "entry": "sha256:5348262a2d338c94bacadc0e9c2bf6dd5fbfc38fd1fa56e0134c39f0c0bb2077",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        30
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "k6",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on governance: pinned TELOS verifier admits ledger entries and seat-signed reviews",
+        "blocker": {
+          "what": "waiting on governance: pinned TELOS verifier admits ledger entries and seat-signed reviews",
+          "role": "decision-authority",
+          "resume_when": "the governance is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "p8-p9-admission",
+      "title": "P8/P9 admission through the efficiency gate",
+      "status": "On Hold",
+      "entry": "sha256:1abbec255ec2f334047df3aceedf969ec79687db09828913276099e31b26cd55",
+      "depends_on": [
+        "k6"
+      ],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        41
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "p8-p9-admission",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "held: needs the pinned verifier to admit it",
+        "blocker": {
+          "what": "held: needs the pinned verifier to admit it",
+          "role": "decision-authority",
+          "resume_when": "the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "q7-adjustment",
+      "title": "Q7 seat adjustment from evidence",
+      "status": "On Hold",
+      "entry": "sha256:4f6c6d54e0cef101a3938802777e9fdb8bcd96a7d1e596c89ceaa31a9692cb66",
+      "depends_on": [
+        "k6"
+      ],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        45
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "q7-adjustment",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "held: needs the pinned verifier to admit a seating dimension",
+        "blocker": {
+          "what": "held: needs the pinned verifier to admit a seating dimension",
+          "role": "decision-authority",
+          "resume_when": "the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "signed-transitions",
+      "title": "Signed transitions",
+      "status": "On Hold",
+      "entry": "sha256:40dd74ba4066a11fde82bec18b2735a67dee42599dc4fea5f08d9a8b8d9f5b5c",
+      "depends_on": [
+        "k6"
+      ],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        56
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "signed-transitions",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "held: governance decision on the pinned verifier",
+        "blocker": {
+          "what": "held: governance decision on the pinned verifier",
+          "role": "decision-authority",
+          "resume_when": "the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "all-turns",
+      "title": "all_turns on GPT-6 Astra, Sol, Luna",
+      "status": "On Hold",
+      "entry": "sha256:053328727313c786fa975de11bfa1c45dca0f249e7adea01758f5587f8664b58",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        10
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "all-turns",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on credential: docs conflict on Astra, silent on Sol and Luna; one live call settles it",
+        "blocker": {
+          "what": "waiting on credential: docs conflict on Astra, silent on Sol and Luna; one live call settles it",
+          "role": "decision-authority",
+          "resume_when": "the credential is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "tier-adjustment",
+      "title": "Adjusting the output tiers",
+      "status": "On Hold",
+      "entry": "sha256:5bd8286a6f0bb90f34b6e7a08696ae7df1ee00832a8dd9683e0fd8cb90ad61a1",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        64
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "tier-adjustment",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on evidence: moves only on recorded truncations from real runs",
+        "blocker": {
+          "what": "waiting on evidence: moves only on recorded truncations from real runs",
+          "role": "decision-authority",
+          "resume_when": "the evidence is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "direct-path-xai",
+      "title": "xAI models on the shared client",
+      "status": "On Hold",
+      "entry": "sha256:a795fd469eed14c56f605080044563e7eb2489092a2d82b1ad2486ff0390653a",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        15
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "direct-path-xai",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on fact: xAI documents no output ceilings (re-checked 2026-11-17)",
+        "blocker": {
+          "what": "waiting on fact: xAI documents no output ceilings (re-checked 2026-11-17)",
+          "role": "decision-authority",
+          "resume_when": "the fact is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "gemini-routing",
+      "title": "gemini-3.6-flash off the agy seats",
+      "status": "On Hold",
+      "entry": "sha256:191dd174af45a16e57865b202eb1bda9b2f62af09249a97ba684cde78dfb3c5e",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        23
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "gemini-routing",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on decision: would move OAuth agy seats onto the metered API",
+        "blocker": {
+          "what": "waiting on decision: would move OAuth agy seats onto the metered API",
+          "role": "decision-authority",
+          "resume_when": "the decision is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "signer",
+      "title": "Status-ledger operator key custody",
+      "status": "Resolved",
+      "entry": "sha256:628453802b90b64b4ec6aae56a083d1db630122a991c09c41667b2de30f267d0",
+      "depends_on": [],
+      "history": 4,
+      "ticket": null,
+      "issues": [
+        57
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "signer",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "gate-on-run-path",
+      "title": "Gate verdicts recorded on the run path",
+      "status": "Resolved",
+      "entry": "sha256:a16316e5f7bb19c579019b8448135deb54cf428bdd576016e3ada6872ab109d4",
+      "depends_on": [],
+      "history": 3,
+      "ticket": null,
+      "issues": [
+        21
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "gate-on-run-path",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "ref-write-gap",
+      "title": "Ref recorded but its file write fails",
+      "status": "Resolved",
+      "entry": "sha256:16858786b4399cb99a0bd56097f44fdbabb8f7b43631ae6ba5eced706f6712e0",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        48
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "ref-write-gap",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "legacy-seat-files",
+      "title": "Seat files from before the ledger",
+      "status": "On Hold",
+      "entry": "sha256:9a6ceacb83dd5dd828a7b37d7a27f5dd3aa9678d8efde9ab823e4ee8d5e810c4",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        33
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "legacy-seat-files",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on decision: a resumed board from before the ledger has seat turns that were never recorded; refused today. Adopting them as signed inputs is a choice about trust",
+        "blocker": {
+          "what": "waiting on decision: a resumed board from before the ledger has seat turns that were never recorded; refused today. Adopting them as signed inputs is a choice about trust",
+          "role": "decision-authority",
+          "resume_when": "the decision is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "ru2-frontier-forgery",
+      "title": "RU2: frontier verification accepted a keyless forgery (independent review)",
+      "status": "Resolved",
+      "entry": "sha256:b34b0a4082131c97bb803efb8b7912a6b32cdd1b2cc952861e5e3e3d31e27e41",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        53
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "ru2-frontier-forgery",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "ru1-cross-lab",
+      "title": "RU1: cross-lab rule compared vendor strings (independent review)",
+      "status": "Resolved",
+      "entry": "sha256:b4a3013b6a4bc4391e703fcfc9600e83f4d204a9a60465c0c69204e8bd70d22d",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        52
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "ru1-cross-lab",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "fw1-stored-answer",
+      "title": "FW1: prove/verify certify against a stored answer (independent review)",
+      "status": "Resolved",
+      "entry": "sha256:f1e01bbd9e65c3f8817cde364297a7ffcb4b6cbec22eabf90996d076b1670719",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        18
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "fw1-stored-answer",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "public-record",
+      "title": "GitHub as the public projection of the ledger",
+      "status": "Resolved",
+      "entry": "sha256:d950cbcca8bef4e2a2ffde5d2079996a328ace8f8d650a05e577c6a57419cad3",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        43
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "public-record",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "github-projects",
+      "title": "GitHub Projects view of the loop",
+      "status": "On Hold",
+      "entry": "sha256:e09347998af85d995d303d0719822ec9835bedc741efadd4132906b88722b510",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        24
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "github-projects",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on credential: user-owned Projects need a token with project scope; neither GITHUB_TOKEN nor this session has one. The publisher syncs Projects only when that token is configured",
+        "blocker": {
+          "what": "waiting on credential: user-owned Projects need a token with project scope; neither GITHUB_TOKEN nor this session has one. The publisher syncs Projects only when that token is configured",
+          "role": "decision-authority",
+          "resume_when": "the credential is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "me1-author-signature",
+      "title": "ME1: no test failed when the author-signature check was deleted (independent review)",
+      "status": "Resolved",
+      "entry": "sha256:553bcd83a3afef979bafbf723271c43f31b73cdcf92c8a4c817ac21d1a0fb3b1",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        35
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "me1-author-signature",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "sy1-ledger-caller",
+      "title": "SY1: the ledger had no shipped caller (independent review)",
+      "status": "Resolved",
+      "entry": "sha256:75b01f758c43b8a45d0f5769e2f84e7b23caf8d9cb6e68468da4be5b2ea14011",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        61
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "sy1-ledger-caller",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "fw4-threat-model",
+      "title": "FW4: a threat model naming the adversary (independent review)",
+      "status": "On Hold",
+      "entry": "sha256:aaed5a90f31f103eca113a6afe4350ea6d9a31f7193f85fbcad52a5328995c43",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        20
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "fw4-threat-model",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on decision: the review assigns this to the decision authority: which adversary the controls must stop (careless owner, compromised agent session, malicious repo writer, provider substitution). A draft can be proposed for decision",
+        "blocker": {
+          "what": "waiting on decision: the review assigns this to the decision authority: which adversary the controls must stop (careless owner, compromised agent session, malicious repo writer, provider substitution). A draft can be proposed for decision",
+          "role": "decision-authority",
+          "resume_when": "the decision is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "cross-lab-review",
+      "title": "Cross-lab review of the ledger work (PR #6)",
+      "status": "On Hold",
+      "entry": "sha256:3fc0f0441a3528e3718a553d3eb3401110926fd16dc793be740ecefe00936eb8",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        14
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "cross-lab-review",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on credential: reviewers from OpenAI, xAI and Google are ready to run (npm run review-cycle with the HTTPS turn); the saved provider keys are still rejected",
+        "blocker": {
+          "what": "waiting on credential: reviewers from OpenAI, xAI and Google are ready to run (npm run review-cycle with the HTTPS turn); the saved provider keys are still rejected",
+          "role": "check@review",
+          "resume_when": "the credential is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "review-mutants",
+      "title": "Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2",
+      "status": "In progress",
+      "entry": "sha256:abc9a1278d9719d89598505205ee25b1e0244d24efc3375324b3cf3d8adf5db6",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        50
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "review-mutants",
+        "state": "In progress",
+        "gate": "plan",
+        "mode": "author",
+        "requirement": {
+          "item": "review-mutants",
+          "title": "Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2",
+          "basis": "independent review: checks no test protects; each gets a killing test",
+          "entry": "sha256:abc9a1278d9719d89598505205ee25b1e0244d24efc3375324b3cf3d8adf5db6"
+        },
+        "stale": [],
+        "reason": "no approved plan and no ticket: evaluation and planning"
+      }
+    },
+    {
+      "item": "supply-portability",
+      "title": "SY4 lockfile integrity, SY5 append cost and lock, WF3 sandbox python path, WF4 machine paths",
+      "status": "Resolved",
+      "entry": "sha256:79860d3d2aedf8acde56ea6a4255da6245f713e84817e08ed3634f0a10cd8c8c",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        59
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "supply-portability",
+        "state": "Resolved",
+        "gate": "evidence-gap",
+        "reason": "Resolved without recorded completion evidence (an attested basis only)",
+        "blocker": {
+          "what": "Resolved without recorded completion evidence (an attested basis only)",
+          "role": "decision-authority",
+          "resume_when": "the owner re-opens the item for the lifecycle, or records completion evidence"
+        }
+      }
+    },
+    {
+      "item": "me3-canonical",
+      "title": "ME3: nine canonical-JSON functions that disagree at the edges",
+      "status": "Ready",
+      "entry": "sha256:729be2bff478be36c411ac440bbf671d97287ea7457bb8cf08aeb946209d6d37",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        37
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "me3-canonical",
+        "state": "Ready",
+        "gate": "plan",
+        "mode": "author",
+        "requirement": {
+          "item": "me3-canonical",
+          "title": "ME3: nine canonical-JSON functions that disagree at the edges",
+          "basis": "unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first",
+          "entry": "sha256:729be2bff478be36c411ac440bbf671d97287ea7457bb8cf08aeb946209d6d37"
+        },
+        "stale": [],
+        "reason": "no approved plan and no ticket: evaluation and planning"
+      }
+    },
+    {
+      "item": "co1-readability",
+      "title": "CO1: ophanim/ is expensive to review (6% comments, long lines)",
+      "status": "Ready",
+      "entry": "sha256:e0954df298fffecf49e6cec2acd103b1628dcbdcc36dfefaa7715b1815f5a536",
+      "depends_on": [],
+      "history": 1,
+      "ticket": {
+        "path": "tickets/co1-readability.json",
+        "digest": "sha256:782c8caf1d94ad196d203e1449a22cd68d31fc8a317c67f955f05cb73542dd19"
+      },
+      "issues": [
+        12
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "co1-readability",
+        "state": "Ready",
+        "gate": "plan",
+        "mode": "revalidate",
+        "requirement": {
+          "item": "co1-readability",
+          "title": "CO1: ophanim/ is expensive to review (6% comments, long lines)",
+          "basis": "reformat and document without behaviour change",
+          "entry": "sha256:e0954df298fffecf49e6cec2acd103b1628dcbdcc36dfefaa7715b1815f5a536"
+        },
+        "stale": [],
+        "reason": "a ticket exists; its assumptions, scope, dependencies and acceptance criteria need re-checking"
+      }
+    },
+    {
+      "item": "fw3-premises",
+      "title": "FW3: core premises open (0 of 6 trials delegated; swarm not independent)",
+      "status": "On Hold",
+      "entry": "sha256:c6048c83664648bacb67d1f0b61411a8b61edd41a7c555911445a442c4aa1934",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        19
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "fw3-premises",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on evidence: needs live runs with real providers",
+        "blocker": {
+          "what": "waiting on evidence: needs live runs with real providers",
+          "role": "decision-authority",
+          "resume_when": "the evidence is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "me2-admission-stat",
+      "title": "ME2: thin admission statistic (three pairs per width; p95 equals max)",
+      "status": "On Hold",
+      "entry": "sha256:4f070a5fac9cd9d17bd6fea0ce81d301dd5e8166b0fa50cfb72962c6f6221a8b",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        36
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "me2-admission-stat",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on decision: thresholds are a decision (review decision 4); more samples need live runs",
+        "blocker": {
+          "what": "waiting on decision: thresholds are a decision (review decision 4); more samples need live runs",
+          "role": "decision-authority",
+          "resume_when": "the decision is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "ru3-pin-boundary",
+      "title": "RU3: governance.mjs, which holds the pins, is not itself pinned",
+      "status": "On Hold",
+      "entry": "sha256:cb7dfb733b92005b16caf2a016a1145c0e8283e0fa25a3dfd8b3f976cc57aa53",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        54
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "ru3-pin-boundary",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on governance: what the pinned verifier covers is a governance decision",
+        "blocker": {
+          "what": "waiting on governance: what the pinned verifier covers is a governance decision",
+          "role": "decision-authority",
+          "resume_when": "the governance is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "sy3-portable-proofs",
+      "title": "SY3: proofs bind absolute paths and cannot be checked on another machine",
+      "status": "On Hold",
+      "entry": "sha256:8f9db6909c738850367690a4a156e3864c20dd86308830436fca3728e17d18f3",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        62
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "sy3-portable-proofs",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on decision: whether a retained proof must verify elsewhere is review decision 8",
+        "blocker": {
+          "what": "waiting on decision: whether a retained proof must verify elsewhere is review decision 8",
+          "role": "decision-authority",
+          "resume_when": "the decision is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "cross-lab-evaluator",
+      "title": "Independent evaluation plan, Phases 0 to 6",
+      "status": "On Hold",
+      "entry": "sha256:a02fdd8a74bdafad54290bdcb3f289682f5c5ec42d4a3e70645123b1dec37ecc",
+      "depends_on": [],
+      "history": 1,
+      "ticket": null,
+      "issues": [
+        13
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "cross-lab-evaluator",
+        "state": "On Hold",
+        "gate": "blocked",
+        "reason": "waiting on decision: needs a cross-lab evaluator with TELOS access and live-run budget (review decisions 5 to 7)",
+        "blocker": {
+          "what": "waiting on decision: needs a cross-lab evaluator with TELOS access and live-run budget (review decisions 5 to 7)",
+          "role": "decision-authority",
+          "resume_when": "the decision is supplied and the owner records the item Ready"
+        }
+      }
+    },
+    {
+      "item": "routing-coordination-practices",
+      "title": "Priority: qualify model routing and coordination practices every cycle",
+      "status": "In progress",
+      "entry": "sha256:f8526a6753aaad321653ae2d232c36125b47081fd8177ad0735a8fb59ca0c009",
+      "depends_on": [],
+      "history": 2,
+      "ticket": null,
+      "issues": [
+        51
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "routing-coordination-practices",
+        "state": "In progress",
+        "gate": "plan",
+        "mode": "author",
+        "requirement": {
+          "item": "routing-coordination-practices",
+          "title": "Priority: qualify model routing and coordination practices every cycle",
+          "basis": "Owner-designated priority: determine effective model routing, escalation and coordination practices, with a bounded assessment and retained disposition every operating cycle and actual next-dispatch policy consumption. Audit at 94a115c reproduced static task routing, ignored stop decisions, lost overrides/usage, expanded output caps, same-lab swarm coordination and missing cycle recovery/learning. Start with deterministic repairs and per-attempt resource evidence; unknown cost stays unknown. Review and standing acceptance contract: docs/reviews/2026-11-16-routing-coordination/. Implementation remains Ready; this status entry records the requirement rather than dispatching teams.",
+          "entry": "sha256:76892bd2bff0f050c01591dc42b0241112c350d86df14f0ec94e676fd4b60503"
+        },
+        "stale": [],
+        "reason": "no approved plan and no ticket: evaluation and planning"
+      }
+    },
+    {
+      "item": "workflow-handoff-controls",
+      "title": "Priority: correct workflow handoffs and ledger-driven improvement controls",
+      "status": "In progress",
+      "entry": "sha256:9ac16794a3de1cc0958485df486a294a73217a79a7f2214423a3007ed7943fd4",
+      "depends_on": [],
+      "history": 3,
+      "ticket": null,
+      "issues": [
+        66
+      ],
+      "runs": [],
+      "stages": 0,
+      "gate": {
+        "item": "workflow-handoff-controls",
+        "state": "In progress",
+        "gate": "plan",
+        "mode": "author",
+        "requirement": {
+          "item": "workflow-handoff-controls",
+          "title": "Priority: correct workflow handoffs and ledger-driven improvement controls",
+          "basis": "Owner governing priority: follow evidence-supported correctness through ledger-documented decisions/rationale, audit inherited state and capabilities each cycle, keep current practices provisional and qualify scoped improvements through A/B testing. Agents must be specialized, reusable and versioned/qualified; live routing, consumed agent definitions and component policy must agree. Audit beb577f, rechecked at ebdc69a, reproduced wrong-task and wrong-revision completion plus stale application, duplicate dispatch, verification and dependency gaps; reviewer resume is partially repaired. Correct completion bindings first, then cohesive claims/recovery/public verification and actual next-cycle policy consumption. Review and executable acceptance contract: docs/reviews/2026-11-16-workflow-handoffs/. These controls, tickets and live/scale qualification remain implementation work.",
+          "entry": "sha256:0e0d9d8d5d9ded30ba3cbc61901a5815bec49abfbbe5dab5c2c962fd328b1bad"
+        },
+        "stale": [],
+        "reason": "no approved plan and no ticket: evaluation and planning"
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "number": 3,
+      "title": "Ophanim ↔ LEXI liaison: verified coordination channel",
+      "state": "open",
+      "why": "no item marker: an intake candidate for the owner to classify; never executed on its own"
+    }
+  ],
+  "orphans": [],
+  "duplicates": [],
+  "counts": {
+    "items": 58,
+    "issues": 59,
+    "linked_issues": 58,
+    "candidates": 1,
+    "tickets": 1,
+    "orphans": 0,
+    "items_with_runs": 0,
+    "by_gate": {
+      "evidence-gap": 36,
+      "blocked": 17,
+      "plan": 5
+    },
+    "duplicates": 0,
+    "unknown_markers": 0,
+    "drift": 0,
+    "by_status": {
+      "Resolved": 36,
+      "On Hold": 17,
+      "In progress": 3,
+      "Ready": 2
+    }
+  },
+  "work": {
+    "state": "absent",
+    "root": "status/work"
+  },
+  "authority": {
+    "held": false,
+    "keys": "/home/user/OPHANIM/.claude/worktrees/agent-abfe5c690ed8e5e6d/status/work/keys",
+    "why": "there is no work ledger here"
+  },
+  "status": {
+    "root": "status/ledger"
+  },
+  "issues_source": "GitHub issues snapshot of 2026-11-17 (dsmcewan/OPHANIM, all states, 59 issues, read through the GitHub MCP list_issues tool)",
+  "unknown_markers": [],
+  "drift": [],
+  "issues_list": [
+    {
+      "number": 3,
+      "title": "Ophanim ↔ LEXI liaison: verified coordination channel",
+      "state": "open",
+      "labels": []
+    },
+    {
+      "number": 9,
+      "title": "Escalation on agy seats [agy-escalation]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 10,
+      "title": "all_turns on GPT-6 Astra, Sol, Luna [all-turns]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:credential"
+      ]
+    },
+    {
+      "number": 11,
+      "title": "One ledger across boards and domains [board-resolver]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 12,
+      "title": "CO1: ophanim/ is expensive to review (6% comments, long lines) [co1-readability]",
+      "state": "open",
+      "labels": [
+        "state:ready"
+      ]
+    },
+    {
+      "number": 13,
+      "title": "Independent evaluation plan, Phases 0 to 6 [cross-lab-evaluator]",
+      "state": "open",
+      "labels": [
+        "decision-authority",
+        "state:on-hold",
+        "waiting:decision"
+      ]
+    },
+    {
+      "number": 14,
+      "title": "Cross-lab review of the ledger work (PR #6) [cross-lab-review]",
+      "state": "open",
+      "labels": [
+        "role:check@review",
+        "state:on-hold",
+        "waiting:credential"
+      ]
+    },
+    {
+      "number": 15,
+      "title": "xAI models on the shared client [direct-path-xai]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:fact"
+      ]
+    },
+    {
+      "number": 16,
+      "title": "Cited capability facts [facts]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 17,
+      "title": "Six models on the shared client [frontier-move]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 18,
+      "title": "FW1: prove/verify certify against a stored answer (independent review) [fw1-stored-answer]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 19,
+      "title": "FW3: core premises open (0 of 6 trials delegated; swarm not independent) [fw3-premises]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:evidence"
+      ]
+    },
+    {
+      "number": 20,
+      "title": "FW4: a threat model naming the adversary (independent review) [fw4-threat-model]",
+      "state": "open",
+      "labels": [
+        "decision-authority",
+        "state:on-hold",
+        "waiting:decision"
+      ]
+    },
+    {
+      "number": 21,
+      "title": "Gate verdicts recorded on the run path [gate-on-run-path]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 22,
+      "title": "gemini-3.8-flash [gemini-3.8]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 23,
+      "title": "gemini-3.6-flash off the agy seats [gemini-routing]",
+      "state": "open",
+      "labels": [
+        "decision-authority",
+        "state:on-hold",
+        "waiting:decision"
+      ]
+    },
+    {
+      "number": 24,
+      "title": "GitHub Projects view of the loop [github-projects]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:credential"
+      ]
+    },
+    {
+      "number": 25,
+      "title": "Ledger core (K1) [k1]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 26,
+      "title": "Genesis and anchors (K2) [k2]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 27,
+      "title": "First ledger kinds (K3) [k3]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 28,
+      "title": "Turns, cold review, seat keys (K4) [k4]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 29,
+      "title": "Efficiency records (K5, K5b) [k5]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 30,
+      "title": "TELOS reviewers bound to real seats (K6) [k6]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:governance"
+      ]
+    },
+    {
+      "number": 31,
+      "title": "Layered review findings [layered-review]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 32,
+      "title": "The ledger by default [ledger-default]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 33,
+      "title": "Seat files from before the ledger [legacy-seat-files]",
+      "state": "open",
+      "labels": [
+        "decision-authority",
+        "state:on-hold",
+        "waiting:decision"
+      ]
+    },
+    {
+      "number": 34,
+      "title": "Reseat from the live view [live-reseat]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 35,
+      "title": "ME1: no test failed when the author-signature check was deleted (independent review) [me1-author-signature]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 36,
+      "title": "ME2: thin admission statistic (three pairs per width; p95 equals max) [me2-admission-stat]",
+      "state": "open",
+      "labels": [
+        "decision-authority",
+        "state:on-hold",
+        "waiting:decision"
+      ]
+    },
+    {
+      "number": 37,
+      "title": "ME3: nine canonical-JSON functions that disagree at the edges [me3-canonical]",
+      "state": "open",
+      "labels": [
+        "state:ready"
+      ]
+    },
+    {
+      "number": 38,
+      "title": "Remaining off-ledger records [off-ledger-records]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 39,
+      "title": "OPHANIM loop P1-P7 [p1-p7]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 40,
+      "title": "Frontier handoff and refill scheduling (P8, P9) [p8-p9]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 41,
+      "title": "P8/P9 admission through the efficiency gate [p8-p9-admission]",
+      "state": "open",
+      "labels": [
+        "state:on-hold"
+      ]
+    },
+    {
+      "number": 42,
+      "title": "Routing and escalation protocol [protocol]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 43,
+      "title": "GitHub as the public projection of the ledger [public-record]",
+      "state": "closed",
+      "labels": [
+        "role:lead@orch",
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 44,
+      "title": "Engine Q1-Q6 [q1-q6]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 45,
+      "title": "Q7 seat adjustment from evidence [q7-adjustment]",
+      "state": "open",
+      "labels": [
+        "state:on-hold"
+      ]
+    },
+    {
+      "number": 46,
+      "title": "Q7 contribution measurement [q7-measurement]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 47,
+      "title": "OpenAI reasoning.context [reasoning-context]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 48,
+      "title": "Ref recorded but its file write fails [ref-write-gap]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 49,
+      "title": "Review layer every cycle [review-every-cycle]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 50,
+      "title": "Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2 [review-mutants]",
+      "state": "open",
+      "labels": [
+        "role:check@review",
+        "state:in-progress"
+      ]
+    },
+    {
+      "number": 51,
+      "title": "Priority: qualify model routing and coordination practices every cycle [routing-coordination-practices]",
+      "state": "open",
+      "labels": [
+        "role:lead@orch",
+        "state:in-progress"
+      ]
+    },
+    {
+      "number": 52,
+      "title": "RU1: cross-lab rule compared vendor strings (independent review) [ru1-cross-lab]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 53,
+      "title": "RU2: frontier verification accepted a keyless forgery (independent review) [ru2-frontier-forgery]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 54,
+      "title": "RU3: governance.mjs, which holds the pins, is not itself pinned [ru3-pin-boundary]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:governance"
+      ]
+    },
+    {
+      "number": 55,
+      "title": "Ledger as a shared package [shared-package]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 56,
+      "title": "Signed transitions [signed-transitions]",
+      "state": "open",
+      "labels": [
+        "state:on-hold"
+      ]
+    },
+    {
+      "number": 57,
+      "title": "Status-ledger operator key custody [signer]",
+      "state": "closed",
+      "labels": [
+        "decision-authority",
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 58,
+      "title": "Status board from a ledger [status-board]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 59,
+      "title": "SY4 lockfile integrity, SY5 append cost and lock, WF3 sandbox python path, WF4 machine paths [supply-portability]",
+      "state": "closed",
+      "labels": [
+        "role:impl@build",
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 60,
+      "title": "Swarms on the board [swarms]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 61,
+      "title": "SY1: the ledger had no shipped caller (independent review) [sy1-ledger-caller]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 62,
+      "title": "SY3: proofs bind absolute paths and cannot be checked on another machine [sy3-portable-proofs]",
+      "state": "open",
+      "labels": [
+        "decision-authority",
+        "state:on-hold",
+        "waiting:decision"
+      ]
+    },
+    {
+      "number": 63,
+      "title": "One terminal-state rule for every model [terminal-state]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 64,
+      "title": "Adjusting the output tiers [tier-adjustment]",
+      "state": "open",
+      "labels": [
+        "state:on-hold",
+        "waiting:evidence"
+      ]
+    },
+    {
+      "number": 65,
+      "title": "Output-token tiers [token-tiers]",
+      "state": "closed",
+      "labels": [
+        "state:resolved"
+      ]
+    },
+    {
+      "number": 66,
+      "title": "Priority: correct workflow handoffs and ledger-driven improvement controls [workflow-handoff-controls]",
+      "state": "open",
+      "labels": [
+        "role:lead@orch",
+        "state:in-progress"
+      ]
+    }
+  ],
+  "bundles": null
+}
