@@ -48,7 +48,7 @@ These are permissible explicit policies, not established optima: static ARGO rol
 Run the retained `probe.mjs` with the offline guard:
 
 ```sh
-/usr/bin/node --import /mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/workflow-audit/offline-guard.mjs /mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/workflow-audit/current-state/probe.mjs
+/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs ${AUDIT_WORKSPACE}/work/workflow-audit/current-state/probe.mjs
 ```
 
 Results: `probe-results.json`; compact stdout: `probe.stdout.json`. Sixteen assertions passed. This probe exercises current pure selectors, escalation and request compilation; it does not execute an end-to-end operating cycle or a provider. The source links pin every claim to the audited commit. Findings are not fixes and are not cross-lab approval.
@@ -76,7 +76,7 @@ Results: `probe-results.json`; compact stdout: `probe.stdout.json`. Sixteen asse
 
 # Current-state measurement and policy audit
 
-Pinned public source: `e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6` (commit timestamp `2026-11-17T04:19:01Z`). Source worktree: `/mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/ophanim-current-policy-audit`.
+Pinned public source: `e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6` (commit timestamp `2026-11-17T04:19:01Z`). Source worktree: `${AUDIT_WORKSPACE}/work/ophanim-current-policy-audit`.
 
 The repository has real synthetic measurement and integrity machinery. The examined evidence does **not establish that current live model routing, escalation, reviewer count or coordination choices are empirically efficient**. Its own code distinguishes operator preferences and capability facts from unmeasured result quality/cost. The public status board still holds evidence-driven seating adjustment and independent evaluation, and marks the continuing practice-assessment requirement Ready. This is a current-state finding, not merely a proposal for future work.
 
@@ -106,7 +106,7 @@ The only tracked `.jsonl` file at this source pin is `status/ledger/chain.jsonl`
 Source: `docs/STATUS.md:6`, `:9`, `:16-19`, `:23-27`, `:35`, `:47`, `:58`; exact selected sequence/payload references are in the companion JSON. Public verification command used native Node with the offline guard:
 
 ```sh
-/usr/bin/node --import /mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/workflow-audit/offline-guard.mjs packages/ledger/status.mjs verify
+/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs packages/ledger/status.mjs verify
 ```
 
 ### 2. Current routing choices are explicitly provisional on quality and useful cost
@@ -121,7 +121,7 @@ A requirement for three independent reviewers, where adopted as owner policy, is
 
 ### 3. The retained scheduler experiment is a useful negative result
 
-The selected historical report is `/home/colchis/Projects/reports/ophanim-admission-2026-11-15.4yHgI7/admission-proof.json`. Its retained comparison and the investigation's `controlled-replay-verification.json` agree on:
+The selected historical report is `${USER_HOME}/Projects/reports/ophanim-admission-2026-11-15.4yHgI7/admission-proof.json`. Its retained comparison and the investigation's `controlled-replay-verification.json` agree on:
 
 - Baseline conservative completion 1910 ms; candidate 1481 ms; conservative local gain 429 ms.
 - Trial cost 24,046 ms; forecast gross gain 8580 ms across 20 matching convergences; forecast net −15,466 ms; realized net −24,046 ms.

@@ -557,7 +557,7 @@
     "recordedAtUtc": "2026-11-17T04:50:43.797838+00:00",
     "source": {
       "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
-      "worktree": "/mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/ophanim-current-policy-audit",
+      "worktree": "${AUDIT_WORKSPACE}/work/ophanim-current-policy-audit",
       "contentPins": [
         {
           "path": "README.md",
@@ -678,61 +678,61 @@
       "publicTrackedInventory": true,
       "selectedLocalRetainedReports": [
         {
-          "path": "/home/colchis/Projects/reports/ophanim-investigation-2026-11-15/independent-verification.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-investigation-2026-11-15/independent-verification.json",
           "sha256": "c775ad3c1ecb7a14c82254bdc980cd432a5500524d14e83536e90dc71fbffbc1",
           "bytes": 578,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-investigation-2026-11-15/controlled-replay-verification.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-investigation-2026-11-15/controlled-replay-verification.json",
           "sha256": "349556ecca858bce1efc79895084241e44ee4c0cc5b26a9688616460985fa177",
           "bytes": 1561,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-investigation-2026-11-15/latency-receipt.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-investigation-2026-11-15/latency-receipt.json",
           "sha256": "0eb81483f7415542d454aa35a4168f9e951559bcd838ba28a73c8db39d3cec63",
           "bytes": 125768,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-measurement-2026-11-15/independent-measurement-verification.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/independent-measurement-verification.json",
           "sha256": "cd18ffb91c80d2f885bf1c5aad1e80c999cde9ce0dde32f72555900270eb6915",
           "bytes": 8505,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-measurement-2026-11-15/qualification-result.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/qualification-result.json",
           "sha256": "95485b5b206312c75c2610e064f1adc4a923d24c5fd6e5297aade7a35fa04d6d",
           "bytes": 47774,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-measurement-2026-11-15/retained-baseline-summary.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/retained-baseline-summary.json",
           "sha256": "c67f624a7db7f072da7809a8c7cb64d5228106aec5e413a155ea59d78edbb4f5",
           "bytes": 1101,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-measurement-2026-11-15/restart-receipt.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/restart-receipt.json",
           "sha256": "ea1da835c13f81f0da530d098ea02c86fb52ac39c8a53d8d5a149f3325d79a25",
           "bytes": 534,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-admission-2026-11-15.4yHgI7/admission-proof.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-admission-2026-11-15.4yHgI7/admission-proof.json",
           "sha256": "f05cbab3c4cd47d1cc415e146c1c6eee190e9d90fd76927c333b1f2fd14551b4",
           "bytes": 39981,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-measurement-2026-11-15/evidence/scopes/edb9cb38b61c7adb0d9fd9d5ef05f62619dfad69d23b84c17b1261c51554d54f/measurements/099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70/samples.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/evidence/scopes/edb9cb38b61c7adb0d9fd9d5ef05f62619dfad69d23b84c17b1261c51554d54f/measurements/099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70/samples.json",
           "sha256": "ebcc52f9efe5a084080f1ffb21d7c03a386fd136222c78ddcafa738147da83fe",
           "bytes": 18712,
           "source": "local retained report, not tracked public record"
         },
         {
-          "path": "/home/colchis/Projects/reports/ophanim-measurement-2026-11-15/evidence/scopes/edb9cb38b61c7adb0d9fd9d5ef05f62619dfad69d23b84c17b1261c51554d54f/measurements/099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70/qualification.json",
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/evidence/scopes/edb9cb38b61c7adb0d9fd9d5ef05f62619dfad69d23b84c17b1261c51554d54f/measurements/099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70/qualification.json",
           "sha256": "432c18caae7030f0532c5541df650f0e7831d0cae1b0169e9419a9ca471d7f36",
           "bytes": 30881,
           "source": "local retained report, not tracked public record"
@@ -748,7 +748,7 @@
     "publicLedger": {
       "anchor": "sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d",
       "verified": true,
-      "verificationCommand": "/usr/bin/node --import /mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/workflow-audit/offline-guard.mjs packages/ledger/status.mjs verify",
+      "verificationCommand": "/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs packages/ledger/status.mjs verify",
       "verificationOutput": "ok: 57 items, 81 entries, head sha256:76892bd2bff0f050c01591dc42b0241112c350d86df14f0ec94e676fd4b60503",
       "entries": 81,
       "kindCounts": {
@@ -1817,7 +1817,7 @@
       }
     },
     "repair": {
-      "worktree": "/mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/ophanim-learning-delta-audit",
+      "worktree": "${AUDIT_WORKSPACE}/work/ophanim-learning-delta-audit",
       "commit": "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54",
       "scope": "Fail closed while comparison/decision qualification is unimplemented; no research pipeline added",
       "changes": [
@@ -1842,7 +1842,7 @@
       "finalFocusedTests": {
         "passed": 36,
         "failed": 0,
-        "command": "/usr/bin/node --import /mnt/c/Users/dsmce/Documents/Codex/2026-11-16/he/work/workflow-audit/offline-guard.mjs --test packages/ledger/tests/append-policy.test.mjs packages/ledger/tests/chain.test.mjs pantheon/tests/practice-promotion-gate.test.mjs pantheon/tests/ledger-practice.test.mjs ophanim/efficiency/practice.test.mjs"
+        "command": "/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs --test packages/ledger/tests/append-policy.test.mjs packages/ledger/tests/chain.test.mjs pantheon/tests/practice-promotion-gate.test.mjs pantheon/tests/ledger-practice.test.mjs ophanim/efficiency/practice.test.mjs"
       },
       "historicalFixture": {
         "schema": "pantheon.fixture.unqualified-practice-promotion/v1",
@@ -2071,5 +2071,6 @@
       "Preserve worker escalation and actual-answerer handoff evidence.",
       "Do not adopt vendor co-seating as a universal architecture requirement."
     ]
-  }
+  },
+  "public_path_note": "Paths use portable ${USER_HOME} and ${AUDIT_WORKSPACE} aliases. Exact original source/report hashes remain pinned; the owner evidence bundle preserves original local provenance."
 }
