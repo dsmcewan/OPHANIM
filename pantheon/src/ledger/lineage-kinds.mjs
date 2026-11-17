@@ -41,8 +41,33 @@ function lineageOf(view, hashes) {
     const e = view.entry(h);
     if (!e) continue;
     if (e.kind === 'turn' || e.kind === 'review') { out.push({entry: e, payload: view.payload(h)}); queue.push(...e.derived_from); }
+    else if (e.kind === 'cycle') queue.push(...e.derived_from);    // a cycle's lineage is the author turns it cites
   }
   return out;
+}
+
+// A review of a cycle (cycle-kinds.mjs): never by the lab that authored the change, answered by a turn of
+// the same seat that was given exactly the cycle's prompt, one review per lab, and none once it is closed.
+function cycleReview(e, view, cycle, lab) {
+  const c = view.payload(cycle), p = e.payload;
+  if (c.author_labs.includes(lab)) return `the ${lab} lab authored the change under review`;
+  const t = typeof p.turn === 'string' ? view.entry(p.turn) : null;
+  if (t?.kind !== 'turn' || t.author.key_id !== e.author.key_id || !t.derived_from.includes(cycle)) return 'a cycle review names the turn that answered it, by the same seat, on this cycle';
+  const a = view.payload(p.turn);
+  if (a.prompt_sha !== c.prompt_sha) return 'the answering turn was not given the cycle\'s change and brief';
+  if ((a.response_id ?? null) !== (p.response_id ?? null) || a.requested_model !== p.model || (a.served_model ?? null) !== (p.served_model ?? null)) {
+    return 'the review does not name its answering turn\'s response and model';
+  }
+  const hs = view.entries();
+  if (hs.some(h => view.entry(h).kind === 'cycle.close' && view.entry(h).derived_from.includes(cycle))) return 'the cycle is closed';
+  for (const h of hs) {
+    const x = view.entry(h);
+    if (x.kind === 'review' && x.derived_from.includes(cycle)) {
+      const q = view.payload(h);
+      if (labOf(q.seat.vendor, q.served_model ?? q.model) === lab) return `the ${lab} lab has already reviewed this cycle`;
+    }
+  }
+  return null;
 }
 
 export function lineageKinds() {
@@ -72,12 +97,15 @@ export function lineageKinds() {
     review: {
       authors: () => true,
       validate: p => (seatShape(p?.seat) && ['approve', 'request_changes'].includes(p.verdict) && typeof p.model === 'string'
+        && (p.turn === undefined || typeof p.turn === 'string')
         ? null : 'a review names its seat, model and verdict'),
       rederive: (e, view) => {
         const p = e.payload;
         if (e.author.key_id !== seatKeyId(p.seat)) return `signed by ${e.author.key_id}, not by the reviewing seat`;
         const targets = e.derived_from.filter(h => view.entry(h)?.kind === 'turn');
-        if (!targets.length) return 'a review cites the turns it reviews';
+        const cycles = e.derived_from.filter(h => view.entry(h)?.kind === 'cycle');
+        if (!targets.length && !cycles.length) return 'a review cites the turns it reviews';
+        if (cycles.length > 1) return 'a review cites at most one cycle';
         const lab = labOf(p.seat.vendor, p.served_model ?? p.model);
         const mine = lineageKey(p.seat.vendor, p.response_id);
         for (const {entry, payload: t} of lineageOf(view, e.derived_from)) {
@@ -85,7 +113,7 @@ export function lineageKinds() {
           if (t.seat && t.reply_sha && labOf(t.seat.vendor, t.served_model ?? t.requested_model) === lab) return `the ${lab} lab is in the lineage of what it reviews`;
           if (mine && lineageKey(t.seat.vendor, t.response_id) === mine) return 'the review response is part of the lineage it reviews';
         }
-        return null;
+        return cycles.length ? cycleReview(e, view, cycles[0], lab) : null;
       },
     },
   };
@@ -141,9 +169,10 @@ export function lineageRecorder({ledger, operator, order, keys: store = null}) {
       }
       return out;
     },
-    recordReview({seat, model, served_model = null, response_id = null, verdict, findings = '', targets}) {
+    // `turn`: for a cycle review (cycle-kinds.mjs), the seat's turn that answered it.
+    recordReview({seat, model, served_model = null, response_id = null, verdict, findings = '', targets, turn = undefined}) {
       const s = signerFor(seat);
-      return ledger.append({kind: 'review', payload: {seat, model, served_model, response_id, verdict, findings},
+      return ledger.append({kind: 'review', payload: {seat, model, served_model, response_id, verdict, findings, ...(turn !== undefined ? {turn} : {})},
         author: {key_id: s.key_id}, signer: s, order, derivedFrom: targets}).hash;
     },
   };

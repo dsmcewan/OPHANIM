@@ -466,3 +466,60 @@ The dependency ran both ways: Pantheon dynamic-imported `ophanim/ledger/system.m
   - Pantheon: 812 -> 836 pass (24 moved in), plus the 1 known environment failure;
   - `packages/ledger`: 21 pass (14 moved in, 7 added);
   - model client: 48 pass.
+
+## Review every cycle (2026-11-17)
+
+The cycle review (items 2 and 5-6) found that a cycle checked only by its author shipped a regression, and the layered review caught it. The review layer now runs at the end of every cycle, as ledger entries under the cold-review rules.
+
+**Kinds** (`pantheon/src/ledger/cycle-kinds.mjs`, plus `review` in `lineage-kinds.mjs`; registered in `pantheonLedgerKinds`, so also in `systemKinds`).
+
+| Kind | Author | Payload | Re-derives by |
+|---|---|---|---|
+| `cycle` | controller | `{scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}` | <ul><li>`base` and `head` differ.</li><li>It cites only author turns and the previous cycle's close.</li><li>Cycles of one scope form a chain: `base` is the previous `head`, and the previous cycle is closed. No commit range is skipped, and no cycle opens over an open one.</li></ul> |
+| `review` (extended) | reviewing seat | adds `turn`, the seat's answering turn | <ul><li>Cites the cycle, and so the author turns. Cold review walks through the cycle: no lab, seat or response from that lineage may review.</li><li>Never the cycle's `author_labs`.</li><li>The answering turn is the same seat's, cites the cycle, and was given exactly the cycle's prompt (`prompt_sha`). Its response and model match the review's.</li><li>One review per lab per cycle, and none after the close.</li></ul> |
+| `finding` | controller | `{index, severity, file, line, claim, reproduction}` | <ul><li>It must equal finding `index` of the reviewer's signed reply, as `parseReview` reads it. The controller cannot invent or reword one.</li><li>`file` is in the change.</li><li>Each finding is recorded once.</li><li>`reproduction` is `{kind: command\|test, run}`, or `null`, which is recorded as unreproduced.</li></ul> |
+| `finding.resolution` | controller | `{status: fixed, fix: {commit, test, before, after}}` or `{status: deferred, reason}` | <ul><li>A fix names a commit other than base and head.</li><li>`before` is the reviewed head with a non-zero exit. `after` is the fix commit with exit 0.</li><li>A deferral gives a reason.</li><li>One resolution per finding, none after the close.</li></ul> |
+| `cycle.close` | controller | `{outcome, reviews, labs, findings: {total, fixed, deferred, unreproduced}}` | <ul><li>Recomputed from the cycle's entries and compared canonically.</li><li>It closes only when all `reviewers` reviews are recorded on distinct labs, every reported finding is recorded, and every finding is fixed or deferred.</li><li>`outcome` is derived, not chosen: `verified` only when no finding lacks a reproduction.</li></ul> |
+
+**The review.** `reviewCycle({ledger, change, seats, turn, n = 3})` (`pantheon/src/ledger/review-cycle.mjs`):
+- **Seats.** By default, `reviewSeats` takes the reviewer table in order and adds other chairs for a missing lab. It picks `n` distinct labs, avoiding the author's. With an Anthropic author, that gives xai, google and openai.
+- **Prompt.** Every reviewer gets the same prompt: the fixed `REVIEW_BRIEF`, then the change.
+- **Recording.** Each reply is recorded as a turn, then a review citing the cycle (and any author turns), then its findings.
+- **Failure.** A seat that fails is reported, and the cycle cannot close.
+- **`turn`.** It is injected. Tests use scripted reviewers. The CLI uses live SDK turns, imported at the edge.
+- **Parsing fails closed.** A reply that is not the required JSON, or a request for changes with no finding, becomes one blocking, unreproduced finding.
+
+**How it runs by default.** At a cycle boundary, the loop runs `npm run review-cycle` (`node pantheon/bin/pantheon-review-cycle.mjs`).
+
+| Step | Command |
+|---|---|
+| Review the cycle | `npm run review-cycle -- [--head HEAD]`. Without `--base`, the cycle starts where the last one ended. Only a scope's first cycle needs `--base`. |
+| Fix a finding | `... fix --finding H --commit C --test CMD --before-exit N --after-exit 0` |
+| Defer a finding | `... defer --finding H --reason TEXT` |
+| Close | `... close`. This exits 1 with the reason while the cycle cannot close. |
+| Inspect | `... status` |
+
+- **Ledger.** `PANTHEON_CYCLE_LEDGER`, otherwise `<git common dir>/pantheon-cycles`: one ledger per repository, shared by its worktrees and not committed.
+- **Defaults.** The author lab is `anthropic`, the lab the loop's controller runs on; set it with `--author-lab`. The scope is the repository's directory name.
+- **Not skippable.** The next cycle's review is refused while this cycle is open, so a skipped review blocks the next cycle.
+
+*Check.*
+- `pantheon/tests/ledger-review-cycle.test.mjs` (9 tests, scripted reviewers):
+  - three labs recorded, each review citing the cycle, signed by its answering seat and given the cycle's prompt;
+  - cycles chain (default base, refused while open, refused over a gap);
+  - same lab refused: two seats on one lab, the author's lab, a served model from the author's lab, a second review from a lab, a turn given another prompt, and an openai author turn in the lineage;
+  - an unreproduced finding closes only as `unverified`, and a forged `verified` close is refused;
+  - fixes without fail-before, on the wrong commit, or still failing are refused; a proper fix closes `verified`;
+  - refused: forged closes (tampered counts, a dropped review, extra citations, a seat key, a second close), invented or reworded findings, an omitted finding, and late reviews or resolutions;
+  - the CLI end to end on a temporary git repository.
+- Suites:
+  - `npm run test:proof`: 152 of 152, with TELOS at the pin;
+  - Pantheon: 846 pass (9 added), plus the 1 known environment failure;
+  - `packages/ledger`: 21 pass;
+  - model client: 48 pass.
+
+**Limits.**
+- **Tests are not run at re-derive time.** The fix's `before` and `after` exits are data signed by the controller and checked only for presence and consistency. The ledger does not check that the fix commit descends from the head.
+- **The diff is bound by digest only.** `diff_sha` and `prompt_sha` are recorded, but the diff text is not kept on the ledger.
+- **Wiring.** Nothing in `runOpenItem` calls `reviewCycle`. The cycle boundary is the loop's step, run through the CLI, and the chain refusal is what makes skipping it visible.
+- **No live run yet.** The live `turn` (`sendTurn` per vendor) has not met a provider; the tests use scripted reviewers.
