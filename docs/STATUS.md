@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:0b334d16a1a86684a8815867f8baca91674938ca3e144e2c3956669db9ca878e` · 48 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:8ac9bee9f51287d45c6c3a2caab42349cb0bf00438f5e241bdf42f72138145cc` · 51 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 25 · In progress: 0 · Ready: 3 · On Hold: 10.
+**Counts:** Resolved: 25 · In progress: 3 · Ready: 0 · On Hold: 10.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -22,9 +22,9 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
 | **Hardware or remote signer** (`signer`) | On Hold | decision | which signer holds operator keys is a custody decision | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
-| **One ledger across boards and domains** (`board-resolver`) | Ready |  | gate and contribution kinds resolve their own board per entry; and a Pantheon run on a ledger that also holds OPHANIM efficiency entries is refused today (closed registry) unless OPHANIM's recorder is passed. Dependencies converged | 2026-11-17 |
-| **Gate verdicts recorded on the run path** (`gate-on-run-path`) | Ready |  | the gate kind and its lease citations exist; runOpenItem does not yet record a gate entry at ship | 2026-11-17 |
-| **Review layer every cycle** (`review-every-cycle`) | Ready |  | review entries under cold-review rules by default; dependencies converged | 2026-11-17 |
+| **One ledger across boards and domains** (`board-resolver`) | In progress |  | per-entry board resolution for gate and contribution; a principled answer for ledgers holding several domains of kinds | 2026-11-17 |
+| **Gate verdicts recorded on the run path** (`gate-on-run-path`) | In progress |  | runOpenItem records the ship verdict as a gate entry citing its lease entries | 2026-11-17 |
+| **Review layer every cycle** (`review-every-cycle`) | In progress |  | cycle, review and finding entries; independent reviewers on distinct labs at every cycle end; close re-derives | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
 | **Six models on the shared client** (`frontier-move`) | Resolved |  | requests unchanged (providerDefaults); remaining models held (direct-path-xai, gemini-routing) | 2026-11-17 |
