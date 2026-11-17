@@ -40,11 +40,12 @@ tickets/<item>.json --> run <item> --> evidence bundle + UNSIGNED proposal --> a
    `OPHANIM_LEDGER`); the shipped artifacts, re-certified from the board, committed on `pantheon/<item>`
    from the repository's `HEAD` without touching the working tree (refused if a file's base version is not
    what the implementer was shown, or if the ticket's `copy` paths have uncommitted changes); then
-   `reviewCycle` over `base..head` with `n = 3` reviewers on distinct labs, on the same run ledger. The
-   planner's lab is excluded too when the seating table has enough labs, and the author turns are then
-   cited, so the cold-review rule is re-derived over their lineage; when it does not (an Anthropic planner
-   and an OpenAI implementer leave only two other labs), only the implementer's lab is excluded, the author
-   turns are not cited, and the bundle says so. Reviewer turns are injectable (`--turn MODULE`; default the
+   `reviewCycle` over `base..head` with `n = 3` reviewers on distinct labs, on the same run ledger. Every
+   lab that contributed to the change (`review/scope.mjs`, scope `change`: plan, work, and critiques that
+   reached a revision) is excluded, and the author turns are cited, so the cold-review rule is re-derived
+   over their lineage. When the configured pool cannot supply three labs outside the contributors (for
+   example a model-written plan from Anthropic and OpenAI work leave only two other labs), nothing is
+   narrowed: the work and evidence are kept and the review is `REVIEW_CAPACITY_PENDING`. Reviewer turns are injectable (`--turn MODULE`; default the
    live SDK turns, `pantheon/bin/cycle-review-http-turn.mjs` for plain HTTPS).
 6. **Findings.** With no findings the cycle closes (`verified`) at once. Otherwise each finding is fixed
    (a later commit and a test that failed before and passes after) or deferred (with a reason) on the run

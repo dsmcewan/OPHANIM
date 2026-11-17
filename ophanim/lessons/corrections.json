@@ -31,6 +31,14 @@
           "date": "2026-11-17",
           "ref": "f96531a",
           "note": "reservation put planner and maker on openai; doc said only four labs exist"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "ophanim/operate/stages.mjs (delegated stage executors, before d609b7a)",
+          "note": "a delegated implementation moved the planner into the implementer's lab to leave the coordinated review its pool; caught in self-review before push and removed; the stage tests now show the four-lab capacity pending directly; ophanim/operate/stages.test.mjs 'the four configured labs: ...' now fails on that code. Not counted as mechanism success: no registered detector caught it",
+          "detected_by": "integrator review of a delegated diff; no executable detector fired (the stage tests passed with the co-seated planner)",
+          "corrected_by": "integrator"
         }
       ],
       "fixed_in": "a73d185",
@@ -288,6 +296,27 @@
         "kind": "test",
         "file": "pantheon/tests/review-capacity.test.mjs",
         "name": "strict: two contributing labs leave the configured cycle pool short"
+      }
+    },
+    {
+      "id": "push-gated-on-wrong-signal",
+      "class": "A commit or push is chained on a command's exit status that does not reflect the test result (for example grep finding a summary line), so a red suite is pushed.",
+      "source": "self-observed 2026-11-17: 99f0545 pushed with a failing test; CI (WF4) caught it",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "99f0545",
+          "note": "the chain was gated on grep's exit status; the backlog JSON carried an absolute key path and a proof test failed",
+          "detected_by": "CI after the push (qualification.yml)",
+          "corrected_by": "integrator"
+        }
+      ],
+      "fixed_in": "b8bf3d9 (the path); the commit chain is now gated on the parsed fail count being 0",
+      "detector": {
+        "kind": "none",
+        "why": "session conduct before push; CI (qualification.yml, npm run test:proof) detected it only after the push",
+        "next": "gate every commit and push on the parsed '# fail' counts of the suites being 0, never on a pipeline's exit status"
       }
     }
   ]
