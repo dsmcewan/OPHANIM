@@ -25,6 +25,14 @@ import { candidatesFor, selectFor, shouldFallThrough, SEATING, DIFFICULTY } from
 import { isFrontier } from "../../../packages/model-client/index.mjs";
 
 export const PROTOCOL = "pantheon.escalation/v1";
+// v2 separates PERMISSION to revise from the AVAILABILITY of a stronger seat. Under v1 a rejection by the cross-lab
+// checker, when the seat's effort is at its top and no higher rung exists, is a terminal `stop`: the feedback is
+// dropped. Under v2 that case is `revise`: the SAME seat revises with the findings (the same model, not a new
+// identity), still inside the escalation budget (`maxSteps`) and the run's revision limit. Every other decision is
+// v1's. A record names the protocol it was decided under and is re-derived under that protocol, so a v1 record
+// verifies exactly as before.
+export const PROTOCOL_V2 = "pantheon.escalation/v2";
+export const PROTOCOLS = Object.freeze([PROTOCOL, PROTOCOL_V2]);
 export const MAX_STEPS = 4;
 const TRUNCATED = new Set(["max_tokens", "MAX_TOKENS", "incomplete", "max_output_tokens"]);
 // The record digest is CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order it was always computed in.
@@ -85,7 +93,7 @@ export function classifyOutcome(outcome) {
  * The next step for a seat. `seat` is {vendor, model, effort?, output?}; `steps` is how many
  * escalation steps this item has already taken. Returns a decision; it never performs one.
  */
-export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS, facts = FACTS, seating = SEATING }) {
+export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS, facts = FACTS, seating = SEATING, protocol = PROTOCOL }) {
   const { cause, why, retry_after_s } = classifyOutcome(outcome);
   const from = { vendor: seat.vendor, model: seat.model, effort: seat.effort ?? null, output: seat.output ?? null };
   const decide = (action, to, reason, basis = null) => ({ action, cause, from, to, why: `${why}; ${reason}`, basis });
@@ -130,13 +138,20 @@ export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS,
     return decide("step_rung", { vendor: next.vendor, model: next.model, effort: null, output: from.output },
       `${seat.model}'s effort dial is ${dial}; up a rung to ${next.model}`);
   }
+  if (protocol === PROTOCOL_V2 && outcome.kind === "critique") {
+    return decide("revise", from, `${seat.model}'s effort dial is ${dial} and there is no higher banded rung for ${role}: the same seat revises with the ` +
+      `findings (step ${steps + 1} of ${maxSteps}); a stronger seat being unavailable is not a reason to drop the feedback`);
+  }
   return decide("stop", null, `${seat.model}'s effort dial is ${dial} and there is no higher banded rung for ${role}`);
 }
 
 /** The decision as a record: inputs, decision, and a digest a later step checks against the trail. */
 export function escalationRecord(input) {
-  const decision = nextStep(input);
-  const body = { schema: PROTOCOL, role: input.role, seat: input.seat, outcome: input.outcome, steps: input.steps ?? 0, decision };
+  const protocol = input.protocol ?? PROTOCOL;
+  if (!PROTOCOLS.includes(protocol)) throw new Error(`escalationRecord: unknown protocol "${protocol}"`);
+  const decision = nextStep({ ...input, protocol });
+  const { protocol: _p, ...rest } = input;
+  const body = { schema: protocol, role: rest.role, seat: rest.seat, outcome: rest.outcome, steps: rest.steps ?? 0, decision };
   return { ...body, digest: digest(body) };
 }
 
@@ -152,8 +167,9 @@ export function verifyEscalation(records, { facts = FACTS, seating = SEATING } =
   for (const [i, stored] of records.entries()) {
     const r = Object.fromEntries(Object.entries(stored).filter(([k]) => !RECORD_NOTES.includes(k)));
     const { digest: d, ...body } = r;
-    if (r.schema !== PROTOCOL || digest(body) !== d) throw new Error(`escalation record ${i} is not intact`);
-    const again = nextStep({ role: r.role, seat: r.seat, outcome: r.outcome, steps: r.steps, facts, seating });
+    if (!PROTOCOLS.includes(r.schema) || digest(body) !== d) throw new Error(`escalation record ${i} is not intact`);
+    // Re-derived under the protocol the record names.
+    const again = nextStep({ role: r.role, seat: r.seat, outcome: r.outcome, steps: r.steps, facts, seating, protocol: r.schema });
     if (stable(substance(again)) !== stable(substance(r.decision))) throw new Error(`escalation record ${i} does not follow from its inputs`);
     if (i > 0 && r.steps !== records[i - 1].steps + (["hold", "wait", "stop"].includes(records[i - 1].decision.action) ? 0 : 1)) {
       throw new Error(`escalation record ${i} step count does not continue the trail`);

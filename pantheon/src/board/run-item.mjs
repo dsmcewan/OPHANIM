@@ -38,7 +38,8 @@ import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder
 import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
-import { escalationRecord } from "../route/protocol.mjs";
+import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
+import { currentPolicy as currentIdentityPolicy, policyDigest as identityPolicyDigest, contributorKeys, candidateRefusal, reviewerRefusal, resolveModel } from "../review/identity.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
@@ -292,6 +293,19 @@ export async function runOpenItem(spec, opts = {}) {
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
   // `retryStopped: "<reason>"` (resume only): the explicit action that lifts recorded escalation stops.
+  // The escalation protocol the run decides a checker's rejection under (route/protocol.mjs). Default v1, as always;
+  // "pantheon.escalation/v2" lets the same seat revise when no stronger one exists (the lifecycle asks for it).
+  const ESCALATION = opts.escalation ?? null;
+  if (ESCALATION !== null && !PROTOCOLS.includes(ESCALATION)) throw new Error(`unknown escalation protocol "${ESCALATION}"`);
+  // IN-RUN REVIEW INDEPENDENCE. Default: the lab rule, as always (a reviewer shares no lab with a contribution to the
+  // bytes it judges). `independence: "model"` (the lifecycle passes it only when the model rule is in force) seats the
+  // in-run checker by MODEL identity instead, under a pinned identity policy: no reviewer that is a contributing model
+  // -- the worker's, or a reviewer's whose findings reached a revision -- labs that did not contribute first, then a
+  // non-contributing model of a contributing lab. Its reviews are recorded with that policy, and the ledger checks
+  // them under it (lineage-kinds.mjs). The run records which rule it ran under.
+  const IN_RUN_MODEL = opts.independence === "model";
+  if (opts.independence !== undefined && !["lab", "model"].includes(opts.independence)) throw new Error(`unknown in-run independence "${opts.independence}"`);
+  const ID_POLICY = IN_RUN_MODEL ? opts.identityPolicy ?? currentIdentityPolicy() : null;
   const RETRY_STOPPED = typeof opts.retryStopped === "string" && opts.retryStopped.trim() ? opts.retryStopped.trim() : null;
   if (opts.retryStopped !== undefined && (!RETRY_STOPPED || !RESUME)) throw new Error("retryStopped is a stated reason, and applies only to a resume");
   // `maxProviderCalls`: a bound on the provider calls this invocation may make, checked at the generation
@@ -1343,14 +1357,26 @@ export async function runOpenItem(spec, opts = {}) {
       for (let k = 0; k < need; k++) {
       let reviewChoice;
       // The operator's reviewer seat, if any, is the first member; the others are the selector's, across labs.
-      try { reviewChoice = choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], chars: reviewChars,
-        ...(k ? { roleOverride: null } : {}) }); }
+      try {
+        if (IN_RUN_MODEL) {
+          // By model: every candidate of the role, minus contributing models (and unresolved ones); untouched labs first.
+          const keys = contributorKeys(scope.contributions, ID_POLICY);
+          const all = choose("reviewer", { avoid: usedVendors, avoidLabs: usedLabs, chars: reviewChars, ...(k ? { roleOverride: null } : {}) });
+          const ok = all.candidates.filter(c => c && !candidateRefusal({ vendor: c.vendor, model: c.model }, keys, ID_POLICY));
+          const touched = c => keys.contributing_labs.includes(resolveModel(c.vendor, c.model, ID_POLICY).lab);
+          const ordered = [...ok.filter(c => !touched(c)), ...ok.filter(touched)];
+          if (!ordered.length) throw new Error(`no reviewer model is left that did not contribute to these bytes (contributors: ${keys.models.join(", ") || "none"}` +
+            `${keys.unresolved.length ? `; unresolved: ${keys.unresolved.map(u => u.model).join(", ")}` : ""})`);
+          reviewChoice = { ...all, seat: ordered[0], candidates: ordered, selection: ordered[0].selection };
+        } else reviewChoice = choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], chars: reviewChars,
+          ...(k ? { roleOverride: null } : {}) });
+      }
       catch (e) {
         if (k) throw panelRefusal(built, `reviewer ${k + 1} has no candidate after avoiding labs ${[...avoidLabs, ...usedLabs].join(", ")}: ${e.message}`);
         throw new Error(`no clean reviewer: no reviewer candidate left after avoiding ${avoid.join(", ")} (labs ${avoidLabs.join(", ")}): ${e.message}`);
       }
       const pairing = { reviewer: reviewChoice.seat.vendor, why: reviewChoice.selection.reason };
-      assertReviewCutsAcross({ contributors: scope.contributions, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
+      if (!IN_RUN_MODEL) assertReviewCutsAcross({ contributors: scope.contributions, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
       let seat = { vendor: pairing.reviewer, seat_id: toReview.length === 1 ? `${pairing.reviewer}-critique` : `${pairing.reviewer}-critique-${built.sl.slot}`, mode: "critique", occupancy_gen: 1 };
       let rref = `refs/seat/${seat.seat_id}/wip`;
       await board.refs.branch({ name: rref, from: built.wip, author: seat });
@@ -1365,15 +1391,34 @@ export async function runOpenItem(spec, opts = {}) {
         "behaviour it broke, or a case the acceptance test does not cover that would fail. If the executed acceptance failed, " +
         "you must request changes. End your reply with a line reading exactly `VERDICT: approve` or `VERDICT: request_changes`.");
       assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
-      const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
-      // Law 3 on the reviewer that actually answered, not the one paired in advance.
-      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, contributors: scope.contributions });
+      let reviewed;
+      if (IN_RUN_MODEL) {
+        // ADMISSION OF THE ANSWER, by the model that answered. An answer whose serving model is unnamed or unresolved, or
+        // is a contributor, is not a review: it is kept (the turn is on the ledger, and run.review_rejections names the
+        // seat, the serving model and the reason), and the next eligible candidate is asked.
+        const keys = contributorKeys(scope.contributions, ID_POLICY);
+        for (const cand of reviewChoice.candidates) {
+          const got = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: { ...reviewChoice, seat: cand, candidates: [cand], selection: cand.selection }, extra: { tokens: 4000 } });
+          const servedBy = ledgerTurns.get(p.prompt)?.served_model ?? run.turns.findLast(t => t.purpose === "critique" && t.vendor === got.seat.vendor && t.model === got.seat.model)?.served_model ?? null;
+          const why = reviewerRefusal({ vendor: got.seat.vendor, model: got.seat.model, served_model: servedBy }, keys, ID_POLICY);
+          if (!why) { reviewed = got; break; }
+          (run.review_rejections ??= []).push({ slot: built.sl.slot, rev, vendor: got.seat.vendor, model: got.seat.model, served_model: servedBy, why });
+          progress({ event: "review.rejected", seat: got.seat.vendor, slot: built.sl.slot, detail: why.slice(0, 200) });
+          record();
+        }
+        if (!reviewed) throw Object.assign(new Error(`no reviewer model is left whose answer could be admitted for ${built.sl.slot} ` +
+          `(${(run.review_rejections ?? []).filter(x => x.slot === built.sl.slot && x.rev === rev).map(x => `${x.vendor}/${x.model}: ${x.why}`).join("; ").slice(0, 400)})`), { code: "REVIEW_NOT_ADMITTED" });
+      } else {
+        reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
+        // Law 3 on the reviewer that actually answered, not the one paired in advance.
+        assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, contributors: scope.contributions });
+      }
       const reviewedLab = labOf(reviewed.seat.vendor, reviewed.seat.model ?? null);
       if (usedLabs.includes(reviewedLab) || usedVendors.includes(reviewed.seat.vendor)) {
         throw panelRefusal(built, `reviewer ${k + 1} answered from ${reviewed.seat.vendor}/${reviewed.seat.model}, a lab already on the panel`);
       }
       if (reviewed.seat.vendor !== seat.vendor) {
-        assertReviewCutsAcross({ contributors: scope.contributions, producer: built.seat, reviewer: reviewed.seat });
+        if (!IN_RUN_MODEL) assertReviewCutsAcross({ contributors: scope.contributions, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
         rref = `refs/seat/${seat.seat_id}/wip`;
         await board.refs.branch({ name: rref, from: built.wip, author: seat });
@@ -1404,7 +1449,8 @@ export async function runOpenItem(spec, opts = {}) {
       if (LEDGER?.recordReview && workTurn && critiqueTurn) {
         LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique@${reviewed.seat.model}`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
           model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
-          verdict: memberVerdict, findings: memberFindings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
+          verdict: memberVerdict, findings: memberFindings.map(f => f.note).join("\n"), targets: [workTurn.hash],
+          ...(IN_RUN_MODEL ? { identity_policy: ID_POLICY } : {}) });
       }
       const c = await publish({ ...board, ref: rref, author: seat, msg: "review",
         entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict: memberVerdict, findings: memberFindings } }] });
@@ -1427,7 +1473,7 @@ export async function runOpenItem(spec, opts = {}) {
       } else if (verdict === "request_changes") {
         // The verdict is an outcome for the MAKER's seat: the protocol decides its next revision, which a
         // resume then runs (a passing acceptance alone would otherwise just re-review the same bytes).
-        const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0,
+        const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0, ...(ESCALATION ? { protocol: ESCALATION } : {}),
           seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null } });
         const { action } = rec.decision;
         applyDecision(built, rec, rev);

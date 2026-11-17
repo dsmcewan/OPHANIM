@@ -54,14 +54,14 @@ export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => n
 }
 
 /** The chain of passed stages that rests on `plan`, in order, following handoffs (each must be the next stage). */
-function chainFrom(plan, stages) {
+function chainFrom(plan, stages, usable = () => true) {
   const chain = [plan];
   for (;;) {
     const last = chain.at(-1);
     const nextName = STAGES[STAGES.indexOf(last.stage) + 1];
     if (!nextName) break;
     const after = stages.filter(s => s.handoff?.from === last.hash && s.stage === nextName);
-    const passed = after.filter(s => s.status === 'passed' && s.inputs.upstream === outputsDigest(last.outputs)).at(-1);
+    const passed = after.filter(s => s.status === 'passed' && s.inputs.upstream === outputsDigest(last.outputs) && usable(s)).at(-1);
     if (!passed) break;
     chain.push(passed);
   }
@@ -73,11 +73,25 @@ function chainFrom(plan, stages) {
  * `depStatus(id)` the latest status of a dependency or null; `ticket` the readTicket result ({spec, digest, path}
  * or {why}) or null; `stages` this item's work.stage records in ledger order; `activeClaim` the live claim or null.
  */
-export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now(), recovery = null, evidenceStable = null}) {
+export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now(), recovery = null, evidenceStable = null, reassessments = []}) {
   const base = {item: item.item, state: item.state};
+  // REASSESSMENT (work.reassessment): a later identity policy found that a recorded review of a cycle would not
+  // qualify. That is evidence against reusing the approval: a stage whose approval came from such a cycle, and every
+  // stage resting on it, is not reused. Nothing recorded is changed; the cycle still verifies under its own policy.
+  const disqualified = new Map(reassessments.filter(r => (r.findings ?? []).length).map(r => [r.cycle, r]));
+  const cyclesOf = s => (s.stage === 'plan' ? [s.outputs?.plan_review?.cycle] : s.stage === 'review' ? [s.outputs?.cycle] : []).filter(Boolean);
+  const hit = s => cyclesOf(s).map(c => disqualified.get(c)).find(Boolean) ?? null;
   if (activeClaim) return {...base, gate: 'claimed', reason: `claimed: ${activeClaim.stage}, attempt ${activeClaim.attempt} (lease)`, claim: activeClaim.hash};
   if (item.state === 'Resolved') {
     const ev = completionEvidence(item);
+    // A Resolved item whose completion evidence rests on a disqualified review NEEDS RE-VERIFICATION. The owner's signed
+    // status is not rewritten and the item is not reopened: the need is recorded here, for the owner.
+    const again = ev.ok ? disqualified.get(item.evidence?.review?.cycle) ?? null : null;
+    if (again) {
+      const what = `the review this Resolved status rests on was disqualified by a reassessment (${again.hash.slice(0, 19)}): ${again.findings.map(x => x.why).join('; ')}`;
+      return {...base, gate: 'reverification-needed', reason: what, reassessment: again.hash,
+        blocker: {what, role: 'decision-authority', resume_when: 'the owner records the item Ready to re-verify it through the lifecycle, or records why the status stands'}};
+    }
     if (ev.ok) return {...base, gate: 'complete', reason: 'Resolved with completion evidence bound to its ticket, commit and a three-lab verified review'};
     // Evidence recovery (evidence-recovery.mjs) for THIS status entry: recovered evidence waits for the owner's
     // signature; a search that found none says what it searched. The status itself is never changed here.
@@ -129,17 +143,21 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
       reason: `plan is ${lastPlan.status}: ${lastPlan.blocker?.what ?? lastPlan.next?.why ?? ''}`};
   }
   const passedPlans = stages.filter(s => s.stage === 'plan' && s.status === 'passed');
-  let valid = null;
+  let valid = null, planReassessed = null;
   for (const p of [...passedPlans].reverse()) {
     const v = planValidity(p, {requirement, deps: Object.fromEntries(Object.entries(deps).map(([d, s]) => [d, s ? {entry: s.entry} : null])), ticket: t, bytesOf});
+    const bad = hit(p);
+    if (bad) { planReassessed ??= bad; stale.push({stage: 'plan', record: p.hash, why: [`its plan review was disqualified by reassessment ${bad.hash.slice(0, 19)}`]}); continue; }
     if (v.valid) { valid = p; break; }
     stale.push({stage: 'plan', record: p.hash, why: v.why});
   }
   if (!valid) {
     return {...base, gate: 'plan', mode: t ? 'revalidate' : 'author', requirement, stale,
-      reason: t ? 'a ticket exists; its assumptions, scope, dependencies and acceptance criteria need re-checking' : 'no approved plan and no ticket: evaluation and planning'};
+      ...(planReassessed ? {rereview: {stage: 'plan', cycle: planReassessed.cycle, reassessment: planReassessed.hash, policy_rules: planReassessed.policy_rules ?? null}} : {}),
+      reason: planReassessed ? 'the plan\'s review was disqualified by a reassessment: the plan is re-checked and reviewed again'
+        : t ? 'a ticket exists; its assumptions, scope, dependencies and acceptance criteria need re-checking' : 'no approved plan and no ticket: evaluation and planning'};
   }
-  const chain = chainFrom(valid, stages);
+  const chain = chainFrom(valid, stages, s => !hit(s));
   const reuse = Object.fromEntries(chain.map(s => [s.stage, s.hash]));
   const last = chain.at(-1);
   // A later attempt of the next stage that returned work to an earlier stage, or is pending/blocked, decides.
@@ -147,6 +165,14 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
   // Follow the explicit handoff only: a record with equal output bytes from another chain is not this attempt.
   const tried = stages.filter(s => s.handoff?.from === last.hash);
   const latestTry = tried.at(-1) ?? null;
+  // The stage after `last` passed, but on a review that a reassessment disqualified: it is done again, in its own
+  // bounded re-review, and validation and the outcome that rested on it are not reused.
+  const voided = latestTry?.status === 'passed' ? hit(latestTry) : null;
+  if (voided) {
+    return {...base, gate: latestTry.stage, mode: 'rereview', requirement, reuse, from: last.hash, stale: [...stale, {stage: latestTry.stage, record: latestTry.hash, why: [`disqualified by reassessment ${voided.hash.slice(0, 19)}`]}],
+      rereview: {stage: latestTry.stage, cycle: voided.cycle, reassessment: voided.hash, policy_rules: voided.policy_rules ?? null, replaces: latestTry.hash},
+      reason: `the ${latestTry.stage} of this work was disqualified by a reassessment (${voided.findings.map(x => x.why).join('; ')}): it is reviewed again`};
+  }
   if (latestTry?.status === 'returned') {
     const to = latestTry.next.stage;
     const back = chain.find(s => s.stage === STAGES[STAGES.indexOf(to) - 1]) ?? null;

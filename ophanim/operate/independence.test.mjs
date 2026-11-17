@@ -34,7 +34,8 @@ test('the policy is not active: the lab rule is the default, and neither the ser
 });
 
 test('four real labs: an item without a ticket and one with an existing ticket complete the lifecycle; the panel is three distinct labs, no contributing model reviews, and the shared lab is recorded', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, serve}) => {
+    serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'fresh'}, {item: 'ticketed'}], {tickets: ['ticketed']});
     const turn = scriptedTurn();
     // The lab rule, for contrast, on the same items: implementation waits on review capacity.
@@ -98,7 +99,8 @@ test('four real labs: an item without a ticket and one with an existing ticket c
 });
 
 test('four real labs, repeated revisions: contributions come to span all four labs and each later panel is still three labs of models that never contributed', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor, implement}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, implement, serve}) => {
+    serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'cyc'}]);
     commit(repo, {'alpha.mjs': 'export const ok = false;\nexport const legacy = 1;\n',
       'consumer.mjs': 'import {ok, mode} from \'./alpha.mjs\';\nif (ok && mode !== \'strict\') process.exit(1);\n',

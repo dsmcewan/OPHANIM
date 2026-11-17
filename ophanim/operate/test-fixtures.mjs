@@ -68,9 +68,10 @@ export function scriptedTurn(over = {}) {
     const k = log.filter(l => l.kind === kind).length + 1;
     log.push({kind, vendor, model});
     // An override may return text, or {text, served_model}: the model that "answered" when it is not the one asked for.
+    // A served_model given as null or blank is passed on as given: the fixture never fills in the name asked for.
     const out = await (over[kind] ?? defaults[kind])({vendor, model, prompt, k, item: /"item":"([^"]+)"/.exec(prompt)?.[1] ?? null});
     const text = typeof out === 'string' ? out : out.text;
-    return {text, response_id: `t_${kind}_${log.length}`, served_model: typeof out === 'string' ? model : out.served_model ?? model};
+    return {text, response_id: `t_${kind}_${log.length}`, served_model: typeof out === 'string' ? model : 'served_model' in out ? out.served_model : model};
   };
   fn.log = log;
   return fn;

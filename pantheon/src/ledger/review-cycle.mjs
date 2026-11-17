@@ -14,7 +14,7 @@
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V3, independenceRefusal} from './cycle-kinds.mjs';
-import {resolveModel, contributorKeys, reviewerRefusal, currentPolicy} from '../review/identity.mjs';
+import {resolveModel, contributorKeys, candidateRefusal, currentPolicy} from '../review/identity.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
 
@@ -63,7 +63,7 @@ export function reviewSeatsByModel({n = 3, contributions = [], excluded = null, 
   const byLab = new Map();
   for (const role of ['reviewer', ...Object.keys(seating).filter(r => r !== 'reviewer')]) {
     for (const c of candidatesFor(role, {seating, ...(facts ? {facts} : {})})) {
-      if (!c.model || reviewerRefusal({vendor: c.vendor, model: c.model}, keys, policy)) continue;   // contributors and unresolved candidates
+      if (!c.model || candidateRefusal({vendor: c.vendor, model: c.model}, keys, policy)) continue;   // contributors and unresolved candidates
       const who = resolveModel(c.vendor, c.model, policy), lab = who.lab;
       if (!byLab.has(lab)) byLab.set(lab, {vendor: c.vendor, model: c.model, lab, role, why: c.why, identity: who.id});
     }
@@ -141,7 +141,9 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   // Model-level independence is asked for explicitly (change.independence: 'model', with the contributions); it opens
   // the cycle under pantheon.cycle/v3. Without it the cycle opens as before, under the lab rule.
   const byModel = change?.independence === 'model';
-  const pinned = byModel ? currentPolicy() : null;
+  // The identity policy the cycle is opened and pinned under: the current one, or the one the caller names (a re-review
+  // after a reassessment is made under the corrected policy that reassessment used).
+  const pinned = byModel ? change.identity_policy ?? currentPolicy() : null;
   const keys = byModel ? contributorKeys(change.contributions ?? [], pinned) : null;
   if (byModel && keys.unresolved.length) throw refuse('UNRESOLVED_CONTRIBUTOR', `reviewCycle: a contributor's identity is unresolved (${keys.unresolved.map(u => `${u.vendor}/${u.model}`).join(', ')}); no review can qualify`);
   if (byModel && required_reviewers === undefined) required_reviewers = Math.max(n, REQUIRED_REVIEW_LABS);
@@ -163,7 +165,7 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
       `and ${chosen.length} reviewer seat(s) were given; a caller cannot lower it`);
   }
   if (byModel) {
-    for (const s of chosen) { const why = reviewerRefusal(s, keys, pinned); if (why) throw Object.assign(new Error(`reviewCycle: ${why}`), {code: 'CONTRIBUTOR'}); }
+    for (const s of chosen) { const why = candidateRefusal(s, keys, pinned); if (why) throw Object.assign(new Error(`reviewCycle: ${why}`), {code: 'CONTRIBUTOR'}); }
   } else {
     const authored = labs.find(l => author_labs.includes(l));
     if (authored) throw Object.assign(new Error(`reviewCycle: the ${authored} lab authored the change and may not review it`), {code: 'SAME_LAB'});

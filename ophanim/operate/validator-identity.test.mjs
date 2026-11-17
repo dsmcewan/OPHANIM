@@ -17,7 +17,8 @@ const xaiFinds = () => { let asked = 0; return ({vendor}) => (vendor === 'xai' &
   ? json({verdict: 'request_changes', findings: [{severity: 'major', file: null, line: null, claim: 'the plan names no regression check', reproduction: null}]}) : APPROVE); };
 
 test('4. a validator answer served by a contributor, or by an unresolved model, is not accepted: it is kept on the record and the item does not reach an outcome', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, serve}) => {
+    serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'val'}]);
     // Whatever seat is asked: the Google route answers as a model nobody declares, and xai answers as grok-4.7.
     const turn = scriptedTurn({'plan-review': xaiFinds(),
@@ -45,7 +46,8 @@ test('4. a validator answer served by a contributor, or by an unresolved model, 
 });
 
 test('4. after a rejected answer the next eligible seat is asked; the accepted record names the model asked for and the model that answered', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, serve}) => {
+    serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'val2'}]);
     let n = 0;
     const turn = scriptedTurn({'plan-review': xaiFinds(),
@@ -68,7 +70,8 @@ test('4. after a rejected answer the next eligible seat is asked; the accepted r
 });
 
 test('an in-run code-review finding is followed by a code revision: the stopped run is RESUMED, the finding reaches the worker, and that reviewer model is excluded from the change review', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor, review, implement, calls}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, review, implement, calls, serve}) => {
+    serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'inrun'}]);
     // Pantheon's own in-run checker requests changes of the first, passing revision. (`fit` routing: the worker has
     // effort headroom, so the escalation protocol decides a revision. The fixture routes any prompt that mentions a
@@ -110,16 +113,4 @@ test('an in-run code-review finding is followed by a code revision: the stopped 
     assert.notEqual(`${val.outputs.validator.lab}/${val.outputs.validator.model}`, `${critic.lab}/${critic.model}`);
   });
 });
-
-test('default routing: the worker is on the top model with no headroom, so an in-run rejection stops the run with no revision pending (the documented gap)', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor, review}) => {
-    const f = fixture(repo, [{item: 'argo'}]);
-    review(({prompt}) => (/^Attack the artifact/.test(prompt) ? 'export ok as a frozen constant\nVERDICT: request_changes' : null));
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model'});
-    await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
-    const impl = openWorkLedger({root: f.workRoot}).stages('argo').at(-1);
-    assert.deepEqual([impl.stage, impl.status], ['implement', 'failed']);
-    assert.equal(impl.outputs.pending_revision, false, 'the escalation protocol decided to stop: nothing is pending to resume');
-    assert.match(impl.next.why, /REVIEW: artifact:alpha: 1 blocking finding/);
-  });
-});
+// Default routing (argo) used to stop here with no revision pending. That gap is closed: see revision-reassessment.test.mjs.

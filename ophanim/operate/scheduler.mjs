@@ -117,9 +117,12 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       // the work (so a revision is new work, while a re-run on identical inputs is refused as already done).
       const upstreamRec = gate.from ? work.stages(item).find(x => x.hash === gate.from) : null;
       const inputs = {upstream: upstreamRec ? outputsDigest(upstreamRec.outputs) : null, requirement: gate.requirement ? 'sha256:' + digest(gate.requirement) : null,
-        ...(gate.returned_by ? {returned_by: gate.returned_by} : {})};
+        ...(gate.returned_by ? {returned_by: gate.returned_by} : {}),
+        // A re-review after a reassessment is new work on the same inputs: it is named by the reassessment it answers.
+        ...(gate.rereview ? {rereview: gate.rereview.reassessment} : {})};
       const attempts = work.stages(item).filter(s => s.stage === gate.gate && (s.inputs?.upstream ?? null) === inputs.upstream
-        && (s.inputs?.requirement ?? null) === inputs.requirement && (s.inputs?.returned_by ?? null) === (inputs.returned_by ?? null)).length;
+        && (s.inputs?.requirement ?? null) === inputs.requirement && (s.inputs?.returned_by ?? null) === (inputs.returned_by ?? null)
+        && (s.inputs?.rereview ?? null) === (inputs.rereview ?? null)).length;
       if (attempts >= L.stage_attempts) {
         log.blocked.push({item, gate: gate.gate, blocker: {what: `${attempts} attempts of ${gate.gate} on the same inputs`, role: 'lead@orch', resume_when: 'an input changes, or the owner raises the retry limit'}});
         return;

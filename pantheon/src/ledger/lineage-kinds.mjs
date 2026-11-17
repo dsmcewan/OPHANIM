@@ -10,7 +10,7 @@
 //     (`seat:<seat_id>#<occupancy_gen>`), admitted to the ledger by an operator's authority entry. A
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
-import {reviewerRefusal, reviewerIdentity, resolveModel} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, resolveModel, policyRefusal, policyDigest} from '../review/identity.mjs';
 import {labOf} from '../config/models.mjs';
 import {promptSha, replySha} from '../context/chain.mjs';
 import {generateSigner, AUTHORITY} from '../../../packages/ledger/chain.mjs';
@@ -117,9 +117,14 @@ export function lineageKinds() {
         if (!targets.length && !cycles.length) return 'a review cites the turns it reviews';
         if (cycles.length > 1) return 'a review cites at most one cycle';
         const mine = lineageKey(p.seat.vendor, p.response_id);
-        const v3 = cycles.length === 1 && view.payload(cycles[0])?.contract === 'pantheon.cycle/v3';
-        // Under v3 every name is resolved by the cycle's RECORDED identity policy; an unresolved reviewer does not qualify.
-        const pinned = v3 ? view.payload(cycles[0]).identity_policy.rules : null;
+        // The MODEL rule applies to a review of a pantheon.cycle/v3 cycle, and to a review outside a cycle that carries
+        // its own identity policy (an in-run review made under the model rule). Every other review -- every one
+        // recorded before this existed -- is checked by LAB, exactly as before.
+        const own = !cycles.length && p.independence === 'model' ? p.identity_policy : null;
+        if (own && (policyRefusal(own.rules) !== null || policyDigest(own.rules) !== own.digest)) return 'a model-rule review carries its identity policy {digest, rules}, and the digest is of those rules';
+        const v3 = Boolean(own) || (cycles.length === 1 && view.payload(cycles[0])?.contract === 'pantheon.cycle/v3');
+        // Under the model rule every name is resolved by the RECORDED identity policy; an unresolved reviewer does not qualify.
+        const pinned = own ? own.rules : v3 ? view.payload(cycles[0]).identity_policy.rules : null;
         const who = v3 ? reviewerIdentity({vendor: p.seat.vendor, model: p.model, served_model: p.served_model ?? null}, pinned) : null;
         if (who?.why) return who.why;
         const lab = v3 ? who.lab : labOf(p.seat.vendor, p.served_model ?? p.model);
@@ -199,9 +204,11 @@ export function lineageRecorder({ledger, operator, order, keys: store = null}) {
       return out;
     },
     // `turn`: for a cycle review (cycle-kinds.mjs), the seat's turn that answered it.
-    recordReview({seat, model, served_model = null, response_id = null, verdict, findings = '', targets, turn = undefined}) {
+    recordReview({seat, model, served_model = null, response_id = null, verdict, findings = '', targets, turn = undefined, identity_policy = undefined}) {
       const s = signerFor(seat);
-      return ledger.append({kind: 'review', payload: {seat, model, served_model, response_id, verdict, findings, ...(turn !== undefined ? {turn} : {})},
+      // `identity_policy` (a review outside a cycle, made under the model rule): the policy travels with the review.
+      return ledger.append({kind: 'review', payload: {seat, model, served_model, response_id, verdict, findings, ...(turn !== undefined ? {turn} : {}),
+        ...(identity_policy ? {independence: 'model', identity_policy: {digest: policyDigest(identity_policy), rules: identity_policy}} : {})},
         author: {key_id: s.key_id}, signer: s, order, derivedFrom: targets}).hash;
     },
   };

@@ -30,6 +30,13 @@ export const IDENTITY_POLICY_SCHEMA = "pantheon.identity-policy/v1";
 const FILE = join(dirname(fileURLToPath(import.meta.url)), "../config/model-identity.json");
 const str = v => typeof v === "string" && v.trim() !== "";
 const SNAPSHOT = /-\d{8}$/;
+// The policy's `resolver` number is the version of its ADMISSION rule, pinned with the rest on each cycle:
+//   1  (cycles recorded before the review of 10cbd52) an answer that names no serving model was taken to have been
+//      served by the model asked for. Kept only so those cycles verify as they were recorded.
+//   2  an answer is admitted only on the identity of the model that ANSWERED: a missing, blank or unresolved
+//      serving model does not qualify, and the model asked for is never evidence of which model answered.
+export const RESOLVER = 2;
+export const RESOLVERS = Object.freeze([1, 2]);
 
 /** A base model name under `policy`: lower case, through `same_model`, without a date snapshot (applied to a fixpoint). */
 function baseOf(model, policy) {
@@ -60,7 +67,7 @@ function build() {
   // lanes.json: each lane model names its lab.
   for (const lane of Object.values(LANES)) for (const [m, spec] of Object.entries(lane)) declare(m, spec.lab, "lanes.json");
   const vendor_lab = Object.fromEntries(Object.keys(MODELS).filter(v => !routes.includes(v)).sort().map(v => [v, v]));
-  const policy = { schema: IDENTITY_POLICY_SCHEMA, resolver: 1, snapshot: "-YYYYMMDD", same_model, model_lab: Object.fromEntries(Object.entries(model_lab).sort()), vendor_lab, routes };
+  const policy = { schema: IDENTITY_POLICY_SCHEMA, resolver: RESOLVER, snapshot: "-YYYYMMDD", same_model, model_lab: Object.fromEntries(Object.entries(model_lab).sort()), vendor_lab, routes };
   return Object.freeze(policy);
 }
 let CURRENT = null;
@@ -69,7 +76,7 @@ export const policyDigest = policy => "sha256:" + createHash("sha256").update(ca
 /** Why `policy` is not a usable identity policy, or null. */
 export function policyRefusal(policy) {
   const map = (o, ok) => o && typeof o === "object" && !Array.isArray(o) && Object.entries(o).every(([k, v]) => str(k) && ok(v));
-  return policy?.schema === IDENTITY_POLICY_SCHEMA && policy.resolver === 1 && map(policy.same_model, str) && map(policy.model_lab, str)
+  return policy?.schema === IDENTITY_POLICY_SCHEMA && RESOLVERS.includes(policy.resolver) && map(policy.same_model, str) && map(policy.model_lab, str)
     && map(policy.vendor_lab, str) && Array.isArray(policy.routes) && policy.routes.every(str) ? null
     : `an identity policy is a ${IDENTITY_POLICY_SCHEMA} object {resolver, same_model, model_lab, vendor_lab, routes}`;
 }
@@ -112,23 +119,45 @@ export function contributorKeys(contributions = [], policy = currentPolicy()) {
 }
 
 /**
- * The identity a reviewer seat qualifies under, or why it does not. `seat` is {vendor, model, served_model?}: the
- * model asked for and the model that answered. Both must resolve, to the SAME lab; the lab a review counts for is
- * that lab. Returns {lab, ids} or {why, code}.
+ * BEFORE A CALL: may this seat be ASKED? Only the model asked for is known. It must resolve, and must not be a
+ * contributor. Returns {lab, id} or {why, code}.
  */
-export function reviewerIdentity(seat, policy = currentPolicy()) {
+export function candidateIdentity(seat, policy = currentPolicy()) {
   const asked = resolveModel(seat.vendor, seat.model, policy);
+  if (!asked?.known) return { code: "UNRESOLVED", why: `the seat's identity is unresolved: ${asked?.why ?? "no model is named"}` };
+  return { lab: asked.lab, id: asked.id };
+}
+/** Why `seat` ({vendor, model}) may not be asked to review work with contributor `keys`, or null. */
+export function candidateRefusal(seat, keys, policy = currentPolicy()) {
+  if ((keys.unresolved ?? []).length) return `a contributor's identity is unresolved (${keys.unresolved.map(u => u.model ?? u.vendor).join(", ")}): no reviewer can be shown not to be it`;
+  const who = candidateIdentity(seat, policy);
+  if (who.why) return who.why;
+  if ((keys.labs ?? []).includes(who.lab)) return `the ${who.lab} lab is excluded: a contribution from it names no model`;
+  return (keys.models ?? []).includes(who.id) ? `${who.id} contributed to the change under review and may not review it` : null;
+}
+
+/**
+ * AFTER A CALL: the identity an ANSWER is admitted under, or why it is not. `answer` is {vendor, model, served_model}:
+ * the model asked for and the model that answered. Both must resolve, to the SAME lab; the lab a review counts for is
+ * that lab. Under resolver 2 the serving model must be NAMED: the model asked for is not evidence of which model
+ * answered. Returns {lab, ids} or {why, code}.
+ */
+export function reviewerIdentity(answer, policy = currentPolicy()) {
+  const asked = resolveModel(answer.vendor, answer.model, policy);
   if (!asked?.known) return { code: "UNRESOLVED", why: `the reviewer's identity is unresolved: ${asked?.why ?? "no model is named"}` };
-  const served = str(seat.served_model) ? resolveModel(seat.vendor, seat.served_model, policy) : asked;
+  let served;
+  if (str(answer.served_model)) served = resolveModel(answer.vendor, answer.served_model, policy);
+  else if (policy.resolver >= 2) return { code: "NO_SERVED_IDENTITY", why: `the answer names no serving model: ${asked.id} was asked, and that is not evidence of which model answered` };
+  else served = asked;   // resolver 1, for cycles recorded under it
   if (!served.known) return { code: "UNRESOLVED", why: `the model that answered is unresolved: ${served.why}` };
   if (served.lab !== asked.lab) return { code: "LAB_MISMATCH", why: `${asked.id} was asked and ${served.id} answered: a review counts for one lab` };
   return { lab: served.lab, ids: [...new Set([asked.id, served.id])] };
 }
 
-/** Why `seat` may not review work with contributor `keys` ({models, labs, unresolved?}), or null. */
-export function reviewerRefusal(seat, keys, policy = currentPolicy()) {
+/** Why an ANSWER may not count as a review of work with contributor `keys` ({models, labs, unresolved?}), or null. */
+export function reviewerRefusal(answer, keys, policy = currentPolicy()) {
   if ((keys.unresolved ?? []).length) return `a contributor's identity is unresolved (${keys.unresolved.map(u => u.model ?? u.vendor).join(", ")}): no reviewer can be shown not to be it`;
-  const who = reviewerIdentity(seat, policy);
+  const who = reviewerIdentity(answer, policy);
   if (who.why) return who.why;
   if ((keys.labs ?? []).includes(who.lab)) return `the ${who.lab} lab is excluded: a contribution from it names no model`;
   const hit = who.ids.find(i => (keys.models ?? []).includes(i));

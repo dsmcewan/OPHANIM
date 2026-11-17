@@ -184,7 +184,7 @@ export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "a
  * independence requirement; do not drop the planner's contribution or weaken the scope). When the configured pool
  * cannot supply n labs outside the contributors, the result is pending, with no seats, and says why.
  */
-export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined, independence = "lab" }) {
+export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined, independence = "lab", policy = undefined }) {
   const full = scope ?? { kind: "change", contributions: [...planLabs.map(lab => ({ purpose: "plan", lab })), ...workLabs.map(lab => ({ purpose: "work", lab }))],
     author_labs: [...new Set([...workLabs, ...planLabs])].sort() };
   const base = { author_labs: full.author_labs, planner_excluded: true, scope: full };
@@ -192,10 +192,10 @@ export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n =
   // distinct labs are still required, labs that did not contribute are seated first, and a seat that shares a lab with
   // a contributor says so. The default is the lab rule below, unchanged.
   if (independence === "model") {
-    const keys = contributorKeys(full.contributions ?? []);
+    const keys = contributorKeys(full.contributions ?? [], ...(policy ? [policy] : []));
     const by = { ...base, independence: "model", author_models: keys.models, excluded_labs: keys.labs, author_labs: keys.contributing_labs, contributions: full.contributions ?? [] };
     try {
-      const seats = reviewSeatsByModel({ n, excluded: keys, ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) });
+      const seats = reviewSeatsByModel({ n, excluded: keys, ...(policy ? { policy } : {}), ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) });
       return { ...by, seats, shared_labs: seats.filter(s => s.shared_lab).map(s => s.lab) };
     } catch (e) {
       if (e.code !== "NO_SEATS") throw e;

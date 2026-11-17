@@ -327,9 +327,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   const byModel = independence === 'model';
   const pool = {...(seating ? {seating} : {}), ...(facts ? {facts} : {})};
   /** A panel of `k` distinct labs for work with these contributions, under the independence in force. Throws NO_SEATS. */
-  const panel = (contributions, k = n) => (byModel ? reviewSeatsByModel({n: k, contributions, ...pool}) : reviewSeats({n: k, avoidLabs: labsOfContribs(contributions), ...pool}));
+  // `policy` is given only for a re-review after a reassessment: the corrected identity policy that reassessment used.
+  const panel = (contributions, k = n, policy = null) => (byModel ? reviewSeatsByModel({n: k, contributions, ...(policy ? {policy} : {}), ...pool}) : reviewSeats({n: k, avoidLabs: labsOfContribs(contributions), ...pool}));
   /** What a cycle's `change` carries so the ledger opens it under the matching contract. */
-  const independenceOf = contributions => (byModel ? {independence: 'model', contributions} : {});
+  const independenceOf = (contributions, policy = null) => (byModel ? {independence: 'model', contributions, ...(policy ? {identity_policy: policy} : {})} : {});
   const reviewerRow = (role, s) => ({role, ...seatOf(s), ...(s.shared_lab ? {shared_lab: true, shared_with: s.shared_with} : {})});
   const today = () => checked ?? new Date().toISOString().slice(0, 10);
   // Evidence for every judging seat (context.mjs): the dossier of the item, and bounded read-only retrieval.
@@ -379,7 +380,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const inherited = mode === 'revise' ? [...(prevRec?.contributions ?? []).filter(c => c.purpose !== 'plan'),
       ...(gate.findings ?? []).filter(f => f.lab).map(f => ({purpose: 'critique', vendor: f.vendor ?? null, model: f.model ?? null, ...withServed(f), lab: f.lab, via: `finding ${String(f.id).slice(0, 19)} returned to planning reached the revised plan`}))] : [];
     let planSeats;
-    try { planSeats = panel([{purpose: 'plan', ...seatOf(planner)}, ...inherited]); } catch (e) {
+    const corrected = gate.rereview?.policy_rules ?? null;
+    try { planSeats = panel([{purpose: 'plan', ...seatOf(planner)}, ...inherited], n, corrected); } catch (e) {
       if (e.code !== 'NO_SEATS') throw e;
       return result('pending', {outputs: {mode, planner: seatOf(planner), stage: 'before-work'}, team, usage: {provider_calls: 0, elapsed_ms: Date.now() - t0},
         blocker: pendingCapacity(`the configured reviewer pool offers fewer than ${n} labs outside the planner's (${planner.lab}); nothing was planned`, {stage: 'plan'}),
@@ -460,7 +462,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
             const part = {via: got.via, complete: got.complete, portions: got.portions, total: got.total};
             return file ? {path: file, sha256: bytesOf(file), why: e.why, ...part} : {ref, source: got.source, version: got.version ?? null, why: e.why, ...part};
           }),
-          version: {n: versions.length + 1, previous: prevDigest}};
+          version: {n: versions.length + 1, previous: prevDigest},
+          // A plan made again because a reassessment disqualified its earlier review names that reassessment.
+          ...(gate.rereview ? {rereview_of: gate.rereview.reassessment} : {})};
       }
       if (!doc) return stop(`no well-formed plan after ${PLANNER_TRIES} planner answer(s): ${refused.at(-1)?.why.join('; ')}`);
       const planDigest = 'sha256:' + digest(doc);
@@ -480,7 +484,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       }
       const diff = G(['diff', '--no-color', base, head]);
       const r = await reviewCycle({ledger: rec, resume: Boolean(resume), change: {scope, base, head, diff, files: [file], author_labs: resume?.author_labs ?? labsOfContribs(contributions),
-        author_turns: resume?.author_turns ?? [turnHash], ...(resume ? {} : independenceOf(dedupe(contributions)))}, seats: planSeats, n,
+        author_turns: resume?.author_turns ?? [turnHash], ...(resume ? {} : independenceOf(dedupe(contributions), corrected))}, seats: planSeats, n,
         // The reviewers get the evidence itself, not only the planner's account of it, and may retrieve more.
         turn: investigatingTurn(m, retriever, investigations, 'plan-reviewer'),
         brief: boundBrief(ctx, `plan|${base}|${head}`, () => [PLAN_BRIEF, '', renderDossier(dossier), '',
@@ -521,7 +525,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         }
         const evidence = doc.evidence.filter(e => e.path).map(e => ({path: e.path, sha256: e.sha256}));
         return result('passed', {identity: {ticket: {path: tk.path, digest: tk.digest}}, inputs: {mode, plan_previous: prevDigest},
-          outputs: {plan: doc, plan_digest: planDigest, plan_commit: head, plan_review: {cycle: r.cycle, labs: closed.labs, close: closed.close, outcome: closed.outcome,
+          outputs: {plan: doc, plan_digest: planDigest, plan_commit: head, plan_ledger: sys.root ?? path.join(dirOf(ctx, 'plan-ledger')), plan_review: {cycle: r.cycle, labs: closed.labs, close: closed.close, outcome: closed.outcome,
             unresolved: rows, ledger_anchor: sys.anchor, independence, shared_labs: planSeats.filter(x => x.shared_lab).map(x => x.lab).sort()}, ticket: {path: tk.path, digest: tk.digest}, ...(ticketRevision ? {ticket_revision: ticketRevision} : {}),
             ...(mode === 'revalidate' ? {ticket_kept: ticketRevision === null && Boolean(ticket)} : {}), deps, evidence, refused, versions, planner: seatOf(planner),
             context: ctxOut(), carry: carryForward(doc, planDigest)},
@@ -538,7 +542,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       progress({event: 'plan.revise', item, version: v, findings: rows.length});
       // The revision will carry these findings: its reviewers must be outside the labs that made them. Checked BEFORE
       // the revision is paid for; a short pool keeps the reviewed version and its findings, and waits.
-      try { planSeats = panel(dedupe(contributions)); } catch (e) {
+      try { planSeats = panel(dedupe(contributions), n, corrected); } catch (e) {
         if (e.code !== 'NO_SEATS') throw e;
         return result('pending', {outputs: {mode, plan: doc, plan_digest: planDigest, refused, versions, context: ctxOut(), stage: 'before-revision'},
           team, contributions: dedupe(contributions), findings: rows, usage: usage(),
@@ -591,6 +595,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let res;
     try {
       res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: callsBefore + ctx.budget.provider_calls, scouts, profile,
+        // A checker's rejection at the top of the worker's dial is a revision by the same seat, not a stop (protocol v2).
+        escalation: 'pantheon.escalation/v2',
+        // The in-run checker follows the same independence rule as the rest of the lifecycle.
+        ...(byModel ? {independence: 'model'} : {}),
         ...(resumable ? {resume: resumable} : {}), ...(revisions ? {revisions} : {}), progress: ev => progress({...ev, from: 'pipeline'})});
     } catch (e) {
       const runFile = path.join(boardDir, 'run.json');
@@ -604,8 +612,34 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const calls = Math.max(0, providerCallsOf(run?.attempts ?? []) - callsBefore);
     const team = [...new Map((run?.turns ?? []).map(x => [`${x.purpose}|${x.vendor}|${x.model}`, {role: x.purpose, vendor: x.vendor, model: x.served_model ?? x.model, lab: labOf(x.vendor, x.served_model ?? x.model)}])).values()];
     if (!res.shipped) {
-      return result('failed', {outputs: {board: boardDir, shipped: false, ...(resumable ? {resumed: true} : {}),
-        pending_revision: (run?.files ?? []).some(x => x.escalation?.pending?.reason === 'review'), error: res.error ?? null, tests: run?.acceptance ? {cmd: run.acceptance.cmd, exit: run.acceptance.exit} : null},
+      // THE REJECTED WORK AND ITS FINDINGS ARE KEPT. The board (the bytes, the reviewers' findings, the escalation
+      // decisions) stays where it is, and the record names every in-run finding met so far on this plan, with the
+      // reviewer that made it: earlier attempts' and this one's.
+      const pend = (run?.files ?? []).map(x => x.escalation?.pending).filter(x => x?.reason === 'review');
+      const keyOf = x => `${x.vendor}|${x.model}|${x.text}`;
+      const before = [...new Map(ctx.work.stages(item).filter(x => x.stage === 'implement' && x.handoff?.from === planRec.hash).flatMap(x => x.findings ?? [])
+        .filter(x => x.cause === 'in-run-review').map(x => [keyOf(x), x])).values()];
+      const seen = new Set(before.map(keyOf));
+      const fresh = pend.flatMap(x => (x.reviewers?.length ? x.reviewers : [{vendor: null, model: null}]).map(r => ({text: x.findings, vendor: r.vendor ?? null, model: r.model ?? null, lab: r.vendor ? labOf(r.vendor, r.model) : null})))
+        .filter(x => !seen.has(`${x.vendor}|${x.model}|${x.text}`));
+      const findings = [...before.map(({id, ...x}) => x), ...fresh.map(x => ({severity: 'block', cause: 'in-run-review', ...x}))].map((x, i) => ({id: `inrun-${i + 1}`, ...x}));
+      const outputs = {board: boardDir, shipped: false, ...(resumable ? {resumed: true, resumed_from: prior.hash} : {}), pending_revision: pend.length > 0, error: res.error ?? null,
+        escalations: (run?.escalations ?? []).filter(e => e.decision).map(e => ({protocol: e.schema, action: e.decision.action, steps: e.steps})),
+        tests: run?.acceptance ? {cmd: run.acceptance.cmd, exit: run.acceptance.exit} : null};
+      // No further revision is possible in this run: every slot is stopped (the escalation or revision budget is spent),
+      // or no reviewer is left that may judge the revised bytes. That is a BLOCK with the findings unresolved -- not a
+      // failure to retry from scratch, which would repeat the work and drop the feedback.
+      const message = String(res.error?.message ?? '');
+      const noReviewer = /no clean reviewer|no reviewer model is left|REVIEW_LABS_UNAVAILABLE|REVIEW_NOT_ADMITTED/.test(message);
+      const stopped = (run?.files ?? []).filter(x => x.escalation?.stopped).map(x => `${x.slot}: ${x.escalation.stopped.why}`);
+      if ((noReviewer || stopped.length) && !pend.length) {
+        const why = noReviewer ? `no in-run reviewer is eligible for the revised work (${message.slice(0, 200)})` : `the run stopped (${stopped.join('; ').slice(0, 200)})`;
+        return result('blocked', {outputs, team, contributions, findings, usage: usage(calls),
+          blocker: {code: 'IN_RUN_REVIEW_UNRESOLVED', what: `IN_RUN_REVIEW_UNRESOLVED: ${why}; ${findings.length} in-run finding(s) are unresolved; the run and its work are kept`,
+            role: 'lead@orch', resume_when: 'a reviewer that did not contribute becomes eligible, or the owner lifts the stop with a stated reason or reseats the work'},
+          next: {stage: 'implement', why}});
+      }
+      return result('failed', {outputs, findings,
         team, contributions, usage: usage(calls), next: {stage: 'implement', why: `the run did not ship: ${res.error?.message ?? 'acceptance or review refused it'}`}});
     }
     const files = certifiedArtifacts(run, {repoRoot: t.spec.repo_root, outDir: res.outDir}).map(f => ({...f, path: path.relative(top, path.join(t.spec.repo_root, f.path))}));
@@ -648,13 +682,20 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     const run = JSON.parse(fs.readFileSync(o.run.run_json, 'utf8'));
     const scope = fullScope(changeScope(run), o.contributions ?? []);
-    const chosen = cycleReviewers({scope, n, ...pool, independence});
+    // A RE-REVIEW after a reassessment disqualified this change's earlier review (gates.mjs): a new cycle of the same
+    // change, on its own ledger (the earlier cycle stays closed and verifiable on the run ledger), with its panel chosen
+    // under the corrected identity policy, so the model the correction identified as a contributor is not seated.
+    const rr = ctx.gate?.rereview?.stage === 'review' ? ctx.gate.rereview : null;
+    const corrected = rr?.policy_rules ?? null;
+    const chosen = cycleReviewers({scope, n, ...pool, independence, ...(corrected ? {policy: corrected} : {})});
     const outputs = {commit: o.commit, base: o.base, review_scope: chosen.scope, author_labs: chosen.author_labs, independence,
+      ...(rr ? {rereview_of: {cycle: rr.cycle, reassessment: rr.reassessment, replaces: rr.replaces}} : {}),
       ...(byModel ? {author_models: chosen.author_models, shared_labs: chosen.shared_labs ?? []} : {})};
     if (chosen.pending) {
       return result('pending', {outputs, usage: usage(), blocker: pendingCapacity(chosen.pending.why), next: {stage: 'review', why: 'review capacity is short; the commit is kept'}});
     }
-    const sys = openPantheonLedger({root: o.run.ledger, anchor: o.run.ledger_anchor, board: openBoard(o.run.board)});
+    const cycleLedger = rr ? dirOf(ctx, `rereview-${rr.reassessment.slice(7, 19)}-ledger`) : o.run.ledger;
+    const sys = rr ? openPantheonLedger({root: cycleLedger}) : openPantheonLedger({root: o.run.ledger, anchor: o.run.ledger_anchor, board: openBoard(o.run.board)});
     const rec = sys.recorder();
     const top = git(repo)(['rev-parse', '--show-toplevel']).trim(), G = git(top);
     // The board scope the status ledger binds completion evidence to (status.mjs checkReview): one cycle per run ledger,
@@ -662,7 +703,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const cscope = boardScopeOf(item, o.base);
     const diff = G(['diff', '--no-color', o.base, o.commit]);
     const files = G(['diff', '--name-only', o.base, o.commit]).split('\n').filter(Boolean);
-    const authorTurns = sys.ledger.read().filter(e => e.kind === 'turn' && ['plan', 'work'].includes(sys.ledger.payloadOf(e).purpose)).map(e => sys.ledger.hashOf(e));
+    // (The author's turns are on the run ledger; a re-review's own ledger cannot cite them. Its independence rests on the cycle's recorded contributors.)
+    const authorTurns = rr ? [] : sys.ledger.read().filter(e => e.kind === 'turn' && ['plan', 'work'].includes(sys.ledger.payloadOf(e).purpose)).map(e => sys.ledger.hashOf(e));
     const last = rec.lastCycle(cscope);
     const planDoc = chainOf(ctx.work, impl).plan?.outputs.plan ?? null;
     const {dossier, retriever} = evidenceFor(ctx);
@@ -670,12 +712,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let cycle = last?.hash ?? null;
     if (!last?.close) {
       // An open cycle of this exact change is resumed (its recorded reviews kept), never reopened.
-      const r = await reviewCycle({ledger: rec, resume: Boolean(last), change: {scope: cscope, base: o.base, head: o.commit, diff, files, author_labs: chosen.author_labs, author_turns: authorTurns, ...(last ? {} : independenceOf(chosen.contributions ?? []))},
+      const r = await reviewCycle({ledger: rec, resume: Boolean(last), change: {scope: cscope, base: o.base, head: o.commit, diff, files, author_labs: chosen.author_labs, author_turns: authorTurns, ...(last ? {} : independenceOf(chosen.contributions ?? [], corrected))},
         seats: chosen.seats, n, policy: runPolicy(run),
         // The change reviewers judge the diff against the requirement and the approved plan, with the evidence itself
         // and their own retrieval -- not the diff alone.
         turn: investigatingTurn(m, retriever, investigations, 'cycle-reviewer'),
-        brief: boundBrief(ctx, `change|${o.base}|${o.commit}`, () => [REVIEW_BRIEF,
+        brief: boundBrief(ctx, `change|${o.base}|${o.commit}|${rr?.reassessment ?? ''}`, () => [REVIEW_BRIEF,
           'Judge the change against the ORIGINAL requirement and the approved plan below, not only for defects in the diff: does it do what was required, does it keep',
           'the plan\'s exclusions and the obligations of what consumes the changed files, and does it hold on a retry, a partial completion and a later revision?',
           'You have your own access to the evidence (the dossier and retrieval). Name the evidence a finding rests on inside its claim, as [source: <path or ref>].',
@@ -687,7 +729,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     const state = rec.cycleState(cycle);
     const team = state.reviews.map(x => ({role: 'cycle-reviewer', vendor: x.seat.vendor, model: x.model, lab: x.lab}));
-    Object.assign(outputs, {cycle, cycle_ledger_anchor: sys.anchor, scope: cscope, labs: state.reviews.map(x => x.lab).sort(), context: {dossier: dossierRecord(dossier), investigations: [...investigations]}});
+    Object.assign(outputs, {cycle, cycle_ledger: cycleLedger, cycle_ledger_anchor: sys.anchor, scope: cscope, labs: state.reviews.map(x => x.lab).sort(), context: {dossier: dossierRecord(dossier), investigations: [...investigations]}});
     if (state.reviews.length < state.cycle.reviewers) {
       const failed = state.attempts.filter(a => a.outcome === 'failed').map(a => `${a.seat.lab}: ${a.why}`);
       return result('pending', {outputs, team, usage: usage(),
@@ -749,24 +791,33 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       .map(f => ({purpose: 'critique', vendor: f.vendor ?? null, model: f.model ?? null, ...withServed(f), lab: f.lab}));
     // The validator contributed to nothing it judges: under the lab rule its lab did not, under the model rule it did not.
     // `barred` are seats already tried whose answer could not be accepted (see below): they are not asked again.
+    // THE FULL CONTRIBUTION HISTORY, always: the plan, the work, and every finding that reached a revision. It is used
+    // to choose the seat and again to admit the answer. There is no weaker fallback: when no eligible validator is
+    // left, the work waits on capacity; it is not validated by a contributor.
     const allContribs = [...(impl.outputs.contributions ?? []), ...finderRows];
-    const authorsOnly = allContribs.filter(c => ['plan', 'work'].includes(c.purpose));
     const pickValidator = barred => {
       const extra = barred.flatMap(x => [{purpose: 'barred', vendor: x.vendor, model: x.model, lab: x.lab}, ...(x.served_model ? [{purpose: 'barred', vendor: x.vendor, model: x.served_model, lab: x.lab}] : [])]);
-      const seatFor = rows => (byModel ? reviewSeatsByModel({n: 1, contributions: [...rows, ...extra.filter(e => resolveModel(e.vendor, e.model)?.known)], ...pool})
-        : reviewSeats({n: 1, avoidLabs: [...new Set([...labsOfContribs(rows), ...barred.map(x => x.lab)])], ...pool}))[0];
-      try { return {seat: seatFor(allContribs), independent: true, against: allContribs}; }
-      catch { try { return {seat: seatFor(authorsOnly), independent: false, against: authorsOnly}; } catch { return null; } }
+      try {
+        return (byModel ? reviewSeatsByModel({n: 1, contributions: [...allContribs, ...extra.filter(e => resolveModel(e.vendor, e.model)?.known)], ...pool})
+          : reviewSeats({n: 1, avoidLabs: [...new Set([...labsOfContribs(allContribs), ...barred.map(x => x.lab)])], ...pool}))[0];
+      } catch (e) { if (e.code !== 'NO_SEATS') throw e; return null; }
     };
-    /** Why the model that ANSWERED may not be this item's validator, or null. Asked-for and answering model both count. */
-    const servedRefusal = (seat, served, against) => {
-      if (byModel) return reviewerRefusal({vendor: seat.vendor, model: seat.model, served_model: served}, contributorKeys(against));
-      const lab = labOf(seat.vendor, served ?? seat.model);
-      return labsOfContribs(against).includes(lab) ? `the ${lab} lab contributed to the work and its model answered (${served})` : null;
+    /**
+     * ADMISSION of an answer, after the call: by the model that ANSWERED. A missing or blank serving model does not
+     * qualify (the model asked for is not evidence of which model answered); nor does an unresolved one, or a contributor.
+     */
+    const servedRefusal = (seat, served) => {
+      if (byModel) return reviewerRefusal({vendor: seat.vendor, model: seat.model, served_model: served}, contributorKeys(allContribs));
+      if (typeof served !== 'string' || !served.trim()) return `the answer names no serving model: ${seat.vendor}/${seat.model} was asked, and that is not evidence of which model answered`;
+      const lab = labOf(seat.vendor, served);
+      return labsOfContribs(allContribs).includes(lab) ? `the ${lab} lab contributed to the work and its model answered (${served})` : null;
     };
-    let picked = pickValidator([]);
-    if (!picked) return result('failed', {outputs: {commit, tests, cause: 'validation-defect'}, usage: usage(), next: {stage: 'validate', why: 'no validator seat is available that did not write the plan or the code'}});
-    let {seat, independent} = picked;
+    const noValidator = (why, extra = {}) => result('pending', {outputs: {commit, tests, green, ...extra}, usage: usage(),
+      blocker: pendingCapacity(`no eligible validator: ${why}. The validated commit, its tests and every answer received are kept; nothing was accepted from a contributor`, {stage: 'validate'}),
+      next: {stage: 'validate', why: 'no validator is eligible'}});
+    let seat = pickValidator([]);
+    if (!seat) return noValidator(byModel ? 'every model that could be asked contributed to the work' : `every lab contributed to the work (${labsOfContribs(allContribs).join(', ')})`);
+    const independent = true;
     const team = [{role: 'validator', ...seatOf(seat)}];
     const diff = G(['diff', '--no-color', impl.outputs.base, commit]);
     const {dossier, retriever} = evidenceFor(ctx, {outputsDir});
@@ -789,6 +840,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       'stated cause is wrong or unsupported. missing_evidence: you cannot judge because evidence is missing or unretrievable (say which). Keep these apart.'].join('\n');
     let judged = null;
     const refusedJ = [], rejected = [];
+    let exhausted = false;
     for (let k = 0; k < 3 && !judged; k++) {
       if (m.left() < 1) break;
       let reply;
@@ -803,13 +855,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // model that served the turn must be eligible too: resolved, and not a contributor. An answer that fails this
       // is kept on the record (requested and served names, the reason, the reply's digest) and is not a validation.
       const served = reply.served_model ?? null;
-      const why = servedRefusal(seat, served, picked.against);
+      const why = servedRefusal(seat, served);
       if (why) {
         rejected.push({vendor: seat.vendor, model: seat.model, served_model: served, lab: seat.lab, why, verdict: j?.verdict ?? null, reply_sha: sha256(reply.text ?? '')});
         refusedJ.push(`the answer of ${seat.vendor}/${seat.model} (served by ${served ?? 'an unnamed model'}) is not accepted: ${why}`);
-        picked = pickValidator(rejected);
-        if (!picked) break;
-        ({seat, independent} = picked);
+        const nextSeat = pickValidator(rejected);
+        if (!nextSeat) { exhausted = true; break; }
+        seat = nextSeat;
         team.push({role: 'validator', ...seatOf(seat)});
         continue;
       }
@@ -828,6 +880,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         ...(byModel && judged ? {identity: resolveModel(seat.vendor, seat.model)?.id ?? null, served_identity: resolveModel(seat.vendor, judged.served_model ?? seat.model)?.id ?? null} : {})},
       refused: refusedJ, rejected_answers: rejected, context: {dossier: dossierRecord(dossier), investigations}};
     // No judgment is a defect of the validation itself, kept apart from a defect of the change.
+    // Every eligible seat was asked and none gave an admissible answer: a capacity block, with the answers kept.
+    if (!judged && exhausted) return noValidator('no seat is left whose answer could be admitted', {rejected_answers: rejected, refused: refusedJ, context: outputs.context});
     if (!judged) return result('failed', {outputs: {...outputs, cause: 'validation-defect'}, team, usage: usage(), next: {stage: 'validate', why: `no well-formed validator judgment (${refusedJ.join('; ')})`}});
     // A red test cannot be accepted, and a green test alone cannot pass: the judgment is required.
     let verdict = judged.verdict;
@@ -857,7 +911,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       ticket: {...o.ticket, file: path.resolve(repo, o.ticket.path)}, board: o.run.board, base: o.base, branch: o.branch, commit,
       run: {ledger: o.run.ledger, ledger_anchor: o.run.ledger_anchor, ledger_head: o.run.ledger_head, run_json: o.run.run_json, run_json_digest: o.run_json_digest,
         shipped: true, gate_entry: o.run.gate_entry, tests: o.run.tests},
-      review: {ledger: o.run.ledger, ledger_anchor: rv.outputs.cycle_ledger_anchor, scope: rv.outputs.scope, review_scope: rv.outputs.review_scope, cycle: rv.outputs.cycle,
+      review: {ledger: rv.outputs.cycle_ledger ?? o.run.ledger, ledger_anchor: rv.outputs.cycle_ledger_anchor, scope: rv.outputs.scope, review_scope: rv.outputs.review_scope, cycle: rv.outputs.cycle,
         author_labs: rv.outputs.author_labs, close: rv.outputs.close, outcome: rv.outputs.outcome},
       validation: {verdict: val.outputs.verdict, record: val.hash, tests: val.outputs.tests.map(x => ({kind: x.kind, cmd: x.cmd, exit: x.exit, output_digest: x.output_digest})), validator: val.outputs.validator},
       plan: {digest: chain.plan.outputs.plan_digest, cycle: chain.plan.outputs.plan_review.cycle}, proposal: null};

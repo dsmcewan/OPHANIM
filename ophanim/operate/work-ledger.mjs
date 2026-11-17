@@ -93,7 +93,8 @@ function kinds({operators}) {
       authors: byController,
       validate: p => (p?.schema === WORK_SCHEMA && ID.test(p.item ?? '') && SHA.test(p.cycle ?? '') && SHA.test(p.recorded_policy ?? '') && SHA.test(p.policy ?? '')
         && p.recorded_policy !== p.policy && Array.isArray(p.findings) && p.findings.every(x => plain(x) && (x.review === null || SHA.test(x.review ?? '')) && str(x.why)) && ISO(p.at)
-        ? null : 'a reassessment names {item, cycle, recorded_policy, policy (another one), findings: [{review, why}], at}'),
+        && (p.policy_rules === undefined || plain(p.policy_rules))
+        ? null : 'a reassessment names {item, cycle, recorded_policy, policy (another one), findings: [{review, why}], policy_rules?, at}'),
       // One reassessment of a cycle per policy: the same evidence is not recorded twice.
       rederive: (e, view) => (entriesOf(view, 'work.reassessment').some(h => { const q = view.payload(h); return q.cycle === e.payload.cycle && q.policy === e.payload.policy; })
         ? 'this cycle is already reassessed under that policy' : null),
@@ -242,8 +243,8 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
       append('work.recovery', {item, status_entry, sources, outcome, searched, ...(proposal !== undefined ? {proposal} : {}), at}),
     recoveries: item => of('work.recovery', r => item === undefined || r.item === item),
     /** Record what a later identity policy says about a closed cycle's reviews (pantheon review/identity.mjs `reassess`). */
-    recordReassessment: ({item, cycle, recorded_policy, policy, findings, at = new Date().toISOString()}) =>
-      append('work.reassessment', {item, cycle, recorded_policy, policy, findings, at}),
+    recordReassessment: ({item, cycle, recorded_policy, policy, findings, policy_rules = undefined, at = new Date().toISOString()}) =>
+      append('work.reassessment', {item, cycle, recorded_policy, policy, findings, ...(policy_rules !== undefined ? {policy_rules} : {}), at}),
     reassessments: item => of('work.reassessment', r => item === undefined || r.item === item),
     intakes: () => of('work.intake'),
     claims: item => of('work.claim', c => item === undefined || c.item === item),

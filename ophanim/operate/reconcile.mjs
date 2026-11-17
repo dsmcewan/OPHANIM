@@ -81,6 +81,7 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     const activeClaim = workLedger ? workLedger.activeClaim(s.item, now) : null;
     const gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, now,
       recovery: workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry).at(-1) ?? null : null,
+      reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
         ? (() => { try { return buildDossier({repo, statusRoot, item: s.item, work: workLedger, issues, bundlesDir}).stable; } catch { return null; } })() : null});

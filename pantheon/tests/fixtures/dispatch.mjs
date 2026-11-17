@@ -40,13 +40,14 @@ export async function withDispatch(fn) {
   let implement = () => "export const ok = true;\n";
   let fault = () => null;
   let review = () => null;
-  const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call), call => review(call));
+  let served = () => null;
+  const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call), call => review(call), (vendor, model) => served(vendor, model));
   let n = 0;
   const agy = () => existsSync(agyLog) ? readFileSync(agyLog, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
   const spec = (key, extra = {}) => ({ key, repo_root: dir, title: "fixture", goal: "fixture goal", question: "q", copy: [],
     acceptance_cmd: "true", slot: "code", path: "code.mjs", ...extra });
   try {
-    return await fn({ dir, calls, agy, makeClientFor, spec, implement: f => { implement = f; }, fault: f => { fault = f; }, review: f => { review = f; },
+    return await fn({ dir, calls, agy, makeClientFor, spec, implement: f => { implement = f; }, fault: f => { fault = f; }, review: f => { review = f; }, serve: f => { served = f; },
       opts: (extra = {}) => ({ dir: join(dir, `board-${++n}`), makeClientFor, scouts: ["xai"], ...extra }) });
   } finally {
     for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -67,7 +68,9 @@ const GOOGLE_USAGE = { promptTokenCount: 1234, candidatesTokenCount: 56, totalTo
  * (with usage). Returning null serves the request normally. `review({vendor, model, pool, prompt})` may
  * answer a reviewer's prompt itself (a reply text); returning null keeps the default verdict.
  */
-export function scriptedClients(calls = [], implement = () => "export const ok = true;\n", fault = () => null, review = () => null) {
+// `served(vendor, model)` names the model a scripted provider REPORTS as having answered (the adapter reads it from the
+// stream, as from a live provider): by default none is reported, as before; a test of answer admission passes one.
+export function scriptedClients(calls = [], implement = () => "export const ok = true;\n", fault = () => null, review = () => null, served = () => null) {
   let n = 0;
   const answer = (prompt, who = {}) => {
     if (/VERDICT/i.test(prompt)) return review({ ...who, prompt }) ?? (/exited 1\b/.test(prompt) ? "VERDICT: request_changes" : "VERDICT: approve");
@@ -88,7 +91,8 @@ export function scriptedClients(calls = [], implement = () => "export const ok =
       responses: { inputTokens: { count: async () => ({ input_tokens: 1000 }) }, create: async req => {
         const { text, incomplete } = note(req, typeof req.input === "string" ? req.input : req.input?.at(-1)?.content ?? ""), id = `fixture_${++n}`;
         return { async *[Symbol.asyncIterator]() {
-          yield { type: "response.created", response: { id } };
+          const m = served(vendor, req.model);
+          yield { type: "response.created", response: { id, ...(m ? { model: m } : {}) } };
           yield { type: "response.output_text.delta", delta: text };
           if (incomplete) {
             yield { type: "response.incomplete", response: { id, status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [], usage: { ...USAGE } } };
@@ -101,7 +105,8 @@ export function scriptedClients(calls = [], implement = () => "export const ok =
         const last = req.messages?.at(-1)?.content;
         const { text, incomplete } = note(req, typeof last === "string" ? last : (last ?? []).map(p => p.text ?? "").join(""));
         return { async *[Symbol.asyncIterator]() {
-          yield { type: "message_start", message: { usage: { input_tokens: USAGE.input_tokens, output_tokens: 1 } } };
+          const m = served(vendor, req.model);
+          yield { type: "message_start", message: { ...(m ? { model: m } : {}), usage: { input_tokens: USAGE.input_tokens, output_tokens: 1 } } };
           yield { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } };
           yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } };
           yield { type: "message_delta", delta: { stop_reason: incomplete ? "max_tokens" : "end_turn" }, usage: { output_tokens: USAGE.output_tokens } };
@@ -111,7 +116,8 @@ export function scriptedClients(calls = [], implement = () => "export const ok =
       models: { countTokens: async () => ({ totalTokens: 1000 }), generateContentStream: async req => {
         const { text, incomplete } = note(req, (req.contents?.at?.(-1)?.parts ?? []).map(p => p.text ?? "").join("") || String(req.contents ?? ""));
         return { async *[Symbol.asyncIterator]() {
-          yield { candidates: [{ finishReason: incomplete ? "MAX_TOKENS" : "STOP", content: { parts: [{ text }] } }], usageMetadata: { ...GOOGLE_USAGE } };
+          const m = served(vendor, req.model);
+          yield { ...(m ? { modelVersion: m } : {}), candidates: [{ finishReason: incomplete ? "MAX_TOKENS" : "STOP", content: { parts: [{ text }] } }], usageMetadata: { ...GOOGLE_USAGE } };
         } };
       } },
     };

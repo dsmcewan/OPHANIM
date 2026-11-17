@@ -60,7 +60,7 @@ import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, carriesPractice, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
-import {reviewerRefusal, reviewerIdentity, resolveModel, policyRefusal, policyDigest} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, candidateRefusal, resolveModel, policyRefusal, policyDigest} from '../review/identity.mjs';
 
 export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 
@@ -79,9 +79,12 @@ export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 //                    alias correction cannot change this cycle's validity. A reviewer whose asked-for or answering
 //                    model the policy cannot resolve, or whose two names are of different labs, does not qualify.
 /** Why a reviewer seat may not review cycle `c`, or null. `seat` is {vendor, model, served_model?, lab}. */
-export function independenceRefusal(c, seat) {
+export function independenceRefusal(c, seat, {answer = false} = {}) {
   if (c.contract !== CYCLE_CONTRACT_V3) return c.author_labs.includes(seat.lab) ? `the ${seat.lab} lab authored the change and may not review it` : null;
-  return reviewerRefusal(seat, {models: c.author_models, labs: c.excluded_labs}, c.identity_policy.rules);
+  // Two different questions (review/identity.mjs): may this seat be ASKED (only the model asked for is known), and
+  // may this ANSWER count (the model that answered must be named and admissible).
+  const keys = {models: c.author_models, labs: c.excluded_labs};
+  return answer ? reviewerRefusal(seat, keys, c.identity_policy.rules) : candidateRefusal(seat, keys, c.identity_policy.rules);
 }
 /** The lab a review of cycle `c` counts for: under v3 the reviewer's resolved lab (recorded policy); else labOf. */
 export function reviewLab(c, {vendor, model, served_model = null}) {
@@ -199,7 +202,7 @@ export function closeClaim(state) {
     return {why: `the cycle requires ${Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)} independent labs and ${new Set(labs).size} reviewed`};
   }
   if (c.contract === CYCLE_CONTRACT_V3) {
-    for (const r of reviews) { const why = independenceRefusal(c, {vendor: r.seat.vendor, model: r.model, served_model: r.served_model, lab: r.lab}); if (why) return {why}; }
+    for (const r of reviews) { const why = independenceRefusal(c, {vendor: r.seat.vendor, model: r.model, served_model: r.served_model, lab: r.lab}, {answer: true}); if (why) return {why}; }
   } else {
     const authored = labs.find(l => c.author_labs.includes(l));
     if (authored) return {why: `the ${authored} lab authored the change and reviewed it`};

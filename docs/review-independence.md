@@ -26,6 +26,7 @@ With four labs, the old pairing left room for one contributing lab at most. A mo
 
 - **An unresolved contributor** means nobody can be shown not to be it. No panel qualifies and the review is pending until the name is declared.
 - **An unresolved reviewer** does not qualify. This applies to the model asked for and to the model that answered, and the two must be of the same lab. The response is kept on the ledger and the attempt is recorded as failed with the reason; it is not counted as a review.
+- **An answer that does not name the model that served it** does not qualify (resolver 2, below). The name asked for is never used in its place.
 - **A contribution that names a lab and no model** excludes that lab, as an explicit statement.
 
 ## The identity policy is pinned to each cycle
@@ -35,7 +36,7 @@ Everything that decides "which model is this, and which lab made it" is one valu
 - A v3 cycle **records the whole policy and its digest** (`identity_policy: {digest, rules}`), plus the raw contributor names it was opened with (`contributors`).
 - **Every check of that cycle uses the recorded rules**: who may review, which lab a review counts for, the seat's lab, cold review, the close. The configuration files are not read.
 - So **editing the rules later cannot change a recorded ledger's validity.** The test replays a recorded ledger in a fresh process over changed alias rules, and it verifies as before.
-- **A later correction is new evidence.** `reassess` reports which recorded reviews would not qualify under another policy. `work.recordReassessment` records that on the work ledger, naming the cycle, the policy it recorded and the policy it was reassessed under. Nothing in the cycle's own ledger or the item's status changes; what follows is the owner's decision.
+- **A later correction is new evidence.** `reassess` reports which recorded reviews would not qualify under another policy. `work.recordReassessment` records that on the work ledger, naming the cycle, the policy it recorded and the policy it was reassessed under. Nothing in the cycle's own ledger or the item's status changes. What the lifecycle then does is in "After a reassessment" below.
 
 ## How a panel is chosen
 
@@ -95,6 +96,16 @@ The inventory is the real one: 5 Anthropic, 3 OpenAI, 2 xAI and 2 Google models 
 - a validator answer served by a contributor, or by an unresolved model, is not accepted: it is kept with the requested and served names and the reason, and the next eligible seat is asked. When no acceptable answer is found the item does not reach an outcome;
 - an in-run code-review finding followed by a code revision (below).
 
+`pantheon/tests/review-admission.test.mjs` and `ophanim/operate/revision-reassessment.test.mjs` (the corrections after the review of `10cbd52`). The second file labels each test LIFECYCLE or BOUNDARY:
+
+- LIFECYCLE, default routing: finding, revision by the same worker model, restart of the process, outcome; with and without a ticket;
+- LIFECYCLE, default routing: repeated findings end `blocked` with every finding kept;
+- LIFECYCLE: validator answers with a missing, empty or blank served model are kept and never accepted;
+- BOUNDARY (injected stage records): exhausted validator capacity is `pending`;
+- LIFECYCLE: reassessment, re-review of active work with and without a ticket, and a Resolved item left alone.
+
+These tests use APIs added by the corrections, so they do not load on `10cbd52`. The defects were shown on `10cbd52` by the appendix's probes; the same probes, with their defect-asserting checks made non-fatal, now report the corrected behaviour.
+
 ## Corrections after the review of `b9fa745`
 
 Each was reproduced on a checkout of `b9fa745` before it was fixed.
@@ -106,21 +117,66 @@ Each was reproduced on a checkout of `b9fa745` before it was fixed.
 | 3. Lab taken from the route | `claude-opus-4-6-20261117` through the Google route resolved to `google/claude-opus-4-6`. A cycle with that response, by the model that wrote the plan, closed verified on "google, openai, xai". | Resolved to `anthropic/claude-opus-4-6` on every route. That review is refused. |
 | 4. Validator not rechecked | An `accept` served by a contributing or unknown model passed validation with `independent: true`. | The answering model is checked before the judgment is read. The accepted record names both models. |
 
-## The in-run checker, and what activation covers
+## Corrections after the review of `10cbd52`
 
-Inside a Pantheon run, each file is reviewed by Pantheon's own checker before the change exists. **That checker still uses the lab rule**, and its reviews are recorded on the run ledger under the lab-based cold-review rule. Activating the model rule would cover the plan review, the change review and the validator; it would not change the in-run checker.
+Starting commit `10cbd52` (the reviewed commit; the branch had not moved). Each finding of the reproduction appendix was reproduced there first, with the appendix's own probes, which ran to completion in this environment.
 
-How the two meet, as tested:
+| Finding | On `10cbd52` | Now |
+|---|---|---|
+| 1. Unnamed answering model | A validator answer with no served model passed with `independent: true` and the item reached `outcome`. A cycle whose three reviews had `served_model: null` closed `verified`. | Not admitted, by the validator and by the ledger. Each response is kept with the reason. The next eligible seat is asked within the stage budget; otherwise the cycle stays open or the stage fails without an outcome. |
+| 2. Weaker fallback at exhausted capacity | With every declared model a contributor, validation passed with `independent: false`, judged by contributing `grok-4.7`. | The fallback is removed. The stage is `pending` with `REVIEW_CAPACITY_PENDING`; no contributor is asked; the commit and test results are kept. |
+| 3. No revision under default routing | At the top model and top effort, a rejection was a terminal `stop`. The next attempt started a fresh run without the finding. | Escalation protocol v2 answers with `revise` by the same seat, bounded. The run is resumed with the finding, across a restart of the process. |
+| 4. Reassessment had no effect | The gate stayed at `validate` and the disqualified review was reused. | The review, and the validation and outcome resting on it, are not reused. Active work is re-reviewed once. A Resolved item is marked `reverification-needed` and left alone. |
 
-- **A finding that reaches a revision is a contribution.** When the in-run reviewer requests changes of passing work, Pantheon ends that run with the finding pending. The lifecycle's next implement attempt now **resumes that run** instead of starting a new one (it used to restart, which repeated the work and dropped the finding). The worker revises with the finding in its prompt, and the reviewer's model becomes a contributor to the change. The change review then excludes that model.
-- **Inside the run, the lab rule applies to the revised file**: it is reviewed by a lab that is neither the worker's nor the critic's. With four labs this leaves room for two rounds of in-run findings on a single-lab worker.
+### 1. Selection and admission are separate checks
 
-Where the boundary still blocks, and what would be needed:
+- **Before a call** (`candidateIdentity`, `candidateRefusal`): is the model about to be asked resolvable, and is it a contributor? Only the requested name exists, so only it is checked.
+- **After a call** (`reviewerIdentity`, `reviewerRefusal`): which model answered? The answer must name it. A missing, empty or blank `served_model` is refused with `NO_SERVED_IDENTITY`.
+- **Versioned.** The rule is resolver 2 of the identity policy, and the resolver number is part of the policy each cycle records. A cycle recorded under resolver 1 is still checked under resolver 1, where an unnamed answer counted as the model asked for. Such a cycle on a ledger verifies as before (tested).
+- **The validator** applies the same check under both independence rules.
 
-1. **Default routing gives no in-run revision.** Under the default (`argo`) routing the implementer is already the top model at top effort, so Pantheon's escalation rule answers an in-run rejection with "stop". No revision is pending, the stage fails, and a retry starts a fresh run without the finding. The tested revision path uses the `fit` routing profile, where the worker has headroom. To close this, the in-run findings would have to be carried to the next implement attempt as findings to answer, **and** the run would need a way to be told which reviewers already contributed, so its checker does not seat them again. The second part is a change to the run's own review scope, and should be a versioned one. Not built.
-2. **The lab rule inside the run is stricter than the model rule outside it.** A worker fallback to a second lab plus one in-run finding leaves one lab for the in-run review. Aligning the in-run checker with the model rule needs a versioned rule for reviews on the run ledger, as was done for cycles. Not built.
+### 2. Validator capacity
 
-Neither is needed for the first cycle of an item under the model rule: the lifecycle tests reach an outcome on four labs.
+The validator excludes the full contribution history: the plan, the work, every critique whose finding reached a revision, and the change reviewers. If no seat is left it waits.
+
+**Reachability.** The exhausted state was reached only by the appendix's injected fixture, which supplies a contributor list naming every declared model. In a complete lifecycle I did not find a path to it: validation runs only after a passed change review, and a passed review means three labs each still had a non-contributing model at that point. The three reviewers then become contributors, and the cases I enumerated on the real inventory still leave at least one eligible validator model. This is an argument from the inventory and the stage order, backed by the lifecycle tests. It is not a proof over every sequence of revisions, so the capacity block is kept and tested at the boundary.
+
+### 3. Revision at the top of the dial
+
+- **Two separate questions.** "May this work be revised again?" is a count of steps (`MAX_STEPS`, 4 per slot). "Is there a stronger model or a higher effort?" is the dial. Protocol v1 asked only the second; with nothing higher it stopped.
+- **Protocol v2** (`pantheon.escalation/v2`): a rejected critique with nothing higher is `revise` by the same seat. The same model revising is the same identity; no new contributor is created. Past the step bound it is `stop`.
+- **Versioned.** Each escalation record names its protocol and is re-derived under it. v1 records verify as before. The lifecycle asks for v2; `pantheon-board run` is unchanged.
+- **Only critiques.** An acceptance failure at the top of the dial still stops under v2. Repeating the same model at the same effort against a failing test has no new input.
+- **Resumed, not restarted.** The stopped run, its rejected file, the finding and the reviewer are on the board and the stage record. The next implement attempt resumes that board. A test runs the resuming tick in a separate process.
+- **Accounting.** Each attempt is charged its own calls. The sum over attempts equals the calls made, across the restart.
+
+### The in-run checker under the model rule
+
+When the lifecycle runs under the model rule it now asks the run for the same rule (`runOpenItem({independence: 'model'})`):
+
+- The in-run reviewer is chosen from candidates that are not contributors, labs that have not contributed first.
+- **A reviewer whose finding reached a revision does not review the revised file.** It also joins the contributors of the change, so the change review and the validator exclude it.
+- The in-run answer must name its serving model. A rejected answer is kept in `run.review_rejections`, and the next candidate is asked.
+- The review on the run ledger records `independence: "model"` and its identity policy. Cold review of that entry is re-derived by model. Entries without it use the lab rule as before.
+
+**When the limits run out.** The stage ends `blocked` with `IN_RUN_REVIEW_UNRESOLVED`. The record keeps every finding with the reviewer that made it, and the run with its rejected work. It is not dispatched again on the same inputs.
+
+**Limits found, not worked around:**
+
+1. **Default routing has two in-run reviewer candidates** (`xai/grok-4.7`, `agy_google/gemini-4-carbon`). So at most two rounds of in-run findings fit; the third is the blocker above. More rounds need more configured reviewer candidates, which is a routing decision.
+2. **The `agy` transport reports no served model.** Under the model rule its answers cannot be admitted, so on live providers the second candidate would be rejected and default routing would have one usable in-run reviewer. The scripted tests have the provider report its model. Closing this needs the transport to report the model, or a different second candidate. Neither was done here.
+
+### After a reassessment
+
+`node ophanim/operate/cli.mjs reassess --item ID` (`ophanim/operate/reassess.mjs`) checks each recorded cycle of the item against the current policy and records what no longer qualifies.
+
+- **Active work.** A disqualified review is not reused, nor are the validation and outcome records after it. The gate returns to that stage in `rereview` mode. The re-review runs once per reassessment, on its own ledger, with a panel chosen under the corrected policy. A disqualified plan review is handled the same way.
+- **History.** The earlier cycle is not changed and still verifies under the policy it recorded. Work-ledger entries are not rewritten.
+- **A Resolved item.** The gate is `reverification-needed`, a blocker addressed to the decision authority. No status is recorded, nothing is dispatched, and the item is not reopened.
+
+## Activation and the in-run checker
+
+`REVIEW_INDEPENDENCE` is still `'lab'`. Under the lab rule the run uses the lab rule as before. The only change that applies with the policy off is protocol v2 for lifecycle runs, and the requirement that a validator answer names its model.
 
 ## For the independent review
 
@@ -130,5 +186,7 @@ Points worth another lab's attention:
 2. **Undeclared aliases.** Two declared names that are one model, and are not in the rules, would count as two reviewers. The inventory was read for this; the two lane variants found are declared. A reassessment is how a later correction is recorded.
 3. **Each cycle carries a full copy of the policy** (about 1 KB). That makes replay self-contained at the cost of repetition.
 4. **Capacity is finite.** xAI and Google have two models each in the tables. After both models of a lab have contributed, that lab is out; after that happens to two labs, the review is pending.
-5. **Inside a Pantheon run**, the in-run checker still uses the lab rule, and default routing yields no in-run revision (see above).
-6. **What happens after a reassessment** with findings is left to the owner; nothing re-reviews automatically.
+5. **Inside a Pantheon run** under default routing there are two in-run reviewer candidates, and one of them (the `agy` transport) reports no served model.
+6. **Protocol v2 lets one model revise up to four times** on critiques alone. Is that bound right, and should it apply outside the lifecycle?
+7. **Validator capacity** was not shown reachable in a complete lifecycle; the argument is above and is not a proof.
+8. **After a reassessment** the re-review is automatic for active work. A Resolved item waits for the owner.

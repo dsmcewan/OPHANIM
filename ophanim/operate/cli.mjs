@@ -20,6 +20,9 @@
 //   node ophanim/operate/cli.mjs context --item ID [--issues FILE | --github] [--bundles DIR] [--retrieve JSON] [--json]
 //       Read-only: the evidence dossier a judging seat is given for the item (context.mjs), or one retrieval result.
 //       Works for any item, Resolved ones included; nothing is recorded, reopened or signed.
+//   node ophanim/operate/cli.mjs reassess --item ID
+//       Reassess the item's recorded model-rule reviews under the current identity policy; record any disqualification
+//       on the work ledger (new evidence: the review's own ledger and the status ledger are not touched).
 //   node ophanim/operate/cli.mjs serve --config FILE [--max-ticks N]
 //       The execution service (service.mjs): watch under a validated config (declared provider-call cap, interval,
 //       issue source, seats), one instance per work ledger, status and log files under its state directory.
@@ -55,7 +58,7 @@ const usage = why => { throw Object.assign(new Error(why), {usage: true}); };
 const BOOLEAN = new Set(['json', 'github', 'once', 'init']);
 export function parseArgs(argv) {
   const [first, ...rest] = argv;
-  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, tick, watch, serve, context or report');
+  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, tick, watch, serve, context, reassess or report');
   const opts = {}, pos = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { pos.push(rest[i]); continue; }
@@ -144,7 +147,7 @@ export function reconcileView({repo, statusRoot, workRoot, bundlesDir = null, is
 }
 
 // Gates in lifecycle order, then the waiting and terminal ones; with what each means.
-export const GATE_ORDER = ['claimed', ...STAGES, 'awaiting-owner', 'blocked', 'evidence-gap', 'complete'];
+export const GATE_ORDER = ['claimed', ...STAGES, 'awaiting-owner', 'blocked', 'reverification-needed', 'evidence-gap', 'complete'];
 const GATE_MEANS = {
   claimed: 'a stage is claimed under a live lease: in progress, not dispatched twice',
   plan: 'evaluation and planning: author a ticket from the requirement, or re-check the existing one',
@@ -155,6 +158,7 @@ const GATE_MEANS = {
   'awaiting-owner': 'the outcome is recorded; only the owner signs the status transition',
   blocked: 'waits on something outside the work or on an unresolved dependency; never dispatched',
   'evidence-gap': 'Resolved on the ledger without completion evidence bound to a ticket, a commit and a three-lab verified review',
+  'reverification-needed': 'Resolved with evidence, but a reassessment disqualified the review it rests on: the owner decides; the status is not changed',
   complete: 'Resolved with completion evidence',
 };
 const cell = s => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
@@ -375,6 +379,19 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
         return 0;
       }
       log(opts.json ? JSON.stringify(d, null, 2) : renderDossier(d));
+      return 0;
+    }
+    if (verb === 'reassess') {
+      // Reassess an item's recorded model-rule reviews under the CURRENT identity policy and record what is found
+      // (reassess.mjs). It writes only to the work ledger, with the controller key; no review ledger or status changes.
+      const item = opts.item ?? usage('reassess needs --item ID');
+      const opened = openWorkReadOnly(paths.workRoot);
+      const auth = authorityOf(opened.work, paths.workRoot);
+      if (!auth.held) { log(JSON.stringify(noAuthority(auth, opened.ledger), null, 2)); return 3; }
+      const {reassessItem} = await import('./reassess.mjs');
+      const r = reassessItem({work: openWorkLedger({root: paths.workRoot}), item});
+      log(JSON.stringify({item: r.item, policy: r.policy, recorded: r.recorded.map(x => ({stage: x.stage, cycle: x.cycle, reassessment: x.reassessment, findings: x.findings})),
+        skipped: r.skipped.map(x => ({stage: x.stage, cycle: x.cycle, why: x.why}))}, null, 2));
       return 0;
     }
     if (verb === 'serve') {
