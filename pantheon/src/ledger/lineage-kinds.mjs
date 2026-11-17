@@ -27,7 +27,9 @@ const HEX = /^[0-9a-f]{64}$/;
 // file can be checked against the ledger. `prompt_sha` cannot be re-derived (the prompt is not kept);
 // the reply's exchange digest is re-derived from the reply and tools.
 const exchangeShape = p => (p.prompt_sha === undefined || HEX.test(p.prompt_sha))
-  && (p.tools === undefined || (Array.isArray(p.tools) && p.tools.every(t => typeof t === 'string')));
+  && (p.tools === undefined || (Array.isArray(p.tools) && p.tools.every(t => typeof t === 'string')))
+  && (p.selection === undefined || (p.selection && typeof p.selection === 'object' && typeof p.selection.policy === 'string'
+    && typeof p.selection.policy_hash === 'string' && typeof p.selection.source === 'string'));
 
 const seatShape = s => s && typeof s.seat_id === 'string' && typeof s.vendor === 'string' && Number.isInteger(s.occupancy_gen) && s.occupancy_gen > 0;
 
@@ -142,11 +144,14 @@ export function lineageRecorder({ledger, operator, order, keys: store = null}) {
     return s;
   };
   return {
-    recordTurn({seat, requested_model, served_model = null, response_id = null, reply, purpose = null, cites = [], prompt = null, tools = []}) {
+    recordTurn({seat, requested_model, served_model = null, response_id = null, reply, purpose = null, cites = [], prompt = null, tools = [], selection = null}) {
       const s = signerFor(seat);
       const prev = last.get(seat.seat_id);
+      // `selection` (optional, additive): why this seat was chosen and under which policy version/hash
+      // (pantheon/src/route/frontier.mjs selectSeat). Entries written before it existed verify unchanged.
       const payload = {seat, requested_model, served_model, response_id, reply, reply_sha: sha(reply), purpose,
-        ...(typeof prompt === 'string' ? {prompt_sha: promptSha(prompt)} : {}), ...(tools?.length ? {tools: tools.map(String)} : {})};
+        ...(typeof prompt === 'string' ? {prompt_sha: promptSha(prompt)} : {}), ...(tools?.length ? {tools: tools.map(String)} : {}),
+        ...(selection ? {selection} : {})};
       const h = ledger.append({kind: 'turn', payload, author: {key_id: s.key_id}, signer: s, order, derivedFrom: [...(prev ? [prev] : []), ...cites]}).hash;
       last.set(seat.seat_id, h);
       return h;
