@@ -44,7 +44,7 @@ Every entry states its kind (authoritative requirement, observation, derived, hy
 - **Views.** Each request names a view: a source (including any selection, such as a `match` on status history) and a version. A result is a byte range of that view's whole body, with the total.
 - **Continuation.** A cut result or dossier entry carries `next`, the complete request that continues it. This holds for every source, including a long status history, a large stage record and a file that is one oversized line. `match` and `entry` select rows instead of paging through them.
 - **Containment.** A path must be inside the repository as written and as resolved: a symlink, or a path through a symlinked directory, to a target outside is refused, in retrieval and in the dossier alike. The refusal is listed.
-- **Budgets, in bytes.** One result is at most `result_bytes` (16 KB) and one seat's investigation at most `total_bytes` (160 KB) of delivered record text, counted as UTF-8 bytes without splitting a character. Both are enforced before a result enters the prompt: a result is cut to what is left, and a request that does not fit is not run. Each cut and each request not run is recorded with what remains retrievable.
+- **Budgets, in bytes.** The initial view is at most `dossier_bytes` (80 KB) of evidence text, one result at most `result_bytes` (16 KB), and one seat's investigation at most `total_bytes` (160 KB) of delivered record text, counted as UTF-8 bytes without splitting a character. Both are enforced before a result enters the prompt: a result is cut to what is left, and a request that does not fit is not run. Each cut and each request not run is recorded with what remains retrievable.
 - **Rounds.** 3 rounds of at most 6 requests by default. Every round is a counted provider call. At the bound the seat is told nothing more was retrieved and must say what it could not see.
 
 **The model decides whether it has enough.** A plan states `context` (sufficient, gaps, uncertainty) and answers the four questions (historical cause, operational position, change impact, adequacy of success). Each is either examined, with a finding and sources, or not examined, with the reason; none is forced. Consequential relevance decisions can be recorded (`used` or `dismissed`, with why). If the evidence does not support a plan, the planner answers `insufficient` instead: no plan is invented, no review is spent, the item waits with its gaps recorded, and it is planned again when the evidence changes.
@@ -96,6 +96,26 @@ The owner's review reproduced four defects at `22cbbb8`. Each has a regression t
 2. **Shared identity.** The requirement and its history were one source, so a complete requirement made a partial history count as fully delivered, and a finding about it was classified as "delivered in full". They are now separate views, and completeness is computed from byte ranges per view and version.
 3. **No continuation.** A cut status history, stage record or one-line file could not be continued. Every cut now carries the request that continues it, and status and work views can be selected by `match`.
 4. **Budgets.** `grep` could return several times `result_bytes`; an investigation could pass `total_bytes` before noticing; and bytes were counted as characters. All three are fixed as described above.
+
+## Recheck of `c4c40c2`
+
+The four defects were re-probed with fresh reproductions, not the regression tests, and each is corrected. This recheck was done by the implementer, so it is not an independent review. The probes found further gaps, fixed here with tests in `context-bounds.test.mjs` that fail on `c4c40c2`:
+
+| Gap | Was it introduced by the fixes? | Now |
+|---|---|---|
+| `file` read ignored files inside the repository: `.env`, `.git/config`, and the ledgers' private signing keys | No, it predates them; the containment fix did not cover it | Git's own directory and anything `.gitignore` excludes are refused. Tracked files, and untracked files that are not ignored, are still readable. |
+| `grep`, `list` and `log` used `HEAD` as their version, though `grep` reads the working tree; two different bodies could be added up as one complete delivery | Yes (the per-version ranges relied on it) | Their version is the digest of the body returned. |
+| A window smaller than one character returned an empty result marked delivered, with a continuation that made no progress | Yes | Refused as `CAP_TOO_SMALL`; an investigation with fewer than 4 bytes left treats its budget as spent. |
+| An `offset` given as a string was ignored (the same window came back); one past the end returned an empty result | Yes | A numeric string is honoured; anything else is `BAD_REQUEST`; past the end is `OUT_OF_RANGE` with the total. |
+| The recorded continuation of a partly delivered view was the first cut's, even after more had been retrieved | Yes | It is computed from the delivered ranges: the first byte not delivered. |
+| The initial view itself had no overall bound (165 KB with 30 linked issues and a long consumer list) | No | The whole view is bounded (`dossier_bytes`, 80 KB). At most three issues are shown; what does not fit is listed with its request. |
+| A cut status history or work record kept its oldest rows, so the latest decisions and findings were the first to drop out | No | The excerpt keeps the most recent rows, starting on a whole row; the earlier ones are the gap, from byte 0. |
+
+Not fixed, by nature:
+
+- **Hard links.** A hard link inside the repository to a file elsewhere is an ordinary file to every check available; it is read.
+- **Untracked secrets that are not ignored.** A secret file that `.gitignore` does not cover is readable. The keys and `.env` in this repository are ignored.
+- **`match` selects on the stored row text**, so a pattern containing quotes or newlines has to be written as it appears in the JSON row.
 
 ## Open
 

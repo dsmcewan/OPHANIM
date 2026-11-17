@@ -207,3 +207,88 @@ test('decisive history beyond the initial excerpt is retrieved and changes the d
     }
   });
 });
+
+// ---- Gaps found on a recheck of c4c40c2 (each fails there) ---------------------------------------------------------
+test('recheck: ignored files and git internals are never evidence (keys, .env, .git); an untracked, unignored working file still is', () => {
+  const repo = tmp();
+  try {
+    const f = fixture(repo, [{item: 'sec'}]);
+    fs.appendFileSync(path.join(repo, '.gitignore'), '.env\n');
+    fs.writeFileSync(path.join(repo, '.env'), 'API_KEY=sk-live-123\n');
+    fs.writeFileSync(path.join(repo, 'draft.md'), 'a working note\n');
+    const R = makeRetriever({repo, statusRoot: f.statusRoot});
+    const key = `status/ledger/keys/${fs.readdirSync(path.join(repo, 'status/ledger/keys'))[0]}`;
+    for (const p of [key, '.env', '.git/config', '.git/HEAD']) {
+      const r = R.run({op: 'file', path: p});
+      assert.equal(r.ok, false, `${p} must not be read`);
+      assert.equal(r.error, 'REFUSED');
+      assert.ok(!/PRIVATE|sk-live|repositoryformat/.test(JSON.stringify(r)));
+    }
+    assert.equal(R.run({op: 'file', path: 'draft.md'}).ok, true);
+    assert.equal(R.run({op: 'file', path: 'alpha.mjs'}).ok, true);
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
+});
+
+test('recheck: a view\'s version identifies its body, a window always makes progress or is refused, and offsets are validated', async () => {
+  const repo = tmp();
+  try {
+    const f = fixture(repo, [{item: 'v-item'}]);
+    commit(repo, {'multi.txt': 'é'.repeat(20_000), 'lines.txt': Array.from({length: 3000}, (_, i) => `line ${i + 1}`).join('\n')}, 'files');
+    const R = makeRetriever({repo, statusRoot: f.statusRoot});
+    // The working tree changes under the same HEAD: the search result is another body, so another version.
+    const g1 = R.run({op: 'grep', pattern: 'ok', path: 'alpha.mjs'});
+    fs.appendFileSync(path.join(repo, 'alpha.mjs'), '// ok, changed\n');
+    const g2 = R.run({op: 'grep', pattern: 'ok', path: 'alpha.mjs'});
+    assert.notEqual(g1.version, g2.version);
+    const halves = deliveryOf(null, {requests: [{ok: true, request: {op: 'grep'}, source: g1.source, version: g1.version, coverage: {...g1.coverage, to: 5, complete: false}},
+      {ok: true, request: {op: 'grep'}, source: g2.source, version: g2.version, coverage: {...g2.coverage, from: 5, complete: false}}]});
+    assert.equal(halves.get(g1.source).complete, false, 'halves of two bodies are not one complete delivery');
+    // A cap smaller than one character delivers nothing: that is a refusal, not an empty "delivered" result.
+    const tiny = R.run({op: 'file', path: 'multi.txt'}, {cap: 1});
+    assert.equal(tiny.ok, false);
+    assert.equal(tiny.error, 'CAP_TOO_SMALL');
+    const prompts = [];
+    const r = await investigate({prompt: 'P', retriever: R, limits: {total_bytes: 16_001, rounds: 2},
+      ask: async p => { prompts.push(p); return prompts.length === 1 ? {text: json({requests: [{op: 'file', path: 'lines.txt'}, {op: 'file', path: 'multi.txt'}]})} : {text: json({verdict: 'approve', findings: []})}; }});
+    assert.ok(!r.log.requests.some(q => q.ok && q.bytes === 0), 'no request is recorded as delivered with zero bytes');
+    assert.equal(r.log.requests[1].ok, false);
+    // Offsets: a numeric string is honoured; nonsense and past-the-end are errors the model can see.
+    assert.equal(R.run({op: 'file', path: 'lines.txt', offset: '500'}).coverage.from, 500);
+    assert.equal(R.run({op: 'file', path: 'lines.txt', offset: 'abc'}).error, 'BAD_REQUEST');
+    assert.equal(R.run({op: 'file', path: 'lines.txt', offset: -3}).error, 'BAD_REQUEST');
+    const past = R.run({op: 'file', path: 'lines.txt', offset: 10 ** 9});
+    assert.equal(past.error, 'OUT_OF_RANGE');
+    assert.match(past.why, /28892 bytes/);
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
+});
+
+test('recheck: the gap\'s continuation starts at the first undelivered byte; the initial view is bounded as a whole and keeps the most recent history', () => {
+  const repo = tmp();
+  try {
+    const f = fixture(repo, [{item: 'g-item', basis: 'alpha.mjs exports ok = true; see index.mjs'}]);
+    commit(repo, {'big.mjs': `import {ok} from './alpha.mjs';\n${'// filler line\n'.repeat(900)}// end\n`, 'index.mjs': 'export {};\n',
+      ...Object.fromEntries(Array.from({length: 400}, (_, i) => [`many/user${i}-with-a-long-descriptive-name.mjs`, 'import \'../index.mjs\';\nimport \'../alpha.mjs\';\n']))}, 'files');
+    longHistory(f, 'g-item');
+    const R = makeRetriever({repo, statusRoot: f.statusRoot});
+    const issues = Array.from({length: 30}, (_, i) => ({number: i + 1, title: 't', state: 'open', labels: [], body: `${'y'.repeat(5000)}\n<!-- ophanim:item=g-item -->`}));
+    const d = buildDossier({repo, statusRoot: f.statusRoot, item: 'g-item', issues});
+    // The whole initial view is bounded, and what did not fit is listed with the request that retrieves it.
+    const shown = d.entries.reduce((n, e) => n + bytes(e.text), 0);
+    assert.ok(shown <= R.limits.dossier_bytes, `the initial view carries ${shown} bytes of evidence; its budget is ${R.limits.dossier_bytes}`);
+    assert.ok(d.omissions.some(o => /issue.*NOT shown.*\{"op":"issue","number":\d+\}/.test(o)), 'an issue that did not fit is listed with its request');
+    // The history excerpt keeps the most recent entries; the earlier ones are the gap, from byte 0.
+    const hist = d.entries.find(e => /^Status history/.test(e.title));
+    assert.ok(hist.text.includes('the requirement of g-item: alpha.mjs exports ok = true'), 'the newest entry is in the initial view');
+    assert.ok(!hist.text.includes('routine note 0.'));
+    assert.equal(hist.coverage.next.offset, 0);
+    assert.ok(hist.text.startsWith('{"entry"'), 'the excerpt starts on a whole row');
+    // The continuation of a gap is computed from what was delivered, not remembered from the first cut.
+    const big = d.entries.find(e => e.source === 'file:big.mjs');
+    const first = big.coverage.to;
+    const range = R.run({op: 'file', path: 'big.mjs', start: 890, lines: 5});
+    const step = R.run({op: 'file', path: 'big.mjs', offset: first}, {cap: 2000});
+    const log = rs => ({requests: rs.map(([request, r]) => ({request, ok: true, source: r.source, version: r.version, coverage: r.coverage}))});
+    assert.equal(deliveryOf(d, log([[{op: 'file', path: 'big.mjs', start: 890, lines: 5}, range]])).get('file:big.mjs').next.offset, first);
+    assert.deepEqual(deliveryOf(d, log([[{op: 'file', path: 'big.mjs', offset: first}, step]])).get('file:big.mjs').next, {op: 'file', path: 'big.mjs', offset: first + 2000});
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
+});
