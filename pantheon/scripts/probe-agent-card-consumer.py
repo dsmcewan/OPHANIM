@@ -17,7 +17,7 @@
 import ast, re, json, subprocess, sys, tempfile, shutil
 from pathlib import Path
 
-REPO = Path("/home/colchis/Projects/pantheon")
+REPO = Path(__file__).resolve().parent.parent  # the pantheon checkout this script lives in
 SRC = (REPO / "scripts" / "agy-seat.py").read_text(encoding="utf-8")
 
 # Extract the REAL load_agent_card, byte-for-byte, without importing the antigravity SDK.

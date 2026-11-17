@@ -78,7 +78,7 @@ The Pantheon DAG holds the parents, but the "was → is" consistency of the trai
 
 - `runtime.mjs:216`: `authorizePlan` is invoked only `if(typeof governance.authorizePlan==='function')`. A governance adapter without it admits plans with no registration.
 - `runtime.mjs:137`: `transitionRelease` accepts `valid===true || valid?.ok===true || valid?.valid===true`. Three shapes of success is a loose contract for a release gate. Every other gate in the codebase requires `ok===true`.
-- (Minor) `createGovernance` defaults `telosRoot` to a developer path (`/home/colchis/Projects/TELOS`). The pin check rejects it safely, but the default should be "required" rather than a path that happens to fail.
+- (Minor) `createGovernance` defaults `telosRoot` to a developer path (`~/Projects/TELOS`). The pin check rejects it safely, but the default should be "required" rather than a path that happens to fail.
 
 ### G5. Assignment isn't fully part of the recorded loop
 
