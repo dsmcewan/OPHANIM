@@ -29,10 +29,11 @@ import { openBoard } from "./index.mjs";
 import { cidOf } from "./canon.mjs";
 import { certifiedArtifacts } from "./artifacts.mjs";
 import { ticketRuntimeRefusal, ticketContainmentRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
-import { frontierCandidates, readPools } from "../route/frontier.mjs";
-import { labOf } from "../config/models.mjs";
+import { readPools, selectSeat } from "../route/frontier.mjs";
+import { labOf, vendorsOfLab, modelId } from "../config/models.mjs";
+import { seatingPlan, INTAKE } from "../role/seating.mjs";
 import { TOKEN_TIERS } from "../config/tiers.mjs";
-import { taskProfile } from "../route/task-profile.mjs";
+import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
@@ -104,14 +105,62 @@ function ticketRefusal(t, { repo, item }) {
   return null;
 }
 
-/** The seats runOpenItem would put in each chair (its default routing profile), and the cycle reviewers. */
-export function seatTeam({ pools = [], overrides = {} } = {}) {
-  const seat = c => ({ vendor: c.vendor, model: c.model, lab: labOf(c.vendor, c.model), pool: c.pool ?? c.vendor });
-  // An operator reseat (--seat role=vendor/model) is the chair's only occupant for the run, as in runOpenItem.
-  const ladder = role => (overrides[role] ? [{ ...seat(overrides[role]), operator: true }] : frontierCandidates(role, { pools }).map(seat));
-  const team = Object.fromEntries(ROLES.map(r => [r, ladder(r)]));
-  const authors = { plan: [team.planner[0]?.lab].filter(Boolean), work: [team.implementer[0]?.lab].filter(Boolean) };
-  return { ...team, cycle_reviewers: cycleReviewers({ planLabs: authors.plan, workLabs: authors.work }) };
+/**
+ * The seats runOpenItem will put in each chair for `spec` under `profile`, and the cycle reviewers: the SAME
+ * selector the dispatch calls (selectSeat), with the same inputs -- the ticket's difficulty, under `fit` its task
+ * profile, the operator's seats, the pools -- in the dispatch's order: the scouts (argo: the configured scout
+ * vendors; legacy: the INTAKE fan-out; fit: explorer width, each avoiding the labs already seated), the planner,
+ * each slot's implementer, and each slot's reviewer(s), avoiding the maker's and the planner's vendors and labs.
+ * Each chair lists its seat first, then the fallbacks the selection admitted. It assumes every first seat
+ * answers (a fallback at dispatch changes what follows it), admits on a recorded window but not on the size of a
+ * prompt (known only at dispatch), and does not apply a producer lab reservation (it says so when one could).
+ */
+export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "argo", scouts: scoutVendors = ["xai"] } = {}) {
+  const slots = spec ? normalizeSlots(spec) : [{ slot: "file", path: null }];
+  const difficulty = spec?.difficulty ?? "medium";
+  const task = profile === "fit" ? taskProfile(spec ?? {}, { paths: slots.map(s => s.path).filter(Boolean), mode: "batch" }) : null;
+  const choose = (role, extra = {}) => selectSeat(role, { profile, difficulty, pools, needsContext: 1, roleOverride: overrides[role] ?? null,
+    ...(task ? { task } : {}), ...extra });
+  const seatOf = c => ({ vendor: c.vendor, model: c.model, lab: labOf(c.vendor, c.model), pool: c.pool ?? c.vendor, source: c.selection?.source ?? null,
+    ...(["operator-override", "slot-override"].includes(c.selection?.source) ? { operator: true } : {}),
+    ...(profile === "fit" ? { class: c.selection?.class?.value ?? null, effort: c.selection?.effort?.value ?? null } : {}) });
+  const ladder = choice => [...new Map(choice.candidates.map(c => [`${c.vendor}/${c.model}`, seatOf(c)])).values()];
+  const notes = [];
+  // Scouts, as the dispatch's intake seats them.
+  const scoutLadders = [];
+  if (profile === "fit") {
+    const width = requirementsOf(task).explorer_width.value, avoid = [], avoidLabs = [];
+    for (let k = 0; k < width; k++) {
+      const l = ladder(choose("scout", { avoid, avoidLabs, ...(k ? { roleOverride: null } : {}) }));
+      scoutLadders.push(l); avoid.push(l[0].vendor); avoidLabs.push(l[0].lab);
+    }
+  } else {
+    const intake = profile === "legacy" ? seatingPlan({ roles: ["scout"], seating: INTAKE }) : null;
+    for (const vendor of scoutVendors) {
+      if (profile === "argo") { scoutLadders.push(ladder(choose("scout")).filter(c => c.vendor === vendor)); continue; }
+      const model = intake.assigned.scout.vendor === vendor ? intake.assigned.scout.model : (vendor === "xai" ? modelId("xai", "grok-4.3") : modelId("google", "argon"));
+      scoutLadders.push(ladder(choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake", reason: `intake fan-out vendor ${vendor}` } })));
+    }
+  }
+  const reviewLabs = task ? requirementsOf(task).review_labs.value : 1;
+  if (reviewLabs > 1) notes.push(`stakes need ${reviewLabs} review labs: the dispatch may hold labs back from the planner and implementers to keep that panel possible, which this preview does not apply`);
+  const planner = ladder(choose("planner"));
+  const implementers = slots.map((sl, i) => ladder(choose("implementer", { pin: sl.model ?? null,
+    slotOverride: overrides[`implementer.${i}`] ?? overrides[`implementer.${sl.slot}`] ?? null })));
+  const p = planner[0];
+  const reviewPanels = implementers.map(im => {
+    const m = im[0];
+    const avoid = [...new Set([m.vendor, p.vendor, ...vendorsOfLab(m.lab), ...vendorsOfLab(p.lab)])], avoidLabs = [...new Set([m.lab, p.lab])];
+    const panel = [], usedVendors = [], usedLabs = [];
+    for (let k = 0; k < reviewLabs; k++) {
+      const l = ladder(choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], ...(k ? { roleOverride: null } : {}) }));
+      panel.push(l); usedVendors.push(l[0].vendor); usedLabs.push(l[0].lab);
+    }
+    return panel;
+  });
+  const team = { profile, scout: scoutLadders[0] ?? [], scouts: scoutLadders.map(l => l[0]), planner, implementer: implementers[0], implementers,
+    reviewer: reviewPanels[0][0], review_panels: reviewPanels.map(panel => panel.map(l => l[0])), ...(notes.length ? { notes } : {}) };
+  return { ...team, cycle_reviewers: cycleReviewers({ planLabs: [p.lab], workLabs: [...new Set(implementers.map(l => l[0].lab))] }) };
 }
 
 /**
@@ -160,15 +209,17 @@ export function dispatchable(board, item, { repo }) {
 }
 
 /** `next`: the dispatchable items, in dependency order, each with its ticket and the team it would seat. */
-export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor = null, pools = null, overrides = {} }) {
+export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor = null, pools = null, overrides = {}, profile = "argo" }) {
   const board = readBoard({ statusRoot, anchor });
-  const team = seatTeam({ pools: pools ?? readPools(), overrides });
+  const poolList = pools ?? readPools();
   const items = [], skipped = [];
   for (const it of dependencyOrder(board.items)) {
     if (it.state !== "Ready") continue;
     const d = dispatchable(board, it.item, { repo });
     if (d.why) { skipped.push({ item: it.item, why: d.why }); continue; }
     const t = d.ticket;
+    // The team this ticket's run will seat: the same selector, on this ticket, under the run's profile.
+    const team = seatTeam({ pools: poolList, overrides, spec: t.spec, profile });
     items.push({ item: it.item, title: it.title, entry: it.entry, basis: it.basis,
       ticket: { path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key,
         files: normalizeSlots(t.spec).map(s => s.path), acceptance_cmd: t.spec.acceptance_cmd, difficulty: t.spec.difficulty ?? "medium" },

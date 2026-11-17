@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Pantheon on the status board (pantheon/src/board/operate.mjs, docs/operating-workflow.md).
 //
-//   node pantheon/bin/pantheon-board.mjs next [--json] [--seat role=vendor/model]...
+//   node pantheon/bin/pantheon-board.mjs next [--json] [--seat role=vendor/model]... [--profile argo|legacy|fit]
 //       the verified board's dispatchable items, in dependency order, each with its ticket and the team
-//       it would seat (vendor, model, lab per chair, and the cycle reviewers)
+//       its run would seat: the dispatch's own selector (selectSeat) on that ticket under the profile (its task
+//       profile under fit), per chair the seat then its fallbacks, the review panel, and the cycle reviewers
 //   node pantheon/bin/pantheon-board.mjs run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model]...
 //       [--n 3] [--dir BOARD] [--out DIR] [--branch NAME] [--checked YYYY-MM-DD] [--profile argo|legacy|fit]
 //       runOpenItem on the item's ticket (the run ledger on), the shipped change committed on a branch,
@@ -70,7 +71,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N] [--max-provider-calls N] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N] [--max-provider-calls N] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -160,7 +161,8 @@ const seatOverrides = Object.fromEntries(multi.seat.map(s => {
   return [role, { vendor, model, rank: 0, pool: vendor, band: null, basis: "OPERATOR", why: "operator reseat for this board run" }];
 }));
 
-const seatLine = s => `${s.vendor}/${s.model} (${s.lab})${s.operator ? " [operator reseat]" : ""}`;
+const seatLine = s => `${s.vendor}/${s.model} (${s.lab})${s.operator ? " [operator reseat]" : ""}` +
+  (s.class !== undefined ? ` [${s.class ?? "-"}, effort ${s.effort ?? "-"}]` : "");
 function printNext(r) {
   console.log(`Status board: ${r.board.root}`);
   console.log(`  verified: anchor ${r.board.anchor}, head ${r.board.head}, ${r.board.entries} entries`);
@@ -171,8 +173,12 @@ function printNext(r) {
     console.log(`  ticket ${it.ticket.path} (${it.ticket.digest.slice(0, 19)}), slice: ${it.ticket.slice}`);
     console.log(`  files: ${it.ticket.files.join(", ")}; difficulty ${it.ticket.difficulty}; proposes ${it.ticket.proposes.state} on success`);
     console.log(`  acceptance: ${it.ticket.acceptance_cmd}`);
-    console.log("  team (runOpenItem's routing, first seat then fallbacks):");
-    for (const role of ["scout", "planner", "implementer", "reviewer"]) console.log(`    ${role.padEnd(11)} ${it.team[role].map(seatLine).join(" | ")}`);
+    console.log(`  team (${it.team.profile}: the dispatch's selector on this ticket; first seat then fallbacks):`);
+    console.log(`    ${"scouts".padEnd(11)} ${it.team.scouts.length ? it.team.scouts.map(seatLine).join(" + ") : "(none: no explorer stage)"}`);
+    console.log(`    ${"planner".padEnd(11)} ${it.team.planner.map(seatLine).join(" | ")}`);
+    for (const [i, l] of it.team.implementers.entries()) console.log(`    ${(it.team.implementers.length > 1 ? `impl.${i}` : "implementer").padEnd(11)} ${l.map(seatLine).join(" | ")}`);
+    for (const [i, p] of it.team.review_panels.entries()) console.log(`    ${(it.team.review_panels.length > 1 ? `review.${i}` : "reviewer").padEnd(11)} ${p.map(seatLine).join(" + ")}`);
+    for (const n of it.team.notes ?? []) console.log(`      note: ${n}`);
     const c = it.team.cycle_reviewers;
     console.log(`    cycle review (n=${c.seats.length}, distinct labs, avoiding ${c.author_labs.join(", ")}): ${c.seats.map(seatLine).join(" | ")}`);
     if (c.note) console.log(`      note: ${c.note}`);
@@ -185,7 +191,8 @@ function printNext(r) {
 
 try {
   if (verb === "next") {
-    const r = boardNext({ repo, statusRoot, anchor, overrides: seatOverrides });
+    if (opts.profile && !["argo", "legacy", "fit"].includes(opts.profile)) usage(`--profile is argo, legacy or fit, got ${opts.profile}`);
+    const r = boardNext({ repo, statusRoot, anchor, overrides: seatOverrides, profile: opts.profile ?? "argo" });
     if (opts.json) console.log(JSON.stringify(r, null, 2)); else printNext(r);
     process.exit(0);
   }
