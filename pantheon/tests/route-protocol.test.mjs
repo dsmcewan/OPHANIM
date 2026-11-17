@@ -2,7 +2,7 @@
 // cheapest change for their cause, are recorded, and re-derive.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nextStep, escalationRecord, verifyEscalation, routeFor, classifyOutcome, carriesEffort } from "../src/route/protocol.mjs";
@@ -274,4 +274,27 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     writeFileSync(file, [...lines.slice(0, -1), JSON.stringify(forged)].join("\n") + "\n");
     await assert.rejects(runFixture(join(dir, "again"), scripted(), { ledger: recorder }), /ledger does not verify, refusing to run/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the ledger is on by default: a run records at <board>/ledger, and `ledger: false` turns it off", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-default-ledger-"));
+  const saved = process.env.OPHANIM_LEDGER;
+  delete process.env.OPHANIM_LEDGER;
+  try {
+    const on = await runFixture(join(dir, "on"), scripted({ cutAt: 20000 }));
+    assert.equal(on.shipped, true, JSON.stringify(on.error));
+    const ledgerDir = join(on.board, "ledger");
+    const { openSystemLedger } = await import("../../ophanim/ledger/system.mjs");
+    const { openBoard } = await import("../src/board/index.mjs");
+    const reopened = openSystemLedger({ root: ledgerDir, board: openBoard(on.board) });
+    const kinds = reopened.ledger.read().map(e => e.kind);
+    for (const k of ["genesis", "facts", "seating", "turn", "review", "escalation"]) assert.ok(kinds.includes(k), `${k} recorded by default`);
+    assert.equal(reopened.ledger.verify().ok, true);
+    const off = await runFixture(join(dir, "off"), scripted(), { ledger: false });
+    assert.equal(off.shipped, true, JSON.stringify(off.error));
+    assert.equal(existsSync(join(off.board, "ledger")), false, "opted out: no ledger written");
+  } finally {
+    if (saved === undefined) delete process.env.OPHANIM_LEDGER; else process.env.OPHANIM_LEDGER = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

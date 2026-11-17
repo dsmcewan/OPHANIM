@@ -305,6 +305,13 @@ export function efficiencyRecorder({ledger, controller, order, snapshot = readRu
       return append('efficiency.debit', {schema: DEBIT, traceSha, assessmentCostMs, charged, interrupted}, [use]);
     },
     /** The trace an assessment reads, carried whole and bound to the board commit it names. */
+    /** The entries already recorded for a trace (an equilibrium reuse cites these, never new ones). */
+    entriesFor(traceSha) {
+      const trace = find('efficiency.trace', (e, x) => x.traceSha === traceSha);
+      const assessed = trace && find('efficiency.assessed', (e, x) => x.traceSha === traceSha);
+      const retained = assessed && find('efficiency.retained', e => e.derived_from.includes(assessed));
+      return trace && assessed ? {trace, assessed, ...(retained ? {retained} : {})} : null;
+    },
     trace({stateDir, trace}) {
       const traceSha = digest(trace);
       return find('efficiency.trace', (e, x) => x.traceSha === traceSha)

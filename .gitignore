@@ -6,3 +6,6 @@ __pycache__/
 outputs/
 .env
 .env.*
+
+# Agent worktrees (isolated checkouts used during a session; never committed)
+.claude/worktrees/

@@ -16,7 +16,7 @@ import {chairContributions, CONTRIBUTIONS_SCHEMA} from '../../pantheon/src/board
 import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
 import {LANES} from '../../pantheon/src/config/models.mjs';
 import {FACTS} from '../../pantheon/src/config/facts.mjs';
-import {canonical} from '../board.mjs';
+import {canonical, digest} from '../board.mjs';
 
 // A figure is either UNRECORDED (never guessed) or carries the source and quote it was read from.
 const isCited = f => f === 'UNRECORDED' || f === undefined
@@ -100,8 +100,15 @@ export function pantheonKinds({authors = {}, board = null} = {}) {
  */
 export function escalationRecorder({ledger, controller, order, operator, facts = currentFacts(), seating = currentSeating()}) {
   const by = s => ({author: {key_id: s.key_id}, signer: s, order});
-  const f = ledger.append({kind: 'facts', payload: facts, ...by(operator)}).hash;
-  const s = ledger.append({kind: 'seating', payload: seating, derivedFrom: [f], ...by(operator)}).hash;
+  // Inputs are recorded once: an identical facts or seating entry already on the chain is reused, so a
+  // ledger shared across runs grows by what changed, not by a copy of the inputs per run.
+  const ref = value => 'sha256:' + digest(value);
+  const existing = (kind, value, cites) => {
+    const e = ledger.read().findLast(x => x.kind === kind && x.payload_ref === ref(value) && cites.every(c => x.derived_from.includes(c)));
+    return e ? ledger.hashOf(e) : null;
+  };
+  const f = existing('facts', facts, []) ?? ledger.append({kind: 'facts', payload: facts, ...by(operator)}).hash;
+  const s = existing('seating', seating, [f]) ?? ledger.append({kind: 'seating', payload: seating, derivedFrom: [f], ...by(operator)}).hash;
   const last = new Map();
   return {
     inputs: {facts: f, seating: s},

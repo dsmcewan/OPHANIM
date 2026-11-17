@@ -173,14 +173,11 @@ export async function runOpenItem(spec, opts = {}) {
   // can never fire is not caution, it is a landmine for a future SEATING change that adds a role
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
-  // The ledger (ophanim/ledger): when given, the run verifies it before relying on anything, and every
-  // escalation decision is recorded on it as an entry citing the facts and seating it was made under.
-  // run.json keeps its copy for display; the ledger entry is the one that re-derives.
-  const LEDGER = opts.ledger ?? null;
-  if (LEDGER) {
-    const v = LEDGER.verify();
-    if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
-  }
+  // The ledger (ophanim/ledger) is ON BY DEFAULT: a run records on the ledger at OPHANIM_LEDGER (one
+  // ledger shared by every run) or, unset, at <board root>/ledger. `ledger: false` turns it off; a
+  // recorder passed in is used as is. The run verifies it before relying on anything, and every turn,
+  // review and escalation is an entry that re-derives. run.json keeps its copy for display only.
+  let LEDGER = opts.ledger === false ? null : (opts.ledger ?? null);
   let escalationWork = 0;
   // Turn entries by prompt, so a critique can cite the work it reviews; work cites the plan it followed.
   const ledgerTurns = new Map();
@@ -203,6 +200,14 @@ export async function runOpenItem(spec, opts = {}) {
   mkdirSync(outDir, { recursive: true });
 
   const board = openBoard(root);
+  if (opts.ledger === undefined) {
+    const { openSystemLedger } = await import("../../../ophanim/ledger/system.mjs");
+    LEDGER = openSystemLedger({ root: process.env.OPHANIM_LEDGER ?? join(root, "ledger"), board }).recorder();
+  }
+  if (LEDGER) {
+    const v = LEDGER.verify();
+    if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
+  }
   const HUMAN = { vendor: "human" };
   const CONTROLLER = { vendor: "controller" };
   const REF = `refs/board/${spec.key}`;
@@ -357,7 +362,7 @@ export async function runOpenItem(spec, opts = {}) {
       run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
         tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage, ...(effort ? { effort_not_carried: effort } : {}) });
       // The agy transports report no served model; it is recorded as unreported (null), never guessed.
-      recordTurn({ seat: { seat_id: `${vendor}-${purpose}`, vendor, mode: purpose, occupancy_gen: 1 },
+      recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: 1 },
         requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt });
       progress({ event: "turn.done", seat: vendor, model, ms, detail: `${r.text.length} chars, ${r.tool_calls} tool call(s), ${r.subagent_calls} subagent(s)` });
       return r.text;
@@ -401,9 +406,11 @@ export async function runOpenItem(spec, opts = {}) {
     const ms = Date.now() - t0;
     run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
       served_model: r.result.served_model ?? null });
-    // On the ledger: signed by this seat occupancy (a recorded reseat is a new occupancy), with the
-    // served model the provider reported beside the requested one.
-    recordTurn({ seat: { seat_id: `${vendor}-${purpose}`, vendor, mode: purpose, occupancy_gen: r.seat?.model_gen ?? 1 },
+    // On the ledger: signed by this seat occupancy, with the served model the provider reported beside
+    // the requested one. The seat is identified as the conversation layer keys it (vendor, purpose and
+    // model: sdkTurn's seat is `${purpose}@${pool}@${model}`), so two slots running different models are
+    // two seats, never one seat that "changed model".
+    recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: r.seat?.model_gen ?? 1 },
       requested_model: model, served_model: r.result.served_model ?? null, response_id: r.result.response_id ?? null, reply: text, purpose, prompt });
     progress({ event: "turn.done", seat: vendor, model, ms, detail: `${text.length} chars` });
     return text;
@@ -911,7 +918,7 @@ export async function runOpenItem(spec, opts = {}) {
       const workTurn = built.workPrompt && ledgerTurns.get(built.workPrompt);
       const critiqueTurn = ledgerTurns.get(p.prompt);
       if (LEDGER?.recordReview && workTurn && critiqueTurn) {
-        LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
+        LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique@${reviewed.seat.model}`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
           model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
           verdict, findings: findings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
       }

@@ -419,12 +419,18 @@ export async function assessConvergence({root,stateDir,scope,state,boardCommit,o
 }
 
 // The assessment retained for an unchanged head is the assessment of this run.
-export function reusedEfficiencyRecord({stateDir,boardCommit,output}) {
+export function reusedEfficiencyRecord({stateDir,boardCommit,output,ledger=null}) {
   const reportFile=path.join(stateDir,'efficiency','convergences',boardCommit.replace(':','-'),'assessment.json');
   if(!exists(reportFile))throw Error('Reused convergence has no retained efficiency assessment');
   const assessment=read(reportFile);
   const record={schema:assessment.schema,outcome:assessment.outcome,reason:assessment.reason,traceSha:assessment.traceSha,scopeSha:assessment.scopeSha,boardCommit,reportFile};
   verifyEfficiencyRecord({stateDir,record,output});
+  // At equilibrium the reused record names the same ledger entries the fresh one did; it records nothing new.
+  if(ledger){
+    verifiedLedger(ledger);
+    const entries=ledger.entriesFor?.(assessment.traceSha)??null;
+    if(entries)record.ledger=entries;
+  }
   return record;
 }
 

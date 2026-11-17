@@ -92,16 +92,22 @@ export function lineageKinds() {
  * by an operator authority entry before the seat's first entry, so every seat entry is signed by a key
  * the ledger's authority admitted.
  */
-export function lineageRecorder({ledger, operator, order}) {
+export function lineageRecorder({ledger, operator, order, keys: store = null}) {
   const keys = new Map(), last = new Map();
+  // With a key store (system.mjs), a seat occupancy keeps its key across runs: it is admitted once,
+  // and reused while the ledger's authority still names it. Without one, keys live for this recorder.
   const signerFor = seat => {
     const id = seatKeyId(seat);
-    if (!keys.has(id)) {
-      const s = generateSigner(id);
-      ledger.append({kind: AUTHORITY, payload: {add: {[id]: s.publicJwk}}, author: {key_id: operator.key_id}, signer: operator, order});
-      keys.set(id, s);
-    }
-    return keys.get(id);
+    if (keys.has(id)) return keys.get(id);
+    let s = store?.get(id) ?? null;
+    const admitted = ledger.verify().authority?.keys?.[id];
+    if (s && admitted && admitted.x === s.publicJwk.x) { keys.set(id, s); return s; }
+    if (!s) s = store ? store.put(generateSigner(id)) : generateSigner(id);
+    else if (admitted) s = store.replace(generateSigner(id));   // held key no longer admitted: a fresh one
+    if (admitted) ledger.append({kind: AUTHORITY, payload: {revoke: [id]}, author: {key_id: operator.key_id}, signer: operator, order});
+    ledger.append({kind: AUTHORITY, payload: {add: {[id]: s.publicJwk}}, author: {key_id: operator.key_id}, signer: operator, order});
+    keys.set(id, s);
+    return s;
   };
   return {
     recordTurn({seat, requested_model, served_model = null, response_id = null, reply, purpose = null, cites = []}) {

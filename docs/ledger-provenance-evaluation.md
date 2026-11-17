@@ -347,3 +347,37 @@ Without a ledger the file path is unchanged.
 - A **completed** experiment recorded as `efficiency.retained` is not exercised end to end. That needs a full 1 → 3 replay with independent qualification, which no test in the suite runs. The refusal paths are tested; the positive path shares `retainedExperimentFrom` with `readRetainedExperiment`.
 - In the evidence-dependent case, a held receipt cannot show which failure produced it (forecast, retired source, lock). It is bound to the trace and carries no authority, but substituting it for a real receipt there is not detectable.
 - `cli.mjs` still creates no ledger of its own (unchanged from K5).
+
+## The ledger by default (cycle 8, 2026-11-17)
+
+The cycle review named "the ledger is opt-in" as the largest remaining gap. It is now on by default.
+
+| Piece | How |
+|---|---|
+| Ledger home | `ophanim/ledger/system.mjs`, `openSystemLedger({root, board, anchor})`. It opens, or on first use creates, a ledger with every kind registered: facts, seating, escalation, contribution, turn, review, the efficiency kinds, and, when a board is given, gate and board anchors. |
+| Trust | First use writes the genesis and pins its hash in `ANCHOR`. An expected anchor (argument or `OPHANIM_LEDGER_ANCHOR`) must match. A chain without its anchor is refused, never trusted on its own word. |
+| Key custody | `keys/` (0700) holds one owner-only file (0600) per private key: operator, controller, and each seat occupancy. Keys never enter the chain. A key readable by others, or one that does not match the authority's public key, is refused. |
+| Seat keys across runs | A seat occupancy keeps its key and is admitted once. `rotateSeatKey` revokes and re-admits, and earlier entries still verify. |
+| Inputs once | Identical facts and seating entries already on the chain are reused, so a shared ledger grows by what changed. |
+| Default on | `runOpenItem` records at `OPHANIM_LEDGER` or `<board root>/ledger`. `executeRequest` records at `OPHANIM_LEDGER` or `<stateDir>/ledger`. `ledger: false` opts out, and replays get none. |
+
+**Found by turning it on.** Multi-slot runs give each slot its own implementer (one slot on gpt-6-astra, another on gpt-6-sol). The ledger had recorded both under one seat and correctly refused the second turn as a model change without a reseat. The seat is now identified the way the conversation layer keys it (vendor, purpose and model), so they are two seats. An equilibrium reuse now names the same ledger entries as the fresh assessment instead of none.
+
+*Check.*
+- `ophanim/ledger/system.test.mjs` (4 tests) covers:
+  - creation, pinning and permissions;
+  - refusal of a wrong anchor, a lost anchor, an exposed key and a swapped key;
+  - inputs and seat keys reused across runs, and rotation;
+  - the key store refusing overwrites.
+- `ophanim/ledger/cli-default.test.mjs` covers the CLI on by default and opted out.
+- `pantheon/tests/route-protocol.test.mjs` covers a run on by default: genesis, facts, seating, turns, review and escalation recorded and verifying. It also covers `ledger: false` writing nothing.
+- Suites:
+  - `npm run test:proof`: 170 of 170, with TELOS at the pin;
+  - Pantheon: 812 pass, plus the 1 known environment failure;
+  - model client: 48 pass.
+
+**Still to do.**
+- **Layering:** Pantheon reaches the ledger through a dynamic import of `ophanim/ledger`. The ledger belongs in a shared package (`packages/ledger`).
+- **Shared ledger:** gate and contribution kinds re-derive against the board the ledger was opened with, so one shared ledger across boards needs a board resolver per entry.
+- **Key custody:** it is a local key store; a hardware or remote signer would replace `keyStore`.
+

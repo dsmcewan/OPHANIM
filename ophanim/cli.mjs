@@ -15,10 +15,16 @@ function workerArtifact(options,workers) {
   return {schema:'ophanim.synthetic-worker-artifact/v1',sourceSha:digest(fs.readFileSync(FIXTURES,'utf8')),options,workers:metadata(workers)};
 }
 
-// `opts.ledger` (K5): an efficiencyRecorder from ophanim/ledger/efficiency-kinds.mjs. It carries signing
-// keys, so it is passed by the caller, never read from a request file.
+// The ledger is ON BY DEFAULT: efficiency records go to the ledger at OPHANIM_LEDGER or, unset, at
+// <stateDir>/ledger (ophanim/ledger/system.mjs). `opts.ledger: false` turns it off; a recorder passed in
+// is used as is. It carries signing keys, so it never comes from a request file, and replays get none.
 export async function executeRequest(request,opts={}) {
-  return execute(request,false,opts);
+  let ledger=opts.ledger===false?null:(opts.ledger??null);
+  if(opts.ledger===undefined&&request&&path.isAbsolute(request.stateDir??'')){
+    const {openSystemLedger}=await import('./ledger/system.mjs');
+    ledger=openSystemLedger({root:process.env.OPHANIM_LEDGER??path.join(path.resolve(request.stateDir),'ledger')}).recorder();
+  }
+  return execute(request,false,{ledger});
 }
 
 async function execute(request,replay,opts={}) {
@@ -157,7 +163,7 @@ async function runRequest(request,replay,{ledger=null}={}) {
     };
     // A reused convergence wrote nothing; its head already carries an assessment.
     if(result.reused)output.reusedConvergence={boardCommit:result.boardCommit};
-    if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output});
+    if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output,ledger});
     else if(!replay){
       const record=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
         boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,

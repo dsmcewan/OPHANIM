@@ -161,7 +161,7 @@
    Each cost a cycle. The P8/P9 holds pointed at TELOS from cycle 1. Reading it then would have saved cycles 6 and 7 at least one turn each.
 2. **The review layer should run every cycle by default.** It is cheap next to a shipped regression, and cycle 5 shows the cost of skipping it. On the ledger it is now the same mechanism: review entries under cold-review rules.
 3. **Nothing has met a live provider.** Every turn, served model, truncation and tier was checked against fakes. The first live run is the real validation. It needs credentials, and it would also settle `all_turns` and give the tiers evidence.
-4. **The ledger is opt-in.** `runOpenItem` and `executeRequest` record only when the caller passes a recorder. Nothing creates the genesis, holds the operator key, or rotates seat keys outside tests. Key custody is fixture-grade.
+4. **The ledger is opt-in.** *(Addressed in cycle 8: on by default, with key custody and rotation; see the ledger evaluation doc.)* `runOpenItem` and `executeRequest` record only when the caller passes a recorder. Nothing creates the genesis, holds the operator key, or rotates seat keys outside tests. Key custody is fixture-grade.
 5. **Some records are still off the ledger, or only signed inputs:**
    - the `run.json` display copies;
    - seat conversation files;
@@ -176,7 +176,7 @@
 7. **The status is scattered.** Three evaluation documents each hold a status table. One board, itself a projection of the ledger, would be easier to keep true.
 8. **Process slips:**
    - one merge commit (`09926bf`) went out without the attribution lines;
-   - `.claude/` worktrees are excluded locally, not in the repository.
+   - `.claude/` worktrees were excluded locally, not in the repository. *(Fixed in cycle 8: `.gitignore`.)*
 
 ## What remains On Hold (all external)
 
