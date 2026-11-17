@@ -53,11 +53,13 @@
 //
 // Exit codes: 0 done, 1 refused (not dispatchable, not shipped, the cycle cannot close yet, a check
 // failed), 2 usage.
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
 import { boardNext, runBoardItem, resumeBoardItem, proposeFromBundle, checkProposal, defaultStatusRoot } from "../src/board/operate.mjs";
 import { evaluate, defaultEvidenceStore } from "../src/practice/evaluate.mjs";
+import { capacityReport } from "../src/practice/review-capacity.mjs";
 
 const REPO_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const [verb, ...argv] = process.argv.slice(2);
@@ -71,7 +73,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] [--max-provider-calls N] [--plan-title model|ticket] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] [--max-provider-calls N] [--plan-title model|ticket] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json] | capacity [--bundles DIR] [--evidence-store DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -274,6 +276,18 @@ try {
     const e = evaluate({ runs: store });
     // A large record on a pipe: wait for stdout to drain before exiting, or the JSON is cut short.
     if (opts.json) await new Promise(r => process.stdout.write(JSON.stringify(e, null, 2) + "\n", r)); else printEvaluation(e, store);
+    process.exit(0);
+  }
+  if (verb === "capacity") {
+    // Is four labs enough for coordinated review? (src/practice/review-capacity.mjs; the rule is in
+    // docs/reviews/2026-11-17-review-capacity/FOUR_LABS.md). Reads bundles and before-work refusals; calls nothing.
+    const bundles = resolve(opts.bundles ?? join(homedir(), ".pantheon", "boards"));
+    const store = opts["evidence-store"] ? resolve(opts["evidence-store"]) : defaultEvidenceStore();
+    const r = capacityReport({ bundles, store });
+    if (opts.json) { await new Promise(res => process.stdout.write(JSON.stringify(r, null, 2) + "\n", res)); process.exit(0); }
+    console.log(`coordinated review capacity (rule: ${r.rule.enough_rate * 100}% of >= ${r.rule.min_runs} board runs complete)`);
+    console.log(`  ${r.needed} needed a coordinated review; ${r.completed} completed; verdict: ${r.verdict.outcome} -- ${r.verdict.why}`);
+    for (const [k, n] of Object.entries(r.counts)) if (n) console.log(`  ${k.padEnd(26)} ${n}  ${r.classes[k] ?? ""}`);
     process.exit(0);
   }
   usage(`unknown verb: ${verb ?? "(none)"}`);

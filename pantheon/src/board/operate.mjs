@@ -526,6 +526,9 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     if (cap.pending) {
       const pending = { ...cap.pending, stage: "before-work", predicted_contributors: cap.scope.contributions, profile, plan_title: runOpts.planTitle ?? "model" };
       progress({ event: "run.pending", code: pending.code, why: pending.why });
+      // Kept as evidence for the four-lab evaluation (practice/review-capacity.mjs): a refusal is an outcome too.
+      mkdirSync(join(store, "review-pending"), { recursive: true });
+      writeFileSync(join(store, "review-pending", `${item}-${Date.now()}.json`), JSON.stringify({ item, at: new Date().toISOString(), ...pending }, null, 2) + "\n");
       return { bundle: null, dir: null, proposal: null, pending, why: `${pending.code} before any work: ${pending.why}` };
     }
   }
