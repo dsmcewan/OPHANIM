@@ -3,16 +3,17 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:7af40371063a3b2d2fa65546b78ed947292739e5e75deed18e8ebb6a0c43c8b0` · 65 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:3fc0f0441a3528e3718a553d3eb3401110926fd16dc793be740ecefe00936eb8` · 67 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 33 · In progress: 1 · Ready: 0 · On Hold: 12.
+**Counts:** Resolved: 34 · In progress: 0 · Ready: 0 · On Hold: 13.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
 | Item | State | Waiting on | Basis | Checked |
 |---|---|---|---|---|
 | **all_turns on GPT-6 Astra, Sol, Luna** (`all-turns`) | On Hold | credential | docs conflict on Astra, silent on Sol and Luna; one live call settles it | 2026-11-17 |
+| **Cross-lab review of the ledger work (PR #6)** (`cross-lab-review`) | On Hold | credential | reviewers from OpenAI, xAI and Google are ready to run (npm run review-cycle with the HTTPS turn); the saved provider keys are still rejected | 2026-11-17 |
 | **xAI models on the shared client** (`direct-path-xai`) | On Hold | fact | xAI documents no output ceilings (re-checked 2026-11-17) | 2026-11-17 |
 | **FW4: a threat model naming the adversary (independent review)** (`fw4-threat-model`) | On Hold | decision | the review assigns this to the decision authority: which adversary the controls must stop (careless owner, compromised agent session, malicious repo writer, provider substitution). A draft can be proposed for decision | 2026-11-17 |
 | **gemini-3.6-flash off the agy seats** (`gemini-routing`) | On Hold | decision | would move OAuth agy seats onto the metered API | 2026-11-17 |
@@ -24,7 +25,6 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
 | **Operator key custody (hardware or remote signer)** (`signer`) | On Hold | decision | keys generated in an agent session stay there (independent review SY1/WF2); the status board key is the same question. Needs the owner to hold the operator key or name a signer | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
-| **GitHub as the public projection of the ledger** (`public-record`) | In progress |  | issues, labels, PR provenance, cycle reports and Actions summaries generated from committed ledgers; agent seats never shown as GitHub identities | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **One ledger across boards and domains** (`board-resolver`) | Resolved |  | entries name their board (scope) and re-derive against it; domains declared by operator-signed entries; a reader checks foreign-domain entries structurally and reports them as foreign, never re-derived | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
@@ -45,6 +45,7 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **OPHANIM loop P1-P7** (`p1-p7`) | Resolved |  | equilibrium reuse, chain verification, required gates, assignments, append-only debits, deltas, investigation checkpoints (docs/loop-evaluation.md) | 2026-11-17 |
 | **Frontier handoff and refill scheduling (P8, P9)** (`p8-p9`) | Resolved |  | implemented, opt-in; admission through the efficiency gate is held separately (p8-p9-admission) | 2026-11-17 |
 | **Routing and escalation protocol** (`protocol`) | Resolved |  | decisions re-derive; reviewer verdicts and truncations escalated | 2026-11-17 |
+| **GitHub as the public projection of the ledger** (`public-record`) | Resolved |  | issues, labels, PR provenance, cycle reports and CI summaries generated from committed ledgers; seats never shown as GitHub identities (docs/public-record.md); publishes on push to main only | 2026-11-17 |
 | **Engine Q1-Q6** (`q1-q6`) | Resolved |  | model in the author, occupancy, chair and controller gates, lane registry, budget binding (docs/pantheon-engine-loop-evaluation.md) | 2026-11-17 |
 | **Q7 contribution measurement** (`q7-measurement`) | Resolved |  | projection, recomputation check and ranking across five chairs | 2026-11-17 |
 | **OpenAI reasoning.context** (`reasoning-context`) | Resolved |  | settled from the vendor docs; effective mode recorded | 2026-11-17 |
