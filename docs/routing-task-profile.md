@@ -19,8 +19,8 @@ Code: `pantheon/src/route/task-profile.mjs` and the `fit` path in `pantheon/src/
 | `depth` | none, light, standard, deep, max | Effort rung. Depth index *d* (0 to 4) maps to rung `round(d·(n−1)/4)` of the chosen model's own documented ladder (`capability-facts.json` `efforts.values`). A model with no documented ladder, or a seat on a transport that carries no effort (agy), gets no effort, and the record says which case applied. | legacy |
 | `output` | xs, s, m, l, xl = 1024, 4096, 16384, 32768, 65536 | Output tier (`OUTPUT_TIERS` in `config/tiers.mjs`), still capped at the documented ceiling. easy, medium and hard alias s, m and l with unchanged budgets. | legacy |
 | `context` | measured estimate only (prompt chars / 4) | Admission under M7: a documented window smaller than the estimate, or an unrecorded window, excludes the model and records the reason. A ticket `context` field is refused. | derived:prompt-chars |
-| `stakes` | low, normal, high, critical | Minimum model class (fast, standard, frontier, frontier). Also the number of independent review labs (1, 1, 2, 3), returned as `requirements.review_labs` and not yet consumed by the review cycle. | ticket > derived:paths > legacy |
-| `ambiguity` | settled, open, contested | The planner's class floor (fast, standard, frontier). Also an explorer width (0, 1, 3 distinct labs), returned as `requirements.explorer_width` and not consumed yet. | legacy |
+| `stakes` | low, normal, high, critical | Minimum model class (fast, standard, frontier, frontier). Also the number of independent review labs (1, 1, 2, 3), `requirements.review_labs`, consumed by the review stage (see below). | ticket > derived:paths > legacy |
+| `ambiguity` | settled, open, contested | The planner's class floor (fast, standard, frontier). Also an explorer width (0, 1, 3 distinct labs), `requirements.explorer_width`, consumed by intake (see below). | legacy |
 | `latency` | interactive, batch | Tie-break toward the faster class. Fallbacks may climb at most 1 class above the floor for `interactive` and 2 for `batch`. | derived:dispatch-mode (`batch` for the board dispatcher) |
 | `kind` | code, analysis, prose, review | Capability filter where facts support one. None do today: no cited fact separates these abilities, so every selection records `filter: "unfiltered"` with that reason. | derived:paths (docs-only gives prose, otherwise code) |
 
@@ -74,6 +74,23 @@ Operating points reached as first seats, over a fixed set of 180 tickets × 4 ro
 
 These counts measure reach. They say nothing about quality.
 
+## What `fit` runs at intake and review
+
+These apply under `fit` only. `argo` and `legacy` keep one configured scout vendor and one reviewer.
+
+- **Intake.** The run fields `explorer_width` scouts. The `fit` selector chooses each one for the scout role, one at a time, and each avoids every vendor and lab that already answered. So no two scouts share a lab, even after a fallback.
+  - Width 0 runs no explorer stage, and the ticket cites no scouts.
+  - The configured scout vendors and the legacy INTAKE seats are not used.
+  - The scout role's tables name only two labs (xai, openai). The third lab comes from the roster's scout/explorer chair, `scout@opt` in `team/roster.mjs` (agy_google, xai, openai), which is the declared bench for that chair.
+  - `run.json` `intake` records the width and each scout's selection.
+  - If too few labs are eligible, the run refuses with `EXPLORER_LABS_UNAVAILABLE` before any scout is called.
+- **Review.** The run fields `review_labs` reviewers per artifact, chosen one at a time. Each avoids the maker's lab, the planner's lab (law 3, `assertReviewCutsAcross`), and every vendor and lab already on the panel.
+  - If fewer labs are eligible than required, the run refuses with `REVIEW_LABS_UNAVAILABLE` before any reviewer is called. It never runs fewer.
+  - Every member's critique lands on the board, so the existing REVIEW gate refuses any rejection. The run also refuses to ship (`REVIEW_PANEL`) unless every member approved.
+  - `run.json` `review.panels` records each member's lab, verdict and selection.
+  - Only four labs exist, so 3 review labs requires the planner and the maker to share a lab. When they do not, a critical-stakes run is refused.
+- **Escalation.** The slot's effort is the one the answering seat ran with. When a fallback answers, a later raise starts from the fallback's own mapped effort.
+
 ## What is provisional
 
 All of it. That includes:
@@ -81,6 +98,7 @@ All of it. That includes:
 - the class of every model: 19 are `TASTE`. Two are `VENDOR`, with the vendor's positioning quote as cited in `seating.mjs`, and the kb file that quote comes from is not in this checkout.
 - the stakes-to-class and ambiguity-to-class floors
 - the review-lab and explorer-width counts
+- the explorer bench (the labs of the roster's `scout@opt` chair), which is what lets explorer width reach 3
 - the proportional depth-to-effort mapping
 - the latency climb limits
 - the path patterns used to derive stakes
@@ -108,7 +126,4 @@ Until all three are done, `argo` stays the default, and any `fit` run is labelle
 
 Not done in this change:
 
-- `review_labs` and `explorer_width` are not wired into the review cycle or into intake fan-out.
-- The intake scouts under `fit` use the legacy INTAKE seats.
 - The printed seating report for a `fit` run shows the legacy table.
-- When a fallback model rather than the primary answers, a later effort escalation starts from the primary's mapped effort.

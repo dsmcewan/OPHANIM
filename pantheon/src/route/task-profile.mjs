@@ -106,7 +106,7 @@ export function classFloor(task, role, order = ["fast", "standard", "frontier"])
   return { value: floor, why: why.join("; ") };
 }
 
-/** Requirements the profile states for later stages to consume (not wired into the review cycle here). */
+/** Requirements the profile states for later stages: run-item.mjs consumes both under `fit` (review panel, intake width). */
 export function requirementsOf(task) {
   return {
     review_labs: { value: REVIEW_LABS[task.stakes.value], basis: `stakes ${task.stakes.value} (${task.stakes.basis})` },

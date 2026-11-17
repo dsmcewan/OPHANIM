@@ -4,6 +4,7 @@ import {modelId,models,isFrontier,CAPABILITIES} from '../../../packages/model-cl
 import {LANES,labOf} from '../config/models.mjs';
 import {FACTS} from '../config/facts.mjs';
 import {SEATING,INTAKE,candidatesFor,modelOf} from '../role/seating.mjs';
+import {ROSTER} from '../team/roster.mjs';
 import {routeFor,documentedWindow} from './protocol.mjs';
 import {taskProfile,classFloor,requirementsOf,effortForDepth,PROFILE_MAPPING,LATENCY_CLIMB} from './task-profile.mjs';
 
@@ -240,9 +241,15 @@ function roleTables(){
   for(const [role,rows] of Object.entries({...SEATING,...INTAKE}))for(const c of rows)add(role,c.vendor,modelOf(c));
   return t;
 }
+// The explorer bench (`fit` only): the scout role's tables (ARGO `scout`, INTAKE) name two labs, but explorer
+// width is counted in DISTINCT labs and reaches 3 for contested work. The roster's scout/explorer chair
+// (team/roster.mjs `scout@opt`, candidates agy_google, xai, openai) is the declared bench for that chair, so its
+// labs are allowed after the tables' own, in the roster's order. PROVISIONAL, like every fit judgment.
+const EXPLORER_BENCH=Object.freeze({scout:'scout@opt'});
 /** The labs a role's tables allow, in declared order (first appearance across its tables, ARGO first). */
 export function roleLabs(role){
-  return [...new Set((roleTables()[role]??[]).map(c=>labOf(c.vendor,c.model)))];
+  const bench=EXPLORER_BENCH[role]?ROSTER[EXPLORER_BENCH[role]].candidates.map(v=>labOf(v)):[];
+  return [...new Set([...(roleTables()[role]??[]).map(c=>labOf(c.vendor,c.model)),...bench])];
 }
 const classRank=m=>CLASSES.order.indexOf(CLASSES.models[m]?.class);
 
