@@ -29,7 +29,7 @@ const specPath = flag("--ticket");
 if (!specPath) { console.error("usage: open-items-run.mjs --ticket <spec.json> [--dir <root>]"); process.exit(2); }
 const SPEC = JSON.parse(readFileSync(resolve(REPO, specPath), "utf8"));
 
-// OPERATOR RESEAT, declared. `--seat planner=agy_google/gemini-3.5-flash` puts a named body in a
+// OPERATOR RESEAT, declared. `--seat planner=agy_google/gemini-3.6-flash` puts a named body in a
 // chair for this run only; the chair, its pack and its projection do not change, and the run record
 // says who sat where. A reseat is the seating table's own answer to a hose with no retry-after.
 const seatOverrides = Object.fromEntries(argv.flatMap((a, i) => a === "--seat" ? [argv[i + 1]] : []).map(spec => {

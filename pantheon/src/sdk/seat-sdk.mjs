@@ -23,7 +23,7 @@ import { mkdirSync, writeFileSync, existsSync, unlinkSync, readFileSync } from "
 import { seatKey } from "../seat/identity.mjs";
 import { withSeatLock } from "../seat/lock.mjs";
 import { pantheonHome } from "../seat/store.mjs";
-import { sendTurn, continuityMode } from "./adapter.mjs";
+import { sendTurn, continuityMode, ADAPTERS } from "./adapter.mjs";
 import { loadHistoryState, saveHistory, commitHistory, stageHistoryGeneration, loadHistoryGeneration } from "./history.mjs";
 import { cacheKey } from "../../../packages/model-client/index.mjs";
 import { createHash } from "node:crypto";
@@ -62,7 +62,7 @@ function readIntent(seat, home) {
 }
 
 export async function sdkTurn({
-  vendor, purpose, cwd, prompt, model, client, home, extra, onEvent, label, continuity, acknowledgeLost = false,
+  vendor, purpose, cwd, prompt, model, client, home, extra, onEvent, label, continuity, acknowledgeLost = false, reseatModel = false,
   scope, sessionId, effort, architecture, contractHeader, signal, deadline,
 } = {}) {
   if (!vendor || !purpose || !cwd) throw new Error("sdkTurn: vendor, purpose and cwd are required");
@@ -86,6 +86,19 @@ export async function sdkTurn({
   return withSeatLock(seatKey(seat), async () => {
     const held = loadSeat(seat, opts);
 
+    // HANDOFF. A turn may build only on a record whose chain is the chain of its own exchanges.
+    // An edited or half-written record would otherwise be re-chained from whatever it now holds,
+    // and the next turn would report a resume of a conversation the record no longer proves.
+    if (held && (held.chain || held.exchanges)) {
+      const recomputed = Array.isArray(held.exchanges) && held.exchanges.length ? record(held.exchanges) : null;
+      if (!recomputed || recomputed.head !== held.chain?.head || recomputed.length !== held.chain?.length) {
+        return {
+          ok: false, code: "CHAIN_MISMATCH", persisted: false, seat: held,
+          why: "the stored chain does not match the chain of the stored exchanges; this seat record cannot be continued",
+        };
+      }
+    }
+
     // One decision, made once per turn and REPORTED, so a caller can never be left guessing
     // which mode actually ran. A request for a mode the vendor cannot do is honoured as far as
     // possible and flagged, not silently downgraded.
@@ -98,6 +111,22 @@ export async function sdkTurn({
       ? loadHistoryGeneration(seat,held.history_generation,opts)
       : loadHistoryState(seat, { ...opts, acknowledged: held?.history_len ?? null }) : null;
     const history = replay ? hist.messages : undefined;
+
+    // The model that will answer, resolved the way the adapter resolves it. A conversation recorded under
+    // one model is not silently continued by another: replayed history (and any reasoning it carries) was
+    // produced for the recorded model. Changing it is an explicit, recorded reseat.
+    const usedModel = model ?? ADAPTERS[vendor]?.default_model ?? null;
+    const heldModel = held?.model ?? null;
+    if (heldModel && usedModel && heldModel !== usedModel && !reseatModel) {
+      return {
+        ok: false, code: "MODEL_CHANGED", persisted: false, seat: held,
+        why: `this seat's conversation is held by ${heldModel}; continuing it with ${usedModel} is a reseat. ` +
+          `Pass reseatModel: true to record the change, or use a different seat.`,
+      };
+    }
+    const modelPatch = !usedModel ? {}
+      : !heldModel ? { model: usedModel, model_gen: held?.model_gen ?? 1 }
+      : heldModel === usedModel ? {} : { model: usedModel, model_gen: (held.model_gen ?? 1) + 1 };
 
     const homeDir = home ?? pantheonHome();
     const pending = readIntent(seat, homeDir);
@@ -156,6 +185,7 @@ export async function sdkTurn({
       // record as the chain, so the two cannot disagree about how much conversation exists.
       ...(replay ? { history_len: result.history.length } : {}),
       ...(generation?{history_generation:generation}:{}),
+      ...modelPatch,
     }, opts);
 
     // PHASE TWO: the seat record is on disk, so the tail is real. Unconditional and idempotent -- a
@@ -176,6 +206,8 @@ export async function sdkTurn({
       history_healed: hist?.healed_from_seat ?? null,
       history_committed: committed?.committed ?? null,
       turns_added: next.length - prior.length,
+      model: saved.model ?? null,
+      model_reseated: Boolean(modelPatch.model && heldModel && heldModel !== modelPatch.model),
       chain,
       continuity: !result.resumed
         ? "fresh conversation; no continuity claimed"

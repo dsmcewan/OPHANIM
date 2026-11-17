@@ -13,6 +13,8 @@
 // In particular `delta.text` is a FRAGMENT, never a whole message -- a consumer that treats one
 // delta as a complete reply will look correct on short answers and truncate on long ones.
 
+import { terminalState } from "../../../packages/model-client/index.mjs";
+
 const now = () => Date.now();
 const ev = (seat, type, rest = {}) => ({ seat, type, at: now(), ...rest });
 
@@ -38,9 +40,10 @@ const STREAMERS = {
       else if (e?.type === "response.output_item.added" && e.item?.name) {
         yield ev(seat, "tool", { name: e.item.name });
       } else if (e?.type === "response.completed") {
-        yield ev(seat, "done", { id: e.response?.id ?? null, final: e.response ?? null });
-      } else if (e?.type === "error" || e?.type === "response.failed") {
-        yield ev(seat, "error", { text: e.error?.message ?? "stream failed" });
+        const terminal = terminalState("responses", { status: e.response?.status ?? "completed" });
+        yield ev(seat, "done", { id: e.response?.id ?? null, final: e.response ?? null, terminal });
+      } else if (e?.type === "error" || e?.type === "response.failed" || e?.type === "response.incomplete") {
+        yield ev(seat, "error", { text: e.error?.message ?? e.response?.incomplete_details?.reason ?? "stream failed" });
       }
     }
   },
@@ -51,8 +54,12 @@ const STREAMERS = {
   async *genai({ client, req, seat }) {
     yield ev(seat, "start", { id: null });
     const stream = await client.models.generateContentStream(req);
-    let full = "";
+    let full = "", finishReason = null, blocked = false;
+    const modelParts = [];
     for await (const chunk of stream) {
+      finishReason = chunk?.candidates?.[0]?.finishReason ?? finishReason;
+      blocked = blocked || Boolean(chunk?.promptFeedback?.blockReason);
+      for (const part of chunk?.candidates?.[0]?.content?.parts ?? []) modelParts.push(structuredClone(part));
       for (const candidate of chunk?.candidates ?? []) {
         for (const part of candidate?.content?.parts ?? []) {
           if (part?.thought === true && typeof part.text === "string") {
@@ -67,7 +74,8 @@ const STREAMERS = {
         : parts.filter(p => p?.thought !== true).map(p => p?.text ?? "").join("");
       if (t) { full += t; yield ev(seat, "delta", { text: t }); }
     }
-    yield ev(seat, "done", { id: null, text: full });
+    // Every model part, thought signatures included, is what a replay must carry forward.
+    yield ev(seat, "done", { id: null, text: full, parts: modelParts, terminal: terminalState("genai", { finishReason, blocked }) });
   },
 
   // Anthropic: a typed event stream. content_block_delta carries text_delta; tool_use arrives
@@ -75,8 +83,17 @@ const STREAMERS = {
   async *messages({ client, req, seat }) {
     yield ev(seat, "start", { id: null });
     const stream = await client.messages.create({ ...req, stream: true });
-    let full = "";
+    let full = "", stopReason = null;
+    const blocks = [], json = new Map();
     for await (const e of stream) {
+      if (e?.type === "content_block_start" && e.content_block) blocks[e.index ?? blocks.length] = structuredClone(e.content_block);
+      const block = blocks[e?.index];
+      if (e?.type === "content_block_delta" && block) {
+        if (e.delta?.type === "text_delta") block.text = (block.text ?? "") + e.delta.text;
+        else if (e.delta?.type === "thinking_delta") block.thinking = (block.thinking ?? "") + e.delta.thinking;
+        else if (e.delta?.type === "signature_delta") block.signature = (block.signature ?? "") + e.delta.signature;
+        else if (e.delta?.type === "input_json_delta") json.set(e.index, (json.get(e.index) ?? "") + e.delta.partial_json);
+      }
       if (e?.type === "content_block_start" && e.content_block?.type === "tool_use") {
         yield ev(seat, "tool", { name: e.content_block.name });
       } else if (e?.type === "content_block_delta" && e.delta?.type === "text_delta") {
@@ -84,8 +101,11 @@ const STREAMERS = {
       } else if (e?.type === "content_block_delta" && e.delta?.type === "thinking_delta"
         && typeof e.delta.thinking === "string") {
         yield ev(seat, "thinking", { bytes: Buffer.byteLength(e.delta.thinking) });
+      } else if (e?.type === "message_delta") {
+        stopReason = e.delta?.stop_reason ?? stopReason;
       } else if (e?.type === "message_stop") {
-        yield ev(seat, "done", { id: null, text: full });
+        for (const [index, value] of json) if (blocks[index]) blocks[index].input = JSON.parse(value);
+        yield ev(seat, "done", { id: null, text: full, blocks: blocks.filter(Boolean), terminal: terminalState("messages", { stopReason }) });
       }
     }
   },
@@ -108,6 +128,7 @@ export async function streamTurn({ client, surface, req, seat, onEvent }) {
   let id = null;
   let sawDone = false;
   let final = null;
+  let terminal = null, parts = null, blocks = null;
   for await (const e of gen({ client, req, seat })) {
     if (e.type === "delta" && e.text) text += e.text;
     if (e.type === "thinking") thinking_bytes += e.bytes;
@@ -119,6 +140,9 @@ export async function streamTurn({ client, surface, req, seat, onEvent }) {
       // A vendor whose terminal event carries the whole text (genai, messages) is authoritative
       // over our accumulation; trust it when present, keep ours when not.
       if (typeof e.text === "string" && e.text.length >= text.length) text = e.text;
+      if (e.terminal) terminal = e.terminal;
+      if (Array.isArray(e.parts)) parts = e.parts;
+      if (Array.isArray(e.blocks)) blocks = e.blocks;
       if (e.final) {
         final = e.final;                       // the completed response, with EVERY output item
         const t = collectToolNamesFromFinal(e.final);
@@ -135,11 +159,16 @@ export async function streamTurn({ client, surface, req, seat, onEvent }) {
   const finalText = (final?.output ?? []).filter(i => i?.type === "message").flatMap(i => i.content ?? [])
     .filter(c => c?.type === "output_text" && typeof c.text === "string").map(c => c.text).join("");
   if (finalText) text = finalText;
+  // A terminal event is necessary, not sufficient: the provider's own terminal
+  // state (status, stop reason, finish reason) must also be a success.
+  const complete = sawDone && terminal?.complete !== false;
   return {
-    text, tools: [...new Set(tools)].sort(), response_id: id, streamed: true, final,
+    text, tools: [...new Set(tools)].sort(), response_id: id, streamed: true, final, parts, blocks,
     thinking_bytes,
-    complete: sawDone,
-    why_incomplete: sawDone ? null : "stream ended without a terminal event; the reply may be truncated",
+    terminal_state: terminal?.state ?? null,
+    complete,
+    why_incomplete: !sawDone ? "stream ended without a terminal event; the reply may be truncated"
+      : complete ? null : terminal.why,
   };
 }
 

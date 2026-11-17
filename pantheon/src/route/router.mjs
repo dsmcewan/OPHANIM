@@ -33,26 +33,18 @@ export const SEAT_FACTS = {
     vendor: "openai", continuity: "server", quota_pool: "openai",
     latency_class: "seconds",                       // measured 2026-09-27
     models: { default: modelId("openai", "luna"), strong: modelId("openai", "sol"), strongest: modelId("openai", "astra") },
-    // CORRECTED 2026-09-28 against the current GPT-6 guidance, which documents SIX levels:
-    // "`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. Available levels depend on the model
-    // and client." (config-file/config-reference.md, model_reasoning_effort; the subagents page
-    // lists the same six with per-level advice.)
-    //
-    // Three corrections, and only one of them was the obvious one:
-    //   - `minimal` is NOT a reasoning level. The only "minimal" in the current docs is `:minimal`,
-    //     a filesystem PERMISSION token -- an unrelated string that reads like a match.
-    //   - `none` is not in the documented list for these models either. It was carried alongside
-    //     minimal and is dropped with it, which also retires the `unsupported` entry below.
-    //   - `ultra` was MISSING, and that one cost something: raiseEffort() walks this array, so
-    //     escalation topped out at `max` and could never reach the deepest level the models offer,
-    //     while wasting two steps on levels they do not advertise.
+    // CORRECTED 2026-11-16 against each model's own page (cited in src/config/capability-facts.json).
+    // The 2026-09-28 list came from a CLIENT configuration reference ("Available levels depend on the
+    // model and client") and added `ultra`, which no GPT-6 model page lists: escalating past `max`
+    // would have sent an undocumented value. The model pages also restore `none` for Luna and Sol.
+    //   gpt-6-luna, gpt-6-sol    none low medium(default) high xhigh max
+    //   gpt-6.1-sol              low medium(default) high xhigh max        (no none/minimal)
+    //   gpt-6-astra              low medium high xhigh max                 (none -> HTTP 400; default not stated)
     effort: { param: "reasoning.effort",
-      values: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      default: { "gpt-6-sol": "medium", "gpt-6-luna": "medium" },
-      // Astra's own default is UNRECORDED: the reasoning guide names Sol's and Luna's only.
-      // `unsupported` is now empty: it recorded that astra rejects `none`, which is moot once
-      // `none` is not an advertised level at all. Kept as a key so the shape stays uniform.
-      unsupported: {} },
+      values: ["none", "low", "medium", "high", "xhigh", "max"],
+      default: { "gpt-6-sol": "medium", "gpt-6-luna": "medium", "gpt-6.1-sol": "medium" },
+      supports: { "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"], "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"] },
+      unsupported: { "gpt-6-astra": ["none"] } },
     // Recorded 2026-09-28 from the operator's capability table. Previously ABSENT entirely, so all
     // three implementer rungs reported a null window -- the ladder was routed on bands whose
     // context claim nothing backed. 1.05M, distinct from anthropic's 1M: close enough to have been
@@ -82,13 +74,13 @@ export const SEAT_FACTS = {
   agy_google: {
     vendor: "agy_google", continuity: "replay", quota_pool: "agy_google",
     latency_class: "seconds",
-    models: { default: modelId("google", "gemini-3.5-flash") },
+    models: { default: modelId("google", "gemini-3.6-flash") },
     // This row describes the raw Gemini API adapter, which still requires GEMINI_API_KEY.
     // The board can opt into the Antigravity CLI's cached OAuth login instead;
     // sharing a vendor identity does not make these credentials or quota pools interchangeable.
     // Recorded 2026-09-28 from the operator's capability table; previously absent. The exact figure
     // is 1,048,576 (2^20) rather than a rounded 1M, and it is written as the vendor states it.
-    // gemini-3.5-flash: operator's capability table, 2026-09-28.
+    // gemini-3.6-flash: aistudio.google.com/docs/models/gemini-3.6-flash, 2026-11-16 (replaces the deprecated 3.5 Flash).
     // gemini-3.8-flash-high: INFERRED, NOT VERIFIED. The same table gives 3.5 Flash and 3.7 Flash
     // both 1,048,576, and 3.8 is the same family, so this is the family figure carried forward. No
     // source states it for 3.8 specifically and `agy models` prints names only. It is written down
@@ -102,7 +94,7 @@ export const SEAT_FACTS = {
     // generation (SEAT_FACTS.anthropic.windows, all 1,000,000) on the same reasoning as
     // gemini-3.8-flash-high just above: a live, routed-on seat should not report a null window, but
     // this number is weaker than its measured neighbours and should be corrected on sight.
-    windows: { "gemini-3.5-flash": 1_048_576, "gemini-3.8-flash-high": 1_048_576,
+    windows: { "gemini-3.6-flash": 1_048_576, "gemini-3.8-flash-high": 1_048_576,
       "claude-opus-4-6-thinking": 1_000_000, "claude-sonnet-4-6": 1_000_000 },
     notes: "Raw Gemini API adapter requires GEMINI_API_KEY; board agent turns can opt into agy CLI OAuth. Replay: every raw-API turn resends history",
   },
@@ -173,7 +165,9 @@ for (const [model, cap] of Object.entries(CAPABILITIES)) {
   if(facts.effort && cap.efforts){
     facts.effort.supports ??= {};
     facts.effort.supports[model]=cap.efforts;
-    if(cap.vendor==='anthropic')facts.effort.default[model]='high';
+    // The frontier client sends `high` when no effort is named; a providerDefaults model sends none,
+    // so its documented default stands.
+    if(cap.vendor==='anthropic'&&!cap.providerDefaults)facts.effort.default[model]='high';
   }
 }
 
@@ -198,6 +192,7 @@ export const MODEL_FAMILY = {
   "gpt-6-luna": "gpt-6", "gpt-6-sol": "gpt-6", "gpt-6-astra": "gpt-6",
   "grok-4.6": "grok-4", "grok-4.20-multi-agent": "grok-4",
   "gemini-3.5-flash": "gemini-3",
+  "gemini-3.6-flash": "gemini-3",
   "claude-haiku-4-5-20251001": "claude-4-5", "claude-sonnet-5": "claude-5", "claude-opus-5": "claude-5",
 };
 

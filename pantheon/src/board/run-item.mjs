@@ -19,7 +19,8 @@ import { sdkTurn } from "../sdk/seat-sdk.mjs";
 import { openBoard } from "./index.mjs";
 import { publish, treeSlots } from "./dag.mjs";
 import { merge } from "./merge.mjs";
-import { ship } from "./integrate.mjs";
+import { ship, shipClaim } from "./integrate.mjs";
+import { assertStage, stageCheck, assertLaw } from "./stage-gate.mjs";
 import { boardState, boardStatus, schedule, testsBrief, acceptanceStatus } from "./controller.mjs";
 import { project, PROJECTION_FOR_ROLE } from "./project.mjs";
 import { seatingPlan, seatingReport, assertReviewCutsAcross, assertFanOutIsOutside, INTAKE,
@@ -36,6 +37,9 @@ import { tokenCapFor } from "../agents/store.mjs";
 import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
 import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
+import { nextOccupancy } from "./occupancy.mjs";
+import { escalationRecord } from "../route/protocol.mjs";
+import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools } from "../route/frontier.mjs";
 import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
 
@@ -91,6 +95,12 @@ function packageContext(repoRoot, copied, slots) {
 }
 
 /** An output cap in the vendor's own request shape; `extra` is { tokens } or undefined. */
+const ROLE_OF_PURPOSE = { plan: "planner", work: "implementer", critique: "reviewer", scout: "scout" };
+
+// What a resumed run needs to continue a slot's escalation trail.
+const escalationState = c => ({ effort: c.effort ?? null, forced: c.forced ?? null, steps: c.escalationSteps ?? 0,
+  model: c.ranModel ?? null, pending: c.pendingRevision ?? null });
+
 const capFor = (vendor, extra) => extra?.tokens == null ? undefined
   : vendor === "agy_google" ? { config: { maxOutputTokens: extra.tokens } }
   : vendor === "anthropic" ? { max_tokens: extra.tokens }
@@ -163,6 +173,28 @@ export async function runOpenItem(spec, opts = {}) {
   // can never fire is not caution, it is a landmine for a future SEATING change that adds a role
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
+  // The ledger (ophanim/ledger): when given, the run verifies it before relying on anything, and every
+  // escalation decision is recorded on it as an entry citing the facts and seating it was made under.
+  // run.json keeps its copy for display; the ledger entry is the one that re-derives.
+  const LEDGER = opts.ledger ?? null;
+  if (LEDGER) {
+    const v = LEDGER.verify();
+    if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
+  }
+  let escalationWork = 0;
+  // Turn entries by prompt, so a critique can cite the work it reviews; work cites the plan it followed.
+  const ledgerTurns = new Map();
+  let planTurn = null;
+  const recordTurn = t => {
+    if (!LEDGER?.recordTurn) return;
+    const hash = LEDGER.recordTurn({ ...t, cites: t.purpose === "work" && planTurn ? [planTurn] : [] });
+    ledgerTurns.set(t.prompt, { hash, served_model: t.served_model, response_id: t.response_id });
+    if (t.purpose === "plan") planTurn = hash;
+  };
+  const escalated = (work, rec) => { (run.escalations ??= []).push(rec); LEDGER?.record(work, rec); };
+  // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
+  const TIER = spec.difficulty ?? "medium";
+  if (typeof TIER !== "string" || !Object.hasOwn(TOKEN_TIERS, TIER)) throw new Error(`unknown ticket difficulty "${TIER}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
   const root = RESUME ?? dir ?? join(homedir(), ".pantheon", "boards", `open-${spec.key}-${Date.now()}`);
   const worktree = join(root, "worktree");
   mkdirSync(worktree, { recursive: true });
@@ -312,7 +344,7 @@ export async function runOpenItem(spec, opts = {}) {
     return { text, response_id: res.response_id, usage: res.usage, tool_calls: res.tool_calls, subagent_calls: res.subagent_calls };
   }
 
-  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal }) {
+  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null }) {
     const t0 = Date.now();
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
     if (vendor === "agy_google" && !isFrontier(model)) {
@@ -320,8 +352,13 @@ export async function runOpenItem(spec, opts = {}) {
       try { r = await agyTurn({ purpose, model, prompt }); }
       catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
       const ms = Date.now() - t0;
+      // The agy transports take no effort. The protocol never decides one for these seats; if one
+      // arrives anyway it is recorded as not carried rather than silently dropped.
       run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
-        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage });
+        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage, ...(effort ? { effort_not_carried: effort } : {}) });
+      // The agy transports report no served model; it is recorded as unreported (null), never guessed.
+      recordTurn({ seat: { seat_id: `${vendor}-${purpose}`, vendor, mode: purpose, occupancy_gen: 1 },
+        requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt });
       progress({ event: "turn.done", seat: vendor, model, ms, detail: `${r.text.length} chars, ${r.tool_calls} tool call(s), ${r.subagent_calls} subagent(s)` });
       return r.text;
     }
@@ -333,22 +370,52 @@ export async function runOpenItem(spec, opts = {}) {
       if (e.type === "delta" && e.text) { chars += e.text.length; if (Date.now() - lastNote > 10_000) { lastNote = Date.now(); progress({ event: "turn.progress", seat: vendor, model, detail: `${chars} chars so far` }); } }
       else if (e.type === "error") progress({ event: "turn.error", seat: vendor, model, detail: e.text ?? "stream error" });
     };
-    let r;
-    try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
-      architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(extra ? { extra } : {}) }); }
-    catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
+    // The ticket's difficulty picks the output tier; the budget is sent explicitly, so what is recorded
+    // is what was asked for. A caller's own budget (e.g. the reviewer's 4000) still wins.
+    let r, steps = 0, budget = extra;
+    const work = `turn:${purpose}:${++escalationWork}`;   // one truncation trail per turn
+    if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
+    for (;;) {
+      try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
+        architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
+        ...(effort ? { effort } : {}) }); }
+      catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
+      if (r.ok || !r.result) break;
+      // A reply cut off by its output budget is an outcome for the protocol: the only change it makes is
+      // a larger budget within the model's documented ceiling. The refused turn was not persisted, so
+      // the retry starts from the same conversation. Every decision is recorded on the run.
+      const output = budget?.max_tokens ?? budget?.max_output_tokens ?? budget?.config?.maxOutputTokens
+        ?? defaultOutputFor(vendor, model, TIER);
+      const rec = escalationRecord({ role: ROLE_OF_PURPOSE[purpose] ?? purpose, steps,
+        outcome: { kind: "turn", complete: false, terminal_state: r.result.terminal_state ?? null, why: r.why },
+        seat: { vendor, model, effort: effort ?? null, output } });
+      escalated(work, { purpose, tier: TIER, ...rec });
+      progress({ event: "escalate", seat: vendor, model, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
+      if (rec.decision.action !== "raise_output") break;
+      const raised = capFor(vendor, { tokens: rec.decision.to.output });
+      budget = { ...budget, ...raised, ...(raised.config ? { config: { ...budget?.config, ...raised.config } } : {}) };
+      steps++;
+    }
     if (!r.ok) { progress({ event: "turn.error", seat: vendor, model, detail: r.why }); throw new Error(`${vendor}/${purpose}: ${r.why}`); }
     const text = r.result.text ?? "";
     const ms = Date.now() - t0;
-    run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false });
+    run.turns.push({ vendor, model, pool: pool ?? vendor, purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
+      served_model: r.result.served_model ?? null });
+    // On the ledger: signed by this seat occupancy (a recorded reseat is a new occupancy), with the
+    // served model the provider reported beside the requested one.
+    recordTurn({ seat: { seat_id: `${vendor}-${purpose}`, vendor, mode: purpose, occupancy_gen: r.seat?.model_gen ?? 1 },
+      requested_model: model, served_model: r.result.served_model ?? null, response_id: r.result.response_id ?? null, reply: text, purpose, prompt });
     progress({ event: "turn.done", seat: vendor, model, ms, detail: `${text.length} chars` });
     return text;
   }
 
   /** Walk the seating table's fallbacks on a TRANSPORT failure only. */
-  async function roleTurn({ role, purpose, prompt, avoid = [], extra = undefined, pin = null }) {
+  async function roleTurn({ role, purpose, prompt, avoid = [], extra = undefined, pin = null, effort = null, seat = null }) {
     let candidates;
-    if (OVERRIDES[role]) {
+    // An escalation that stepped a rung names its seat outright: a lane model cannot be pinned through
+    // the API registry, and the decision is already recorded, so it is not re-derived from the table.
+    if (seat) candidates = [{ vendor: seat.vendor, model: seat.model, pool: seat.pool ?? seat.vendor }];
+    else if (OVERRIDES[role]) {
       const selected = OVERRIDES[role];
       candidates = [{ ...selected, pool: selected.pool ?? selected.vendor }];
       if (pin && pin !== selected.model) candidates = [forRole(role, { pin, avoid })[0], ...candidates];
@@ -360,7 +427,9 @@ export async function runOpenItem(spec, opts = {}) {
     if (!candidates.length || candidates.some(c => !c)) throw new Error(`no seated candidate for "${role}"`);
     const routed = await routeCall({ candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
-      invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra) }) });
+      // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
+      invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
+        effort: effort && candidate.model === effort.model ? effort.value : null }) });
     return { text: routed.value, seat: routed.seat };
   }
 
@@ -505,7 +574,9 @@ export async function runOpenItem(spec, opts = {}) {
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;
-        const r = await publish({ ...board, ref: `refs/iso/${vendor}/scout`, author: seat, msg: `scout ${vendor}`,
+        // The author names the occupant that answered, not the one the table offered first.
+        const scoutSeat = nextOccupancy(null, routed.seat, { seat_id: seat.seat_id, mode: seat.mode });
+        const r = await publish({ ...board, ref: `refs/iso/${vendor}/scout`, author: scoutSeat, msg: `scout ${vendor}`,
           entries: [{ kind: "search", payload: { query: spec.question, urls: [] }, blob: text }] });
         if (!r.ok) throw new Error(`scout ${vendor} publish: ${r.why}`);
         scouts.push({ vendor, ref: `refs/iso/${vendor}/scout`, commit: r.commit, evidence: r.written[0].cid, text });
@@ -536,10 +607,12 @@ export async function runOpenItem(spec, opts = {}) {
         const { slice } = project(board.store, board.refs.resolve(REF), PROJECTION_FOR_ROLE.planner);
         const p = promptFor("planner", { ticket: slice.slots.ticket.payload.goal },
           NO_TOOLS + "Reply with exactly one line and nothing else: TITLE: <a one-line work item title for the single change this ticket asks for>");
+        assertStage({ ...board, ref: REF, stage: "plan" });
         const { text, seat: ran } = await roleTurn({ role: "planner", purpose: "plan", prompt: p.prompt });
         plannerVendor = ran.vendor;
-        if (ran.vendor !== seat.vendor) {
-          seat = { ...seat, vendor: ran.vendor, seat_id: `${ran.vendor}-plan` };
+        const vendorChanged = ran.vendor !== seat.vendor;
+        seat = nextOccupancy(null, ran, { seat_id: `${ran.vendor}-plan`, mode: "plan" });
+        if (vendorChanged) {
           planWip = `refs/seat/${seat.seat_id}/wip`;
           await board.refs.branch({ name: planWip, from: REF, author: seat });
         }
@@ -560,8 +633,10 @@ export async function runOpenItem(spec, opts = {}) {
         const mg = await merge({ ...board, into: REF, from: planWip, author: CONTROLLER, only: CARRY, msg: "adopt the plan" });
         if (!mg.ok) throw new Error(`adopt: ${mg.why}`);
       }
-      const sched = schedule({ ...board, ref: REF });
-      check(sched.ready.some(r => r.ks === "work"), "the controller scheduled work from board state");
+      // Every slot's item must be scheduled as work, through impl@build, before any lease is taken.
+      const workGate = assertStage({ ...board, ref: REF, stage: "work" });
+      for (const sl of SLOTS) assertStage({ ...board, ref: REF, stage: "work", match: r => r.item === itemKeyFor(sl) });
+      check(workGate.ok, "the controller scheduled work from board state");
 
       // ---------------------------------------------------------------- work
       enter("work", `up to ${revisions} revisions`);
@@ -601,7 +676,11 @@ export async function runOpenItem(spec, opts = {}) {
         return { sl, seat: saved.seat, itemKey: itemKeyFor(sl), wip: saved.wip,
           model: sl.model ?? (OVERRIDES.implementer ?? chain.assigned.implementer).model,
           file: join(worktree, sl.path), artifactCid: saved.artifactCid, bytes: saved.bytes,
-          baseline: saved.baseline, code: contents.toString("utf8"), lease: null };
+          baseline: saved.baseline, code: contents.toString("utf8"), lease: null,
+          // The slot's escalation state, as recorded: the next revision continues the trail, not a fresh one.
+          effort: saved.escalation?.effort ?? null, forced: saved.escalation?.forced ?? null,
+          escalationSteps: saved.escalation?.steps ?? 0, ranModel: saved.escalation?.model ?? null,
+          pendingRevision: saved.escalation?.pending ?? null };
       });
       rev = Math.max(...run.files.map(f => f.rev));
       const exits = crew.map(c => {
@@ -618,7 +697,7 @@ export async function runOpenItem(spec, opts = {}) {
     record();
     // A failed acceptance resumes at revision, retaining every slot and its original baseline.
     // A late review/ship failure can reuse its byte-bound passing controller result.
-    if (!RESUME || recordedExit !== 0) {
+    if (!RESUME || recordedExit !== 0 || crew.some(c => c.pendingRevision)) {
     {
         for (const c of crew) {
           if (!board.refs.resolve(c.wip)) await board.refs.branch({ name: c.wip, from: REF, author: c.seat });
@@ -657,24 +736,36 @@ export async function runOpenItem(spec, opts = {}) {
                 work_item: `${c.itemKey}: ${slice.slots[`item:${c.itemKey}`]?.payload?.title ?? spec.title}`,
                 artifact: rev === 1
                   ? `Current contents of ${c.sl.path}:\n\n${current}${attached}`
-                  : `Your revision ${rev - 1} of ${c.sl.path}, which FAILED the executed acceptance shown under tests (fix it; do not start over):\n\n${c.code}${attached}`,
+                  : c.pendingRevision?.reason === "review"
+                    ? `Your revision ${rev - 1} of ${c.sl.path}, which passed the executed acceptance but the cross-lab reviewer REQUESTED CHANGES (address them; do not start over):\n\n${c.pendingRevision.findings}\n\n${c.code}${attached}`
+                    : `Your revision ${rev - 1} of ${c.sl.path}, which FAILED the executed acceptance shown under tests (fix it; do not start over):\n\n${c.code}${attached}`,
                 tests: `${implTests.text}\n\n${oracle ? `The acceptance test file ${spec.tests_file}, verbatim (it runs as part of the command above):\n\n${oracle}` : ""}` },
               NO_TOOLS + `Output ONLY the complete new contents of ${c.sl.path}. No prose before or after, no markdown fence. ` +
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
             writeFileSync(join(outDir, `implementer-prompt-${c.sl.slot}-rev${rev}.txt`), p.prompt);
+            c.workPrompt = p.prompt;
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
-              ...(c.model ? { pin: c.model } : {}) });
+              ...(c.forced ? { seat: c.forced } : c.model ? { pin: c.model } : {}),
+              effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
+            c.ranModel = made.seat.model;
+            c.pendingRevision = null;
+            // A different vendor or model answering this chair is a reseat: the generation advances.
+            const next = nextOccupancy(c.seat, made.seat, { seat_id: made.seat.vendor !== c.seat.vendor
+              ? `${made.seat.vendor}-work-${c.sl.slot}` : c.seat.seat_id, mode: "work" });
             if (made.seat.vendor !== c.seat.vendor) {
               await board.runtime.release({ resource: c.lease.resource, holder: c.seat, gen: c.lease.gen });
               const priorWip = c.wip;
-              c.seat = { ...c.seat, vendor: made.seat.vendor, seat_id: `${made.seat.vendor}-work-${c.sl.slot}` };
+              c.seat = next;
               c.wip = `refs/seat/${c.seat.seat_id}/wip`;
               if (!board.refs.resolve(c.wip)) await board.refs.branch({ name: c.wip, from: priorWip, author: c.seat });
               const held = await board.runtime.acquire({ resource: `item:${c.itemKey}`, holder: c.seat, ttlMs: 1_800_000 });
               if (!held.ok) throw new Error("could not acquire the reseated implementer's lease");
               c.lease = { resource: `item:${c.itemKey}`, gen: held.lease.gen };
               if (c === crew[0]) { maker = c.seat; wip = c.wip; }
+            } else {
+              c.seat = next;
+              if (c === crew[0]) maker = c.seat;
             }
             writeArtifact(worktree, c.sl.path, c.code.endsWith("\n") ? c.code : c.code + "\n");
             progress({ event: "wrote", rev, slot: c.sl.slot, detail: `${c.sl.path} (${c.code.length} chars)` });
@@ -687,7 +778,7 @@ export async function runOpenItem(spec, opts = {}) {
             c.bytes = board.store.get(c.artifactCid).links.bytes;
             run.files = crew.map(member => ({ slot: member.sl.slot, path: member.sl.path,
               baseline: member.baseline, seat: member.seat, wip: member.wip,
-              artifactCid: member.artifactCid, bytes: member.bytes, rev }));
+              artifactCid: member.artifactCid, bytes: member.bytes, rev, escalation: escalationState(member) }));
             record();
             check(true, `rev ${rev}: ${c.sl.slot} written by ${c.seat.vendor} (${shortCid(c.artifactCid)})`);
           }));
@@ -711,7 +802,23 @@ export async function runOpenItem(spec, opts = {}) {
           run.revisions.push({ rev, exit: acc.exit, slots: crew.map(c => ({ slot: c.sl.slot, chars: c.code.length, artifact: c.artifactCid, bytes: c.bytes })) });
           record();
           if (acc.exit === 0) break;
-          if (attempt + 1 < revisions) progress({ event: "revise", rev: rev + 1 });
+          if (attempt + 1 < revisions) {
+            // ESCALATION, from the executed result: each slot's next revision is the protocol's decision
+            // (src/route/protocol.mjs) -- documented effort first, then the next harder rung -- and the
+            // decision is recorded with its inputs so it can be re-derived from the run.
+            for (const c of crew) {
+              const rec = escalationRecord({ role: "implementer", outcome: { kind: "acceptance", exit: acc.exit }, steps: c.escalationSteps ?? 0,
+                seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null } });
+              const { action, to } = rec.decision;
+              if (action === "raise_effort") c.effort = to.effort;
+              if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
+              if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
+              escalated(`slot:${c.sl.slot}`, { slot: c.sl.slot, rev, ...rec });
+              progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
+            }
+            record();
+            progress({ event: "revise", rev: rev + 1 });
+          }
         }
 
         for (const c of crew) {
@@ -771,13 +878,18 @@ export async function runOpenItem(spec, opts = {}) {
         "Attack this change. Name the strongest specific flaw: a behaviour the ticket asked for that is missing, an existing " +
         "behaviour it broke, or a case the acceptance test does not cover that would fail. If the executed acceptance failed, " +
         "you must request changes. End your reply with a line reading exactly `VERDICT: approve` or `VERDICT: request_changes`.");
+      assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
       const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, avoid: [built.seat.vendor, plannerVendor], extra: { tokens: 4000 } });
+      // Law 3 on the reviewer that actually answered, not the one paired in advance.
+      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor } });
       if (reviewed.seat.vendor !== seat.vendor) {
         assertReviewCutsAcross({ assigner: { vendor: plannerVendor }, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
         rref = `refs/seat/${seat.seat_id}/wip`;
         await board.refs.branch({ name: rref, from: built.wip, author: seat });
       }
+      // The critique is authored by the reviewer that actually answered, model included.
+      seat = nextOccupancy(null, reviewed.seat, { seat_id: seat.seat_id, mode: "critique" });
       reviewText = reviewed.text;
       writeFileSync(join(outDir, toReview.length === 1 ? "review.md" : `review-${built.sl.slot}.md`), `# ${reviewed.seat.vendor} · ${reviewed.seat.model} reviewing ${built.seat.vendor} on ${built.sl.slot} (rev ${rev})\n\n${reviewText}\n`);
       let m = reviewText.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
@@ -794,12 +906,39 @@ export async function runOpenItem(spec, opts = {}) {
       if (!m) progress({ event: "verdict", seat: seat.vendor, detail: "unparseable → request_changes" });
       progress({ event: "verdict", seat: seat.vendor, slot: built.sl.slot, detail: verdict });
       const findings = verdict === "approve" ? [] : [{ severity: "block", note: (m ? reviewText : `no parseable verdict after a re-ask; failing closed. Reviewer text: ${reviewText}`).slice(0, 400) }];
+      // On the ledger, the review cites the work turn it judged (which cites the plan). Cold review is then
+      // re-derivable: no lab, seat or response in that lineage may have made the review.
+      const workTurn = built.workPrompt && ledgerTurns.get(built.workPrompt);
+      const critiqueTurn = ledgerTurns.get(p.prompt);
+      if (LEDGER?.recordReview && workTurn && critiqueTurn) {
+        LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
+          model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
+          verdict, findings: findings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
+      }
       const c = await publish({ ...board, ref: rref, author: seat, msg: "review",
         entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict, findings } }] });
       if (!c.ok) throw new Error(`critique publish: ${c.why}`);
       const back = await merge({ ...board, into: built.wip, from: rref, author: CONTROLLER, only: ["critique:"], msg: "collect the verdict" });
       if (!back.ok) throw new Error(`collect: ${back.why}`);
       await merge({ ...board, into: REF, from: built.wip, author: CONTROLLER, only: CARRY, msg: "carry the verdict" });
+      if (verdict === "request_changes") {
+        // The verdict is an outcome for the MAKER's seat: the protocol decides its next revision, which a
+        // resume then runs (a passing acceptance alone would otherwise just re-review the same bytes).
+        const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0,
+          seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null } });
+        const { action, to } = rec.decision;
+        if (action === "raise_effort") built.effort = to.effort;
+        if (action === "step_rung") { built.forced = { vendor: to.vendor, model: to.model }; built.effort = null; }
+        if (!["hold", "wait", "stop"].includes(action)) built.escalationSteps = (built.escalationSteps ?? 0) + 1;
+        // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work
+        // needs its own pending revision, with the findings the implementer must address.
+        if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000) };
+        escalated(`slot:${built.sl.slot}`, { slot: built.sl.slot, rev, ...rec });
+        const file = run.files.find(f => f.slot === built.sl.slot);
+        if (file) file.escalation = escalationState(built);
+        progress({ event: "escalate", rev, slot: built.sl.slot, detail: `${action}: ${rec.decision.why}`.slice(0, 300) });
+        record();
+      }
       }
     }
     run.review = { verdict };
@@ -826,7 +965,20 @@ export async function runOpenItem(spec, opts = {}) {
       }
       progress({ event: "staged", detail: `${BUILT.length} slots staged onto ${shipFrom} for one ship transaction` });
     }
-    const r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER });
+    // The controller must schedule integrate for every built item, and law 7 must hold on facts the
+    // ship gates derive. A ship the controller would not schedule is refused here with its reason,
+    // through the same record a gate refusal takes; nothing moves.
+    const integrate = stageCheck({ ...board, ref: REF, stage: "ship" });
+    const unscheduled = (BUILT ?? []).filter(c => !integrate.candidates.some(r => r.item === c.itemKey));
+    let r;
+    if (unscheduled.length) {
+      const dry = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER, dryRun: true });
+      r = { ok: false, gates: dry.gates, why: `the controller did not schedule integrate for ${unscheduled.map(c => c.itemKey).join(", ")}` +
+        ` (${integrate.dropped.join("; ") || integrate.why})${dry.ok ? "; the ship gates alone would have passed" : `; ship gates: ${dry.why}`}` };
+    } else {
+      assertLaw(await shipClaim({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER }));
+      r = await ship({ ...board, ref: REF, from: shipFrom, actor: CONTROLLER });
+    }
     for (const g of r.gates) progress({ event: "gate", stage: g.gate, detail: g.ok ? "pass" : `REFUSE — ${g.why}` });
     progress({ event: "ship", detail: r.ok ? `shipped ${r.shipped.join(", ")} as ${shortCid(r.commit)}` : `refused: ${r.why}` });
     run.gates = r.gates; run.shipped = r.ok; run.ship_why = r.ok ? null : r.why;

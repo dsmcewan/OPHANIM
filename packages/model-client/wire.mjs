@@ -1,13 +1,17 @@
 // Injected SDKs own HTTP serialization. This module owns completion and opaque history.
+import {successfulStop} from './terminal.mjs';
+import {reasoningContextReport} from './reasoning.mjs';
 const textOf=parts=>parts.filter(p=>p.type==='text'||(!p.type&&!p.thought)).map(p=>p.text??'').join('');
 const responseText=res=>res.output_text??(res.output??[]).filter(x=>x.type==='message')
   .flatMap(x=>x.content??[]).filter(x=>x.type==='output_text').map(x=>x.text??'').join('');
-const successfulStop=reason=>['end_turn','tool_use','stop_sequence'].includes(reason);
 
 export async function exchange(prepared,client,onEvent){
-  const {cap,request,options,vendor,continuity,history,prompt}=prepared;
-  const emit=(type,rest={})=>onEvent?.({seat:vendor,type,at:Date.now(),...rest});
-  let response,complete=false,text='',output=[],tools=[],responseId=null,usage=null;
+  const {cap,request,options,vendor,continuity,history,prompt,label}=prepared;
+  // Events name the pane they belong to (label, else vendor) and open with `start`, as the direct
+  // path's streams do: a viewer clears the pane on start, and without it turns run together.
+  const emit=(type,rest={})=>onEvent?.({seat:label??vendor,type,at:Date.now(),...rest});
+  emit('start');
+  let response,complete=false,text='',output=[],tools=[],responseId=null,usage=null,terminal=null;
   if(cap.surface==='responses'){
     if(onEvent){
       const stream=await client.responses.create({...request,stream:true},options);
@@ -26,6 +30,7 @@ export async function exchange(prepared,client,onEvent){
       response=await client.responses.create(request,options);
       complete=response?.status==='completed';
     }
+    terminal=response?.status??null;
     output=response?.output??[];
     complete=complete&&Array.isArray(output)&&output.length>0;
     text=responseText(response??{});
@@ -56,10 +61,12 @@ export async function exchange(prepared,client,onEvent){
       for(const [index,value] of jsonParts)blocks[index].input=JSON.parse(value);
       output=blocks;
       complete=sawStop&&successfulStop(stop);
+      terminal=stop;
     }else{
       response=await messages.create(request,options);
       output=response?.content??[];usage=response?.usage??null;
       complete=successfulStop(response?.stop_reason);
+      terminal=response?.stop_reason??null;
     }
     complete=complete&&Array.isArray(output)&&output.length>0;
     text=textOf(output);
@@ -92,6 +99,7 @@ export async function exchange(prepared,client,onEvent){
         blocked=Boolean(response?.promptFeedback?.blockReason);usage=response?.usageMetadata??usage;
         for(const part of candidate?.content?.parts??[])append(part);
       }
+      terminal=blocked?'BLOCKED':reason;
       if(reason==='STOP'&&!blocked){complete=true;break;}
       // A caller's explicit output budget covers this turn, not each of an
       // unbounded series of fresh generation requests. Long-decode keeps hops.
@@ -119,8 +127,9 @@ export async function exchange(prepared,client,onEvent){
     :[...request.contents,{role:'model',parts:structuredClone(output)}];
   const usable=complete&&(replay||typeof responseId==='string'&&responseId.length>0);
   emit(usable?'done':'error',usable?{}:{text:'Provider output incomplete; refusing truncated result'});
-  return {vendor,response_id:responseId,text,tools:[...new Set(tools)].sort(),usage,complete,
+  return {vendor,response_id:responseId,text,tools:[...new Set(tools)].sort(),usage,complete,terminal_state:terminal,
+    ...(cap.surface==='responses'?{reasoning_context:reasoningContextReport(request.reasoning?.context,response)}:{}),
     resumed:replay?history.length>0:Boolean(request.previous_response_id),streamed:Boolean(onEvent),
-    usable_for_resume:usable,why_unusable:usable?null:'Provider output incomplete or missing authoritative terminal state',
+    usable_for_resume:usable,why_unusable:usable?null:complete?'Provider returned no response id; server continuity has nothing to resume by':'Provider output incomplete or missing authoritative terminal state',
     ...(replay?{history:nextHistory}:{})};
 }

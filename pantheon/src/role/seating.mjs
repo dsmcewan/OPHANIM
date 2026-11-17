@@ -19,7 +19,11 @@
 import { ROLES } from "./roles.mjs";
 import { packOf, PROJECTION_FOR_ROLE } from "../board/project.mjs";
 import { SEAT_FACTS, UNMEASURED, route, modelFor } from "../route/router.mjs";
-import { modelId } from "../config/models.mjs";
+import { modelId, LANES } from "../config/models.mjs";
+
+// A lane model, resolved from the lane table so a removed entry fails at load rather than at a call.
+const AGY_GEMINI_HIGH = LANES.agy_cli["gemini-3.8-flash-high"] ? "gemini-3.8-flash-high"
+  : (() => { throw new Error("agy lane model gemini-3.8-flash-high is not declared in lanes.json"); })();
 
 /**
  * BASIS is a JUSTIFICATION LABEL for why a seat was chosen. It is never a surface.
@@ -305,7 +309,7 @@ export const SEATING = {
         "harness has actually called and had answer (2026-09-27)" },
     // The isolation tail: if the implementer is ever seated on xai, grok cannot review its own lab.
     // These are RESEATS, not lesser reviewers -- the chair has to have somewhere to go.
-    { vendor: "agy_google", model: modelId("google", "gemini-3.5-flash"), band: "easy", basis: "ISOLATION",
+    { vendor: "agy_google", model: modelId("google", "gemini-3.6-flash"), band: "easy", basis: "ISOLATION",
       why: "the reseat when the implementer holds the xai lab; a reviewer may never share the maker's" },
     { vendor: "anthropic", tier: "default", basis: "ISOLATION",
       why: "last reseat, same reason: what disqualifies a reviewer is the lab it shares, never its size" },
@@ -313,8 +317,9 @@ export const SEATING = {
   explorer: [
     // Models pinned by the operator 2026-09-28 ("subagents Gemini 3.8-High-Flash, Grok 4.7").
     // gemini-3.8-flash-high is the id exactly as `agy models` prints it -- Antigravity bakes the
-    // effort into the model name, so "High" is part of the id and not a separate flag.
-    { vendor: "agy_google", model: modelId("google", "gemini-3.8-flash-high"), basis: "QUOTA",
+    // effort into the model name, so "High" is part of the id and not a separate flag. It is an agy
+    // CLI lane name (src/config/lanes.json), not a Gemini API id, so it is not read from models.json.
+    { vendor: "agy_google", model: AGY_GEMINI_HIGH, basis: "QUOTA",
       why: "breadth wants independent pools, and google/xai spend from their own subscriptions, so " +
         "fan-out across them does not contend" },
     { vendor: "xai", model: modelId("xai", "grok-4.7"), basis: "QUOTA",
@@ -322,7 +327,7 @@ export const SEATING = {
   ],
   advocate: [
     { vendor: "xai", model: modelId("xai", "grok-4.7"), basis: "QUOTA", why: "as above; an advocate's output is argument, never evidence" },
-    { vendor: "agy_google", model: modelId("google", "gemini-3.8-flash-high"), basis: "QUOTA",
+    { vendor: "agy_google", model: AGY_GEMINI_HIGH, basis: "QUOTA",
       why: "the second independent pool; an advocate's output is argument, never evidence" },
   ],
   judge: [

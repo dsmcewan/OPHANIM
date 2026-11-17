@@ -42,7 +42,7 @@ const client = { responses: { create: async params => {
     if (Date.now() - t0 > 15000) { process.stderr.write("held past 15s, never released"); process.exit(3); }
     await sleep(5);
   }
-  return { id: "resp_" + process.pid + "_" + n, output_text: "reply to " + me,
+  return { id: "resp_" + process.pid + "_" + n, status: "completed", output_text: "reply to " + me,
     output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "reply to " + me }] }] };
 } } };
 writeFileSync(sig("asked"), "");

@@ -6,6 +6,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {makeFixtures,createPlanning,createSyntheticDestination,canonical,digest,writeJson,outputProjection} from './fixtures.mjs';
 import {loadRuntime} from './runtime.mjs';
+import {verifyRuntimeChain,readRuntimeSnapshot} from './board.mjs';
 import {openStore} from '../pantheon/src/board/cas.mjs';
 import {verifyEfficiencyRecord} from './efficiency/assessment.mjs';
 
@@ -234,10 +235,14 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
     }
   }
   assert.ok(files>40,'Nonempty detailed evidence manifest required');
-  let states=0,accepted=0,decisions=0,effects=0;
+  let states=0,accepted=0,decisions=0,effects=0,chains=0;
   for(const [relative,summary] of Object.entries(report.finalStates??{})) {
     const stateDir=inside(relative),state=loadRuntime(stateDir);
     assert.equal(digest(state),summary.stateSha,`Runtime state changed: ${relative}`);
+    // Every retained snapshot must be one recorded transition of its parent.
+    const chain=verifyRuntimeChain(stateDir);
+    assert.equal(digest(readRuntimeSnapshot(stateDir,chain.head).state),summary.stateSha,`Verified chain head differs: ${relative}`);
+    chains++;
     assert.equal(digest(outputProjection(state)),summary.outputSha);
     const governance=await createGovernance({root:stateDir,fixtureOnly:true,readOnly:true,...telosRoot?{telosRoot}:{}});
     const destinationRoot=path.join(stateDir,'destination');
@@ -270,7 +275,7 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
     }
     assert.ok(Object.keys(state.plans??{}).length>0);states++;
   }
-  assert.ok(states>=10&&accepted>0&&decisions>=3&&effects>0);
+  assert.ok(states>=10&&chains===states&&accepted>0&&decisions>=3&&effects>0);
   const one=read(report.scenarios.find(s=>s.name==='scale-1').resultFile),three=read(report.scenarios.find(s=>s.name==='scale-3').resultFile);
   assert.equal(canonical(one.outputs),canonical(three.outputs));assert.equal(canonical(effectProjection(one.effects)),canonical(effectProjection(three.effects)));
   assert.equal(one.intervalSummary.maxActive,1);assert.ok(three.intervalSummary.maxActive>=2&&three.intervalSummary.maxActive<=3);
@@ -280,5 +285,5 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
     const quiescent=read(report.scenarios.find(s=>s.name===name).resultFile);
     assert.equal(quiescent.convergence,'no_change');assert.equal(quiescent.dispatches,0);assert.equal(quiescent.blockers.length,0);
   }
-  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,accepted,effects,decisions,efficiencyAssessments,investigationAssessments,modelCalls:0,runtimeDispatches:0,deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,limits:'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
+  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,chains,accepted,effects,decisions,efficiencyAssessments,investigationAssessments,modelCalls:0,runtimeDispatches:0,deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,limits:'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
 }

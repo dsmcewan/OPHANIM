@@ -22,21 +22,32 @@ function readBounded(file, expectedSha) {
 // Prior evidence can suppress an experiment. It confers no authorization and
 // never reruns the verifier or a worker on the admission path.
 export function readRetainedExperiment(markerFile, trace) {
-  const marker = readBounded(markerFile);
-  requireThat(marker.schema === 'ophanim.efficiency/v1' && hex(marker.traceSha) && marker.fromSlots === 1 && marker.toSlots === 3 &&
+  return retainedExperimentFrom({marker: readBounded(markerFile), trace,
+    prior: reportDir => readBounded(path.join(reportDir, 'trace.json')),
+    report: reportDir => readBounded(path.join(reportDir, 'assessment.json')),
+    state: (stateDir, boardCommit) => readRuntimeSnapshot(stateDir, boardCommit).state});
+}
+
+// The computation behind readRetainedExperiment, with the prior trace, its assessment report and its
+// board state supplied by the caller: from files (above), or from ledger entries (K5b, the
+// `efficiency.retained` kind in ophanim/ledger/efficiency-kinds.mjs). Each source is a function of the
+// paths the marker names, so both readers bind the same marker to the same evidence. The replay manifest
+// and trial verifications stay content-addressed files, read here by the hashes the report names.
+export function retainedExperimentFrom({marker, trace, prior: priorOf, report: reportOf, state: stateOf}) {
+  requireThat(marker && typeof marker === 'object' && marker.schema === 'ophanim.efficiency/v1' && hex(marker.traceSha) && marker.fromSlots === 1 && marker.toSlots === 3 &&
     path.isAbsolute(marker.evidenceRoot), 'Exact prior experiment marker required');
   const experiment = marker.evidenceRoot;
   const reportDir = path.dirname(experiment);
   const stateDir = path.resolve(reportDir, '../../..');
   const commit = path.basename(reportDir);
   requireThat(/^commit-[a-f0-9]{64}$/.test(commit) && experiment === path.join(stateDir, 'efficiency', 'convergences', commit, 'experiment'), 'Prior experiment path differs');
-  const prior = readBounded(path.join(reportDir, 'trace.json'));
+  const prior = priorOf(reportDir);
   const boardCommit = commit.replace('commit-', 'commit:');
   requireThat(digest(prior) === marker.traceSha && prior.boardCommit === boardCommit && prior.scopeSha === trace.scopeSha &&
     baselineEvidenceSha(prior) === baselineEvidenceSha(trace) && canonical(prior.policy) === canonical(trace.policy), 'Prior trace binding differs');
-  const snapshot = readRuntimeSnapshot(stateDir, boardCommit).state;
+  const snapshot = stateOf(stateDir, boardCommit);
   requireThat(digest(snapshot) === prior.stateSha && snapshot.events.at(-1)?.convergence === 'accepted_change', 'Prior accepted board differs');
-  const report = readBounded(path.join(reportDir, 'assessment.json'));
+  const report = reportOf(reportDir);
   const qualification = report.qualification ?? report.efficiency;
   const manifestFile = path.join(experiment, 'manifest.json');
   const evidenceSha = report.experiment?.evidenceSha;

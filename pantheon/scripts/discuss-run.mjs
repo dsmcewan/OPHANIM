@@ -22,7 +22,7 @@ const STANCES = {
 const SEATS = {
   openai:    { vendor: "openai",    model: "gpt-6-luna" },
   xai:       { vendor: "xai",       model: "grok-4.6" },
-  agy_google: { vendor: "agy_google", model: "gemini-3.5-flash" },
+  agy_google: { vendor: "agy_google", model: "gemini-3.6-flash" },
   anthropic: { vendor: "anthropic", model: "claude-haiku-4-5-20251001" },
 };
 const state = async () => (await (await fetch(`${base}/seats`)).json()).state;

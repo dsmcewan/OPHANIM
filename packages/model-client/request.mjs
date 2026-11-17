@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {CAPABILITIES} from './registry.mjs';
+import {reasoningContextFor} from './reasoning.mjs';
 
 export const COMPACTION_BETA='compact-2026-09-04';
 const RESERVED=new Set(['model','input','messages','contents','previous_response_id','stream']);
@@ -40,12 +41,19 @@ export function prepareRequest({vendor,model,prompt,history=[],previousResponseI
   if(cap.surface==='messages'){
     delete e.thinking;
     if(['any','tool'].includes(e.tool_choice?.type))delete e.tool_choice;
-    const depth=effort??e.output_config?.effort??(architecture?'xhigh':'high');
-    if(!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
+    // A providerDefaults model sends no effort unless one is asked for: the provider's default applies.
+    // providerDefaults: the architecture flag imposes nothing either; only a named effort is sent.
+    const depth=effort??e.output_config?.effort??(cap.providerDefaults?null:architecture?'xhigh':'high');
+    if(depth!==null&&!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
+    if(cap.providerDefaults&&e.max_tokens==null&&e.max_output_tokens==null)
+      throw new Error('This model takes no long-decode default: pass max_tokens explicitly');
     const max=outputBudget(e.max_tokens??e.max_output_tokens,'max_tokens');
     delete e.max_output_tokens;
     if(max>cap.output)throw new Error('Output token budget exceeds model limit');
-    request={...e,model,max_tokens:max,output_config:{...e.output_config,effort:depth},messages:[...structuredClone(history),{role:'user',content:pinned}]};
+    const outputConfig=depth===null?e.output_config:{...e.output_config,effort:depth};
+    delete e.output_config;
+    request={...e,model,max_tokens:max,...(outputConfig&&Object.keys(outputConfig).length?{output_config:outputConfig}:{}),
+      messages:[...structuredClone(history),{role:'user',content:pinned}]};
     if(history.some(m=>Array.isArray(m.content)&&m.content.some(b=>b.type==='compaction')))
       options.headers['anthropic-beta']=COMPACTION_BETA;
   }else if(cap.surface==='genai'){
@@ -59,27 +67,32 @@ export function prepareRequest({vendor,model,prompt,history=[],previousResponseI
     for(const key of ['temperature','topP','topK'])delete config[key];
     const thinking={...config.thinkingConfig};
     delete thinking.thinkingBudget;
-    const wanted=effort??thinking.thinkingLevel?.toLowerCase()??'high';
-    const depth=wanted==='minimal'?'low':wanted;
-    if(!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
-    thinking.thinkingLevel=depth.toUpperCase();
-    config.thinkingConfig=thinking;
+    const wanted=effort??thinking.thinkingLevel?.toLowerCase()??(cap.providerDefaults?null:'high');
+    // `minimal` folds to `low` only on a model that does not document it.
+    const depth=wanted==='minimal'&&!cap.efforts.includes('minimal')?'low':wanted;
+    if(depth!==null&&!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
+    if(depth!==null)thinking.thinkingLevel=depth.toUpperCase();
+    if(Object.keys(thinking).length)config.thinkingConfig=thinking;else delete config.thinkingConfig;
     const max=outputBudget(config.maxOutputTokens,'maxOutputTokens');
     config.maxOutputTokens=outputBudgetPolicy==='explicit'?max:Math.max(65536,max);
     if(config.maxOutputTokens>cap.output)throw new Error('Output token budget exceeds configured long-decode bound');
     if(signal)config.abortSignal=signal;
     request={...e,model,config,contents:[...structuredClone(history),{role:'user',parts:[{text:pinned}]}]};
   }else{
-    const max=outputBudget(e.max_output_tokens??e.max_tokens,'max_output_tokens');
-    if(cap.output&&max>cap.output)throw new Error('Output token budget exceeds model limit');
-    delete e.max_tokens;
+    // A providerDefaults model with no named budget sends none: the provider's default applies.
+    const named=e.max_output_tokens??e.max_tokens;
+    const max=cap.providerDefaults&&named==null&&outputBudgetPolicy!=='explicit'?null:outputBudget(named,'max_output_tokens');
+    if(max!==null&&cap.output&&max>cap.output)throw new Error('Output token budget exceeds model limit');
+    delete e.max_tokens;delete e.max_output_tokens;
     const reasoning={...e.reasoning};
-    if(vendor==='openai')delete reasoning.context;
+    // Documented for OpenAI, so it is passed through (validated) rather than stripped; see reasoning.mjs.
+    const context=reasoningContextFor({vendor,model,requested:reasoning.context,continuity});
+    if(context===undefined)delete reasoning.context;else reasoning.context=context;
     const depth=effort??reasoning.effort;
     if(depth&&!cap.efforts.includes(depth))throw new Error('Unsupported effort for model');
     if(depth)reasoning.effort=depth;
     const input=continuity==='replay'?[...structuredClone(history),{role:'user',content:pinned}]:pinned;
-    request={...e,model,input,max_output_tokens:max,...(Object.keys(reasoning).length?{reasoning}:{}),
+    request={...e,model,input,...(max!==null?{max_output_tokens:max}:{}),...(Object.keys(reasoning).length?{reasoning}:{}),
       ...(continuity==='replay'?{store:false,include:[...new Set([...(e.include??[]),'reasoning.encrypted_content'])]}:
         previousResponseId?{previous_response_id:previousResponseId}:{})};
     if(scope&&sessionId)request.prompt_cache_key=cacheKey({scope,sessionId,vendor,model});

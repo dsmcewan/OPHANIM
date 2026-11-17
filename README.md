@@ -25,7 +25,7 @@ node ophanim/cli.mjs verify --output /absolute/path/to/proof
 
 The proof runs the complete Operations intake flow, injects failures, resumes child processes, verifies and activates a narrow alias repair, and rehearses rollback. It also composes dependent units, replicates the workflow into a second scope, and compares one and three scheduler slots using the same synthetic work. The verifier reconstructs the retained source, board, governance and destination evidence and replays deterministic semantic checks. It uses the original proof paths and executable paths bound by TELOS. Run a fresh proof on a different checkout or installation.
 
-Use `node ophanim/cli.mjs resume --state /absolute/path/to/proof/scenario-state` to resume a retained scenario with a saved request. Use `node ophanim/cli.mjs status --state /absolute/path/to/proof/scenario-state` to inspect its obligations and effect state.
+Use `node ophanim/cli.mjs resume --state /absolute/path/to/proof/scenario-state` to resume a retained scenario with a saved request. A resume that finds a settled head with nothing left to dispatch returns that head and writes no new record. `status` also reports whether the controller's commit chain verifies. Use `node ophanim/cli.mjs status --state /absolute/path/to/proof/scenario-state` to inspect its obligations and effect state.
 
 The qualification covers deterministic workers, fixture TELOS authority and local queue effects. Live models, shared drives, business destinations and production rollout each require their own qualification.
 

@@ -35,7 +35,8 @@ export const putCommit = (store, { parents = [], tree, author, lease_gen = null,
   for (const p of parents) if (!isCid(p) || codecOf(p) !== "commit") throw new BoardViolation(`commit.parents must be commit cids, got ${p}`, "COMMIT");
   if (!author?.vendor) throw new BoardViolation("commit.author is required", "COMMIT");
   const a = authorClassOf(author) === "seat"
-    ? { vendor: author.vendor, seat_id: author.seat_id, mode: author.mode, occupancy_gen: author.occupancy_gen }
+    ? { vendor: author.vendor, seat_id: author.seat_id, mode: author.mode, occupancy_gen: author.occupancy_gen,
+        ...(author.model !== undefined ? { model: author.model } : {}) }
     : { vendor: author.vendor };
   for (const r of records) if (!isCid(r) || codecOf(r) !== "entry") throw new BoardViolation(`commit.records must be entry cids, got ${r}`, "COMMIT");
   // `records` is what this commit INTRODUCED, slotted or not. Without it an accumulative entry --

@@ -9,6 +9,8 @@ export interface ModelCapability {
   compaction?:boolean;
   inputCeiling?:number;
   combined?:boolean;
+  /** No frontier effort/output default is imposed where the caller names none. */
+  providerDefaults?:boolean;
 }
 export interface RequestOptions {
   vendor:Vendor;
@@ -26,6 +28,8 @@ export interface RequestOptions {
   signal?:AbortSignal;
   continuity?:'replay'|'server';
   previousResponseId?:string;
+  /** Names the pane streamed events belong to; defaults to the vendor. */
+  label?:string;
 }
 export interface PreparedRequest {
   vendor:Vendor;
@@ -94,3 +98,13 @@ export function isFrontier(model:string):boolean;
 export const models:Record<string,Record<string,string>>;
 export const CAPABILITIES:Readonly<Record<string,ModelCapability>>;
 export function providerFetch(fetchImpl?:typeof fetch):typeof fetch;
+export type Surface='responses'|'messages'|'genai';
+export interface TerminalState {complete:boolean;state:string|null;why:string|null}
+export const SUCCESSFUL_STOPS:readonly string[];
+export function successfulStop(reason:unknown):boolean;
+export function terminalState(surface:Surface,observed?:{status?:string|null;stopReason?:string|null;finishReason?:string|null;blocked?:boolean}):TerminalState;
+export type ReasoningContext='auto'|'current_turn'|'all_turns';
+export const REASONING_CONTEXTS:readonly ReasoningContext[];
+export const DOCUMENTED_ALL_TURNS:readonly string[];
+export function reasoningContextFor(options:{vendor:string;model:string;requested?:ReasoningContext;continuity?:string}):ReasoningContext|undefined;
+export function reasoningContextReport(requested:ReasoningContext|undefined,response:unknown):{requested:ReasoningContext|null;effective:string|null;honoured:boolean|null};

@@ -79,6 +79,7 @@ export function reduceSeats(events, into = {}) {
       case "tool": if (e.name && !s.tools.includes(e.name)) s.tools.push(e.name); break;
       case "done": s.status = "done"; if (typeof e.text === "string" && e.text.length > s.text.length) s.text = e.text; break;
       case "error": s.status = "error"; s.error = e.text ?? "error"; break;
+      case "reseat": s.model = e.model ?? null; s.model_gen = e.model_gen ?? null; break;
     }
   }
   return seats;

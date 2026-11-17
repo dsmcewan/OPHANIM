@@ -261,6 +261,8 @@ function validateLinks(kind, links) {
  * Shape check for an entry node, before any board-state rule is consulted.
  * Returns the slot it claims (null for accumulative kinds).
  */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
+
 export function validateEntry(entry) {
   const { kind, level, author, payload, visibility, links = {} } = entry ?? {};
   const spec = KINDS[kind];
@@ -280,10 +282,15 @@ export function validateEntry(entry) {
     if (!MODE_WRITES[author.mode].has(kind)) {
       bad("MODE", `a seat in "${author.mode}" mode may not write "${kind}" (it may write: ${[...MODE_WRITES[author.mode]].join(", ")})`);
     }
+    // The occupant model is identity, not a banner: the same claim from another model is a different
+    // claim's author, and which model produced an entry has to be checkable from the trail itself.
+    if (author.model !== undefined && (typeof author.model !== "string" || !MODEL_ID.test(author.model))) {
+      bad("AUTHOR", "author.model must be a model id string");
+    }
     for (const f of Object.keys(author)) {
       // The author is an identity, not a banner. A prose field here would churn the cid of an
       // otherwise identical claim and break dedup.
-      if (!["vendor", "seat_id", "mode", "occupancy_gen"].includes(f)) bad("AUTHOR", `author.${f} is not part of a seat's identity; runtime detail belongs in the side log`);
+      if (!["vendor", "seat_id", "mode", "occupancy_gen", "model"].includes(f)) bad("AUTHOR", `author.${f} is not part of a seat's identity; runtime detail belongs in the side log`);
     }
     // A CLAIM from an isolated mode must be isolated. Structural rather than status-dependent: the
     // earlier form of this rule was "refuse a board-visible debate entry while the board is

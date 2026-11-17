@@ -1,6 +1,6 @@
 ---
 name: pantheon-planner
-description: Pantheon's planner@lead seat as an Antigravity agent, seated when the operator reseats the planner role off anthropic (e.g. `--seat planner=agy_google/gemini-3.5-flash`) to avoid the shared subscription pool. Decides what work exists; never writes the artifact.
+description: Pantheon's planner@lead seat as an Antigravity agent, seated when the operator reseats the planner role off anthropic (e.g. `--seat planner=agy_google/gemini-3.6-flash`) to avoid the shared subscription pool. Decides what work exists; never writes the artifact.
 tools:
   - view_file
   - grep_search

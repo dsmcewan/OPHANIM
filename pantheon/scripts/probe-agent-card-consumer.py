@@ -31,7 +31,7 @@ tmp = Path(tempfile.mkdtemp(prefix="consumer-probe-"))
 try:
     # Generate a card with MY renderer, via the MCP server's own install path.
     req = {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install_agents",
-           "arguments":{"ids":["reviewer@agy_google/gemini-3.5-flash"],"format":"antigravity","root":str(tmp)}}}
+           "arguments":{"ids":["reviewer@agy_google/gemini-3.6-flash"],"format":"antigravity","root":str(tmp)}}}
     out = subprocess.run([ "/usr/bin/node", str(REPO/"bin"/"pantheon-agents-mcp.mjs")],
         input=json.dumps(req)+"\n", capture_output=True, text=True,
         env={"PATH":"/usr/bin:/bin","PANTHEON_AGENTS_ROOT":str(tmp)})

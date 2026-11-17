@@ -4,9 +4,9 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,canonical,digest,writeJson,outputProjection,intervalSummary} from './fixtures.mjs';
 import {runRuntime,loadRuntime,activateRelease,rollbackRelease} from './runtime.mjs';
-import {readRuntimeSnapshot} from './board.mjs';
+import {readRuntimeSnapshot,verifyRuntimeChain} from './board.mjs';
 import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
-import {assessConvergence,chooseEfficiencySlots,efficiencyScope} from './efficiency/assessment.mjs';
+import {assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord,verifyEfficiencyRecord} from './efficiency/assessment.mjs';
 import {recoverInterruptedAssessment} from './efficiency/recovery.mjs';
 
 const FIXTURES=fileURLToPath(new URL('./fixtures.mjs',import.meta.url));
@@ -15,11 +15,13 @@ function workerArtifact(options,workers) {
   return {schema:'ophanim.synthetic-worker-artifact/v1',sourceSha:digest(fs.readFileSync(FIXTURES,'utf8')),options,workers:metadata(workers)};
 }
 
-export async function executeRequest(request) {
-  return execute(request,false);
+// `opts.ledger` (K5): an efficiencyRecorder from ophanim/ledger/efficiency-kinds.mjs. It carries signing
+// keys, so it is passed by the caller, never read from a request file.
+export async function executeRequest(request,opts={}) {
+  return execute(request,false,opts);
 }
 
-async function execute(request,replay) {
+async function execute(request,replay,opts={}) {
   if(!request || !path.isAbsolute(request.stateDir??''))throw Error('Absolute private synthetic stateDir required');
   if(Object.hasOwn(request,'expectedQualifiedConvergences')&&
       (!Number.isInteger(request.expectedQualifiedConvergences)||request.expectedQualifiedConvergences<1||request.expectedQualifiedConvergences>20))
@@ -27,10 +29,10 @@ async function execute(request,replay) {
   const stateDir=path.resolve(request.stateDir);
   fs.mkdirSync(stateDir,{recursive:true,mode:0o700});
   if(fs.realpathSync(stateDir)!==stateDir)throw Error('Canonical synthetic state directory required');
-  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay),{dir:path.join(stateDir,'locks'),timeoutMs:60000});
+  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay,replay?{}:opts),{dir:path.join(stateDir,'locks'),timeoutMs:60000});
 }
 
-async function runRequest(request,replay) {
+async function runRequest(request,replay,{ledger=null}={}) {
   const stateDir=request.stateDir;
   const intervals=[],startedAt=Date.now();
   const dispatchStarts=new Map(),acceptedLatencies=[];
@@ -93,13 +95,17 @@ async function runRequest(request,replay) {
     const artifact=workerArtifact(workerOptions,workers);
     const initialRelease=priorRuntime?.activeRelease??null;
     const baselineSlots=request.slots??1;
-    const replayRequest={batches,maxDispatches:request.maxDispatches??1000,workerOptions,...telosRoot?{telosRoot}:{}};
+    // Non-default policies are part of the request identity; defaults are omitted
+    // so existing scopes and replays are unchanged.
+    const policies={...request.schedule&&request.schedule!=='wave'?{schedule:request.schedule}:{},
+      ...request.handoffVerification&&request.handoffVerification!=='full'?{handoffVerification:request.handoffVerification}:{}};
+    const replayRequest={batches,maxDispatches:request.maxDispatches??1000,workerOptions,...policies,...telosRoot?{telosRoot}:{}};
     const scope=efficiencyScope({obligations:fixtures.flatMap(f=>f.obligations),planning,
-      workerArtifactSha:digest(artifact),registry:metadata(workers),request:{batches,maxDispatches:replayRequest.maxDispatches,workerOptions},slots:baselineSlots});
+      workerArtifactSha:digest(artifact),registry:metadata(workers),request:{batches,maxDispatches:replayRequest.maxDispatches,workerOptions,...policies},slots:baselineSlots});
     const recoveredEfficiency=replay?null:await recoverInterruptedAssessment({stateDir,priorRuntime,scope,governance:authority});
     const efficiencyRoot=path.resolve(request.efficiencyRoot??path.join(stateDir,'efficiency'));
     const use=replay||request.operation||request.fault||initialRelease&&initialRelease!=='baseline'||!request.efficiencyRoot
-      ?{slots:baselineSlots}:await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,hasRuntime:!!priorRuntime,telosRoot});
+      ?{slots:baselineSlots}:await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,hasRuntime:!!priorRuntime,telosRoot,ledger});
     const slots=use.slots;
     scope.configuration.slots=slots;
     const efficiencyContext=replay?null:{scopeSha:scope.scopeSha,configuration:scope.configuration,policy:scope.policy};
@@ -135,7 +141,8 @@ async function runRequest(request,replay) {
       writeJson(path.join(stateDir,'driver-request.json'),resumeRequest);
       const prior=loadRuntime(stateDir),active=prior?.pendingRelease?.release??prior?.releases?.[prior.activeRelease];
       if(active&&active.id!=='baseline'&&active.artifactSha!==digest(artifact))throw Error('Fixture worker implementation/config differs from accepted release artifact');
-      result=await runRuntime({stateDir,planning,workers,slots,governance,effectAdapter:destination,fault,maxDispatches:request.maxDispatches??1000,onEvent,efficiencyContext});
+      result=await runRuntime({stateDir,planning,workers,slots,governance,effectAdapter:destination,fault,maxDispatches:request.maxDispatches??1000,onEvent,efficiencyContext,
+        ...policies.schedule?{schedule:policies.schedule}:{},...policies.handoffVerification?{handoffVerification:policies.handoffVerification}:{}});
     }
     const convergence=result.convergence??(initialRelease!==result.state.activeRelease?'accepted_change':'no_change');
     const endedAt=Date.now();
@@ -146,10 +153,20 @@ async function runRequest(request,replay) {
       p95StageAcceptanceMs:acceptedLatencies.length?Math.round(acceptedLatencies[Math.ceil(acceptedLatencies.length*0.95)-1]):null,
       workerContextBytes,
       verificationCalls,
+      ...result.handoff?.mode==='frontier'?{handoff:{mode:result.handoff.mode,verified:result.handoff.verified.length,skipped:result.handoff.skipped}}:{},
     };
-    if(!replay)output.efficiency=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
-      boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
-      attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency});
+    // A reused convergence wrote nothing; its head already carries an assessment.
+    if(result.reused)output.reusedConvergence={boardCommit:result.boardCommit};
+    if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output});
+    else if(!replay){
+      const record=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
+        boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
+        attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency,ledger});
+      // A fresh assessment is re-derived from its retained trace and the accepted board before it is used or
+      // written, as a reused one is (reusedEfficiencyRecord). A record that does not re-derive stops the run.
+      verifyEfficiencyRecord({stateDir,record,output});
+      output.efficiency=record;
+    }
     if(recoveredEfficiency)output.recoveredEfficiency=recoveredEfficiency;
     writeJson(request.resultFile??path.join(stateDir,'result.json'),output);
     return output;
@@ -219,13 +236,16 @@ async function main() {
     const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1),
       ...opts['efficiency-root']?{efficiencyRoot:path.resolve(opts['efficiency-root'])}:{},
       ...investigationEstimate!==undefined?{investigationEstimate}:{},
+      ...opts.schedule?{schedule:opts.schedule}:{},...opts['handoff-verification']?{handoffVerification:opts['handoff-verification']}:{},
       ...Object.hasOwn(opts,'expected-convergences')?{expectedQualifiedConvergences:Number(opts['expected-convergences'])}:{}});
     process.stdout.write(JSON.stringify(result,null,2)+'\n');return;
   }
   if(command==='status') {
     if(!opts.state)throw Error('status requires --state');
     const state=loadRuntime(path.resolve(opts.state));
-    process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,activeRelease:state.activeRelease,obligations:Object.fromEntries(Object.entries(state.obligations).map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),effects:state.effects}:null,null,2)+'\n');return;
+    let chain;
+    try{chain=verifyRuntimeChain(path.resolve(opts.state));}catch(error){chain={ok:false,reason:String(error.message).slice(0,500)};}
+    process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,chain,activeRelease:state.activeRelease,obligations:Object.fromEntries(Object.entries(state.obligations).map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),effects:state.effects}:null,null,2)+'\n');return;
   }
   if(command==='investigate') {
     if(opts['historical-report']){
@@ -256,6 +276,6 @@ async function main() {
   }
   if(command==='fixtures') {process.stdout.write(JSON.stringify(makeFixtures({count:Number(opts.cases??3)}),null,2)+'\n');return;}
   if(command!=='help')throw Error(`Unknown command: ${command}`);
-  process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 1 [--expected-convergences 1] [--investigation-estimate /absolute/forecast.json]\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs investigate --state /absolute/state\n  node ophanim/cli.mjs investigate --historical-report /absolute/report.json [--output /absolute/new-result.json | --verify-receipt /absolute/result.json]\n  node ophanim/cli.mjs fixtures --cases 3\n');
+  process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 1 [--schedule wave|refill] [--handoff-verification full|frontier] [--expected-convergences 1] [--investigation-estimate /absolute/forecast.json]\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs investigate --state /absolute/state\n  node ophanim/cli.mjs investigate --historical-report /absolute/report.json [--output /absolute/new-result.json | --verify-receipt /absolute/result.json]\n  node ophanim/cli.mjs fixtures --cases 3\n');
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{process.stderr.write(error.stack+'\n');process.exitCode=1;});

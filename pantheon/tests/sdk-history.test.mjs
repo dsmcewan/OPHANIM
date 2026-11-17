@@ -122,7 +122,7 @@ test("history files are owner-only, because they hold prompts", () => {
 // thing under test: accepted input -> phase one -> seat record -> phase two -> next turn's replay.
 
 const outputReply = n => ({
-  id: `resp_${n}`, output_text: `hi${n}`,
+  id: `resp_${n}`, status: "completed", output_text: `hi${n}`,
   // Replay refuses a reply with no output ITEMS, by design: the items carry the reasoning that makes
   // the next turn work, and keeping only the prose would look like a working replay while dropping it.
   output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: `hi${n}` }] }],

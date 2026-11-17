@@ -90,12 +90,21 @@ test('governed convergence persists a bounded decision, suppresses noise, and re
   fs.writeFileSync(forgedFile,JSON.stringify(forged),{mode:0o600});
   try { await assert.rejects(recordInvestigation(args),/history differs from source evidence/); }
   finally { fs.unlinkSync(forgedFile); }
+  const convergences=path.join(high.stateDir,'efficiency','convergences');
+  const assessedHeads=fs.readdirSync(convergences).sort();
+  const journalBefore=fs.readdirSync(path.join(ledger,'scopes',scopeSha,'investigations')).sort();
   const resumed=await executeRequest({...runOptions,stateDir:high.stateDir,efficiencyRoot:ledger,
     expectedQualifiedConvergences:20,investigationEstimate:forecast});
   assert.equal(resumed.convergence,'no_change');
   assert.equal(resumed.dispatches,0);
   assert.deepEqual(resumed.destinationInvocations,high.result.destinationInvocations);
+  // Equilibrium: the unchanged head is reused, so the run starts no new
+  // research and records no new assessment or investigation history.
+  assert.equal(resumed.reusedConvergence.boardCommit,high.result.efficiency.boardCommit);
+  assert.deepEqual(JSON.parse(JSON.stringify(resumed.efficiency)),JSON.parse(JSON.stringify(high.result.efficiency)));
   const resumedEvidence=load(high.stateDir,resumed);
-  assert.equal(resumedEvidence.receipt.decision.reason,'no-new-accepted-evidence');
+  assert.equal(resumedEvidence.receipt.traceSha,high.receipt.traceSha);
+  assert.deepEqual(fs.readdirSync(convergences).sort(),assessedHeads);
+  assert.deepEqual(fs.readdirSync(path.join(ledger,'scopes',scopeSha,'investigations')).sort(),journalBefore);
   console.log(`Ophanim investigation qualification evidence: ${root}`);
 });

@@ -1,0 +1,583 @@
+{
+ "schema": "pantheon.capability-facts/v1",
+ "read": "2026-11-16",
+ "rule": "Every figure is quoted from the vendor's own documentation on the date read. UNRECORDED means the vendor's docs do not state it; it is never filled by inference.",
+ "models": {
+  "claude-fable-5-2": {
+   "vendor": "anthropic",
+   "api_id": true,
+   "status": "Active (latest)",
+   "window": {
+    "value": 1000000,
+    "source": "https://platform.claude.com/docs/en/models/fable-5-2/overview",
+    "quote": "1M tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://platform.claude.com/docs/en/models/fable-5-2/overview",
+    "quote": "128K tokens"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "high",
+    "source": "https://platform.claude.com/docs/en/models/fable-5-2/overview",
+    "quote": "supports all five effort levels; default `high`"
+   },
+   "surface": "messages"
+  },
+  "claude-haiku-4-5-20251001": {
+   "vendor": "anthropic",
+   "api_id": true,
+   "status": "Active (legacy); retirement not sooner than October 15, 2026",
+   "window": {
+    "value": 200000,
+    "source": "https://platform.claude.com/docs/en/models/haiku-4-5/overview",
+    "quote": "200K tokens"
+   },
+   "output": {
+    "value": 64000,
+    "source": "https://platform.claude.com/docs/en/models/haiku-4-5/overview",
+    "quote": "64K tokens"
+   },
+   "efforts": {
+    "values": [],
+    "default": null,
+    "source": "https://platform.claude.com/docs/en/models/haiku-4-5/overview",
+    "quote": "Default effort: Not supported"
+   },
+   "surface": "messages"
+  },
+  "claude-opus-5": {
+   "vendor": "anthropic",
+   "api_id": true,
+   "status": "Active (legacy)",
+   "window": {
+    "value": 1000000,
+    "source": "https://platform.claude.com/docs/en/models/opus-5/overview",
+    "quote": "1M tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://platform.claude.com/docs/en/models/opus-5/overview",
+    "quote": "128K tokens"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "high",
+    "source": "https://platform.claude.com/docs/en/models/opus-5/overview",
+    "quote": "supports all five effort levels; default `high`"
+   },
+   "surface": "messages"
+  },
+  "claude-opus-5-5": {
+   "vendor": "anthropic",
+   "api_id": true,
+   "status": "Active (latest)",
+   "window": {
+    "value": 1000000,
+    "source": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+    "quote": "1M tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+    "quote": "128K tokens"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "medium",
+    "source": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+    "quote": "supports all five effort levels; default `medium`"
+   },
+   "surface": "messages"
+  },
+  "claude-sonnet-5": {
+   "vendor": "anthropic",
+   "api_id": true,
+   "status": "Active (legacy); claude-sonnet-5-5 is current",
+   "window": {
+    "value": 1000000,
+    "source": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+    "quote": "1M tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+    "quote": "128K tokens"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "high",
+    "source": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+    "quote": "supports all five effort levels; default `high`"
+   },
+   "surface": "messages"
+  },
+  "gemini-3.5-flash": {
+   "vendor": "agy_google",
+   "api_id": "deprecated; requests routed to Gemini 3.6 Flash",
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.5-flash",
+    "quote": "1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.5-flash",
+    "quote": "65,536"
+   },
+   "efforts": "UNRECORDED",
+   "surface": "genai",
+   "notes": [
+    "\"Gemini 3.5 Flash (`gemini-3.5-flash`) is deprecated and has been replaced by\" Gemini 3.6 Flash; it is the agy_google adapter's default model."
+   ]
+  },
+  "gemini-3.6-flash": {
+   "vendor": "agy_google",
+   "api_id": true,
+   "status": "stable; no shutdown date announced",
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.6-flash",
+    "quote": "Input token limit 1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.6-flash",
+    "quote": "Output token limit 65,536"
+   },
+   "efforts": {
+    "values": [
+     "minimal",
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "medium",
+    "source": "https://aistudio.google.com/docs/thinking",
+    "quote": "gemini-3.6-flash | On (medium) | minimal, low, medium, high"
+   },
+   "surface": "genai",
+   "notes": [
+    "Named replacement for gemini-3.5-flash (aistudio.google.com/docs/deprecations): \"API requests to `gemini-3.5-flash` are automatically routed to `gemini-3.6-flash`.\""
+   ]
+  },
+  "gemini-3.8-flash-high": {
+   "vendor": "agy_google",
+   "api_id": false,
+   "window": "UNRECORDED",
+   "output": "UNRECORDED",
+   "efforts": "UNRECORDED",
+   "surface": "UNRECORDED",
+   "notes": [
+    "Not a Gemini API model id: absent from aistudio.google.com/docs/models, the 3.8 Flash page and the thinking page. It is the name `agy models` prints for gemini-3.8-flash at high thinking, so it belongs to the agy CLI lane.",
+    "Base gemini-3.8-flash (API): 1,048,576 input, 65,536 output, thinking low/medium/high."
+   ]
+  },
+  "gemini-4-argon": {
+   "vendor": "agy_google",
+   "api_id": true,
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-4-argon",
+    "quote": "Context window (unified input and output token limit) 1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-4-argon",
+    "quote": "65,536 (default synchronous) / up to 1,048,576 (with long decode)"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "medium",
+    "source": "https://aistudio.google.com/docs/thinking",
+    "quote": "thinking_level low, medium, high (default medium)"
+   },
+   "surface": "genai",
+   "output_long_decode": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-4-argon",
+    "quote": "up to 1,048,576 (with long decode)"
+   }
+  },
+  "gemini-4-carbon": {
+   "vendor": "agy_google",
+   "api_id": true,
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-4-carbon",
+    "quote": "Context window (unified input and output token limit) 1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-4-carbon",
+    "quote": "65,536 (default synchronous) / up to 1,048,576 (with long decode)"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "medium",
+    "source": "https://aistudio.google.com/docs/thinking",
+    "quote": "thinking_level low, medium, high (default medium)"
+   },
+   "surface": "genai",
+   "output_long_decode": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-4-carbon",
+    "quote": "up to 1,048,576 (with long decode)"
+   }
+  },
+  "gpt-6-astra": {
+   "vendor": "openai",
+   "api_id": true,
+   "window": {
+    "value": 1050000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    "quote": "Context window: 1,050,000 tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    "quote": "Max output: 128,000 tokens"
+   },
+   "input": {
+    "value": 922000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    "quote": "Max input: 922,000 tokens"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": null,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    "quote": "`reasoning.effort` supports `low`, `medium`, `high`, `xhigh`, and `max`."
+   },
+   "surface": {
+    "value": "responses",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    "quote": "Supported endpoints: responses, chat_completions, batch"
+   },
+   "notes": [
+    "Default effort not stated; `none` returns HTTP 400 (guides/reasoning)."
+   ]
+  },
+  "gpt-6-luna": {
+   "vendor": "openai",
+   "api_id": true,
+   "window": {
+    "value": 1050000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "quote": "Context window: 1,050,000 tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "quote": "Max output: 128,000 tokens"
+   },
+   "input": {
+    "value": 922000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "quote": "Max input: 922,000 tokens"
+   },
+   "efforts": {
+    "values": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "medium",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "quote": "`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`."
+   },
+   "surface": {
+    "value": "responses",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "quote": "Supported endpoints: responses, chat_completions, batch"
+   }
+  },
+  "gpt-6-sol": {
+   "vendor": "openai",
+   "api_id": true,
+   "window": {
+    "value": 1050000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    "quote": "Context window: 1,050,000 tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    "quote": "Max output: 128,000 tokens"
+   },
+   "input": {
+    "value": 922000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    "quote": "Max input: 922,000 tokens"
+   },
+   "efforts": {
+    "values": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "medium",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    "quote": "`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`."
+   },
+   "surface": {
+    "value": "responses",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    "quote": "Supported endpoints: responses, chat_completions, batch"
+   },
+   "notes": [
+    "The page points to GPT-6.1 Sol as the newer Sol model."
+   ]
+  },
+  "gpt-6.1-sol": {
+   "vendor": "openai",
+   "api_id": true,
+   "window": {
+    "value": 1050000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "quote": "Context window: 1,050,000 tokens"
+   },
+   "output": {
+    "value": 128000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "quote": "Max output: 128,000 tokens"
+   },
+   "input": {
+    "value": 922000,
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "quote": "Max input: 922,000 tokens"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "default": "medium",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "quote": "`reasoning.effort` supports `low`, `medium` (default), `high`, `xhigh`, and `max`."
+   },
+   "surface": {
+    "value": "responses",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "quote": "Supported endpoints: responses, chat_completions, batch"
+   }
+  },
+  "grok-4.20-multi-agent": {
+   "vendor": "xai",
+   "api_id": "alias of grok-4.20-multi-agent-0309",
+   "window": {
+    "value": 1000000,
+    "source": "https://docs.x.ai/developers/models/grok-4.20-multi-agent-0309",
+    "quote": "Context window 1,000,000"
+   },
+   "output": {
+    "value": null,
+    "source": "https://docs.x.ai/developers/model-capabilities/text/multi-agent",
+    "quote": "The max_tokens parameter is not currently supported by the multi-agent model variant."
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ],
+    "default": null,
+    "source": "https://docs.x.ai/developers/model-capabilities/text/multi-agent",
+    "quote": "reasoning.effort low or medium for 4 agents, high or xhigh for 16 agents"
+   },
+   "surface": {
+    "value": "responses",
+    "source": "https://docs.x.ai/developers/model-capabilities/text/multi-agent",
+    "quote": "Use the xAI SDK or the Responses API instead."
+   },
+   "notes": [
+    "No client-side or custom tools (function calling) on the multi-agent variant."
+   ]
+  },
+  "grok-4.3": {
+   "vendor": "xai",
+   "api_id": true,
+   "window": {
+    "value": 1000000,
+    "source": "https://docs.x.ai/developers/models/grok-4.3",
+    "quote": "Context window 1,000,000"
+   },
+   "output": "UNRECORDED",
+   "efforts": {
+    "values": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ],
+    "default": "low",
+    "source": "https://docs.x.ai/developers/models/grok-4.3",
+    "quote": "Reasoning efforts Supported none, low, medium, high, xhigh Default low"
+   },
+   "surface": "UNRECORDED",
+   "notes": [
+    "Same page's capability card lists none/low/medium/high without xhigh."
+   ]
+  },
+  "grok-4.5": {
+   "vendor": "xai",
+   "api_id": true,
+   "window": {
+    "value": 500000,
+    "source": "https://docs.x.ai/developers/models/grok-4.5",
+    "quote": "Context window 500,000"
+   },
+   "output": "UNRECORDED",
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "high",
+    "source": "https://docs.x.ai/developers/model-capabilities/text/reasoning",
+    "quote": "grok-4.5 supports low / medium / high (default); xhigh is treated as high",
+    "conflict": {
+     "source": "https://docs.x.ai/developers/models/grok-4.5",
+     "quote": "Reasoning efforts Supported low, medium, high, xhigh Default high",
+     "resolution": "the narrower list is recorded: an xhigh request is served as high, so escalating to it would change nothing (read 2026-11-16)"
+    }
+   },
+   "surface": "UNRECORDED"
+  },
+  "grok-4.6": {
+   "vendor": "xai",
+   "api_id": true,
+   "window": {
+    "value": 500000,
+    "source": "https://docs.x.ai/developers/models/grok-4.6",
+    "quote": "Context window 500,000"
+   },
+   "output": "UNRECORDED",
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ],
+    "default": "high",
+    "source": "https://docs.x.ai/developers/models/grok-4.6",
+    "quote": "Reasoning efforts Supported low, medium, high, xhigh Default high"
+   },
+   "surface": "UNRECORDED"
+  },
+  "grok-4.7": {
+   "vendor": "xai",
+   "api_id": true,
+   "window": {
+    "value": 500000,
+    "source": "https://docs.x.ai/developers/models/grok-4.7",
+    "quote": "Context window 500,000"
+   },
+   "output": "UNRECORDED",
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ],
+    "default": "high",
+    "source": "https://docs.x.ai/developers/models/grok-4.7",
+    "quote": "Reasoning efforts Supported low, medium, high, xhigh Default high"
+   },
+   "surface": "UNRECORDED"
+  },
+  "grok-build-0.1": {
+   "vendor": "xai",
+   "api_id": true,
+   "window": {
+    "value": 256000,
+    "source": "https://docs.x.ai/developers/models/grok-build-0.1",
+    "quote": "Context window 256,000"
+   },
+   "output": "UNRECORDED",
+   "efforts": "UNRECORDED",
+   "surface": "UNRECORDED",
+   "notes": [
+    "Aliases grok-code-fast-1; Batch API not supported."
+   ]
+  },
+  "gemini-3.8-flash": {
+   "vendor": "google",
+   "api_id": true,
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
+    "quote": "Input token limit 1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
+    "quote": "Output token limit 65,536"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "UNRECORDED",
+    "source": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
+    "quote": "Supported (low, medium, high); minimal is not supported and returns an error"
+   },
+   "status": "Stable; no shutdown date announced (aistudio.google.com/docs/deprecations, released September 2, 2026)"
+  }
+ }
+}

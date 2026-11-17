@@ -17,7 +17,7 @@ const question = process.argv[2] ??
 const SEATS = [
   { seat: "openai",    vendor: "openai",    model: "gpt-6-luna" },
   { seat: "xai",       vendor: "xai",       model: "grok-4.6" },
-  { seat: "agy_google",    vendor: "agy_google",    model: "gemini-3.5-flash" },
+  { seat: "agy_google",    vendor: "agy_google",    model: "gemini-3.6-flash" },
   { seat: "anthropic", vendor: "anthropic", model: "claude-haiku-4-5-20251001" },
 ];
 const spec = Object.fromEntries(SEATS.map(s => [s.seat, s]));
