@@ -7,6 +7,7 @@
 // did not apply prints the same green as one that held -- and a suite whose cases all skip is the
 // failure this project has already shipped once.
 import { ROSTER, PODS, podOf } from "./roster.mjs";
+import { labOf } from "../config/models.mjs";
 import { measureBytes } from "./measure.mjs";
 import { contextFor, CONTEXT_KINDS } from "../role/roles.mjs";
 
@@ -62,11 +63,14 @@ export const LAWS = [
     check: a => {
       if (a.is_diff === false) return null;
       if (!a.producer?.vendor || !a.checker?.vendor) return "review needs a producer and a checker with vendors";
-      if (a.producer.vendor === a.checker.vendor) {
-        return `${a.checker.vendor} cannot check ${a.producer.vendor}'s diff: same lab. This is the one ` +
+      // The LAB is compared, not only the vendor string: a Claude lane model served by an agy seat is
+      // Anthropic's work (independent review 2026-11-16, RU1).
+      const lab = s => labOf(s.vendor, s.model ?? null);
+      if (a.producer.vendor === a.checker.vendor || lab(a.producer) === lab(a.checker)) {
+        return `${a.checker.vendor} cannot check ${a.producer.vendor}'s diff: same lab (${lab(a.producer)}). This is the one ` +
           `routing rule with direct evidence behind it here`;
       }
-      if (a.assigner?.vendor && a.checker.vendor === a.assigner.vendor) {
+      if (a.assigner?.vendor && (a.checker.vendor === a.assigner.vendor || lab(a.checker) === lab(a.assigner))) {
         return `${a.checker.vendor} assigned this work and cannot also check it: judgment cuts across ` +
           `the chain, it does not climb it`;
       }

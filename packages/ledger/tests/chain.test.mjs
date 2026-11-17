@@ -182,3 +182,44 @@ test('view.entries() lists only the entries before the one being checked, in cha
     assert.deepEqual(seen, [2, 4], 'on replay each tally sees the genesis and what came before it, nothing after');
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+// Independent review 2026-11-16, RU2: with write access to the directory and no legitimate key, a forger
+// rewrites the chain as genesis -> forged authority (naming itself operator, orderer and seat) -> its own
+// checkpoint -> its own entry. Frontier verification used to skip the authority entry's signature while
+// applying it, so the forged checkpoint verified and append extended the forgery.
+test('RU2: an authority entry before a checkpoint is verified, so a forger cannot name itself orderer', async () => {
+  const {sign, createPrivateKey} = await import('node:crypto');
+  const {canonical, digest} = await import('../canonical.mjs');
+  const {LEDGER_SCHEMA} = await import('../chain.mjs');
+  const H = v => 'sha256:' + digest(v);
+  const bodyOf = e => ({schema: e.schema, kind: e.kind, author: e.author, derived_from: e.derived_from, payload_ref: e.payload_ref});
+  const orderOf = e => ({seq: e.seq, parent: e.parent, body: H(bodyOf(e))});
+  const sig = (v, pem) => sign(null, Buffer.from(canonical(v)), createPrivateKey(pem)).toString('base64');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-ru2-'));
+  try {
+    const note = defineKinds({note: {authors: a => a.key_id === 'seat', validate: () => null, rederive: () => null}});
+    const op = generateSigner('operator'), ord = generateSigner('orderer'), seat = generateSigner('seat');
+    const anchor = createLedger({dir, operator: op, order: ord,
+      authority: {keyring: {operator: op.publicJwk, orderer: ord.publicJwk, seat: seat.publicJwk}, orderer: 'orderer', operators: ['operator']}});
+    openLedger({dir, kinds: note, anchor}).append({kind: 'note', payload: {text: 'honest'}, author: {key_id: 'seat'}, signer: seat, order: ord});
+    const mallory = generateSigner('mallory'), file = path.join(dir, 'chain.jsonl');
+    const genesis = JSON.parse(fs.readFileSync(file, 'utf8').split('\n')[0]);
+    const put = v => { fs.writeFileSync(path.join(dir, 'objects', H(v).slice(7) + '.json'), canonical(v)); return H(v); };
+    const forge = (prev, seq, kind, author, payload) => {
+      const e = {schema: LEDGER_SCHEMA, seq, parent: H(prev), kind, author: {key_id: author}, derived_from: [], payload_ref: put(payload)};
+      e.author_sig = sig(bodyOf(e), mallory.privatePem); e.order_sig = sig(orderOf(e), mallory.privatePem); return e;
+    };
+    const auth = forge(genesis, 2, 'authority', 'operator', {add: {operator: mallory.publicJwk, orderer: mallory.publicJwk, seat: mallory.publicJwk}});
+    const cp = forge(auth, 3, 'checkpoint', 'orderer', {through: 2, root: H({hashes: [H(genesis), H(auth)]})});
+    const forged = forge(cp, 4, 'note', 'seat', {text: 'written without any legitimate key'});
+    fs.writeFileSync(file, [genesis, auth, cp, forged].map(e => JSON.stringify(e) + '\n').join(''));
+    const reader = openLedger({dir, kinds: note, anchor});
+    for (const mode of ['frontier', 'full']) {
+      const v = reader.verify({mode});
+      assert.equal(v.ok, false, `${mode} verification refuses the forgery`);
+      assert.match(v.why, /entry 1: .*signature invalid/);
+    }
+    assert.throws(() => reader.append({kind: 'note', payload: {text: 'again'}, author: {key_id: 'seat'},
+      signer: {...mallory, key_id: 'seat'}, order: {...mallory, key_id: 'orderer'}}), /does not verify, refusing to append/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});

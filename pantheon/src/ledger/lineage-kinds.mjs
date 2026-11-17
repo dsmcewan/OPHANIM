@@ -10,19 +10,15 @@
 //     (`seat:<seat_id>#<occupancy_gen>`), admitted to the ledger by an operator's authority entry. A
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
-import {LANES} from '../config/models.mjs';
+import {labOf} from '../config/models.mjs';
 import {promptSha, replySha} from '../context/chain.mjs';
 import {generateSigner, AUTHORITY} from '../../../packages/ledger/chain.mjs';
 
 const PLACEHOLDER = /^$|_self$|^self$|placeholder/i;           // TELOS's own rule (proposal-ledger.mjs)
 const sha = text => 'sha256:' + createHash('sha256').update(text).digest('hex');
 export const seatKeyId = seat => `seat:${seat.seat_id}#${seat.occupancy_gen}`;
-const LAB_OF_VENDOR = {agy_google: 'google'};
 /** The lab that answered: a lane model names its lab (an agy seat may serve a Claude model). */
-export function labOf(vendor, model) {
-  for (const lane of Object.values(LANES)) if (lane[model]) return lane[model].lab;
-  return LAB_OF_VENDOR[vendor] ?? vendor;
-}
+export {labOf};
 export const lineageKey = (vendor, responseId) =>
   typeof responseId === 'string' && !PLACEHOLDER.test(responseId) && typeof vendor === 'string' && vendor ? `${vendor.toLowerCase()}:${responseId}` : null;
 

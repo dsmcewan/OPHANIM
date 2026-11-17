@@ -32,7 +32,7 @@ import { runAcceptance as isolatedAcceptance, ACCEPTANCE_ISOLATION } from "./acc
 import { artifactPath, readArtifact, writeArtifact } from "./artifact-files.mjs";
 import { certifiedArtifacts } from "./artifacts.mjs";
 import { resolveRepoRoot } from "../../scripts/lib/repo-root.mjs";
-import { modelId } from "../config/models.mjs";
+import { modelId, labOf, vendorsOfLab } from "../config/models.mjs";
 import { tokenCapFor } from "../agents/store.mjs";
 import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
 import { spawnPromise } from "./spawn.mjs";
@@ -539,7 +539,7 @@ export async function runOpenItem(spec, opts = {}) {
     progress({ event: "run.start", detail: `${spec.key}: ${spec.title} → ${SLOT}; acceptance: ${CMD}` });
     for (const r of seatingReport(chain)) say(r.line);
 
-    let scouts = [], TICKET = null, plannerVendor = null, maker = null, wip = null;
+    let scouts = [], TICKET = null, plannerVendor = null, plannerModel = null, maker = null, wip = null;
     // One work item per slot. A single-slot ticket keeps the bare key it always had, so its board
     // refs, its run record and every existing test are untouched.
     const itemKeyFor = sl => (SLOTS.length === 1 ? ITEM : `${ITEM}-${sl.slot}`);
@@ -626,6 +626,7 @@ export async function runOpenItem(spec, opts = {}) {
         assertStage({ ...board, ref: REF, stage: "plan" });
         const { text, seat: ran } = await roleTurn({ role: "planner", purpose: "plan", prompt: p.prompt });
         plannerVendor = ran.vendor;
+        plannerModel = ran.model ?? null;
         const vendorChanged = ran.vendor !== seat.vendor;
         seat = nextOccupancy(null, ran, { seat_id: `${ran.vendor}-plan`, mode: "plan" });
         if (vendorChanged) {
@@ -678,6 +679,7 @@ export async function runOpenItem(spec, opts = {}) {
     } else {
       enter("resume", `from ${root}`);
       plannerVendor = run.planner_vendor;
+      plannerModel = run.planner_model ?? null;
       if (!plannerVendor || run.files.length !== SLOTS.length) throw new Error("resume: incomplete per-slot recovery state");
       TICKET = board.store.get(treeSlots(board.store, board.refs.resolve(REF)).ticket)?.payload;
       if (!TICKET) throw new Error("resume: no board ticket");
@@ -710,6 +712,7 @@ export async function runOpenItem(spec, opts = {}) {
       artifactCid = crew[0].artifactCid; bytes = crew[0].bytes; code = crew[0].code;
     }
     run.planner_vendor = plannerVendor;
+    run.planner_model = plannerModel;
     record();
     // A failed acceptance resumes at revision, retaining every slot and its original baseline.
     // A late review/ship failure can reuse its byte-bound passing controller result.
@@ -865,6 +868,10 @@ export async function runOpenItem(spec, opts = {}) {
       // critique would be refused -- correctly. The pairing is computed per file, against THAT
       // file's maker, because "a different lab than the one that wrote it" is a per-file property.
       const toReview = BUILT ?? [{ sl: { slot: SLOT, path: PATH }, seat: maker, wip, artifactCid, bytes, code }];
+      // A reviewer may share neither a vendor nor a lab with the maker or the planner (RU1): a Claude lane
+      // model served by agy is Anthropic's work, so Anthropic seats are avoided for it too.
+      const reviewerAvoid = made => [...new Set([made.vendor, plannerVendor,
+        ...vendorsOfLab(labOf(made.vendor, made.model ?? null)), ...vendorsOfLab(labOf(plannerVendor, plannerModel))].filter(Boolean))];
       for (const built of toReview) {
       // WAS reviewPlan({producers, assigner})[0] here. Found 2026-09-29: reviewPlan picks from
       // Object.keys(SEAT_FACTS) -- every vendor that exists, not SEATING.reviewer's actual curated
@@ -878,9 +885,9 @@ export async function runOpenItem(spec, opts = {}) {
         ? { reviewer: OVERRIDES.reviewer.vendor, why: `operator reseat: ${OVERRIDES.reviewer.vendor}/${OVERRIDES.reviewer.model}` }
         : (c => c ? { reviewer: c.vendor, why: `candidatesFor("reviewer"), first entry excluding the maker (${built.seat.vendor}) and planner (${plannerVendor})` }
                   : { reviewer: null, why: `no reviewer candidate left after avoiding ${built.seat.vendor}, ${plannerVendor}` }
-          )(profile === "argo" ? forRole("reviewer", { avoid: [built.seat.vendor, plannerVendor] })[0] : candidatesFor("reviewer", { avoid: [built.seat.vendor, plannerVendor] })[0]);
+          )(profile === "argo" ? forRole("reviewer", { avoid: reviewerAvoid(built.seat) })[0] : candidatesFor("reviewer", { avoid: reviewerAvoid(built.seat) })[0]);
       if (!pairing.reviewer) throw new Error(`no clean reviewer: ${pairing.why}`);
-      assertReviewCutsAcross({ assigner: { vendor: plannerVendor }, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
+      assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
       let seat = { vendor: pairing.reviewer, seat_id: toReview.length === 1 ? `${pairing.reviewer}-critique` : `${pairing.reviewer}-critique-${built.sl.slot}`, mode: "critique", occupancy_gen: 1 };
       let rref = `refs/seat/${seat.seat_id}/wip`;
       await board.refs.branch({ name: rref, from: built.wip, author: seat });
@@ -895,11 +902,11 @@ export async function runOpenItem(spec, opts = {}) {
         "behaviour it broke, or a case the acceptance test does not cover that would fail. If the executed acceptance failed, " +
         "you must request changes. End your reply with a line reading exactly `VERDICT: approve` or `VERDICT: request_changes`.");
       assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
-      const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, avoid: [built.seat.vendor, plannerVendor], extra: { tokens: 4000 } });
+      const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, avoid: reviewerAvoid(built.seat), extra: { tokens: 4000 } });
       // Law 3 on the reviewer that actually answered, not the one paired in advance.
-      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor } });
+      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor, model: plannerModel } });
       if (reviewed.seat.vendor !== seat.vendor) {
-        assertReviewCutsAcross({ assigner: { vendor: plannerVendor }, producer: built.seat, reviewer: reviewed.seat });
+        assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
         rref = `refs/seat/${seat.seat_id}/wip`;
         await board.refs.branch({ name: rref, from: built.wip, author: seat });

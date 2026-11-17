@@ -19,7 +19,7 @@
 import { ROLES } from "./roles.mjs";
 import { packOf, PROJECTION_FOR_ROLE } from "../board/project.mjs";
 import { SEAT_FACTS, UNMEASURED, route, modelFor } from "../route/router.mjs";
-import { modelId, LANES } from "../config/models.mjs";
+import { modelId, LANES, labOf } from "../config/models.mjs";
 
 // A lane model, resolved from the lane table so a removed entry fails at load rather than at a call.
 const AGY_GEMINI_HIGH = LANES.agy_cli["gemini-3.8-flash-high"] ? "gemini-3.8-flash-high"
@@ -813,13 +813,17 @@ export class SeatingViolation extends Error {}
  */
 export function assertReviewCutsAcross({ assigner, producer, reviewer }) {
   if (!reviewer?.vendor || !producer?.vendor) throw new SeatingViolation("assertReviewCutsAcross: producer and reviewer are required");
-  if (reviewer.vendor === producer.vendor) {
+  // Vendor AND lab: a Claude model served through an agy seat is Anthropic's work (lanes.json names
+  // its lab), so an Anthropic reviewer shares its lab even though the vendor strings differ.
+  const lab = s => labOf(s.vendor, s.model ?? null);
+  if (reviewer.vendor === producer.vendor || lab(reviewer) === lab(producer)) {
     throw new SeatingViolation(
-      `${reviewer.vendor} cannot review ${producer.vendor}: a reviewer must not share the producer's vendor`);
+      `${reviewer.vendor}${reviewer.model ? `/${reviewer.model}` : ""} cannot review ${producer.vendor}${producer.model ? `/${producer.model}` : ""}: ` +
+      `a reviewer must not share the producer's vendor or lab (${lab(producer)})`);
   }
-  if (assigner && reviewer.vendor === assigner.vendor) {
+  if (assigner?.vendor && (reviewer.vendor === assigner.vendor || lab(reviewer) === lab(assigner))) {
     throw new SeatingViolation(
-      `${reviewer.vendor} assigned this work and cannot also review it: judgment cuts across the ` +
+      `${reviewer.vendor} shares a vendor or lab with whoever assigned this work and cannot also review it: judgment cuts across the ` +
       `chain, it does not climb it -- a layer reviewing the layer below is grading its own plan`);
   }
   return true;

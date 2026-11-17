@@ -177,10 +177,13 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64}) {
     let rederived = 0, auth = null;
     for (const [i, e] of entries.entries()) {
       const prev = entries[i - 1] ?? null;
-      if (i > 0 && i < lastCheckpoint) {
+      // Authority entries are ALWAYS fully verified, before a checkpoint too. A checkpoint is trusted
+      // because the orderer signed it, and who the orderer is comes from the authority entries; letting an
+      // unverified authority entry name the orderer lets a forger name itself and sign its own checkpoint
+      // (independent review 2026-11-16, RU2). Only ordinary entries may rest on a checkpoint.
+      if (i > 0 && i < lastCheckpoint && e?.kind !== AUTHORITY) {
         // Covered by the checkpoint: linkage is re-hashed here, its commitment is checked at the checkpoint.
         if (e?.seq !== i + 1 || e.parent !== (prev ? hashOf(prev) : null)) return {ok: false, why: `entry ${i}: chain linkage broken before the checkpoint`};
-        if ((e.kind === AUTHORITY) && getObject(e.payload_ref) === null) return {ok: false, why: `entry ${i}: authority payload missing or altered`};
       } else {
         const why = check(e, i, prev, byHash, auth, {rederive: true});
         if (why) return {ok: false, why};
