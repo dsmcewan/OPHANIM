@@ -37,7 +37,9 @@ test('plan from the committed status ledger: one issue per item, labels and stat
     assert.equal(i.state_reason, it.state === 'Resolved' ? 'completed' : null);
     if (it.waiting_on) assert.ok(i.labels.includes(`waiting:${it.waiting_on}`));
     else assert.ok(!i.labels.some(l => l.startsWith('waiting:')));
-    assert.equal(i.labels.includes('decision-authority'), it.waiting_on === 'decision');
+    // The recorded owner_role wins; without one, a decision hold is the decision authority's (record.mjs ownerOf).
+    const owner = it.owner_role ?? (it.state === 'On Hold' && it.waiting_on === 'decision' ? 'decision-authority' : null);
+    assert.equal(i.labels.includes('decision-authority'), owner === 'decision-authority');
     assert.ok(i.body.includes(it.entry) && i.body.includes(rec.anchor), 'the verify section names the entry and the anchor');
     assert.ok(i.body.includes('node packages/ledger/status.mjs verify'));
   }
