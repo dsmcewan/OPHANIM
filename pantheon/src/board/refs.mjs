@@ -89,7 +89,14 @@ export function slotsAllowed(name, changedSlots) {
   return { ok: true };
 }
 
-export function openRefs(root, { runtime = null, store = null, readOnly = false } = {}) {
+// WITH A LEDGER (`ledger`, a board recorder from ophanim/ledger/board-kinds.mjs, injected): every
+// successful swap is recorded as a `ref.move` entry {name, from, to, msg, by, reset} citing the previous
+// move of that ref, BEFORE the ref file changes. The ledger re-derives it: `from` is where the previous
+// move left the ref, and `to` is a commit in this store whose history contains `from`, unless the swap
+// says `reset: true` (and is recorded as one). A ref moved by hand, or a swap that rewrites history
+// without saying so, is refused as LEDGER_REFUSED and the name does not move. The reflog stays, for display.
+export function openRefs(root, { runtime = null, store = null, readOnly = false, ledger = null } = {}) {
+  let L = ledger;
   const base = join(root, "refs");
   if (!readOnly) mkdirSync(base, { recursive: true });
   const lockDir = join(root, "runtime", "locks");
@@ -121,7 +128,7 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false 
    * Compare-and-swap a name. Returns { ok:false, code } on every refusal; never retries.
    * `lease` is { resource, gen } and is verified inside the critical section when supplied.
    */
-  const swap = ({ name, expected = null, next, author, lease = null, changedSlots: claimed = [], msg = "", ship = false, from = null }) =>
+  const swap = ({ name, expected = null, next, author, lease = null, changedSlots: claimed = [], msg = "", ship = false, from = null, reset = false }) =>
     readOnly ? Promise.reject(new Error("refs.swap: this reader is read-only")) : withSeatLock(`ref ${name}`, async () => {
       const { spec } = parseRef(name);
       if (!isCid(next)) return { ok: false, code: "BAD_CID", why: `next "${next}" is not a cid` };
@@ -231,6 +238,12 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false 
           if (!v.ok) return { ok: false, code: v.code, why: v.why, current };
         }
 
+        // On the ledger first: a move the ledger refuses does not happen.
+        if (L) {
+          try { L.recordRefMove({ name, from: current, to: next, msg, by: author.seat_id ?? author.vendor, reset: Boolean(reset) }); }
+          catch (e) { return { ok: false, code: "LEDGER_REFUSED", why: `the ledger refused this move of ${name}: ${e.message}`, current }; }
+        }
+
         const p = refPath(name);
         mkdirSync(dirname(p), { recursive: true });
         const tmp = `${p}.tmp${process.pid}`;
@@ -270,5 +283,7 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false 
     ? readFileSync(logPath, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l))
     : []);
 
-  return { base, resolve, list, swap, branch, reflog, refPath };
+  return { base, resolve, list, swap, branch, reflog, refPath,
+    /** Attach a board recorder after opening (the ledger is opened with the board it records for). */
+    useLedger: l => { L = l ?? null; } };
 }

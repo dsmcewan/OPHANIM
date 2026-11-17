@@ -288,8 +288,14 @@ test("the ledger is on by default: a run records at <board>/ledger, and `ledger:
     const { openBoard } = await import("../src/board/index.mjs");
     const reopened = openSystemLedger({ root: ledgerDir, board: openBoard(on.board) });
     const kinds = reopened.ledger.read().map(e => e.kind);
-    for (const k of ["genesis", "facts", "seating", "turn", "review", "escalation"]) assert.ok(kinds.includes(k), `${k} recorded by default`);
+    for (const k of ["genesis", "facts", "seating", "turn", "review", "escalation", "lease", "ref.move"]) assert.ok(kinds.includes(k), `${k} recorded by default`);
     assert.equal(reopened.ledger.verify().ok, true);
+    // Every ref on the board is where its last recorded move left it.
+    const board = openBoard(on.board);
+    const moves = new Map(reopened.ledger.read().filter(e => e.kind === "ref.move").map(e => reopened.ledger.payloadOf(e)).map(p => [p.name, p.to]));
+    for (const { name, cid } of board.refs.list()) assert.equal(moves.get(name), cid, `${name} is where the ledger left it`);
+    // The turns name the digests the seat files hold.
+    assert.ok(reopened.ledger.read().filter(e => e.kind === "turn").every(e => /^[0-9a-f]{64}$/.test(reopened.ledger.payloadOf(e).prompt_sha)));
     const off = await runFixture(join(dir, "off"), scripted(), { ledger: false });
     assert.equal(off.shipped, true, JSON.stringify(off.error));
     assert.equal(existsSync(join(off.board, "ledger")), false, "opted out: no ledger written");

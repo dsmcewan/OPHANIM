@@ -95,6 +95,7 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `ophanim/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
 | K5 efficiency events as entries, and the debit loophole | Resolved | `ophanim/ledger/efficiency-kinds.mjs`; `assessConvergence({ledger})`, `chooseEfficiencySlots({ledger})`. See "K5 implemented" below. |
 | K5 `assessed` and `retained` kinds | Resolved | `efficiency.trace`, `efficiency.assessed`, `efficiency.retained` in `ophanim/ledger/efficiency-kinds.mjs`, re-derived by the same computations the file verifiers run; a fresh assessment is verified before `cli.mjs` uses it. See "K5b implemented" below. |
+| Lease rows, budget limits, ref moves and seat files on the ledger | Resolved | `ophanim/ledger/board-kinds.mjs`; seat files checked in `sdkTurn`. See "Remaining records on the ledger" below. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
@@ -381,3 +382,58 @@ The cycle review named "the ledger is opt-in" as the largest remaining gap. It i
 - **Shared ledger:** gate and contribution kinds re-derive against the board the ledger was opened with, so one shared ledger across boards needs a board resolver per entry.
 - **Key custody:** it is a local key store; a hardware or remote signer would replace `keyStore`.
 
+
+## Remaining records on the ledger (2026-11-17)
+
+The cycle review (item 5) named the records still off the ledger or only signed inputs. Four are now entries or checked against them. The `run.json` display copies stay display copies.
+
+| Record | Was | Now |
+|---|---|---|
+| Lease rows (`runtime/leases.json`) | Mutable table; a signed input to the LEASE gate | A `lease` entry per grant, renewal, release, expiry and fence |
+| Budget limits (`runtime/budget.json`) | Overwritten, `declared_at` mutable | A `budget` entry per declared cap, citing the one it replaces |
+| Ref moves (`refs/`, reflog) | Ref files plus a display reflog | A `ref.move` entry per successful swap, citing the previous move of that ref |
+| Seat conversation files | Self-attesting: the chain is recomputed from the file | Checked against the ledger's `turn` entries for the seat at handoff |
+
+**Kinds** (`ophanim/ledger/board-kinds.mjs`, registered in `systemKinds`, authored by the controller). Each entry names its board (`scope`, the board root) and cites exactly the latest entry for the same lease, budget or ref; a skipped, stale or forked citation is refused.
+
+| Kind | Payload | Re-derives by |
+|---|---|---|
+| `lease` | `{scope, resource, event, gen, holder, when, expires_at?, reason?}` | <ul><li>`granted` follows an inactive entry at gen + 1; `fenced` is gen + 1 with a reason.</li><li>`renewed`, `released`, `expired` keep the active gen and holder; `expired` only at or after `expires_at`.</li><li>Time does not run backwards; an active lease expires after it was granted.</li><li>`observed` records a lease the ledger had not seen (a board older than its ledger), only as the first entry for it.</li></ul> |
+| `budget` | `{scope, limits, declared_at}` | Non-negative `max_turns` / `max_usd`; declared no earlier than the cap it replaces. |
+| `ref.move` | `{scope, name, from, to, msg, by, reset}` | <ul><li>`from` is where the previous move left the ref.</li><li>`to` is a commit in the board's store whose history contains `from`, unless `reset` is true.</li></ul> |
+| `turn` (extended) | adds `prompt_sha` and `tools` | The reply's exchange digest is recomputed from the reply and tools; the prompt digest is carried (prompts are not kept). |
+| `gate` (extended) | adds `lease_scope` | With it, the lease rows must be exactly those the board's latest active `lease` entries derive, and the verdict cites exactly those entries. |
+
+**On the path.**
+- `openBoard(root, {ledger})` and `board.useLedger(rec)` take a board recorder (`recorder().board(root)`). Pantheon never imports the ledger for this; `runOpenItem` attaches the default ledger's recorder.
+- Runtime and refs record **before** the file changes. A record the ledger refuses:
+  - a lease change throws, and the table is not written;
+  - a swap returns `LEDGER_REFUSED`, and the ref does not move;
+  - `refs.swap({reset: true})` is the only way to move a ref to a non-descendant, and it is recorded as a reset.
+- `runtime.budget()` reads the declared limits from the ledger. It reports `declared_binding` and `declared_file_mismatch`; an edited `budget.json` does not raise the cap. Spend stays bound to commits.
+- `sdkTurn({ledger: {exchanges()}})`: at handoff, every stored exchange must match the ledger's turn entries for the seat, in order (`unmatchedExchange`), or the turn is refused as `LEDGER_MISMATCH`. `runOpenItem` passes the seat's entries, and records `prompt_sha` and `tools` with each turn.
+- `gateRecord({leaseLedger})` refuses a runtime table that differs from the ledger's; `gateLeaseCitations` gives the entries to cite.
+- `ledger: false`, or no recorder: every file path is unchanged.
+
+*Check.*
+- `ophanim/ledger/board-kinds.test.mjs` (6 tests), on a real Pantheon board recording on the system ledger:
+  - lease events and generations recorded; forged grants, fences, renewals, uncited and early-expiry records refused;
+  - a lease row edited in the file is refused at its next change, and the file is left unchanged;
+  - the gate citing its lease entries; a dropped row, missing citation or missing scope refused;
+  - an edited `budget.json` not raising the cap; caps uncited, out of order or negative refused;
+  - a ref moved by hand and a history rewrite refused as `LEDGER_REFUSED`; a recorded reset accepted; forged moves refused;
+  - without a ledger, the earlier behaviour.
+- `ophanim/ledger/seat-ledger.test.mjs` (5 tests): an honest seat continues; an edited reply or prompt, reordered or injected exchanges, and an exchange persisted but never recorded are refused as `LEDGER_MISMATCH`; without a ledger, only the file check applies.
+- Against the pre-change Pantheon files, all 6 board tests and the 3 seat-refusal tests fail.
+- `pantheon/tests/route-protocol.test.mjs`: the default-ledger run also records `lease` and `ref.move`, every ref is where its last recorded move left it, and every turn carries `prompt_sha`.
+- Suites:
+  - `npm run test:proof`: 181 of 181, with TELOS at the pin;
+  - Pantheon: 812 pass, plus the 1 known environment failure;
+  - model client: 48 pass.
+
+**Limits.**
+- `observed` is a signed input, like the gate's lease rows were: a lease the ledger never saw is taken as it stands, once.
+- A ref move is checked against its board's store only while that board exists (the opened board, or another board at its `scope`). For a removed board, only its move chain is checked.
+- Prompts are not on the ledger, only their digests. A turn recorded before `prompt_sha` existed matches any prompt.
+- A seat file from a run whose turns were not recorded (a board resumed from before the ledger) is refused, not adopted.
+- The gate's lease citations are available to callers; no gate entry is recorded on the run path yet, as before.

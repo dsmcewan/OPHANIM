@@ -207,6 +207,9 @@ export async function runOpenItem(spec, opts = {}) {
   if (LEDGER) {
     const v = LEDGER.verify();
     if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
+    // The board's own records on the same ledger: lease changes, budget limits and ref moves are entries
+    // first (ophanim/ledger/board-kinds.mjs), and a change the ledger refuses does not happen.
+    if (typeof LEDGER.board === "function") board.useLedger(LEDGER.board(root));
   }
   const HUMAN = { vendor: "human" };
   const CONTROLLER = { vendor: "controller" };
@@ -381,7 +384,11 @@ export async function runOpenItem(spec, opts = {}) {
     const work = `turn:${purpose}:${++escalationWork}`;   // one truncation trail per turn
     if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
     for (;;) {
+      // With a ledger, the seat's stored conversation is checked against the ledger's turn entries for
+      // the same seat before it is continued (seat-sdk: LEDGER_MISMATCH), not only against itself.
+      const seatLedger = typeof LEDGER?.exchanges === "function" ? { exchanges: () => LEDGER.exchanges(`${vendor}-${purpose}@${model}`) } : null;
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
+        ...(seatLedger ? { ledger: seatLedger } : {}),
         architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
         ...(effort ? { effort } : {}) }); }
       catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
@@ -411,7 +418,8 @@ export async function runOpenItem(spec, opts = {}) {
     // model: sdkTurn's seat is `${purpose}@${pool}@${model}`), so two slots running different models are
     // two seats, never one seat that "changed model".
     recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: r.seat?.model_gen ?? 1 },
-      requested_model: model, served_model: r.result.served_model ?? null, response_id: r.result.response_id ?? null, reply: text, purpose, prompt });
+      requested_model: model, served_model: r.result.served_model ?? null, response_id: r.result.response_id ?? null, reply: text, purpose, prompt,
+      tools: r.result.tools ?? [] });
     progress({ event: "turn.done", seat: vendor, model, ms, detail: `${text.length} chars` });
     return text;
   }

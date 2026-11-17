@@ -11,6 +11,7 @@
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
 import {LANES} from '../../pantheon/src/config/models.mjs';
+import {promptSha, replySha} from '../../pantheon/src/context/chain.mjs';
 import {generateSigner, AUTHORITY} from './chain.mjs';
 
 const PLACEHOLDER = /^$|_self$|^self$|placeholder/i;           // TELOS's own rule (proposal-ledger.mjs)
@@ -24,6 +25,13 @@ export function labOf(vendor, model) {
 }
 export const lineageKey = (vendor, responseId) =>
   typeof responseId === 'string' && !PLACEHOLDER.test(responseId) && typeof vendor === 'string' && vendor ? `${vendor.toLowerCase()}:${responseId}` : null;
+
+const HEX = /^[0-9a-f]{64}$/;
+// Optional: the digests the seat's conversation file records the exchange under (seat-sdk), so a seat
+// file can be checked against the ledger. `prompt_sha` cannot be re-derived (the prompt is not kept);
+// the reply's exchange digest is re-derived from the reply and tools.
+const exchangeShape = p => (p.prompt_sha === undefined || HEX.test(p.prompt_sha))
+  && (p.tools === undefined || (Array.isArray(p.tools) && p.tools.every(t => typeof t === 'string')));
 
 const seatShape = s => s && typeof s.seat_id === 'string' && typeof s.vendor === 'string' && Number.isInteger(s.occupancy_gen) && s.occupancy_gen > 0;
 
@@ -47,7 +55,7 @@ export function lineageKinds() {
       // Only the seat occupancy that made the turn signs it.
       authors: () => true,
       validate: p => (seatShape(p?.seat) && typeof p.requested_model === 'string' && typeof p.reply === 'string' && typeof p.reply_sha === 'string'
-        && (p.served_model === null || typeof p.served_model === 'string') ? null : 'a turn names its seat, requested and served model, and reply'),
+        && (p.served_model === null || typeof p.served_model === 'string') && exchangeShape(p) ? null : 'a turn names its seat, requested and served model, and reply'),
       rederive: (e, view) => {
         const p = e.payload;
         if (e.author.key_id !== seatKeyId(p.seat)) return `signed by ${e.author.key_id}, not by the seat that answered (${seatKeyId(p.seat)})`;
@@ -110,13 +118,32 @@ export function lineageRecorder({ledger, operator, order, keys: store = null}) {
     return s;
   };
   return {
-    recordTurn({seat, requested_model, served_model = null, response_id = null, reply, purpose = null, cites = []}) {
+    recordTurn({seat, requested_model, served_model = null, response_id = null, reply, purpose = null, cites = [], prompt = null, tools = []}) {
       const s = signerFor(seat);
       const prev = last.get(seat.seat_id);
-      const payload = {seat, requested_model, served_model, response_id, reply, reply_sha: sha(reply), purpose};
+      const payload = {seat, requested_model, served_model, response_id, reply, reply_sha: sha(reply), purpose,
+        ...(typeof prompt === 'string' ? {prompt_sha: promptSha(prompt)} : {}), ...(tools?.length ? {tools: tools.map(String)} : {})};
       const h = ledger.append({kind: 'turn', payload, author: {key_id: s.key_id}, signer: s, order, derivedFrom: [...(prev ? [prev] : []), ...cites]}).hash;
       last.set(seat.seat_id, h);
       return h;
+    },
+    /**
+     * A seat's turns as its conversation file records them: per turn, the prompt digest (null when the
+     * turn was recorded without one) and, when the reply has text or tools, the reply's exchange digest.
+     * Read from a ledger that verifies, in chain order. seat-sdk checks a stored conversation against it.
+     */
+    exchanges(seat_id) {
+      const state = ledger.verify({mode: 'frontier'});
+      if (!state.ok) throw Object.assign(new Error(`ledger does not verify: ${state.why}`), {code: 'LEDGER_REFUSED'});
+      const out = [];
+      for (const e of ledger.read()) {
+        if (e.kind !== 'turn') continue;
+        const p = ledger.payloadOf(e);
+        if (p?.seat?.seat_id !== seat_id) continue;
+        out.push({role: 'user', sha: p.prompt_sha ?? null});
+        if (p.reply !== '' || p.tools?.length) out.push({role: 'assistant', sha: replySha(p.reply, p.tools ?? [])});
+      }
+      return out;
     },
     recordReview({seat, model, served_model = null, response_id = null, verdict, findings = '', targets}) {
       const s = signerFor(seat);

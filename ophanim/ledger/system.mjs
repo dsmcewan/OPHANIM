@@ -22,6 +22,7 @@ import {lineageKinds, lineageRecorder, seatKeyId} from './lineage-kinds.mjs';
 import {efficiencyKinds, efficiencyRecorder} from './efficiency-kinds.mjs';
 import {gateKinds} from './gate-kind.mjs';
 import {anchorKinds, boardResolver} from './anchors.mjs';
+import {boardKinds, boardRecorder} from './board-kinds.mjs';
 
 export const OPERATOR = 'operator';
 export const CONTROLLER = 'controller';
@@ -57,13 +58,18 @@ export function keyStore(dir) {
   };
 }
 
-/** Every kind the system records, bound to the board it records for (contributions, gates, anchors). */
+/**
+ * Every kind the system records, bound to the board it records for (contributions, gates, anchors).
+ * The board's runtime records (lease, budget, ref.move) are always registered: their entries name the
+ * board they belong to, and ref moves are checked against that board's store wherever it is.
+ */
 export function systemKinds({board = null} = {}) {
   const op = a => a.key_id === OPERATOR, ctl = a => a.key_id === CONTROLLER;
   return defineKinds({
     ...pantheonKinds({authors: {inputs: op, decisions: ctl}, board}),
     ...lineageKinds(),
     ...efficiencyKinds({authors: {promotion: ctl, events: ctl}}),
+    ...boardKinds({authors: ctl, board}),
     ...(board ? gateKinds({authors: ctl, board}) : {}),
     ...(board ? anchorKinds({board: boardResolver(board), authors: ctl}) : {}),
   });
@@ -109,12 +115,17 @@ export function openSystemLedger({root, board = null, anchor = process.env.OPHAN
     return keys.replace(next);
   }
 
-  /** One recorder for every run path: escalations, turns and reviews, and efficiency records. */
+  /**
+   * One recorder for every run path: escalations, turns and reviews, and efficiency records.
+   * `board(scope)` is the board's recorder (lease rows, budget limits, ref moves) for openBoard's
+   * `ledger` option, with `scope` the board root.
+   */
   function recorder() {
     const efficiency = efficiencyRecorder({ledger, controller, order: controller});
     const escalation = escalationRecorder({ledger, controller, order: controller, operator});
     const lineage = lineageRecorder({ledger, operator, order: controller, keys});
-    return {...efficiency, ...escalation, ...lineage, verify: () => ledger.verify(), ledger, anchor: pinned, rotateSeatKey};
+    const board = scope => boardRecorder({ledger, controller, order: controller, scope});
+    return {...efficiency, ...escalation, ...lineage, board, verify: () => ledger.verify(), ledger, anchor: pinned, rotateSeatKey};
   }
   return {ledger, anchor: pinned, root, recorder, rotateSeatKey, keys};
 }
