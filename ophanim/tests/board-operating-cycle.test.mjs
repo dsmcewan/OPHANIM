@@ -105,6 +105,14 @@ test('REHEARSAL: one operating cycle, from the verified board to a Resolved stat
       assert.ok(!labs.includes('anthropic'), 'the lab that planned and implemented did not review');
       assert.equal(r.bundle.review.planner_excluded, true);
       assert.ok(r.bundle.review.author_turns.length >= 1, 'the cycle cites the author turns (cold review over their lineage)');
+      // The reviewed contribution scope is explicit (owner audit RS2): the plan and the work both reached the change,
+      // so the cycle cites the plan turn as well as the work turn, and nothing was narrowed.
+      assert.deepEqual([r.bundle.review.review_scope.kind, r.bundle.review.review_scope.narrowed],
+        ['change', undefined]);
+      assert.deepEqual([...new Set(r.bundle.review.review_scope.contributions.map(c => c.purpose))].sort(), ['plan', 'work']);
+      const citedSys = openPantheonLedger({root: r.bundle.review.ledger});
+      const cited = r.bundle.review.author_turns.map(h => citedSys.ledger.payloadOf(citedSys.ledger.read().find(e => citedSys.ledger.hashOf(e) === h)).purpose);
+      assert.ok(cited.includes('plan') && cited.includes('work'), `the cycle cites the plan and work turns (${cited})`);
       assert.equal(r.bundle.review.outcome, 'verified');
       assert.equal(r.proposal.schema, 'ophanim.status-proposal/v1');
       assert.equal(r.proposal.to.state, 'Resolved');

@@ -70,6 +70,14 @@ export const LAWS = [
         return `${a.checker.vendor} cannot check ${a.producer.vendor}'s diff: same lab (${lab(a.producer)}). This is the one ` +
           `routing rule with direct evidence behind it here`;
       }
+      // Contributions in the reviewed scope (review/scope.mjs): a checker may share a lab with none of them. This is
+      // derived from what reached the bytes, not from a role label (owner audit RS2).
+      for (const c of a.contributors ?? []) {
+        if (c?.vendor && (a.checker.vendor === c.vendor || lab(a.checker) === lab(c))) {
+          return `${a.checker.vendor} shares the ${lab(c)} lab with a ${c.purpose ?? "contribution"} in the reviewed scope ` +
+            `(${c.vendor}${c.model ? `/${c.model}` : ""}${c.via ? `: ${c.via}` : ""}) and cannot check it`;
+        }
+      }
       if (a.assigner?.vendor && (a.checker.vendor === a.assigner.vendor || lab(a.checker) === lab(a.assigner))) {
         return `${a.checker.vendor} assigned this work and cannot also check it: judgment cuts across ` +
           `the chain, it does not climb it`;

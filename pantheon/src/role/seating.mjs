@@ -811,7 +811,7 @@ export class SeatingViolation extends Error {}
  * A reviewer reading work it commissioned is grading its own plan; a reviewer sharing the producer's
  * vendor is the derangement rule broken.
  */
-export function assertReviewCutsAcross({ assigner, producer, reviewer }) {
+export function assertReviewCutsAcross({ assigner, producer, reviewer, contributors = [] }) {
   if (!reviewer?.vendor || !producer?.vendor) throw new SeatingViolation("assertReviewCutsAcross: producer and reviewer are required");
   // Vendor AND lab: a Claude model served through an agy seat is Anthropic's work (lanes.json names
   // its lab), so an Anthropic reviewer shares its lab even though the vendor strings differ.
@@ -820,6 +820,13 @@ export function assertReviewCutsAcross({ assigner, producer, reviewer }) {
     throw new SeatingViolation(
       `${reviewer.vendor}${reviewer.model ? `/${reviewer.model}` : ""} cannot review ${producer.vendor}${producer.model ? `/${producer.model}` : ""}: ` +
       `a reviewer must not share the producer's vendor or lab (${lab(producer)})`);
+  }
+  // Every contribution in the reviewed scope (review/scope.mjs), named as what it is (owner audit RS2).
+  for (const c of contributors) {
+    if (c?.vendor && (reviewer.vendor === c.vendor || lab(reviewer) === lab(c))) {
+      throw new SeatingViolation(`${reviewer.vendor}${reviewer.model ? `/${reviewer.model}` : ""} shares the ${lab(c)} lab with a ` +
+        `${c.purpose ?? "contribution"} in the reviewed scope (${c.vendor}${c.model ? `/${c.model}` : ""}${c.via ? `: ${c.via}` : ""}) and cannot review it`);
+    }
   }
   if (assigner?.vendor && (reviewer.vendor === assigner.vendor || lab(reviewer) === lab(assigner))) {
     throw new SeatingViolation(

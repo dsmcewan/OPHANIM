@@ -42,6 +42,7 @@ import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
+import { reviewScope } from "../review/scope.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
 import { assignArm, explicitAssignment, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
@@ -1065,7 +1066,9 @@ export async function runOpenItem(spec, opts = {}) {
           // The slot's escalation state, as recorded: the next revision continues the trail, not a fresh one.
           effort: override ? null : saved.escalation?.effort ?? null, forced: override ? null : saved.escalation?.forced ?? null,
           escalationSteps: saved.escalation?.steps ?? 0, ranModel: override ? null : saved.escalation?.model ?? null,
-          pendingRevision: saved.escalation?.pending ?? null, stopped: override || RETRY_STOPPED ? null : stopped };
+          pendingRevision: saved.escalation?.pending ?? null, stopped: override || RETRY_STOPPED ? null : stopped,
+          // A run recorded before contributors were kept names its last seat only; that is what it can attest.
+          contributors: saved.contributors ?? [{ purpose: "work", vendor: saved.seat.vendor, model: saved.escalation?.model ?? choice.seat.model, slot: sl.slot }] };
       });
       if (crew.every(c => c.stopped)) {
         throw new Error(`resume: every slot recorded a terminal escalation stop (${crew.map(c => `${c.sl.slot}: ${c.stopped.why}`).join("; ")}); ` +
@@ -1153,6 +1156,11 @@ export async function runOpenItem(spec, opts = {}) {
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
             c.ranModel = made.seat.model;
+            // Every model that wrote a revision contributed to the final bytes: the next revision's prompt carries the
+            // previous file ("fix it; do not start over"). Kept for the reviewed scope (review/scope.mjs, owner audit RS2).
+            if (!(c.contributors ??= []).some(x => x.vendor === made.seat.vendor && x.model === made.seat.model)) {
+              c.contributors.push({ purpose: "work", vendor: made.seat.vendor, model: made.seat.model, slot: c.sl.slot });
+            }
             // Under `fit`, the slot's effort is the one the answering seat ran with: when a fallback answered,
             // the next escalation starts from the fallback's own mapped effort, not the primary's.
             if (profile === "fit") c.effort = made.effort ?? null;
@@ -1186,7 +1194,7 @@ export async function runOpenItem(spec, opts = {}) {
             run.files = crew.map(member => ({ slot: member.sl.slot, path: member.sl.path,
               baseline: member.baseline, seat: member.seat, wip: member.wip,
               artifactCid: member.artifactCid, bytes: member.bytes, rev, escalation: escalationState(member),
-              selected: savedChoice(member.choice) }));
+              selected: savedChoice(member.choice), contributors: member.contributors ?? [] }));
             record();
             check(true, `rev ${rev}: ${c.sl.slot} written by ${c.seat.vendor} (${shortCid(c.artifactCid)})`);
           }));
@@ -1261,10 +1269,15 @@ export async function runOpenItem(spec, opts = {}) {
       // critique would be refused -- correctly. The pairing is computed per file, against THAT
       // file's maker, because "a different lab than the one that wrote it" is a per-file property.
       const toReview = BUILT ?? [{ sl: { slot: SLOT, path: PATH }, seat: maker, wip, artifactCid, bytes, code }];
-      // A reviewer may share neither a vendor nor a lab with the maker or the planner (RU1): a Claude lane
-      // model served by agy is Anthropic's work, so Anthropic seats are avoided for it too.
-      const reviewerAvoid = made => [...new Set([made.vendor, plannerVendor,
-        ...vendorsOfLab(labOf(made.vendor, made.model ?? null)), ...vendorsOfLab(labOf(plannerVendor, plannerModel))].filter(Boolean))];
+      // THE REVIEWED SCOPE (review/scope.mjs, owner audit RS2): each slot's checker judges that slot's bytes, so it may
+      // share a vendor or lab with no contribution that reached them -- every model that wrote a revision, and the
+      // planner, whose title is the work item the worker read. Derived from those contributions, not from a role
+      // label; recorded in run.json review_scopes. (A Claude lane model served by agy is Anthropic's work, RU1.)
+      const scopeOf = built => reviewScope({ kind: "artifact", slot: built.sl.slot, turns: [
+        { purpose: "plan", vendor: plannerVendor, model: plannerModel },
+        ...(built.contributors?.length ? built.contributors
+          : [{ purpose: "work", vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? built.model ?? null, slot: built.sl.slot }])] });
+      const reviewerAvoid = scope => [...new Set(scope.contributions.flatMap(c => [c.vendor, ...vendorsOfLab(c.lab)]).filter(Boolean))];
       // Under `fit`, stakes state how many INDEPENDENT labs review each artifact (requirements.review_labs:
       // low 1, normal 1, high 2, critical 3). The panel is chosen one reviewer at a time, each avoiding the maker's
       // and the planner's labs (law 3) and every vendor and lab that already ANSWERED, so a fallback cannot seat two
@@ -1284,8 +1297,10 @@ export async function runOpenItem(spec, opts = {}) {
       // override at all once agy_google became the default maker for both planner and implementer.
       // Fix: compute the pairing from the SAME lookup roleTurn actually uses, so they cannot diverge.
       // Now: the pairing IS the selection roleTurn runs (selectSeat), admitted by lab independence as well.
-      const avoid = reviewerAvoid(built.seat);
-      const avoidLabs = [...new Set([labOf(built.seat.vendor, built.ranModel ?? built.seat.model ?? built.model ?? null), labOf(plannerVendor, plannerModel)])];
+      const scope = scopeOf(built);
+      (run.review_scopes ??= {})[built.sl.slot] = scope;
+      const avoid = reviewerAvoid(scope);
+      const avoidLabs = scope.author_labs;
       const reviewChars = (built.code ?? "").length + attached.length;
       const need = REVIEW_LABS?.value ?? 1;
       if (REVIEW_LABS) {
@@ -1305,7 +1320,7 @@ export async function runOpenItem(spec, opts = {}) {
         throw new Error(`no clean reviewer: no reviewer candidate left after avoiding ${avoid.join(", ")} (labs ${avoidLabs.join(", ")}): ${e.message}`);
       }
       const pairing = { reviewer: reviewChoice.seat.vendor, why: reviewChoice.selection.reason };
-      assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
+      assertReviewCutsAcross({ contributors: scope.contributions, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
       let seat = { vendor: pairing.reviewer, seat_id: toReview.length === 1 ? `${pairing.reviewer}-critique` : `${pairing.reviewer}-critique-${built.sl.slot}`, mode: "critique", occupancy_gen: 1 };
       let rref = `refs/seat/${seat.seat_id}/wip`;
       await board.refs.branch({ name: rref, from: built.wip, author: seat });
@@ -1322,13 +1337,13 @@ export async function runOpenItem(spec, opts = {}) {
       assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
       const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
       // Law 3 on the reviewer that actually answered, not the one paired in advance.
-      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, assigner: { vendor: plannerVendor, model: plannerModel } });
+      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, contributors: scope.contributions });
       const reviewedLab = labOf(reviewed.seat.vendor, reviewed.seat.model ?? null);
       if (usedLabs.includes(reviewedLab) || usedVendors.includes(reviewed.seat.vendor)) {
         throw panelRefusal(built, `reviewer ${k + 1} answered from ${reviewed.seat.vendor}/${reviewed.seat.model}, a lab already on the panel`);
       }
       if (reviewed.seat.vendor !== seat.vendor) {
-        assertReviewCutsAcross({ assigner: { vendor: plannerVendor, model: plannerModel }, producer: built.seat, reviewer: reviewed.seat });
+        assertReviewCutsAcross({ contributors: scope.contributions, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
         rref = `refs/seat/${seat.seat_id}/wip`;
         await board.refs.branch({ name: rref, from: built.wip, author: seat });

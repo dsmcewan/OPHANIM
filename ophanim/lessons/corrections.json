@@ -237,6 +237,25 @@
         "why": "no general executable check; caught by integrator discipline",
         "next": "when a new test is claimed to fail on old code, confirm the failure is behavioural, not an import or fixture error"
       }
+    },
+    {
+      "id": "role-label-as-contribution",
+      "class": "Review independence is derived from a role label (the 'planner' as 'assigner') instead of the contributions that actually reached the reviewed bytes, and the reviewed scope is left implicit.",
+      "source": "owner audit RS2, docs/reviews/2026-11-16-workflow-handoffs/CURRENT_STATE.md; owner request 2026-11-17 'Make the reviewed contribution scope explicit for RS2'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "048b3ba",
+          "note": "in-run law passed plannerVendor as assigner; the cycle excluded the planner's lab but cited only work turns"
+        }
+      ],
+      "fixed_in": "this commit (pantheon/src/review/scope.mjs; run.json review_scopes; bundle.review.review_scope)",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/review-scope.test.mjs",
+        "name": "the plan's inclusion is derived from what the worker reads"
+      }
     }
   ]
 }

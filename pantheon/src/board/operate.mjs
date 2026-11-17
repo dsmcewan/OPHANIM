@@ -21,6 +21,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync
 import { join, resolve, relative, isAbsolute, dirname, basename } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { createHash } from "node:crypto";
+import { reviewScope } from "../review/scope.mjs";
 import { execFileSync } from "node:child_process";
 import { openStatusLedger, propose, proposalRefusal, proposalDigest, STATES } from "../../../packages/ledger/status.mjs";
 import { digest } from "../../../packages/ledger/canonical.mjs";
@@ -164,20 +165,37 @@ export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "a
 }
 
 /**
- * The cycle's reviewers: n labs, none of which made the change. The planner's lab is excluded too when
- * the seating table has enough labs; otherwise only the implementer's lab is, the author turns are not
- * cited (so the planner's lab may review), and the result says so.
+ * The cycle's reviewers: n labs outside the labs that contributed to the reviewed change (review/scope.mjs, scope
+ * `change`: the planner's title reached every worker, and every work turn wrote the bytes). The result carries the
+ * scope it applied.
+ *
+ * KNOWN, OPEN (owner audit RS3, the tracked lineage-downgrade bypass): when the configured pool cannot supply n labs
+ * outside every contributor, the planner's contribution is dropped from the applied scope so the planner's lab may
+ * review, and the author turns are not cited. That narrowing is now recorded explicitly (`narrowed`), with the
+ * dropped contributions and the reason, instead of happening silently. It is not fixed here: the owner's control
+ * contract says the three-lab requirement cannot be lowered by an availability fallback, and the owner holds a
+ * candidate fix. Making it strict leaves every default ARGO board run pending (planner anthropic, maker openai,
+ * cycle pool outside both: xai and google only).
  */
-export function cycleReviewers({ planLabs = [], workLabs = [], n = 3 }) {
-  const all = [...new Set([...workLabs, ...planLabs])];
+export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3 }) {
+  const full = scope ?? { kind: "change", contributions: [...planLabs.map(lab => ({ purpose: "plan", lab })), ...workLabs.map(lab => ({ purpose: "work", lab }))],
+    author_labs: [...new Set([...workLabs, ...planLabs])].sort() };
   try {
-    return { seats: reviewSeats({ n, avoidLabs: all }), author_labs: all, planner_excluded: true };
+    return { seats: reviewSeats({ n, avoidLabs: full.author_labs }), author_labs: full.author_labs, planner_excluded: true, scope: full };
   } catch (e) {
     if (e.code !== "NO_SEATS") throw e;
-    return { seats: reviewSeats({ n, avoidLabs: [...new Set(workLabs)] }), author_labs: [...new Set(workLabs)], planner_excluded: false,
-      note: `excluding the planner's lab (${planLabs.join(", ")}) as well leaves fewer than ${n} labs: the planner's lab may review, and the author turns are not cited` };
+    const kept = full.contributions.filter(c => c.purpose !== "plan"), dropped = full.contributions.filter(c => c.purpose === "plan");
+    const labs = [...new Set(kept.map(c => c.lab).filter(Boolean))].sort();
+    const applied = { ...full, contributions: kept, author_labs: labs,
+      narrowed: { dropped, why: `excluding every contributing lab (${full.author_labs.join(", ")}) leaves fewer than ${n} labs in the configured cycle pool; ` +
+        `the plan contribution was dropped from the applied scope so its lab may review`, status: "known open bypass (owner audit RS3); not an accepted scope" } };
+    return { seats: reviewSeats({ n, avoidLabs: labs }), author_labs: labs, planner_excluded: false, scope: applied,
+      note: `excluding the planner's lab (${dropped.map(d => d.lab).join(", ")}) as well leaves fewer than ${n} labs: the planner's lab may review, and the author turns are not cited` };
   }
 }
+
+/** The `change` scope of a run: every plan and work turn it recorded (review/scope.mjs). */
+export const changeScope = run => reviewScope({ kind: "change", turns: [...turnsOf(run, "plan"), ...turnsOf(run, "work")] });
 
 /** Items ordered so that an item's dependencies come before it (cycles broken by id order). */
 export function dependencyOrder(items) {
@@ -559,17 +577,20 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   progress({ event: "committed", branch: branchName, commit: head });
 
   // The review cycle over base..head, on the run's ledger.
-  const chosen = cycleReviewers({ planLabs: labsOf(planTurns), workLabs: labsOf(workTurns), n });
-  // This run's work turns on the ledger: recorded after the run started, by the seats run.json names.
-  const workSeats = new Set(workTurns.map(t => `${t.vendor}-work@${t.model}`));
+  const chosen = cycleReviewers({ scope: changeScope(run), n });
+  // This run's contributing turns on the ledger (plan and work: the reviewed scope's lineage), recorded after the run
+  // started, by the seats run.json names. Cited by the cycle, so its reviews are cold over that lineage.
+  const authorSeats = new Set([...planTurns.map(t => `${t.vendor}-plan@${t.model}`), ...workTurns.map(t => `${t.vendor}-work@${t.model}`)]);
+  // A narrowed scope (the RS3 fallback) cites none, as before: the cycle's own rules refuse a reviewer whose lab
+  // authored a cited turn, and the narrowing lets the planner's lab review.
   const authorTurns = chosen.planner_excluded ? sys.ledger.read().slice(entriesBefore).filter(e => e.kind === "turn")
-    .filter(e => { const p = sys.ledger.payloadOf(e); return p.purpose === "work" && workSeats.has(p.seat.seat_id); }).map(e => sys.ledger.hashOf(e)) : [];
+    .filter(e => { const p = sys.ledger.payloadOf(e); return ["plan", "work"].includes(p.purpose) && authorSeats.has(p.seat.seat_id); }).map(e => sys.ledger.hashOf(e)) : [];
   const diff = git(["diff", "--no-color", base, head]);
   const changed = git(["diff", "--name-only", base, head]).split("\n").filter(Boolean);
   const scope = `board/${item}/${base.slice(0, 12)}`;
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
     seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined });
-  bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, cycle: r.cycle, author_labs: chosen.author_labs,
+  bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, review_scope: chosen.scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, ...(chosen.note ? { note: chosen.note } : {}), author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
   save();
@@ -636,7 +657,7 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
       fail("the run's run.json is missing or is not the one the bundle names: the run's reviewers cannot be re-derived");
     }
     const run = JSON.parse(readFileSync(bundle.run.run_json, "utf8"));
-    const chosen = cycleReviewers({ planLabs: labsOf(turnsOf(run, "plan")), workLabs: labsOf(turnsOf(run, "work")), n: state.cycle.reviewers });
+    const chosen = cycleReviewers({ scope: changeScope(run), n: state.cycle.reviewers });
     if ([...chosen.author_labs].sort().join() !== [...bundle.review.author_labs].sort().join()) fail("the run's author labs do not re-derive the bundle's");
     const git = gitIn(gitTop(repo));
     const diff = git(["diff", "--no-color", bundle.base, bundle.commit]);
