@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { classify, capacityReport, MIN_RUNS, ENOUGH_RATE } from "../src/practice/review-capacity.mjs";
 import { runBoardItem } from "../src/board/operate.mjs";
 import { withDispatch, WORK } from "./fixtures/dispatch.mjs";
@@ -25,7 +26,16 @@ test("classify: each outcome of a coordinated review, and a run that needed none
 
 test(`the rule: insufficient below ${MIN_RUNS} runs; enough at ${ENOUGH_RATE * 100}% completed; not enough below`, () => {
   const dir = join(process.env.TMPDIR ?? "/tmp", `cap-${process.pid}-${Date.now()}`);
-  const write = (n, b) => { mkdirSync(join(dir, `b${n}`), { recursive: true }); writeFileSync(join(dir, `b${n}`, "evidence.json"), JSON.stringify(b)); };
+  // 86ce18a review, defect 4: the rule counts unique, verified, live observations. These bundles used to name no
+  // run.json, so each would now be unverified; each is given its own live run.json, cited by digest, as a live board
+  // run leaves it. The rule under test is unchanged.
+  const write = (n, b) => {
+    mkdirSync(join(dir, `b${n}`), { recursive: true });
+    const runJson = JSON.stringify({ key: `b${n}`, providers: { kind: "live" } });
+    writeFileSync(join(dir, `b${n}`, "run.json"), runJson);
+    const run = { ...b.run, run_json: join(dir, `b${n}`, "run.json"), run_json_digest: "sha256:" + createHash("sha256").update(runJson).digest("hex") };
+    writeFileSync(join(dir, `b${n}`, "evidence.json"), JSON.stringify({ ...b, run }));
+  };
   try {
     for (let i = 0; i < 19; i++) write(i, shipped({ close: "sha256:c", outcome: "verified" }));
     assert.equal(capacityReport({ bundles: dir }).verdict.outcome, "insufficient_evidence");
@@ -62,8 +72,12 @@ test("through real board runs: a completed review, a refusal before work, and a 
       });
       await go("mixed", { planTitle: "ticket", profile: "fit", revisions: 3 });
       const r = capacityReport({ bundles: join(repo, "boards"), store });
-      const byClass = Object.fromEntries(Object.entries(r.counts).filter(([, n]) => n));
+      // 86ce18a review, defect 4: fixture runs answer from fake providers, so they are synthetic observations, reported
+      // beside the live rule and never in it (they used to be counted under it).
+      const byClass = Object.fromEntries(Object.entries(r.synthetic.counts).filter(([, n]) => n));
       assert.deepEqual(byClass, { completed: 1, pending_mixed_labs: 1, refused_before_work: 1 });
+      assert.equal(r.unverified.count, 0, "every bundle's run.json verifies");
+      assert.equal(r.needed, 0, "no live observation");
       assert.equal(r.verdict.outcome, "insufficient_evidence");
     } finally { rmSync(keys, { recursive: true, force: true }); }
   });

@@ -38,7 +38,7 @@ import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
-import { closeClaim } from "../ledger/cycle-kinds.mjs";
+import { closeClaim, REQUIRED_REVIEW_LABS } from "../ledger/cycle-kinds.mjs";
 import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
 import { DEFAULT_ELIGIBLE_STRATA, BASELINE_ARM, CANDIDATE_ARM, PAIR_SCHEMA, pairFor, assignArm, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { runMetrics } from "../practice/metrics.mjs";
@@ -56,6 +56,17 @@ const fail = (why, code = "BOARD_REFUSED") => { throw Object.assign(new Error(wh
 const str = v => typeof v === "string" && v.trim() !== "";
 const sha256 = bytes => "sha256:" + createHash("sha256").update(bytes).digest("hex");
 export const today = () => new Date().toISOString().slice(0, 10);
+
+// A board run's change gets a coordinated cycle review by REQUIRED_REVIEW_LABS (3) independent labs, and a caller
+// cannot lower it (86ce18a review, defect 2: `n: 1` closed verified on one lab and the proposal resolved the item).
+// More is allowed; fewer is a named refusal before any work, and the cycle records the requirement.
+export const REVIEW_LABS_BELOW_REQUIRED = "REVIEW_LABS_BELOW_REQUIRED";
+function checkReviewLabs(n, where) {
+  if (!(Number.isInteger(n) && n >= REQUIRED_REVIEW_LABS)) {
+    fail(`${REVIEW_LABS_BELOW_REQUIRED}: ${where}: a board run's coordinated cycle review needs ${REQUIRED_REVIEW_LABS} independent labs; ` +
+      `${n} was asked for, and a caller cannot lower it`, REVIEW_LABS_BELOW_REQUIRED);
+  }
+}
 
 export const defaultStatusRoot = repo => resolve(process.env.OPHANIM_STATUS_LEDGER ?? join(repo, "status", "ledger"));
 export const ticketPath = (repo, item) => join(repo, "tickets", `${item}.json`);
@@ -186,8 +197,12 @@ export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n =
   }
 }
 
-/** The `change` scope of a run: every plan and work turn it recorded (review/scope.mjs). */
-export const changeScope = run => reviewScope({ kind: "change", turns: [...turnsOf(run, "plan"), ...turnsOf(run, "work")] });
+/**
+ * The `change` scope of a run: every plan and work turn it recorded, and every critique whose findings were given to
+ * a worker as revision input (run.files contributors, purpose `critique`; 86ce18a review, defect 3) (review/scope.mjs).
+ */
+export const changeScope = run => reviewScope({ kind: "change", turns: [...turnsOf(run, "plan"), ...turnsOf(run, "work"),
+  ...(run.files ?? []).flatMap(f => (f.contributors ?? []).filter(c => c.purpose === "critique" && c.revision_input === true))] });
 
 /** Items ordered so that an item's dependencies come before it (cycles broken by id order). */
 export function dependencyOrder(items) {
@@ -471,6 +486,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null,
   pairRate = 0, pairMaxProviderCalls = null, pairBudgetCalls = null, pairDir = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
+  checkReviewLabs(n, "runBoardItem");
   // A board run's change gets a coordinated three-lab cycle review. Its work item's title is the ticket's own title
   // by default (planTitle `ticket`): with a model-written title the planner's lab also contributes, and the configured
   // cycle pool then has too few labs for the default seats (docs/reviews/2026-11-17-review-capacity/ANALYSIS.md).
@@ -496,6 +512,10 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const boardDir = dir ?? join(homedir(), ".pantheon", "boards", `board-${item}-${Date.now()}`);
   const bundleDir = out ?? join(boardDir, "operating");
   mkdirSync(bundleDir, { recursive: true });
+  // The ticket as dispatched, beside the bundle: apply checks the proposal's ticket against it (its item, digest and
+  // key; status.mjs checkEvidenceLedgers), even after tickets/<item>.json moves on to the next slice.
+  const ticketCopy = join(bundleDir, "ticket.json");
+  writeFileSync(ticketCopy, JSON.stringify(ticket, null, 2) + "\n");
   progress({ event: "run.start", item, ticket: ticketRel, slice: ticket.slice, board: boardDir });
   const ledgerRoot = resolve(process.env.OPHANIM_LEDGER ?? join(boardDir, "ledger"));
   const chainFile = join(ledgerRoot, "chain.jsonl");
@@ -528,7 +548,9 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
       progress({ event: "run.pending", code: pending.code, why: pending.why });
       // Kept as evidence for the four-lab evaluation (practice/review-capacity.mjs): a refusal is an outcome too.
       mkdirSync(join(store, "review-pending"), { recursive: true });
-      writeFileSync(join(store, "review-pending", `${item}-${Date.now()}.json`), JSON.stringify({ item, at: new Date().toISOString(), ...pending }, null, 2) + "\n");
+      writeFileSync(join(store, "review-pending", `${item}-${Date.now()}.json`), JSON.stringify({ item, at: new Date().toISOString(), ...pending,
+        // What would have answered, as run.json records it: the capacity report counts only live refusals under its rule.
+        providers: { kind: String((runOpts.providers ?? makeClientFor.providers ?? null)?.kind ?? "undeclared") } }, null, 2) + "\n");
       return { bundle: null, dir: null, proposal: null, pending, why: `${pending.code} before any work: ${pending.why}` };
     }
   }
@@ -563,7 +585,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const bundle = {
     schema: BUNDLE_SCHEMA, item, title: board.items.find(i => i.item === item).title, made_against: board.items.find(i => i.item === item).entry,
     status_ledger: { anchor: board.anchor, head: board.head }, checked,
-    ticket: { path: ticketRel, digest: ticketDigest, slice: ticket.slice, proposes: ticket.proposes, key: spec.key },
+    ticket: { path: ticketRel, digest: ticketDigest, slice: ticket.slice, proposes: ticket.proposes, key: spec.key, file: ticketCopy },
     board: boardDir, base, branch: null, commit: null, evidence_store: store,
     run: { ledger: ledgerRoot, ledger_anchor: sys.anchor, ledger_head: v.head, run_json: existsSync(runJsonFile) ? runJsonFile : null,
       run_json_digest: existsSync(runJsonFile) ? sha256(readFileSync(runJsonFile)) : null, shipped: result.shipped === true,
@@ -614,7 +636,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     return { bundle, dir: bundleDir, proposal: null, why: `${chosen.pending.code}: ${chosen.pending.why}` };
   }
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
-    seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined });
+    seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined, required_reviewers: REQUIRED_REVIEW_LABS });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, review_scope: chosen.scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
@@ -676,6 +698,9 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
   const last = rec.lastCycle(bundle.review.scope);
   if (last?.hash !== bundle.review.cycle) fail(`the bundle's cycle ${bundle.review.cycle.slice(0, 19)} is not the last cycle of ${bundle.review.scope} on the run ledger`);
   const state = rec.cycleState(bundle.review.cycle);
+  // A cycle opened on fewer than three labs (a run before this was enforced) is not continued: its review cannot be
+  // completion evidence. Re-dispatch the item.
+  checkReviewLabs(state.cycle.reviewers, `resumeBoardItem: the bundle's cycle ${bundle.review.cycle.slice(0, 19)} names ${state.cycle.reviewers} reviewer(s)`);
   if (!state.close) {
     // The reviewers the run seated, re-derived from the run.json the bundle names (its digest is checked).
     if (!bundle.run.run_json || !existsSync(bundle.run.run_json) || sha256(readFileSync(bundle.run.run_json)) !== bundle.run.run_json_digest) {
@@ -772,7 +797,7 @@ export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnveri
   }
   const p = propose(board, { item: bundle.item, to: { state: bundle.ticket.proposes.state, basis, checked: bundle.checked }, evidence,
     ...(acceptUnverified ? { accept_unverified_reason: acceptUnverified } : {}),
-    locations: { run_ledger: bundle.run.ledger, cycle_ledger: bundle.review.ledger, run_json: bundle.run.run_json } });
+    locations: { run_ledger: bundle.run.ledger, cycle_ledger: bundle.review.ledger, run_json: bundle.run.run_json, ticket: bundle.ticket.file ?? null } });
   writeFileSync(join(dir, "proposal.json"), JSON.stringify(p, null, 2) + "\n");
   bundle.proposal = { file: join(dir, "proposal.json"), digest: proposalDigest(p), to: p.to.state };
   save();

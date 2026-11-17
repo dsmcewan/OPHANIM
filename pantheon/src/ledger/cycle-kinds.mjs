@@ -46,6 +46,12 @@
 //                       re-derives, closes and hashes exactly as before. A scope does not return from v2 to
 //                       the old contract.
 //
+//   required_reviewers  (optional on a cycle; 86ce18a review, defect 2) the independent labs the cycle's review
+//                       requires, recorded when it opens (board runs and the review-cycle CLI: REQUIRED_REVIEW_LABS,
+//                       3). Such a cycle names at least that many reviewers, never fewer than REQUIRED_REVIEW_LABS,
+//                       and closes (verified or not) only on that many distinct labs. A cycle without the field
+//                       (every v1 and v2 cycle opened before it existed) validates, closes and hashes exactly as before.
+//
 // What re-derivation does NOT do: run the tests or the reproductions, or check that the fix commit is a
 // descendant of the head. The fail-before / pass-after exits are recorded data (signed by the
 // controller, like the gate's lease rows were), checked for presence and consistency only.
@@ -60,6 +66,12 @@ export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1};
 export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close', ATTEMPT = 'cycle.attempt';
 export const ATTEMPT_OUTCOMES = ['reviewed', 'failed'];
 export const SEVERITIES = ['block', 'major', 'minor', 'note'];
+/** The independent labs a coordinated cycle review requires when its cycle records the requirement (defect 2, 86ce18a). */
+export const REQUIRED_REVIEW_LABS = 3;
+const requirementRefusal = p => (p.required_reviewers === undefined ? null
+  : !Number.isInteger(p.required_reviewers) || p.required_reviewers < REQUIRED_REVIEW_LABS
+    ? `a cycle that records its required reviewers requires at least ${REQUIRED_REVIEW_LABS}; a caller cannot lower it`
+    : p.reviewers < p.required_reviewers ? `the cycle requires ${p.required_reviewers} independent reviewers and names ${p.reviewers}` : null);
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;            // a git object id (sha1 or sha256)
 const SHA = /^sha256:[0-9a-f]{64}$/;
 const HEX = /^[0-9a-f]{64}$/;
@@ -157,6 +169,9 @@ export function closeClaim(state) {
   if (reviews.length !== c.reviewers) return {why: `${reviews.length} of ${c.reviewers} reviews are recorded`};
   const labs = reviews.map(r => r.lab);
   if (new Set(labs).size !== labs.length) return {why: 'two reviews of this cycle share a lab'};
+  if (c.required_reviewers !== undefined && new Set(labs).size < Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)) {
+    return {why: `the cycle requires ${Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)} independent labs and ${new Set(labs).size} reviewed`};
+  }
   const authored = labs.find(l => c.author_labs.includes(l));
   if (authored) return {why: `the ${authored} lab authored the change and reviewed it`};
   for (const r of reviews) {
@@ -197,7 +212,7 @@ export function cycleKinds({authors = () => true} = {}) {
       validate: p => (str(p?.scope) && COMMIT.test(p.base ?? '') && COMMIT.test(p.head ?? '') && SHA.test(p.diff_sha ?? '') && SHA.test(p.brief_sha ?? '')
         && HEX.test(p.prompt_sha ?? '') && Array.isArray(p.files) && p.files.every(str) && Number.isInteger(p.reviewers) && p.reviewers >= 1
         && Array.isArray(p.author_labs) && p.author_labs.every(str) && ISO(p.opened_at)
-        ? (p.contract === undefined ? null
+        ? requirementRefusal(p) ?? (p.contract === undefined ? null
           : p.contract === CYCLE_CONTRACT && validPolicy(p.policy) && str(p.practice_scope) && (p.prior === null || SHA.test(p.prior ?? '')) ? null
             : `a ${CYCLE_CONTRACT} cycle also names {policy: {version, hash, profile}, practice_scope, prior}; a cycle without a contract field is the old contract`)
         : 'a cycle names {scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}'),
@@ -346,11 +361,11 @@ export function cycleRecorder({ledger, controller, order}) {
      * the admitted practice decision (`prior`). CYCLE_CONTRACT_V1 writes the old payload, byte for byte.
      */
     openCycle({scope, base, head, diff, files, prompt, brief = REVIEW_BRIEF, reviewers = 3, author_labs = [], author_turns = [], opened_at = new Date().toISOString(),
-      contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE}) {
+      contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE, required_reviewers = undefined}) {
       if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT} or ${CYCLE_CONTRACT_V1}`);
       const prev = lastCycle(scope);
       const payload = {scope, base, head, diff_sha: sha(diff), files: [...files], prompt_sha: promptSha(prompt),
-        brief_sha: sha(brief), reviewers, author_labs: [...author_labs], opened_at};
+        brief_sha: sha(brief), reviewers, author_labs: [...author_labs], opened_at, ...(required_reviewers !== undefined ? {required_reviewers} : {})};
       if (contract === CYCLE_CONTRACT_V1) return append(CYCLE, payload, [...(prev?.close ? [prev.close] : []), ...author_turns]);
       const inEffect = policy ?? currentPolicy('argo');
       const prior = admittedPractice(ledgerView(ledger), {scope: practice_scope, profile: inEffect.profile})?.disposition ?? null;

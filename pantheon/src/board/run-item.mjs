@@ -42,7 +42,7 @@ import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
-import { reviewScope } from "../review/scope.mjs";
+import { reviewScope, CRITIQUE_VIA } from "../review/scope.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
 import { assignArm, explicitAssignment, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
@@ -1166,6 +1166,16 @@ export async function runOpenItem(spec, opts = {}) {
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
             writeFileSync(join(outDir, `implementer-prompt-${c.sl.slot}-rev${rev}.txt`), p.prompt);
             c.workPrompt = p.prompt;
+            // A REVIEWER'S FINDINGS IN THIS PROMPT ARE A CONTRIBUTION (86ce18a review, defect 3): the revised bytes are
+            // shaped by them, so the reviewer's lab joins the slot's contributors (purpose `critique`) and neither the
+            // slot's next in-run review nor the cycle's change scope may seat it. Kept in run.files, so a resume keeps it.
+            if (rev > 1 && c.pendingRevision?.reason === "review") {
+              for (const r of c.pendingRevision.reviewers ?? []) {
+                if (!(c.contributors ??= []).some(x => x.purpose === "critique" && x.vendor === r.vendor && x.model === r.model)) {
+                  c.contributors.push({ purpose: "critique", vendor: r.vendor, model: r.model, slot: c.sl.slot, revision_input: true, via: CRITIQUE_VIA });
+                }
+              }
+            }
             // The slot's selected seat, or the rung a recorded escalation stepped to, resolved through its
             // own transport (a lane rung is never an API pin). A rung on the same vendor keeps the pool the
             // operator named for this slot; the decision changed the model, not the credential.
@@ -1178,7 +1188,7 @@ export async function runOpenItem(spec, opts = {}) {
             c.ranModel = made.seat.model;
             // Every model that wrote a revision contributed to the final bytes: the next revision's prompt carries the
             // previous file ("fix it; do not start over"). Kept for the reviewed scope (review/scope.mjs, owner audit RS2).
-            if (!(c.contributors ??= []).some(x => x.vendor === made.seat.vendor && x.model === made.seat.model)) {
+            if (!(c.contributors ??= []).some(x => (x.purpose ?? "work") === "work" && x.vendor === made.seat.vendor && x.model === made.seat.model)) {
               c.contributors.push({ purpose: "work", vendor: made.seat.vendor, model: made.seat.model, slot: c.sl.slot });
             }
             // Under `fit`, the slot's effort is the one the answering seat ran with: when a fallback answered,
@@ -1423,7 +1433,10 @@ export async function runOpenItem(spec, opts = {}) {
         applyDecision(built, rec, rev);
         // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work
         // needs its own pending revision, with the findings the implementer must address.
-        if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000) };
+        // The reviewers whose findings these are (members that requested changes): if the findings reach a revision
+        // prompt, those reviewers become contributors of the slot (above, where the prompt is built).
+        if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000),
+          reviewers: panel.filter(x => x.findings.length).map(x => ({ vendor: x.seat.vendor, model: x.seat.model })) };
         escalated(`slot:${built.sl.slot}`, { slot: built.sl.slot, rev, ...rec });
         const file = run.files.find(f => f.slot === built.sl.slot);
         if (file) file.escalation = escalationState(built);

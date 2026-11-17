@@ -13,7 +13,8 @@
 // Common options: --repo DIR (default: cwd), --ledger DIR (default: PANTHEON_CYCLE_LEDGER, else
 // <git common dir>/pantheon-cycles, one ledger per repository shared by its worktrees), --scope NAME
 // (default: the repository's directory name), --author-lab LAB (repeatable; default anthropic, the lab
-// the loop's controller runs on), --n N (reviewers, default 3), --turn MODULE (a module whose default
+// the loop's controller runs on), --n N (reviewers, default 3; at least 3: the coordinated review needs three
+// independent labs, the cycle records that requirement, and a smaller --n is refused), --turn MODULE (a module whose default
 // export is the reviewer turn; without it, live SDK turns are used, imported here at the edge).
 //
 // Without --base, a cycle starts where the previous cycle of the scope ended; the first cycle of a scope
@@ -43,6 +44,7 @@ import {basename, isAbsolute, join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {openPantheonLedger} from '../src/ledger/system.mjs';
 import {reviewCycle} from '../src/ledger/review-cycle.mjs';
+import {REQUIRED_REVIEW_LABS} from '../src/ledger/cycle-kinds.mjs';
 import {currentPolicy, loadPractice, DEFAULT_PRACTICE_SCOPE} from '../src/ledger/practice-kinds.mjs';
 import {readPools} from '../src/route/frontier.mjs';
 import {labOf} from '../src/config/models.mjs';
@@ -111,9 +113,14 @@ try {
     const diff = git('diff', '--no-color', base, head);
     if (!diff) out({refused: `no change between ${base} and ${head}`}, 1);
     const files = git('diff', '--name-only', base, head).split('\n').filter(Boolean);
+    const n = Number(opts.n ?? REQUIRED_REVIEW_LABS);
+    if (!(Number.isInteger(n) && n >= REQUIRED_REVIEW_LABS)) {
+      out({refused: `REVIEW_LABS_BELOW_REQUIRED: the coordinated cycle review needs ${REQUIRED_REVIEW_LABS} independent labs; --n ${opts.n} cannot lower it`,
+        code: 'REVIEW_LABS_BELOW_REQUIRED'}, 1);
+    }
     const turn = opts.turn ? (await import(pathToFileURL(resolve(opts.turn)).href)).default : await liveTurn();
     const r = await reviewCycle({ledger: rec, change: {scope, base, head, diff, files, author_labs: multi['author-lab'].length ? multi['author-lab'] : ['anthropic']},
-      turn, n: Number(opts.n ?? 3), max_attempts: maxAttempts, policy: currentPolicy(opts.profile ?? 'argo', {pools: readPools()}),
+      turn, n, required_reviewers: REQUIRED_REVIEW_LABS, max_attempts: maxAttempts, policy: currentPolicy(opts.profile ?? 'argo', {pools: readPools()}),
       practice_scope: opts['practice-scope'] ?? DEFAULT_PRACTICE_SCOPE});
     out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), failed: r.failed}, r.complete ? 0 : 1);
   }

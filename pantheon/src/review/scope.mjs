@@ -13,6 +13,10 @@
 //   work   the worker's reply IS the artifact bytes
 //   plan   the planner's TITLE becomes the work_item every worker reads (board/project.mjs PROJECTIONS.worker kinds
 //          include work_item), and every work turn cites the plan turn on the ledger (run-item recordTurn)
+//   critique  (86ce18a review, defect 3) a reviewer whose findings were put in a revision prompt ("the reviewer
+//          REQUESTED CHANGES (address them)") shaped the revised bytes. Such a turn is marked `revision_input: true`
+//          (run-item.mjs records it on the slot's contributors when the findings reach the worker); a critique whose
+//          text reached no prompt is not a contribution, and is excluded with that reason.
 // Not a contribution, with the reason recorded:
 //   scout  its evidence is linked from the ticket entry, but the planner's prompt is the ticket goal only and the
 //          worker's projection admits no scout/hypothesis kinds, so no scout output reaches the bytes
@@ -39,8 +43,12 @@ export function contributionPaths(projections = PROJECTIONS) {
       ? { contributes: true, via: "the planner's title becomes the work_item the worker reads (PROJECTIONS.worker), and the work turn cites the plan turn" }
       : { contributes: false, via: "the worker's projection does not admit the work_item, so no plan output reaches the bytes" },
     scout: { contributes: false, via: "scout evidence reaches neither the planner prompt (the ticket goal only) nor the worker's projection" },
+    critique: { contributes: true, via: CRITIQUE_VIA },
   };
 }
+/** How a critique reached the bytes, when it did (run-item.mjs records it with this path). */
+export const CRITIQUE_VIA = "the reviewer's findings were given to the worker as revision input";
+const CRITIQUE_INERT = "a critique whose text reached no revision prompt does not reach the bytes";
 
 /**
  * The scope record for `kind` over `turns`. For `artifact`, `slot` limits work turns to that slot (a plan turn is
@@ -51,7 +59,7 @@ export function reviewScope({ kind, turns, slot = null, projections = PROJECTION
   const paths = contributionPaths(projections);
   const contributions = [], excluded = [];
   for (const t of turns) {
-    const path = paths[t.purpose];
+    const path = t.purpose === "critique" && t.revision_input !== true ? { contributes: false, via: CRITIQUE_INERT } : paths[t.purpose];
     const row = { purpose: t.purpose, vendor: t.vendor, model: t.served_model ?? t.model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model ?? null),
       ...(t.slot ? { slot: t.slot } : {}), ...(t.turn ? { turn: t.turn } : {}) };
     if (!path) { excluded.push({ ...row, why: `a ${t.purpose} turn has no path to the reviewed bytes` }); continue; }

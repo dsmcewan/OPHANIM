@@ -288,6 +288,9 @@ try {
     console.log(`coordinated review capacity (rule: ${r.rule.enough_rate * 100}% of >= ${r.rule.min_runs} board runs complete)`);
     console.log(`  ${r.needed} needed a coordinated review; ${r.completed} completed; verdict: ${r.verdict.outcome} -- ${r.verdict.why}`);
     for (const [k, n] of Object.entries(r.counts)) if (n) console.log(`  ${k.padEnd(26)} ${n}  ${r.classes[k] ?? ""}`);
+    console.log(`  over ${r.rule.over}: ${r.files} bundle/refusal file(s), ${r.unique} unique (${r.duplicates} duplicate copies), ` +
+      `${r.unverified.count} unverified (outside the rate), ${r.synthetic.observations} synthetic (reported apart)`);
+    for (const [k, n] of Object.entries(r.synthetic.counts)) if (n) console.log(`  synthetic ${k.padEnd(16)} ${n}`);
     process.exit(0);
   }
   usage(`unknown verb: ${verb ?? "(none)"}`);

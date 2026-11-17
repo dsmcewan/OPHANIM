@@ -13,7 +13,7 @@
 // at the cycle's attempt limit.
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {labOf} from './lineage-kinds.mjs';
-import {REVIEW_BRIEF, reviewPrompt, parseReview, sha} from './cycle-kinds.mjs';
+import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS} from './cycle-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
 
@@ -88,11 +88,14 @@ async function askSeats({ledger, cycle, seats, prompt, turn, author_turns, tried
  *   max_attempts  tries per seat for the cycle, the first included (default DEFAULT_MAX_ATTEMPTS)
  *   contract, policy, practice_scope  the cycle contract it opens under (default pantheon.cycle/v2), the
  *           selection policy in effect and the practice scope (cycleRecorder.openCycle)
+ *   required_reviewers  the independent labs the review requires, recorded on the cycle (at least
+ *           REQUIRED_REVIEW_LABS; a board run and the CLI pass it). Fewer seats than that is refused before the
+ *           cycle opens (REVIEW_LABS_BELOW_REQUIRED), and the cycle cannot close on fewer labs.
  * Returns the cycle, each recorded review with its findings, and the seats that failed. A failed seat
  * leaves the cycle unable to close; `resume: true` with the same change tries it again.
  */
 export async function reviewCycle({ledger, change, seats = null, turn, n = 3, brief = REVIEW_BRIEF, opened_at, resume = false, max_attempts, at,
-  contract, policy, practice_scope}) {
+  contract, policy, practice_scope, required_reviewers}) {
   if (typeof turn !== 'function') throw new Error('reviewCycle: pass turn({vendor, model, prompt, seat}) -> {text, response_id, served_model}');
   if (resume) return resumeCycle({ledger, change, seats, turn, brief, max_attempts, at});
   const {scope, head, diff, files = [], author_labs = [], author_turns = []} = change ?? {};
@@ -108,11 +111,16 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   const chosen = (seats ?? reviewSeats({n, avoidLabs: author_labs})).map(s => ({...s, lab: labOf(s.vendor, s.model)}));
   const labs = chosen.map(s => s.lab);
   if (new Set(labs).size !== labs.length) throw Object.assign(new Error(`reviewCycle: reviewers share a lab (${labs.join(', ')})`), {code: 'SAME_LAB'});
+  if (required_reviewers !== undefined && !(Number.isInteger(required_reviewers) && required_reviewers >= REQUIRED_REVIEW_LABS && chosen.length >= required_reviewers)) {
+    throw refuse('REVIEW_LABS_BELOW_REQUIRED', `reviewCycle: the review requires ${Math.max(Number(required_reviewers) || 0, REQUIRED_REVIEW_LABS)} independent labs ` +
+      `and ${chosen.length} reviewer seat(s) were given; a caller cannot lower it`);
+  }
   const authored = labs.find(l => author_labs.includes(l));
   if (authored) throw Object.assign(new Error(`reviewCycle: the ${authored} lab authored the change and may not review it`), {code: 'SAME_LAB'});
 
   const prompt = reviewPrompt({brief, base, head, files, diff});
-  const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs, author_turns, opened_at, contract, policy, practice_scope});
+  const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs, author_turns, opened_at, contract, policy, practice_scope,
+    ...(required_reviewers !== undefined ? {required_reviewers} : {})});
   const {reviews, failed} = await askSeats({ledger, cycle, seats: chosen, prompt, turn, author_turns, max_attempts: limit, resumed: false, at});
   return {cycle, scope, base, head, prompt_sha: promptSha(prompt), reviews, failed, complete: failed.length === 0, max_attempts: limit};
 }
