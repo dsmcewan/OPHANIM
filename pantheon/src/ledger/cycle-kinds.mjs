@@ -27,6 +27,15 @@
 //                       recorded, and every finding is fixed or deferred. The outcome is not chosen:
 //                       `verified` when every finding carries a reproduction, `unverified` otherwise.
 //
+//   cycle.attempt       {seat: {vendor, model, lab}, attempt, max_attempts, outcome, why, resumed, at}: one
+//                       reviewer seat's try at the cycle (independent review 2026-11-16, C2). A failed try
+//                       (a 503, a refused review) is recorded with its reason, and the cycle can be RESUMED:
+//                       only the seats that have no review are tried again, under the same prompt, and the
+//                       reviews already recorded stand. Attempts of one lab are numbered 1, 2, ... and never
+//                       pass the cycle's max_attempts (the same on every attempt of the cycle); a lab whose
+//                       attempt was `reviewed` is not tried again. Additive: a cycle opened before this kind
+//                       existed has no attempts, and its close re-derives exactly as before.
+//
 // What re-derivation does NOT do: run the tests or the reproductions, or check that the fix commit is a
 // descendant of the head. The fail-before / pass-after exits are recorded data (signed by the
 // controller, like the gate's lease rows were), checked for presence and consistency only.
@@ -35,7 +44,8 @@ import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
 
-export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close';
+export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close', ATTEMPT = 'cycle.attempt';
+export const ATTEMPT_OUTCOMES = ['reviewed', 'failed'];
 export const SEVERITIES = ['block', 'major', 'minor', 'note'];
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;            // a git object id (sha1 or sha256)
 const SHA = /^sha256:[0-9a-f]{64}$/;
@@ -105,7 +115,8 @@ const cycleOfReview = (view, review) => cites(view, view.entry(review), CYCLE)[0
  */
 export function deriveCycle(view, cycle) {
   const c = view.payload(cycle);
-  const out = {hash: cycle, cycle: c, reviews: [], findings: [], resolutions: new Map(), close: null};
+  const out = {hash: cycle, cycle: c, author_turns: (view.entry(cycle)?.derived_from ?? []).filter(h => view.entry(h)?.kind === 'turn'),
+    reviews: [], findings: [], resolutions: new Map(), close: null, attempts: []};
   const reviews = new Set(), findings = new Set();
   for (const h of view.entries()) {
     const e = view.entry(h);
@@ -113,7 +124,7 @@ export function deriveCycle(view, cycle) {
       const p = view.payload(h);
       const answer = view.payload(p.turn);
       out.reviews.push({hash: h, seat: p.seat, lab: labOf(p.seat.vendor, p.served_model ?? p.model), verdict: p.verdict,
-        reported: parseReview(answer?.reply ?? '')});
+        model: p.model, served_model: p.served_model ?? null, turn: p.turn ?? null, reported: parseReview(answer?.reply ?? '')});
       reviews.add(h);
     } else if (e.kind === FINDING && e.derived_from.some(x => reviews.has(x))) {
       out.findings.push({hash: h, review: e.derived_from.find(x => reviews.has(x)), payload: view.payload(h)});
@@ -121,6 +132,7 @@ export function deriveCycle(view, cycle) {
     } else if (e.kind === RESOLUTION && e.derived_from.some(x => findings.has(x))) {
       out.resolutions.set(e.derived_from.find(x => findings.has(x)), {hash: h, payload: view.payload(h)});
     } else if (e.kind === CLOSE && e.derived_from.includes(cycle)) out.close = h;
+    else if (e.kind === ATTEMPT && e.derived_from[0] === cycle) out.attempts.push({hash: h, ...view.payload(h)});
   }
   return out;
 }
@@ -224,6 +236,40 @@ export function cycleKinds({authors = () => true} = {}) {
         return null;
       },
     },
+    [ATTEMPT]: {
+      authors,
+      validate: p => (p?.seat && str(p.seat.vendor) && str(p.seat.model) && str(p.seat.lab) && Number.isInteger(p.attempt) && p.attempt >= 1
+        && Number.isInteger(p.max_attempts) && p.max_attempts >= 1 && ATTEMPT_OUTCOMES.includes(p.outcome)
+        && (p.outcome === 'failed' ? str(p.why) : p.why === null) && typeof p.resumed === 'boolean' && ISO(p.at)
+        ? null : 'an attempt names {seat: {vendor, model, lab}, attempt, max_attempts, outcome, why, resumed, at}'),
+      rederive: (e, view) => {
+        const p = e.payload, [cycle, review, ...rest] = e.derived_from;
+        if (view.entry(cycle)?.kind !== CYCLE || rest.length) return 'an attempt cites its cycle, and the review it produced when it reviewed';
+        if (p.outcome === 'reviewed' ? view.entry(review)?.kind !== 'review' : review !== undefined) return 'an attempt cites its cycle, and the review it produced when it reviewed';
+        if (closedAt(view, cycle)) return 'the cycle is closed';
+        if (labOf(p.seat.vendor, p.seat.model) !== p.seat.lab) return `the seat's lab is ${labOf(p.seat.vendor, p.seat.model)}, not ${p.seat.lab}`;
+        const c = view.payload(cycle);
+        if (c.author_labs.includes(p.seat.lab)) return `the ${p.seat.lab} lab authored the change and may not review it`;
+        let tried = 0;
+        for (const h of view.entries()) {
+          const x = view.entry(h);
+          if (x?.kind !== ATTEMPT || x.derived_from[0] !== cycle) continue;
+          const q = view.payload(h);
+          if (q.max_attempts !== p.max_attempts) return `the cycle's attempt limit is ${q.max_attempts}`;
+          if (q.seat.lab !== p.seat.lab) continue;
+          tried++;
+          if (q.outcome === 'reviewed') return `the ${p.seat.lab} lab has already reviewed this cycle`;
+        }
+        if (p.attempt !== tried + 1) return `this is attempt ${tried + 1} of the ${p.seat.lab} seat, not ${p.attempt}`;
+        if (p.attempt > p.max_attempts) return `the ${p.seat.lab} seat has used its ${p.max_attempts} attempt(s)`;
+        if (p.outcome === 'reviewed') {
+          const r = view.payload(review);
+          if (!view.entry(review).derived_from.includes(cycle)) return 'the review is not of this cycle';
+          if (r.seat.vendor !== p.seat.vendor || r.model !== p.seat.model) return 'the review is not by the attempting seat';
+        }
+        return null;
+      },
+    },
     [CLOSE]: {
       authors,
       validate: p => (['verified', 'unverified'].includes(p?.outcome) && Array.isArray(p.reviews) && Array.isArray(p.labs) && p.findings && typeof p.findings === 'object'
@@ -267,6 +313,11 @@ export function cycleRecorder({ledger, controller, order}) {
     recordFinding({review, index, finding}) { return append(FINDING, {index, ...findingOf(normalFinding(finding) ?? finding)}, [review]); },
     fixFinding({finding, commit, test, before, after}) { return append(RESOLUTION, {status: 'fixed', fix: {commit, test, before, after}}, [finding]); },
     deferFinding({finding, reason}) { return append(RESOLUTION, {status: 'deferred', reason}, [finding]); },
+    /** One reviewer seat's try at a cycle: `reviewed` (citing its review) or `failed` (with the reason). */
+    recordAttempt({cycle, seat, attempt, max_attempts, outcome, why = null, review = null, resumed = false, at = new Date().toISOString()}) {
+      return append(ATTEMPT, {seat: {vendor: seat.vendor, model: seat.model, lab: seat.lab}, attempt, max_attempts, outcome,
+        why: outcome === 'failed' ? String(why || 'the seat failed') : null, resumed, at}, outcome === 'reviewed' ? [cycle, review] : [cycle]);
+    },
     cycleState: cycle => deriveCycle(ledgerView(ledger), cycle),
     /** Close the cycle with the claim its entries derive; throws with the reason when it cannot close. */
     closeCycle(cycle) {

@@ -8,6 +8,9 @@
 //       [--n 3] [--dir BOARD] [--out DIR] [--branch NAME] [--checked YYYY-MM-DD]
 //       runOpenItem on the item's ticket (the run ledger on), the shipped change committed on a branch,
 //       a review cycle over it on distinct labs, an evidence bundle and an UNSIGNED status proposal
+//   node pantheon/bin/pantheon-board.mjs resume <item> --out DIR [--turn MODULE] [--max-attempts N]
+//       a run whose review cycle a failed reviewer left open: ask again only the seats with no review, on
+//       the same cycle and change (never a new cycle; the item is not run again), then close and propose
 //   node pantheon/bin/pantheon-board.mjs propose --bundle DIR [--accept-unverified REASON]
 //       close the bundle's review cycle once its findings are fixed or deferred, and write the proposal
 //   node pantheon/bin/pantheon-board.mjs check <proposal.json>
@@ -27,7 +30,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
-import { boardNext, runBoardItem, proposeFromBundle, checkProposal, defaultStatusRoot } from "../src/board/operate.mjs";
+import { boardNext, runBoardItem, resumeBoardItem, proposeFromBundle, checkProposal, defaultStatusRoot } from "../src/board/operate.mjs";
 
 const REPO_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const [verb, ...argv] = process.argv.slice(2);
@@ -41,7 +44,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] | propose --bundle DIR | check <proposal.json>`);
+  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json>`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -116,6 +119,18 @@ try {
     console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null,
       shipped: r.bundle.run.shipped, commit: r.bundle.commit, branch: r.bundle.branch, cycle: r.bundle.review?.cycle ?? null,
       outcome: r.bundle.review?.outcome ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
+    process.exit(r.proposal ? 0 : 1);
+  }
+  if (verb === "resume") {
+    if (args.length !== 1) usage("resume names one item");
+    if (!opts.out) usage("resume needs --out DIR, the run's evidence bundle");
+    const turn = opts.turn ? await load(opts.turn) : await liveTurn();
+    const r = await resumeBoardItem({ repo, item: args[0], dir: resolve(opts.out), statusRoot, anchor, turn,
+      max_attempts: opts["max-attempts"] === undefined ? undefined : Number(opts["max-attempts"]),
+      progress: ev => console.error(JSON.stringify(ev)) });
+    console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null,
+      cycle: r.bundle.review?.cycle ?? null, outcome: r.bundle.review?.outcome ?? null, failed: r.bundle.review?.failed ?? [],
+      resumes: r.bundle.review?.resumes ?? [], findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
     process.exit(r.proposal ? 0 : 1);
   }
   if (verb === "propose") {

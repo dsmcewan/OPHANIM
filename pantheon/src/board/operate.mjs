@@ -293,14 +293,61 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     seats: chosen.seats, turn, n });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, ...(chosen.note ? { note: chosen.note } : {}), author_turns: authorTurns,
-    reviews: r.reviews.map(x => ({ vendor: x.vendor, model: x.model, served_model: x.served_model, lab: x.lab, review: x.review, verdict: x.verdict,
-      findings: x.findings.map(f => ({ finding: f.hash, severity: f.severity, file: f.file, line: f.line, claim: f.claim, reproduction: f.reproduction })) })),
-    failed: r.failed, close: null, outcome: null };
+    reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
   save();
   progress({ event: "reviewed", cycle: r.cycle, reviews: r.reviews.length, failed: r.failed.length,
     findings: r.reviews.reduce((n, x) => n + x.findings.length, 0) });
   const proposed = proposeFromBundle({ dir: bundleDir, statusRoot, anchor, sys });
   return { bundle: proposed.bundle, dir: bundleDir, proposal: proposed.proposal, why: proposed.why };
+}
+
+const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.model, served_model: x.served_model, lab: x.lab, review: x.review, verdict: x.verdict,
+  findings: x.findings.map(f => ({ finding: f.hash, severity: f.severity, file: f.file, line: f.line, claim: f.claim, reproduction: f.reproduction })) }));
+
+/**
+ * Resume a board run whose review cycle a failed reviewer left open (independent review 2026-11-16, C2):
+ * `pantheon-board resume <item> --out DIR`. It does not run the item again and never opens a new cycle:
+ * it reopens the bundle's cycle on the run's ledger and asks again only the reviewer seats with no review
+ * (reviewCycle with `resume: true`), under the cycle's own change (the bundle's base..commit, re-read from
+ * the repository and checked against the digests the cycle bound) and the reviewers the run seated,
+ * re-derived from its run.json. Reviews already recorded are kept; each try is a recorded attempt, up to
+ * the cycle's limit. Then, as after a run, the cycle closes if it can and the proposal is written.
+ */
+export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {} }) {
+  if (typeof turn !== "function") fail("resumeBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
+  const file = join(dir, "evidence.json");
+  if (!existsSync(file)) fail(`no evidence bundle at ${file}: resume names the --out DIR of the run`);
+  const bundle = JSON.parse(readFileSync(file, "utf8"));
+  if (bundle.schema !== BUNDLE_SCHEMA) fail(`${file} is not a ${BUNDLE_SCHEMA} bundle`);
+  if (item !== null && bundle.item !== item) fail(`the bundle at ${dir} is for "${bundle.item}", not "${item}"`);
+  if (!bundle.run.shipped || !bundle.commit) fail("the run did not ship: there is no change to review, and a resume does not run the item again");
+  if (!bundle.review?.cycle) fail("the change was never put under review: there is no cycle to resume");
+  const sys = openPantheonLedger({ root: bundle.review.ledger, anchor: bundle.review.ledger_anchor, board: openBoard(bundle.board) });
+  const rec = sys.recorder();
+  const last = rec.lastCycle(bundle.review.scope);
+  if (last?.hash !== bundle.review.cycle) fail(`the bundle's cycle ${bundle.review.cycle.slice(0, 19)} is not the last cycle of ${bundle.review.scope} on the run ledger`);
+  const state = rec.cycleState(bundle.review.cycle);
+  if (!state.close) {
+    // The reviewers the run seated, re-derived from the run.json the bundle names (its digest is checked).
+    if (!bundle.run.run_json || !existsSync(bundle.run.run_json) || sha256(readFileSync(bundle.run.run_json)) !== bundle.run.run_json_digest) {
+      fail("the run's run.json is missing or is not the one the bundle names: the run's reviewers cannot be re-derived");
+    }
+    const run = JSON.parse(readFileSync(bundle.run.run_json, "utf8"));
+    const chosen = cycleReviewers({ planLabs: labsOf(turnsOf(run, "plan")), workLabs: labsOf(turnsOf(run, "work")), n: state.cycle.reviewers });
+    if ([...chosen.author_labs].sort().join() !== [...bundle.review.author_labs].sort().join()) fail("the run's author labs do not re-derive the bundle's");
+    const git = gitIn(gitTop(repo));
+    const diff = git(["diff", "--no-color", bundle.base, bundle.commit]);
+    const files = git(["diff", "--name-only", bundle.base, bundle.commit]).split("\n").filter(Boolean);
+    progress({ event: "resume.start", cycle: bundle.review.cycle, reviews: state.reviews.length, reviewers: state.cycle.reviewers });
+    const r = await reviewCycle({ ledger: rec, resume: true, turn, max_attempts, seats: chosen.seats,
+      change: { scope: bundle.review.scope, base: bundle.base, head: bundle.commit, diff, files, author_labs: bundle.review.author_labs, author_turns: bundle.review.author_turns } });
+    Object.assign(bundle.review, { reviews: bundleReviews(r.reviews), failed: r.failed,
+      resumes: [...(bundle.review.resumes ?? []), { retained: r.retained, attempted: r.attempted, failed: r.failed.length, complete: r.complete }] });
+    writeFileSync(file, JSON.stringify(bundle, null, 2) + "\n");
+    progress({ event: "resumed", cycle: r.cycle, reviews: r.reviews.length, retained: r.retained.length, attempted: r.attempted.length, failed: r.failed.length });
+  }
+  const proposed = proposeFromBundle({ dir, statusRoot, anchor, sys });
+  return { bundle: proposed.bundle, dir, proposal: proposed.proposal, why: proposed.why };
 }
 
 /**
