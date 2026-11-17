@@ -147,6 +147,9 @@ async function cycleReviewOf({ run, result, spec, profile, turn, n, root }) {
   }).join("");
   const turns = run.turns ?? [];
   const chosen = cycleReviewers({ planLabs: labsOf(turns.filter(t => t.purpose === "plan")), workLabs: labsOf(turns.filter(t => t.purpose === "work")), n });
+  // The independence requirement is never narrowed: a run whose contributors leave the pool short is recorded as a
+  // pending review (no review turns), not reviewed by fewer or by a contributing lab.
+  if (chosen.pending) return { ran: false, pending: chosen.pending, why: `${chosen.pending.code}: ${chosen.pending.why}`, turns: 0, note: AGREEMENT };
   mkdirSync(root, { recursive: true });
   const rec = openPantheonLedger({ root }).recorder();
   const r = await reviewCycle({ ledger: rec, change: { scope: `compare/${spec.key}/${profile}`, base: hex40(canonical(run.files?.map(f => f.baseline) ?? [])),
@@ -170,7 +173,8 @@ export function dispatchRunner({ makeClientFor, dir, runOpts = {}, cycleTurn = n
   return async ({ spec, profile, bounds }) => {
     const key = `${spec.key}.${profile}`;
     const board = join(dir, key);
-    const result = await runOpenItem({ ...spec, key }, { ...runOpts, dir: board, makeClientFor, profile,
+    // Board conditions: the work item's title is the ticket's own unless the caller says otherwise (operate.mjs).
+    const result = await runOpenItem({ ...spec, key }, { planTitle: "ticket", ...runOpts, dir: board, makeClientFor, profile,
       maxProviderCalls: bounds.maxProviderCalls, revisions: bounds.revisions });
     const file = join(board, "run.json");
     const run = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;

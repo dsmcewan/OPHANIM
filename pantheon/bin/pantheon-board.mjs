@@ -71,7 +71,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] [--max-provider-calls N] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] [--max-provider-calls N] [--plan-title model|ticket] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -208,19 +208,27 @@ try {
     if (pairRate > 0 && pairTotal === null) usage("--pair-rate needs --pair-budget-calls N: the total provider calls all counterparts in the evidence store may make. A sampling rate is not a spending cap (PAIR_NO_TOTAL)");
     if (args.length !== 1) usage("run names one item");
     const maxCalls = intFlag("max-provider-calls");
+    const planTitle = opts["plan-title"] ?? null;
+    if (planTitle !== null && !["model", "ticket"].includes(planTitle)) usage(`--plan-title is model or ticket, got ${planTitle}`);
     const makeClientFor = opts.clients ? await load(opts.clients) : await liveClients();
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
     const r = await runBoardItem({ repo, item: args[0], statusRoot, anchor, makeClientFor, turn, n: Number(opts.n ?? 3),
       dir: opts.dir ? resolve(opts.dir) : null, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
       // --profile selects the routing profile for this run only; omitted, runOpenItem's default (argo) applies.
       // --interleave: the ticket's hash-assigned arm for an eligible stratum; an explicit --profile still wins.
-      checked: opts.checked, runOpts: { seatOverrides, ...(maxCalls !== null ? { maxProviderCalls: maxCalls } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}) }, practice,
+      checked: opts.checked, runOpts: { seatOverrides, ...(maxCalls !== null ? { maxProviderCalls: maxCalls } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}), ...(planTitle ? { planTitle } : {}) }, practice,
       evidenceStore: opts["evidence-store"] ? resolve(opts["evidence-store"]) : null,
       pairRate, pairMaxProviderCalls: pairMax, pairBudgetCalls: pairTotal,
       progress: ev => {
         if (ev.from !== "pipeline" && ev.from !== "pair") console.error(JSON.stringify(ev));
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  ${ev.from === "pair" ? "[pair] " : ""}[${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
       } });
+    // Refused before any work: the cycle review the change needs cannot be formed from the configured pool.
+    if (!r.bundle && r.pending) {
+      console.error(`pending: ${r.why}`);
+      console.log(JSON.stringify({ pending: r.pending, why: r.why, shipped: false }, null, 2));
+      process.exit(1);
+    }
     // The seating report: what the selector chose per role (class and effort under fit), from the run's turns.
     const seating = r.bundle.run.seating ?? [];
     if (seating.length) console.error(`Seating (${r.bundle.run.profile ?? "argo"}; what the selector chose):\n${seating.map(x => `  ${x.line}`).join("\n")}`);

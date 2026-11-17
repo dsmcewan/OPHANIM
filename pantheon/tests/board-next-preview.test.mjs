@@ -31,8 +31,10 @@ for (const [profile, extra] of [["argo", []], ["fit", []], ["fit", ["--seat", "i
         const shown = spawnSync(process.execPath, [BOARD_CLI, "next", ...common], { encoding: "utf8", env: process.env, timeout: 60_000 });
         assert.equal(shown.status, 0, shown.stderr);
         assert.match(shown.stdout, new RegExp(`team \\(${profile}: the dispatch's selector on this ticket`));
-        assert.ok(shown.stdout.includes(`${team.planner[0].vendor}/${team.planner[0].model}`));
-        const preview = [...team.scouts.map(s => ["scout", key(s)]), ["planner", key(team.planner[0])],
+        // Board runs take the work item's title from the ticket (planTitle ticket): no planner model, on either side.
+        assert.equal(team.plan_title, "ticket");
+        assert.deepEqual(team.planner, []);
+        const preview = [...team.scouts.map(s => ["scout", key(s)]),
           ...team.implementers.map(l => ["implementer", key(l[0])]), ...team.review_panels.flat().map(s => ["reviewer", key(s)])];
 
         const out = spawnSync(process.execPath, [BOARD_CLI, "run", item, ...common, "--clients", join(repo, "clients.fixture.mjs"),
@@ -44,8 +46,8 @@ for (const [profile, extra] of [["argo", []], ["fit", []], ["fit", ["--seat", "i
         assert.deepEqual(preview, dispatched, "the preview seats exactly what the run's turns record");
         if (profile === "fit") {
           // Under fit the preview carries the class and effort the dispatch's selection recorded.
-          const plan = run.turns.find(t => t.purpose === "plan");
-          assert.deepEqual([team.planner[0].class, team.planner[0].effort], [plan.selection.class.value, plan.selection.effort.value]);
+          const work = run.turns.find(t => t.purpose === "work");
+          assert.deepEqual([team.implementer[0].class ?? null, team.implementer[0].effort ?? null], [work.selection.class?.value ?? null, work.selection.effort?.value ?? null]);
         }
         if (extra.length) assert.equal(team.implementer[0].operator, true);
       } finally { rmSync(keys, { recursive: true, force: true }); }

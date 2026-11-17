@@ -27,10 +27,10 @@ const refuse = (code, why) => Object.assign(new Error(why), {code});
  * does not hold (with an Anthropic author, the reviewer table has two other labs and the third comes from
  * another chair). Throws when the seating table has fewer than `n` labs left.
  */
-export function reviewSeats({n = 3, avoidLabs = [], seating = SEATING} = {}) {
+export function reviewSeats({n = 3, avoidLabs = [], seating = SEATING, facts = undefined} = {}) {
   const out = [], taken = new Set(avoidLabs);
   for (const role of ['reviewer', ...Object.keys(seating).filter(r => r !== 'reviewer')]) {
-    for (const c of candidatesFor(role, {seating})) {
+    for (const c of candidatesFor(role, {seating, ...(facts ? {facts} : {})})) {
       const lab = labOf(c.vendor, c.model);
       if (taken.has(lab) || !c.model) continue;
       taken.add(lab);

@@ -80,14 +80,16 @@ test("a slice already recorded on the item's latest status is not dispatched aga
   assert.match(dispatchable(readBoard({ statusRoot }), "later", { repo }).why, /already recorded on its latest status; write the next slice's ticket/);
 }));
 
-test("cycle reviewers avoid the authoring labs, falling back to the implementer's lab only when labs run out", () => {
+// Owner direction 2026-11-17: the three-lab requirement is enforced; it is never lowered by an availability fallback.
+// This test used to pin that fallback (the planner's lab reviewing when labs ran out); it now pins the refusal.
+test("cycle reviewers avoid every contributing lab; when the pool runs short the review is pending, never narrowed", () => {
   const both = cycleReviewers({ planLabs: ["anthropic"], workLabs: ["anthropic"] });
   assert.equal(both.planner_excluded, true);
   assert.deepEqual(both.seats.map(s => s.lab).sort(), ["google", "openai", "xai"]);
   const split = cycleReviewers({ planLabs: ["anthropic"], workLabs: ["openai"] });
-  assert.equal(split.planner_excluded, false);
-  assert.ok(!split.seats.some(s => s.lab === "openai"));
-  assert.match(split.note, /planner's lab may review/);
+  assert.equal(split.seats, null);
+  assert.equal(split.pending.code, "REVIEW_CAPACITY_PENDING");
+  assert.deepEqual(split.author_labs, ["anthropic", "openai"]);
   const reseated = seatTeam({ overrides: { implementer: { vendor: "agy_google", model: "claude-sonnet-4-6" } } });
   assert.deepEqual(reseated.implementer.map(s => s.lab), ["anthropic"]);
 });

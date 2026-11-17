@@ -229,6 +229,13 @@
           "date": "2026-11-17",
           "ref": "8441296 (merge check)",
           "note": "two delegated tests failed on the old code only at import; re-run the behavioural assertion against the old dispatcher instead"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "review-capacity.test.mjs (pre-commit)",
+          "note": "the escalation test returned early when only one lab wrote (argo's implementer fallbacks are one lab), so it passed without exercising escalation; caught by making the precondition an assertion, fixed by running it under fit"
         }
       ],
       "fixed_in": null,
@@ -250,11 +257,30 @@
           "note": "in-run law passed plannerVendor as assigner; the cycle excluded the planner's lab but cited only work turns"
         }
       ],
-      "fixed_in": "this commit (pantheon/src/review/scope.mjs; run.json review_scopes; bundle.review.review_scope)",
+      "fixed_in": "0f69f65",
       "detector": {
         "kind": "test",
         "file": "pantheon/tests/review-scope.test.mjs",
         "name": "the plan's inclusion is derived from what the worker reads"
+      }
+    },
+    {
+      "id": "availability-fallback-narrows-independence",
+      "class": "When reviewer capacity is short, the review scope or panel is narrowed (a contribution dropped, fewer reviewers, a contributing lab admitted) instead of the review being pending.",
+      "source": "owner audit RS3 and control contract 'Mandatory cross-model accountability'; owner direction 2026-11-17 'Enforce the existing independence requirement for coordinated reviews'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "048b3ba",
+          "note": "cycleReviewers let the planner's lab review and cited no author turns when labs ran out"
+        }
+      ],
+      "fixed_in": "this commit (strict cycleReviewers; capacity check before work; ticket-title board default)",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/review-capacity.test.mjs",
+        "name": "strict: two contributing labs leave the configured cycle pool short"
       }
     }
   ]

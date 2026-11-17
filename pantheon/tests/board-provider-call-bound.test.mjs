@@ -26,28 +26,29 @@ test("M5: --max-provider-calls bounds the board run; resume inherits it with the
   await withDispatch(async ({ dir: repo }) => {
     const { statusRoot, keys } = boardFixture(repo);
     try {
-      // scout, plan, work and the in-run critique are the pipeline's four calls: none is left for the cycle.
-      const out = cli(repo, statusRoot, "run", ITEM, "--clients", join(repo, "clients.fixture.mjs"), "--max-provider-calls", "4",
+      // scout, work and the in-run critique are the pipeline's three calls (board runs take the work item's title from the
+      // ticket, so no planner model is called): none is left for the cycle.
+      const out = cli(repo, statusRoot, "run", ITEM, "--clients", join(repo, "clients.fixture.mjs"), "--max-provider-calls", "3",
         "--dir", join(repo, "board"), "--out", join(repo, "bundle"), "--checked", "2026-11-18");
       const first = JSON.parse(out.stdout);
       assert.equal(first.shipped, true, `${out.stdout}\n${out.stderr.slice(-2000)}`);
       assert.equal(first.proposal, null, "the cycle could not be asked: no proposal");
-      assert.deepEqual([first.provider_calls.limit, first.provider_calls.pipeline, first.provider_calls.review, first.provider_calls.made], [4, 4, 0, 4]);
+      assert.deepEqual([first.provider_calls.limit, first.provider_calls.pipeline, first.provider_calls.review, first.provider_calls.made], [3, 3, 0, 3]);
       assert.equal(first.provider_calls.refused.length, 3, "each cycle reviewer was refused before it was called");
       assert.equal(reviews(repo), 0);
 
-      // Resumed without a bound: the run's bound and its four calls still apply; no reviewer is asked.
+      // Resumed without a bound: the run's bound and its three calls still apply; no reviewer is asked.
       const again = JSON.parse(cli(repo, statusRoot, "resume", ITEM, "--out", join(repo, "bundle")).stdout);
       assert.equal(again.proposal, null);
       assert.equal(reviews(repo), 0, "a resume does not get a fresh limit");
-      assert.deepEqual([again.provider_calls.limit, again.provider_calls.basis, again.provider_calls.made], [4, "inherited", 4]);
+      assert.deepEqual([again.provider_calls.limit, again.provider_calls.basis, again.provider_calls.made], [3, "inherited", 3]);
       assert.equal(again.resumes.at(-1).provider_calls.basis, "inherited");
 
       // The operator's explicit bound for this resume: recorded as such, and the reviewers are asked.
       const raised = JSON.parse(cli(repo, statusRoot, "resume", ITEM, "--out", join(repo, "bundle"), "--max-provider-calls", "3").stdout);
       assert.equal(reviews(repo), 3);
       assert.deepEqual([raised.provider_calls.limit, raised.provider_calls.basis, raised.provider_calls.made], [3, "operator", 3]);
-      assert.equal(raised.resumes.at(-1).provider_calls.prior, 4);
+      assert.equal(raised.resumes.at(-1).provider_calls.prior, 3);
       assert.equal(raised.failed.length, 0, JSON.stringify(raised));
 
       const bad = cli(repo, statusRoot, "resume", ITEM, "--out", join(repo, "bundle"), "--max-provider-calls", "0");

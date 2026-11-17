@@ -337,6 +337,11 @@ export async function runOpenItem(spec, opts = {}) {
   if (typeof DIFFICULTY_OF_TICKET !== "string" || !Object.hasOwn(TOKEN_TIERS, DIFFICULTY_OF_TICKET)) throw new Error(`unknown ticket difficulty "${DIFFICULTY_OF_TICKET}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
   const TASK = profile === "fit" ? taskProfile(spec, { paths: SLOTS.map(sl => sl.path), mode: "batch" }) : null;
   const TIER = TASK ? TASK.output.value : DIFFICULTY_OF_TICKET;
+  // Where the work item's title comes from (docs/reviews/2026-11-17-review-capacity): `model`, a planner model writes
+  // one line restating the goal (and so contributes to the reviewed change); `ticket`, deterministic code uses the
+  // ticket's own title and no model contributes a plan. The worker reads the ticket's goal either way.
+  const PLAN_TITLE = opts.planTitle ?? "model";
+  if (!["model", "ticket"].includes(PLAN_TITLE)) throw new Error(`unknown planTitle "${PLAN_TITLE}" (known: model, ticket)`);
   const root = RESUME ?? dir ?? join(homedir(), ".pantheon", "boards", `open-${spec.key}-${Date.now()}`);
   const worktree = join(root, "worktree");
   mkdirSync(worktree, { recursive: true });
@@ -948,13 +953,28 @@ export async function runOpenItem(spec, opts = {}) {
         acceptance: [{ type: "tests", cmd: CMD, expect: "exit0" }],
         package_context: packageBinding,
       };
-      const t = await publish({ ...board, ref: REF, author: HUMAN, msg: "the ticket",
-        entries: [{ kind: "ticket", links: { derived_from: scouts.map(s => s.evidence) }, payload: TICKET }] });
+      // With planTitle `ticket`, the plan is the ticket's own title (the human's text, spec.title), published in the
+      // same human-authored entry set: the board lets a seat or a human write a plan, never the controller.
+      const ticketTitle = String(spec.title ?? "").trim().slice(0, 120);
+      if (PLAN_TITLE === "ticket" && !ticketTitle) throw new Error("planTitle ticket needs the ticket's title");
+      if (PLAN_TITLE === "ticket") run.plan_source = { kind: "ticket", why: "the work item's title is the ticket's own title (the human's text); no planner model ran" };
+      const planFromTicket = PLAN_TITLE !== "ticket" ? [] : [
+        { kind: "plan", payload: { steps: SLOTS.map(sl => ({ item: itemKeyFor(sl), title: ticketTitle })) } },
+        ...SLOTS.map(sl => ({ kind: "work_item",
+          payload: { key: itemKeyFor(sl), title: SLOTS.length === 1 ? ticketTitle : `${ticketTitle} — ${sl.slot}`,
+            state: "ready", artifact_slots: [`artifact:${sl.slot}`], preferred_mode: "work" } }))];
+      const t = await publish({ ...board, ref: REF, author: HUMAN, msg: PLAN_TITLE === "ticket" ? "the ticket, with its own title as the plan" : "the ticket",
+        entries: [{ kind: "ticket", links: { derived_from: scouts.map(s => s.evidence) }, payload: TICKET }, ...planFromTicket] });
       if (!t.ok) throw new Error(t.why);
 
       // ---------------------------------------------------------------- plan
       enter("plan");
-      {
+      if (PLAN_TITLE === "ticket") {
+        // The plan was published with the human's ticket (promote, above): its title is the human's own. No planner
+        // model runs, so no model contributes a plan to the reviewed change (review/scope.mjs finds no plan turn).
+        check(Boolean(treeSlots(board.store, board.refs.resolve(REF)).plan), "the plan is the ticket's own title, published with the ticket");
+      } else {
+        run.plan_source = { kind: "model" };
         const { slice } = project(board.store, board.refs.resolve(REF), PROJECTION_FOR_ROLE.planner);
         const p = promptFor("planner", { ticket: slice.slots.ticket.payload.goal },
           NO_TOOLS + "Reply with exactly one line and nothing else: TITLE: <a one-line work item title for the single change this ticket asks for>");
@@ -1024,12 +1044,12 @@ export async function runOpenItem(spec, opts = {}) {
       maker = crew[0].seat;
       wip = crew[0].wip;
       progress({ event: "crew", detail: crew.map(c => `${c.sl.slot}:${c.seat.vendor}/${c.model}`).join(", ") });
-      reviewCapacity(crew, labOf(plannerVendor, plannerModel));
+      reviewCapacity(crew, plannerVendor ? labOf(plannerVendor, plannerModel) : null);
     } else {
       enter("resume", `from ${root}`);
       plannerVendor = run.planner_vendor;
       plannerModel = run.planner_model ?? null;
-      if (!plannerVendor || run.files.length !== SLOTS.length) throw new Error("resume: incomplete per-slot recovery state");
+      if ((!plannerVendor && run.plan_source?.kind !== "ticket") || run.files.length !== SLOTS.length) throw new Error("resume: incomplete per-slot recovery state");
       TICKET = board.store.get(treeSlots(board.store, board.refs.resolve(REF)).ticket)?.payload;
       if (!TICKET) throw new Error("resume: no board ticket");
       crew = SLOTS.map((sl, i) => {
@@ -1274,7 +1294,7 @@ export async function runOpenItem(spec, opts = {}) {
       // planner, whose title is the work item the worker read. Derived from those contributions, not from a role
       // label; recorded in run.json review_scopes. (A Claude lane model served by agy is Anthropic's work, RU1.)
       const scopeOf = built => reviewScope({ kind: "artifact", slot: built.sl.slot, turns: [
-        { purpose: "plan", vendor: plannerVendor, model: plannerModel },
+        ...(plannerVendor ? [{ purpose: "plan", vendor: plannerVendor, model: plannerModel }] : []),
         ...(built.contributors?.length ? built.contributors
           : [{ purpose: "work", vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? built.model ?? null, slot: built.sl.slot }])] });
       const reviewerAvoid = scope => [...new Set(scope.contributions.flatMap(c => [c.vendor, ...vendorsOfLab(c.lab)]).filter(Boolean))];

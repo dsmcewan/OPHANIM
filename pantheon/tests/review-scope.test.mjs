@@ -51,13 +51,13 @@ test("law 3 and the seating check name the contribution a reviewer shares a lab 
   assert.doesNotThrow(() => assertReviewCutsAcross({ contributors, producer: { vendor: "openai" }, reviewer: { vendor: "xai" } }));
 });
 
-test("cycle reviewers carry the applied scope; the RS3 fallback is recorded as a narrowing with what it dropped, not hidden", () => {
+test("cycle reviewers carry the scope they applied; a short pool is pending with the planner's contribution kept", () => {
   const whole = cycleReviewers({ planLabs: ["anthropic"], workLabs: ["anthropic"] });
-  assert.equal(whole.scope.narrowed, undefined);
+  assert.deepEqual(whole.scope.contributions.map(c => c.purpose), ["plan", "work"]);
   const split = cycleReviewers({ planLabs: ["anthropic"], workLabs: ["openai"] });
-  assert.equal(split.planner_excluded, false);
-  assert.deepEqual(split.scope.narrowed.dropped.map(d => [d.purpose, d.lab]), [["plan", "anthropic"]]);
-  assert.match(split.scope.narrowed.status, /known open bypass \(owner audit RS3\)/);
+  assert.equal(split.seats, null);
+  assert.deepEqual(split.scope.contributions.map(c => [c.purpose, c.lab]), [["plan", "anthropic"], ["work", "openai"]]);
+  assert.equal(split.scope.narrowed, undefined, "nothing is dropped from the scope");
 });
 
 test("through the dispatcher: run.json records each slot's reviewed scope, the reviewer is outside every contributing lab", async () => {

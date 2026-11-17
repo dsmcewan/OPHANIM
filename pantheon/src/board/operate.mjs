@@ -40,7 +40,7 @@ import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
 import { closeClaim } from "../ledger/cycle-kinds.mjs";
 import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
-import { DEFAULT_ELIGIBLE_STRATA, BASELINE_ARM, CANDIDATE_ARM, PAIR_SCHEMA, pairFor } from "../practice/assign.mjs";
+import { DEFAULT_ELIGIBLE_STRATA, BASELINE_ARM, CANDIDATE_ARM, PAIR_SCHEMA, pairFor, assignArm, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { runMetrics } from "../practice/metrics.mjs";
 
 export const TICKET_SCHEMA = "ophanim.ticket/v1";
@@ -116,7 +116,7 @@ function ticketRefusal(t, { repo, item }) {
  * answers (a fallback at dispatch changes what follows it), admits on a recorded window but not on the size of a
  * prompt (known only at dispatch), and does not apply a producer lab reservation (it says so when one could).
  */
-export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "argo", scouts: scoutVendors = ["xai"] } = {}) {
+export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "argo", scouts: scoutVendors = ["xai"], planTitle = "model" } = {}) {
   const slots = spec ? normalizeSlots(spec) : [{ slot: "file", path: null }];
   const difficulty = spec?.difficulty ?? "medium";
   const task = profile === "fit" ? taskProfile(spec ?? {}, { paths: slots.map(s => s.path).filter(Boolean), mode: "batch" }) : null;
@@ -144,14 +144,16 @@ export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "a
     }
   }
   const reviewLabs = task ? requirementsOf(task).review_labs.value : 1;
-  if (reviewLabs > 1) notes.push(`stakes need ${reviewLabs} review labs: the dispatch may hold labs back from the planner and implementers to keep that panel possible, which this preview does not apply`);
-  const planner = ladder(choose("planner"));
+  if (reviewLabs > 1) notes.push(`stakes need ${reviewLabs} review labs: the dispatch checks that capacity before any work call and is pending when it is short`);
+  // planTitle `ticket`: the plan is the ticket's own title and no planner model runs or contributes.
+  const planner = planTitle === "ticket" ? [] : ladder(choose("planner"));
   const implementers = slots.map((sl, i) => ladder(choose("implementer", { pin: sl.model ?? null,
     slotOverride: overrides[`implementer.${i}`] ?? overrides[`implementer.${sl.slot}`] ?? null })));
-  const p = planner[0];
+  const p = planner[0] ?? null;
   const reviewPanels = implementers.map(im => {
     const m = im[0];
-    const avoid = [...new Set([m.vendor, p.vendor, ...vendorsOfLab(m.lab), ...vendorsOfLab(p.lab)])], avoidLabs = [...new Set([m.lab, p.lab])];
+    const contributors = [m, ...(p ? [p] : [])];
+    const avoid = [...new Set(contributors.flatMap(c => [c.vendor, ...vendorsOfLab(c.lab)]))], avoidLabs = [...new Set(contributors.map(c => c.lab))];
     const panel = [], usedVendors = [], usedLabs = [];
     for (let k = 0; k < reviewLabs; k++) {
       const l = ladder(choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], ...(k ? { roleOverride: null } : {}) }));
@@ -161,36 +163,26 @@ export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "a
   });
   const team = { profile, scout: scoutLadders[0] ?? [], scouts: scoutLadders.map(l => l[0]), planner, implementer: implementers[0], implementers,
     reviewer: reviewPanels[0][0], review_panels: reviewPanels.map(panel => panel.map(l => l[0])), ...(notes.length ? { notes } : {}) };
-  return { ...team, cycle_reviewers: cycleReviewers({ planLabs: [p.lab], workLabs: [...new Set(implementers.map(l => l[0].lab))] }) };
+  return { ...team, plan_title: planTitle, cycle_reviewers: cycleReviewers({ planLabs: p ? [p.lab] : [], workLabs: [...new Set(implementers.map(l => l[0].lab))] }) };
 }
 
 /**
- * The cycle's reviewers: n labs outside the labs that contributed to the reviewed change (review/scope.mjs, scope
- * `change`: the planner's title reached every worker, and every work turn wrote the bytes). The result carries the
- * scope it applied.
- *
- * KNOWN, OPEN (owner audit RS3, the tracked lineage-downgrade bypass): when the configured pool cannot supply n labs
- * outside every contributor, the planner's contribution is dropped from the applied scope so the planner's lab may
- * review, and the author turns are not cited. That narrowing is now recorded explicitly (`narrowed`), with the
- * dropped contributions and the reason, instead of happening silently. It is not fixed here: the owner's control
- * contract says the three-lab requirement cannot be lowered by an availability fallback, and the owner holds a
- * candidate fix. Making it strict leaves every default ARGO board run pending (planner anthropic, maker openai,
- * cycle pool outside both: xai and google only).
+ * The cycle's reviewers: n labs outside every lab that contributed to the reviewed change (review/scope.mjs, scope
+ * `change`). The scope is never narrowed to make a panel possible (owner direction 2026-11-17: enforce the existing
+ * independence requirement; do not drop the planner's contribution or weaken the scope). When the configured pool
+ * cannot supply n labs outside the contributors, the result is pending, with no seats, and says why.
  */
-export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3 }) {
+export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined }) {
   const full = scope ?? { kind: "change", contributions: [...planLabs.map(lab => ({ purpose: "plan", lab })), ...workLabs.map(lab => ({ purpose: "work", lab }))],
     author_labs: [...new Set([...workLabs, ...planLabs])].sort() };
+  const base = { author_labs: full.author_labs, planner_excluded: true, scope: full };
   try {
-    return { seats: reviewSeats({ n, avoidLabs: full.author_labs }), author_labs: full.author_labs, planner_excluded: true, scope: full };
+    return { ...base, seats: reviewSeats({ n, avoidLabs: full.author_labs, ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) }) };
   } catch (e) {
     if (e.code !== "NO_SEATS") throw e;
-    const kept = full.contributions.filter(c => c.purpose !== "plan"), dropped = full.contributions.filter(c => c.purpose === "plan");
-    const labs = [...new Set(kept.map(c => c.lab).filter(Boolean))].sort();
-    const applied = { ...full, contributions: kept, author_labs: labs,
-      narrowed: { dropped, why: `excluding every contributing lab (${full.author_labs.join(", ")}) leaves fewer than ${n} labs in the configured cycle pool; ` +
-        `the plan contribution was dropped from the applied scope so its lab may review`, status: "known open bypass (owner audit RS3); not an accepted scope" } };
-    return { seats: reviewSeats({ n, avoidLabs: labs }), author_labs: labs, planner_excluded: false, scope: applied,
-      note: `excluding the planner's lab (${dropped.map(d => d.lab).join(", ")}) as well leaves fewer than ${n} labs: the planner's lab may review, and the author turns are not cited` };
+    return { ...base, seats: null, pending: { code: "REVIEW_CAPACITY_PENDING", need: n,
+      why: `the configured cycle reviewer pool offers fewer than ${n} labs outside the labs that contributed to the change ` +
+        `(${full.author_labs.join(", ")}); produced work and evidence are kept and the review is pending` } };
   }
 }
 
@@ -227,7 +219,7 @@ export function dispatchable(board, item, { repo }) {
 }
 
 /** `next`: the dispatchable items, in dependency order, each with its ticket and the team it would seat. */
-export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor = null, pools = null, overrides = {}, profile = "argo" }) {
+export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor = null, pools = null, overrides = {}, profile = "argo", planTitle = "ticket" }) {
   const board = readBoard({ statusRoot, anchor });
   const poolList = pools ?? readPools();
   const items = [], skipped = [];
@@ -237,7 +229,7 @@ export function boardNext({ repo, statusRoot = defaultStatusRoot(repo), anchor =
     if (d.why) { skipped.push({ item: it.item, why: d.why }); continue; }
     const t = d.ticket;
     // The team this ticket's run will seat: the same selector, on this ticket, under the run's profile.
-    const team = seatTeam({ pools: poolList, overrides, spec: t.spec, profile });
+    const team = seatTeam({ pools: poolList, overrides, spec: t.spec, profile, planTitle });
     items.push({ item: it.item, title: it.title, entry: it.entry, basis: it.basis,
       ticket: { path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key,
         files: normalizeSlots(t.spec).map(s => s.path), acceptance_cmd: t.spec.acceptance_cmd, difficulty: t.spec.difficulty ?? "medium" },
@@ -479,6 +471,13 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null,
   pairRate = 0, pairMaxProviderCalls = null, pairBudgetCalls = null, pairDir = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
+  // A board run's change gets a coordinated three-lab cycle review. Its work item's title is the ticket's own title
+  // by default (planTitle `ticket`): with a model-written title the planner's lab also contributes, and the configured
+  // cycle pool then has too few labs for the default seats (docs/reviews/2026-11-17-review-capacity/ANALYSIS.md).
+  // PROVISIONAL: adopted because it is the only tested configuration that meets the independence requirement today;
+  // the effect of losing the model-written title is unmeasured (measurement task in the analysis). Rollback:
+  // planTitle `model` (--plan-title model), which a review-capacity check then admits or refuses before work.
+  runOpts = { planTitle: "ticket", ...runOpts };
   pairFor({ ticketKey: "rate-check", policy: { pairRate } }); // a rate outside [0, 1] is refused before any work
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
   checkBound(runOpts.maxProviderCalls);
@@ -513,6 +512,23 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   let stakes = null;
   try { stakes = taskProfile(spec, { paths: normalizeSlots(spec).map(s => s.path), mode: "batch" }).stakes.value; } catch { stakes = null; }
   const sampling = pairFor({ ticketKey: spec.key, stakes, policy: { pairRate, halted: pairRate > 0 ? haltedNow() : [] } });
+  // REVIEW CAPACITY BEFORE WORK (owner direction 2026-11-17): a board run's change needs an n-lab cycle review outside
+  // every contributing lab. The contributors the dispatch will seat (seatTeam: the same selection, tested equal to
+  // the run's turns) are checked against the configured cycle pool before any work call. This only gates the launch:
+  // it never changes which workers are seated, and a worker that later escalates to another lab is not prevented --
+  // its finished work is kept and its review is pending (cycleReviewers).
+  {
+    const profile = runOpts.profile ?? (runOpts.interleave === true
+      ? assignArm({ ticketKey: spec.key, stakes, policy: runOpts.assignmentPolicy ?? DEFAULT_ASSIGNMENT_POLICY }).arm : "argo");
+    const predicted = seatTeam({ pools: readPools(), overrides: runOpts.seatOverrides ?? {}, spec, profile, planTitle: runOpts.planTitle ?? "model" });
+    const cap = cycleReviewers({ planLabs: predicted.planner?.length ? [predicted.planner[0].lab] : [],
+      workLabs: [...new Set(predicted.implementers.map(l => l[0].lab))], n });
+    if (cap.pending) {
+      const pending = { ...cap.pending, stage: "before-work", predicted_contributors: cap.scope.contributions, profile, plan_title: runOpts.planTitle ?? "model" };
+      progress({ event: "run.pending", code: pending.code, why: pending.why });
+      return { bundle: null, dir: null, proposal: null, pending, why: `${pending.code} before any work: ${pending.why}` };
+    }
+  }
   // A sampled ticket's primary runs under the counterpart's bound, so both arms start from the same limit; an
   // explicit, different primary bound is kept and the pair is refused as not comparable (PAIR_NOT_COMPARABLE).
   if (sampling.sampled && runOpts.maxProviderCalls === undefined && Number.isSafeInteger(pairMaxProviderCalls)) {
@@ -581,17 +597,23 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   // This run's contributing turns on the ledger (plan and work: the reviewed scope's lineage), recorded after the run
   // started, by the seats run.json names. Cited by the cycle, so its reviews are cold over that lineage.
   const authorSeats = new Set([...planTurns.map(t => `${t.vendor}-plan@${t.model}`), ...workTurns.map(t => `${t.vendor}-work@${t.model}`)]);
-  // A narrowed scope (the RS3 fallback) cites none, as before: the cycle's own rules refuse a reviewer whose lab
-  // authored a cited turn, and the narrowing lets the planner's lab review.
-  const authorTurns = chosen.planner_excluded ? sys.ledger.read().slice(entriesBefore).filter(e => e.kind === "turn")
-    .filter(e => { const p = sys.ledger.payloadOf(e); return ["plan", "work"].includes(p.purpose) && authorSeats.has(p.seat.seat_id); }).map(e => sys.ledger.hashOf(e)) : [];
+  const authorTurns = sys.ledger.read().slice(entriesBefore).filter(e => e.kind === "turn")
+    .filter(e => { const p = sys.ledger.payloadOf(e); return ["plan", "work"].includes(p.purpose) && authorSeats.has(p.seat.seat_id); }).map(e => sys.ledger.hashOf(e));
   const diff = git(["diff", "--no-color", base, head]);
   const changed = git(["diff", "--name-only", base, head]).split("\n").filter(Boolean);
   const scope = `board/${item}/${base.slice(0, 12)}`;
+  if (chosen.pending) {
+    // Never a downgrade: the committed change and its evidence stay, and the review waits as an explicit pending state.
+    bundle.review = { status: "pending", pending: chosen.pending, scope, review_scope: chosen.scope, author_labs: chosen.author_labs,
+      author_turns: authorTurns, reviews: [], failed: [], close: null, outcome: null };
+    save();
+    progress({ event: "review.pending", code: chosen.pending.code, why: chosen.pending.why });
+    return { bundle, dir: bundleDir, proposal: null, why: `${chosen.pending.code}: ${chosen.pending.why}` };
+  }
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
     seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, review_scope: chosen.scope, cycle: r.cycle, author_labs: chosen.author_labs,
-    planner_excluded: chosen.planner_excluded, ...(chosen.note ? { note: chosen.note } : {}), author_turns: authorTurns,
+    planner_excluded: chosen.planner_excluded, author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
   save();
   progress({ event: "reviewed", cycle: r.cycle, reviews: r.reviews.length, failed: r.failed.length,
@@ -658,6 +680,7 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
     }
     const run = JSON.parse(readFileSync(bundle.run.run_json, "utf8"));
     const chosen = cycleReviewers({ scope: changeScope(run), n: state.cycle.reviewers });
+    if (chosen.pending) fail(`${chosen.pending.code}: ${chosen.pending.why}`);
     if ([...chosen.author_labs].sort().join() !== [...bundle.review.author_labs].sort().join()) fail("the run's author labs do not re-derive the bundle's");
     const git = gitIn(gitTop(repo));
     const diff = git(["diff", "--no-color", bundle.base, bundle.commit]);

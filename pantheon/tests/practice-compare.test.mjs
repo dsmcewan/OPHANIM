@@ -74,7 +74,7 @@ test("compareProfiles: the same tickets under argo and fit, through the real dis
       assert.ok(a.coordination.scout_turns >= 1, `${r.ticket}/${arm}: scouts are coordination overhead`);
       assert.ok(a.coordination_overhead.value > 0 && a.coordination_overhead.value < 1);
       assert.equal(a.coordination_overhead.n, a.provider_calls.value);
-      assert.ok(a.operating_points.length >= 4 && a.operating_points.every(o => o.model && o.purpose));
+      assert.ok(a.operating_points.length >= 3 && a.operating_points.every(o => o.model && o.purpose)); // scout, work, critique: no planner model under the board default planTitle ticket
       if (arm === "candidate") assert.ok(a.operating_points.some(o => o.class), "fit records each seat's class");
       assert.ok(a.stakes.value, `${r.ticket}/${arm}: a stakes stratum (${a.stakes.basis})`);
     }
