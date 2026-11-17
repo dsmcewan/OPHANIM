@@ -1,0 +1,172 @@
+{
+  "schema": "ophanim.dispatch-demo/v1",
+  "head": "1246a72b57a62cdd446668ebda1e141b9c403dec",
+  "issues_source": "GitHub issues snapshot of 2026-11-17 (dsmcewan/OPHANIM, all states, 59 issues, read through the GitHub MCP list_issues tool)",
+  "provider_calls": 0,
+  "phases": {
+    "A": {
+      "what": "tick with no work ledger",
+      "exit": 1,
+      "refusal": "refused: no work ledger at status/work: pass --init to create it here (it generates the controller key on this machine)",
+      "work_ledger_created": false
+    },
+    "B": {
+      "what": "tick --init at the default limits (total provider calls 0)",
+      "exit": 0,
+      "dispatched": [],
+      "intake": 59,
+      "stopped": "provider-call budget: 0 left of 0, a stage needs up to 40",
+      "note": "no --total-provider-calls declared: nothing that may call a provider was dispatched",
+      "refusal": null
+    },
+    "C": {
+      "what": "tick with a declared budget and recording executors",
+      "limits": {
+        "total_provider_calls": 200,
+        "stage_provider_calls": 40,
+        "iterations": 20
+      },
+      "dispatched": [
+        {
+          "item": "co1-readability",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "me3-canonical",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "review-mutants",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "routing-coordination-practices",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "workflow-handoff-controls",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        }
+      ],
+      "received": [
+        {
+          "item": "co1-readability",
+          "stage": "plan",
+          "mode": "revalidate",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "a ticket exists; its assumptions, scope, dependencies and acceptance criteria need re-checking"
+        },
+        {
+          "item": "me3-canonical",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        },
+        {
+          "item": "review-mutants",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        },
+        {
+          "item": "routing-coordination-practices",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        },
+        {
+          "item": "workflow-handoff-controls",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        }
+      ],
+      "blocked": 58,
+      "blocked_by_gate": [
+        [
+          "blocked",
+          22
+        ],
+        [
+          "evidence-gap",
+          36
+        ]
+      ],
+      "intake": 0,
+      "skipped": [],
+      "stopped": null
+    },
+    "D": {
+      "what": "the same tick again",
+      "dispatched": 0,
+      "intake": 0,
+      "stopped": null
+    },
+    "E": {
+      "what": "tick without the controller key",
+      "exit": 3,
+      "block": "NO_AUTHORITY",
+      "entries_before": 76,
+      "entries_after": 76,
+      "verified": true
+    }
+  },
+  "work_ledger": {
+    "entries": 76,
+    "verified": true
+  }
+}
