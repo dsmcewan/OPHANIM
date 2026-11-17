@@ -1,0 +1,1 @@
+{"basis":"test where the orderer authors in a seat name; the deletion mutant now fails it","checked":"2026-11-17","item":"me1-author-signature","schema":"ophanim.status/v1","state":"Resolved","title":"ME1: no test failed when the author-signature check was deleted (independent review)","waiting_on":null}

@@ -19,7 +19,7 @@
 import { ROLES } from "./roles.mjs";
 import { packOf, PROJECTION_FOR_ROLE } from "../board/project.mjs";
 import { SEAT_FACTS, UNMEASURED, route, modelFor } from "../route/router.mjs";
-import { modelId, LANES } from "../config/models.mjs";
+import { modelId, LANES, labOf } from "../config/models.mjs";
 
 // A lane model, resolved from the lane table so a removed entry fails at load rather than at a call.
 const AGY_GEMINI_HIGH = LANES.agy_cli["gemini-3.8-flash-high"] ? "gemini-3.8-flash-high"
@@ -669,8 +669,8 @@ export function escalate(role, current, { facts = SEAT_FACTS, seating = SEATING 
     // Spread FIRST, then the fields this step sets -- the other order let a previous step's `kind`
     // overwrite this one's, so a rung change kept reporting itself as an effort change.
     return { ...current, ok: true, kind: "effort", effort: up,
-      why: `effort ${current.effort ?? "(default)"} -> ${up} on ${current.model}: the dial is cheaper to ` +
-        `turn than the occupant is to change, and it keeps the lab and the pack` };
+      why: `effort ${current.effort ?? "(default)"} -> ${up} on ${current.model}: provisional effort-first recovery; it keeps ` +
+        `the lab and the pack (unqualified: no matched comparison shows it cheaper than changing the occupant)` };
   }
   const cands = candidatesFor(role, { facts, seating });
   // A BAND IS A FIT, NOT A TIER -- and a role with no bands has no ladder. Falling back to declared-array
@@ -811,15 +811,26 @@ export class SeatingViolation extends Error {}
  * A reviewer reading work it commissioned is grading its own plan; a reviewer sharing the producer's
  * vendor is the derangement rule broken.
  */
-export function assertReviewCutsAcross({ assigner, producer, reviewer }) {
+export function assertReviewCutsAcross({ assigner, producer, reviewer, contributors = [] }) {
   if (!reviewer?.vendor || !producer?.vendor) throw new SeatingViolation("assertReviewCutsAcross: producer and reviewer are required");
-  if (reviewer.vendor === producer.vendor) {
+  // Vendor AND lab: a Claude model served through an agy seat is Anthropic's work (lanes.json names
+  // its lab), so an Anthropic reviewer shares its lab even though the vendor strings differ.
+  const lab = s => labOf(s.vendor, s.model ?? null);
+  if (reviewer.vendor === producer.vendor || lab(reviewer) === lab(producer)) {
     throw new SeatingViolation(
-      `${reviewer.vendor} cannot review ${producer.vendor}: a reviewer must not share the producer's vendor`);
+      `${reviewer.vendor}${reviewer.model ? `/${reviewer.model}` : ""} cannot review ${producer.vendor}${producer.model ? `/${producer.model}` : ""}: ` +
+      `a reviewer must not share the producer's vendor or lab (${lab(producer)})`);
   }
-  if (assigner && reviewer.vendor === assigner.vendor) {
+  // Every contribution in the reviewed scope (review/scope.mjs), named as what it is (owner audit RS2).
+  for (const c of contributors) {
+    if (c?.vendor && (reviewer.vendor === c.vendor || lab(reviewer) === lab(c))) {
+      throw new SeatingViolation(`${reviewer.vendor}${reviewer.model ? `/${reviewer.model}` : ""} shares the ${lab(c)} lab with a ` +
+        `${c.purpose ?? "contribution"} in the reviewed scope (${c.vendor}${c.model ? `/${c.model}` : ""}${c.via ? `: ${c.via}` : ""}) and cannot review it`);
+    }
+  }
+  if (assigner?.vendor && (reviewer.vendor === assigner.vendor || lab(reviewer) === lab(assigner))) {
     throw new SeatingViolation(
-      `${reviewer.vendor} assigned this work and cannot also review it: judgment cuts across the ` +
+      `${reviewer.vendor} shares a vendor or lab with whoever assigned this work and cannot also review it: judgment cuts across the ` +
       `chain, it does not climb it -- a layer reviewing the layer below is grading its own plan`);
   }
   return true;

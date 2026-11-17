@@ -1,0 +1,242 @@
+// The `fit` routing candidate: a task profile with independent dimensions, each driving its own dial
+// (docs/routing-task-profile.md). `fit` is a CANDIDATE, not the default: `argo` stays the approved policy,
+// and these tests pin that `argo` (and `legacy`) are unchanged byte-for-byte while `fit` reaches the breadth
+// of registered models and effort levels. Nothing here measures quality; the class table is provisional.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readTicket } from "../src/board/operate.mjs";
+import { selectSeat, selectionPolicy, frontierCandidates, registryModels } from "../src/route/frontier.mjs";
+import { taskProfile, effortForDepth, classFloor, DIMENSIONS } from "../src/route/task-profile.mjs";
+import { documentedDefaultEffort } from "../src/route/protocol.mjs";
+import { outputBudgetFor, TOKEN_TIERS } from "../src/config/tiers.mjs";
+import { labOf } from "../src/config/models.mjs";
+import { runOpenItem } from "../src/board/run-item.mjs";
+import { withDispatch, WORK } from "./fixtures/dispatch.mjs";
+
+const CLASSES = JSON.parse(readFileSync(new URL("../src/config/classes.json", import.meta.url), "utf8"));
+const classOf = m => CLASSES.models[m]?.class;
+const ROLES = ["planner", "implementer", "reviewer", "scout"];
+const firstSeat = (role, o) => selectSeat(role, o).seat;
+
+test("taskProfile: legacy difficulty maps to a default profile; explicit fields win; every dimension names its basis", () => {
+  const easy = taskProfile({ difficulty: "easy" });
+  assert.deepEqual([easy.depth.value, easy.output.value, easy.stakes.value, easy.ambiguity.value], ["light", "s", "normal", "settled"]);
+  const medium = taskProfile({ difficulty: "medium" });
+  assert.deepEqual([medium.depth.value, medium.output.value, medium.stakes.value, medium.ambiguity.value], ["standard", "m", "normal", "open"]);
+  const hard = taskProfile({ difficulty: "hard" });
+  assert.deepEqual([hard.depth.value, hard.output.value, hard.stakes.value, hard.ambiguity.value], ["deep", "l", "high", "open"]);
+  for (const k of ["depth", "output", "stakes", "ambiguity"]) assert.equal(hard[k].basis, "legacy-difficulty");
+  const mixed = taskProfile({ difficulty: "easy", depth: "max", output: "xl" });
+  assert.deepEqual([mixed.depth, mixed.output], [{ value: "max", basis: "ticket" }, { value: "xl", basis: "ticket" }]);
+  assert.equal(mixed.stakes.basis, "legacy-difficulty", "a field the ticket does not name keeps the legacy default");
+  for (const p of [easy, medium, hard, mixed]) for (const k of Object.keys(DIMENSIONS)) {
+    assert.match(p[k].basis, /^(ticket|derived:[a-z-]+|legacy-difficulty)$/, `${k} has a basis`);
+  }
+  assert.throws(() => taskProfile({ depth: "enormous" }), /depth/);
+  assert.throws(() => taskProfile({ context: 500000 }), /measured/, "context is measured, never declared");
+});
+
+test("output tiers: xs..xl extend the table additively; easy/medium/hard keep their budgets and stay the difficulty keys", () => {
+  assert.deepEqual(TOKEN_TIERS, { easy: 4096, medium: 16384, hard: 32768 }, "the difficulty-keyed table is unchanged");
+  assert.deepEqual(["xs", "s", "m", "l", "xl"].map(t => outputBudgetFor("claude-sonnet-5", t).tokens), [1024, 4096, 16384, 32768, 65536]);
+  for (const [alias, tier] of [["easy", "s"], ["medium", "m"], ["hard", "l"]]) {
+    assert.equal(outputBudgetFor("claude-sonnet-5", alias).tokens, outputBudgetFor("claude-sonnet-5", tier).tokens);
+  }
+  assert.equal(outputBudgetFor("claude-haiku-4-5-20251001", "xl").tokens, 64000, "still capped at the documented ceiling");
+});
+
+test("stakes from paths: ledger/governance/authority/key/security -> critical (frontier floor, 3 review labs); tests/docs-only -> low", () => {
+  for (const path of ["packages/ledger/src/append.mjs", "ophanim/governance/pins.json", "src/authority.mjs", "config/keys/signing.pem", "src/security/check.mjs"]) {
+    const p = taskProfile({ difficulty: "easy" }, { paths: [path] });
+    assert.deepEqual(p.stakes, { value: "critical", basis: "derived:paths" }, path);
+    const s = selectSeat("implementer", { profile: "fit", task: p }).selection;
+    assert.equal(s.class_floor.value, "frontier", path);
+    assert.equal(s.requirements.review_labs.value, 3, path);
+    assert.equal(classOf(s.class.model), "frontier");
+  }
+  const docs = taskProfile({ difficulty: "hard" }, { paths: ["docs/guide.md", "pantheon/tests/x.test.mjs"] });
+  assert.deepEqual(docs.stakes, { value: "low", basis: "derived:paths" }, "tests/docs-only is low, over the legacy hard default");
+  const s = selectSeat("implementer", { profile: "fit", task: docs }).selection;
+  assert.equal(s.class_floor.value, "fast");
+  assert.equal(s.requirements.review_labs.value, 1);
+  const ordinary = taskProfile({ difficulty: "medium" }, { paths: ["src/feature.mjs"] });
+  assert.equal(ordinary.stakes.value, "normal");
+  const pinned = taskProfile({ difficulty: "medium", stakes: "low" }, { paths: ["packages/ledger/x.mjs"] });
+  assert.deepEqual(pinned.stakes, { value: "low", basis: "ticket" }, "the ticket's field overrides the derived value");
+  assert.equal(classFloor(taskProfile({ ambiguity: "contested" }), "planner").value, "frontier", "ambiguity floors the planner");
+  assert.equal(selectSeat("planner", { profile: "fit", task: taskProfile({ ambiguity: "contested", difficulty: "easy" }) }).selection.requirements.explorer_width.value, 3);
+});
+
+test("fit: two tickets with the same legacy difficulty but different stakes/depth get different seats and efforts", () => {
+  const routine = taskProfile({ difficulty: "medium", stakes: "low", depth: "light" });
+  const grave = taskProfile({ difficulty: "medium", stakes: "critical", depth: "max" });
+  for (const role of ["planner", "implementer", "reviewer"]) {
+    const a = firstSeat(role, { profile: "fit", task: routine }), b = firstSeat(role, { profile: "fit", task: grave });
+    assert.notDeepEqual([a.model, a.effort], [b.model, b.effort], `${role}: ${a.model}@${a.effort} vs ${b.model}@${b.effort}`);
+    assert.ok(CLASSES.order.indexOf(classOf(b.model)) > CLASSES.order.indexOf(classOf(a.model)), `${role}: critical stakes seat a higher class`);
+  }
+  // And with no explicit dimension, the legacy band still discriminates under `fit`.
+  assert.notDeepEqual(firstSeat("implementer", { profile: "fit", difficulty: "easy" }), firstSeat("implementer", { profile: "fit", difficulty: "hard" }));
+});
+
+test("argo and legacy are unchanged: the same picks for every role and the same policy hashes as before fit existed", () => {
+  // Pinned from the tree before this change (e481e77).
+  assert.equal(selectionPolicy("argo").hash, "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56");
+  assert.equal(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d");
+  const ARGO = { planner: "claude-fable-5-2,gemini-4-carbon,gpt-6-astra", implementer: "gpt-6-astra,claude-fable-5-2,gemini-4-carbon",
+    reviewer: "grok-4.7,gemini-4-carbon", scout: "grok-4.3", synthesis: "gemini-4-carbon", fast_loop: "gemini-4-argon" };
+  const task = taskProfile({ difficulty: "easy", stakes: "critical", depth: "max" });
+  for (const [role, want] of Object.entries(ARGO)) for (const difficulty of ["easy", "medium", "hard"]) {
+    const s = selectSeat(role, { profile: "argo", difficulty, task });
+    assert.equal(s.candidates.map(c => c.model).join(","), want, `${role}/${difficulty}`);
+    assert.equal(s.candidates.map(c => c.model).join(","), [...new Set(frontierCandidates(role).map(c => c.model))].join(","));
+    assert.ok(s.candidates.every(c => c.effort === undefined), "argo sets no up-front effort");
+  }
+  const LEGACY = { easy: "gpt-6-luna,claude-sonnet-4-6,gpt-6-astra,gpt-6-sol", medium: "gpt-6-sol,claude-sonnet-4-6,gpt-6-astra,gpt-6-luna",
+    hard: "claude-sonnet-4-6,gpt-6-astra,gpt-6-sol,gpt-6-luna" };
+  for (const [difficulty, want] of Object.entries(LEGACY)) {
+    assert.equal(selectSeat("implementer", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
+  }
+  assert.notEqual(selectionPolicy("fit").hash, selectionPolicy("argo").hash);
+});
+
+test("fit reaches more distinct (model, effort) operating points across a varied ticket set than legacy or argo", t => {
+  const tickets = [];
+  for (const difficulty of ["easy", "medium", "hard"]) for (const stakes of [undefined, ...DIMENSIONS.stakes])
+    for (const depth of [undefined, ...DIMENSIONS.depth]) for (const ambiguity of [undefined, "contested"])
+      tickets.push({ difficulty, ...(stakes ? { stakes } : {}), ...(depth ? { depth } : {}), ...(ambiguity ? { ambiguity } : {}) });
+  const points = profile => {
+    const seen = new Set();
+    for (const spec of tickets) for (const role of ROLES) {
+      const s = selectSeat(role, { profile, difficulty: spec.difficulty, ...(profile === "fit" ? { task: taskProfile(spec) } : {}) }).seat;
+      // argo and legacy choose no effort up front: the model runs at its documented default.
+      seen.add(`${s.model}@${profile === "fit" ? s.effort : documentedDefaultEffort(s.model)}`);
+    }
+    return seen.size;
+  };
+  const counts = { legacy: points("legacy"), argo: points("argo"), fit: points("fit") };
+  t.diagnostic(`distinct (model, effort) first-seat points over ${tickets.length} tickets x ${ROLES.length} roles: ${JSON.stringify(counts)}`);
+  assert.ok(counts.fit > counts.legacy && counts.fit > counts.argo, JSON.stringify(counts));
+});
+
+test("effort maps onto each model's OWN documented ladder, and the mapping is recorded", () => {
+  const max47 = effortForDepth("max", { vendor: "xai", model: "grok-4.7" });
+  assert.equal(max47.value, "xhigh", "grok-4.7's ladder tops at xhigh");
+  assert.match(max47.mapped, /xhigh|rung 3\/3/);
+  assert.equal(effortForDepth("max", { vendor: "openai", model: "gpt-6-astra" }).value, "max");
+  assert.equal(effortForDepth("standard", { vendor: "agy_google", model: "gemini-4-carbon" }).value, "medium");
+  assert.equal(effortForDepth("none", { vendor: "openai", model: "gpt-6-luna" }).value, "none");
+  const haiku = effortForDepth("max", { vendor: "anthropic", model: "claude-haiku-4-5-20251001" });
+  assert.equal(haiku.value, null);
+  assert.match(haiku.mapped, /no documented effort ladder/);
+  const lane = effortForDepth("max", { vendor: "agy_google", model: "claude-sonnet-4-6" });
+  assert.equal(lane.value, null);
+  assert.match(lane.mapped, /not carried/);
+  // Through the selector: the seat carries the mapped effort and the selection says how it was mapped.
+  const s = selectSeat("reviewer", { profile: "fit", task: taskProfile({ stakes: "high", depth: "max" }), avoidLabs: ["openai"] });
+  assert.equal(s.seat.model, "grok-4.7");
+  assert.equal(s.seat.effort, "xhigh");
+  assert.deepEqual(s.selection.effort.ladder, ["low", "medium", "high", "xhigh"]);
+  assert.equal(s.selection.effort.depth, "max");
+});
+
+test("fit fallbacks cross labs at the same class before stepping class, and never go below the floor", () => {
+  for (const [role, stakes] of [["implementer", "critical"], ["implementer", "low"], ["planner", "normal"], ["reviewer", "normal"]]) {
+    const { candidates, selection } = selectSeat(role, { profile: "fit", task: taskProfile({ difficulty: "medium", stakes }) });
+    const models = [...new Map(candidates.map(c => [c.model, c])).values()];
+    const rank = c => CLASSES.order.indexOf(classOf(c.model));
+    const floor = CLASSES.order.indexOf(selection.class_floor.value);
+    for (const [i, c] of models.entries()) {
+      assert.ok(rank(c) >= floor, `${role}/${stakes}: ${c.model} is not below the floor`);
+      if (i) assert.ok(rank(c) >= rank(models[i - 1]), `${role}/${stakes}: class never steps back down (${models.map(m => m.model)})`);
+    }
+    for (const cls of new Set(models.map(rank))) {
+      const inClass = models.filter(c => rank(c) === cls), labs = new Set(inClass.map(c => labOf(c.vendor, c.model)));
+      const head = inClass.slice(0, labs.size).map(c => labOf(c.vendor, c.model));
+      assert.equal(new Set(head).size, labs.size, `${role}/${stakes}: one of each lab before a second from any (${inClass.map(c => c.model)})`);
+    }
+    assert.ok(models.some((c, i) => i && labOf(c.vendor, c.model) !== labOf(models[0].vendor, models[0].model)), "the first fallback set reaches another lab");
+  }
+});
+
+test("fit candidates come from the whole registry the role's labs allow, and record which basis admitted each", () => {
+  const registry = registryModels();
+  assert.equal(registry.length, 21, "18 API registry models + 3 lane models");
+  for (const { model } of registry) {
+    const c = CLASSES.models[model];
+    assert.ok(c && CLASSES.order.includes(c.class), `${model} has a declared class`);
+    assert.equal(c.status, "provisional", `${model}: unmeasured, so provisional`);
+    assert.ok(["VENDOR", "TASTE"].includes(c.basis), model);
+    if (c.basis === "VENDOR") assert.ok(c.source && c.quote, `${model}: a VENDOR class carries its quoted source`);
+  }
+  const { candidates } = selectSeat("implementer", { profile: "fit", task: taskProfile({ stakes: "critical" }) });
+  const seen = new Map(candidates.map(c => [c.model, c.selection.eligibility]));
+  assert.equal(seen.get("gpt-6-sol"), "role-table");
+  assert.match(seen.get("gpt-6.1-sol"), /^lab-allowed:openai$/, "a registry model the role's tables never named, admitted by lab");
+  assert.ok(!candidates.some(c => labOf(c.vendor, c.model) === "xai"), "a lab no implementer table allows is not reached");
+  const r = selectSeat("implementer", { profile: "fit", task: taskProfile({}) }).selection;
+  assert.equal(r.kind.filter, "unfiltered");
+  assert.match(r.kind.why, /no cited capability fact/);
+});
+
+test("fit still excludes unrecorded windows (M7) against a measured context estimate", () => {
+  const s = selectSeat("planner", { profile: "fit", needsContext: 3000, task: taskProfile({ difficulty: "medium" }) });
+  for (const lane of ["claude-sonnet-4-6", "claude-opus-4-6-thinking", "gemini-3.8-flash-high"]) {
+    assert.ok(!s.candidates.some(c => c.model === lane), `${lane} is not admitted`);
+  }
+  assert.ok(s.selection.excluded.some(e => e.model === "claude-sonnet-4-6" && /window unrecorded/.test(e.why)));
+  assert.deepEqual(s.selection.task.context, { value: 3000, basis: "derived:prompt-chars" });
+  const big = selectSeat("reviewer", { profile: "fit", needsContext: 600000, task: taskProfile({}) });
+  assert.ok(big.candidates.every(c => !/^grok-4\.[567]$/.test(c.model)), "500k-window models are excluded for a 600k estimate");
+  assert.ok(big.selection.excluded.some(e => e.model === "grok-4.6" && /documented window 500000 < estimated 600000/.test(e.why)));
+});
+
+test("board tickets may declare the fit dimensions; a value outside a dimension's set is refused before seating", () => {
+  const repo = mkdtempSync(join(tmpdir(), "pantheon-fit-ticket-"));
+  try {
+    writeFileSync(join(repo, "a.mjs"), "export {};\n");
+    mkdirSync(join(repo, "tickets"));
+    const write = extra => writeFileSync(join(repo, "tickets", "x.json"), JSON.stringify({ schema: "ophanim.ticket/v1", item: "x", slice: "one file",
+      proposes: { state: "Ready", basis: "b" }, title: "t", goal: "g", question: "q", repo_root: ".", slot: "a", path: "a.mjs", copy: ["a.mjs"],
+      acceptance_cmd: "node a.mjs", ...extra }));
+    write({ stakes: "critical", depth: "max", output: "xl", ambiguity: "contested", latency: "interactive", kind: "review" });
+    const ok = readTicket({ repo, item: "x" });
+    assert.equal(ok.why, undefined);
+    assert.deepEqual([ok.spec.stakes, ok.spec.depth, ok.spec.output], ["critical", "max", "xl"], "the dimensions reach runOpenItem's spec");
+    write({ depth: "enormous" });
+    assert.match(readTicket({ repo, item: "x" }).why, /unknown depth "enormous"/);
+    write({ context: 9000 });
+    assert.match(readTicket({ repo, item: "x" }).why, /unknown ticket field\(s\): context/, "context is measured, never declared");
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("fit through the real dispatcher: every turn records the profile, and the request carries the mapped effort", async () => {
+  await withDispatch(async ({ spec, opts, calls }) => {
+    const r = await runOpenItem(spec("fitRun", { difficulty: "medium", depth: "max" }), opts({ profile: "fit" }));
+    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    const run = JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
+    assert.ok(run.turns.length >= 4);
+    for (const t of run.turns) {
+      assert.equal(t.selection?.profile, "fit", `${t.purpose} records the profile`);
+      assert.deepEqual(t.selection.task.depth, { value: "max", basis: "ticket" }, `${t.purpose} records the dimensions with their bases`);
+      assert.equal(t.selection.task.stakes.basis, "derived:paths");
+      assert.match(t.selection.policy_hash, /^sha256:/);
+    }
+    for (const purpose of ["plan", "work", "critique"]) {
+      const turn = run.turns.find(t => t.purpose === purpose);
+      assert.ok(turn, `a ${purpose} turn ran`);
+      assert.equal(turn.selection.source, "policy");
+      const want = turn.selection.effort.value;
+      assert.ok(want, `${purpose}: an effort was chosen up front (${turn.model})`);
+      const asked = calls.filter(c => c.model === turn.model);
+      assert.ok(asked.length, `${purpose}: ${turn.model} was requested`);
+      assert.ok(asked.every(c => c.effort === want), `${purpose}: the request carried effort ${want} (got ${asked.map(c => c.effort)})`);
+      assert.ok(Number.isInteger(turn.selection.requirements.review_labs.value));
+    }
+    const work = calls.filter(c => WORK.test(c.prompt));
+    assert.equal(work.length, 1);
+  });
+});

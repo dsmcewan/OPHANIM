@@ -1,0 +1,1 @@
+{"findings":"[minor] src/x.mjs:1 x changed without a test","model":"grok-4.7","response_id":"resp_xai_1","seat":{"mode":"cycle-review","occupancy_gen":1,"seat_id":"xai-cycle-review@grok-4.7","vendor":"xai"},"served_model":"grok-4.7","turn":"sha256:487501fd1bffbd91ac191b21a7f08f6fc1cf32428632a37d006e536560e5536e","verdict":"request_changes"}

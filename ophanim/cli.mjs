@@ -1,43 +1,85 @@
 #!/usr/bin/env node
+// ophanim/cli.mjs -- the entry point: the `ophanim` command and the worker the watchdog launches.
+//
+// Purpose: turn a synthetic request into one governed convergence. executeRequest builds the fixture
+//   obligations and workers, opens TELOS governance (governance.mjs) and the system ledger, runs the
+//   runtime (runtime.mjs) under a per-state seat lock, then assesses efficiency (efficiency/) and writes
+//   the run's result. The other commands prove, verify, resume, replay, inspect and investigate.
+// Inputs:  `node ophanim/cli.mjs <command> --flag value ...` (see the help text at the bottom), or a
+//   request object passed to executeRequest: stateDir (absolute), fixture/batches, slots, schedule,
+//   handoffVerification, maxDispatches, workerOptions, efficiencyRoot, operation ('activate' |
+//   'rollback'), fault (test injection), resultFile, telosRoot (or OPHANIM_TELOS_ROOT).
+// Outputs: an `ophanim.synthetic-run/v1` result (written to resultFile or <stateDir>/result.json and
+//   returned); board commits under <stateDir>/pantheon; efficiency records and ledger entries; one JSON
+//   line per command on stdout; exit code 1 on any error.
+// Invariants: only the controller (runtime.mjs) writes state; every accepted candidate passed the TELOS
+//   verifier; the worker artifact is bound to the fixture source bytes; a fresh efficiency assessment
+//   is re-derived (verifyEfficiencyRecord) before it is used or written; a replay gets no ledger and is
+//   confined to its evidence directory.
+// Must never: take signing keys or a ledger from a request file, run a replay outside its directory or
+//   without the watchdog, or overwrite an existing investigation report.
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,canonical,digest,writeJson,outputProjection,intervalSummary} from './fixtures.mjs';
+import {
+  makeFixtures,createPlanning,createWorkers,createSyntheticDestination,canonical,digest,writeJson,
+  outputProjection,intervalSummary
+} from './fixtures.mjs';
 import {runRuntime,loadRuntime,activateRelease,rollbackRelease} from './runtime.mjs';
 import {readRuntimeSnapshot,verifyRuntimeChain} from './board.mjs';
 import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
-import {assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord,verifyEfficiencyRecord} from './efficiency/assessment.mjs';
+import {
+  assessConvergence,chooseEfficiencySlots,efficiencyScope,reusedEfficiencyRecord,verifyEfficiencyRecord
+} from './efficiency/assessment.mjs';
 import {recoverInterruptedAssessment} from './efficiency/recovery.mjs';
 
 const FIXTURES=fileURLToPath(new URL('./fixtures.mjs',import.meta.url));
-const metadata=workers=>workers.map(({id,version,kinds,scopes})=>({id,version,kinds,scopes})).sort((a,b)=>a.id.localeCompare(b.id));
+// Workers' public identity, sorted by id (what a release and the efficiency scope record).
+const metadata=workers=>workers.map(({id,version,kinds,scopes})=>({id,version,kinds,scopes}))
+  .sort((a,b)=>a.id.localeCompare(b.id));
+// The release artifact: the fixture source bytes, the worker options and the worker identities.
 function workerArtifact(options,workers) {
-  return {schema:'ophanim.synthetic-worker-artifact/v1',sourceSha:digest(fs.readFileSync(FIXTURES,'utf8')),options,workers:metadata(workers)};
+  return {schema:'ophanim.synthetic-worker-artifact/v1',sourceSha:digest(fs.readFileSync(FIXTURES,'utf8')),
+    options,workers:metadata(workers)};
 }
 
-// `opts.ledger` (K5): an efficiencyRecorder from ophanim/ledger/efficiency-kinds.mjs. It carries signing
-// keys, so it is passed by the caller, never read from a request file.
+// The ledger is ON BY DEFAULT: efficiency records go to the ledger at OPHANIM_LEDGER or, unset, at
+// <stateDir>/ledger (ophanim/ledger/system.mjs). `opts.ledger: false` turns it off; a recorder passed in
+// is used as is. It carries signing keys, so it never comes from a request file, and replays get none.
 export async function executeRequest(request,opts={}) {
-  return execute(request,false,opts);
+  let ledger=opts.ledger===false?null:(opts.ledger??null);
+  if(opts.ledger===undefined&&request&&path.isAbsolute(request.stateDir??'')){
+    const {openSystemLedger}=await import('./ledger/system.mjs');
+    ledger=openSystemLedger({root:process.env.OPHANIM_LEDGER??path.join(path.resolve(request.stateDir),'ledger')})
+      .recorder();
+  }
+  return execute(request,false,{ledger});
 }
 
+// Validate the request, create the private state directory, and run under the 'synthetic-driver' lock.
 async function execute(request,replay,opts={}) {
   if(!request || !path.isAbsolute(request.stateDir??''))throw Error('Absolute private synthetic stateDir required');
   if(Object.hasOwn(request,'expectedQualifiedConvergences')&&
-      (!Number.isInteger(request.expectedQualifiedConvergences)||request.expectedQualifiedConvergences<1||request.expectedQualifiedConvergences>20))
+      (!Number.isInteger(request.expectedQualifiedConvergences)||
+        request.expectedQualifiedConvergences<1||request.expectedQualifiedConvergences>20))
     throw Error('Expected exact-scope convergences must be an integer from 1 to 20');
   const stateDir=path.resolve(request.stateDir);
   fs.mkdirSync(stateDir,{recursive:true,mode:0o700});
   if(fs.realpathSync(stateDir)!==stateDir)throw Error('Canonical synthetic state directory required');
-  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay,replay?{}:opts),{dir:path.join(stateDir,'locks'),timeoutMs:60000});
+  return withSeatLock('synthetic-driver',()=>runRequest({...request,stateDir},replay,replay?{}:opts),
+    {dir:path.join(stateDir,'locks'),timeoutMs:60000});
 }
 
+// The run itself. Observes every runtime event (attempt timings, accepted latencies, heartbeats to the
+// watchdog), wraps governance to count and time verifier calls, wraps workers to measure their input,
+// then runs the runtime (or a release activation/rollback) and assesses efficiency unless replaying.
 async function runRequest(request,replay,{ledger=null}={}) {
   const stateDir=request.stateDir;
   const intervals=[],startedAt=Date.now();
   const dispatchStarts=new Map(),acceptedLatencies=[];
   const priorRuntime=loadRuntime(stateDir);
-  const alreadyAccepted=new Set(Object.values(priorRuntime?.obligations??{}).filter(row=>row.status==='accepted').map(row=>row.spec.id));
+  const alreadyAccepted=new Set(Object.values(priorRuntime?.obligations??{})
+    .filter(row=>row.status==='accepted').map(row=>row.spec.id));
   const attempts=new Map(),verifications=[],events=[];
   const verificationCalls={verifyCandidate:0,verifyPlan:0};
   let workerContextBytes=0;
@@ -81,14 +123,17 @@ async function runRequest(request,replay,{ledger=null}={}) {
     };
     const batches=request.batches??[request.fixture??{}];
     const fixtures=batches.map(makeFixtures),planning=createPlanning({batches});
-    const workerOptions={department:fixtures[0]?.department??'operations',departments:[...new Set(fixtures.map(f=>f.department))].sort(),version:'synthetic-v1',delayMs:15,...request.workerOptions};
+    const workerOptions={department:fixtures[0]?.department??'operations',
+      departments:[...new Set(fixtures.map(f=>f.department))].sort(),version:'synthetic-v1',delayMs:15,
+      ...request.workerOptions};
     const workers=createWorkers({...workerOptions,onInterval:interval=>{intervals.push(interval);}}).map(worker=>({
       ...worker,
       run:input=>{
         const bytes=Buffer.byteLength(canonical(input));
         workerContextBytes+=bytes;
         const row=attempts.get(JSON.stringify([input.obligation.id,input.priorAttempts+1]));
-        if(row)Object.assign(row,{inputSha:digest(input.inputs),inputBytes:Buffer.byteLength(canonical(input.inputs)),contextBytes:bytes});
+        if(row)Object.assign(row,
+          {inputSha:digest(input.inputs),inputBytes:Buffer.byteLength(canonical(input.inputs)),contextBytes:bytes});
         return worker.run(input);
       },
     }));
@@ -98,18 +143,31 @@ async function runRequest(request,replay,{ledger=null}={}) {
     // Non-default policies are part of the request identity; defaults are omitted
     // so existing scopes and replays are unchanged.
     const policies={...request.schedule&&request.schedule!=='wave'?{schedule:request.schedule}:{},
-      ...request.handoffVerification&&request.handoffVerification!=='full'?{handoffVerification:request.handoffVerification}:{}};
-    const replayRequest={batches,maxDispatches:request.maxDispatches??1000,workerOptions,...policies,...telosRoot?{telosRoot}:{}};
+      ...request.handoffVerification&&request.handoffVerification!=='full'
+        ?{handoffVerification:request.handoffVerification}:{}};
+    const replayRequest={batches,maxDispatches:request.maxDispatches??1000,workerOptions,...policies,
+      ...telosRoot?{telosRoot}:{}};
+    // The efficiency scope: what this convergence is (obligations, plan, worker artifact and registry,
+    // request policies, baseline slots). Assessments and slot choices apply only within the same scope.
     const scope=efficiencyScope({obligations:fixtures.flatMap(f=>f.obligations),planning,
-      workerArtifactSha:digest(artifact),registry:metadata(workers),request:{batches,maxDispatches:replayRequest.maxDispatches,workerOptions,...policies},slots:baselineSlots});
-    const recoveredEfficiency=replay?null:await recoverInterruptedAssessment({stateDir,priorRuntime,scope,governance:authority});
+      workerArtifactSha:digest(artifact),registry:metadata(workers),
+      request:{batches,maxDispatches:replayRequest.maxDispatches,workerOptions,...policies},slots:baselineSlots});
+    const recoveredEfficiency=replay?null
+      :await recoverInterruptedAssessment({stateDir,priorRuntime,scope,governance:authority});
     const efficiencyRoot=path.resolve(request.efficiencyRoot??path.join(stateDir,'efficiency'));
-    const use=replay||request.operation||request.fault||initialRelease&&initialRelease!=='baseline'||!request.efficiencyRoot
-      ?{slots:baselineSlots}:await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,hasRuntime:!!priorRuntime,telosRoot,ledger});
+    // Slot width: the baseline unless this is an ordinary run with an efficiency root on the baseline
+    // release; then a promotion for this scope, re-verified by governance, may widen it to 3.
+    const use=replay||request.operation||request.fault||initialRelease&&initialRelease!=='baseline'||
+      !request.efficiencyRoot
+      ?{slots:baselineSlots}
+      :await chooseEfficiencySlots({root:efficiencyRoot,scope,stateDir,baselineSlots,
+        hasRuntime:!!priorRuntime,telosRoot,ledger});
     const slots=use.slots;
     scope.configuration.slots=slots;
     const efficiencyContext=replay?null:{scopeSha:scope.scopeSha,configuration:scope.configuration,policy:scope.policy};
     const destination=createSyntheticDestination(path.join(stateDir,'destination'));
+    // Test fault injection: at the named event (and id), once per fault and state directory, crash (SIGKILL) or
+    // stall forever so the watchdog must act. Inert unless the request names a fault.
     const fault=async(event,payload)=>{
       if(event!==request.fault?.event)return;
       const id=payload.id??payload.obligationId??payload.release??null;
@@ -124,12 +182,17 @@ async function runRequest(request,replay,{ledger=null}={}) {
     };
     let result;
     if(request.operation==='activate') {
-      if(!loadRuntime(stateDir))await runRuntime({stateDir,obligations:[],workers,governance,effectAdapter:destination,slots:1});
-      const release={id:request.releaseId??workerOptions.version,artifactSha:digest(artifact),stateSchema:'ophanim.runtime/v1',workers:metadata(workers)};
-      const obligation={id:`release:${release.id}`,kind:'synthetic-release',scope:'fixture-release',inputs:{artifact},dependsOn:[],outputKey:`release:${release.id}`,expected:release,maxAttempts:1};
+      // A release manifest is itself an obligation: TELOS must accept it before it can be activated.
+      if(!loadRuntime(stateDir))
+        await runRuntime({stateDir,obligations:[],workers,governance,effectAdapter:destination,slots:1});
+      const release={id:request.releaseId??workerOptions.version,artifactSha:digest(artifact),
+        stateSchema:'ophanim.runtime/v1',workers:metadata(workers)};
+      const obligation={id:`release:${release.id}`,kind:'synthetic-release',scope:'fixture-release',
+        inputs:{artifact},dependsOn:[],outputKey:`release:${release.id}`,expected:release,maxAttempts:1};
       const candidate={id:`release:${release.id}:1`,sha256:digest(release),output:release,checks:[]};
       const worker={id:'fixture-release-builder',version:'1',kinds:['synthetic-release'],scopes:['fixture-release']};
-      const accepted=await governance.verifyCandidate({candidate,obligation,worker,evidence:{attempt:1,dependencyVersions:[],stateSchema:'ophanim.runtime/v1'}});
+      const accepted=await governance.verifyCandidate({candidate,obligation,worker,
+        evidence:{attempt:1,dependencyVersions:[],stateSchema:'ophanim.runtime/v1'}});
       if(accepted?.ok!==true)throw Error('Synthetic release manifest failed TELOS acceptance');
       release.planRef=accepted.planRef;release.evidenceRefs=accepted.evidenceRefs??[];
       writeJson(path.join(stateDir,`artifact-${release.id}.json`),artifact);
@@ -140,28 +203,43 @@ async function runRequest(request,replay,{ledger=null}={}) {
       const {fault:ignoredFault,resultFile:ignoredResult,operation:ignoredOperation,...resumeRequest}=request;
       writeJson(path.join(stateDir,'driver-request.json'),resumeRequest);
       const prior=loadRuntime(stateDir),active=prior?.pendingRelease?.release??prior?.releases?.[prior.activeRelease];
-      if(active&&active.id!=='baseline'&&active.artifactSha!==digest(artifact))throw Error('Fixture worker implementation/config differs from accepted release artifact');
-      result=await runRuntime({stateDir,planning,workers,slots,governance,effectAdapter:destination,fault,maxDispatches:request.maxDispatches??1000,onEvent,efficiencyContext,
-        ...policies.schedule?{schedule:policies.schedule}:{},...policies.handoffVerification?{handoffVerification:policies.handoffVerification}:{}});
+      if(active&&active.id!=='baseline'&&active.artifactSha!==digest(artifact))
+        throw Error('Fixture worker implementation/config differs from accepted release artifact');
+      result=await runRuntime({stateDir,planning,workers,slots,governance,effectAdapter:destination,fault,
+        maxDispatches:request.maxDispatches??1000,onEvent,efficiencyContext,
+        ...policies.schedule?{schedule:policies.schedule}:{},
+        ...policies.handoffVerification?{handoffVerification:policies.handoffVerification}:{}});
     }
     const convergence=result.convergence??(initialRelease!==result.state.activeRelease?'accepted_change':'no_change');
     const endedAt=Date.now();
-    const output={schema:'ophanim.synthetic-run/v1',synthetic:true,operation:request.operation??'run',startedAt,endedAt,durationMs:endedAt-startedAt,slots,convergence,blockers:result.blockers??result.held??[],complete:result.complete??null,accepted:result.accepted??[],held:result.held??[],dispatches:result.dispatches??0,activeRelease:result.state.activeRelease,outputs:outputProjection(result.state),effects:destination.list(),destinationInvocations:destination.invocations(),intervals,intervalSummary:intervalSummary(intervals),stateRevision:result.state.revision,limits:{modelCalls:0,servicesStarted:0,businessSystemsConnected:0,syntheticWorkerDelayMs:workerOptions.delayMs}};
+    const output={schema:'ophanim.synthetic-run/v1',synthetic:true,operation:request.operation??'run',
+      startedAt,endedAt,durationMs:endedAt-startedAt,slots,convergence,blockers:result.blockers??result.held??[],
+      complete:result.complete??null,accepted:result.accepted??[],held:result.held??[],
+      dispatches:result.dispatches??0,activeRelease:result.state.activeRelease,
+      outputs:outputProjection(result.state),effects:destination.list(),
+      destinationInvocations:destination.invocations(),intervals,intervalSummary:intervalSummary(intervals),
+      stateRevision:result.state.revision,
+      limits:{modelCalls:0,servicesStarted:0,businessSystemsConnected:0,syntheticWorkerDelayMs:workerOptions.delayMs}};
     acceptedLatencies.sort((a,b)=>a-b);
     output.measurements={
       acceptedStageSamples:acceptedLatencies.length,
-      p95StageAcceptanceMs:acceptedLatencies.length?Math.round(acceptedLatencies[Math.ceil(acceptedLatencies.length*0.95)-1]):null,
+      p95StageAcceptanceMs:acceptedLatencies.length
+        ?Math.round(acceptedLatencies[Math.ceil(acceptedLatencies.length*0.95)-1]):null,
       workerContextBytes,
       verificationCalls,
-      ...result.handoff?.mode==='frontier'?{handoff:{mode:result.handoff.mode,verified:result.handoff.verified.length,skipped:result.handoff.skipped}}:{},
+      ...result.handoff?.mode==='frontier'
+        ?{handoff:{mode:result.handoff.mode,verified:result.handoff.verified.length,skipped:result.handoff.skipped}}
+        :{},
     };
     // A reused convergence wrote nothing; its head already carries an assessment.
     if(result.reused)output.reusedConvergence={boardCommit:result.boardCommit};
-    if(!replay&&result.reused)output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output});
+    if(!replay&&result.reused)
+      output.efficiency=reusedEfficiencyRecord({stateDir,boardCommit:result.boardCommit,output,ledger});
     else if(!replay){
       const record=await assessConvergence({root:efficiencyRoot,stateDir,scope,state:result.state,
         boardCommit:result.boardCommit??readRuntimeSnapshot(stateDir).commit,output,request,replayRequest,priorRuntime,
-        attempts:[...attempts.values()],verifications,events,governance:authority,use,interrupted:recoveredEfficiency,ledger});
+        attempts:[...attempts.values()],verifications,events,governance:authority,use,
+        interrupted:recoveredEfficiency,ledger});
       // A fresh assessment is re-derived from its retained trace and the accepted board before it is used or
       // written, as a reused one is (reusedEfficiencyRecord). A record that does not re-derive stops the run.
       verifyEfficiencyRecord({stateDir,record,output});
@@ -173,11 +251,17 @@ async function runRequest(request,replay,{ledger=null}={}) {
   } finally {clearInterval(heartbeat);}
 }
 
+// `--name value` pairs into {name: value}; every flag needs a value.
 function options(args) {
   const out={};
-  for(let i=0;i<args.length;i+=2){if(!args[i]?.startsWith('--')||args[i+1]===undefined)throw Error('Flags require values');out[args[i].slice(2)]=args[i+1];}
+  for(let i=0;i<args.length;i+=2){
+    if(!args[i]?.startsWith('--')||args[i+1]===undefined)throw Error('Flags require values');
+    out[args[i].slice(2)]=args[i+1];
+  }
   return out;
 }
+// Write a report to a path that must not exist yet: prepared in a temporary file, then hard-linked into
+// place (linkSync fails if the target exists), so an existing report is never overwritten.
 function writeNewReport(file,value) {
   fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
   const temporary=fs.mkdtempSync(path.join(path.dirname(file),'.ophanim-report-'));
@@ -192,25 +276,32 @@ function writeNewReport(file,value) {
 }
 async function main() {
   const command=process.argv[2]??'help',opts=options(process.argv.slice(3));
+  // Replay worker: launched only by the watchdog (IPC connected), with the request, its state and its
+  // result all inside the evidence root; runs without a ledger or efficiency assessment.
   if(command==='replay-worker') {
     if(!process.connected||!opts.request||!opts.root)throw Error('The watchdog must launch an isolated replay worker');
     const root=fs.realpathSync(opts.root),file=fs.realpathSync(opts.request);
     const inside=value=>typeof value==='string'&&path.isAbsolute(value)&&path.resolve(value).startsWith(root+path.sep);
     if(!inside(file))throw Error('Replay request is outside its evidence directory');
     const request=JSON.parse(fs.readFileSync(file,'utf8'));
-    if(request.operation||request.efficiencyRoot||!inside(request.stateDir)||!inside(request.resultFile))throw Error('Replay requires disposable synthetic state and output');
+    if(request.operation||request.efficiencyRoot||!inside(request.stateDir)||!inside(request.resultFile))
+      throw Error('Replay requires disposable synthetic state and output');
     await execute(request,true);
     return;
   }
   if(command==='worker') {
     if(!opts.request)throw Error('worker requires --request');
     const result=await executeRequest(JSON.parse(fs.readFileSync(opts.request,'utf8')));
-    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,complete:result.complete,accepted:result.accepted.length,held:result.held.length,dispatches:result.dispatches,efficiency:result.efficiency})+'\n');return;
+    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,
+      complete:result.complete,accepted:result.accepted.length,held:result.held.length,
+      dispatches:result.dispatches,efficiency:result.efficiency})+'\n');return;
   }
   if(command==='proof'||command==='prove') {
     const {runQualification}=await import('./proof.mjs');
-    const report=await runQualification({outputDir:opts.output?path.resolve(opts.output):undefined,onProgress:value=>process.stdout.write(JSON.stringify(value)+'\n')});
-    process.stdout.write(JSON.stringify({status:report.status,convergence:report.convergence,blockers:report.blockers,report:report.reportFile})+'\n');return;
+    const report=await runQualification({outputDir:opts.output?path.resolve(opts.output):undefined,
+      onProgress:value=>process.stdout.write(JSON.stringify(value)+'\n')});
+    process.stdout.write(JSON.stringify({status:report.status,convergence:report.convergence,
+      blockers:report.blockers,report:report.reportFile})+'\n');return;
   }
   if(command==='verify') {
     if(!opts.output)throw Error('verify requires --output /absolute/proof-directory');
@@ -220,42 +311,60 @@ async function main() {
   }
   if(command==='resume') {
     if(!opts.state)throw Error('resume requires --state /absolute/state');
-    const stateDir=path.resolve(opts.state),request=JSON.parse(fs.readFileSync(path.join(stateDir,'driver-request.json'),'utf8'));
+    // Resume re-runs the saved request (without its fault/operation), which must name this same state.
+    const stateDir=path.resolve(opts.state),
+      request=JSON.parse(fs.readFileSync(path.join(stateDir,'driver-request.json'),'utf8'));
     if(request.stateDir!==stateDir)throw Error('Saved synthetic resume identity differs');
     const result=await executeRequest({...request,resultFile:path.join(stateDir,'result.json')});
-    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,complete:result.complete,accepted:result.accepted.length,held:result.held.length,dispatches:result.dispatches,activeRelease:result.activeRelease,efficiency:result.efficiency})+'\n');return;
+    process.stdout.write(JSON.stringify({convergence:result.convergence,blockers:result.blockers,
+      complete:result.complete,accepted:result.accepted.length,held:result.held.length,
+      dispatches:result.dispatches,activeRelease:result.activeRelease,efficiency:result.efficiency})+'\n');return;
   }
   if(command==='demo') {
     if(!opts.state)throw Error('demo requires --state /absolute/new-state');
     let investigationEstimate;
     if(opts['investigation-estimate']){
       const file=path.resolve(opts['investigation-estimate']),stat=fs.lstatSync(file);
-      if(!stat.isFile()||stat.size>8192||fs.realpathSync(file)!==file)throw Error('Bounded canonical investigation estimate file required');
+      if(!stat.isFile()||stat.size>8192||fs.realpathSync(file)!==file)
+        throw Error('Bounded canonical investigation estimate file required');
       investigationEstimate=JSON.parse(fs.readFileSync(file,'utf8'));
     }
-    const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},slots:Number(opts.slots??1),
+    const result=await executeRequest({stateDir:path.resolve(opts.state),fixture:{count:Number(opts.cases??3)},
+      slots:Number(opts.slots??1),
       ...opts['efficiency-root']?{efficiencyRoot:path.resolve(opts['efficiency-root'])}:{},
       ...investigationEstimate!==undefined?{investigationEstimate}:{},
-      ...opts.schedule?{schedule:opts.schedule}:{},...opts['handoff-verification']?{handoffVerification:opts['handoff-verification']}:{},
-      ...Object.hasOwn(opts,'expected-convergences')?{expectedQualifiedConvergences:Number(opts['expected-convergences'])}:{}});
+      ...opts.schedule?{schedule:opts.schedule}:{},
+      ...opts['handoff-verification']?{handoffVerification:opts['handoff-verification']}:{},
+      ...Object.hasOwn(opts,'expected-convergences')
+        ?{expectedQualifiedConvergences:Number(opts['expected-convergences'])}:{}});
     process.stdout.write(JSON.stringify(result,null,2)+'\n');return;
   }
   if(command==='status') {
     if(!opts.state)throw Error('status requires --state');
     const state=loadRuntime(path.resolve(opts.state));
     let chain;
-    try{chain=verifyRuntimeChain(path.resolve(opts.state));}catch(error){chain={ok:false,reason:String(error.message).slice(0,500)};}
-    process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,chain,activeRelease:state.activeRelease,obligations:Object.fromEntries(Object.entries(state.obligations).map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),effects:state.effects}:null,null,2)+'\n');return;
+    // Status reports the chain verification result (or why it failed) beside the current state.
+    try{chain=verifyRuntimeChain(path.resolve(opts.state));}
+    catch(error){chain={ok:false,reason:String(error.message).slice(0,500)};}
+    process.stdout.write(JSON.stringify(state?{schema:state.schema,revision:state.revision,chain,
+      activeRelease:state.activeRelease,
+      obligations:Object.fromEntries(Object.entries(state.obligations)
+        .map(([id,row])=>[id,{status:row.status,attempt:row.attempt,reason:row.reason}])),
+      effects:state.effects}:null,null,2)+'\n');return;
   }
   if(command==='investigate') {
     if(opts['historical-report']){
       const {investigateHistoricalLatency}=await import('./efficiency/investigation/historical.mjs');
-      if(opts.output && fs.existsSync(path.resolve(opts.output)))throw Error('Fresh investigation report path required');
-      const retained=opts['verify-receipt']?JSON.parse(fs.readFileSync(path.resolve(opts['verify-receipt']),'utf8')):null;
-      const report=await investigateHistoricalLatency({reportFile:path.resolve(opts['historical-report']),expectedReportSha:retained?.sourceReportSha,
-        telosRoot:process.env.OPHANIM_TELOS_ROOT});
+      if(opts.output && fs.existsSync(path.resolve(opts.output)))
+        throw Error('Fresh investigation report path required');
+      // With --verify-receipt, recompute the investigation and require it to equal the retained receipt.
+      const retained=opts['verify-receipt']
+        ?JSON.parse(fs.readFileSync(path.resolve(opts['verify-receipt']),'utf8')):null;
+      const report=await investigateHistoricalLatency({reportFile:path.resolve(opts['historical-report']),
+        expectedReportSha:retained?.sourceReportSha,telosRoot:process.env.OPHANIM_TELOS_ROOT});
       if(retained){
-        if(canonical(report)!==canonical(retained))throw Error('Historical investigation differs from independently reopened evidence');
+        if(canonical(report)!==canonical(retained))
+          throw Error('Historical investigation differs from independently reopened evidence');
         process.stdout.write(JSON.stringify({ok:true,receiptSha:report.receiptSha})+'\n');return;
       }
       if(opts.output)writeNewReport(path.resolve(opts.output),report);
@@ -274,8 +383,12 @@ async function main() {
     const models=buildFunctionalModels({trace,registry:report.contributionRegistry,variables:report.variables});
     process.stdout.write(JSON.stringify({models,receipt:report.investigation},null,2)+'\n');return;
   }
-  if(command==='fixtures') {process.stdout.write(JSON.stringify(makeFixtures({count:Number(opts.cases??3)}),null,2)+'\n');return;}
+  if(command==='fixtures') {
+    process.stdout.write(JSON.stringify(makeFixtures({count:Number(opts.cases??3)}),null,2)+'\n');return;
+  }
   if(command!=='help')throw Error(`Unknown command: ${command}`);
   process.stdout.write('Ophanim synthetic local qualification\n  node ophanim/cli.mjs prove --output /absolute/new-proof\n  node ophanim/cli.mjs resume --state /absolute/state\n  node ophanim/cli.mjs verify --output /absolute/proof\n  node ophanim/cli.mjs demo --state /absolute/new-state --cases 3 --slots 1 [--schedule wave|refill] [--handoff-verification full|frontier] [--expected-convergences 1] [--investigation-estimate /absolute/forecast.json]\n  node ophanim/cli.mjs status --state /absolute/state\n  node ophanim/cli.mjs investigate --state /absolute/state\n  node ophanim/cli.mjs investigate --historical-report /absolute/report.json [--output /absolute/new-result.json | --verify-receipt /absolute/result.json]\n  node ophanim/cli.mjs fixtures --cases 3\n');
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{process.stderr.write(error.stack+'\n');process.exitCode=1;});
+// Run main() only when executed directly (not when imported by proof.mjs, tests or the watchdog's parent).
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))
+  main().catch(error=>{process.stderr.write(error.stack+'\n');process.exitCode=1;});

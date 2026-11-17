@@ -1,5 +1,7 @@
 # Cycle review: OPHANIM and Pantheon, start to finish (2026-11-16 → 17)
 
+> **Scope of what is proven** (added after the independent review of 2026-11-16, finding FW1). OPHANIM's `prove` and `verify` run against fixture authority: a candidate is accepted when its output equals the obligation's stored `expected` value (`ophanim/governance/check-contract.mjs`), and the three TELOS reviewer approvals are generated and signed by the same process that needs them (`ophanim/governance.mjs`). They therefore certify crash consistency and record integrity, not that work without a stored answer can be verified. Model turns in the suites run against scripted fakes; no live provider is called in CI. Binding real reviewers to the ledger is item K6 on the [status board](STATUS.md), a governance decision.
+
 **Scope.**
 - 37 commits on `ccr-aa24f0d5-336szn`, from the first loop evaluation (`f980986`) to the K5b merge (`009152c`).
 - Seven cycles. Each ran the same loop: stabilize → identify unresolved → research or propose → apply → validate → record only deltas → hand off on a matching record → converge.
@@ -161,7 +163,7 @@
    Each cost a cycle. The P8/P9 holds pointed at TELOS from cycle 1. Reading it then would have saved cycles 6 and 7 at least one turn each.
 2. **The review layer should run every cycle by default.** It is cheap next to a shipped regression, and cycle 5 shows the cost of skipping it. On the ledger it is now the same mechanism: review entries under cold-review rules.
 3. **Nothing has met a live provider.** Every turn, served model, truncation and tier was checked against fakes. The first live run is the real validation. It needs credentials, and it would also settle `all_turns` and give the tiers evidence.
-4. **The ledger is opt-in.** `runOpenItem` and `executeRequest` record only when the caller passes a recorder. Nothing creates the genesis, holds the operator key, or rotates seat keys outside tests. Key custody is fixture-grade.
+4. **The ledger is opt-in.** *(Addressed in cycle 8: on by default, with key custody and rotation; see the ledger evaluation doc.)* `runOpenItem` and `executeRequest` record only when the caller passes a recorder. Nothing creates the genesis, holds the operator key, or rotates seat keys outside tests. Key custody is fixture-grade.
 5. **Some records are still off the ledger, or only signed inputs:**
    - the `run.json` display copies;
    - seat conversation files;
@@ -173,12 +175,14 @@
 6. **Gaps in coverage:**
    - the retained-experiment positive path is not tested end to end, because it needs a full 1→3 qualification;
    - a held investigation receipt cannot show which failure produced it, where the decision depends on retained evidence.
-7. **The status is scattered.** Three evaluation documents each hold a status table. One board, itself a projection of the ledger, would be easier to keep true.
+7. **The status is scattered.** *(Addressed in cycle 8: one board, generated from a status ledger.)* Three evaluation documents each hold a status table. One board, itself a projection of the ledger, would be easier to keep true.
 8. **Process slips:**
    - one merge commit (`09926bf`) went out without the attribution lines;
-   - `.claude/` worktrees are excluded locally, not in the repository.
+   - `.claude/` worktrees were excluded locally, not in the repository. *(Fixed in cycle 8: `.gitignore`.)*
 
-## What remains On Hold (all external)
+## What remained On Hold at the end of cycle 7 (all external)
+
+The live status is on the status board, [docs/STATUS.md](STATUS.md), which is generated from the status ledger.
 
 | Item | Waiting on |
 |---|---|

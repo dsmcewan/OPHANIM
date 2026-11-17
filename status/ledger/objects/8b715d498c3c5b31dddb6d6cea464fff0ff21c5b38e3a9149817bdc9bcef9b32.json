@@ -1,0 +1,1 @@
+{"basis":"what the pinned verifier covers is a governance decision","checked":"2026-11-17","item":"ru3-pin-boundary","schema":"ophanim.status/v1","state":"On Hold","title":"RU3: governance.mjs, which holds the pins, is not itself pinned","waiting_on":"governance"}

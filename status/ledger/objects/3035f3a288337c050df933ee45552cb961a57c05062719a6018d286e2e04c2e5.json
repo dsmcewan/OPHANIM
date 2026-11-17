@@ -1,0 +1,1 @@
+{"basis":"lease rows, budget caps and ref moves are ledger entries recorded before the file changes; seat files are checked against ledger turns at handoff (ophanim/ledger/board-kinds.mjs)","checked":"2026-11-17","item":"off-ledger-records","schema":"ophanim.status/v1","state":"Resolved","title":"Remaining off-ledger records","waiting_on":null}

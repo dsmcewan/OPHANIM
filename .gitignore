@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 __pycache__/
 *.pyc
 .ophanim/
@@ -6,3 +6,8 @@ __pycache__/
 outputs/
 .env
 .env.*
+
+# Agent worktrees (isolated checkouts used during a session; never committed)
+.claude/worktrees/
+# Status ledger private keys (only public keys are on the chain)
+status/ledger/keys/

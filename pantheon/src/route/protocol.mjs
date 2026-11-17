@@ -12,12 +12,13 @@
 //
 // Cheapest first, because each step keeps more of what was already paid for:
 //   raise_output  same model, same reasoning; only a truncated reply is fixed by a larger budget
-//   raise_effort  same model, lab and conversation; the dial is cheaper than the occupant
+//   raise_effort  same model, lab and conversation; effort-first is a provisional, unqualified recovery policy (CS2)
 //   step_rung     same role's next banded rung (seating.mjs bands)
 //   reseat        another quota pool, same chair -- for a pool that is shut, never for a hard task
 // and some causes are not escalated at all: a rate limit with an interval WAITS, a malformed request
 // STOPS (a stronger model does not fix a wrong request), and the step budget is bounded.
 import { createHash } from "node:crypto";
+import { canonicalCodeUnit } from "../../../packages/ledger/canonical.mjs";
 import { FACTS } from "../config/facts.mjs";
 import { LANES } from "../config/models.mjs";
 import { candidatesFor, selectFor, shouldFallThrough, SEATING, DIFFICULTY } from "../role/seating.mjs";
@@ -26,8 +27,8 @@ import { isFrontier } from "../../../packages/model-client/index.mjs";
 export const PROTOCOL = "pantheon.escalation/v1";
 export const MAX_STEPS = 4;
 const TRUNCATED = new Set(["max_tokens", "MAX_TOKENS", "incomplete", "max_output_tokens"]);
-const stable = v => Array.isArray(v) ? `[${v.map(stable).join(",")}]`
-  : v && typeof v === "object" ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}` : JSON.stringify(v);
+// The record digest is CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order it was always computed in.
+const stable = v => canonicalCodeUnit(v);
 const digest = v => createHash("sha256").update(stable(v)).digest("hex");
 const cited = (field) => field && typeof field === "object" && "value" in field ? field.value : null;
 
@@ -111,8 +112,14 @@ export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS,
   const start = seat.effort ?? documentedDefaultEffort(seat.model, facts);
   const i = start === null ? -1 : ladder.indexOf(start);
   if (i !== -1 && i + 1 < ladder.length) {
-    return decide("raise_effort", { ...from, effort: ladder[i + 1] },
-      `effort ${start} -> ${ladder[i + 1]} on ${seat.model}: the dial is cheaper than the occupant`, facts.models[seat.model].efforts.source);
+    // CS2 (owner audit): `basis` is the source of the PERMITTED effort values only. That trying the dial before a
+    // reseat is cheaper or more successful is a provisional policy hypothesis, recorded as unqualified beside it.
+    return { ...decide("raise_effort", { ...from, effort: ladder[i + 1] },
+      `effort ${start} -> ${ladder[i + 1]} on ${seat.model}: provisional effort-first recovery (unqualified: no matched comparison shows it cheaper or more successful than reseating)`,
+      facts.models[seat.model].efforts.source),
+      basis_supports: "the permitted effort values for this model",
+      hypothesis: { claim: "raising effort before reseating recovers more cheaply or more often", status: "unqualified", evidence: null,
+        qualification: "matched successful-recovery rate, total cost and latency: effort-first against reseat-first" } };
   }
   // "Up" is the nearest HARDER band, not an earlier position: tables are not ordered by difficulty.
   const cands = candidatesFor(role, { seating });
@@ -156,6 +163,19 @@ export function verifyEscalation(records, { facts = FACTS, seating = SEATING } =
 }
 
 /**
+ * The documented context window for a model, or null. A capability record's cited window first; a
+ * declared lane (lanes.json) may carry its own cited `window` -- the bound of the LANE's transport,
+ * which is not assumed to be the API model's window. Uncited numbers are not windows. One lookup, so
+ * every selector admits context the same way (owner audit 2026-11-16, M7).
+ */
+export function documentedWindow(model, facts = FACTS) {
+  const api = cited(facts.models[model]?.window);
+  if (api !== null) return api;
+  for (const lane of Object.values(LANES)) if (lane[model]) { const w = cited(lane[model].window); if (w !== null) return w; }
+  return null;
+}
+
+/**
  * Routing: the seating choice for a difficulty, gated by the cited facts. A candidate that is neither
  * a documented API id nor a declared lane model is skipped; a deprecated one is used only when
  * nothing else in the role is; a model whose documented window is smaller than the context the work
@@ -168,8 +188,11 @@ export function routeFor(role, { difficulty = "medium", needsContext = null, avo
     const f = facts.models[c.model];
     if (!f && !isLane(c.model)) { skipped.push({ model: c.model, why: "no capability record and not a declared lane model" }); return false; }
     if (f?.api_id === false && !isLane(c.model)) { skipped.push({ model: c.model, why: "not an API id" }); return false; }
-    const window = cited(f?.window);
-    if (needsContext && window !== null && window < needsContext) { skipped.push({ model: c.model, why: `documented window ${window} < ${needsContext}` }); return false; }
+    const window = documentedWindow(c.model, facts);
+    // A stated context requirement is admitted only against a documented window: an unknown window is
+    // not evidence the work fits, so it is skipped with its reason rather than treated as unlimited.
+    if (needsContext && window === null) { skipped.push({ model: c.model, why: `window unrecorded; cannot admit a stated need of ${needsContext}` }); return false; }
+    if (needsContext && window < needsContext) { skipped.push({ model: c.model, why: `documented window ${window} < ${needsContext}` }); return false; }
     return true;
   };
   const deprecated = c => typeof facts.models[c.model]?.api_id === "string" && facts.models[c.model].api_id.startsWith("deprecated");

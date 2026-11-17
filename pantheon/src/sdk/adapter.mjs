@@ -4,7 +4,9 @@ import { homedir } from "node:os";
 import { streamTurn } from "./stream.mjs";
 import { modelId } from "../config/models.mjs";
 import { defaultOutputFor } from "../config/tiers.mjs";
-import { isFrontier, sendModelTurn, providerFetch, terminalState, reasoningContextFor, reasoningContextReport } from "../../../packages/model-client/index.mjs";
+import { SEAT_FACTS } from "../route/router.mjs";
+import { isFrontier, sendModelTurn, providerFetch, terminalState, reasoningContextFor, reasoningContextReport,
+  admitContext, estimateInputTokens, reservedOutput, providerTokenCounter } from "../../../packages/model-client/index.mjs";
 
 // SDK transport. Replaces spawning a vendor CLI and then going to find the transcript it wrote.
 //
@@ -227,8 +229,17 @@ export function makeClient(vendor, opts = {}) {
 // client is observed at one point, so both paths, unary and streamed, report it the same way.
 const reported = o => (o && typeof o === "object" ? (o.model ?? o.modelVersion ?? o.response?.model ?? o.message?.model ?? null) : null);
 async function* watched(stream, seen) { for await (const e of stream) { seen.model ??= reported(e); yield e; } }
+// The settings each generation request actually carried, read off the request handed to the SDK (audit
+// M5): the output cap and effort as sent, after every default and policy has been applied.
+const sentSettings = req => !req || typeof req !== "object" ? null : {
+  model: req.model ?? null,
+  max_output_tokens: req.max_output_tokens ?? req.max_tokens ?? req.config?.maxOutputTokens ?? null,
+  effort: req.reasoning?.effort ?? req.output_config?.effort ?? req.config?.thinkingConfig?.thinkingLevel?.toLowerCase() ?? null,
+};
 function observe(fn, seen) {
   return async (...args) => {
+    seen.requests = (seen.requests ?? 0) + 1;
+    seen.sent = sentSettings(args[0]);
     const out = await fn(...args);
     if (out && typeof out[Symbol.asyncIterator] === "function") return watched(out, seen);
     seen.model ??= reported(out);
@@ -251,30 +262,48 @@ function observedClient(client, seen) {
 }
 
 export async function sendTurn(args) {
-  const seen = { model: null };
-  const result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client });
-  return { ...result, served_model: seen.model };
+  const seen = { model: null, sent: null, requests: 0 };
+  let result;
+  try { result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client }); }
+  catch (e) {
+    // A failed request's evidence: what it carried and how many requests reached the SDK. Attached to
+    // the error the caller already receives, never in place of it.
+    if (e && typeof e === "object") { try { Object.assign(e, { sent: seen.sent, provider_requests: seen.requests }); } catch { /* frozen error */ } }
+    throw e;
+  }
+  return { ...result, served_model: seen.model, sent: seen.sent, provider_requests: seen.requests };
 }
 
 async function sendTurnOn({
   client, vendor, model, prompt, previousResponseId, history, onEvent, label, continuity, extra = {},
-  scope, sessionId, effort, architecture, contractHeader, signal, deadline,
+  scope, sessionId, effort, architecture, contractHeader, signal, deadline, outputBudgetPolicy,
 }) {
   const spec = ADAPTERS[vendor];
   if (!spec) throw new Error(`sendTurn: no SDK adapter for vendor "${vendor}"`);
   if (!client) throw new Error("sendTurn: client is required");
   if (typeof prompt !== "string" || prompt === "") throw new Error("sendTurn: prompt is required");
   const { mode } = continuityMode(vendor, continuity);
+  // A caller's output cap is a bound, not a floor: a named cap is sent as named ("explicit") on every
+  // provider path. The long-decode allowance applies only where it is the effective policy -- no cap was
+  // named, or the caller asked for it by name.
+  const named = extra?.max_tokens ?? extra?.max_output_tokens ?? extra?.config?.maxOutputTokens;
+  const policy = outputBudgetPolicy ?? (named != null ? "explicit" : "long_decode");
+  if (!["explicit", "long_decode"].includes(policy)) throw new Error(`sendTurn: unsupported output budget policy "${policy}"`);
+  if (policy === "explicit" && named == null) throw new Error("sendTurn: an explicit output budget policy requires an explicit output token cap");
   // The reusable client owns frontier policy on BOTH unary and streaming paths.
   if (isFrontier(model ?? spec.default_model)) {
     const m = model ?? spec.default_model;
     // Messages needs max_tokens; a caller that names none gets the same default the direct path used.
     const sent = spec.surface === "messages" && extra?.max_tokens == null && extra?.max_output_tokens == null
       ? { ...extra, max_tokens: defaultOutputFor(vendor, m, "medium") } : extra;
-    return sendModelTurn({ client, vendor, model: m, prompt, ...(label ? { label } : {}),
+    const r = await sendModelTurn({ client, vendor, model: m, prompt, ...(label ? { label } : {}),
       previousResponseId, history, onEvent, continuity: mode, extra: sent, scope, sessionId,
-      effort, architecture, contractHeader, signal, deadline });
+      effort, architecture, contractHeader, signal, deadline, outputBudgetPolicy: policy });
+    return { ...r, output_budget_policy: policy };
   }
+  // The direct path has no frontier client in front of it, so its context admission is done here, from
+  // the cited capability facts, before any generation call.
+  const admit = req => admitDirect({ client, vendor, spec, req, signal });
 
   // Streaming is an OBSERVATION channel, not a second result format: streamTurn accumulates
   // into the same shape the non-streaming path returns, so the seat layer hashes one thing.
@@ -285,6 +314,7 @@ async function sendTurnOn({
     // row is unchanged, but a turn run on a different model under a different purpose can be
     // given its own identity instead of overwriting the vendor's pane with another model's
     // output -- two models writing one pane is a display that lies about who said what.
+    await admit(req);
     const acc = await streamTurn({ client, surface: spec.surface, req, seat: label ?? vendor, onEvent });
     if (mode === "replay") {
       // EVERY OUTPUT ITEM, on this path too. The unary Responses replay below keeps res.output so the
@@ -306,7 +336,7 @@ async function sendTurnOn({
         ...replayResult({
           vendor, text: acc.text, tools: acc.tools, resumed: prior.length > 0,
           history: items, terminal: acc.terminal_state ? { state: acc.terminal_state } : null,
-          complete: acc.complete, why_incomplete: acc.why_incomplete,
+          complete: acc.complete, why_incomplete: acc.why_incomplete, usage: acc.usage,
         }),
         ...(spec.surface === "responses" ? { reasoning_context: reasoningContextReport(req.reasoning?.context, acc.final) } : {}),
       };
@@ -322,7 +352,7 @@ async function sendTurnOn({
       usable_for_resume: Boolean(acc.response_id) && acc.complete,
       why_unusable: !acc.complete ? acc.why_incomplete
         : (acc.response_id ? null : "vendor returned no response id; the next turn cannot resume"),
-      usage: null,
+      usage: acc.usage ?? null,
     };
   }
 
@@ -331,6 +361,7 @@ async function sendTurnOn({
   if (spec.surface === "responses" && mode === "replay") {
     const items = [...(history ?? []), { role: "user", content: prompt }];
     const req = withEffort(spec.surface, model ?? spec.default_model, effort, buildRequest({ spec, vendor, model, prompt, history, extra, mode }));
+    await admit(req);
     const res = await client.responses.create(req);
     const n = { ...normalize(res, vendor, (history ?? []).length > 0), reasoning_context: reasoningContextReport(req.reasoning?.context, res) };
     const hasOutput = Array.isArray(res?.output) && res.output.length > 0;
@@ -348,27 +379,31 @@ async function sendTurnOn({
   }
 
   if (spec.surface === "responses") {
-    const res = await client.responses.create(withEffort(spec.surface, model ?? spec.default_model, effort, {
+    const req = withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model,
       input: prompt,
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...extra,
-    }));
+    });
+    await admit(req);
+    const res = await client.responses.create(req);
     return normalize(res, vendor, Boolean(previousResponseId));
   }
-  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort });
+  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort, admit });
 }
 
 // Replay surfaces. `history` is the prior conversation in the vendor's own message shape; the
 // caller owns it and gets an updated copy back. Returning the new history rather than mutating
 // the input keeps a failed turn from corrupting the caller's record.
-async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort }) {
+async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort, admit }) {
   const resumed = history.length > 0;
   if (spec.surface === "genai") {
     const contents = [...history, { role: "user", parts: [{ text: prompt }] }];
-    const res = await client.models.generateContent(withEffort(spec.surface, model ?? spec.default_model, effort, {
+    const req = withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model, contents, ...extra,
-    }));
+    });
+    await admit(req);
+    const res = await client.models.generateContent(req);
     const candidate = res?.candidates?.[0];
     const text = typeof res?.text === "string" ? res.text : collectGenaiText(res);
     const terminal = terminalState("genai", { finishReason: candidate?.finishReason ?? null, blocked: Boolean(res?.promptFeedback?.blockReason) });
@@ -377,19 +412,21 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     return replayResult({
       vendor, text, resumed, terminal,
       history: [...contents, { role: "model", parts }],
-      complete: terminal.complete, why_incomplete: terminal.why,
+      complete: terminal.complete, why_incomplete: terminal.why, usage: res?.usageMetadata ?? null,
     });
   }
   if (spec.surface === "messages") {
     const messages = [...history, { role: "user", content: prompt }];
-    const res = await client.messages.create(withEffort(spec.surface, model ?? spec.default_model, effort, {
+    const req = withEffort(spec.surface, model ?? spec.default_model, effort, {
       model: model ?? spec.default_model,
       // Messages requires max_tokens. The default is the medium token tier, capped at the documented
       // ceiling (config/tiers.mjs); it was a flat 1,024, which cut long replies off.
       max_tokens: extra?.max_tokens ?? defaultOutputFor(vendor, model ?? spec.default_model, "medium"),
       messages,
       ...extra,
-    }));
+    });
+    await admit(req);
+    const res = await client.messages.create(req);
     const text = (res?.content ?? []).filter(b => b?.type === "text").map(b => b.text).join("");
     const tools = [...new Set((res?.content ?? []).filter(b => b?.type === "tool_use").map(b => b.name))].sort();
     // A max_tokens stop is a truncated reply, not a complete exchange.
@@ -397,7 +434,7 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     return replayResult({
       vendor, text, tools, resumed, terminal,
       history: [...messages, { role: "assistant", content: res?.content ?? text }],
-      complete: terminal.complete, why_incomplete: terminal.why,
+      complete: terminal.complete, why_incomplete: terminal.why, usage: res?.usage ?? null,
     });
   }
   throw new Error(`sendTurn: unhandled surface "${spec.surface}"`);
@@ -407,6 +444,21 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
 // it silently, so an escalation that raised effort here would be recorded and have no effect. A value
 // the cited capability facts do not document for the model is refused rather than sent.
 const CAPABILITY_FACTS = JSON.parse(readFileSync(new URL("../config/capability-facts.json", import.meta.url), "utf8"));
+const citedValue = field => field && typeof field === "object" && Number.isSafeInteger(field.value) ? field.value : null;
+
+// Context admission on the direct path: the cited window must be known, and the input (the provider's
+// count where its SDK supports one, otherwise the qualified upper-bound estimate) plus the reserved
+// output must fit it. Refused before any generation call, with a named reason.
+async function admitDirect({ client, vendor, spec, req, signal }) {
+  const facts = CAPABILITY_FACTS.models[req.model];
+  // The cited fact first; then the window the router's seat table records for the vendor's model.
+  const window = citedValue(facts?.window) ?? SEAT_FACTS[vendor]?.windows?.[req.model] ?? null;
+  const output = reservedOutput(req, { output: citedValue(facts?.output) });
+  if (window === null) return admitContext({ model: req.model, window, output, input: 0, basis: "not_counted" });
+  const counter = providerTokenCounter(client, { cap: { vendor, surface: spec.surface }, options: { headers: {} } }, signal);
+  const input = counter ? await counter(req) : estimateInputTokens(req);
+  return admitContext({ model: req.model, window, output, input, basis: counter ? "provider_count" : "byte_upper_bound" });
+}
 export function withEffort(surface, model, effort, req) {
   if (effort === undefined || effort === null) return req;
   const documented = CAPABILITY_FACTS.models[model]?.efforts?.values ?? [];
@@ -467,7 +519,7 @@ function collectGenaiText(res) {
 // the history we hold. `usable_for_resume` is therefore true whenever we captured a reply: the
 // thing that must exist is the history, not an id. Saying otherwise would make every replay turn
 // look like a continuity failure.
-function replayResult({ vendor, text, tools = [], resumed, history, complete, why_incomplete = null, terminal = null }) {
+function replayResult({ vendor, text, tools = [], resumed, history, complete, why_incomplete = null, terminal = null, usage = null }) {
   if (typeof complete !== "boolean") throw new Error("replayResult: completion must be decided from the provider's terminal state");
   const ok = Array.isArray(history) && history.length > 0 && complete;
   return {
@@ -485,7 +537,7 @@ function replayResult({ vendor, text, tools = [], resumed, history, complete, wh
     usable_for_resume: ok,
     why_unusable: ok ? null
       : (why_incomplete ?? "no history captured; the next turn would silently start a new conversation"),
-    usage: null,
+    usage,
   };
 }
 

@@ -107,7 +107,7 @@ test("first write of any rank is accepted", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-identity.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-identity.test.mjs`
 Expected: FAIL — `Cannot find module '../src/seat/identity.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -152,18 +152,18 @@ export function mergeIdentity(existing, incoming) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-identity.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-identity.test.mjs`
 Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Run from a foreign cwd**
 
-Run: `cd /tmp && node --test /home/colchis/Projects/pantheon/tests/seat-identity.test.mjs`
+Run: `cd /tmp && node --test ~/Projects/pantheon/tests/seat-identity.test.mjs`
 Expected: PASS. A suite that only passes in its own directory is partly testing the environment (evidence H1).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add src/seat/identity.mjs tests/seat-identity.test.mjs
 git commit -m "feat(seat): stable cwd-scoped identity with provenance-ranked writes"
 ```
@@ -269,7 +269,7 @@ test("the capability table declares every field the spec requires", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-argv.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-argv.test.mjs`
 Expected: FAIL — `Cannot find module '../src/seat/argv.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -352,13 +352,13 @@ export function buildArgv({ vendor, cwd, model, effort, resumeToken, sessionId, 
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-argv.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-argv.test.mjs`
 Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add src/seat/argv.mjs tests/seat-argv.test.mjs
 git commit -m "feat(seat): declared capability table and per-vendor argv, bypass off by default"
 ```
@@ -451,7 +451,7 @@ test("tool names are sorted so ordering churn does not change the hash", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/context-project.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/context-project.test.mjs`
 Expected: FAIL — `Cannot find module '../src/context/project.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -518,13 +518,13 @@ export function projectTranscript(text, vendor) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/context-project.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/context-project.test.mjs`
 Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add src/context/project.mjs tests/context-project.test.mjs
 git commit -m "feat(context): vendor transcript projection, torn-line tolerant, content-free"
 ```
@@ -619,7 +619,7 @@ test("a malformed record is refused rather than trusted", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/context-chain.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/context-chain.test.mjs`
 Expected: FAIL — `Cannot find module '../src/context/chain.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -662,14 +662,14 @@ export function verifyExtends(liveTurns, recorded) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/context-chain.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/context-chain.test.mjs`
 Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Prove the suite is not vacuous**
 
 Run:
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 node --input-type=module -e '
 import { verifyExtends, record } from "./src/context/chain.mjs";
 const t = (r, s) => ({ role: r, sha: s, len: 2, tools: [] });
@@ -684,7 +684,7 @@ Expected: prints `prefix hash mismatch`, exit 0. If it prints `shorter than reco
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add src/context/chain.mjs tests/context-chain.test.mjs
 git commit -m "feat(context): per-turn hash chain with reason-bearing extension check"
 ```
@@ -780,7 +780,7 @@ test("a quota reply is not ok and is labelled quota_exhausted", async () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-turn.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-turn.test.mjs`
 Expected: FAIL — `Cannot find module '../src/seat/turn.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -852,13 +852,13 @@ export async function runTurn({
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-turn.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-turn.test.mjs`
 Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add src/seat/turn.mjs tests/seat-turn.test.mjs
 git commit -m "feat(seat): warm-seat turn with timeout-vs-quota distinction and id capture"
 ```
@@ -931,7 +931,7 @@ test("locateStore reports an explicit reason when a vendor store is unconfirmed"
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-conformance.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-conformance.test.mjs`
 Expected: FAIL — `Cannot find module '../src/seat/conformance.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1065,41 +1065,41 @@ if (verb === "conform") {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-conformance.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-conformance.test.mjs`
 Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Run the whole suite from a foreign cwd**
 
-Run: `cd /tmp && node --test /home/colchis/Projects/pantheon/tests/`
+Run: `cd /tmp && node --test ~/Projects/pantheon/tests/`
 Expected: all suites PASS. Any failure that appears only here is a cwd dependency — fix it; do not move the suite back to the repo root to make it green (evidence H1).
 
 - [ ] **Step 6: Prove conformance against the real binaries**
 
-Run: `cd /home/colchis/Projects/pantheon && node bin/pantheon.mjs conform`
+Run: `cd ~/Projects/pantheon && node bin/pantheon.mjs conform`
 Expected: one line per vendor. A `FAIL` here is a **real finding about vendor drift**, not a bug in this task — record the flag and the vendor version in the evidence base before changing the table.
 
 - [ ] **Step 7: Prove the end-to-end resume check on a real transcript, both ways**
 
 Run:
 ```bash
-cd /home/colchis/Projects/pantheon
-node bin/pantheon.mjs snapshot claude /home/colchis/Projects > /tmp/rec-projects.json
+cd ~/Projects/pantheon
+node bin/pantheon.mjs snapshot claude ~/Projects > /tmp/rec-projects.json
 cat /tmp/rec-projects.json
-node bin/pantheon.mjs verify-resume claude /home/colchis/Projects /tmp/rec-projects.json
+node bin/pantheon.mjs verify-resume claude ~/Projects /tmp/rec-projects.json
 ```
 Expected: `RESUMED turns=N recorded=N grew=0`, exit 0.
 
 Then make it say no — snapshot a **different** directory's transcript and verify the first against it:
 ```bash
-node bin/pantheon.mjs snapshot claude /home/colchis/Projects/pantheon > /tmp/rec-other.json
-node bin/pantheon.mjs verify-resume claude /home/colchis/Projects /tmp/rec-other.json; echo "exit=$?"
+node bin/pantheon.mjs snapshot claude ~/Projects/pantheon > /tmp/rec-other.json
+node bin/pantheon.mjs verify-resume claude ~/Projects /tmp/rec-other.json; echo "exit=$?"
 ```
 Expected: `NOT RESUMED ... reason="prefix hash mismatch"`, exit 1. **A verifier that has never returned NOT RESUMED is unproven.** If it returns `shorter than recorded` instead, pick a longer counter-example so the hash does the work.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add package.json bin/pantheon.mjs src/seat/conformance.mjs src/context/locate.mjs tests/seat-conformance.test.mjs
 git commit -m "feat(seat): capability conformance and resume verification CLI"
 ```
@@ -1208,7 +1208,7 @@ test("a corrupt record file is refused rather than silently treated as absent", 
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-store.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-store.test.mjs`
 Expected: FAIL — `Cannot find module '../src/seat/store.mjs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1334,14 +1334,14 @@ const USAGE = "usage: pantheon conform | turn <vendor> <purpose> <cwd> <prompt..
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/colchis/Projects/pantheon && node --test tests/seat-store.test.mjs`
+Run: `cd ~/Projects/pantheon && node --test tests/seat-store.test.mjs`
 Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Prove nothing was written outside PANTHEON_HOME**
 
 Run:
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 H=$(mktemp -d); BEFORE=$(mktemp)
 find "$HOME" -maxdepth 2 -newermt '-1 second' -printf '%p\n' 2>/dev/null | sort > "$BEFORE"
 PANTHEON_HOME="$H" node --test tests/seat-store.test.mjs >/dev/null 2>&1
@@ -1356,7 +1356,7 @@ Expected: no `TOUCHED:` lines. This is the acceptance check for spec §9 in mini
 
 Run — in a throwaway directory so no project is touched:
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 W=$(mktemp -d); export PANTHEON_HOME=$(mktemp -d)
 node bin/pantheon.mjs turn claude scratch "$W" "Reply with exactly the word ONE and nothing else."
 node bin/pantheon.mjs turn claude scratch "$W" "Reply with exactly the word TWO and nothing else."
@@ -1367,7 +1367,7 @@ Expected: the first turn creates a seat record with a token and a chain; the sec
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/colchis/Projects/pantheon
+cd ~/Projects/pantheon
 git add src/seat/store.mjs bin/pantheon.mjs tests/seat-store.test.mjs
 git commit -m "feat(seat): PANTHEON_HOME-scoped seat store and end-to-end turn with pre-turn chain check"
 ```

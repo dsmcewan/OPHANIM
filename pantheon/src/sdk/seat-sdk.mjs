@@ -17,7 +17,7 @@
 // a fresh conversation. That is a real check, but it is the VENDOR's check, not ours, and it is
 // recorded as such. Claiming the CLI path's guarantee here would be the same category of error as
 // calling a directory name an identity.
-import { record, chainOf } from "../context/chain.mjs";
+import { record, chainOf, promptSha, replySha } from "../context/chain.mjs";
 import { loadSeat, saveSeat } from "../seat/store.mjs";
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import { seatKey } from "../seat/identity.mjs";
@@ -35,18 +35,34 @@ const sha256 = s => createHash("sha256").update(s).digest("hex");
 // projectors produce, so chain.mjs is reused unchanged rather than forked for this path.
 // Content is hashed and discarded here exactly as it is there.
 export function exchangeTurns({ prompt, result }) {
-  const turns = [{ role: "user", sha: sha256(`text:${prompt}`), len: prompt.length, tools: [] }];
+  const turns = [{ role: "user", sha: promptSha(prompt), len: prompt.length, tools: [] }];
   // An assistant turn with no text but real tool calls is a turn. Requiring text would drop
   // tool-only turns from the chain, which is how the CLI-side projectors lost most of a
   // transcript before they were rewritten.
   if (result.text !== "" || result.tools.length > 0) {
-    const unit = `text:${result.text}` + result.tools.map(t => `␟tool:${t}`).join("");
-    turns.push({ role: "assistant", sha: sha256(unit), len: result.text.length, tools: result.tools });
+    turns.push({ role: "assistant", sha: replySha(result.text, result.tools), len: result.text.length, tools: result.tools });
   }
   return turns;
 }
 
+/**
+ * The first stored exchange that the ledger does not account for, or null. `tokens` are the ledger's turn
+ * entries for the seat, flattened in chain order to {role, sha}; a `user` token with sha null is a turn
+ * recorded without its prompt digest, which matches any prompt. The stored exchanges must be a
+ * subsequence of the tokens: the ledger may hold more (other pools of the same seat), never fewer.
+ */
+export function unmatchedExchange(exchanges, tokens) {
+  let j = 0;
+  for (const [i, x] of exchanges.entries()) {
+    while (j < tokens.length && !(tokens[j].role === x.role && (tokens[j].sha === null || tokens[j].sha === x.sha))) j++;
+    if (j === tokens.length) return i;
+    j++;
+  }
+  return null;
+}
+
 // Take one turn on a seat. Returns what happened; the caller decides how to report it.
+// `ledger`, when given, is { exchanges() -> [{role, sha}] }: the seat's turns as the ledger records them.
 // THE THIRD WINDOW. history.mjs closes two crash windows around the two-phase write; the 2026-09-27
 // re-review found the one BEFORE them: sendTurn can complete -- including a non-idempotent tool call the
 // vendor already executed -- and the process can die before the first byte reaches disk. Nothing then
@@ -63,7 +79,7 @@ function readIntent(seat, home) {
 
 export async function sdkTurn({
   vendor, purpose, cwd, prompt, model, client, home, extra, onEvent, label, continuity, acknowledgeLost = false, reseatModel = false,
-  scope, sessionId, effort, architecture, contractHeader, signal, deadline,
+  scope, sessionId, effort, architecture, contractHeader, signal, deadline, ledger = null, outputBudgetPolicy,
 } = {}) {
   if (!vendor || !purpose || !cwd) throw new Error("sdkTurn: vendor, purpose and cwd are required");
   if (typeof prompt !== "string" || prompt === "") throw new Error("sdkTurn: prompt is required");
@@ -96,6 +112,21 @@ export async function sdkTurn({
           ok: false, code: "CHAIN_MISMATCH", persisted: false, seat: held,
           why: "the stored chain does not match the chain of the stored exchanges; this seat record cannot be continued",
         };
+      }
+    }
+    // ...AND, WITH A LEDGER, CHECKED AGAINST IT. The check above is self-attesting: an exchange edited in
+    // the file with its chain recomputed passes it. The ledger's turn entries for this seat, each signed
+    // by the seat occupancy that answered, name the prompt and reply digests, so every stored exchange
+    // must be one of them, in the ledger's order. Without a ledger nothing changes.
+    if (ledger && Array.isArray(held?.exchanges) && held.exchanges.length) {
+      const mismatch = why => ({ ok: false, code: "LEDGER_MISMATCH", persisted: false, seat: held, why });
+      let tokens;
+      try { tokens = [...await ledger.exchanges()]; }
+      catch (e) { return mismatch(`the ledger could not be read for this seat: ${e.message}`); }
+      const unmatched = unmatchedExchange(held.exchanges, tokens);
+      if (unmatched !== null) {
+        return mismatch(`stored exchange ${unmatched} (${held.exchanges[unmatched].role}) is not on the ledger's turn entries for this seat, ` +
+          "in order; the seat record was edited or written outside a recorded turn, and cannot be continued");
       }
     }
 
@@ -149,7 +180,8 @@ export async function sdkTurn({
       scope: scope ?? { tenant_id: 'pantheon', rights_lane: 'private_upload', workspace_id: sha256(cwd),
         workspace_tenant_id: `pantheon:private_upload:${sha256(cwd)}`, campaign_id: 'build', world_id: sha256(cwd),
         branch_id: 'build', actor_id: purpose }, sessionId: sessionId ?? sha256(`${homeDir}:${purpose}:${model}`),
-      effort, architecture, contractHeader, signal, deadline }); }
+      // The caller's output policy travels with the turn; omitted, the adapter derives it from the cap.
+      effort, architecture, contractHeader, signal, deadline, ...(outputBudgetPolicy ? { outputBudgetPolicy } : {}) }); }
     catch (e) { clearIntent(); throw e; }   // the failure is REPORTED to the caller; the intent's job is the silent case
 
     if (!result.usable_for_resume) {

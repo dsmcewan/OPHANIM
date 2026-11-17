@@ -258,6 +258,35 @@ test("law 7: REVIEW — an ack from the maker's own lab is not an ack", () => wi
   assert.deepEqual(ack.acks, []);
 }));
 
+// Independent review 2026-11-16, RU4 (mutant P6): with `blocks.length === 0` removed from the REVIEW
+// rule, every test still passed, because no fixture had a cross-lab approval AND a blocking finding on
+// the same bytes. A blocking finding is a veto: another lab's approval does not outvote it.
+test("law 7: REVIEW — a blocking finding vetoes the ship, even beside a cross-lab approval", () => withBoard(async (board) => {
+  const d = await drive(board);
+  const blocker = seat("agy_google", "critique", "agy_google-critique");
+  const bref = `refs/seat/${blocker.seat_id}/wip`;
+  await board.refs.branch({ name: bref, from: d.wip, author: blocker });
+  const c = await publish({ ...board, ref: bref, author: blocker, msg: "review",
+    entries: [{ kind: "critique", links: { target: d.bytes },
+      payload: { target: { slot: SLOT, rev: 1 }, verdict: "request_changes",
+        findings: [{ severity: "block", note: "a slow holder still wins after its lease expires" }] } }] });
+  assert.equal(c.ok, true, c.why);
+  const back = await merge({ ...board, into: d.wip, from: bref, author: CONTROLLER, only: ["critique:"] });
+  assert.equal(back.ok, true, back.why);
+
+  const ack = reviewAck(board.store, board.refs.resolve(d.wip), board.store.get(d.artifactCid));
+  assert.deepEqual(ack.acks.map(a => a.vendor), ["xai"], "the cross-lab approval is still there");
+  assert.equal(ack.blocks, 1);
+  assert.equal(ack.ok, false);
+
+  const before = board.refs.resolve(REF);
+  const r = await ship({ ...board, ref: REF, from: d.wip, actor: CONTROLLER });
+  assert.equal(r.ok, false);
+  assert.equal(r.refused, "REVIEW", r.why);
+  assert.match(r.why, /1 blocking finding\(s\) on/);
+  assert.equal(board.refs.resolve(REF), before);
+}));
+
 test("law 7: TESTS — green on another revision is not green on this one", () => withBoard(async (board) => {
   const d = await drive(board, { tests: true });
   const before = board.refs.resolve(REF);

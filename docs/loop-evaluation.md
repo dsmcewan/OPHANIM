@@ -1,5 +1,7 @@
 # Loop evaluation: OPHANIM against the loop operating principle
 
+> **Scope of what is proven** (added after the independent review of 2026-11-16, finding FW1). OPHANIM's `prove` and `verify` run against fixture authority: a candidate is accepted when its output equals the obligation's stored `expected` value (`ophanim/governance/check-contract.mjs`), and the three TELOS reviewer approvals are generated and signed by the same process that needs them (`ophanim/governance.mjs`). They therefore certify crash consistency and record integrity, not that work without a stored answer can be verified. Model turns in the suites run against scripted fakes; no live provider is called in CI. Binding real reviewers to the ledger is item K6 on the [status board](STATUS.md), a governance decision.
+
 Status: evaluation and proposals. All nine proposals are implemented on this branch; P8 and P9 are opt-in
 (`ophanim/runtime.mjs`, `ophanim/cli.mjs`, `ophanim/efficiency/assessment.mjs`,
 `ophanim/governance.mjs`, `ophanim/board.mjs`, `ophanim/proof.mjs`; tests in
@@ -76,7 +78,7 @@ The Pantheon DAG holds the parents, but the "was → is" consistency of the trai
 
 - `runtime.mjs:216`: `authorizePlan` is invoked only `if(typeof governance.authorizePlan==='function')`. A governance adapter without it admits plans with no registration.
 - `runtime.mjs:137`: `transitionRelease` accepts `valid===true || valid?.ok===true || valid?.valid===true`. Three shapes of success is a loose contract for a release gate. Every other gate in the codebase requires `ok===true`.
-- (Minor) `createGovernance` defaults `telosRoot` to a developer path (`/home/colchis/Projects/TELOS`). The pin check rejects it safely, but the default should be "required" rather than a path that happens to fail.
+- (Minor) `createGovernance` defaults `telosRoot` to a developer path (`~/Projects/TELOS`). The pin check rejects it safely, but the default should be "required" rather than a path that happens to fail.
 
 ### G5. Assignment isn't fully part of the recorded loop
 

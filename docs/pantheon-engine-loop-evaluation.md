@@ -1,5 +1,7 @@
 # Loop evaluation: the Pantheon engine and its 1 + 4 arrangement
 
+> **Scope of what is proven** (added after the independent review of 2026-11-16, finding FW1). OPHANIM's `prove` and `verify` run against fixture authority: a candidate is accepted when its output equals the obligation's stored `expected` value (`ophanim/governance/check-contract.mjs`), and the three TELOS reviewer approvals are generated and signed by the same process that needs them (`ophanim/governance.mjs`). They therefore certify crash consistency and record integrity, not that work without a stored answer can be verified. Model turns in the suites run against scripted fakes; no live provider is called in CI. Binding real reviewers to the ledger is item K6 on the [status board](STATUS.md), a governance decision.
+
 This extends [loop-evaluation.md](loop-evaluation.md) (OPHANIM's controller, P1–P9) and [pantheon-model-loop-evaluation.md](pantheon-model-loop-evaluation.md) (per-model call paths, M1–M3). The same loop applies, with no new architecture. Pantheon and its modes are subjects of stabilize → identify → propose → apply → validate → record delta → hand off on match → converge.
 
 Scope:
@@ -170,27 +172,7 @@ Status: Q1–Q6 and Q7's measurement are implemented on this branch.
 
 ### Dependency status
 
-Standing rule: a blackboard dependency is On Hold or Resolved. Each On Hold item is re-checked for a change in circumstances before the loop concludes. Re-checked at this commit:
-
-| Dependency | Status | Basis |
-|---|---|---|
-| Q1 model in the author, Q2 occupancy transitions, Q3 chair gate, Q4 controller gate, Q5 lane registry, Q6 budget binding | Resolved | implemented; covered by the Pantheon suite (current count below the table) |
-| Q7 measurement (projection, recomputation check, ranking) | Resolved | implemented and tested end to end on a real board |
-| Q7 adjustment (a seat change from evidence) | On Hold | Admission needs the pinned TELOS-side verifier to accept a seating dimension. Unchanged: it still admits only the 1→3 slot policy. |
-| P8/P9 admission through the efficiency gate | On Hold | Same pinned verifier; unchanged. |
-| 1,024-token default on direct Messages calls | Resolved | Replaced by provisional output-token tiers by difficulty (easy 4,096, medium 16,384, hard 32,768), each capped at the documented ceiling. The tiers are a starting policy, not a measurement: recorded truncations are the evidence for moving them. See "Output-token tiers" below. |
-| OpenAI `reasoning.context` conflict | Resolved | Settled from the vendor docs. Both paths now share one rule: pass validated values through, request `all_turns` only where documented, never send the field to xAI, and record the effective mode. See `pantheon-model-loop-evaluation.md` §4.3. |
-| Seat (conversation) records carry the model | Resolved | Recorded in `saveSeat`. A model change is refused unless it is an explicit, recorded reseat (`model_gen`). |
-| `all_turns` support on GPT-6 Astra, Sol and Luna | On Hold | The docs conflict on Astra and say nothing on Sol or Luna. These models use their default, and the recorded effective mode will show the answer once a live call is made. |
-| Capability records for the registry models | Resolved | `pantheon/src/config/capability-facts.json` holds 20 records, read 2026-11-16: all 18 registry models, plus gemini-3.5-flash (deprecated, kept for the record) and the lane name gemini-3.8-flash-high. Anything unstated stays UNRECORDED: max output for grok-4.3, 4.5, 4.6, 4.7 and grok-build-0.1, and effort for grok-build-0.1 and gemini-3.5-flash. grok-4.20-multi-agent's output is a cited null: the model does not accept `max_tokens`. |
-| Correcting the code-vs-docs disagreements | Resolved | All applied, including replacing the deprecated gemini-3.5-flash with gemini-3.6-flash. That follows Google's deprecation notice, and live requests were already routed there. The known-drift list is now empty. |
-| Routing and escalation protocol | Resolved | See "Routing and escalation protocol" below. |
-| Moving direct-path models onto the frontier client | Resolved | gpt-6-luna, gpt-6-sol, gpt-6.1-sol, claude-sonnet-5, claude-opus-5 and claude-opus-5-5 now run on the shared client with `providerDefaults`, so their requests keep the direct path's defaults. Not moved: claude-haiku (no effort dial; the Messages path would refuse it), gemini-3.6-flash (moving it would pull the agy seats off OAuth onto the metered API), and the xAI models without a cited output or effort record. Those stay direct: see the next row and "Direct-path models on the frontier client" below. |
-| Models left on the direct path (claude-haiku-4-5, gemini-3.6-flash, grok-4.5, grok-4.6, grok-4.20-multi-agent, grok-build-0.1) | On Hold | Each needs a decision or a fact first. Haiku: nothing is gained until it needs the shared client. gemini-3.6-flash: a routing decision (OAuth agy seats vs the metered API). xAI: a cited output ceiling (and for grok-build, efforts); multi-agent accepts no `max_tokens`. Re-checked 2026-11-17: xAI still states no output limit for any Grok model. grok-4.5's effort list is narrowed to low, medium and high, because its reasoning page says `xhigh` is served as `high`, so escalating to it would change nothing (conflict recorded). |
-| Escalation for agy seats (CLI lane and agy-seat.py) | Resolved | Those transports take no effort setting, so the protocol no longer decides a `raise_effort` there that would be dropped. A rejection steps to the role's next harder rung, or stops. See "Escalation on agy seats" below. |
-| Signed transitions | On Hold | A governance decision on the pinned TELOS verifier, like the Q7 adjustment and P8/P9 admission. Unchanged. |
-| A possible move to gemini-3.8-flash | Resolved: no change | Re-checked 2026-11-17. Google now lists `gemini-3.8-flash` as a stable API model (1,048,576 in, 65,536 out, thinking low, medium and high; `minimal` returns an error), so it is recorded in `capability-facts.json` and can be seated. The default stays on gemini-3.6-flash: it is current with no shutdown date, it supports `minimal`, and there is no evidence that 3.8 serves these seats better. The agy lane name `gemini-3.8-flash-high` is still not an API id. |
-| Live view treating a model switch as an explicit reseat | Resolved | `POST /turn` takes `reseat` / `reseats` (booleans, per seat). Without consent the switch is refused with code `MODEL_CHANGED`; the page asks, re-sends only those seats, and the seat records `model_gen`. See "Reseat from the live view" below. |
+The current status of every item lives on the status board, **[docs/STATUS.md](STATUS.md)**. It is generated from the status ledger (`status/ledger`), where each change is a signed entry and the standing rule is enforced on append. The table that stood here until 2026-11-17 was the board's source and is in the git history.
 
 Pantheon full suite, run locally with bubblewrap installed: 808 pass and 1 fail. That one (`acceptance uses real filesystem/network isolation and still runs local tools`) also fails on the unchanged code, because this container's sandbox lacks a local tool it expects; it passes in CI.
 

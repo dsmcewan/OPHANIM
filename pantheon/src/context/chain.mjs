@@ -7,6 +7,13 @@ const link = (prev, t) => createHash("sha256")
   .update(JSON.stringify({ prev, role: t.role, sha: t.sha, tools: t.tools ?? [] }))
   .digest("hex");
 
+// The digests an SDK exchange is recorded under (seat-sdk exchangeTurns). Shared, so the ledger's turn
+// entries (pantheon/src/ledger/lineage-kinds.mjs) name the same digests a seat file holds, and a seat file
+// can be checked against them.
+const hex = s => createHash("sha256").update(s).digest("hex");
+export const promptSha = prompt => hex(`text:${prompt}`);
+export const replySha = (text, tools = []) => hex(`text:${text}` + tools.map(t => `␟tool:${t}`).join(""));
+
 export function chainOf(turns) {
   const links = [];
   let prev = "genesis";

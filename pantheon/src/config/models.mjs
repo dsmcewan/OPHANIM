@@ -51,3 +51,17 @@ export function resolveSeatModel(model) {
   }
   throw new Error(`resolveSeatModel: "${model}" is in neither models.json nor lanes.json`);
 }
+
+// THE LAB, not the vendor string, is what the cross-lab review rule is about. An agy seat (vendor
+// agy_google) can serve a Claude lane model, whose lab is anthropic; comparing vendor strings let an
+// Anthropic seat review it (independent review 2026-11-16, RU1). A lane model names its lab; otherwise
+// a vendor's lab is its own name, except agy_google, which is Google's.
+const LAB_OF_VENDOR = Object.freeze({ agy_google: "google" });
+export function labOf(vendor, model = null) {
+  for (const lane of Object.values(LANES)) if (model && lane[model]) return lane[model].lab;
+  return LAB_OF_VENDOR[vendor] ?? vendor;
+}
+/** Vendors whose own lab is `lab` (to avoid when seating a reviewer for work made in that lab). */
+export const vendorsOfLab = (lab, vendors = ["anthropic", "openai", "xai", "agy_google"]) =>
+  vendors.filter(v => (LAB_OF_VENDOR[v] ?? v) === lab);
+

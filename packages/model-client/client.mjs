@@ -20,7 +20,7 @@ export async function sendModelTurn({client,onEvent,countTokens,beforeGenerate,r
     const prepared=prepareRequest({...args,history,signal});
     if(prepared.options.headers['anthropic-beta'])prepared.options.headers['anthropic-beta']=
       [...(client.argoBetaHeaders??[]),prepared.options.headers['anthropic-beta']].join(',');
-    const counter=countTokens??sdkCounter(client,prepared,signal);
+    const counter=countTokens??providerTokenCounter(client,prepared,signal);
     await checkBudget(prepared,counter);
     signal.throwIfAborted();
     if(Date.now()>=deadline)throw new Error('Request deadline exceeded');
@@ -31,7 +31,19 @@ export async function sendModelTurn({client,onEvent,countTokens,beforeGenerate,r
   },{signal:args.signal,deadline});
 }
 
-function sdkCounter(client,{cap},signal){
+// The provider's own input count, where its SDK exposes one; undefined where none is supported.
+export function providerTokenCounter(client,{cap,options},signal){
+  if(cap.surface==='messages'){
+    const beta=options?.headers?.['anthropic-beta'];
+    const messages=beta?(client.beta?.messages??client.messages):client.messages;
+    if(typeof messages?.countTokens!=='function')return undefined;
+    return async request=>{
+      // The count endpoint's input fields: system, tools and the whole message history.
+      const keys=['model','messages','system','tools','tool_choice','thinking'];
+      const body=Object.fromEntries(keys.filter(k=>request[k]!==undefined).map(k=>[k,request[k]]));
+      return (await messages.countTokens(body,{...(signal?{signal}:{}),...(beta?{headers:{'anthropic-beta':beta}}:{})})).input_tokens;
+    };
+  }
   if(cap.vendor==='openai'&&client.responses?.inputTokens?.count){
     return async request=>{
       // These are the input-count endpoint's fields; output caps/store/cache hints are not inputs.
@@ -42,7 +54,7 @@ function sdkCounter(client,{cap},signal){
   }
   if(cap.vendor==='agy_google'&&client.models?.countTokens){
     return async request=>{
-      const {model,contents,config}=request;
+      const {model,contents,config={}}=request;
       // The Developer API SDK's CountTokensConfig rejects system/tools/generationConfig.
       // Its REST countTokens endpoint accepts generateContentRequest instead. Inject the full
       // count request through the SDK's documented extraBody hook; omit the alternative contents.

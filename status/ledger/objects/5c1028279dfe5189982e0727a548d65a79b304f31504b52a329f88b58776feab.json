@@ -1,0 +1,1 @@
+{"basis":"user-owned Projects need a token with project scope; neither GITHUB_TOKEN nor this session has one. The publisher syncs Projects only when that token is configured","checked":"2026-11-17","item":"github-projects","schema":"ophanim.status/v1","state":"On Hold","title":"GitHub Projects view of the loop","waiting_on":"credential"}

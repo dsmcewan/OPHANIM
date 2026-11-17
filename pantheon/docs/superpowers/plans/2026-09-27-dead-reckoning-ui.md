@@ -46,7 +46,7 @@ Do not delete or rewrite the untracked glass-block draft, mockup, agora sketch, 
 
 ## File map and responsibilities
 
-Paths below are relative to /home/colchis/Projects/pantheon.
+Paths below are relative to ~/Projects/pantheon.
 
 | Component | Create | Modify |
 |---|---|---|

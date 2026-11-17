@@ -1,0 +1,1 @@
+{"basis":"a ref.move is recorded before the ref file is written; if that write fails, the next swap is refused until repaired. Needs a recorded repair path","checked":"2026-11-17","item":"ref-write-gap","schema":"ophanim.status/v1","state":"Ready","title":"Ref recorded but its file write fails","waiting_on":null}

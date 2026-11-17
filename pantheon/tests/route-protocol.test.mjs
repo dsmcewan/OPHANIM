@@ -2,7 +2,7 @@
 // cheapest change for their cause, are recorded, and re-derive.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nextStep, escalationRecord, verifyEscalation, routeFor, classifyOutcome, carriesEffort } from "../src/route/protocol.mjs";
@@ -203,12 +203,27 @@ test("a cut-off reply is retried with a larger output budget within the document
 
 test("a reviewer's rejection of passing work escalates the maker, and resume revises at the decided effort", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-review-"));
+  const savedLedger = process.env.OPHANIM_LEDGER;
+  delete process.env.OPHANIM_LEDGER;
   try {
     let reject = true;
     const clients = scripted({ review: () => (reject ? "request_changes" : "approve") });
     const first = await runFixture(dir, clients);
     assert.equal(first.shipped, false, "the REVIEW gate refuses the rejected bytes");
     let run = JSON.parse(readFileSync(join(first.board, "run.json"), "utf8"));
+    // The refusal is on the default ledger: a gate entry whose REVIEW gate is red.
+    const { openPantheonLedger } = await import("../src/ledger/system.mjs");
+    const { openBoard } = await import("../src/board/index.mjs");
+    const gatesOf = () => {
+      const L = openPantheonLedger({ root: join(first.board, "ledger"), board: openBoard(first.board) }).ledger;
+      const v = L.verify();
+      assert.equal(v.ok, true, v.why);
+      return L.read().filter(e => e.kind === "gate").map(e => L.payloadOf(e));
+    };
+    const refused = gatesOf();
+    assert.equal(refused.length, 1);
+    assert.equal(refused[0].claim.checker_ack, false);
+    assert.equal(refused[0].claim.gates.find(g => g.gate === "REVIEW").ok, false, "the recorded refusal names the gate that refused");
     const decision = run.escalations.find(e => e.outcome.kind === "critique");
     assert.deepEqual([decision.decision.action, decision.decision.to.effort], ["raise_effort", "high"]);
     assert.equal(run.files[0].escalation.pending.reason, "review");
@@ -231,12 +246,18 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
     assert.match(revised.prompt, /the boundary case is wrong/, "the reviewer's findings reach the maker");
     run = JSON.parse(readFileSync(join(second.board, "run.json"), "utf8"));
     assert.equal(run.files[0].escalation.pending, null);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    // Both verdicts re-derive after the ship moved the board on: the refusal and the green one.
+    const both = gatesOf();
+    assert.deepEqual(both.map(g => g.claim.checker_ack), [false, true]);
+  } finally {
+    if (savedLedger === undefined) delete process.env.OPHANIM_LEDGER; else process.env.OPHANIM_LEDGER = savedLedger;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("K3: with a ledger, the run verifies it first and records each escalation as an entry that re-derives", async () => {
-  const { openLedger, createLedger, defineKinds, generateSigner } = await import("../../ophanim/ledger/chain.mjs");
-  const { pantheonKinds, escalationRecorder } = await import("../../ophanim/ledger/kinds.mjs");
+  const { openLedger, createLedger, defineKinds, generateSigner } = await import("../../packages/ledger/chain.mjs");
+  const { pantheonKinds, escalationRecorder } = await import("../src/ledger/kinds.mjs");
   const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-ledger-"));
   try {
     const operator = generateSigner("operator"), controller = generateSigner("controller");
@@ -244,10 +265,10 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     const ledgerDir = join(dir, "ledger");
     mkdirSync(ledgerDir);
     const anchor = createLedger({ dir: ledgerDir, authority, operator, order: controller });
-    const { lineageKinds: lk } = await import("../../ophanim/ledger/lineage-kinds.mjs");
+    const { lineageKinds: lk } = await import("../src/ledger/lineage-kinds.mjs");
     const ledger = openLedger({ dir: ledgerDir, kinds: defineKinds({ ...pantheonKinds({
       authors: { inputs: a => a.key_id === "operator", decisions: a => a.key_id === "controller" } }), ...lk() }), anchor });
-    const { lineageKinds, lineageRecorder } = await import("../../ophanim/ledger/lineage-kinds.mjs");
+    const { lineageKinds, lineageRecorder } = await import("../src/ledger/lineage-kinds.mjs");
     const recorder = { ...escalationRecorder({ ledger, controller, order: controller, operator }), ...lineageRecorder({ ledger, operator, order: controller }) };
     const clients = scripted({ cutAt: 20000 });
     const result = await runFixture(dir, clients, { ledger: recorder });
@@ -274,4 +295,95 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     writeFileSync(file, [...lines.slice(0, -1), JSON.stringify(forged)].join("\n") + "\n");
     await assert.rejects(runFixture(join(dir, "again"), scripted(), { ledger: recorder }), /ledger does not verify, refusing to run/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the ledger is on by default: a run records at <board>/ledger, and `ledger: false` turns it off", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-default-ledger-"));
+  const saved = process.env.OPHANIM_LEDGER;
+  delete process.env.OPHANIM_LEDGER;
+  try {
+    const on = await runFixture(join(dir, "on"), scripted({ cutAt: 20000 }));
+    assert.equal(on.shipped, true, JSON.stringify(on.error));
+    const ledgerDir = join(on.board, "ledger");
+    const { openPantheonLedger } = await import("../src/ledger/system.mjs");
+    const { openBoard } = await import("../src/board/index.mjs");
+    const reopened = openPantheonLedger({ root: ledgerDir, board: openBoard(on.board) });
+    const kinds = reopened.ledger.read().map(e => e.kind);
+    for (const k of ["genesis", "facts", "seating", "turn", "review", "escalation", "lease", "ref.move"]) assert.ok(kinds.includes(k), `${k} recorded by default`);
+    assert.equal(reopened.ledger.verify().ok, true);
+    // Every ref on the board is where its last recorded move left it.
+    const board = openBoard(on.board);
+    const moves = new Map(reopened.ledger.read().filter(e => e.kind === "ref.move").map(e => reopened.ledger.payloadOf(e)).map(p => [p.name, p.to]));
+    for (const { name, cid } of board.refs.list()) assert.equal(moves.get(name), cid, `${name} is where the ledger left it`);
+    // The turns name the digests the seat files hold.
+    assert.ok(reopened.ledger.read().filter(e => e.kind === "turn").every(e => /^[0-9a-f]{64}$/.test(reopened.ledger.payloadOf(e).prompt_sha)));
+    // The ship's verdict is a gate entry naming this board, recorded before the ship moved the ref.
+    const gates = reopened.ledger.read().filter(e => e.kind === "gate");
+    assert.equal(gates.length, 1, "the ship's gate verdict is on the ledger");
+    const verdict = reopened.ledger.payloadOf(gates[0]);
+    assert.deepEqual([verdict.scope, verdict.lease_scope, verdict.claim.why, verdict.claim.tests_passed, verdict.claim.checker_ack], [on.board, on.board, null, true, true]);
+    const run = JSON.parse(readFileSync(join(on.board, "run.json"), "utf8"));
+    assert.equal(run.ledger.gate, reopened.ledger.hashOf(gates[0]), "run.json names the entry");
+    assert.notEqual(verdict.heads.find(h => h.name === "refs/board/escFixture").cid, board.refs.resolve("refs/board/escFixture"), "the board has moved on since");
+    // A forged verdict is refused; the honest one still re-derives after the board moved on.
+    const by = { author: { key_id: "controller" }, signer: reopened.controller, order: reopened.controller };
+    assert.throws(() => reopened.ledger.append({ kind: "gate", payload: { ...verdict, claim: { ...verdict.claim, tests_passed: false } }, ...by }), /not the verdict these heads produce/);
+    assert.throws(() => reopened.ledger.append({ kind: "gate", payload: { ...verdict, now: verdict.now + 1, heads: verdict.heads.map(h => ({ ...h, cid: "commit:" + "0".repeat(64) })) }, ...by }), /not on this board/);
+    // Edited on disk, the recorded verdict no longer verifies.
+    const obj = join(ledgerDir, "objects", gates[0].payload_ref.slice(7) + ".json");
+    const kept = readFileSync(obj, "utf8");
+    writeFileSync(obj, JSON.stringify({ ...verdict, claim: { ...verdict.claim, checker_ack: false } }));
+    assert.match(reopened.ledger.verify().why, /payload object missing or altered/);
+    writeFileSync(obj, kept);
+    assert.equal(reopened.ledger.verify().ok, true);
+    const off = await runFixture(join(dir, "off"), scripted(), { ledger: false });
+    assert.equal(off.shipped, true, JSON.stringify(off.error));
+    assert.equal(existsSync(join(off.board, "ledger")), false, "opted out: no ledger written");
+  } finally {
+    if (saved === undefined) delete process.env.OPHANIM_LEDGER; else process.env.OPHANIM_LEDGER = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("one ledger for every run: two boards and another domain's entries on it, each verdict re-derives against its own board", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-shared-ledger-"));
+  const saved = process.env.OPHANIM_LEDGER;
+  const root = join(dir, "ledger");
+  process.env.OPHANIM_LEDGER = root;
+  try {
+    // The shared ledger already holds an entry of a domain Pantheon does not supply (as OPHANIM's
+    // efficiency records are), declared by the composition that wrote it.
+    const { openLedgerHome, defineKinds, CONTROLLER } = await import("../../packages/ledger/index.mjs");
+    const { openPantheonLedger, pantheonLedgerKinds, pantheonDomains } = await import("../src/ledger/system.mjs");
+    const { openBoard } = await import("../src/board/index.mjs");
+    const W = openLedgerHome({ root, kinds: defineKinds({ ...pantheonLedgerKinds(), "demo.note": { authors: a => a.key_id === CONTROLLER,
+      validate: p => (typeof p?.text === "string" ? null : "a note has text"), rederive: () => null } }), domains: { ...pantheonDomains(), demo: ["demo.note"] } });
+    W.ledger.append({ kind: "demo.note", payload: { text: "another domain" }, author: { key_id: CONTROLLER }, signer: W.controller, order: W.controller });
+
+    const one = await runFixture(join(dir, "one"), scripted());
+    assert.equal(one.shipped, true, JSON.stringify(one.error));
+    const two = await runFixture(join(dir, "two"), scripted());
+    assert.equal(two.shipped, true, JSON.stringify(two.error));
+    assert.notEqual(one.board, two.board);
+    const run = JSON.parse(readFileSync(join(two.board, "run.json"), "utf8"));
+    assert.deepEqual(run.ledger.underived, { foreign: { demo: 1 }, partial: 0 }, "the run says what it passed over");
+
+    const L = openPantheonLedger({ root, board: openBoard(two.board) }).ledger;
+    const v = L.verify();
+    assert.equal(v.ok, true, v.why);
+    assert.deepEqual([v.foreign, v.partial], [{ demo: 1 }, []], "both boards' verdicts re-derived, the other domain reported");
+    const gates = L.read().filter(e => e.kind === "gate").map(e => L.payloadOf(e));
+    assert.deepEqual(gates.map(g => g.scope), [one.board, two.board]);
+    assert.ok(gates.every(g => g.claim.why === null));
+
+    // The first board is removed: its verdict is reported as not re-derived, not hidden and not refused.
+    rmSync(one.board, { recursive: true, force: true });
+    const after = openPantheonLedger({ root, board: openBoard(two.board) }).ledger.verify();
+    assert.equal(after.ok, true, after.why);
+    assert.ok(after.partial.some(p => p.kind === "gate" && p.why.includes(one.board)));
+    assert.ok(after.partial.every(p => p.why.includes(one.board)));
+  } finally {
+    if (saved === undefined) delete process.env.OPHANIM_LEDGER; else process.env.OPHANIM_LEDGER = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -1,0 +1,1 @@
+{"basis":"entries name their board (scope) and re-derive against it; domains declared by operator-signed entries; a reader checks foreign-domain entries structurally and reports them as foreign, never re-derived","checked":"2026-11-17","item":"board-resolver","schema":"ophanim.status/v1","state":"Resolved","title":"One ledger across boards and domains","waiting_on":null}

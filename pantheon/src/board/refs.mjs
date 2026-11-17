@@ -14,7 +14,7 @@
 import { shipOnlySlots } from "./policy.mjs";
 import { changedSlots as diffSlots, treeSlots } from "./dag.mjs";
 import { authorClassOf } from "./schema.mjs";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, appendFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, appendFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { isCid, shortCid } from "./canon.mjs";
 import { withSeatLock } from "../seat/lock.mjs";
@@ -89,7 +89,14 @@ export function slotsAllowed(name, changedSlots) {
   return { ok: true };
 }
 
-export function openRefs(root, { runtime = null, store = null, readOnly = false } = {}) {
+// WITH A LEDGER (`ledger`, a board recorder from pantheon/src/ledger/board-kinds.mjs, injected): every
+// successful swap is recorded as a `ref.move` entry {name, from, to, msg, by, reset} citing the previous
+// move of that ref, BEFORE the ref file changes. The ledger re-derives it: `from` is where the previous
+// move left the ref, and `to` is a commit in this store whose history contains `from`, unless the swap
+// says `reset: true` (and is recorded as one). A ref moved by hand, or a swap that rewrites history
+// without saying so, is refused as LEDGER_REFUSED and the name does not move. The reflog stays, for display.
+export function openRefs(root, { runtime = null, store = null, readOnly = false, ledger = null } = {}) {
+  let L = ledger;
   const base = join(root, "refs");
   if (!readOnly) mkdirSync(base, { recursive: true });
   const lockDir = join(root, "runtime", "locks");
@@ -121,7 +128,7 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false 
    * Compare-and-swap a name. Returns { ok:false, code } on every refusal; never retries.
    * `lease` is { resource, gen } and is verified inside the critical section when supplied.
    */
-  const swap = ({ name, expected = null, next, author, lease = null, changedSlots: claimed = [], msg = "", ship = false, from = null }) =>
+  const swap = ({ name, expected = null, next, author, lease = null, changedSlots: claimed = [], msg = "", ship = false, from = null, reset = false }) =>
     readOnly ? Promise.reject(new Error("refs.swap: this reader is read-only")) : withSeatLock(`ref ${name}`, async () => {
       const { spec } = parseRef(name);
       if (!isCid(next)) return { ok: false, code: "BAD_CID", why: `next "${next}" is not a cid` };
@@ -231,11 +238,28 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false 
           if (!v.ok) return { ok: false, code: v.code, why: v.why, current };
         }
 
+        // The new ref file is prepared first, so after the ledger records the move only the atomic rename
+        // remains. On the ledger next: a move the ledger refuses does not happen.
         const p = refPath(name);
         mkdirSync(dirname(p), { recursive: true });
         const tmp = `${p}.tmp${process.pid}`;
         writeFileSync(tmp, next + "\n");
-        renameSync(tmp, p);
+        const by = author.seat_id ?? author.vendor;
+        if (L) {
+          try { L.recordRefMove({ name, from: current, to: next, msg, by, reset: Boolean(reset) }); }
+          catch (e) { rmSync(tmp, { force: true }); return { ok: false, code: "LEDGER_REFUSED", why: `the ledger refused this move of ${name}: ${e.message}`, current }; }
+        }
+        try { renameSync(tmp, p); }
+        catch (e) {
+          rmSync(tmp, { force: true });
+          // The ledger says the ref moved and the file says it did not. Record the truth: a reset back to
+          // where the ref still is, so the ledger and the file agree and the next swap is not wedged.
+          if (L) {
+            try { L.recordRefMove({ name, from: next, to: current, msg: `undo: the ref file could not be written (${e.code ?? e.message})`, by, reset: true }); }
+            catch (u) { return { ok: false, code: "LEDGER_DIVERGED", why: `the ref file write failed and the undo was refused: ${u.message}`, current }; }
+          }
+          return { ok: false, code: "WRITE_FAILED", why: `the ref file could not be written: ${e.message}`, current };
+        }
         // A reflog is runtime chrome, so it lives outside the DAG and is never load-bearing: the
         // commit parents are the audit trail. This only answers "which names moved, when".
         try {
@@ -270,5 +294,7 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false 
     ? readFileSync(logPath, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l))
     : []);
 
-  return { base, resolve, list, swap, branch, reflog, refPath };
+  return { base, resolve, list, swap, branch, reflog, refPath,
+    /** Attach a board recorder after opening (the ledger is opened with the board it records for). */
+    useLedger: l => { L = l ?? null; } };
 }

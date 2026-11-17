@@ -1,0 +1,1 @@
+{"basis":"runOpenItem records each ship verdict, including refusals, as a scoped gate entry that re-derives after the board moves on","checked":"2026-11-17","item":"gate-on-run-path","schema":"ophanim.status/v1","state":"Resolved","title":"Gate verdicts recorded on the run path","waiting_on":null}

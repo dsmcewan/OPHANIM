@@ -1,0 +1,313 @@
+# Current-state evidence and role audit
+
+Audited snapshots: `e481e778` (initial executable policy/evidence), `41e6262` (task-profile and practice-record additions), and `048b3ba` (review reservation and worker-role semantics). These are pinned observations, not a claim that a changing branch is frozen or that live improvements are qualified. The parent routing/coordination and workflow requirements remain open.
+
+# Current routing policy: evidence and opinion
+
+Audited source: **`e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6`**, detached snapshot `work/ophanim-current-policy-audit`. This is an audit of current executable policy at that commit, not a proposal-only review. Source files were unchanged. No provider requests, model CLIs, credentials, or owner keys were used.
+
+The current selector is now connected to planning, implementation and review. It applies a static operator profile by default, and the legacy profile uses manually assigned task bands. This establishes repeatable policy execution; it does not establish that the chosen models, effort levels, or budgets are efficient or best for these tasks. No numerical quality/cost weights were found in the audited selectors: ordering is ordinal table position, exact/nearest-lower difficulty, and quota-pool spreading. [Active caller][caller], [profile policy][profile], [legacy bands][bands], [pool router][router]
+
+## Current findings
+
+| ID | Priority | Current observation | Required correction / bounded acceptance |
+|---|---|---|---|
+| CS1 | P2 | A single justification tag blends an eligibility constraint with a performance preference. `selectSeat('implementer', {profile:'legacy',difficulty:'hard',avoid:['agy_google'],needsContext:100})` returns Astra with `basis:'SURFACE'`, although the source says the API justifies the lab and Astra's rank is the operator's ladder. The medium reviewer returns Grok 4.6 with `basis:'ISOLATION'`, while its reason calls it the “stronger pick” and asserts less overhead than another rung. Independence establishes who is ineligible; it does not validate those comparative claims. This is exposed by the current effective selector, not just a dormant helper. [Assignments][mixed], [recording][profile] | Emit separate `constraints` and `preference/hypothesis` fields. Every comparative quality, latency or cost reason must carry a matched evidence reference or explicitly say `unqualified`. A fixture should assert that SURFACE/ISOLATION alone never qualifies a model ordering. Preserve the user's independent-review requirement as an authorization constraint. |
+| CS2 | P2 | With Fable at `high` in the implementer seat, a recorded acceptance rejection deterministically raises effort to `xhigh`, records “the dial is cheaper than the occupant,” and uses the model capability page as `basis`. That cited page supplies the permitted effort values; this audit found no linked task-level comparison proving that strategy cheaper or more successful than reseating. Supported parameter values and an efficient recovery strategy are different claims. The transition and its unmeasured cost rationale both survive into the recorded decision. [Protocol][escalation] | Retain the bounded recovery rule as an explicit provisional policy, with the supported-values source separated from its cost/utility hypothesis. Test that a capability citation cannot classify a strategy as measured. Qualification should require comparable successful-recovery rate, total cost and latency for effort-first versus the candidate alternative. |
+| CS3 | P2 | The current ARGO selection reason says ticket difficulty “sets the output tier only.” Yet default planning with Fable and implementation with Astra compile to **65,536 output tokens for easy, medium and hard**. The tier helper returns 4,096 / 16,384 / 32,768, but `defaultOutputFor` preserves the frontier long-decode default; the active caller explicitly invokes it for Anthropic and lets the model client impose it for Astra. Current reviewer calls have their own explicit 4,000 cap and are excluded from this live-path mismatch. This proves a cap-policy mismatch, not actual tokens consumed or money wasted. [Profile claim][profile], [default budgets][tiers], [active budget handling][budgetcaller], [client default][request] | Either make difficulty affect the actual planning/implementation cap, or accurately record that the frontier profile intentionally retains one long-decode cap and why. Assert serialized request caps for both easy and hard at the active `runOpenItem` boundary, with a fake provider, plus a positive reviewer-4,000 case. Choosing lower caps still needs truncation and successful-completion evidence. |
+
+## What is qualified, and what is not
+
+| Evidence class | Current source / observed control | Limit |
+|---|---|---|
+| User-authorized constraint | The current request requires independent cross-model accountability. This is a governance constraint, not an empirical claim that every such review improves quality. | An internal same-family review does not satisfy cross-lab qualification. |
+| Repository-recorded preference | ARGO's static order is explicitly tagged `OPERATOR`; seven legacy assignments are tagged `TASTE`. This audit found no hidden numerical optimizer. | “Approved” in source is the repository's assertion of authorization. A comment is not an approval receipt or a performance benchmark. |
+| Documentary capability | `capability-facts.json` has a read date and per-field vendor documentation citations; the selector refuses unknown/small context windows for policy candidates. | These establish the recorded API/transport bounds and supported controls. This audit did not revalidate external pages or call the live providers. They do not establish optimal task ranking. [Facts][facts], [context admission][admission] |
+| Deterministically verified behavior | The guarded probe made 18 role/profile/difficulty selections, compiled requests locally, and passed 16 assertions. Selection identity/reason travels with the actual caller. | Fakes and request compilation verify mechanics, not provider quality, actual spend, latency or real recovery success. |
+| Historical case evidence | The evidence-base prose records two concrete design defects found by OpenAI/xAI reviewers. This supports the value of those specific reviews. | It does not rank the current models or measure generalized review uplift. The separate paired evaluation is reported as all ties and zero delegations in six delegating-arm trials. Both are historical; the env-lab receipt is referenced, not bundled here. [Two cases][cases], [paired evaluation][paired] |
+| Current efficiency measurement | No matched task-level cost/quality/latency dataset for the current ARGO models, task bands, effort-first policy or token tiers was found in this bounded tracked-source audit. `docs/pantheon-engine-loop-evaluation.md` explicitly says the tiers had no recorded truncations when introduced. | This is an evidence gap in this repository snapshot, not a claim that no external receipts exist. [Tier evidence scope][tierevidence] |
+
+`SEAT_FACTS` also retains vendor-level latency labels described as measured on 2026-09-27, and inferred AGY windows. The current policy selectors use documented windows rather than those inferred window entries; the audit found no latency-based ranking in their active choice path. Treat the legacy labels as historical metadata, not current per-model performance. [Historical metadata][historical]
+
+## Present unqualified policy knobs
+
+These are permissible explicit policies, not established optima: static ARGO role order; legacy easy/medium/hard model bands and nearest-lower-band fallback; high default effort on frontier Messages/Gemini; effort-first recovery; four escalation steps; output doubling; three default work revisions; fifteen-minute turn deadline; and prompt-characters/4 context estimation. The output tiers are already honestly labelled provisional. No benchmark evidence in this audit establishes these choices as the best values. [Bands][bands], [effort defaults][request], [escalation][escalation], [run controls][runcontrols], [context estimate][contextestimate], [tiers][tiers]
+
+`truncationEvidence` is an available aggregation helper, but the audited runtime source has no caller that consumes its result to change the policy. A cycle may record and review work without qualifying or revising these model-selection practices. The current task should therefore begin by assessing the existing policy, with candidate changes held as hypotheses until qualified; recording a future requirement alone leaves the existing claims unchanged.
+
+## Minimum current-state acceptance
+
+1. Export the effective current policy, including role order, bins, output and effort defaults, context estimator and recovery limits. Preserve existing constraints; identify each remaining choice as an explicit preference or hypothesis until evidence qualifies it.
+2. Reject unsupported comparative claims in machine-readable decisions, including claims smuggled through SURFACE/ISOLATION or a vendor capability citation. Record evidence provenance, source version, task population and limits when a claim is qualified.
+3. Verify actual request serialization for each current role/profile/difficulty and declared override. Do not infer budgets or models from helper output alone.
+4. Assess the current baseline on representative, independently checked tasks before changing it. Record success/rework, actual usage/cost, latency, truncation and recovery outcomes; compare candidate policies under the same authorized constraints. Explicit user constraints stay constraints even if a benchmark favors removing them.
+5. Each subsequent cycle should review accumulated evidence, regressions and policy drift, and either retain the current version with a reason or propose a separately reviewed candidate. A benchmark or same-family self-review must not independently authorize its own promotion.
+
+## Reproduction and scope
+
+Run the retained `probe.mjs` with the offline guard:
+
+```sh
+/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs ${AUDIT_WORKSPACE}/work/workflow-audit/current-state/probe.mjs
+```
+
+Results: `probe-results.json`; compact stdout: `probe.stdout.json`. Sixteen assertions passed. This probe exercises current pure selectors, escalation and request compilation; it does not execute an end-to-end operating cycle or a provider. The source links pin every claim to the audited commit. Findings are not fixes and are not cross-lab approval.
+
+[caller]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/board/run-item.mjs#L165-L175
+[profile]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/frontier.mjs#L91-L197
+[bands]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/role/seating.mjs#L637-L659
+[router]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/router.mjs#L240-L316
+[mixed]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/role/seating.mjs#L268-L315
+[escalation]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/protocol.mjs#L26-L133
+[tiers]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/config/tiers.mjs#L1-L40
+[budgetcaller]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/board/run-item.mjs#L415-L427
+[request]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/packages/model-client/request.mjs#L19-L95
+[facts]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/config/capability-facts.json#L1-L30
+[admission]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/protocol.mjs#L158-L197
+[cases]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/docs/specs/2026-09-27-evidence-base.md#L714-L748
+[paired]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/STATE.md#L421-L430
+[tierevidence]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/docs/pantheon-engine-loop-evaluation.md#L280-L295
+[historical]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/router.mjs#L30-L103
+[runcontrols]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/board/run-item.mjs#L124-L134
+[contextestimate]: https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/board/run-item.mjs#L107-L108
+
+
+---
+
+# Current-state measurement and policy audit
+
+Pinned public source: `e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6` (commit timestamp `2026-11-17T04:19:01Z`). Source worktree: `${AUDIT_WORKSPACE}/work/ophanim-current-policy-audit`.
+
+The repository has real synthetic measurement and integrity machinery. The examined evidence does **not establish that current live model routing, escalation, reviewer count or coordination choices are empirically efficient**. Its own code distinguishes operator preferences and capability facts from unmeasured result quality/cost. The public status board still holds evidence-driven seating adjustment and independent evaluation, and marks the continuing practice-assessment requirement Ready. This is a current-state finding, not merely a proposal for future work.
+
+## Evidence classes and findings
+
+| Claim or component | Present evidence | What it establishes | What remains unestablished |
+|---|---|---|---|
+| Public status board | Fresh full verification under the original public anchor: 81 entries, 57 items; 78 status entries, one genesis, checkpoint and authority entry | Signature/hash/link consistency and authorized status statements | Independent truth or completeness of the statements, current artifact acceptance, measured live efficiency |
+| Efficiency records, K5/K5b | Status entry 21 is Resolved; basis says trace/assessment/retained records are ledger-bound | Signed implementation-status claim; the code and fixture receipts support existence of record/recomputation mechanisms | A successful live model efficiency experiment or adopted routing optimization |
+| Q7 contribution measurement | Status entry 6 Resolved; source projects chair entries, rework, reseats and critiques from reachable board objects | Recomputable contribution accounting mechanisms | Model quality ranking, causal credit, cost per useful result, or authority to reseat models |
+| Current seating/router | Explicit TASTE, QUOTA, SURFACE, ISOLATION grounds; router lists code quality, reasoning quality and cost per useful result as UNMEASURED | Visible provisional choices and capability/transport constraints | Matched current-model trials demonstrating that the selected ladder is the efficient choice |
+| Historical synthetic 1-slot→3-slot scheduler comparison | Retained, scope-bound timing/acceptance/recovery report; candidate saves 429 ms by its conservative local timing measure but costs 24,046 ms to test; forecast net −15,466 ms and realized net −24,046 ms | A measured comparison with retained negative result and refusal to promote | Any accepted wider scheduler policy, monetary/provider savings, or transfer to live models |
+| Synthetic phase measurement qualification | Fresh guarded raw-sample recomputation exactly matches the retained verdict: 32 samples, four counterbalanced blocks, same synthetic accepted output/effect proposals | The instrumentation distinguishes the injected timer and transformation controls and preserves frozen synthetic outputs | Historical cause, naturally occurring workload effects, system throughput/recovery improvement, live provider quality or cost |
+| Independent model evaluation / review | Public board holds independent Phases 0–6, real-seat K6, PR6 cross-lab review and core-premise live runs | Open requirements are recorded | Completed independent current-model evaluation or externally reviewed policy promotion |
+| Continuous practice learning | Public status entry 81 remains Ready; cycle contract explicitly says it is an implementation/acceptance contract, not an enforcement claim | Owner priority, intended acceptance cases and ordering are concretely documented | Every current cycle retaining a practice disposition and the next actual dispatch loading an admitted learned policy |
+
+### 1. Signed status is not measurement or independent review
+
+The public ledger freshly verifies as:
+
+`ok: 57 items, 81 entries, head sha256:76892bd2bff0f050c01591dc42b0241112c350d86df14f0ec94e676fd4b60503`
+
+The original anchor is `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d`. Latest state counts are 36 Resolved, 17 On Hold, 1 In progress and 3 Ready. All 78 status payloads contain a textual `basis`, date, title, item, state and wait field; five include dependencies and eight an owner role. These public status payloads contain no structured experiment, review or evidence-reference field. This says what the public board carries; it does not imply that external run ledgers cannot carry richer evidence.
+
+The only tracked `.jsonl` file at this source pin is `status/ledger/chain.jsonl`. No retained experiment/sample/result JSON is tracked under the examined efficiency/state paths. Source, tests and public evaluation documents are present; selected raw measurements survive separately in local report directories. Those are separate provenance classes and should not be combined into a claim that the public status chain proves a live experiment.
+
+Source: `docs/STATUS.md:6`, `:9`, `:16-19`, `:23-27`, `:35`, `:47`, `:58`; exact selected sequence/payload references are in the companion JSON. Public verification command used native Node with the offline guard:
+
+```sh
+/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs packages/ledger/status.mjs verify
+```
+
+### 2. Current routing choices are explicitly provisional on quality and useful cost
+
+`pantheon/src/route/router.mjs:1-23` states that the earlier paired evaluation tied all tasks and refuses to present a quality ranking. Lines 216–220 list three unmeasured properties: better code, better reasoning, and cheaper useful results. Its continuity, quota and coarse latency grounds address narrower operational questions. The bounded evidence inspected here did not reopen the earlier paired trial's raw records; the introductory comment is historical context, not fresh validation of current models.
+
+`pantheon/src/role/seating.mjs:141-147` defines TASTE as operator preference rather than measurement. Lines 270–295 retain the Astra→Sol→Luna ladder while explicitly noting that historical vendor guidance contradicts its hard/medium/easy ordering; the source labels the choice as the operator's. This audit does not use that historical guidance as current vendor documentation. It shows that the repo itself does not claim a measured quality/cost basis for this ladder.
+
+`pantheon/src/board/contributions.mjs:1-6` and `:99` explicitly say the projection ranks no model and authorizes no seat change. Public `q7-adjustment` is On Hold pending K6 (`docs/STATUS.md:27`), while contribution accounting is Resolved (`:58`). Accounting and selecting a better model therefore have different completion states.
+
+A requirement for three independent reviewers, where adopted as owner policy, is a constraint to enforce. Neither these records nor the phase calibration establish that three is an empirically optimal reviewer count.
+
+### 3. The retained scheduler experiment is a useful negative result
+
+The selected historical report is `${USER_HOME}/Projects/reports/ophanim-admission-2026-11-15.4yHgI7/admission-proof.json`. Its retained comparison and the investigation's `controlled-replay-verification.json` agree on:
+
+- Baseline conservative completion 1910 ms; candidate 1481 ms; conservative local gain 429 ms.
+- Trial cost 24,046 ms; forecast gross gain 8580 ms across 20 matching convergences; forecast net −15,466 ms; realized net −24,046 ms.
+- Outcome `no_change`; stage p95 materially regressed, and trial cost exceeded forecast savings.
+- `actualNewPolicyAdmitted:false`; model calls, business connections, policy decisions issued and activations all 0.
+
+The report's deterministic positive case demonstrates gate mechanics only. It is separately labelled; it does not overturn the measured historical refusal. The fresh admission section also refuses repeat work (`replays:0`) after retaining the negative result. This supports avoiding needless synthetic experiments, not a live provider optimization claim.
+
+README lines38–44 explicitly scope this to 1→3 synthetic scheduler slots with three alternating clean pairs and a crash/resume per width. Provider spend/model invocations are zero. The three pairs are thin evidence for tail statistics; the public board separately holds ME2 rather than presenting them as sufficient live qualification (`docs/STATUS.md:25`).
+
+### 4. Raw measurement discrimination is reproducible; historical attribution remains unresolved
+
+The retained phase-calibration qualification is `099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70`; file SHA256 `432c18caae7030f0532c5541df650f0e7831d0cae1b0169e9419a9ca471d7f36`.
+
+This audit freshly reopened the raw `samples.json`, reconstructed the frozen fixture and expected output/effect identities from the retained history/request, and ran the pinned pure `verifyMeasurementProbe`. The complete resulting verdict matches the retained verification exactly under canonical comparison. Four blocks contain 32 samples (four conditions×collection on/off). Median isolated timer contrast is 14.9324985 ms and transformation contrast 9.3253565 ms; the recorded collection window is 501.211304 ms. This read-only recomputation executed no workload sampling, provider call, policy action or destination effect.
+
+The verifier retains `criticalPathMs`, `stageP95Ms`, `throughput` and `recoveryMs` as null; historical timer/transformation attribution remains unresolved. The qualification report has no proposed or accepted policy and records `historicalWideSetting:'refused-stage-p95'`. Its positive information-value calculation uses a declared forecast for the synthetic qualification scenario, not a measured live economic gain. README lines81–85 and `measurement.mjs:106-117`, `:181-187` preserve those boundaries.
+
+Reproduction script: `work/workflow-audit/current-state/recheck-measurement.mjs`; machine-readable result: `measurement-recheck.json`.
+
+### 5. Existing verifier receipts and independent model review must stay distinct
+
+Selected retained `independent-verification.json` receipts report 16 synthetic states, 79 accepted obligations, 26 effects, 6 signed decisions and 26 efficiency/investigation assessments, with 0 model calls/runtime dispatches. These are existing receipts read and content-pinned during this audit. The copied baseline receipts overlap; their counts must not be summed. This audit did not rerun their full signed-authority verifier.
+
+The reason is concrete: `ophanim/governance.mjs:92-112` loads private fixture-authority material even on its read-only path. The current audit forbids reading private keys. It instead performed the public status verification and pure raw-sample recomputation described above. Thus full historical authority/signature re-verification remains an explicit evidence limit here.
+
+Moreover, `ophanim/governance.mjs:183-186` constructs and signs each of the three fixture reviewer approvals in the same process, with provider provenance `fixture-local`. A separate deterministic verifier can independently recompute fixture integrity without supplying independent model judgment. The five evaluation documents' FW1 caveat and README line30 correctly distinguish those properties. Public K6/cross-lab review holds confirm that real-seat review qualification is still open.
+
+## What this supports doing now
+
+Treat present seating as explicitly provisional policy under enforced capability, role and independence constraints. Retain the synthetic negative results and avoid replaying unchanged experiments. Complete the already Ready practice-assessment integration so the current cycle records its actual disposition and the next dispatch consumes its policy identity. Then qualify narrowly scoped live comparisons with actual per-attempt usage/cost, acceptance and independent review before claiming an efficiency improvement. Missing telemetry or cost remains unknown.
+
+The three necessary completion proofs remain separate: measured outcome on the intended scope; eligible independent review of the evidence and interpretation; and an adopted, version-bound policy actually consumed by dispatch. None can be inferred solely from a signed status, passing fake-provider suite, synthetic measurement result or selected model preference.
+
+## Scope and preservation
+
+This was a bounded source/public-ledger audit plus selected local retained-report inspection, not an exhaustive search of every external live run. It made no provider calls, read no pre-existing owner or retained fixture private keys, changed no source content and wrote only its scratch audit files. Every Node invocation used the tested offline guard. All 16 selected current-source content pins match the pinned Git blobs; the materialized worktree has inherited executable-bit metadata differences, so it is not described as a clean Git checkout. The JSON contains exact file hashes, public payload references and qualifications.
+
+The root branch's immutable-proposal correction was separately confirmed on local candidate `d9179ab2e5fe229098fb6c87b8bb0b99b5133794`, status module SHA256 `ab71d0b883ccc581aae6ff16442700d64a6655d0bbdb55168e69a34aa413e305` (content matches that commit). Two scratch fixture cases pass: mutating the caller proposal or verifier-copy cannot alter the persisted private snapshot, and a complete receipt naming a different digest refuses without append. All three existing status-application control tests also pass under the offline guard. These use disposable fixture authority and an injected verifier to isolate snapshot/digest mechanics; they do not establish real domain qualification or independent model review. This correction is not part of public `e481e778` and must not be represented as a control already present in that public source. See `immutable-proposal-confirmation.json` and `verify-immutable-proposal.mjs`.
+
+
+---
+
+# Routing delta at current `41e6262`
+
+This bounded delta audit supersedes the commit scope of the routing portion of `findings.md`. Pinned source: **`41e62627f0016bc7f2c10a3d49b2740a3fdd65d4`**, including fit candidate `6c0c12f`, attempt/usage changes `fb67275`, and practice-record changes `39a98a7`. The source worktree was unchanged. All Node probes/tests used the offline guard; no live providers or owner keys were used.
+
+**`fit` is an opt-in, unpromoted candidate. It is not the default or a demonstrated improvement.** `runOpenItem` still defaults to `argo`; CLI `--profile fit` selects it for one run. Its documentation and emitted decisions expressly say provisional/unmeasured. Existing tests pin unchanged ARGO/legacy picks and policy hashes. The added “42 operating points versus 4/8” result measures reachable settings across synthetic tickets, not accepted quality, useful cost, latency, or superiority. [Default][default], [status and limits][doc], [fit decisions][choices]
+
+## Current applicability of CS1–CS3
+
+| Finding | Current result |
+|---|---|
+| CS1: eligibility tags carry unsupported model-ranking rationale | **Still applies to legacy routing.** The seating source is unchanged since `e481e778`, and a fresh probe still returns Astra/SURFACE and Grok 4.6/ISOLATION. The new fit path improves candor: its ordering is explicitly provisional and model classes are 19 TASTE / 2 VENDOR, not relabelled as measured. VENDOR means a positioning quote carried from a missing kb source, not a project benchmark. [Classes][classes] |
+| CS2: effort-first cost claim cites a capability source | **Still applies.** `protocol.mjs` is unchanged since `e481e778`. Fit adds real initial effort mapping and request binding; it does not supply evidence that raising effort before reseating is cheaper or more successful. |
+| CS3: output tier does not reach default frontier requests | **Still applies, and fit inherits it.** A fresh fake-provider test runs the real dispatcher four times. With fit `output:'xs'`, the planner Sonnet request correctly receives 1,024, but Astra implementation still receives 65,536 even though its recorded task output is xs. With xl, both receive 65,536. Default ARGO remains Fable/Astra at 65,536; reviewer requests stay explicitly capped at 4,000. The fit output dimension is therefore only partially bound to actual requests. [Tier selection][tierselect], [request boundary][boundary] |
+
+The current CS3 regression should assert the **serialized implementation request** for fit xs and xl, not only the helper's tier or the decision's task-output field. Expected xs is the model-capped xs budget; observed is 65,536. Keep the explicit reviewer cap as a positive control. This proves a request-policy mismatch, not actual excessive token use or cost.
+
+## What is real, provisional, or unwired
+
+- **Real request binding:** fit's depth maps to a documented effort ladder and `roleTurn` forwards each candidate's effort. The existing test observes actual scripted-provider requests for plan, work and review. A further guarded dispatcher probe observed Sonnet/Astra at max and Grok 4.6 at xhigh for `depth:'max'`. [Effort forwarding][effort]
+- **Explicit routing judgments:** fast/standard/frontier classes; stakes and ambiguity floors; ordinal role/lab order; proportional rounding from five depth values onto each model's ladder; path-derived stakes; latency climb limits of one/two classes. These are manually set provisional rules, with no numerical quality/cost optimizer. The `fast` class does not establish measured per-task speed. [Mappings][mapping], [ordering][choices]
+- **Recorded requirements only:** fit emits `review_labs` 1/1/2/3 and explorer width 0/1/3. Those requirements are not consumed by the review cycle or intake fan-out. They cannot currently be represented as enforced cross-model accountability. The printed seating report remains legacy, and fallback effort escalation is documented as starting from the primary's mapping. [Declared gaps][gaps]
+- **Evidence plumbing, not evidence of superiority:** `loadPractice` now attaches an admitted disposition reference, or explicitly records a provisional default. With no admitted fit disposition, an opt-in fit run remains executable and labelled provisional. That is candidate execution, not empirical promotion. A mismatched admitted policy is recorded as `applies:false`; it does not change the implemented selector. No matched fit-versus-ARGO performance receipt was added by this delta. Documentation requires matched results, independent review, disposition and rollback/re-evaluation conditions before default adoption. [Practice load][practice], [adoption][adoption]
+
+The owner requirement for independent accountability should remain a mandatory operating constraint. The candidate's unconsumed one-/two-lab suggestions must not weaken it. Evaluating fit experimentally and promoting it as qualified policy are separate acts.
+
+## Validation
+
+- `route-task-profile.test.mjs`: **12/12 pass** under the offline guard, including actual effort serialization and breadth/context controls.
+- `latest-delta-routing-probe.mjs`: **25 assertions pass**, four real `runOpenItem` executions with scripted local providers. It retains models, actual sent request caps/effort, task dimensions and practice references in `latest-delta-routing-probe.json`.
+- Current source remains clean. No code changes, provider calls, empirical performance comparison or cross-lab qualification were performed.
+
+[default]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L201-L218
+[doc]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/docs/routing-task-profile.md#L1-L3
+[classes]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/config/classes.json#L1-L51
+[choices]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/route/frontier.mjs#L253-L294
+[tierselect]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L265-L270
+[boundary]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L500-L526
+[effort]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L577-L587
+[mapping]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/route/task-profile.mjs#L30-L64
+[gaps]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/docs/routing-task-profile.md#L109-L114
+[practice]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/ledger/practice-kinds.mjs#L169-L187
+[adoption]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/docs/routing-task-profile.md#L91-L107
+
+
+---
+
+# Current cycle-learning delta: audit and narrow repair
+
+Public source reviewed: `41e62627f0016bc7f2c10a3d49b2740a3fdd65d4`, including C3 `39a98a7` and resource evidence `fb67275`. The earlier claim that no cycle-learning record/gate exists is superseded. C3 adds real ledger enforcement and actual dispatch provenance; qualification of a policy promotion is the remaining defect addressed here.
+
+## What is enforced at the public source
+
+- A default `pantheon.cycle/v2` cycle cannot close without an assessment-stage disposition. Explicit provisional `retain` or `insufficient_evidence` is enough; buying an experiment every cycle is not required. The close lists its dispositions. `cycle-kinds.mjs:175-182`.
+- The next v2 cycle cites the historical admitted prior, and actual `run-item` selections carry the entry loaded by `loadPractice`, or a named provisional implemented default. `cycle-kinds.mjs:211-214`; `run-item.mjs:208-218`.
+- Unmeasured judgment must be labelled provisional. Declared proposer/decider labs are recomputed and same-lab promotion is rejected. A changed document alone cannot change the decision dispatch loads. `practice-kinds.mjs:81-98`, `:113-130`, `:176-187`.
+- M5 retains per-attempt outcomes, usage and sent settings; missing usage/cost remains unknown. Its 13 focused capture/resource tests pass. This is instrumentation, not an independently qualified live practice comparison.
+
+The two C3 practice/assessment files pass 9 focused tests, including an actual fake-provider dispatch retaining the loaded disposition. Historical v1 readers remain valid. An explicit v1 writer path also remains: the assessment requirement is specifically enforced for v2, not every record an arbitrary compatibility caller can create.
+
+## P2: promotion can claim qualification without measurement or an independent decision
+
+At the public source, `practice-kinds.mjs:95-98` requires `measured:true`, any `kind:ledger` citation and textual applicability/rollback/re-evaluation conditions. Lines117-130 bind the named proposal and declared labs but require neither a comparison evidence kind nor a signed decision/review turn. `pantheon-review-cycle.mjs:150-159` can supply those labels directly. Closed-cycle admission then selects the claim (`practice-kinds.mjs:150-159`).
+
+The guarded reproduction uses a real disposable ledger with three scripted ordinary code reviews. After all three reviews finish, it records an unmeasured candidate and a promotion with:
+
+- `measured:true`;
+- the cycle entry itself as its purported comparison evidence;
+- `xai/model-never-invoked-for-this-decision` as decider;
+- ordinary condition strings.
+
+No comparison or later practice-review turn is performed. Nevertheless the promotion is accepted, the cycle closes `verified`, full verification succeeds, and admission returns `promote`, `provisional:false`. Positive controls reject `measured:false` and a same-lab decider. Exact observed data: `repro-learning-promotion.json`; reproduction: `repro-learning-promotion.mjs` against the pinned public source.
+
+The original reproduction's unimplemented candidate reports `applies:false`; it does not prove arbitrary candidate tables execute. A separate historical public-only fixture names the actual implemented policy hash and exposes the matching-hash load path without supplying qualification. No efficiency or quality result should be inferred from either signed claim.
+
+The `practiceAssessment` adapter conservatively maps the existing chair ranking into provisional outcomes (`ophanim/efficiency/practice.mjs:30-44`), but has no production caller at this source pin. `operate.mjs:231-235` takes the caller's outcome/question/evidence; a cycle gate currently guarantees a disposition record, not automatic use of raw telemetry, ranked questions or a validated comparison.
+
+## Narrow fail-closed repair
+
+No validated comparison and signed independent decision verifier exists yet. The candidate therefore refuses every new `promote`, `measured:true` or `provisional:false` practice disposition with that specific missing-qualification reason. Provisional retention, insufficient evidence and measurement proposals remain usable.
+
+An optional trusted kind `appendRefusal` policy runs only on new writes, before payload/object/chain writes; the ledger home checks before lazy authority declaration too. It cannot be bypassed by direct core append. For kinds using that policy, strict canonical JSON creates the stable payload snapshot, and the policy receives a separate copy. This prevents caller/policy mutation from changing the stored value after checking. Historical validation/re-derivation semantics are unchanged.
+
+Current `loadPractice` rejects unsupported historical promotion and measured/nonprovisional retention claims before testing policy-hash equality and falls back to the named provisional implemented policy. Historical `admittedPractice` remains unchanged solely to preserve old cycle/prior re-derivation; it is not current promotion qualification.
+
+The archived fixture has 20 entries, a closed unsupported promotion and a successor citing it as prior. It contains public chain/object/anchor material only. It still verifies at original head `sha256:48e53d3e60561c06ae3a91f1a5c8b26b240b73f59ef41691a479fab275d99883`.
+
+## Validation and limits
+
+Five of the initial six new tests failed before the repair; the historical reader test already passed. Additional focused regressions reproduced lazy authority writes on refusal and mutation changing stored 0 to 2. Final guarded core/practice checks pass 36/36, including direct append, unchanged object/chain on refusal, mutation isolation, old signatures/prior hashes, matching-hash dispatch fallback and actual dispatch provenance. Full root composition and independent cross-model review remain separate requirements; native subagents here are the same model family.
+
+No live provider, owner key or production state was used. Disposable fixture authority was generated for tests and omitted from the archived fixture. This repair closes false promotion; it does not implement the broader empirical research/qualification pipeline or prove the current seating/reviewer count optimal. Candidate commits: `a5f9c4ea001362c4f42a5a46828d16397803320f` and follow-up `b6b5cd048c0b7ed8b4f7be9275d64388e2803d54`. Exact base/candidate source pins are in `latest-delta-learning.json`.
+
+## Retention qualification follow-up
+
+The first narrow promotion repair still allowed the same unsupported qualification through `retain(measured:true, provisional:false, evidence:[])`. A guarded real-ledger reproduction at `a5f9c4e` closed `verified`, fully verified, and loaded the current policy with `outcome:retain`, `provisional:false`, `applies:true`, despite no comparison or independent practice decision. `repro-learning-retain.json` records that observation.
+
+The follow-up extends the same write-only qualification predicate across practice outcomes, including measured-but-provisional claims, and makes current dispatch reject legacy measured/nonprovisional retains. Twelve flag/outcome combinations plus recorder/raw-append boundaries are covered by the new cases. The compact public historical retain fixture keeps its original signature, head and successor prior; runtime falls back to the named provisional implemented policy. Three new tests failed before this extension; the final focused total is 36/36. Raw measurement kinds elsewhere remain unchanged.
+
+
+---
+
+# Role semantics and review reservation at `048b3ba`
+
+Pinned current remote: **`048b3ba41e3b81dc58d446bf9767ccf59d4571a9`**, including reservation change `f96531a`. Read-only audit; source unchanged. No live provider requests, owner keys, new co-seating rule or quorum reduction.
+
+The user's distinction is supported by the code: **a model worker can reason about its task, revise its work and escalate without becoming the orchestration authority.** In this pipeline orchestration authority belongs to deterministic JavaScript. The current reservation is a choice about which contributor labs and reviewer pools count for a particular review scope; it is not a general rule that workers must use OpenAI or that planning belongs only to an orchestrator.
+
+| Term | Actual current behavior |
+|---|---|
+| Controller/orchestration authority | `controller.mjs` computes stages from board state; `runOpenItem` schedules, grants/releases leases, executes acceptance and submits the gated ship transaction. `CONTROLLER` is a code identity, not a model seat. [Controller][controller], [ship][ship] |
+| `planner` model in this caller | Asked for **exactly one TITLE line**. JavaScript constructs all slot work-items, chooses implementer seats and adopts the plan. Its general role-card charter is broader than this callable task. The resulting title reaches the implementer's work-item prompt. [Actual task][plan], [broader template][roles] |
+| Implementer/worker | Receives the ticket, its assigned file, tests and revision feedback; produces file contents. Keeping an external supervisor plan out of its context does not forbid internal planning. Worker revision, effort escalation, fallback and occupancy changes are real and do not grant controller authority. [Worker context][worker], [handoff][handoff] |
+| Independent reviewer | Judges a specified artifact/change and its evidence. Independence is checked against the contribution lineage of that scope, not against whether a model ever planned some unrelated task. Review does not gain ship authority. [Lineage][lineage] |
+
+## Concrete conflations and restrictions
+
+**RS1 — “Only four labs exist” describes this configuration, not the world.** The registry currently exposes four labs. Fit's **in-run reviewer role** permits xai/google/anthropic, while **cycle review** deliberately also draws reviewers from other role tables. A guarded pure probe obtains three cycle reviewers excluding Anthropic: xai, google and OpenAI. That OpenAI seat comes from the planner table but performs a review with the cycle-review brief; its table-of-origin label does not make it an orchestrator. [Configured pools][pool], [cycle pool][cyclepool]
+
+Reservation therefore makes OpenAI the only automatic producer lab for critical fit runs because of this particular in-run reviewer table and producer-exclusion rule. It is not a capability theorem. The fake-provider repro confirms default critical fit puts both title worker and file worker on OpenAI and ships after three other labs review. An explicit Anthropic title worker instead causes `REVIEW_LABS_UNAVAILABLE` after the title call and **before any work call**, even though this repository's cycle-review pool can find three labs excluding Anthropic. This counterexample shows a pool/scoping distinction; it does not establish that the two review layers are interchangeable or authorize removing either constraint. [Reservation][reserve], [wording][reservationdoc]
+
+**RS2 — The named planner is treated as the work's assigner/contributor more broadly than its current authority.** The in-run law passes `plannerVendor` as `assigner`, and every work turn cites the plan turn. Actual model output here is a title; scheduling and assignment remain code. The title is nevertheless consumed by the worker, so current lineage policy deliberately includes that contribution. Correcting the terminology must preserve that recorded relationship rather than silently deleting it. Decide the review scope explicitly—title/requirements, implementation bytes, or the whole change—and derive conflicts from the contributions included in that scope. A role label by itself does not prove authority, authorship of every byte, or absence of contribution. [Plan citation][plancite], [assigner law][law]
+
+**RS3 — The two current review layers apply the shortage differently.** In-run fit reserves producer labs and refuses if its panel cannot be populated. Current remote `cycleReviewers({planLabs:['anthropic'],workLabs:['openai'],n:3})` instead returns `planner_excluded:false`, keeps only OpenAI in `author_labs`, and permits Anthropic review; its caller then sets `author_turns:[]`. The guarded probe reproduces that result. This is the already tracked lineage-downgrade bypass, not a valid resolution of a role-semantics disagreement. The root review candidate addresses it separately; it must not be described as fixed on this audited remote. [Cycle shortage handling][cyclefallback]
+
+## Worker escalation remains valid
+
+The focused current test “when a fallback answered” passes under the offline guard: Google Carbon answers a worker fallback at medium effort; failed acceptance leads to high effort on that answering seat, then the revised work ships. This is worker recovery, not an orchestrator taking over. Actual answerer, model, effort, occupancy and contributions must remain in the handoff evidence. If those contributions leave too few qualified reviewers for the declared scope, record that review-capacity shortage; do not erase the contribution or infer a universal ban on escalation. [Implementation][handoff]
+
+No new mandatory co-seating policy is proposed here. Keep the required quorum; distinguish the configured candidate pool from the set of possible qualified evaluators; keep current worker reasoning and recovery intact; make orchestration authority and the reviewed contribution scope explicit before choosing a reservation policy. Any routing tradeoff remains a candidate requiring independent review and evidence.
+
+Validation: `role-semantics-probe.mjs` passes **16 assertions**, including two real dispatcher runs with scripted providers. `fit-review-intake.test.mjs` filtered to the fallback-effort case passes **1/1**. Raw evidence: `role-semantics-probe.json`; structured audit: `role-semantics.json`. No empirical claim about model quality, cost or review superiority follows from these mechanical checks.
+
+[controller]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/controller.mjs#L1-L3
+[ship]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/run-item.mjs#L1299-L1343
+[plan]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/run-item.mjs#L851-L893
+[roles]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/role/roles.mjs#L62-L80
+[worker]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/project.mjs#L36-L49
+[handoff]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/run-item.mjs#L1029-L1065
+[lineage]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/ledger/lineage-kinds.mjs#L104-L118
+[pool]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/route/frontier.mjs#L235-L251
+[cyclepool]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/ledger/review-cycle.mjs#L24-L41
+[reserve]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/run-item.mjs#L677-L704
+[reservationdoc]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/docs/routing-task-profile.md#L87-L93
+[plancite]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/run-item.mjs#L247-L253
+[law]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/role/seating.mjs#L810-L828
+[cyclefallback]: https://github.com/dsmcewan/OPHANIM/blob/048b3ba41e3b81dc58d446bf9767ccf59d4571a9/pantheon/src/board/operate.mjs#L113-L126

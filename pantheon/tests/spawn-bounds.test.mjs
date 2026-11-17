@@ -6,6 +6,8 @@ import {readFileSync} from 'node:fs';
 const alive=pid=>{try{return !/\) Z /.test(readFileSync(`/proc/${pid}/stat`,'utf8'));}catch{return false;}};
 const cleanup=ids=>ids.forEach(pid=>{try{process.kill(pid,'SIGKILL');}catch{}});
 
+// The timeout must outlast child startup: on a loaded CI runner a 150ms timeout fired before the
+// ESM child had spawned its descendant and printed both pids, so nothing was left to check.
 test('timeout kills a TERM-ignoring process and descendants while the event loop stays responsive',async()=>{
   const ids=[];
   const code=`import {spawn} from 'node:child_process';process.on('SIGTERM',()=>{});const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'inherit'});console.log(JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000);`;
@@ -13,8 +15,8 @@ test('timeout kills a TERM-ignoring process and descendants while the event loop
   let guard;
   try{
     const result=await Promise.race([
-      spawnPromise(process.execPath,['--input-type=module','-e',code],{timeout:150,killGraceMs:25,onStdoutLine:line=>ids.push(...JSON.parse(line))}),
-      new Promise((_,reject)=>{guard=setTimeout(()=>reject(new Error('runner hung after timeout')),800);})]);
+      spawnPromise(process.execPath,['--input-type=module','-e',code],{timeout:1500,killGraceMs:25,onStdoutLine:line=>ids.push(...JSON.parse(line))}),
+      new Promise((_,reject)=>{guard=setTimeout(()=>reject(new Error('runner hung after timeout')),6000);})]);
     assert.equal(result.status,null);
     assert.ok(ticks>5);
     assert.equal(ids.length,2);

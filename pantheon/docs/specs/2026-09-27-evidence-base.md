@@ -656,7 +656,7 @@ new transport — only the streaming flag, which is now recorded per vendor as `
 ### T3. grok store LOCATED — closes the P1 residual for this vendor
 
 `~/.grok/sessions/<percent-encoded-cwd>/<session-id>/`, 2365 files on this machine. Buckets are
-named for the percent-encoded cwd (`%2Fhome%2Fcolchis%2F.claude`). Deriving that bucket name from
+named for the percent-encoded cwd (`%2Fhome%2Fx%2F.claude`). Deriving that bucket name from
 cwd would be defect C3 in a different encoding, so `locateGrokById` scans buckets for the id and
 never reconstructs the encoding. `summary.json` carries `info.id` and `info.cwd`, giving a
 contents-based identity confirmation of the same kind the codex resolver already uses.

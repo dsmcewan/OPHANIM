@@ -1,0 +1,294 @@
+{
+  "schema": "ophanim.owner-corrections/v1",
+  "purpose": "Every correction the owner has had to make, as a failure class with its instances and a detector. Owner conditions 2026-11-17 (docs/self-evaluation.md): corrections must influence future planning and evaluation (7); the owner's corrective intervention must decrease (8); the self-improvement mechanism is not successful until it detects and corrects a previously observed class without the owner pointing it out again. An instance observed_by 'owner' is an intervention; observed_by 'mechanism' is a detection the owner did not have to make.",
+  "classes": [
+    {
+      "id": "declared-dimension-not-serialized",
+      "class": "A routing/task dimension is recorded in the selection or run record but does not reach the serialized provider request, so the record claims a behaviour the request does not have.",
+      "source": "owner audit CS3, docs/reviews/2026-11-16-workflow-handoffs/CURRENT_STATE.md (fit output xs still sent 65,536)",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "41e6262",
+          "note": "fit output dimension unbound for Astra; argo reason claimed difficulty sets the tier"
+        }
+      ],
+      "fixed_in": "cbe0622",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/output-cap-serialized.test.mjs",
+        "name": "fit output"
+      }
+    },
+    {
+      "id": "manufactured-review-panel",
+      "class": "Ordinary worker selection is constrained by orchestration/review separation rules: producers are co-seated or moved to make a numeric review panel possible, or a configured pool is described as a universal limit.",
+      "source": "owner audit RS1-RS3 and control contract 'Functional roles and valid worker escalation'; owner condition 4, 2026-11-17",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "f96531a",
+          "note": "reservation put planner and maker on openai; doc said only four labs exist"
+        }
+      ],
+      "fixed_in": "a73d185",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/fit-review-intake.test.mjs",
+        "name": "producers are chosen on their own merits"
+      }
+    },
+    {
+      "id": "unqualified-claim-as-measurement",
+      "class": "A preference, sample-size threshold, capability citation or synthetic result is recorded or presented as a measured/qualified basis without a validated comparison and an independent decision.",
+      "source": "owner control contract 'Empirical qualification replaces opinion-based policy promotion'; audit learning P2; owner conditions 5 and 6",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "39a98a7",
+          "note": "promote/retain could claim measured:true with no comparison or independent decision"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "6c0c12f",
+          "note": "fit classes and thresholds offered as 'my judgment calls, not measurements'"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "d4f9644",
+          "note": "automatic assessment wrote measured:true once n was sufficient"
+        }
+      ],
+      "fixed_in": "62e54e8 (automatic path only; the general write-side refusal is the owner's candidate a5f9c4e/b6b5cd0, not public)",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/practice-continuous.test.mjs",
+        "name": "cycle close: without a stated assessment"
+      }
+    },
+    {
+      "id": "constraint-tag-carries-ranking",
+      "class": "An eligibility/constraint tag (SURFACE, ISOLATION) or a capability citation carries an unsupported comparative quality, cost or latency claim in a recorded decision.",
+      "source": "owner audit CS1 and CS2, docs/reviews/2026-11-16-workflow-handoffs/CURRENT_STATE.md",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "e481e77",
+          "note": "Astra/SURFACE and Grok 4.6/ISOLATION reasons assert ranking; effort-first 'dial is cheaper' cites a capability page"
+        }
+      ],
+      "fixed_in": "this commit (selection claims; raise_effort hypothesis)",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/claims-separation.test.mjs",
+        "name": "CS1: every selection separates constraints"
+      }
+    },
+    {
+      "id": "sampling-rate-as-spend-cap",
+      "class": "An experiment's spend is bounded only per run or by a sampling rate, with no total spending boundary or comparable starting conditions.",
+      "source": "owner condition 3, 2026-11-17",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "58c0b8e",
+          "note": "paired runs had pairRate and a per-counterpart bound only"
+        }
+      ],
+      "fixed_in": "62e54e8",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/practice-paired.test.mjs",
+        "name": "owner condition 3"
+      }
+    },
+    {
+      "id": "coarse-single-label-routing",
+      "class": "One coarse label (easy/hard) drives several independent dials and the routing ignores the breadth of eligible alternatives.",
+      "source": "owner, 2026-11-17: 'Easy and Hard is not an effective scale and does not utilize the breadth of alternatives'; control contract 'Routing requires a capability profile and an alternative set'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "e481e77",
+          "note": "legacy bands chose model and output tier from one label"
+        }
+      ],
+      "fixed_in": "6c0c12f (fit candidate, unqualified; not adopted)",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/route-task-profile.test.mjs",
+        "name": "same legacy difficulty but different stakes/depth"
+      }
+    },
+    {
+      "id": "machine-specific-paths",
+      "class": "A tracked source, test, script or record names a real /home/<user> path.",
+      "source": "independent review WF4; recurred in an owner audit record 2026-11-17 (4221a94), fixed by the owner (a364832)",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-16",
+          "ref": "PR #7 WF4",
+          "note": "48 occurrences in 12 files"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "owner",
+          "date": "2026-11-17",
+          "ref": "4221a94",
+          "note": "CI synthetic-proof (WF4 guard) detected paths in a new review record before anyone pointed it out; the owner corrected it (a364832), so this is a detection, not a correction by the mechanism"
+        }
+      ],
+      "fixed_in": "a364832",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/tests/machine-paths.test.mjs",
+        "name": "WF4: no source"
+      }
+    },
+    {
+      "id": "agent-claim-relayed-unverified",
+      "class": "A delegated agent's report of behaviour is merged and relayed to the owner as done, verified only by the suites the agent wrote, without checking the claimed behaviour at the real boundary (serialized request, ledger write, refs).",
+      "source": "owner condition 8, 2026-11-17 ('tell one agent to verify another's work'); CS3 was such a claim",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "6c0c12f",
+          "note": "'every request carries the mapped effort/output' reported; output was unbound for Astra"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "a process failure in how work is integrated; no executable check exists for it yet",
+        "next": "before merging delegated work, the integrator states each claimed behaviour and names the test that observes it at the real boundary and fails on the old code; a claim with none is reported as unverified, not done"
+      }
+    },
+    {
+      "id": "partial-reported-as-complete",
+      "class": "Work is reported as complete or a workflow as operational while required parts (live cycle, cross-lab review, owner signing) are missing.",
+      "source": "owner, 'Is that the entire review or is their more to do?'; 'Demonstrate one complete cycle before calling that workflow operational'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-16",
+          "ref": "PR #7",
+          "note": "review reported before all findings were addressed"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "reporting discipline; the status rules already refuse Resolved without a shipped run and a closed cross-lab review",
+        "next": "status proposals and summaries list unmet parent requirements explicitly (control contract 'Parent acceptance coverage')"
+      }
+    },
+    {
+      "id": "stopped-loop-restarted",
+      "class": "A background activity the owner stopped (e.g. a credential retry loop) is restarted or repeated.",
+      "source": "owner, 2026-11-16: 'Don't start that shot again'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-16",
+          "ref": "session",
+          "note": "provider-key check loop"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "session conduct, not code",
+        "next": "one attempt per credential check, results recorded; cross-lab-review.mjs makes one attempt per lab by design"
+      }
+    },
+    {
+      "id": "test-passes-for-wrong-reason",
+      "class": "A test passes without exercising the behaviour it names (a wrong fixture shape, an import-time failure read as a behavioural one, an assertion that holds for any input), so passing it is mistaken for evidence.",
+      "source": "owner condition 5, 2026-11-17 ('Do not optimize for the verification mechanism')",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "claims-separation.test.mjs (pre-commit)",
+          "note": "the CS2 compatibility test used an outcome shape the protocol does not know, so it verified a 'stop' record, not raise_effort; caught by checking the decision the fixture produced, fixed with an assertion that the case is a real raise_effort"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "8441296 (merge check)",
+          "note": "two delegated tests failed on the old code only at import; re-run the behavioural assertion against the old dispatcher instead"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "review-capacity.test.mjs (pre-commit)",
+          "note": "the escalation test returned early when only one lab wrote (argo's implementer fallbacks are one lab), so it passed without exercising escalation; caught by making the precondition an assertion, fixed by running it under fit"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "practice-measure-plan-title.test.mjs (pre-commit)",
+          "note": "a bare /TITLE:/ counted reviewer prompts (they quote the work item) as planner calls, and a total boundary of 30 was too loose to stop any run; caught by printing what matched and what ran, fixed with the planner's own instruction and a boundary that binds"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "no general executable check; caught by integrator discipline",
+        "next": "when a new test is claimed to fail on old code, confirm the failure is behavioural, not an import or fixture error"
+      }
+    },
+    {
+      "id": "role-label-as-contribution",
+      "class": "Review independence is derived from a role label (the 'planner' as 'assigner') instead of the contributions that actually reached the reviewed bytes, and the reviewed scope is left implicit.",
+      "source": "owner audit RS2, docs/reviews/2026-11-16-workflow-handoffs/CURRENT_STATE.md; owner request 2026-11-17 'Make the reviewed contribution scope explicit for RS2'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "048b3ba",
+          "note": "in-run law passed plannerVendor as assigner; the cycle excluded the planner's lab but cited only work turns"
+        }
+      ],
+      "fixed_in": "0f69f65",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/review-scope.test.mjs",
+        "name": "the plan's inclusion is derived from what the worker reads"
+      }
+    },
+    {
+      "id": "availability-fallback-narrows-independence",
+      "class": "When reviewer capacity is short, the review scope or panel is narrowed (a contribution dropped, fewer reviewers, a contributing lab admitted) instead of the review being pending.",
+      "source": "owner audit RS3 and control contract 'Mandatory cross-model accountability'; owner direction 2026-11-17 'Enforce the existing independence requirement for coordinated reviews'",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "048b3ba",
+          "note": "cycleReviewers let the planner's lab review and cited no author turns when labs ran out"
+        }
+      ],
+      "fixed_in": "this commit (strict cycleReviewers; capacity check before work; ticket-title board default)",
+      "detector": {
+        "kind": "test",
+        "file": "pantheon/tests/review-capacity.test.mjs",
+        "name": "strict: two contributing labs leave the configured cycle pool short"
+      }
+    }
+  ]
+}

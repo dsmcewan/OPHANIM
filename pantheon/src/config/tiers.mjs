@@ -8,6 +8,12 @@ import { isFrontier, CAPABILITIES } from "../../../packages/model-client/index.m
 
 const FACTS = JSON.parse(readFileSync(new URL("./capability-facts.json", import.meta.url), "utf8"));
 export const TOKEN_TIERS = Object.freeze({ easy: 4096, medium: 16384, hard: 32768 });
+// The `fit` profile's output dimension (src/route/task-profile.mjs): five named tiers, added beside the
+// difficulty-keyed table rather than into it, because TOKEN_TIERS' keys are also the set of accepted ticket
+// difficulties (run-item, operate, run-swarm). easy/medium/hard are aliases of s/m/l, with the same budgets.
+// Equally PROVISIONAL.
+export const OUTPUT_TIERS = Object.freeze({ xs: 1024, s: 4096, m: 16384, l: 32768, xl: 65536 });
+export const TIER_ALIASES = Object.freeze({ easy: "s", medium: "m", hard: "l" });
 export const TIERS_STATUS = "provisional (2026-11-16); adjust from recorded truncations";
 // What the frontier client applies when no budget is named (model-client prepareRequest, long_decode).
 export const FRONTIER_DEFAULT_OUTPUT = 65536;
@@ -20,8 +26,9 @@ const ceilingOf = model => {
 /** The tier's budget for a model, capped at its documented ceiling. */
 export function outputBudgetFor(model, tier = "medium") {
   // Own keys only: "toString" and the like are not tiers (they would yield a NaN budget).
-  const wanted = typeof tier === "string" && Object.hasOwn(TOKEN_TIERS, tier) ? TOKEN_TIERS[tier] : null;
-  if (!wanted) throw new Error(`unknown token tier "${tier}" (known: ${Object.keys(TOKEN_TIERS).join(", ")})`);
+  const wanted = typeof tier !== "string" ? null : Object.hasOwn(TOKEN_TIERS, tier) ? TOKEN_TIERS[tier]
+    : Object.hasOwn(OUTPUT_TIERS, tier) ? OUTPUT_TIERS[tier] : null;
+  if (!wanted) throw new Error(`unknown token tier "${tier}" (known: ${[...Object.keys(TOKEN_TIERS), ...Object.keys(OUTPUT_TIERS)].join(", ")})`);
   const ceiling = ceilingOf(model);
   const tokens = ceiling === null ? wanted : Math.min(wanted, ceiling);
   return { tokens, tier, ceiling, capped: ceiling !== null && ceiling < wanted, status: TIERS_STATUS };

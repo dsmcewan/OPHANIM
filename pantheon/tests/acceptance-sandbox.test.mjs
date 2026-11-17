@@ -1,9 +1,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { createServer } from "node:net";
 import { runAcceptance } from "../src/board/acceptance.mjs";
 
@@ -13,6 +13,10 @@ test("acceptance uses real filesystem/network isolation and still runs local too
   const { mkdirSync } = await import("node:fs"); mkdirSync(worktree);
   const secret = join(root, "host-secret"); writeFileSync(secret, "fixture-only");
   symlinkSync(secret, join(worktree, "host-link"));
+  // The host's home directory, on whatever machine runs this: it must exist here, so the check inside
+  // the sandbox is not vacuous (it once named a path that existed only on the original machine).
+  const home = realpathSync(homedir());
+  assert.ok(home !== "/" && existsSync(home), `the host home directory ${home} exists outside the sandbox`);
   const server = createServer(socket => socket.end());
   await new Promise(r => server.listen(0, "127.0.0.1", r));
   writeFileSync(join(worktree, "probe.mjs"), `import assert from "node:assert/strict";
@@ -20,7 +24,7 @@ test("acceptance uses real filesystem/network isolation and still runs local too
     assert.equal(process.env.PANTHEON_FIX_DUMMY,undefined);
     assert.equal(existsSync(${JSON.stringify(secret)}),false);
     assert.equal(existsSync("host-link"),false);
-    assert.equal(existsSync("/home/colchis/.claude"),false);
+    assert.equal(existsSync(${JSON.stringify(home)}),false,"host home directory visible");
     assert.throws(()=>writeFileSync("/usr/escape","bad"));
     writeFileSync("local-output","ok");
     await new Promise((resolve,reject)=>{const s=connect(${server.address().port},"127.0.0.1");

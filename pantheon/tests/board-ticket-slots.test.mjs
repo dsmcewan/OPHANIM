@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { normalizeSlots, ticketContainmentRefusal } from "../src/board/ticket-safety.mjs";
 
 const base = {
-  key: "multi", repo_root: "/home/colchis/Projects/fixture", title: "t", goal: "the whole change",
+  key: "multi", repo_root: "/srv/fixture", title: "t", goal: "the whole change",
   copy: [], acceptance_cmd: "true", question: "q",
 };
 

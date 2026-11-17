@@ -1,0 +1,1 @@
+{"basis":"the ledger is on by default for runOpenItem and the OPHANIM CLI (PR #6); key custody is tracked under signer","checked":"2026-11-17","item":"sy1-ledger-caller","schema":"ophanim.status/v1","state":"Resolved","title":"SY1: the ledger had no shipped caller (independent review)","waiting_on":null}

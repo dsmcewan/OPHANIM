@@ -1,0 +1,1 @@
+{"basis":"review entries under cold-review rules by default; after shared-package, which moves the same files","checked":"2026-11-17","depends_on":["shared-package"],"item":"review-every-cycle","schema":"ophanim.status/v1","state":"Ready","title":"Review layer every cycle","waiting_on":null}

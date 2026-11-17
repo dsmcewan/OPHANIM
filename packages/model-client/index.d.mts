@@ -46,6 +46,12 @@ export type TokenCounter=(request:OpaqueItem)=>Promise<number>;
 export const COMPACTION_BETA:string;
 export function prepareRequest(options:RequestOptions):PreparedRequest;
 export function checkBudget(prepared:PreparedRequest,countTokens?:TokenCounter):Promise<number|null>;
+export const LONG_DECODE_RESERVE:number;
+export function reservedOutput(request:OpaqueItem,cap?:{output?:number|null}):number;
+export function estimateInputTokens(request:OpaqueItem):number;
+export interface ContextAdmission {model:string;window:number|null;inputCeiling:number|null;output:number;input:number;basis:string}
+export function admitContext(options:{model:string;window:number|null|undefined;inputCeiling?:number|null|undefined;output:number;input:number;basis:string}):ContextAdmission;
+export function providerTokenCounter(client:unknown,prepared:{cap:{vendor?:string;surface:string};options?:{headers?:Record<string,string>}},signal?:AbortSignal):TokenCounter|undefined;
 export function compactConversation(options:{client:unknown;model:string;history:OpaqueItem[];system?:unknown;tools?:unknown;signal?:AbortSignal}):Promise<OpaqueItem[]>;
 export function cacheKey(options:{scope:OpaqueItem;sessionId:string;vendor:string;model:string}):string;
 

@@ -7,17 +7,17 @@ import assert from 'node:assert/strict';
 import { resolveRepoRoot } from '../scripts/lib/repo-root.mjs';
 
 test('with no repo_root, resolves to the pantheon repo itself (default, existing-ticket behavior)', () => {
-  assert.equal(resolveRepoRoot('/home/colchis/Projects/pantheon', undefined), '/home/colchis/Projects/pantheon');
+  assert.equal(resolveRepoRoot('/srv/projects/pantheon', undefined), '/srv/projects/pantheon');
 });
 
 test('an absolute repo_root is used as-is', () => {
-  assert.equal(resolveRepoRoot('/home/colchis/Projects/pantheon', '/home/colchis/Projects/lexi-orb'), '/home/colchis/Projects/lexi-orb');
+  assert.equal(resolveRepoRoot('/srv/projects/pantheon', '/srv/projects/lexi-orb'), '/srv/projects/lexi-orb');
 });
 
 test('a relative repo_root is resolved against the pantheon repo, not the process cwd', () => {
-  assert.equal(resolveRepoRoot('/home/colchis/Projects/pantheon', '../lexi-orb'), '/home/colchis/Projects/lexi-orb');
+  assert.equal(resolveRepoRoot('/srv/projects/pantheon', '../lexi-orb'), '/srv/projects/lexi-orb');
 });
 
 test('an empty-string repo_root is treated as absent, not as "resolve to cwd"', () => {
-  assert.equal(resolveRepoRoot('/home/colchis/Projects/pantheon', ''), '/home/colchis/Projects/pantheon');
+  assert.equal(resolveRepoRoot('/srv/projects/pantheon', ''), '/srv/projects/pantheon');
 });

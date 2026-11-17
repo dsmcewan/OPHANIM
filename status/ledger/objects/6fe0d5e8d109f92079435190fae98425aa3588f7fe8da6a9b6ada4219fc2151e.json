@@ -1,0 +1,1 @@
+{"basis":"gate and contribution kinds resolve their own board per entry; after shared-package, which moves the same files","checked":"2026-11-17","depends_on":["shared-package"],"item":"board-resolver","schema":"ophanim.status/v1","state":"Ready","title":"One ledger across boards","waiting_on":null}

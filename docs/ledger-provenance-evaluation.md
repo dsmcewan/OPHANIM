@@ -1,5 +1,7 @@
 # Ledger provenance: TELOS as the ledger (revised 2026-11-16)
 
+> **Scope of what is proven** (added after the independent review of 2026-11-16, finding FW1). OPHANIM's `prove` and `verify` run against fixture authority: a candidate is accepted when its output equals the obligation's stored `expected` value (`ophanim/governance/check-contract.mjs`), and the three TELOS reviewer approvals are generated and signed by the same process that needs them (`ophanim/governance.mjs`). They therefore certify crash consistency and record integrity, not that work without a stored answer can be verified. Model turns in the suites run against scripted fakes; no live provider is called in CI. Binding real reviewers to the ledger is item K6 on the [status board](STATUS.md), a governance decision.
+
 **Principle (Research Director).**
 - Review, supervision, audit and watchdog are not extra layers. They are the same loop applied to its own records, hardened through provenance.
 - It runs on a ledger, and TELOS was the ledger. That is why the pieces interlock:
@@ -88,19 +90,20 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | Item | Status | Basis |
 |---|---|---|
 | TELOS as the single ledger as is | Resolved: no | Limits T1–T6 above, read from the pinned source. |
-| K1 chain core | Resolved | `ophanim/ledger/chain.mjs`. See "K1 implemented" below. |
-| K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
-| K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `ophanim/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
-| K3 `gate` kind (ship gate verdicts) | Resolved | Ship's gates now evaluate against named heads (`gatesAt`, `pinnedRefs` in `integrate.mjs`); `ophanim/ledger/gate-kind.mjs` records and re-derives the verdict. See "Gate kind implemented" below. |
-| K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `ophanim/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
+| K1 chain core | Resolved | `packages/ledger/chain.mjs`. See "K1 implemented" below. |
+| K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority), `ophanim/ledger/anchors.mjs` (TELOS) and `pantheon/src/ledger/anchors.mjs` (board). See "K2 implemented" below. |
+| K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `pantheon/src/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
+| K3 `gate` kind (ship gate verdicts) | Resolved | Ship's gates now evaluate against named heads (`gatesAt`, `pinnedRefs` in `integrate.mjs`); `pantheon/src/ledger/gate-kind.mjs` records and re-derives the verdict. See "Gate kind implemented" below. |
+| K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `pantheon/src/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
 | K5 efficiency events as entries, and the debit loophole | Resolved | `ophanim/ledger/efficiency-kinds.mjs`; `assessConvergence({ledger})`, `chooseEfficiencySlots({ledger})`. See "K5 implemented" below. |
 | K5 `assessed` and `retained` kinds | Resolved | `efficiency.trace`, `efficiency.assessed`, `efficiency.retained` in `ophanim/ledger/efficiency-kinds.mjs`, re-derived by the same computations the file verifiers run; a fresh assessment is verified before `cli.mjs` uses it. See "K5b implemented" below. |
+| Lease rows, budget limits, ref moves and seat files on the ledger | Resolved | `pantheon/src/ledger/board-kinds.mjs`; seat files checked in `sdkTurn`. See "Remaining records on the ledger" below. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
 ## K1 implemented (2026-11-16)
 
-`ophanim/ledger/chain.mjs`: one append-only chain (`chain.jsonl`) plus content-addressed payload objects.
+`packages/ledger/chain.mjs`: one append-only chain (`chain.jsonl`) plus content-addressed payload objects.
 
 | Property | How |
 |---|---|
@@ -113,7 +116,7 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 
 One trust assumption is stated rather than hidden: in frontier mode, entries before a checkpoint are trusted to have been verified when the orderer signed it. `verify({mode: "full"})` re-derives everything.
 
-*Check.* `ophanim/ledger/chain.test.mjs` (8 tests, in `npm run test:proof`) covers:
+*Check.* `packages/ledger/tests/chain.test.mjs` (8 tests then; it ran in `npm run test:proof` until the move to `packages/ledger`, see "Layering") covers:
 - multi-author chains re-deriving;
 - refusal before writing;
 - the closed registry and per-kind authorship;
@@ -136,7 +139,7 @@ One trust assumption is stated rather than hidden: in frontier mode, entries bef
 - A revoked key signs nothing after the revocation.
 - A change that would leave no valid orderer or operator is refused.
 
-**Anchors** (`ophanim/ledger/anchors.mjs`). The pinned TELOS chains and the board DAG are not changed. They are anchored.
+**Anchors** (`ophanim/ledger/anchors.mjs` for TELOS, `pantheon/src/ledger/anchors.mjs` for the board). The pinned TELOS chains and the board DAG are not changed. They are anchored.
 
 | Kind | Payload | Re-derives by |
 |---|---|---|
@@ -144,7 +147,7 @@ One trust assumption is stated rather than hidden: in frontier mode, entries bef
 | `board.anchor` | `{ref, commit}` | Walking the ref's history: the commit must still be in it. The board moving on is fine; a rewrite is not. |
 
 *Check.*
-- `ophanim/ledger/chain.test.mjs` (10 tests) adds two genesis cases:
+- `packages/ledger/tests/chain.test.mjs` (10 tests) adds two genesis cases:
   - a forged ledger under another authority verifies only against its own anchor, never the pinned one;
   - only an operator changes the authority, and revocation takes effect from that entry.
 - `ophanim/ledger/anchors.test.mjs` (3 tests) covers:
@@ -173,7 +176,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - `run.json` keeps its copy for display; the ledger entry is the one that re-derives.
 
 *Check.*
-- `ophanim/ledger/kinds.test.mjs` (5 tests) covers uncited facts, seating citations, escalations re-deriving against cited facts, step continuity by citation, and contributions after the board moves on.
+- `pantheon/tests/ledger-kinds.test.mjs` (5 tests) covers uncited facts, seating citations, escalations re-deriving against cited facts, step continuity by citation, and contributions after the board moves on.
 - `pantheon/tests/route-protocol.test.mjs` adds an end-to-end run. A truncation is recorded on the ledger, citing its inputs, and verifies on replay. A ledger altered afterwards stops the next run before it starts.
 - Suites:
   - `npm run test:proof`: 146 of 146, with TELOS at the pin;
@@ -190,7 +193,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - A provider that reports nothing yields `null`, never a guess.
 - `run.json` turns carry it too.
 
-**Kinds** (`ophanim/ledger/lineage-kinds.mjs`).
+**Kinds** (`pantheon/src/ledger/lineage-kinds.mjs`).
 
 | Kind | Re-derives by |
 |---|---|
@@ -205,7 +208,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - The critique is recorded as a `review` citing the work turn, so cold review covers the planner's lab as well. That is the same rule `assertReviewCutsAcross` enforces live, now re-derivable from the ledger.
 
 *Check.*
-- `ophanim/ledger/lineage-kinds.test.mjs` (4 tests) covers:
+- `pantheon/tests/ledger-lineage-kinds.test.mjs` (4 tests) covers:
   - per-seat signing and refusal of another key;
   - reply, placeholder and model-change refusals;
   - cold review across direct, transitive and lane-model lineage, and self-review;
@@ -232,7 +235,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - Ship's gate code moved into a synchronous `evaluateGates`; `ship` calls it, then writes its one commit exactly as before. Refusals and dry runs return the same objects.
 - `gatesAt({store, heads, ref, from, actor, graft, leases, now})` runs the same evaluator through `pinnedRefs(heads)` and returns the `shipClaim`. It is a second caller of the evaluator, not a copy. It is synchronous, as a re-deriver must be.
 
-**The kind** (`ophanim/ledger/gate-kind.mjs`; `kinds.mjs` is unchanged):
+**The kind** (`pantheon/src/ledger/gate-kind.mjs`; `kinds.mjs` is unchanged):
 
 | Kind | Payload | Re-derives by |
 |---|---|---|
@@ -241,7 +244,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - `gateKinds({authors, board: {store, refs}})`: authors is the controller.
 - `gateRecord(...)` builds the payload from the live board. It reads the heads and leases once, computes the claim from that record, and refuses if a live `shipClaim` at the same moment disagrees.
 
-*Check.* `ophanim/ledger/gate-kind.test.mjs` (4 tests, on a real Pantheon board) covers:
+*Check.* `pantheon/tests/ledger-gate-kind.test.mjs` (4 tests, on a real Pantheon board) covers:
 - a held-lease refusal and a green verdict recorded, the ship landing, the branch moving on, and both entries still re-deriving;
 - forgeries refused: `tests_passed` flipped, LEASE quietly green, lease rows dropped, a later `now`, a non-controller author;
 - heads refused when they are not on this board (a commit from another board, a made-up cid) or not in the ref's history;
@@ -283,7 +286,7 @@ Suites:
 *Check.*
 - `ophanim/efficiency/measured-value.test.mjs` (2 tests): a negative or invented legacy aggregate and a negative debit are refused; forged result files (no use; a use whose state directory holds no such trace) are not counted. Both tests fail against the pre-change `assessment.mjs` (the `-100000` aggregate is accepted; 3 convergences counted instead of 1) and pass after.
 - `ophanim/ledger/efficiency-kinds.test.mjs` (5 tests): promotion figures, the 20-use cap counted on the chain, savings re-derived from the cited promotion, debits non-negative and never double-charged, totals refused on an edited ledger, and an assessment recording on the ledger and refusing an altered one.
-- `ophanim/ledger/chain.test.mjs` (11 tests) adds `view.entries()`: an entry sees only what came before it, on append and on replay.
+- `packages/ledger/tests/chain.test.mjs` (11 tests) adds `view.entries()`: an entry sees only what came before it, on append and on replay.
 - Suites:
   - `npm run test:proof`: 154 of 154, with TELOS at the pin;
   - Pantheon: 811 pass, plus the 1 known environment failure.
@@ -347,3 +350,259 @@ Without a ledger the file path is unchanged.
 - A **completed** experiment recorded as `efficiency.retained` is not exercised end to end. That needs a full 1 → 3 replay with independent qualification, which no test in the suite runs. The refusal paths are tested; the positive path shares `retainedExperimentFrom` with `readRetainedExperiment`.
 - In the evidence-dependent case, a held receipt cannot show which failure produced it (forecast, retired source, lock). It is bound to the trace and carries no authority, but substituting it for a real receipt there is not detectable.
 - `cli.mjs` still creates no ledger of its own (unchanged from K5).
+
+## The ledger by default (cycle 8, 2026-11-17)
+
+The cycle review named "the ledger is opt-in" as the largest remaining gap. It is now on by default.
+
+| Piece | How |
+|---|---|
+| Ledger home | `ophanim/ledger/system.mjs`, `openSystemLedger({root, board, anchor})` (since the layering move: the home itself is `packages/ledger/home.mjs`, and a Pantheon run opens `openPantheonLedger` in `pantheon/src/ledger/system.mjs`). It opens, or on first use creates, a ledger with every kind registered: facts, seating, escalation, contribution, turn, review, the efficiency kinds, and, when a board is given, gate and board anchors. |
+| Trust | First use writes the genesis and pins its hash in `ANCHOR`. An expected anchor (argument or `OPHANIM_LEDGER_ANCHOR`) must match. A chain without its anchor is refused, never trusted on its own word. |
+| Key custody | `keys/` (0700) holds one owner-only file (0600) per private key: operator, controller, and each seat occupancy. Keys never enter the chain. A key readable by others, or one that does not match the authority's public key, is refused. |
+| Seat keys across runs | A seat occupancy keeps its key and is admitted once. `rotateSeatKey` revokes and re-admits, and earlier entries still verify. |
+| Inputs once | Identical facts and seating entries already on the chain are reused, so a shared ledger grows by what changed. |
+| Default on | `runOpenItem` records at `OPHANIM_LEDGER` or `<board root>/ledger`. `executeRequest` records at `OPHANIM_LEDGER` or `<stateDir>/ledger`. `ledger: false` opts out, and replays get none. |
+
+**Found by turning it on.** Multi-slot runs give each slot its own implementer (one slot on gpt-6-astra, another on gpt-6-sol). The ledger had recorded both under one seat and correctly refused the second turn as a model change without a reseat. The seat is now identified the way the conversation layer keys it (vendor, purpose and model), so they are two seats. An equilibrium reuse now names the same ledger entries as the fresh assessment instead of none.
+
+*Check.*
+- `ophanim/ledger/system.test.mjs` (4 tests) covers:
+  - creation, pinning and permissions;
+  - refusal of a wrong anchor, a lost anchor, an exposed key and a swapped key;
+  - inputs and seat keys reused across runs, and rotation;
+  - the key store refusing overwrites.
+- `ophanim/ledger/cli-default.test.mjs` covers the CLI on by default and opted out.
+- `pantheon/tests/route-protocol.test.mjs` covers a run on by default: genesis, facts, seating, turns, review and escalation recorded and verifying. It also covers `ledger: false` writing nothing.
+- Suites:
+  - `npm run test:proof`: 170 of 170, with TELOS at the pin;
+  - Pantheon: 812 pass, plus the 1 known environment failure;
+  - model client: 48 pass.
+
+**Still to do.**
+- **Layering:** Pantheon reaches the ledger through a dynamic import of `ophanim/ledger`. The ledger belongs in a shared package (`packages/ledger`). Done: see "Layering" below.
+- **Shared ledger:** gate and contribution kinds re-derive against the board the ledger was opened with, so one shared ledger across boards needs a board resolver per entry. Done: see "Shared ledgers and the run-path gate" below.
+- **Key custody:** it is a local key store; a hardware or remote signer would replace `keyStore`.
+
+
+## Remaining records on the ledger (2026-11-17)
+
+The cycle review (item 5) named the records still off the ledger or only signed inputs. Four are now entries or checked against them. The `run.json` display copies stay display copies.
+
+| Record | Was | Now |
+|---|---|---|
+| Lease rows (`runtime/leases.json`) | Mutable table; a signed input to the LEASE gate | A `lease` entry per grant, renewal, release, expiry and fence |
+| Budget limits (`runtime/budget.json`) | Overwritten, `declared_at` mutable | A `budget` entry per declared cap, citing the one it replaces |
+| Ref moves (`refs/`, reflog) | Ref files plus a display reflog | A `ref.move` entry per successful swap, citing the previous move of that ref |
+| Seat conversation files | Self-attesting: the chain is recomputed from the file | Checked against the ledger's `turn` entries for the seat at handoff |
+
+**Kinds** (`pantheon/src/ledger/board-kinds.mjs`, registered in `systemKinds`, authored by the controller). Each entry names its board (`scope`, the board root) and cites exactly the latest entry for the same lease, budget or ref; a skipped, stale or forked citation is refused.
+
+| Kind | Payload | Re-derives by |
+|---|---|---|
+| `lease` | `{scope, resource, event, gen, holder, when, expires_at?, reason?}` | <ul><li>`granted` follows an inactive entry at gen + 1; `fenced` is gen + 1 with a reason.</li><li>`renewed`, `released`, `expired` keep the active gen and holder; `expired` only at or after `expires_at`.</li><li>Time does not run backwards; an active lease expires after it was granted.</li><li>`observed` records a lease the ledger had not seen (a board older than its ledger), only as the first entry for it.</li></ul> |
+| `budget` | `{scope, limits, declared_at}` | Non-negative `max_turns` / `max_usd`; declared no earlier than the cap it replaces. |
+| `ref.move` | `{scope, name, from, to, msg, by, reset}` | <ul><li>`from` is where the previous move left the ref.</li><li>`to` is a commit in the board's store whose history contains `from`, unless `reset` is true.</li></ul> |
+| `turn` (extended) | adds `prompt_sha` and `tools` | The reply's exchange digest is recomputed from the reply and tools; the prompt digest is carried (prompts are not kept). |
+| `gate` (extended) | adds `lease_scope` | With it, the lease rows must be exactly those the board's latest active `lease` entries derive, and the verdict cites exactly those entries. |
+
+**On the path.**
+- `openBoard(root, {ledger})` and `board.useLedger(rec)` take a board recorder (`recorder().board(root)`). Pantheon never imports the ledger for this; `runOpenItem` attaches the default ledger's recorder.
+- Runtime and refs record **before** the file changes. A record the ledger refuses:
+  - a lease change throws, and the table is not written;
+  - a swap returns `LEDGER_REFUSED`, and the ref does not move;
+  - `refs.swap({reset: true})` is the only way to move a ref to a non-descendant, and it is recorded as a reset.
+- `runtime.budget()` reads the declared limits from the ledger. It reports `declared_binding` and `declared_file_mismatch`; an edited `budget.json` does not raise the cap. Spend stays bound to commits.
+- `sdkTurn({ledger: {exchanges()}})`: at handoff, every stored exchange must match the ledger's turn entries for the seat, in order (`unmatchedExchange`), or the turn is refused as `LEDGER_MISMATCH`. `runOpenItem` passes the seat's entries, and records `prompt_sha` and `tools` with each turn.
+- `gateRecord({leaseLedger})` refuses a runtime table that differs from the ledger's; `gateLeaseCitations` gives the entries to cite.
+- `ledger: false`, or no recorder: every file path is unchanged.
+
+*Check.*
+- `pantheon/tests/ledger-board-kinds.test.mjs` (6 tests), on a real Pantheon board recording on the system ledger:
+  - lease events and generations recorded; forged grants, fences, renewals, uncited and early-expiry records refused;
+  - a lease row edited in the file is refused at its next change, and the file is left unchanged;
+  - the gate citing its lease entries; a dropped row, missing citation or missing scope refused;
+  - an edited `budget.json` not raising the cap; caps uncited, out of order or negative refused;
+  - a ref moved by hand and a history rewrite refused as `LEDGER_REFUSED`; a recorded reset accepted; forged moves refused;
+  - without a ledger, the earlier behaviour.
+- `pantheon/tests/ledger-seat.test.mjs` (5 tests): an honest seat continues; an edited reply or prompt, reordered or injected exchanges, and an exchange persisted but never recorded are refused as `LEDGER_MISMATCH`; without a ledger, only the file check applies.
+- Against the pre-change Pantheon files, all 6 board tests and the 3 seat-refusal tests fail.
+- `pantheon/tests/route-protocol.test.mjs`: the default-ledger run also records `lease` and `ref.move`, every ref is where its last recorded move left it, and every turn carries `prompt_sha`.
+- Suites:
+  - `npm run test:proof`: 181 of 181, with TELOS at the pin;
+  - Pantheon: 812 pass, plus the 1 known environment failure;
+  - model client: 48 pass.
+
+**Limits.**
+- `observed` is a signed input, like the gate's lease rows were: a lease the ledger never saw is taken as it stands, once.
+- A ref move is checked against its board's store only while that board exists (the opened board, or another board at its `scope`). For a removed board, only its move chain is checked.
+- Prompts are not on the ledger, only their digests. A turn recorded before `prompt_sha` existed matches any prompt.
+- A seat file from a run whose turns were not recorded (a board resumed from before the ledger) is refused, not adopted.
+- The gate's lease citations are available to callers; no gate entry is recorded on the run path yet, as before. Done: see "Shared ledgers and the run-path gate" below.
+
+## Layering (2026-11-17)
+
+The dependency ran both ways: Pantheon dynamic-imported `ophanim/ledger/system.mjs`, and `ophanim/ledger/*` imported OPHANIM (`board.mjs`'s canonical form, `efficiency/*`) and Pantheon (route protocol, contributions, seating, config, integrate, dag). It now runs one way: OPHANIM -> Pantheon -> `packages/ledger`.
+
+| Layer | Holds | Imports |
+|---|---|---|
+| `packages/ledger` (`@argo/ledger`) | `canonical.mjs` (canonical JSON and digest, the same bytes as `ophanim/board.mjs`); `chain.mjs` (chain, genesis, authority, checkpoints, `defineKinds`); `home.mjs` (`keyStore`, `openLedgerHome`: ANCHOR pinning, create/open, key checks, `rotateKey`); `status.mjs` (the status board and its CLI) | nothing outside itself |
+| `pantheon/src/ledger` | Pantheon's kinds: `kinds.mjs` (facts, seating, escalation, contribution), `lineage-kinds.mjs` (turn, review), `gate-kind.mjs` (gate), `board-kinds.mjs` (lease, budget, ref.move), `anchors.mjs` (board.anchor, `boardResolver`); `system.mjs`: `pantheonLedgerKinds`, `openPantheonLedger`, the default for `runOpenItem` | `packages/ledger`, Pantheon |
+| `ophanim/ledger` | OPHANIM's kinds: `efficiency-kinds.mjs`, `anchors.mjs` (telos.anchor, `telosResolver`, composed with the board anchor); `system.mjs`: `systemKinds`, `openSystemLedger`, the full composition the OPHANIM CLI opens | `packages/ledger`, `pantheon/src/ledger`, OPHANIM |
+
+**A move, not a redesign.** No kind's name, authors, rules or payload shape changed, and `LEDGER_SCHEMA` is still `ophanim.ledger/v1`. `systemKinds` is `pantheonLedgerKinds` plus the efficiency kinds, so an entry a Pantheon run records re-derives the same way under OPHANIM's composition. No shims were left at the old `ophanim/ledger` paths; every import was updated. The status CLI is now `node packages/ledger/status.mjs verify|render|set`, and `docs/STATUS.md` was regenerated with `render` so its instructions name that path.
+
+**One consequence of the closed registry.** A ledger that already holds efficiency entries (an `OPHANIM_LEDGER` shared with the OPHANIM CLI) is refused by Pantheon's composition (`kind "efficiency.trace" is not in the registry`), where before the move Pantheon opened OPHANIM's. Such a run takes OPHANIM's recorder (`runOpenItem(spec, {ledger: openSystemLedger(...).recorder()})`). The other direction always works. Resolved for ledgers that declare their domains: see "Shared ledgers and the run-path gate" below.
+
+*Check.*
+- `ophanim/ledger/layering.test.mjs` (4 tests, in `npm run test:proof`):
+  - no file in `packages/ledger` imports outside it, and no file in `pantheon/` imports `ophanim/`;
+  - the core's canonical form and digest equal `ophanim/board.mjs`'s on edge values, with the same refusals;
+  - every Pantheon kind is in `systemKinds` under the same name and the same rule functions, and OPHANIM adds only `efficiency.*`;
+  - a ledger written with `openPantheonLedger` (facts, seating, turn, review, budget, ref.move, board.anchor) verifies and keeps growing under `openSystemLedger`, and Pantheon still reads what OPHANIM appended with Pantheon's kinds.
+- `packages/ledger/tests` (`npm test` in that package, and in the root `npm test`): chain (11), status (3), home (4), canonical (3). The canonical tests pin digests recorded from `ophanim/board.mjs` before the move and verify the committed `status/ledger` against its anchor.
+- Ledgers written by the pre-move code (a Pantheon run alone; a Pantheon run and an OPHANIM CLI run on one ledger) verify under the new compositions, and a new Pantheon run appends to the pre-move one and still verifies under `openSystemLedger`.
+- The chair-ranking checks that made Pantheon's tests import `ophanim/efficiency/investigation/chairs.mjs` moved to `ophanim/efficiency/investigation/chairs-board.test.mjs`.
+- Suites (before -> after; tests moved, none dropped):
+  - `npm run test:proof`: 184 -> 152 of 152, with TELOS at the pin (38 moved out: 14 to `packages/ledger`, 24 to Pantheon; 6 added);
+  - Pantheon: 812 -> 836 pass (24 moved in), plus the 1 known environment failure;
+  - `packages/ledger`: 21 pass (14 moved in, 7 added);
+  - model client: 48 pass.
+
+## Review every cycle (2026-11-17)
+
+The cycle review (items 2 and 5-6) found that a cycle checked only by its author shipped a regression, and the layered review caught it. The review layer now runs at the end of every cycle, as ledger entries under the cold-review rules.
+
+**Kinds** (`pantheon/src/ledger/cycle-kinds.mjs`, plus `review` in `lineage-kinds.mjs`; registered in `pantheonLedgerKinds`, so also in `systemKinds`).
+
+| Kind | Author | Payload | Re-derives by |
+|---|---|---|---|
+| `cycle` | controller | `{scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}` | <ul><li>`base` and `head` differ.</li><li>It cites only author turns and the previous cycle's close.</li><li>Cycles of one scope form a chain: `base` is the previous `head`, and the previous cycle is closed. No commit range is skipped, and no cycle opens over an open one.</li></ul> |
+| `review` (extended) | reviewing seat | adds `turn`, the seat's answering turn | <ul><li>Cites the cycle, and so the author turns. Cold review walks through the cycle: no lab, seat or response from that lineage may review.</li><li>Never the cycle's `author_labs`.</li><li>The answering turn is the same seat's, cites the cycle, and was given exactly the cycle's prompt (`prompt_sha`). Its response and model match the review's.</li><li>One review per lab per cycle, and none after the close.</li></ul> |
+| `finding` | controller | `{index, severity, file, line, claim, reproduction}` | <ul><li>It must equal finding `index` of the reviewer's signed reply, as `parseReview` reads it. The controller cannot invent or reword one.</li><li>`file` is in the change.</li><li>Each finding is recorded once.</li><li>`reproduction` is `{kind: command\|test, run}`, or `null`, which is recorded as unreproduced.</li></ul> |
+| `finding.resolution` | controller | `{status: fixed, fix: {commit, test, before, after}}` or `{status: deferred, reason}` | <ul><li>A fix names a commit other than base and head.</li><li>`before` is the reviewed head with a non-zero exit. `after` is the fix commit with exit 0.</li><li>A deferral gives a reason.</li><li>One resolution per finding, none after the close.</li></ul> |
+| `cycle.close` | controller | `{outcome, reviews, labs, findings: {total, fixed, deferred, unreproduced}}` | <ul><li>Recomputed from the cycle's entries and compared canonically.</li><li>It closes only when all `reviewers` reviews are recorded on distinct labs, every reported finding is recorded, and every finding is fixed or deferred.</li><li>`outcome` is derived, not chosen: `verified` only when no finding lacks a reproduction.</li></ul> |
+
+**The review.** `reviewCycle({ledger, change, seats, turn, n = 3})` (`pantheon/src/ledger/review-cycle.mjs`):
+- **Seats.** By default, `reviewSeats` takes the reviewer table in order and adds other chairs for a missing lab. It picks `n` distinct labs, avoiding the author's. With an Anthropic author, that gives xai, google and openai.
+- **Prompt.** Every reviewer gets the same prompt: the fixed `REVIEW_BRIEF`, then the change.
+- **Recording.** Each reply is recorded as a turn, then a review citing the cycle (and any author turns), then its findings.
+- **Failure.** A seat that fails is reported, and the cycle cannot close.
+- **`turn`.** It is injected. Tests use scripted reviewers. The CLI uses live SDK turns, imported at the edge.
+- **Parsing fails closed.** A reply that is not the required JSON, or a request for changes with no finding, becomes one blocking, unreproduced finding.
+
+**How it runs by default.** At a cycle boundary, the loop runs `npm run review-cycle` (`node pantheon/bin/pantheon-review-cycle.mjs`).
+
+| Step | Command |
+|---|---|
+| Review the cycle | `npm run review-cycle -- [--head HEAD]`. Without `--base`, the cycle starts where the last one ended. Only a scope's first cycle needs `--base`. |
+| Fix a finding | `... fix --finding H --commit C --test CMD --before-exit N --after-exit 0` |
+| Defer a finding | `... defer --finding H --reason TEXT` |
+| Close | `... close`. This exits 1 with the reason while the cycle cannot close. |
+| Inspect | `... status` |
+
+- **Ledger.** `PANTHEON_CYCLE_LEDGER`, otherwise `<git common dir>/pantheon-cycles`: one ledger per repository, shared by its worktrees and not committed.
+- **Defaults.** The author lab is `anthropic`, the lab the loop's controller runs on; set it with `--author-lab`. The scope is the repository's directory name.
+- **Not skippable.** The next cycle's review is refused while this cycle is open, so a skipped review blocks the next cycle.
+
+*Check.*
+- `pantheon/tests/ledger-review-cycle.test.mjs` (9 tests, scripted reviewers):
+  - three labs recorded, each review citing the cycle, signed by its answering seat and given the cycle's prompt;
+  - cycles chain (default base, refused while open, refused over a gap);
+  - same lab refused: two seats on one lab, the author's lab, a served model from the author's lab, a second review from a lab, a turn given another prompt, and an openai author turn in the lineage;
+  - an unreproduced finding closes only as `unverified`, and a forged `verified` close is refused;
+  - fixes without fail-before, on the wrong commit, or still failing are refused; a proper fix closes `verified`;
+  - refused: forged closes (tampered counts, a dropped review, extra citations, a seat key, a second close), invented or reworded findings, an omitted finding, and late reviews or resolutions;
+  - the CLI end to end on a temporary git repository.
+- Suites:
+  - `npm run test:proof`: 152 of 152, with TELOS at the pin;
+  - Pantheon: 846 pass (9 added), plus the 1 known environment failure;
+  - `packages/ledger`: 21 pass;
+  - model client: 48 pass.
+
+**Limits.**
+- **Tests are not run at re-derive time.** The fix's `before` and `after` exits are data signed by the controller and checked only for presence and consistency. The ledger does not check that the fix commit descends from the head.
+- **The diff is bound by digest only.** `diff_sha` and `prompt_sha` are recorded, but the diff text is not kept on the ledger.
+- **Wiring.** Nothing in `runOpenItem` calls `reviewCycle`. The cycle boundary is the loop's step, run through the CLI, and the chain refusal is what makes skipping it visible.
+- **No live run yet.** The live `turn` (`sendTurn` per vendor) has not met a provider; the tests use scripted reviewers.
+
+## Shared ledgers and the run-path gate (2026-11-17)
+
+Two gaps left open above: a ledger shared by several boards could not verify (`board-resolver`), and a ship recorded no gate entry (`gate-on-run-path`).
+
+**One ledger, several boards.** `contribution` and `gate` entries now name their board, as the board kinds already did. Each entry is re-derived against the board it names, through one resolver (`pantheon/src/ledger/scopes.mjs`, `boardScopes`), which `ref.move` now uses too.
+
+| Entry names | Re-derived against |
+|---|---|
+| the opened board's root | the opened board |
+| another root, with a board there | that board, opened read-only |
+| a root with no board there | nothing that needs a store. The ledger-side checks still run (shape, the gate's lease rows and citations). The verify result lists the entry in `partial` |
+| no scope (recorded before this change) | the opened board, as before; refused when no board was opened |
+
+- Kind names are unchanged. `scope` is an optional, absolute payload field. A gate's `lease_scope` must equal its `scope`.
+- `gateRecord` fills `scope` from the board recorder, or else from the board's `root`.
+- `gate` and `contribution` are registered with or without an opened board.
+- Core: `view.note(why)` lets a kind report the part it could not re-derive. `verify()` returns `partial` ([{seq, kind, why}]), `foreign` and `complete`.
+
+**Another domain on the same ledger.** Before this change, a Pantheon run on a ledger that also held OPHANIM's efficiency entries was refused (`kind "efficiency.trace" is not in the registry`).
+
+| Option | Verdict |
+|---|---|
+| Kind sets pinned in genesis; a composition must supply all of them | Rejected. It only words the refusal better: the Pantheon run is still refused. It also blocks the order that works today, where a Pantheon-created ledger later receives OPHANIM records, unless the declaration can grow. |
+| **Declared domains; a reader checks a domain it does not supply structurally** | **Chosen.** It is the first option with growable declarations, plus a reader that passes over a domain without re-deriving it. |
+
+How the chosen option works:
+- **Declaration.** The authority declares each domain and its kinds: `domains: {name: [kind]}` in genesis, or in a later authority entry signed by an operator. Declarations only grow, and a kind belongs to one domain only.
+- **Who declares.** `openLedgerHome({domains})` writes them into a new genesis. On an existing ledger, it declares a missing domain just before that domain's first entry; opening never writes.
+- **Compositions.** Pantheon supplies `pantheon`. OPHANIM supplies `pantheon` and `ophanim` (the `efficiency.*` kinds).
+- **What a reader does with an entry outside its registry:**
+
+| The entry's kind is | The reader |
+|---|---|
+| in a declared domain the reader does not supply | Checks linkage, order and author signatures, a keyring author and an intact payload. Never re-derives or appends the entry. Counts it in `verify().foreign` |
+| in a domain the reader supplies, missing from its registry | Refuses it: the composition is incomplete |
+| in no domain declared before it | Refuses it, as before |
+
+- **Why this is sound for Pantheon.** No Pantheon kind reads a foreign entry, and the chain binds every entry, so a foreign entry cannot change what a Pantheon entry re-derives. What the reader does not check (the foreign entry's meaning) is reported, not implied: `complete` is false.
+- **Why the registry stays closed.** A reader passes over exactly the kinds an operator-signed authority named, and nothing else.
+- **On the run path.** `runOpenItem` records what the verify passed over in `run.json` (`ledger.underived`).
+
+**The ship's verdict on the ledger.** At ship, `runOpenItem` judges the gates once, at `shipNow`. It records that verdict as a `gate` entry, then ships at the same `now`:
+- the entry is built with `gateRecord({..., leaseLedger})` and appended with the board recorder's new `recordGate`;
+- it names the board and the heads it read, and cites the lease entries;
+- a refusal is recorded the same way, including the case where the controller did not schedule integrate (the entry holds the gate verdict);
+- a check confirms the recorded gates match the ones the ship ran;
+- `run.json` names the entry (`ledger.gate`).
+
+*Check.*
+- `packages/ledger/tests/domains.test.mjs` (5 tests):
+  - a foreign domain is checked structurally and reported, and the reader refuses to append it;
+  - foreign entries that were forged (an altered payload, a swapped payload with a stale signature, an unknown author) are refused;
+  - an undeclared kind, an incomplete composition, a kind in two domains and a non-operator declaration are refused;
+  - a declaration applies from its entry on, and `note` reaches `partial`;
+  - the home declares domains in genesis, and lazily before a domain's first entry.
+- `pantheon/tests/ledger-shared.test.mjs` (4 tests):
+  - two boards share one ledger, and each gate and contribution re-derives against its own board, with the ledger opened with either board. The same verdict without a scope is refused (the behaviour before this change);
+  - for the other board, a flipped claim, a verdict re-scoped onto the wrong board and a forged projection are refused;
+  - with a board removed, its gate, contribution and ref moves are listed in `partial`, and forged lease rows are still refused;
+  - an unscoped entry is checked against the opened board, and refused with none;
+  - another domain is checked structurally, its forged entries are refused, and an undeclared kind is still refused.
+- `pantheon/tests/route-protocol.test.mjs`:
+  - **default-ledger run:** one `gate` entry, scoped and citing its lease scope. It re-derives after the board moved on. A flipped claim and made-up heads are refused, and the entry edited on disk fails verification;
+  - **rejected review:** the refusal is recorded with REVIEW red, and after resume both verdicts re-derive;
+  - **two runs on two boards, one `OPHANIM_LEDGER` holding another domain's entry:** both ship, and both verdicts re-derive against their own boards. With the first board removed, its entries are listed in `partial`.
+- `ophanim/ledger/layering.test.mjs` adds a ledger holding a real `efficiency.promotion`. Pantheon opens it and reports `foreign: {ophanim: 1}`, refuses to append the efficiency kind, and refuses a forged one. OPHANIM still re-derives everything.
+- **Against the code before this change:**
+  - the new route-protocol checks fail (no gate entry; the shared run is refused);
+  - `ledger-shared` and `domains` fail to load.
+- Suites:
+  - `npm run test:proof`: 153 of 153, with TELOS at the pin;
+  - Pantheon: 842 pass, plus the 1 known environment failure;
+  - `packages/ledger`: 26 pass;
+  - model client: 48 pass.
+
+**Limits.**
+- **Ledgers without declarations.** On ledgers written before this change, nothing is declared, so their OPHANIM entries still stop a Pantheon reader. A declaration applies from its entry on, as keys do. Such a ledger is opened with OPHANIM's composition, as before.
+- **A scope with no board.** A verdict whose scope names a root with no board re-derives only its ledger side. The controller signs `scope`, and the result reports the entry rather than hiding it. Nothing refuses it.
+- **Frontier counts.** `foreign` and `partial` cover the entries a verify checked, so `mode: 'frontier'` counts only those after the last checkpoint.
+- **`board.anchor`** still re-derives against the opened board only.

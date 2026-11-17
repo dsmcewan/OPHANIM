@@ -1,0 +1,1 @@
+{"basis":"authority entries are always fully verified; regression test in packages/ledger fails on the old code","checked":"2026-11-17","item":"ru2-frontier-forgery","schema":"ophanim.status/v1","state":"Resolved","title":"RU2: frontier verification accepted a keyless forgery (independent review)","waiting_on":null}

@@ -108,7 +108,7 @@ export async function ship({
   // `ship: true` is what lets a bound-review slot land on a board ref; nothing else may say it.
   const swap = await refs.swap({ name: ref, expected: head, next: commit, author: actor, changedSlots: changed, msg: "ship", ship: true });
   if (!swap.ok) return { ok: false, refused: "CAS", gates, why: swap.why, head, unchanged: true };
-  if (runtime) { try { runtime.recordSpend({ commit, seat: actor.vendor, vendor: actor.vendor, turns: 0 }); } catch { /* side log */ } }
+  if (runtime) { try { runtime.recordSpend({ commit, seat: actor.vendor, vendor: actor.vendor, publications: 0, usd: 0, provider_calls: 0, usd_basis: "integration commit: no provider request" }); } catch { /* side log */ } }
   return { ok: true, commit, from: head, changed, gates, candidates, shipped: artifacts.map(a => a.slot),
     acks: reviews.flatMap(r => r.acks) };
 }

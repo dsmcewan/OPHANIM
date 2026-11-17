@@ -1,0 +1,1 @@
+{"basis":"unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first","checked":"2026-11-17","item":"me3-canonical","schema":"ophanim.status/v1","state":"Ready","title":"ME3: nine canonical-JSON functions that disagree at the edges","waiting_on":null}

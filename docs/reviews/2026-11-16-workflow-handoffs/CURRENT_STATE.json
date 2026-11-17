@@ -1,0 +1,2076 @@
+{
+  "schema": "ophanim.current-state-evidence-audit/v1",
+  "source_commits": [
+    "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+    "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+    "048b3ba41e3b81dc58d446bf9767ccf59d4571a9"
+  ],
+  "routing": {
+    "schema": "ophanim.current-policy-qualification-audit/v1",
+    "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+    "source_unchanged": true,
+    "status": "review_findings_only",
+    "independent_cross_lab_review": false,
+    "providers_called": 0,
+    "owner_keys_read": false,
+    "findings": [
+      {
+        "id": "CS1",
+        "priority": "P2",
+        "title": "Eligibility tags also carry unqualified performance ordering",
+        "observed": {
+          "legacy_hard_openai": {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "transport": "api",
+            "pool": "openai",
+            "poolConfig": null,
+            "poolNamed": false,
+            "basis": "SURFACE",
+            "band": "hard",
+            "why": "openai is the seat whose Responses API this project has executed against, and tool calling on this lab requires it. That fact is about the LAB; astra being first is the operator's ladder",
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d",
+              "profile": "legacy",
+              "role": "implementer",
+              "difficulty": "hard",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "policy",
+              "band": "hard",
+              "excluded": [
+                {
+                  "model": "claude-sonnet-4-6",
+                  "why": "vendor agy_google is avoided"
+                }
+              ],
+              "reason": "difficulty band: gpt-6-astra is the hard rung; SURFACE: openai is the seat whose Responses API this project has executed against, and tool calling on this lab requires it. That fact is about the LAB; astra being first is the operator's ladder",
+              "rank": 0
+            },
+            "rank": 0
+          },
+          "legacy_medium_reviewer": {
+            "vendor": "xai",
+            "model": "grok-4.6",
+            "transport": "api",
+            "pool": "xai",
+            "poolConfig": null,
+            "poolNamed": false,
+            "basis": "ISOLATION",
+            "band": "medium",
+            "why": "same lab, same 500k window, and the stronger pick for an ordinary diff -- a review turns on reading the artifact closely, which it does without the slower rung's overhead. The one this harness has actually called and had answer (2026-09-27)",
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d",
+              "profile": "legacy",
+              "role": "reviewer",
+              "difficulty": "medium",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "policy",
+              "band": "medium",
+              "excluded": [],
+              "reason": "difficulty band: grok-4.6 is the medium rung; ISOLATION: same lab, same 500k window, and the stronger pick for an ordinary diff -- a review turns on reading the artifact closely, which it does without the slower rung's overhead. The one this harness has actually called and had answer (2026-09-27)",
+              "rank": 0
+            },
+            "rank": 0
+          }
+        },
+        "claim_class": "constraint_plus_unqualified_preference",
+        "sources": [
+          {
+            "path": "pantheon/src/role/seating.mjs",
+            "start_line": 268,
+            "end_line": 315,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/role/seating.mjs#L268-L315"
+          },
+          {
+            "path": "pantheon/src/route/frontier.mjs",
+            "start_line": 189,
+            "end_line": 197,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/frontier.mjs#L189-L197"
+          }
+        ],
+        "acceptance": "Separate constraints from preference/hypothesis. Comparative claims require matched evidence references or explicit unqualified status; SURFACE/ISOLATION alone never qualify ranking."
+      },
+      {
+        "id": "CS2",
+        "priority": "P2",
+        "title": "Capability citation is used as basis for unqualified escalation economics",
+        "observed": {
+          "action": "raise_effort",
+          "cause": "work-rejected",
+          "from": {
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "effort": "high",
+            "output": 65536
+          },
+          "to": {
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "effort": "xhigh",
+            "output": 65536
+          },
+          "why": "executed acceptance exited 1; effort high -> xhigh on claude-fable-5-2: the dial is cheaper than the occupant",
+          "basis": "https://platform.claude.com/docs/en/models/fable-5-2/overview"
+        },
+        "claim_class": "supported_parameter_fact_plus_unqualified_strategy_hypothesis",
+        "sources": [
+          {
+            "path": "pantheon/src/route/protocol.mjs",
+            "start_line": 107,
+            "end_line": 133,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/protocol.mjs#L107-L133"
+          }
+        ],
+        "acceptance": "Record effort-first as provisional strategy separately from allowed-values evidence; qualify using comparable recovery success, total cost and latency."
+      },
+      {
+        "id": "CS3",
+        "priority": "P2",
+        "title": "Default frontier planning and implementation ignore tier cap despite recorded reason",
+        "observed": [
+          {
+            "profile": "argo",
+            "role": "planner",
+            "difficulty": "easy",
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "basis": "OPERATOR",
+            "band": null,
+            "requestedTier": {
+              "tokens": 4096,
+              "tier": "easy",
+              "ceiling": 128000,
+              "capped": false,
+              "status": "provisional (2026-11-16); adjust from recorded truncations"
+            },
+            "effectiveDefaultOutput": 65536,
+            "documentedDefaultEffort": "high",
+            "wire": {
+              "output": 65536,
+              "effort": "high"
+            },
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "role": "planner",
+              "difficulty": "easy",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "profile",
+              "band": null,
+              "excluded": [],
+              "reason": "ARGO November model policy: the approved static planner order (operator profile); claude-fable-5-2 is the first admitted seat. Ticket difficulty \"easy\" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it",
+              "rank": 0
+            }
+          },
+          {
+            "profile": "argo",
+            "role": "planner",
+            "difficulty": "medium",
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "basis": "OPERATOR",
+            "band": null,
+            "requestedTier": {
+              "tokens": 16384,
+              "tier": "medium",
+              "ceiling": 128000,
+              "capped": false,
+              "status": "provisional (2026-11-16); adjust from recorded truncations"
+            },
+            "effectiveDefaultOutput": 65536,
+            "documentedDefaultEffort": "high",
+            "wire": {
+              "output": 65536,
+              "effort": "high"
+            },
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "role": "planner",
+              "difficulty": "medium",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "profile",
+              "band": null,
+              "excluded": [],
+              "reason": "ARGO November model policy: the approved static planner order (operator profile); claude-fable-5-2 is the first admitted seat. Ticket difficulty \"medium\" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it",
+              "rank": 0
+            }
+          },
+          {
+            "profile": "argo",
+            "role": "planner",
+            "difficulty": "hard",
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "basis": "OPERATOR",
+            "band": null,
+            "requestedTier": {
+              "tokens": 32768,
+              "tier": "hard",
+              "ceiling": 128000,
+              "capped": false,
+              "status": "provisional (2026-11-16); adjust from recorded truncations"
+            },
+            "effectiveDefaultOutput": 65536,
+            "documentedDefaultEffort": "high",
+            "wire": {
+              "output": 65536,
+              "effort": "high"
+            },
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "role": "planner",
+              "difficulty": "hard",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "profile",
+              "band": null,
+              "excluded": [],
+              "reason": "ARGO November model policy: the approved static planner order (operator profile); claude-fable-5-2 is the first admitted seat. Ticket difficulty \"hard\" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it",
+              "rank": 0
+            }
+          },
+          {
+            "profile": "argo",
+            "role": "implementer",
+            "difficulty": "easy",
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "basis": "OPERATOR",
+            "band": null,
+            "requestedTier": {
+              "tokens": 4096,
+              "tier": "easy",
+              "ceiling": 128000,
+              "capped": false,
+              "status": "provisional (2026-11-16); adjust from recorded truncations"
+            },
+            "effectiveDefaultOutput": 65536,
+            "documentedDefaultEffort": null,
+            "wire": {
+              "output": 65536,
+              "effort": null
+            },
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "role": "implementer",
+              "difficulty": "easy",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "profile",
+              "band": null,
+              "excluded": [],
+              "reason": "ARGO November model policy: the approved static implementer order (operator profile); gpt-6-astra is the first admitted seat. Ticket difficulty \"easy\" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it",
+              "rank": 0
+            }
+          },
+          {
+            "profile": "argo",
+            "role": "implementer",
+            "difficulty": "medium",
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "basis": "OPERATOR",
+            "band": null,
+            "requestedTier": {
+              "tokens": 16384,
+              "tier": "medium",
+              "ceiling": 128000,
+              "capped": false,
+              "status": "provisional (2026-11-16); adjust from recorded truncations"
+            },
+            "effectiveDefaultOutput": 65536,
+            "documentedDefaultEffort": null,
+            "wire": {
+              "output": 65536,
+              "effort": null
+            },
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "role": "implementer",
+              "difficulty": "medium",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "profile",
+              "band": null,
+              "excluded": [],
+              "reason": "ARGO November model policy: the approved static implementer order (operator profile); gpt-6-astra is the first admitted seat. Ticket difficulty \"medium\" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it",
+              "rank": 0
+            }
+          },
+          {
+            "profile": "argo",
+            "role": "implementer",
+            "difficulty": "hard",
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "basis": "OPERATOR",
+            "band": null,
+            "requestedTier": {
+              "tokens": 32768,
+              "tier": "hard",
+              "ceiling": 128000,
+              "capped": false,
+              "status": "provisional (2026-11-16); adjust from recorded truncations"
+            },
+            "effectiveDefaultOutput": 65536,
+            "documentedDefaultEffort": null,
+            "wire": {
+              "output": 65536,
+              "effort": null
+            },
+            "selection": {
+              "policy": "pantheon.selection/v1",
+              "policy_hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "role": "implementer",
+              "difficulty": "hard",
+              "context": {
+                "estimate_tokens": 100,
+                "method": "prompt chars / 4"
+              },
+              "source": "profile",
+              "band": null,
+              "excluded": [],
+              "reason": "ARGO November model policy: the approved static implementer order (operator profile); gpt-6-astra is the first admitted seat. Ticket difficulty \"hard\" sets the output tier only: this profile does not choose the model by difficulty, and no unmeasured ranking replaces it",
+              "rank": 0
+            }
+          }
+        ],
+        "excluded_from_claim": {
+          "reviewer": 4000
+        },
+        "claim_class": "deterministically_reproduced_policy_description_mismatch",
+        "sources": [
+          {
+            "path": "pantheon/src/route/frontier.mjs",
+            "start_line": 183,
+            "end_line": 187,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/frontier.mjs#L183-L187"
+          },
+          {
+            "path": "pantheon/src/config/tiers.mjs",
+            "start_line": 10,
+            "end_line": 40,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/config/tiers.mjs#L10-L40"
+          },
+          {
+            "path": "pantheon/src/board/run-item.mjs",
+            "start_line": 415,
+            "end_line": 427,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/board/run-item.mjs#L415-L427"
+          },
+          {
+            "path": "packages/model-client/request.mjs",
+            "start_line": 19,
+            "end_line": 95,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/packages/model-client/request.mjs#L19-L95"
+          }
+        ],
+        "acceptance": "Enforce serialized easy/hard planning/implementation tier caps or accurately record the intentional uniform long-decode policy; preserve explicit reviewer cap. No inference of actual spend."
+      }
+    ],
+    "inventory": {
+      "authorized_constraints": [
+        {
+          "rule": "independent cross-model accountability",
+          "provenance": "current user steering",
+          "performance_claim": false
+        }
+      ],
+      "repository_recorded_preferences": [
+        {
+          "rule": "ARGO static role order",
+          "source": {
+            "path": "pantheon/src/route/frontier.mjs",
+            "start_line": 9,
+            "end_line": 14,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/route/frontier.mjs#L9-L14"
+          },
+          "classification": "operator policy; source assertion of approval not independent approval receipt"
+        },
+        {
+          "rule": "legacy role bands",
+          "source": {
+            "path": "pantheon/src/role/seating.mjs",
+            "start_line": 137,
+            "end_line": 147,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/role/seating.mjs#L137-L147"
+          },
+          "classification": "mixed TASTE/SURFACE/ISOLATION labels; not empirical optimum"
+        }
+      ],
+      "documentary_capabilities": {
+        "source": {
+          "path": "pantheon/src/config/capability-facts.json",
+          "start_line": 1,
+          "end_line": 30,
+          "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+          "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/config/capability-facts.json#L1-L30"
+        },
+        "classification": "vendor documentation citations, not live verification or task ranking"
+      },
+      "deterministically_validated": {
+        "assertions": 16,
+        "selection_cases": 18,
+        "raw_results": "probe-results.json",
+        "scope": "pure selectors, escalation and local request compilation"
+      },
+      "historical_case_evidence": [
+        {
+          "claim": "two design defects identified by independent model reviewers",
+          "source": {
+            "path": "pantheon/docs/specs/2026-09-27-evidence-base.md",
+            "start_line": 714,
+            "end_line": 748,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/docs/specs/2026-09-27-evidence-base.md#L714-L748"
+          },
+          "limit": "case-specific historical narrative; no current per-model ranking demonstrated"
+        },
+        {
+          "claim": "paired evaluation tied all tasks; zero delegation in six delegating-arm trials",
+          "source": {
+            "path": "pantheon/STATE.md",
+            "start_line": 421,
+            "end_line": 430,
+            "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+            "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/STATE.md#L421-L430"
+          },
+          "limit": "external env-lab receipt referenced rather than bundled in this snapshot"
+        }
+      ],
+      "unqualified_knobs": [
+        {
+          "rule": "fixed ARGO model ordering",
+          "class": "preference"
+        },
+        {
+          "rule": "easy/medium/hard model bins and nearest-lower fallback",
+          "class": "preference"
+        },
+        {
+          "rule": "frontier high effort default",
+          "class": "default policy"
+        },
+        {
+          "rule": "effort-first recovery",
+          "class": "strategy hypothesis"
+        },
+        {
+          "rule": "four escalation steps",
+          "class": "bounded recovery policy"
+        },
+        {
+          "rule": "double output on truncation",
+          "class": "bounded recovery heuristic"
+        },
+        {
+          "rule": "three work revisions",
+          "class": "bounded recovery policy"
+        },
+        {
+          "rule": "900000 ms turn deadline",
+          "class": "runtime limit"
+        },
+        {
+          "rule": "prompt chars / 4 context estimate",
+          "class": "estimation heuristic"
+        },
+        {
+          "rule": "4096/16384/32768 tiers",
+          "class": "explicitly provisional policy"
+        }
+      ],
+      "weights": {
+        "numeric_model_quality_weights_found": false,
+        "observed": "ordinal table order, exact/nearest-lower difficulty bands, distinct quota-pool spreading"
+      },
+      "raw_current_performance_dataset_found": false,
+      "dataset_search_scope": "bounded tracked repository evidence/routing files; no claim about external receipts",
+      "automatic_policy_learning": {
+        "truncation_helper_exists": true,
+        "runtime_callers_found": 0,
+        "changes_policy_automatically": false,
+        "source": {
+          "path": "pantheon/src/config/tiers.mjs",
+          "start_line": 43,
+          "end_line": 55,
+          "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+          "url": "https://github.com/dsmcewan/OPHANIM/blob/e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6/pantheon/src/config/tiers.mjs#L43-L55"
+        }
+      }
+    },
+    "acceptance_tests": [
+      "Effective-policy export classifies current choices, including effort/output/recovery knobs, with sources and qualification status.",
+      "Unsupported comparative claims cannot be qualified by SURFACE/ISOLATION or a capability citation.",
+      "Fake-provider active-caller tests assert actual model, serialized output cap and effort for each role/profile/difficulty and override.",
+      "Representative independently checked baseline records outcomes, actual usage/cost, latency, truncation and recovery; candidate comparisons preserve authorized constraints.",
+      "Each cycle assesses accumulated evidence/regression/drift and proposes separately reviewed policy changes; a benchmark or self-review cannot authorize its own promotion."
+    ],
+    "limitations": [
+      "No live provider behavior, spend, latency or quality benchmark was measured.",
+      "No source fixes were applied.",
+      "Native same-family review is not cross-lab qualification.",
+      "Pure probes do not constitute an end-to-end operating-cycle test."
+    ]
+  },
+  "measurements": {
+    "schema": "ophanim.current-state-measurement-audit/v1",
+    "recordedAtUtc": "2026-11-17T04:50:43.797838+00:00",
+    "source": {
+      "commit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+      "worktree": "${AUDIT_WORKSPACE}/work/ophanim-current-policy-audit",
+      "contentPins": [
+        {
+          "path": "README.md",
+          "gitBlob": "e730f4cffdc7cf0b150e4322fd013999a9d2aee1",
+          "sha256": "be14daac0563f81715f1d5c91481cb1728ef2ecb3da824d12e4a9ba2d2386480",
+          "bytes": 10629,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "docs/STATUS.md",
+          "gitBlob": "045a7ab6a9111d8024aa227365f25580c8ae4349",
+          "sha256": "ec4b1d9b8f73ad30b82d6f766dd5e9bbbd43002108d5e4c48aafee972460c018",
+          "bytes": 13321,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "docs/pantheon-model-loop-evaluation.md",
+          "gitBlob": "e297ea7dd44416a0668676c4b1aa7f2616078597",
+          "sha256": "b144b99de055682a34aa53213a5d1137146dac4b3b7b14561a449890243c19b9",
+          "bytes": 11624,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "docs/pantheon-engine-loop-evaluation.md",
+          "gitBlob": "544edb54c2c72fde37d07ddbe502ce3b805a85a6",
+          "sha256": "57ccf512ca45b00b3a2bbee34666a5b5465c5393cedf12f827d035e809bc3626",
+          "bytes": 42780,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "docs/reviews/2026-11-16-routing-coordination/CYCLE_CONTRACT.md",
+          "gitBlob": "e44b02b76104c0babb791562a5eccede7ec23d47",
+          "sha256": "4c684ed09eb1f5f10bf76c8f5d355bd243ad177f03ba4a7b4dd538a5d18e2dff",
+          "bytes": 7267,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "pantheon/AGENTS.md",
+          "gitBlob": "26207f7b062bb392980852d7e70099ece766140f",
+          "sha256": "43cf92adf85ea332e3cadc931a82ae772bed217d574b0cf71b82bb29596aac48",
+          "bytes": 7581,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "pantheon/src/route/router.mjs",
+          "gitBlob": "80dde060d92f24dc7d09ef4f2d4deb911c8bdda8",
+          "sha256": "17e6b71ad07f406492633b758f192c83a93ccd4ef25a022f14317d9350b61e3f",
+          "bytes": 20418,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "pantheon/src/role/seating.mjs",
+          "gitBlob": "48a8c2bf574640cecbc3cce2970bbbacf8ef1de0",
+          "sha256": "61843c8a98a3cddf8e409d49644b54c7f70a7cfcbfe4705f2695843fffe494a7",
+          "bytes": 54048,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "pantheon/src/board/contributions.mjs",
+          "gitBlob": "411907238a9c9f4df19933a9d2c393cabd3396ff",
+          "sha256": "6c12016c6a25213ba674a28fd4514d5df8ff5d26f736dabe51fb5ee70ba27ae7",
+          "bytes": 6864,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "ophanim/governance.mjs",
+          "gitBlob": "21f3c1ba56bf19ed9da8ee99908c2b3493ce4244",
+          "sha256": "b0b5617a7a5bfebe676ad97d6e31b26c4106184449e3277de9eacd4ce5b3ad4b",
+          "bytes": 34881,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "ophanim/efficiency/investigation/measurement.mjs",
+          "gitBlob": "0118a50dcb8663c91fbc0a64ad8e8ab000dc9ebb",
+          "sha256": "3b30a540b3600f13630aaa62177f3e787ccf9cd776d0a160e94b62daabfd003d",
+          "bytes": 15977,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "ophanim/efficiency/investigation/measurement-probe.mjs",
+          "gitBlob": "d6f19220d627a0578ea7a8dddaa979aa2f1b0ae8",
+          "sha256": "844d67ae9b053e3a07fb10f497bab84e9d7c50e6796d7770650eee847d027aae",
+          "bytes": 7871,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "ophanim/efficiency/investigation/measurement-verify.mjs",
+          "gitBlob": "0cff6e36777f77819e66a11c0adab5e351628e63",
+          "sha256": "e2cb7643ccf5e7bcd27f6df8c60be0ac09a3198cfb828e0199d69c21e4899b40",
+          "bytes": 14081,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "ophanim/fixtures.mjs",
+          "gitBlob": "f9f1160c8ec8002658e275f6eabae918dbebde71",
+          "sha256": "51ae3483e233fda0452c8b01f3ec77a628814c3453913658fc6d8183560bda8a",
+          "bytes": 11398,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "status/ledger/ANCHOR",
+          "gitBlob": "8eeb583174e3065a7d085f67e8a6c4618dc10b94",
+          "sha256": "d6cce69792d65c9e139235f57b33f723494ad39c579d2d9291fc876293f7262b",
+          "bytes": 72,
+          "contentMatchesCommit": true
+        },
+        {
+          "path": "status/ledger/chain.jsonl",
+          "gitBlob": "3ea309b37fdf67acf629c47a4a5ec7490cb01005",
+          "sha256": "2bd37a312164c72d620d6be867cc889eac41265552bde2663491dd6160171877",
+          "bytes": 40739,
+          "contentMatchesCommit": true
+        }
+      ],
+      "metadataQualification": "Inspected content matches commit. The materialized worktree reports executable-bit-only differences; no source content was edited by this audit."
+    },
+    "scope": {
+      "publicTrackedInventory": true,
+      "selectedLocalRetainedReports": [
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-investigation-2026-11-15/independent-verification.json",
+          "sha256": "c775ad3c1ecb7a14c82254bdc980cd432a5500524d14e83536e90dc71fbffbc1",
+          "bytes": 578,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-investigation-2026-11-15/controlled-replay-verification.json",
+          "sha256": "349556ecca858bce1efc79895084241e44ee4c0cc5b26a9688616460985fa177",
+          "bytes": 1561,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-investigation-2026-11-15/latency-receipt.json",
+          "sha256": "0eb81483f7415542d454aa35a4168f9e951559bcd838ba28a73c8db39d3cec63",
+          "bytes": 125768,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/independent-measurement-verification.json",
+          "sha256": "cd18ffb91c80d2f885bf1c5aad1e80c999cde9ce0dde32f72555900270eb6915",
+          "bytes": 8505,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/qualification-result.json",
+          "sha256": "95485b5b206312c75c2610e064f1adc4a923d24c5fd6e5297aade7a35fa04d6d",
+          "bytes": 47774,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/retained-baseline-summary.json",
+          "sha256": "c67f624a7db7f072da7809a8c7cb64d5228106aec5e413a155ea59d78edbb4f5",
+          "bytes": 1101,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/restart-receipt.json",
+          "sha256": "ea1da835c13f81f0da530d098ea02c86fb52ac39c8a53d8d5a149f3325d79a25",
+          "bytes": 534,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-admission-2026-11-15.4yHgI7/admission-proof.json",
+          "sha256": "f05cbab3c4cd47d1cc415e146c1c6eee190e9d90fd76927c333b1f2fd14551b4",
+          "bytes": 39981,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/evidence/scopes/edb9cb38b61c7adb0d9fd9d5ef05f62619dfad69d23b84c17b1261c51554d54f/measurements/099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70/samples.json",
+          "sha256": "ebcc52f9efe5a084080f1ffb21d7c03a386fd136222c78ddcafa738147da83fe",
+          "bytes": 18712,
+          "source": "local retained report, not tracked public record"
+        },
+        {
+          "path": "${USER_HOME}/Projects/reports/ophanim-measurement-2026-11-15/evidence/scopes/edb9cb38b61c7adb0d9fd9d5ef05f62619dfad69d23b84c17b1261c51554d54f/measurements/099ffd4901f9335a87249539cb3fd1d95f5fb9bf64136cb40993a4153e40bb70/qualification.json",
+          "sha256": "432c18caae7030f0532c5541df650f0e7831d0cae1b0169e9419a9ca471d7f36",
+          "bytes": 30881,
+          "source": "local retained report, not tracked public record"
+        }
+      ],
+      "notExhaustiveLiveHistory": true,
+      "providerCalls": 0,
+      "productionWrites": 0,
+      "testsUseOfflineGuard": true,
+      "preExistingOwnerOrRetainedFixturePrivateKeysRead": false,
+      "separateSnapshotTestsUseDisposableFixtureAuthority": true
+    },
+    "publicLedger": {
+      "anchor": "sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d",
+      "verified": true,
+      "verificationCommand": "/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs packages/ledger/status.mjs verify",
+      "verificationOutput": "ok: 57 items, 81 entries, head sha256:76892bd2bff0f050c01591dc42b0241112c350d86df14f0ec94e676fd4b60503",
+      "entries": 81,
+      "kindCounts": {
+        "genesis": 1,
+        "status": 78,
+        "checkpoint": 1,
+        "authority": 1
+      },
+      "items": 57,
+      "stateCounts": {
+        "Resolved": 36,
+        "On Hold": 17,
+        "In progress": 1,
+        "Ready": 3
+      },
+      "statusPayloadFieldCounts": {
+        "basis": 78,
+        "checked": 78,
+        "item": 78,
+        "schema": 78,
+        "state": 78,
+        "title": 78,
+        "waiting_on": 78,
+        "depends_on": 5,
+        "owner_role": 8
+      },
+      "selectedItems": {
+        "routing-coordination-practices": {
+          "seq": 81,
+          "payload_ref": "sha256:0dec0449259ad8c76a27e4c9a8e5af5e0af7f547e459b36743a53c650f94e25c",
+          "payload": {
+            "basis": "Owner-designated priority: determine effective model routing, escalation and coordination practices, with a bounded assessment and retained disposition every operating cycle and actual next-dispatch policy consumption. Audit at 94a115c reproduced static task routing, ignored stop decisions, lost overrides/usage, expanded output caps, same-lab swarm coordination and missing cycle recovery/learning. Start with deterministic repairs and per-attempt resource evidence; unknown cost stays unknown. Review and standing acceptance contract: docs/reviews/2026-11-16-routing-coordination/. Implementation remains Ready; this status entry records the requirement rather than dispatching teams.",
+            "checked": "2026-11-16",
+            "item": "routing-coordination-practices",
+            "owner_role": "lead@orch",
+            "schema": "ophanim.status/v1",
+            "state": "Ready",
+            "title": "Priority: qualify model routing and coordination practices every cycle",
+            "waiting_on": null
+          },
+          "sha256": "0dec0449259ad8c76a27e4c9a8e5af5e0af7f547e459b36743a53c650f94e25c"
+        },
+        "cross-lab-review": {
+          "seq": 67,
+          "payload_ref": "sha256:f889dde8924d2fd60ce800b3655dba49561f7f625bfd190885f843afc6429abd",
+          "payload": {
+            "basis": "reviewers from OpenAI, xAI and Google are ready to run (npm run review-cycle with the HTTPS turn); the saved provider keys are still rejected",
+            "checked": "2026-11-17",
+            "item": "cross-lab-review",
+            "owner_role": "check@review",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "Cross-lab review of the ledger work (PR #6)",
+            "waiting_on": "credential"
+          },
+          "sha256": "f889dde8924d2fd60ce800b3655dba49561f7f625bfd190885f843afc6429abd"
+        },
+        "cross-lab-evaluator": {
+          "seq": 76,
+          "payload_ref": "sha256:a53d73d51024e99dfe0dd7304b55f1369c8eab190da6fafbded77eea743cc0d5",
+          "payload": {
+            "basis": "needs a cross-lab evaluator with TELOS access and live-run budget (review decisions 5 to 7)",
+            "checked": "2026-11-17",
+            "item": "cross-lab-evaluator",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "Independent evaluation plan, Phases 0 to 6",
+            "waiting_on": "decision"
+          },
+          "sha256": "a53d73d51024e99dfe0dd7304b55f1369c8eab190da6fafbded77eea743cc0d5"
+        },
+        "k6": {
+          "seq": 28,
+          "payload_ref": "sha256:24c870c1fe5eec7a01c83b8adea58a0b820a07b02e75cba97a22797cf47f8eb4",
+          "payload": {
+            "basis": "pinned TELOS verifier admits ledger entries and seat-signed reviews",
+            "checked": "2026-11-17",
+            "item": "k6",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "TELOS reviewers bound to real seats (K6)",
+            "waiting_on": "governance"
+          },
+          "sha256": "24c870c1fe5eec7a01c83b8adea58a0b820a07b02e75cba97a22797cf47f8eb4"
+        },
+        "k5": {
+          "seq": 21,
+          "payload_ref": "sha256:0985b2dfcb8d0cc0f570231ada6325a94a09b20d640d616e86ac6356ab159a7d",
+          "payload": {
+            "basis": "debit loophole closed; trace, assessment and retained on the ledger; fresh assessments verified",
+            "checked": "2026-11-17",
+            "item": "k5",
+            "schema": "ophanim.status/v1",
+            "state": "Resolved",
+            "title": "Efficiency records (K5, K5b)",
+            "waiting_on": null
+          },
+          "sha256": "0985b2dfcb8d0cc0f570231ada6325a94a09b20d640d616e86ac6356ab159a7d"
+        },
+        "q7-measurement": {
+          "seq": 6,
+          "payload_ref": "sha256:dfcdb18e9d3c77a669ba8f96f36638cb063f92d4f409af96fb0d6abb753835f2",
+          "payload": {
+            "basis": "projection, recomputation check and ranking across five chairs",
+            "checked": "2026-11-17",
+            "item": "q7-measurement",
+            "schema": "ophanim.status/v1",
+            "state": "Resolved",
+            "title": "Q7 contribution measurement",
+            "waiting_on": null
+          },
+          "sha256": "dfcdb18e9d3c77a669ba8f96f36638cb063f92d4f409af96fb0d6abb753835f2"
+        },
+        "q7-adjustment": {
+          "seq": 30,
+          "payload_ref": "sha256:9fda3c057a86f0f399846f22fb1c5e1d47aaf0611d502c1ca67bbcd7c53ea288",
+          "payload": {
+            "basis": "needs the pinned verifier to admit a seating dimension",
+            "checked": "2026-11-17",
+            "depends_on": [
+              "k6"
+            ],
+            "item": "q7-adjustment",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "Q7 seat adjustment from evidence",
+            "waiting_on": null
+          },
+          "sha256": "9fda3c057a86f0f399846f22fb1c5e1d47aaf0611d502c1ca67bbcd7c53ea288"
+        },
+        "me2-admission-stat": {
+          "seq": 73,
+          "payload_ref": "sha256:ca5184140622765162d516c7921a2f7cb390a807e69f9afc4de411b50f0a4052",
+          "payload": {
+            "basis": "thresholds are a decision (review decision 4); more samples need live runs",
+            "checked": "2026-11-17",
+            "item": "me2-admission-stat",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "ME2: thin admission statistic (three pairs per width; p95 equals max)",
+            "waiting_on": "decision"
+          },
+          "sha256": "ca5184140622765162d516c7921a2f7cb390a807e69f9afc4de411b50f0a4052"
+        },
+        "p8-p9-admission": {
+          "seq": 29,
+          "payload_ref": "sha256:75adfe47819fa07a252dd1f203dd3153f35156436b3c96cbfbc8781d48054f46",
+          "payload": {
+            "basis": "needs the pinned verifier to admit it",
+            "checked": "2026-11-17",
+            "depends_on": [
+              "k6"
+            ],
+            "item": "p8-p9-admission",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "P8/P9 admission through the efficiency gate",
+            "waiting_on": null
+          },
+          "sha256": "75adfe47819fa07a252dd1f203dd3153f35156436b3c96cbfbc8781d48054f46"
+        },
+        "fw3-premises": {
+          "seq": 72,
+          "payload_ref": "sha256:d51bc267086307e88251d59abeec8d4815677943ffacd500658e6d35ea6046d3",
+          "payload": {
+            "basis": "needs live runs with real providers",
+            "checked": "2026-11-17",
+            "item": "fw3-premises",
+            "schema": "ophanim.status/v1",
+            "state": "On Hold",
+            "title": "FW3: core premises open (0 of 6 trials delegated; swarm not independent)",
+            "waiting_on": "evidence"
+          },
+          "sha256": "d51bc267086307e88251d59abeec8d4815677943ffacd500658e6d35ea6046d3"
+        },
+        "protocol": {
+          "seq": 8,
+          "payload_ref": "sha256:033cffe58288cdc0869df13ef82f7d97b3004ad87e7b7ffb582c557a6d29a194",
+          "payload": {
+            "basis": "decisions re-derive; reviewer verdicts and truncations escalated",
+            "checked": "2026-11-17",
+            "item": "protocol",
+            "schema": "ophanim.status/v1",
+            "state": "Resolved",
+            "title": "Routing and escalation protocol",
+            "waiting_on": null
+          },
+          "sha256": "033cffe58288cdc0869df13ef82f7d97b3004ad87e7b7ffb582c557a6d29a194"
+        }
+      }
+    },
+    "trackedEvidenceInventory": {
+      "jsonlPaths": [
+        "status/ledger/chain.jsonl"
+      ],
+      "retainedEfficiencyOrInvestigationResultsTracked": [],
+      "qualification": "Tests and source code are tracked; this inventory does not assert that no untracked or external live runs exist."
+    },
+    "retainedSyntheticBaseline": {
+      "reportedCounts": {
+        "schema": "ophanim.independent-verification/v1",
+        "ok": true,
+        "synthetic": true,
+        "files": 152,
+        "states": 16,
+        "accepted": 79,
+        "effects": 26,
+        "decisions": 6,
+        "efficiencyAssessments": 26,
+        "investigationAssessments": 26,
+        "modelCalls": 0,
+        "runtimeDispatches": 0,
+        "deterministicSemanticChecks": "replayed, including fixed synthetic worker transformations",
+        "readOnly": true,
+        "limits": "Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain."
+      },
+      "verificationStatus": "Existing verification receipt read and pinned; full signed fixture-authority reopening deliberately not performed because it loads private fixture authority material. Counts overlap other reports and must not be summed."
+    },
+    "retainedSchedulerComparison": {
+      "scopeSha": "548f8ed879cf4f95a953f419e2d31b74d1cadac5b3d7afefac00359baab5210b",
+      "evidenceSha": "3600b8c43ea5242d8a67c3b6e10b82a53dc4a0bc9f524400d7997dd161724f1a",
+      "outcome": "no_change",
+      "eligible": false,
+      "conservativeSavedMs": 429,
+      "trialCostMs": 24046,
+      "forecastNetSavedMs": -15466,
+      "realizedNetSavedMs": -24046,
+      "blockers": [
+        "Stage p95 latency materially regressed",
+        "Measured trial cost exceeds conservative twenty-convergence forecast saving"
+      ],
+      "admissionConclusions": {
+        "measuredHistoricalGainMs": 429,
+        "measuredHistoricalAdmission": false,
+        "deterministicPositiveCase": true,
+        "actualNewPolicyAdmitted": false
+      },
+      "boundaries": {
+        "modelCalls": 0,
+        "businessConnections": 0,
+        "policyDecisionsIssued": 0,
+        "policyActivations": 0
+      },
+      "verificationStatus": "Retained receipts read and pinned, not freshly signature-reverified."
+    },
+    "measurementRawRecheck": {
+      "ok": true,
+      "sourceCommit": "e481e778350d22ed1daaf9f6bbb0e1cb51c28ce6",
+      "scope": "raw synthetic phase-discrimination samples only; historical fixture authority signatures not reopened because verifier loads private fixture authority",
+      "outcome": "distinguished",
+      "samples": 32,
+      "blocks": 4,
+      "timerMedianMs": 14.9324985,
+      "transformMedianMs": 9.3253565,
+      "collectionWallMs": 501.211304,
+      "modelCalls": 0,
+      "policyAuthorized": false,
+      "downstream": {
+        "criticalPathMs": null,
+        "stageP95Ms": null,
+        "throughput": null,
+        "recoveryMs": null
+      },
+      "historical": {
+        "timerResume": "unresolved",
+        "transformation": "unresolved"
+      }
+    },
+    "practicePolicyAssessment": {
+      "currentModelQualityOrCostRankingMeasured": false,
+      "currentCrossLabModelReviewCompleted": "Not established in this bounded evidence set; public board explicitly holds PR6 review and independent evaluation. TELOS fixture approvals are generated in the same fixture process.",
+      "adoptedMeasuredRoutingPolicyBinding": "No qualified live routing/coordination policy promotion found in public tracked records or the selected retained artifacts; Q7 adjustment held, standingcycle requirement Ready.",
+      "measuredSchedulerPolicyAdopted": false,
+      "basis": "router UNMEASURED list; seating TASTE/QUOTA/SURFACE; contribution projection ranksModels=false/authorizesSeatChange=false; retained report actualNewPolicyAdmitted=false"
+    },
+    "immutableProposalFix": {
+      "status": "confirmed separately on local candidate, not public e481 source",
+      "sourceCommit": "d9179ab2e5fe229098fb6c87b8bb0b99b5133794",
+      "statusMjsSha256": "ab71d0b883ccc581aae6ff16442700d64a6655d0bbdb55168e69a34aa413e305",
+      "contentMatchesCommit": true,
+      "scratchCasesPassed": 2,
+      "existingControlsPassed": 3,
+      "domainQualification": "Injected fixture verifier tests snapshot/digest mechanics only; no independent model review or live domain execution claimed."
+    }
+  },
+  "routing_delta": {
+    "schema": "ophanim.latest-delta-routing-probe/v1",
+    "commit": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+    "rows": [
+      {
+        "profile": "default",
+        "output": "xs",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.3",
+            "effort": null,
+            "output": 700,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-fable-5-2",
+            "effort": "high",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": null,
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.7",
+            "effort": null,
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.3",
+            "max_output_tokens": 700,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "max_output_tokens": 65536,
+            "effort": "high"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": null
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.7",
+            "max_output_tokens": 4000,
+            "effort": null
+          }
+        ]
+      },
+      {
+        "profile": "default",
+        "output": "xl",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.3",
+            "effort": null,
+            "output": 700,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-fable-5-2",
+            "effort": "high",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": null,
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.7",
+            "effort": null,
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.3",
+            "max_output_tokens": 700,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "max_output_tokens": 65536,
+            "effort": "high"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": null
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.7",
+            "max_output_tokens": 4000,
+            "effort": null
+          }
+        ]
+      },
+      {
+        "profile": "fit",
+        "output": "xs",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.20-multi-agent",
+            "effort": null,
+            "output": null,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-sonnet-5",
+            "effort": "max",
+            "output": 1024,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": "max",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.6",
+            "effort": "xhigh",
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.20-multi-agent",
+            "max_output_tokens": null,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-sonnet-5",
+            "max_output_tokens": 1024,
+            "effort": "max"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": "max"
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.6",
+            "max_output_tokens": 4000,
+            "effort": "xhigh"
+          }
+        ]
+      },
+      {
+        "profile": "fit",
+        "output": "xl",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.20-multi-agent",
+            "effort": null,
+            "output": null,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-sonnet-5",
+            "effort": "max",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": "max",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.6",
+            "effort": "xhigh",
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.20-multi-agent",
+            "max_output_tokens": null,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-sonnet-5",
+            "max_output_tokens": 65536,
+            "effort": "max"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": "max"
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.6",
+            "max_output_tokens": 4000,
+            "effort": "xhigh"
+          }
+        ]
+      }
+    ],
+    "mixed": {
+      "surface": "SURFACE",
+      "isolation": "ISOLATION"
+    },
+    "fitClasses": {
+      "status": "provisional",
+      "counts": {
+        "TASTE": 19,
+        "VENDOR": 2
+      }
+    },
+    "requirements": {
+      "review_labs": {
+        "value": 3,
+        "basis": "stakes critical (ticket)"
+      },
+      "explorer_width": {
+        "value": 3,
+        "basis": "ambiguity contested (ticket)",
+        "unit": "distinct labs"
+      }
+    },
+    "practice": {
+      "schema": "pantheon.practice/v1",
+      "scope": "routing-coordination",
+      "disposition": null,
+      "outcome": null,
+      "policy": {
+        "version": "pantheon.selection/v1",
+        "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+        "profile": "fit"
+      },
+      "provisional": true,
+      "applies": true,
+      "reason": "no ledger is open for this dispatch; the named provisional default pantheon.selection/v1 (fit) applies"
+    },
+    "scope": "4 real runOpenItem executions using scripted local providers; no live calls or owner keys",
+    "assertionsPassed": 25,
+    "default_profile": "argo",
+    "fit_status": "opt-in unpromoted provisional candidate",
+    "fit_performance_qualification": false,
+    "focused_tests": {
+      "passed": 12,
+      "failed": 0,
+      "name": "route-task-profile.test.mjs"
+    },
+    "prior_findings": {
+      "CS1": "still applies to unchanged legacy seating; fit explicitly labels classes provisional",
+      "CS2": "still applies; protocol unchanged; supported efforts do not establish optimal recovery economics",
+      "CS3": "still applies; now reproduced through actual fake-provider requests including fit xs output ignored by Astra implementation"
+    },
+    "current_output_mismatch": {
+      "profile": "fit",
+      "output_dimension": "xs",
+      "model": "gpt-6-astra",
+      "expected_cap": 1024,
+      "observed_cap": 65536,
+      "source": "pantheon/src/board/run-item.mjs:500-526"
+    },
+    "unconsumed_requirements": [
+      "review_labs",
+      "explorer_width"
+    ],
+    "empirical_claim_limit": "Reachability and request serialization tests do not establish quality, useful cost or speed. No matched fit-versus-ARGO provider comparison added.",
+    "admission_behavior": {
+      "candidate_execution_allowed_without_admitted_disposition": true,
+      "default_not_changed": true,
+      "practice_records_disposition_or_provisional_default": true,
+      "admitted_hash_mismatch_recorded_but_does_not_block_dispatch": true
+    },
+    "source_unchanged": true,
+    "cross_lab_qualification_performed": false
+  },
+  "learning_delta": {
+    "schema": "ophanim.learning-delta-audit/v1",
+    "recordedAtUtc": "2026-11-17T05:22:15.483663+00:00",
+    "publicSource": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+    "sourcePins": [
+      {
+        "path": "pantheon/src/ledger/practice-kinds.mjs",
+        "baseGitBlob": "eeeb008d3234aadd24aa465ff1b58d79c7a112cc",
+        "baseSha256": "cc253e54713980abe3ea17fb10ac9b9072111d200ab37d22011a643c1dfcc9af"
+      },
+      {
+        "path": "pantheon/src/ledger/cycle-kinds.mjs",
+        "baseGitBlob": "7a7fb6a0afdf743c1be4d815475e9c12a693f035",
+        "baseSha256": "579fdd75be6b74aafb30a64905e75b38a86ffc1688e5c48467b74ac1c1a8300a"
+      },
+      {
+        "path": "pantheon/src/board/run-item.mjs",
+        "baseGitBlob": "b1c6ba8ead82b5c821dc304793ffc419a5eac30b",
+        "baseSha256": "b22eb52f168de6c158f7ec6178f36f89a99b3a0ed225bd67329b7e1472130825"
+      },
+      {
+        "path": "pantheon/src/board/operate.mjs",
+        "baseGitBlob": "b8fe3ca72eb8b03f9b7d730819dc27474af1c10d",
+        "baseSha256": "836bf8bf45ff1674346d5598208c7ab87cbcb260f4dfc54f7e46451023174645"
+      },
+      {
+        "path": "pantheon/bin/pantheon-review-cycle.mjs",
+        "baseGitBlob": "e88e6b917eddaf80a6c9a36bc6b9c91ca9010cee",
+        "baseSha256": "dc62636aa7f5bdb86c4afdebb1cde516f977aba26837e736c15626b933660381"
+      },
+      {
+        "path": "ophanim/efficiency/practice.mjs",
+        "baseGitBlob": "23d032f611732d1497c481fc24eb37ed9fe791e5",
+        "baseSha256": "773e476e51d6c87942d90f8a324f8ea1ddfe7dfca0c51ca46f5a74394e0b8b0f"
+      },
+      {
+        "path": "packages/ledger/chain.mjs",
+        "baseGitBlob": "8be028d6a91c9e9ceaf0eafc836e120b067bcb41",
+        "baseSha256": "46561760d1e2d7c21628388faa996dfc0a5c21c6a93d91b368c3854350045c06"
+      },
+      {
+        "path": "packages/ledger/home.mjs",
+        "baseGitBlob": "7a03f168f6f8c9b4008dd546c2b5341a385d940b",
+        "baseSha256": "f74813d6806c5ee005b67eb75f50d166fb7e3890bea82f985723fb37fdcc483c"
+      }
+    ],
+    "positiveEnforcement": [
+      "default v2 cycles require an assessment-stage disposition to close",
+      "close cites cycle dispositions; next cycle binds the historical prior",
+      "actual dispatch selections record loaded decision or named provisional default",
+      "unmeasured judgment must be provisional",
+      "unknown/unimplemented promoted policy hash is reported applies:false at public base",
+      "per-attempt provider usage/settings and unknown USD retained by M5"
+    ],
+    "qualifiedLimits": [
+      "explicit old-v1 writing path is retained for compatibility; only v2 enforces the assessment requirement",
+      "practiceAssessment/rankChairQuestions adapter has no production caller at this pin; operate takes caller-supplied assessment",
+      "provider resource accounting is not a comparison or independently reviewed promotion receipt"
+    ],
+    "finding": {
+      "id": "C3-promotion-qualification",
+      "priority": 2,
+      "title": "Current admission treats a measured flag, arbitrary ledger hash and uninvoked named decider as qualification",
+      "observed": {
+        "accepted": true,
+        "recordedMeasured": true,
+        "ledgerEvidenceKind": "cycle",
+        "declaredDecider": {
+          "lab": "xai",
+          "model": "model-never-invoked-for-this-decision",
+          "vendor": "xai"
+        },
+        "deciderWasInvoked": false,
+        "allRecordedTurnsAreEarlierCodeReviews": true,
+        "turnsBeforePromotion": 3,
+        "turnsAfterPromotion": 3,
+        "independentReviewOfPracticeDecision": false,
+        "executedComparison": false,
+        "cycleClose": "verified",
+        "fullLedgerVerifies": true,
+        "admitted": {
+          "outcome": "promote",
+          "provisional": false,
+          "policy": {
+            "hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "profile": "argo",
+            "version": "candidate-with-no-comparison"
+          }
+        },
+        "loaded": {
+          "outcome": "promote",
+          "applies": false,
+          "reason": "loaded the admitted promote sha256:0f84e1275a26, whose policy sha256:dddddddddddd is not the one this dispatcher implements (sha256:d055a577fcff); the dispatch ran pantheon.selection/v1 and records the difference"
+        }
+      },
+      "expected": "Promotion remains refused without a verifier that validates a scoped comparison and signed independent decision bound to exact candidate evidence",
+      "limits": "At public base the unimplemented candidate reports applies:false; this repro does not show arbitrary candidate tables executing."
+    },
+    "baselineFocusedTests": {
+      "practiceAndAssessment": {
+        "passed": 9,
+        "failed": 0
+      },
+      "resourceUsage": {
+        "passed": 13,
+        "failed": 0
+      }
+    },
+    "repair": {
+      "worktree": "${AUDIT_WORKSPACE}/work/ophanim-learning-delta-audit",
+      "commit": "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54",
+      "scope": "Fail closed while comparison/decision qualification is unimplemented; no research pipeline added",
+      "changes": [
+        "optional trusted write-only appendRefusal kind hook at core append and home pre-declaration",
+        "canonical payload snapshot and separate policy input prevent mutation after checking",
+        "practice kind refuses every new promote, measured:true or provisional:false disposition before object/chain writes",
+        "loadPractice rejects historical unsupported promote or measured/nonprovisional retain before hash equality; uses named provisional implemented policy",
+        "historical validate/rederive/admittedPractice semantics retained for old close and successor prior hashes"
+      ],
+      "redEvidence": {
+        "initialNewTests": {
+          "failed": 5,
+          "passed": 1
+        },
+        "removedHomeGuard": "refused write appended authority object/chain; regression failed",
+        "missingSnapshot": "caller/policy mutation stored value2 instead of stable0",
+        "followupNonpromotionTests": {
+          "failed": 3,
+          "passed": 0
+        }
+      },
+      "finalFocusedTests": {
+        "passed": 36,
+        "failed": 0,
+        "command": "/usr/bin/node --import ${AUDIT_WORKSPACE}/work/workflow-audit/offline-guard.mjs --test packages/ledger/tests/append-policy.test.mjs packages/ledger/tests/chain.test.mjs pantheon/tests/practice-promotion-gate.test.mjs pantheon/tests/ledger-practice.test.mjs ophanim/efficiency/practice.test.mjs"
+      },
+      "historicalFixture": {
+        "schema": "pantheon.fixture.unqualified-practice-promotion/v1",
+        "sourceCommit": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+        "limitation": "Historical synthetic signature/shape acceptance; no comparison or independent practice decision was performed. No private keys retained.",
+        "anchor": "sha256:b53f8b06d1a507d17fe08f9509610a69f14cd6962426fa97ba2697829c329b9e",
+        "head": "sha256:48e53d3e60561c06ae3a91f1a5c8b26b240b73f59ef41691a479fab275d99883",
+        "entries": 20,
+        "cycle": "sha256:e050b545e4cef530442b5d28c49a64b1538c4ea620bd9192bd326b07359cae69",
+        "promoted": "sha256:a27d7bafcd7bc7bc5e190ebde4df982aee872662e95a5c5a1daa4d06c1f9a6ee",
+        "close": "sha256:3a1012ef352a6081efbbd864c0e045dc3d15cf6fec2121d93fb5cdc8a27ac503",
+        "next": "sha256:48e53d3e60561c06ae3a91f1a5c8b26b240b73f59ef41691a479fab275d99883",
+        "policy": {
+          "version": "pantheon.selection/v1",
+          "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+          "profile": "argo"
+        }
+      },
+      "reviewStatus": "internal same-family inspection only; independent cross-model review and root composed freeze remain required",
+      "sourcePins": [
+        {
+          "path": "packages/ledger/chain.mjs",
+          "sha256": "18df5dcd14227ecd7f7bb8d62f123055b0e83b0d93e1529ad68728213d80b131"
+        },
+        {
+          "path": "packages/ledger/home.mjs",
+          "sha256": "e0a8b2849574816a6f9298357113ecf13183bc9f5c8f6f59d5abb2f26652fd58"
+        },
+        {
+          "path": "pantheon/src/ledger/practice-kinds.mjs",
+          "sha256": "1bcef4662487a8e93faca3148f8739ddd06bbbbdb5082ba4f66b90ec7e5c6eba"
+        },
+        {
+          "path": "packages/ledger/tests/append-policy.test.mjs",
+          "sha256": "59187e4d351cee7b5bbd6df64bf79a24383c9be928235164781a8a97e792e5f5"
+        },
+        {
+          "path": "pantheon/tests/practice-promotion-gate.test.mjs",
+          "sha256": "6db3fbb00db3eb0efee834f6e2324a02eee4d28dfbf7979616c0736f777e6f8e"
+        }
+      ],
+      "commits": [
+        "a5f9c4ea001362c4f42a5a46828d16397803320f",
+        "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54"
+      ],
+      "retentionFollowup": {
+        "sourceCommit": "a5f9c4ea001362c4f42a5a46828d16397803320f",
+        "observed": {
+          "sourceCommit": "a5f9c4ea001362c4f42a5a46828d16397803320f",
+          "providerCalls": 0,
+          "fixtureReviews": 3,
+          "comparisonExecuted": false,
+          "practiceReviewExecuted": false,
+          "close": "verified",
+          "ledgerVerifies": true,
+          "loaded": {
+            "schema": "pantheon.practice/v1",
+            "scope": "routing-coordination",
+            "disposition": "sha256:9bbcb55f75abc8711d54c4b7c993a9c801ed3c70a52fcb2708b9c77280da239d",
+            "outcome": "retain",
+            "policy": {
+              "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+              "profile": "argo",
+              "version": "pantheon.selection/v1"
+            },
+            "provisional": false,
+            "applies": true,
+            "reason": "loaded the admitted retain sha256:9bbcb55f75ab; it is the policy this dispatcher runs"
+          }
+        },
+        "fixCommit": "b6b5cd048c0b7ed8b4f7be9275d64388e2803d54",
+        "historicalFixture": "pantheon/tests/fixtures/practice-unqualified-retain.json",
+        "rawMeasurementsUnaffected": "Only practice.disposition labels are restricted; measurement records in other kinds are unchanged."
+      }
+    },
+    "safety": {
+      "providerCalls": 0,
+      "ownerWrites": 0,
+      "preExistingPrivateKeysRead": false,
+      "disposableFixtureAuthority": true,
+      "fixtureExportContainsPrivateKeys": false,
+      "allNodeInvocationsGuarded": true
+    }
+  },
+  "roles": {
+    "schema": "ophanim.role-semantics-probe/v1",
+    "commit": "048b3ba41e3b81dc58d446bf9767ccf59d4571a9",
+    "configuredLabs": [
+      "openai",
+      "xai",
+      "google",
+      "anthropic"
+    ],
+    "inRunReviewerLabs": [
+      "xai",
+      "google",
+      "anthropic"
+    ],
+    "cycleWithoutAnthropic": [
+      {
+        "lab": "xai",
+        "role": "reviewer",
+        "model": "grok-4.7"
+      },
+      {
+        "lab": "google",
+        "role": "reviewer",
+        "model": "gemini-3.6-flash"
+      },
+      {
+        "lab": "openai",
+        "role": "planner",
+        "model": "gpt-6-sol"
+      }
+    ],
+    "rows": [
+      {
+        "forcedPlanner": false,
+        "result": {
+          "shipped": true,
+          "error": null
+        },
+        "plan": {
+          "vendor": "openai",
+          "model": "gpt-6-sol",
+          "reserved": [
+            "xai",
+            "google",
+            "anthropic"
+          ]
+        },
+        "work": {
+          "vendor": "openai",
+          "model": "gpt-6-sol",
+          "reserved": [
+            "xai",
+            "google",
+            "anthropic"
+          ]
+        },
+        "reviewLabs": [
+          "xai",
+          "google",
+          "anthropic"
+        ],
+        "workCalls": 1,
+        "planningTask": "exactly one TITLE line",
+        "workerPromptReceivesTitle": true
+      },
+      {
+        "forcedPlanner": true,
+        "result": {
+          "shipped": false,
+          "error": {
+            "stage": "work",
+            "message": "REVIEW_LABS_UNAVAILABLE: 3 independent review labs (stakes critical) are required, and with anthropic already producing, no producer lab leaves that many reviewer labs eligible (law 3 avoids every producer's lab); refusing rather than running fewer",
+            "at": "2026-11-17T05:26:55.814Z"
+          }
+        },
+        "plan": {
+          "vendor": "anthropic",
+          "model": "claude-fable-5-2"
+        },
+        "reviewLabs": [],
+        "workCalls": 0,
+        "planningTask": "exactly one TITLE line",
+        "workerPromptReceivesTitle": false
+      }
+    ],
+    "currentCycleFallback": {
+      "planner_excluded": false,
+      "author_labs": [
+        "openai"
+      ],
+      "reviewerLabs": [
+        "xai",
+        "google",
+        "anthropic"
+      ],
+      "note": "excluding the planner's lab (anthropic) as well leaves fewer than 3 labs: the planner's lab may review, and the author turns are not cited"
+    },
+    "assertionsPassed": 16,
+    "scope": "two real runOpenItem executions with scripted providers plus pure reviewer-pool/cycle-policy probes; no live provider or owner key",
+    "status": "read-only semantic audit; no policy implementation",
+    "role_interpretation": {
+      "orchestration_authority": "deterministic JavaScript controller",
+      "current_planner_call": "one TITLE line; no model scheduling authority",
+      "worker": "assigned artifact ownership, internal reasoning and bounded recovery",
+      "reviewer": "independent judgment of declared artifact/change contribution scope"
+    },
+    "findings": [
+      {
+        "id": "RS1",
+        "classification": "configured-pool/world-limit conflation",
+        "impact": "critical fit automatically co-seats title and implementation workers on OpenAI; explicit Anthropic title worker is refused before work",
+        "scope": "four configured labs, three fit in-run reviewer labs; cycle reviewer pool also includes OpenAI"
+      },
+      {
+        "id": "RS2",
+        "classification": "role/authority/contribution conflation",
+        "impact": "current title worker is called assigner despite controller performing scheduling; title still reaches worker and work cites plan",
+        "constraint": "do not delete actual contribution lineage while correcting terminology"
+      },
+      {
+        "id": "RS3",
+        "classification": "existing lineage-downgrade bypass still on audited remote",
+        "impact": "cycleReviewers drops planner lab and caller omits all author turns when three reviewers would otherwise be unavailable",
+        "constraint": "do not use this bypass to resolve reservation disagreement or lower quorum"
+      }
+    ],
+    "worker_escalation": {
+      "valid": true,
+      "focused_test_passed": true,
+      "observation": "fallback Carbon medium -> failed acceptance -> high on answering seat -> shipped",
+      "scope": "scripted provider mechanics, not live performance"
+    },
+    "authorized_changes": false,
+    "new_forced_coseating_implemented": false,
+    "quorum_lowered": false,
+    "source_unchanged": true,
+    "fit_fix_commit_preserved": "809d110272a40535cc0cb6edbf7a9c06e4ecb39f",
+    "acceptance": [
+      "Separate deterministic authority, worker task planning and independent artifact review in names and records.",
+      "Derive independence from actual contribution lineage within explicit review scope.",
+      "Treat reviewer pools as configured qualification sets; preserve required quorum and report unavailable capacity honestly.",
+      "Preserve worker escalation and actual-answerer handoff evidence.",
+      "Do not adopt vendor co-seating as a universal architecture requirement."
+    ]
+  },
+  "public_path_note": "Paths use portable ${USER_HOME} and ${AUDIT_WORKSPACE} aliases. Exact original source/report hashes remain pinned; the owner evidence bundle preserves original local provenance."
+}
