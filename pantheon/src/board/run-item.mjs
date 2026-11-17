@@ -40,7 +40,7 @@ import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
-import { frontierCandidates, readPools, selectSeat, registryModels } from "../route/frontier.mjs";
+import { frontierCandidates, readPools, selectSeat, registryModels, selectionPolicy } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
@@ -236,10 +236,24 @@ export async function runOpenItem(spec, opts = {}) {
     if (SHADOW_TASK === undefined) { try { SHADOW_TASK = taskProfile(spec, { paths: SLOTS.map(sl => sl.path), mode: "batch" }); } catch { SHADOW_TASK = null; } }
     return SHADOW_TASK;
   };
+  // A loaded decision that does not apply (its policy is not the one this dispatcher implements) is recorded
+  // `applies: false` on every selection and the dispatch continues under the policy it does implement; it is
+  // also surfaced: a `practice.warning` event and `practice_warning` at the top of run.json, naming the loaded
+  // disposition and why it does not apply.
+  const practiceNow = () => {
+    if (PRACTICE) return PRACTICE;
+    PRACTICE = loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools });
+    if (PRACTICE.applies === false) {
+      run.practice_warning = { code: "PRACTICE_NOT_APPLIED", disposition: PRACTICE.disposition, outcome: PRACTICE.outcome, scope: PRACTICE.scope,
+        loaded_policy: PRACTICE.policy, ran_policy: (id => ({ version: id.policy, hash: id.hash, profile }))(selectionPolicy(profile, { pools })), reason: PRACTICE.reason };
+      progress({ event: "practice.warning", detail: `loaded practice disposition ${PRACTICE.disposition} does not apply: ${PRACTICE.reason}` });
+      record();
+    }
+    return PRACTICE;
+  };
   const choose = (role, { chars = null, ...rest } = {}) => {
     const args = { difficulty: DIFFICULTY_OF_TICKET, pools, needsContext: chars === null ? null : contextEstimate(chars), roleOverride: OVERRIDES[role] ?? null };
-    const primary = withPractice(selectSeat(role, { profile, ...args, ...(TASK ? { task: TASK } : {}), ...rest }),
-      PRACTICE ??= loadPractice({ ledger: LEDGER?.ledger ?? null, scope: opts.practiceScope, profile, pools }));
+    const primary = withPractice(selectSeat(role, { profile, ...args, ...(TASK ? { task: TASK } : {}), ...rest }), practiceNow());
     const task = profile === "fit" ? null : shadowTask();
     const shadow = profile !== "fit" && !task ? { profile: "fit", error: "the ticket has no valid task profile for fit" }
       : shadowSeat(role, { profile, args: { ...args, ...rest }, task });
