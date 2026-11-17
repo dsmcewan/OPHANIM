@@ -3,28 +3,37 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:3fc0f0441a3528e3718a553d3eb3401110926fd16dc793be740ecefe00936eb8` · 67 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:a02fdd8a74bdafad54290bdcb3f289682f5c5ec42d4a3e70645123b1dec37ecc` · 76 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 34 · In progress: 0 · Ready: 0 · On Hold: 13.
+**Counts:** Resolved: 34 · In progress: 2 · Ready: 2 · On Hold: 18.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
 | Item | State | Waiting on | Basis | Checked |
 |---|---|---|---|---|
 | **all_turns on GPT-6 Astra, Sol, Luna** (`all-turns`) | On Hold | credential | docs conflict on Astra, silent on Sol and Luna; one live call settles it | 2026-11-17 |
+| **Independent evaluation plan, Phases 0 to 6** (`cross-lab-evaluator`) | On Hold | decision | needs a cross-lab evaluator with TELOS access and live-run budget (review decisions 5 to 7) | 2026-11-17 |
 | **Cross-lab review of the ledger work (PR #6)** (`cross-lab-review`) | On Hold | credential | reviewers from OpenAI, xAI and Google are ready to run (npm run review-cycle with the HTTPS turn); the saved provider keys are still rejected | 2026-11-17 |
 | **xAI models on the shared client** (`direct-path-xai`) | On Hold | fact | xAI documents no output ceilings (re-checked 2026-11-17) | 2026-11-17 |
+| **FW3: core premises open (0 of 6 trials delegated; swarm not independent)** (`fw3-premises`) | On Hold | evidence | needs live runs with real providers | 2026-11-17 |
 | **FW4: a threat model naming the adversary (independent review)** (`fw4-threat-model`) | On Hold | decision | the review assigns this to the decision authority: which adversary the controls must stop (careless owner, compromised agent session, malicious repo writer, provider substitution). A draft can be proposed for decision | 2026-11-17 |
 | **gemini-3.6-flash off the agy seats** (`gemini-routing`) | On Hold | decision | would move OAuth agy seats onto the metered API | 2026-11-17 |
 | **GitHub Projects view of the loop** (`github-projects`) | On Hold | credential | user-owned Projects need a token with project scope; neither GITHUB_TOKEN nor this session has one. The publisher syncs Projects only when that token is configured | 2026-11-17 |
 | **TELOS reviewers bound to real seats (K6)** (`k6`) | On Hold | governance | pinned TELOS verifier admits ledger entries and seat-signed reviews | 2026-11-17 |
 | **Seat files from before the ledger** (`legacy-seat-files`) | On Hold | decision | a resumed board from before the ledger has seat turns that were never recorded; refused today. Adopting them as signed inputs is a choice about trust | 2026-11-17 |
+| **ME2: thin admission statistic (three pairs per width; p95 equals max)** (`me2-admission-stat`) | On Hold | decision | thresholds are a decision (review decision 4); more samples need live runs | 2026-11-17 |
 | **P8/P9 admission through the efficiency gate** (`p8-p9-admission`) | On Hold | depends on k6 | needs the pinned verifier to admit it | 2026-11-17 |
 | **Q7 seat adjustment from evidence** (`q7-adjustment`) | On Hold | depends on k6 | needs the pinned verifier to admit a seating dimension | 2026-11-17 |
+| **RU3: governance.mjs, which holds the pins, is not itself pinned** (`ru3-pin-boundary`) | On Hold | governance | what the pinned verifier covers is a governance decision | 2026-11-17 |
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
 | **Operator key custody (hardware or remote signer)** (`signer`) | On Hold | decision | keys generated in an agent session stay there (independent review SY1/WF2); the status board key is the same question. Needs the owner to hold the operator key or name a signer | 2026-11-17 |
+| **SY3: proofs bind absolute paths and cannot be checked on another machine** (`sy3-portable-proofs`) | On Hold | decision | whether a retained proof must verify elsewhere is review decision 8 | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
+| **Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2** (`review-mutants`) | In progress |  | independent review: checks no test protects; each gets a killing test | 2026-11-17 |
+| **SY4 lockfile integrity, SY5 append cost and lock, WF3 sandbox python path, WF4 machine paths** (`supply-portability`) | In progress |  | independent review findings fixable without decisions | 2026-11-17 |
+| **CO1: ophanim/ is expensive to review (6% comments, long lines)** (`co1-readability`) | Ready |  | reformat and document without behaviour change | 2026-11-17 |
+| **ME3: nine canonical-JSON functions that disagree at the edges** (`me3-canonical`) | Ready |  | unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
 | **One ledger across boards and domains** (`board-resolver`) | Resolved |  | entries name their board (scope) and re-derive against it; domains declared by operator-signed entries; a reader checks foreign-domain entries structurally and reports them as foreign, never re-derived | 2026-11-17 |
 | **Cited capability facts** (`facts`) | Resolved |  | every registry model cited; UNRECORDED where unstated; drift check empty | 2026-11-17 |
