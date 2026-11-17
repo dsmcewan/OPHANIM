@@ -16,7 +16,7 @@
       "vendor": "agy_google",
       "transport": "agy-cli",
       "lab": "google",
-      "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking; not a Gemini API id (aistudio.google.com/docs/models, read 2026-11-16)"
+      "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking. The lane name is not a Gemini API id; the API model `gemini-3.8-flash` is (aistudio.google.com/docs/models, read 2026-11-16)"
     }
   }
 }

@@ -482,12 +482,16 @@
     "values": [
      "low",
      "medium",
-     "high",
-     "xhigh"
+     "high"
     ],
     "default": "high",
-    "source": "https://docs.x.ai/developers/models/grok-4.5",
-    "quote": "Reasoning efforts Supported low, medium, high, xhigh Default high"
+    "source": "https://docs.x.ai/developers/model-capabilities/text/reasoning",
+    "quote": "grok-4.5 supports low / medium / high (default); xhigh is treated as high",
+    "conflict": {
+     "source": "https://docs.x.ai/developers/models/grok-4.5",
+     "quote": "Reasoning efforts Supported low, medium, high, xhigh Default high",
+     "resolution": "the narrower list is recorded: an xhigh request is served as high, so escalating to it would change nothing (read 2026-11-16)"
+    }
    },
    "surface": "UNRECORDED"
   },
@@ -549,6 +553,31 @@
    "notes": [
     "Aliases grok-code-fast-1; Batch API not supported."
    ]
+  },
+  "gemini-3.8-flash": {
+   "vendor": "google",
+   "api_id": true,
+   "window": {
+    "value": 1048576,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
+    "quote": "Input token limit 1,048,576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
+    "quote": "Output token limit 65,536"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "default": "UNRECORDED",
+    "source": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
+    "quote": "Supported (low, medium, high); minimal is not supported and returns an error"
+   },
+   "status": "Stable; no shutdown date announced (aistudio.google.com/docs/deprecations, released September 2, 2026)"
   }
  }
 }
