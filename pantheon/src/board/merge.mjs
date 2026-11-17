@@ -196,6 +196,6 @@ export async function merge({ store, refs, runtime = null, into, from, author, m
   const changed = changedSlots(store, intoCid, commit);
   const swap = await refs.swap({ name: into, expected: intoCid, next: commit, author, changedSlots: changed, msg });
   if (!swap.ok) return { ok: false, ...swap, plan, commit };
-  if (runtime) { try { runtime.recordSpend({ commit, seat: author.seat_id ?? author.vendor, vendor: author.vendor, turns: 0 }); } catch { /* side log */ } }
+  if (runtime) { try { runtime.recordSpend({ commit, seat: author.seat_id ?? author.vendor, vendor: author.vendor, publications: 0, usd: 0, provider_calls: 0, usd_basis: "merge commit: no provider request" }); } catch { /* side log */ } }
   return { ok: true, commit, plan, changed, withheld: plan.blocked, partial: !plan.ok };
 }
