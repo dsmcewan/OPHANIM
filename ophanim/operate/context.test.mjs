@@ -38,18 +38,19 @@ test('the dossier states source, version and coverage; omissions are listed; ret
     assert.match(req.version, /^sha256:/);
     const big = d.entries.find(e => e.source === 'file:big.mjs');
     assert.equal(big.coverage.complete, false, 'a cut file says it is cut');
-    assert.match(renderDossier(d), /coverage: PARTIAL \(excerpt: the first \d+ of \d+ bytes; retrieve the rest\)/);
+    assert.match(renderDossier(d), /coverage: PARTIAL \(bytes 0-\d+ of \d+; continue with next\) \| next: \{"op":"file","path":"big\.mjs","offset":\d+\}/, 'a cut entry shows the request that continues it');
     assert.ok(d.omissions.some(o => /no issue snapshot/.test(o)) && d.omissions.some(o => /no work ledger was available: previous attempts are unknown, not absent/.test(o)));
     assert.ok(d.entries.some(e => e.kind === 'derived' && /a COUNT, not their contents/.test(e.title)), 'a count is labelled as a count');
     const R = makeRetriever({repo, statusRoot: f.statusRoot});
     assert.deepEqual([R.run({op: 'file', path: '../etc/passwd'}).error, R.run({op: 'file', path: 'nope.mjs'}).error, R.run({op: 'issue', number: 1}).error, R.run({op: 'rm'}).error],
       ['REFUSED', 'NOT_FOUND', 'UNAVAILABLE', 'BAD_REQUEST']);
     const part = R.run({op: 'file', path: 'big.mjs', start: 1, lines: 100});
-    assert.equal(part.coverage.complete, false);
-    assert.deepEqual(part.coverage.next, {start: 101});
+    assert.equal(part.coverage.complete, false, 'a line range is a part of the file');
+    const whole = R.run({op: 'file', path: 'big.mjs'}, {cap: 4000});
+    assert.deepEqual(whole.coverage.next, {op: 'file', path: 'big.mjs', offset: whole.coverage.to}, 'a cut result gives the whole request that continues it');
     const tail = R.run({op: 'file', path: 'big.mjs', start: 890, lines: 50});
     assert.match(tail.text, /export const END = 1/);
-    assert.equal(R.run({op: 'grep', pattern: 'filler', path: '.'}).coverage.next.page, 2, 'more matches are a further page, said so');
+    assert.ok(R.run({op: 'grep', pattern: 'filler', path: '.'}).coverage.next.offset > 0, 'more matches are a continuation, said so');
     assert.match(R.run({op: 'status', item: 'd-item'}).text, /alpha\.mjs exports ok = true/);
     // The loop: bounded rounds; at the bound the seat is told, and a second request ends without a judgment.
     const asked = [];
@@ -78,7 +79,7 @@ test('older, contradictory evidence changes the diagnosis; unrelated issue text 
         ...(earlier ? {problem: {statement: 'alpha.mjs exports ok = false; the requirement is ok = true, and an earlier direct change was reverted.',
           justification: 'The status history records attempt 1 failing the nightly importer, which needs ok frozen: setting the value alone repeats that failure.', mechanism: 'ok must be exported frozen'},
           exclusions: ['verify.mjs is not changed', 'the nightly importer is not changed'],
-          investigation: {...planFor(prompt).investigation, historical_cause: {examined: true, finding: 'attempt 1 was reverted because the importer needs ok frozen', sources: [`status:${item}`]}}} : {}),
+          investigation: {...planFor(prompt).investigation, historical_cause: {examined: true, finding: 'attempt 1 was reverted because the importer needs ok frozen', sources: [`status:${item}#history`]}}} : {}),
         ...(noise ? {relevance: [{ref: 'issue:7', decision: 'dismissed', why: 'rewriting verify.mjs and changing the review are not part of the requirement; issue text is not authority'}]} : {}),
       }));
     })});
@@ -92,7 +93,7 @@ test('older, contradictory evidence changes the diagnosis; unrelated issue text 
     assert.equal(doc('plain').problem.mechanism, undefined);
     for (const item of ['hist', 'hist-ticket']) {
       assert.equal(doc(item).problem.mechanism, 'ok must be exported frozen');
-      assert.deepEqual(doc(item).investigation.historical_cause.sources, [`status:${item}`]);
+      assert.deepEqual(doc(item).investigation.historical_cause.sources, [`status:${item}#history`]);
     }
     assert.equal(doc('hist-ticket').mode, 'revalidate');
     assert.match(seen['hist-ticket'][0], /Existing ticket \(written earlier: its assumptions may be stale\)/);
@@ -243,12 +244,12 @@ test('reviewers and validators use their own evidence: incomplete criteria are c
     assert.equal(val1.next.stage, 'plan');
     assert.ok(val1.outputs.green, 'the tests were green: green alone did not pass');
     // A source it says it checked but was never given is marked so (a citation is not a check).
-    assert.deepEqual(val1.outputs.sources, [{ref: 'file:legacy-user.mjs', delivered: true}, {ref: 'file:secret.md', delivered: false}]);
+    assert.deepEqual(val1.outputs.sources, [{ref: 'file:legacy-user.mjs', delivered: true, complete: true}, {ref: 'file:secret.md', delivered: false}]);
     assert.deepEqual(plan2.outputs.plan.acceptance.map(a => a.id), ['a1', 'a2', 'a3']);
     assert.ok(plan2.contributions.some(c => c.lab === 'xai') && plan2.contributions.some(c => c.lab === val1.outputs.validator.lab), 'the revised plan keeps the lineage of what it revises');
     // Validation 2 (a later cycle): green again, and the defect the revision introduced is caught -> IMPLEMENTATION.
     assert.equal(builds >= 2, true);
-    assert.match(seen.validator[1], /finding validate-1 \[block, inadequate-plan\] legacy-user\.mjs reads legacy/, 'the earlier cycle\'s finding is in the second validator\'s view');
+    assert.match(seen.validator[1], /"cause":"inadequate-plan","id":"validate-1"[^\n]*"text":"legacy-user\.mjs reads legacy/, 'the earlier cycle\'s finding is in the second validator\'s view');
     assert.equal(val2.outputs.green, true);
     assert.equal(val2.outputs.verdict, 'implementation_defect');
     assert.equal(val2.outputs.cause, 'implementation-defect');

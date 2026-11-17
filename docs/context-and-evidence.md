@@ -39,11 +39,21 @@ Finding 3 was found by a test, not by reading: the scripted implementer never sa
 
 Every entry states its kind (authoritative requirement, observation, derived, hypothesis), source, version, date and coverage. An excerpt says how much of how much. What is not in the view is listed. When no file is named anywhere, the selection is a word-match guess and is labelled a hypothesis.
 
-**Retrieval the model drives** (`makeRetriever`, `investigate`). A seat may answer with requests instead of a judgment: read a file or a line range, list, search, read history or a commit, read any item's status history or work record, an earlier stage record, an issue, or a full test output. Results state source, version and coverage; a missing source, a refused path, a cut and a further page are shown as such. The loop is bounded (3 rounds, 6 requests a round, 160 KB by default), every round is a counted provider call, and at the bound the seat is told nothing more was retrieved and must say what it could not see.
+**Retrieval the model drives** (`makeRetriever`, `investigate`). A seat may answer with requests instead of a judgment: read a file or a line range, list, search, read history or a commit, read any item's status history or work record, an earlier stage record, an issue, or a full test output.
+
+- **Views.** Each request names a view: a source (including any selection, such as a `match` on status history) and a version. A result is a byte range of that view's whole body, with the total.
+- **Continuation.** A cut result or dossier entry carries `next`, the complete request that continues it. This holds for every source, including a long status history, a large stage record and a file that is one oversized line. `match` and `entry` select rows instead of paging through them.
+- **Containment.** A path must be inside the repository as written and as resolved: a symlink, or a path through a symlinked directory, to a target outside is refused, in retrieval and in the dossier alike. The refusal is listed.
+- **Budgets, in bytes.** One result is at most `result_bytes` (16 KB) and one seat's investigation at most `total_bytes` (160 KB) of delivered record text, counted as UTF-8 bytes without splitting a character. Both are enforced before a result enters the prompt: a result is cut to what is left, and a request that does not fit is not run. Each cut and each request not run is recorded with what remains retrievable.
+- **Rounds.** 3 rounds of at most 6 requests by default. Every round is a counted provider call. At the bound the seat is told nothing more was retrieved and must say what it could not see.
 
 **The model decides whether it has enough.** A plan states `context` (sufficient, gaps, uncertainty) and answers the four questions (historical cause, operational position, change impact, adequacy of success). Each is either examined, with a finding and sources, or not examined, with the reason; none is forced. Consequential relevance decisions can be recorded (`used` or `dismissed`, with why). If the evidence does not support a plan, the planner answers `insufficient` instead: no plan is invented, no review is spent, the item waits with its gaps recorded, and it is planned again when the evidence changes.
 
-**Supplied, retrieved, cited, checked are kept apart.** Each seat's delivery is recorded: dossier entries and each retrieval with its result. A plan may cite only what was delivered to the planner; a citation of anything else is refused. Each citation records whether it was supplied or retrieved and whether in full. A validator's list of sources it checked is marked per source with whether that source was ever delivered to it.
+**Supplied, retrieved, cited, checked are kept apart.** Each seat's delivery is recorded per view and version, as the byte ranges it was given (`deliveryOf`). A view is complete only when its ranges cover the whole; ranges of two versions are never added together; and one complete view says nothing about another view of the same ledger or file. The requirement and the status history, for example, are separate views (`status:<item>#requirement`, `status:<item>#history`).
+
+- A plan may cite only what was delivered to the planner; a citation of anything else is refused. Each citation records how it arrived (supplied, retrieved), the byte ranges, and whether that is all of it.
+- A view delivered only in part is recorded on the stage as an unresolved gap, with the request that continues it.
+- A validator's list of sources it checked is marked per source with whether that source reached it, and whether in full.
 
 **Carried through the loops.**
 
@@ -71,11 +81,21 @@ All of it is **scripted**: each scripted seat reads the prompt it is given and a
 | Older, contradictory evidence changes the diagnosis | An earlier reverted attempt on the status ledger reaches the planner; the plan's cause and exclusions differ from the same item without it. No ticket and existing ticket. |
 | Irrelevant material is dismissed without redirecting the task | Issue text asking to rewrite a test and lower the review reaches the planner as data, is recorded as dismissed, and scope is unchanged. |
 | A downstream dependency changes the solution | A consumer too long for the initial view is retrieved; its last line changes the plan's scope and travels to the implementer. No ticket and existing ticket. |
+| Decisive history beyond the initial excerpt | A 61-entry status history is cut in the initial view. The planner follows the offered continuation once, finds the reverted attempt, and changes the diagnosis. It does not read the rest, so the history stays partial: in the citation, in the unresolved gaps, and in the cause recorded for a reviewer's finding about it (`evidence-partly-delivered`). No ticket and existing ticket. |
 | Missing or cut evidence triggers retrieval or stated uncertainty | With retrieval: the cut file is fetched. With none allowed: the plan records the gap. A named source that does not exist: the planner declines, the item waits, is not re-run on the same evidence, and is planned once the file exists. |
 | Incomplete criteria and later-cycle failures are detected | A plan reviewer, using its own retrieval, finds a consumer no criterion covers. A validator finds another and returns the work to planning. In the second cycle, a validator catches a defect the revision introduced while the tests stay green, with the first cycle's finding in its view. |
 | A supported solution advances | The plain item plans and passes review; the lifecycle tests reach an outcome. |
 
 **Model judgment: not demonstrated. Live operation: none.** No provider was called. Whether real models use the dossier well, ask for the right records, or dismiss the right material is unmeasured.
+
+## Corrections after review of `22cbbb8`
+
+The owner's review reproduced four defects at `22cbbb8`. Each has a regression test in `ophanim/operate/context-bounds.test.mjs` that fails on that commit.
+
+1. **Symlinks.** File retrieval and the dossier followed a link out of the repository. Containment is now checked on the real target.
+2. **Shared identity.** The requirement and its history were one source, so a complete requirement made a partial history count as fully delivered, and a finding about it was classified as "delivered in full". They are now separate views, and completeness is computed from byte ranges per view and version.
+3. **No continuation.** A cut status history, stage record or one-line file could not be continued. Every cut now carries the request that continues it, and status and work views can be selected by `match`.
+4. **Budgets.** `grep` could return several times `result_bytes`; an investigation could pass `total_bytes` before noticing; and bytes were counted as characters. All three are fixed as described above.
 
 ## Open
 
@@ -84,3 +104,5 @@ All of it is **scripted**: each scripted seat reads the prompt it is given and a
 - **The first guess for an item that names no file** is a word match. It is labelled a hypothesis and can be replaced by retrieval, but a better first selection would save rounds.
 - **Cause analysis is limited to what a finding names.** A finding with no source is recorded as undetermined.
 - **Dossier cost.** It is rebuilt for each stage, and for a plan waiting on evidence at each tick.
+- **Budget accounting covers record text.** The framing around each result (the request, source and coverage line) is not counted against `total_bytes`.
+- **Review capacity is a separate, unresolved decision** (`docs/reviews/2026-11-17-orchestration/ASSESSMENT.md`). The synthetic labs in the tests are test-only and are not production capacity.

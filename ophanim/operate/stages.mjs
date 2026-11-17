@@ -42,7 +42,7 @@ import {selectSeat, readPools} from '../../pantheon/src/route/frontier.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
-import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, refOf, RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
+import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 
 export const PLAN_SCHEMA = 'ophanim.plan/v1';
 export const VERDICTS = Object.freeze(['accept', 'implementation_defect', 'plan_defect', 'diagnosis_defect', 'missing_evidence']);
@@ -286,7 +286,7 @@ export function causeOf(file, delivered, doc = null) {
   if (!file) return {cause: 'undetermined', why: 'the finding names no source'};
   const ref = refOf(file), got = delivered.get(ref);
   if (!got) return {cause: 'evidence-not-delivered', why: `${ref} never reached the author (not supplied, not retrieved)`};
-  if (!got.complete) return {cause: 'evidence-partly-delivered', why: `${ref} reached the author only as an excerpt`};
+  if (!got.complete) return {cause: 'evidence-partly-delivered', why: `${got.source} (version ${String(got.version).slice(0, 19)}) reached the author only in part: bytes ${got.portions.map(p => p.join('-')).join(', ')} of ${got.total}`};
   const dismissed = (doc?.relevance ?? []).find(r => refOf(r.ref) === ref && r.decision === 'dismissed');
   if (dismissed) return {cause: 'evidence-dismissed', why: `the author was given ${ref} and dismissed it: ${dismissed.why}`};
   return {cause: 'evidence-delivered', why: `${ref} reached the author in full: a misreading or an unsupported inference (the record cannot separate them)`};
@@ -311,7 +311,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   // Evidence for every judging seat (context.mjs): the dossier of the item, and bounded read-only retrieval.
   const INV = {...DEFAULT_INVESTIGATION, ...investigation};
   const evidenceFor = (ctx, extra = {}) => {
-    const dossier = buildDossier({repo, statusRoot: statusAt, item: ctx.item, work: ctx.work, issues: ctx.issues ?? null, bundlesDir: ctx.bundlesDir ?? bundlesDir});
+    const dossier = buildDossier({repo, statusRoot: statusAt, item: ctx.item, work: ctx.work, issues: ctx.issues ?? null, bundlesDir: ctx.bundlesDir ?? bundlesDir, limits: INV});
     return {dossier, retriever: makeRetriever({repo, statusRoot: statusAt, work: ctx.work, issues: ctx.issues ?? null, limits: INV, ...extra})};
   };
   const dossierRecord = d => ({digest: d.digest, stable: d.stable, head: d.head, entries: d.entries.map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, complete: e.coverage?.complete !== false})), omissions: d.omissions});
@@ -321,7 +321,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
    */
   const investigatingTurn = (m, retriever, logs, role, reserve = 0) => async ({vendor, model, prompt, seat}) => {
     const r = await investigate({prompt, retriever, canAsk: () => m.left() > reserve, ask: p => m.turn({vendor, model, prompt: p, seat})});
-    logs.push({role, vendor, model, lab: seat?.lab ?? labOf(vendor, model), ...r.log});
+    logs.push({role, vendor, model, lab: seat?.lab ?? labOf(vendor, model), ...r.log, unresolved: gapsOf(deliveryOf(logs.dossier, r.log))});
     if (!r.reply) throw new Error(`no review within the investigation bounds (${r.log.limit_reached})`);
     return r.reply;
   };
@@ -362,8 +362,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         next: {stage: 'plan', why: 'plan review capacity is short'}});
     }
     const {dossier, retriever} = evidenceFor(ctx);
-    const investigations = [];
-    const ctxOut = () => ({dossier: dossierRecord(dossier), investigations});
+    const investigations = Object.assign([], {dossier});
+    // What the planner was given only in part stays an unresolved gap on the record, with the request that continues it.
+    const plannerGot = () => deliveryOf(dossier, {requests: investigations.filter(x => x.role === 'planner').flatMap(x => x.requests)});
+    const ctxOut = () => ({dossier: dossierRecord(dossier), investigations: [...investigations], unresolved: gapsOf(plannerGot())});
     const sys = openPantheonLedger({root: dirOf(ctx, 'plan-ledger')});
     const rec = sys.recorder();
     const top = git(repo)(['rev-parse', '--show-toplevel']).trim();
@@ -396,7 +398,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           // The planner investigates before it answers: each retrieval round is a counted call, and the review's calls are kept in reserve.
           const r = await investigate({prompt: first, retriever, canAsk: () => m.left() > n + 1, ask: p => m.turn({vendor: planner.vendor, model: planner.model, prompt: p, seat: {...planner, role: 'planner'}})});
           reply = r.reply; prompt = r.prompt; inv = r.log;
-          investigations.push({role: 'planner', ...seatOf(planner), version: v, try: k + 1, ...r.log});
+          investigations.push({role: 'planner', ...seatOf(planner), version: v, try: k + 1, ...r.log, unresolved: gapsOf(deliveryOf(dossier, r.log))});
         } catch (e) { refused.push({version: v, try: k + 1, why: [`the planner call failed: ${e.message}`]}); continue; }
         if (!reply) { refused.push({version: v, try: k + 1, why: [`no plan within the investigation bounds (${inv.limit_reached})`]}); continue; }
         const text = reply?.text ?? '';
@@ -423,7 +425,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           evidence: j.evidence.map(e => {
             const ref = refOf(e.ref ?? e.path), got = delivered.get(ref);
             const file = got.source?.startsWith('file:') ? got.source.slice(5) : null;
-            return file ? {path: file, sha256: bytesOf(file), why: e.why, via: got.via, complete: got.complete} : {ref, source: got.source, version: got.version ?? null, why: e.why, via: got.via, complete: got.complete};
+            // Which bytes of which version reached the planner: a partly delivered source stays partial on the record.
+            const part = {via: got.via, complete: got.complete, portions: got.portions, total: got.total};
+            return file ? {path: file, sha256: bytesOf(file), why: e.why, ...part} : {ref, source: got.source, version: got.version ?? null, why: e.why, ...part};
           }),
           version: {n: versions.length + 1, previous: prevDigest}};
       }
@@ -463,7 +467,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           next: {stage: 'plan', why: 'plan review incomplete'}});
       }
       // Each finding with what the record shows about its cause: did the source it is about ever reach the planner?
-      const authorGot = deliveryOf(dossier, {requests: investigations.filter(x => x.role === 'planner').flatMap(x => x.requests)});
+      const authorGot = plannerGot();
       const rows = findingRows(state).map(f => ({...f, ...causeOf(f.file, authorGot, doc)}));
       const blocking = rows.filter(f => BLOCKING.has(f.severity));
       const changes = state.reviews.some(x => x.verdict === 'request_changes');
@@ -619,7 +623,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const last = rec.lastCycle(cscope);
     const planDoc = chainOf(ctx.work, impl).plan?.outputs.plan ?? null;
     const {dossier, retriever} = evidenceFor(ctx);
-    const investigations = [];
+    const investigations = Object.assign([], {dossier});
     let cycle = last?.hash ?? null;
     if (!last?.close) {
       // An open cycle of this exact change is resumed (its recorded reviews kept), never reopened.
@@ -640,7 +644,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     const state = rec.cycleState(cycle);
     const team = state.reviews.map(x => ({role: 'cycle-reviewer', vendor: x.seat.vendor, model: x.model, lab: x.lab}));
-    Object.assign(outputs, {cycle, cycle_ledger_anchor: sys.anchor, scope: cscope, labs: state.reviews.map(x => x.lab).sort(), context: {dossier: dossierRecord(dossier), investigations}});
+    Object.assign(outputs, {cycle, cycle_ledger_anchor: sys.anchor, scope: cscope, labs: state.reviews.map(x => x.lab).sort(), context: {dossier: dossierRecord(dossier), investigations: [...investigations]}});
     if (state.reviews.length < state.cycle.reviewers) {
       const failed = state.attempts.filter(a => a.outcome === 'failed').map(a => `${a.seat.lab}: ${a.why}`);
       return result('pending', {outputs, team, usage: usage(),
@@ -730,7 +734,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       let reply;
       try {
         const r = await investigate({prompt, retriever, canAsk: () => m.left() > 1, ask: p => m.turn({vendor: seat.vendor, model: seat.model, prompt: p, seat: {...seat, role: 'validator'}})});
-        investigations.push({role: 'validator', ...seatOf(seat), try: k + 1, ...r.log});
+        investigations.push({role: 'validator', ...seatOf(seat), try: k + 1, ...r.log, unresolved: gapsOf(deliveryOf(dossier, r.log))});
         reply = r.reply;
         if (!reply) { refusedJ.push(`no judgment within the investigation bounds (${r.log.limit_reached})`); continue; }
       } catch (e) { refusedJ.push(`the validator call failed: ${e.message}`); continue; }
@@ -741,7 +745,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       }
       // What it says it checked, against what it was actually given: a source it never received is not "checked".
       const got = deliveryOf(dossier, {requests: investigations.filter(x => x.role === 'validator').flatMap(x => x.requests)});
-      const sources = (Array.isArray(j.sources) ? j.sources : []).filter(x => typeof x === 'string').map(x => ({ref: refOf(x), delivered: got.has(refOf(x))}));
+      const sources = (Array.isArray(j.sources) ? j.sources : []).filter(x => typeof x === 'string').map(x => ({ref: refOf(x), delivered: got.has(refOf(x)), ...(got.has(refOf(x)) ? {complete: got.get(refOf(x)).complete} : {})}));
       judged = {...j, sources, vendor: seat.vendor, model: seat.model, served_model: reply.served_model ?? null, lab: seat.lab};
     }
     const outputs = {commit, checkout: {commit, tree: G(['rev-parse', `${commit}^{tree}`]).trim(), method: 'git archive'}, tests, green,

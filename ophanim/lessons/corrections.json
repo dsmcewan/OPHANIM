@@ -358,6 +358,25 @@
         "file": "ophanim/operate/context.test.mjs",
         "name": "reviewers and validators use their own evidence"
       }
+    },
+    {
+      "id": "bound-declared-not-enforced",
+      "class": "A limit, a containment rule or a completeness claim is stated in the design and checked on the easy path only: another path (a link, a wide row, a second view of the same source, a multi-byte character) passes it.",
+      "source": "owner review of PR #67 at 22cbbb8 (2026-11-17): four defects in ophanim/operate/context.mjs",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "22cbbb8",
+          "note": "symlinks escaped containment; requirement and history shared one identity; cut sources had no continuation; grep and the investigation total exceeded their byte budgets"
+        }
+      ],
+      "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/context-bounds.test.mjs",
+        "name": "4. budgets hold before anything enters a prompt"
+      }
     }
   ]
 }
