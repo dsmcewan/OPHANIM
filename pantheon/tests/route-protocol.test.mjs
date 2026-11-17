@@ -174,6 +174,13 @@ function scripted({ review = () => "approve", cutAt = 0 } = {}) {
         { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: cut ? "TITLE: fi" : answer(promptOf(req)) } },
         { type: "message_delta", delta: { stop_reason: cut ? "max_tokens" : "end_turn" } }, { type: "message_stop" }]);
     } },
+    // A Google seat, for a review that must avoid every lab that contributed (the planner's, the maker's, and a
+    // reviewer whose findings reached the revision).
+    models: { countTokens: async () => ({ totalTokens: 10 }), generateContentStream: async req => {
+      const prompt = (req.contents?.at?.(-1)?.parts ?? []).map(p => p.text ?? "").join("") || String(req.contents ?? "");
+      sent.push({ model: req.model, effort: null, prompt });
+      return stream([{ candidates: [{ finishReason: "STOP", content: { parts: [{ text: answer(prompt) }] } }] }]);
+    } },
   }) };
 }
 async function runFixture(dir, clients, extraOpts = {}) {
@@ -236,8 +243,10 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
     { dir: join(dir, "board"), makeClientFor: clients.makeClientFor, scouts: ["xai"], revisions: 2, resume: first.board,
       cooldown: openCooldownStore(join(dir, "cooldown")),
       seatOverrides: { planner: { vendor: "anthropic", model: "claude-sonnet-5", rank: 0, pool: "anthropic", band: null, basis: "OPERATOR", why: "s" },
-        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" },
-        reviewer: { vendor: "xai", model: "grok-4.6", rank: 0, pool: "xai", band: null, basis: "OPERATOR", why: "s" } } });
+        // 86ce18a review, defect 3: the xai reviewer's findings are given to the worker as revision input, so xai is
+        // a contributor to the revised bytes and may not review them. This resume used to pin xai again (and so had
+        // the rejecting lab approve the revision its own findings shaped); it now leaves the reviewer to the selector.
+        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" } } });
     assert.equal(second.shipped, true, JSON.stringify(second.error));
     const revised = clients.sent.slice(before).find(s => s.model === "gpt-6-sol" && /Output ONLY the complete new contents/.test(s.prompt));
     assert.ok(revised, "resume revised the rejected slot instead of re-reviewing the same bytes");

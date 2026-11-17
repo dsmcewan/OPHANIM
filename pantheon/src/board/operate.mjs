@@ -197,8 +197,12 @@ export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n =
   }
 }
 
-/** The `change` scope of a run: every plan and work turn it recorded (review/scope.mjs). */
-export const changeScope = run => reviewScope({ kind: "change", turns: [...turnsOf(run, "plan"), ...turnsOf(run, "work")] });
+/**
+ * The `change` scope of a run: every plan and work turn it recorded, and every critique whose findings were given to
+ * a worker as revision input (run.files contributors, purpose `critique`; 86ce18a review, defect 3) (review/scope.mjs).
+ */
+export const changeScope = run => reviewScope({ kind: "change", turns: [...turnsOf(run, "plan"), ...turnsOf(run, "work"),
+  ...(run.files ?? []).flatMap(f => (f.contributors ?? []).filter(c => c.purpose === "critique" && c.revision_input === true))] });
 
 /** Items ordered so that an item's dependencies come before it (cycles broken by id order). */
 export function dependencyOrder(items) {
