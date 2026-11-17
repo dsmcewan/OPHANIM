@@ -1029,5 +1029,679 @@
       "existingControlsPassed": 3,
       "domainQualification": "Injected fixture verifier tests snapshot/digest mechanics only; no independent model review or live domain execution claimed."
     }
+  },
+  "follow_up_routing": {
+    "schema": "ophanim.latest-delta-routing-probe/v1",
+    "commit": "41e62627f0016bc7f2c10a3d49b2740a3fdd65d4",
+    "rows": [
+      {
+        "profile": "default",
+        "output": "xs",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.3",
+            "effort": null,
+            "output": 700,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-fable-5-2",
+            "effort": "high",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": null,
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.7",
+            "effort": null,
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.3",
+            "max_output_tokens": 700,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "max_output_tokens": 65536,
+            "effort": "high"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": null
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.7",
+            "max_output_tokens": 4000,
+            "effort": null
+          }
+        ]
+      },
+      {
+        "profile": "default",
+        "output": "xl",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.3",
+            "effort": null,
+            "output": 700,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-fable-5-2",
+            "effort": "high",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": null,
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.7",
+            "effort": null,
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "argo",
+            "taskOutput": null,
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56",
+                "profile": "argo"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (argo) is on the ledger; the named provisional default pantheon.selection/v1 (argo) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.3",
+            "max_output_tokens": 700,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-fable-5-2",
+            "max_output_tokens": 65536,
+            "effort": "high"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": null
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.7",
+            "max_output_tokens": 4000,
+            "effort": null
+          }
+        ]
+      },
+      {
+        "profile": "fit",
+        "output": "xs",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.20-multi-agent",
+            "effort": null,
+            "output": null,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-sonnet-5",
+            "effort": "max",
+            "output": 1024,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": "max",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.6",
+            "effort": "xhigh",
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xs",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.20-multi-agent",
+            "max_output_tokens": null,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-sonnet-5",
+            "max_output_tokens": 1024,
+            "effort": "max"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": "max"
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.6",
+            "max_output_tokens": 4000,
+            "effort": "xhigh"
+          }
+        ]
+      },
+      {
+        "profile": "fit",
+        "output": "xl",
+        "turns": [
+          {
+            "purpose": "scout",
+            "model": "grok-4.20-multi-agent",
+            "effort": null,
+            "output": null,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": null,
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "plan",
+            "model": "claude-sonnet-5",
+            "effort": "max",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "work",
+            "model": "gpt-6-astra",
+            "effort": "max",
+            "output": 65536,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          },
+          {
+            "purpose": "critique",
+            "model": "grok-4.6",
+            "effort": "xhigh",
+            "output": 4000,
+            "settingsBasis": "sent",
+            "selectionProfile": "fit",
+            "taskOutput": {
+              "value": "xl",
+              "basis": "ticket"
+            },
+            "requirements": {
+              "review_labs": {
+                "value": 1,
+                "basis": "stakes normal (derived:paths)"
+              },
+              "explorer_width": {
+                "value": 1,
+                "basis": "ambiguity open (legacy-difficulty)",
+                "unit": "distinct labs"
+              }
+            },
+            "practice": {
+              "schema": "pantheon.practice/v1",
+              "scope": "routing-coordination",
+              "disposition": null,
+              "outcome": null,
+              "policy": {
+                "version": "pantheon.selection/v1",
+                "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+                "profile": "fit"
+              },
+              "provisional": true,
+              "applies": true,
+              "reason": "no admitted practice disposition for routing-coordination (fit) is on the ledger; the named provisional default pantheon.selection/v1 (fit) applies"
+            }
+          }
+        ],
+        "wire": [
+          {
+            "vendor": "xai",
+            "model": "grok-4.20-multi-agent",
+            "max_output_tokens": null,
+            "effort": null
+          },
+          {
+            "vendor": "anthropic",
+            "model": "claude-sonnet-5",
+            "max_output_tokens": 65536,
+            "effort": "max"
+          },
+          {
+            "vendor": "openai",
+            "model": "gpt-6-astra",
+            "max_output_tokens": 65536,
+            "effort": "max"
+          },
+          {
+            "vendor": "xai",
+            "model": "grok-4.6",
+            "max_output_tokens": 4000,
+            "effort": "xhigh"
+          }
+        ]
+      }
+    ],
+    "mixed": {
+      "surface": "SURFACE",
+      "isolation": "ISOLATION"
+    },
+    "fitClasses": {
+      "status": "provisional",
+      "counts": {
+        "TASTE": 19,
+        "VENDOR": 2
+      }
+    },
+    "requirements": {
+      "review_labs": {
+        "value": 3,
+        "basis": "stakes critical (ticket)"
+      },
+      "explorer_width": {
+        "value": 3,
+        "basis": "ambiguity contested (ticket)",
+        "unit": "distinct labs"
+      }
+    },
+    "practice": {
+      "schema": "pantheon.practice/v1",
+      "scope": "routing-coordination",
+      "disposition": null,
+      "outcome": null,
+      "policy": {
+        "version": "pantheon.selection/v1",
+        "hash": "sha256:278901bf9e87ba960c034d443e3e798e77a7914bbeaff3f97acedadbed63b93c",
+        "profile": "fit"
+      },
+      "provisional": true,
+      "applies": true,
+      "reason": "no ledger is open for this dispatch; the named provisional default pantheon.selection/v1 (fit) applies"
+    },
+    "scope": "4 real runOpenItem executions using scripted local providers; no live calls or owner keys",
+    "assertionsPassed": 25,
+    "default_profile": "argo",
+    "fit_status": "opt-in unpromoted provisional candidate",
+    "fit_performance_qualification": false,
+    "focused_tests": {
+      "passed": 12,
+      "failed": 0,
+      "name": "route-task-profile.test.mjs"
+    },
+    "prior_findings": {
+      "CS1": "still applies to unchanged legacy seating; fit explicitly labels classes provisional",
+      "CS2": "still applies; protocol unchanged; supported efforts do not establish optimal recovery economics",
+      "CS3": "still applies; now reproduced through actual fake-provider requests including fit xs output ignored by Astra implementation"
+    },
+    "current_output_mismatch": {
+      "profile": "fit",
+      "output_dimension": "xs",
+      "model": "gpt-6-astra",
+      "expected_cap": 1024,
+      "observed_cap": 65536,
+      "source": "pantheon/src/board/run-item.mjs:500-526"
+    },
+    "unconsumed_requirements": [
+      "review_labs",
+      "explorer_width"
+    ],
+    "empirical_claim_limit": "Reachability and request serialization tests do not establish quality, useful cost or speed. No matched fit-versus-ARGO provider comparison added.",
+    "admission_behavior": {
+      "candidate_execution_allowed_without_admitted_disposition": true,
+      "default_not_changed": true,
+      "practice_records_disposition_or_provisional_default": true,
+      "admitted_hash_mismatch_recorded_but_does_not_block_dispatch": true
+    },
+    "source_unchanged": true,
+    "cross_lab_qualification_performed": false
   }
 }

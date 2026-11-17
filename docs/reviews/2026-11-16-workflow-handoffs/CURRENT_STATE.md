@@ -161,3 +161,53 @@ The three necessary completion proofs remain separate: measured outcome on the i
 This was a bounded source/public-ledger audit plus selected local retained-report inspection, not an exhaustive search of every external live run. It made no provider calls, read no pre-existing owner or retained fixture private keys, changed no source content and wrote only its scratch audit files. Every Node invocation used the tested offline guard. All 16 selected current-source content pins match the pinned Git blobs; the materialized worktree has inherited executable-bit metadata differences, so it is not described as a clean Git checkout. The JSON contains exact file hashes, public payload references and qualifications.
 
 The root branch's immutable-proposal correction was separately confirmed on local candidate `d9179ab2e5fe229098fb6c87b8bb0b99b5133794`, status module SHA256 `ab71d0b883ccc581aae6ff16442700d64a6655d0bbdb55168e69a34aa413e305` (content matches that commit). Two scratch fixture cases pass: mutating the caller proposal or verifier-copy cannot alter the persisted private snapshot, and a complete receipt naming a different digest refuses without append. All three existing status-application control tests also pass under the offline guard. These use disposable fixture authority and an injected verifier to isolate snapshot/digest mechanics; they do not establish real domain qualification or independent model review. This correction is not part of public `e481e778` and must not be represented as a control already present in that public source. See `immutable-proposal-confirmation.json` and `verify-immutable-proposal.mjs`.
+
+
+---
+
+# Follow-up: newer branch changes
+
+The branch advanced during this audit. The following delta is pinned to `41e62627f0016bc7f2c10a3d49b2740a3fdd65d4`; earlier observations retain their original source pin. Mandatory practice records and task-profile candidates now exist. Their presence does not qualify a measured improvement.
+
+# Routing delta at current `41e6262`
+
+This bounded delta audit supersedes the commit scope of the routing portion of `findings.md`. Pinned source: **`41e62627f0016bc7f2c10a3d49b2740a3fdd65d4`**, including fit candidate `6c0c12f`, attempt/usage changes `fb67275`, and practice-record changes `39a98a7`. The source worktree was unchanged. All Node probes/tests used the offline guard; no live providers or owner keys were used.
+
+**`fit` is an opt-in, unpromoted candidate. It is not the default or a demonstrated improvement.** `runOpenItem` still defaults to `argo`; CLI `--profile fit` selects it for one run. Its documentation and emitted decisions expressly say provisional/unmeasured. Existing tests pin unchanged ARGO/legacy picks and policy hashes. The added “42 operating points versus 4/8” result measures reachable settings across synthetic tickets, not accepted quality, useful cost, latency, or superiority. [Default][default], [status and limits][doc], [fit decisions][choices]
+
+## Current applicability of CS1–CS3
+
+| Finding | Current result |
+|---|---|
+| CS1: eligibility tags carry unsupported model-ranking rationale | **Still applies to legacy routing.** The seating source is unchanged since `e481e778`, and a fresh probe still returns Astra/SURFACE and Grok 4.6/ISOLATION. The new fit path improves candor: its ordering is explicitly provisional and model classes are 19 TASTE / 2 VENDOR, not relabelled as measured. VENDOR means a positioning quote carried from a missing kb source, not a project benchmark. [Classes][classes] |
+| CS2: effort-first cost claim cites a capability source | **Still applies.** `protocol.mjs` is unchanged since `e481e778`. Fit adds real initial effort mapping and request binding; it does not supply evidence that raising effort before reseating is cheaper or more successful. |
+| CS3: output tier does not reach default frontier requests | **Still applies, and fit inherits it.** A fresh fake-provider test runs the real dispatcher four times. With fit `output:'xs'`, the planner Sonnet request correctly receives 1,024, but Astra implementation still receives 65,536 even though its recorded task output is xs. With xl, both receive 65,536. Default ARGO remains Fable/Astra at 65,536; reviewer requests stay explicitly capped at 4,000. The fit output dimension is therefore only partially bound to actual requests. [Tier selection][tierselect], [request boundary][boundary] |
+
+The current CS3 regression should assert the **serialized implementation request** for fit xs and xl, not only the helper's tier or the decision's task-output field. Expected xs is the model-capped xs budget; observed is 65,536. Keep the explicit reviewer cap as a positive control. This proves a request-policy mismatch, not actual excessive token use or cost.
+
+## What is real, provisional, or unwired
+
+- **Real request binding:** fit's depth maps to a documented effort ladder and `roleTurn` forwards each candidate's effort. The existing test observes actual scripted-provider requests for plan, work and review. A further guarded dispatcher probe observed Sonnet/Astra at max and Grok 4.6 at xhigh for `depth:'max'`. [Effort forwarding][effort]
+- **Explicit routing judgments:** fast/standard/frontier classes; stakes and ambiguity floors; ordinal role/lab order; proportional rounding from five depth values onto each model's ladder; path-derived stakes; latency climb limits of one/two classes. These are manually set provisional rules, with no numerical quality/cost optimizer. The `fast` class does not establish measured per-task speed. [Mappings][mapping], [ordering][choices]
+- **Recorded requirements only:** fit emits `review_labs` 1/1/2/3 and explorer width 0/1/3. Those requirements are not consumed by the review cycle or intake fan-out. They cannot currently be represented as enforced cross-model accountability. The printed seating report remains legacy, and fallback effort escalation is documented as starting from the primary's mapping. [Declared gaps][gaps]
+- **Evidence plumbing, not evidence of superiority:** `loadPractice` now attaches an admitted disposition reference, or explicitly records a provisional default. With no admitted fit disposition, an opt-in fit run remains executable and labelled provisional. That is candidate execution, not empirical promotion. A mismatched admitted policy is recorded as `applies:false`; it does not change the implemented selector. No matched fit-versus-ARGO performance receipt was added by this delta. Documentation requires matched results, independent review, disposition and rollback/re-evaluation conditions before default adoption. [Practice load][practice], [adoption][adoption]
+
+The owner requirement for independent accountability should remain a mandatory operating constraint. The candidate's unconsumed one-/two-lab suggestions must not weaken it. Evaluating fit experimentally and promoting it as qualified policy are separate acts.
+
+## Validation
+
+- `route-task-profile.test.mjs`: **12/12 pass** under the offline guard, including actual effort serialization and breadth/context controls.
+- `latest-delta-routing-probe.mjs`: **25 assertions pass**, four real `runOpenItem` executions with scripted local providers. It retains models, actual sent request caps/effort, task dimensions and practice references in `latest-delta-routing-probe.json`.
+- Current source remains clean. No code changes, provider calls, empirical performance comparison or cross-lab qualification were performed.
+
+[default]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L201-L218
+[doc]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/docs/routing-task-profile.md#L1-L3
+[classes]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/config/classes.json#L1-L51
+[choices]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/route/frontier.mjs#L253-L294
+[tierselect]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L265-L270
+[boundary]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L500-L526
+[effort]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/board/run-item.mjs#L577-L587
+[mapping]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/route/task-profile.mjs#L30-L64
+[gaps]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/docs/routing-task-profile.md#L109-L114
+[practice]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/pantheon/src/ledger/practice-kinds.mjs#L169-L187
+[adoption]: https://github.com/dsmcewan/OPHANIM/blob/41e62627f0016bc7f2c10a3d49b2740a3fdd65d4/docs/routing-task-profile.md#L91-L107
