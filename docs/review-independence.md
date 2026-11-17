@@ -164,7 +164,11 @@ When the lifecycle runs under the model rule it now asks the run for the same ru
 **Limits found, not worked around:**
 
 1. **Default routing has two in-run reviewer candidates** (`xai/grok-4.7`, `agy_google/gemini-4-carbon`). So at most two rounds of in-run findings fit; the third is the blocker above. More rounds need more configured reviewer candidates, which is a routing decision.
-2. **The `agy` transport reports no served model.** Under the model rule its answers cannot be admitted, so on live providers the second candidate would be rejected and default routing would have one usable in-run reviewer. The scripted tests have the provider report its model. Closing this needs the transport to report the model, or a different second candidate. Neither was done here.
+2. **Seats served through Antigravity cannot be admitted under the model rule.** The vendor name `agy_google` covers two different paths:
+   - **Frontier Google models** (`gemini-4-carbon`) go to the Gemini API directly. That API names the model in each response (`modelVersion`), so these answers can be admitted. The second default in-run reviewer is on this path.
+   - **Every other `agy_google` model** (the Gemini flash models and the Claude lane models in `lanes.json`) goes through Antigravity: the `agy` CLI or the `google-antigravity` SDK agent. Pantheon records those turns with `served_model: null`. Google's documentation shows no field that names the answering model: the SDK response has text, usage and a stop reason; the CLI's `init.model` is only the `--model` override echoed back. Using it would be substituting the requested name.
+   - So these seats are still chosen as candidates (the validator ladder includes `agy_google/claude-sonnet-4-6`), their answers are refused, and the next seat is asked. Each costs a call. Removing them from reviewing seats under the model rule, or accepting a pinned model as evidence, is the owner's decision; neither was done here.
+   - An earlier version of this section said the second default in-run reviewer was affected. That was wrong: it conflated the vendor name with the Antigravity transport.
 
 ### After a reassessment
 
@@ -186,7 +190,7 @@ Points worth another lab's attention:
 2. **Undeclared aliases.** Two declared names that are one model, and are not in the rules, would count as two reviewers. The inventory was read for this; the two lane variants found are declared. A reassessment is how a later correction is recorded.
 3. **Each cycle carries a full copy of the policy** (about 1 KB). That makes replay self-contained at the cost of repetition.
 4. **Capacity is finite.** xAI and Google have two models each in the tables. After both models of a lab have contributed, that lab is out; after that happens to two labs, the review is pending.
-5. **Inside a Pantheon run** under default routing there are two in-run reviewer candidates, and one of them (the `agy` transport) reports no served model.
+5. **Inside a Pantheon run** under default routing there are two in-run reviewer candidates. Separately, seats served through Antigravity name no answering model and cannot be admitted.
 6. **Protocol v2 lets one model revise up to four times** on critiques alone. Is that bound right, and should it apply outside the lifecycle?
 7. **Validator capacity** was not shown reachable in a complete lifecycle; the argument is above and is not a proof.
 8. **After a reassessment** the re-review is automatic for active work. A Resolved item waits for the owner.
