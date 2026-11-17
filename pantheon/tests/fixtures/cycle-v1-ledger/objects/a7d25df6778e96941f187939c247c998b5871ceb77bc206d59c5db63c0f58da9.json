@@ -1,0 +1,1 @@
+{"claim":"x changed without a test","file":"src/x.mjs","index":0,"line":1,"reproduction":{"kind":"test","run":"node --test tests/x.test.mjs"},"severity":"minor"}

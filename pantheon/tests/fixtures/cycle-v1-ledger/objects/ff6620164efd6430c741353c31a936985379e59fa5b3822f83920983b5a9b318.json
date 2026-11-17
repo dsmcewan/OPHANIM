@@ -1,0 +1,1 @@
+{"fix":{"after":{"commit":"cccccccccccccccccccccccccccccccccccccccc","exit":0},"before":{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","exit":1},"commit":"cccccccccccccccccccccccccccccccccccccccc","test":"node --test tests/x.test.mjs"},"status":"fixed"}

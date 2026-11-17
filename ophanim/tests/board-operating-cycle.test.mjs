@@ -28,6 +28,9 @@ const STATUS_CLI = path.join(REPO, 'packages/ledger/status.mjs');
 const BOARD_CLI = path.join(REPO, 'pantheon/bin/pantheon-board.mjs');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8'});
 const ITEM = 'rehearsal-item';
+// Audit C3: a review cycle opened under the practice contract (pantheon.cycle/v2) closes only with its
+// practice assessment. The rehearsals record the honest one for a fixture with no practice evidence.
+const PRACTICE = {outcome: 'insufficient_evidence', question: 'rehearsal: no routing or coordination comparison exists for this item'};
 
 // A ticket that covers its whole (rehearsal) item, so it proposes Resolved.
 const TICKET = {
@@ -89,9 +92,11 @@ test('REHEARSAL: one operating cycle, from the verified board to a Resolved stat
       const base = git(repo, 'rev-parse', 'HEAD').trim();
       const r = await runBoardItem({repo, item: ITEM, statusRoot, makeClientFor: opts.makeClientFor, turn: approve,
         dir: path.join(work, 'board'), out: path.join(work, 'bundle'), checked: '2026-11-18',
-        runOpts: {scouts: opts.scouts, revisions: opts.revisions, seatOverrides}});
+        runOpts: {scouts: opts.scouts, revisions: opts.revisions, seatOverrides}, practice: PRACTICE});
       assert.equal(r.bundle.run.shipped, true, JSON.stringify(r.bundle.run.error));
       assert.ok(r.proposal, r.why);
+      assert.deepEqual(r.bundle.review.practice.map(d => [d.stage, d.outcome, d.provisional]), [['assessment', 'insufficient_evidence', true]],
+        'the cycle closed with its recorded practice assessment');
       assert.equal(git(repo, 'rev-parse', 'HEAD').trim(), base, 'the working branch is not moved');
       assert.equal(git(repo, 'show', `${r.bundle.commit}:alpha.mjs`), 'export const ok = true;\n');
       assert.equal(git(repo, 'rev-parse', `pantheon/${ITEM}`).trim(), r.bundle.commit);
@@ -183,7 +188,7 @@ test('REHEARSAL: a finding without a reproduction is deferred; the unverified cl
       const seatOverrides = {...opts.seatOverrides, implementer: {...opts.seatOverrides.implementer, vendor: 'anthropic', model: modelId('anthropic', 'fable'), pool: 'anthropic'}};
       const bundleDir = path.join(work, 'bundle');
       const r = await runBoardItem({repo, item: ITEM, statusRoot, makeClientFor: opts.makeClientFor, turn,
-        dir: path.join(work, 'board'), out: bundleDir, runOpts: {scouts: opts.scouts, revisions: opts.revisions, seatOverrides}});
+        dir: path.join(work, 'board'), out: bundleDir, runOpts: {scouts: opts.scouts, revisions: opts.revisions, seatOverrides}, practice: PRACTICE});
       assert.equal(r.bundle.run.shipped, true, JSON.stringify(r.bundle.run.error));
       assert.equal(r.proposal, undefined);
       assert.match(r.why, /neither fixed nor deferred/);
@@ -238,7 +243,7 @@ test('REHEARSAL: a reviewer that fails with a 503 is resumed through pantheon-bo
       assert.match(wrong.out.refused, /is for "rehearsal-item"/);
       assert.equal(fs.existsSync(log), false, 'a refused resume asks no reviewer');
 
-      const resumed = resume(ITEM, '--out', bundleDir);
+      const resumed = resume(ITEM, '--out', bundleDir, '--practice-outcome', PRACTICE.outcome, '--practice-question', PRACTICE.question);
       assert.equal(resumed.code, 0, JSON.stringify(resumed.out));
       assert.equal(resumed.out.cycle, r.bundle.review.cycle, 'the run\'s own cycle, not a new one');
       assert.equal(resumed.out.outcome, 'verified');

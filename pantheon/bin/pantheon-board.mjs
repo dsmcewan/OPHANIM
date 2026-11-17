@@ -16,6 +16,11 @@
 //   node pantheon/bin/pantheon-board.mjs check <proposal.json>
 //       re-derive the proposal's evidence with Pantheon's kinds (the run ledger, the cycle, the commit)
 //
+// run, resume and propose also take --practice-outcome O --practice-question TEXT: the review cycle's practice
+// assessment (audit C3; retain | insufficient_evidence | propose_measurement), recorded before the close. A
+// cycle opened under the practice contract does not close without one, as it does not with an open finding.
+// Richer dispositions (a policy proposal, a candidate's promote) go through pantheon-review-cycle assess.
+//
 // Common: --repo DIR (default: this repository), --status-ledger DIR (default OPHANIM_STATUS_LEDGER, else
 // <repo>/status/ledger), --anchor sha256:... (the status ledger's expected genesis).
 //
@@ -51,6 +56,9 @@ const repo = resolve(opts.repo ?? REPO_DEFAULT);
 const statusRoot = opts["status-ledger"] ? resolve(opts["status-ledger"]) : defaultStatusRoot(repo);
 const anchor = opts.anchor ?? null;
 const load = async file => (await import(pathToFileURL(resolve(file)).href)).default;
+const practice = opts["practice-outcome"] || opts["practice-question"]
+  ? { outcome: opts["practice-outcome"] ?? usage("--practice-question needs --practice-outcome"), question: opts["practice-question"] ?? usage("--practice-outcome needs --practice-question") }
+  : null;
 
 async function liveClients() {
   const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient }] = await Promise.all([
@@ -111,7 +119,7 @@ try {
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
     const r = await runBoardItem({ repo, item: args[0], statusRoot, anchor, makeClientFor, turn, n: Number(opts.n ?? 3),
       dir: opts.dir ? resolve(opts.dir) : null, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
-      checked: opts.checked, runOpts: { seatOverrides },
+      checked: opts.checked, runOpts: { seatOverrides }, practice,
       progress: ev => {
         if (ev.from !== "pipeline") console.error(JSON.stringify(ev));
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  [${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
@@ -126,7 +134,7 @@ try {
     if (!opts.out) usage("resume needs --out DIR, the run's evidence bundle");
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
     const r = await resumeBoardItem({ repo, item: args[0], dir: resolve(opts.out), statusRoot, anchor, turn,
-      max_attempts: opts["max-attempts"] === undefined ? undefined : Number(opts["max-attempts"]),
+      max_attempts: opts["max-attempts"] === undefined ? undefined : Number(opts["max-attempts"]), practice,
       progress: ev => console.error(JSON.stringify(ev)) });
     console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null,
       cycle: r.bundle.review?.cycle ?? null, outcome: r.bundle.review?.outcome ?? null, failed: r.bundle.review?.failed ?? [],
@@ -135,7 +143,7 @@ try {
   }
   if (verb === "propose") {
     if (!opts.bundle) usage("propose needs --bundle DIR");
-    const r = proposeFromBundle({ dir: resolve(opts.bundle), statusRoot, anchor, acceptUnverified: opts["accept-unverified"] });
+    const r = proposeFromBundle({ dir: resolve(opts.bundle), statusRoot, anchor, acceptUnverified: opts["accept-unverified"], practice });
     console.log(JSON.stringify({ proposal: r.proposal ? `${resolve(opts.bundle)}/proposal.json` : null, why: r.why ?? null, outcome: r.bundle.review?.outcome ?? null }, null, 2));
     process.exit(r.proposal ? 0 : 1);
   }

@@ -1,0 +1,1 @@
+{"findings":"","model":"gpt-6-sol","response_id":"resp_openai_6","seat":{"mode":"cycle-review","occupancy_gen":1,"seat_id":"openai-cycle-review@gpt-6-sol","vendor":"openai"},"served_model":"gpt-6-sol","turn":"sha256:5cfe3bde32cad0c31baca3fa09aff1822c8c5ae6018df85ba3d66ade378c1d47","verdict":"approve"}

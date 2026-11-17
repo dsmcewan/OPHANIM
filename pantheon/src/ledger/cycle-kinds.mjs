@@ -36,6 +36,16 @@
 //                       attempt was `reviewed` is not tried again. Additive: a cycle opened before this kind
 //                       existed has no attempts, and its close re-derives exactly as before.
 //
+//   practice.disposition  (practice-kinds.mjs; independent review 2026-11-16, C3) the cycle's practice
+//                       assessment and any candidate's disposition. The CONTRACT a cycle opened under is on
+//                       the cycle: `contract: pantheon.cycle/v2` (the default for a new cycle) also names the
+//                       selection policy in effect {version, hash, profile}, the practice scope, and `prior`,
+//                       the admitted practice decision it loaded at open (cited; null for none). Such a cycle
+//                       closes only with at least one assessment-stage disposition, and its close lists them
+//                       (`practice`). A cycle with no `contract` field opened under the old contract: it
+//                       re-derives, closes and hashes exactly as before. A scope does not return from v2 to
+//                       the old contract.
+//
 // What re-derivation does NOT do: run the tests or the reproductions, or check that the fix commit is a
 // descendant of the head. The fail-before / pass-after exits are recorded data (signed by the
 // controller, like the gate's lease rows were), checked for presence and consistency only.
@@ -43,6 +53,9 @@ import {createHash} from 'node:crypto';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
+import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
+
+export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1};
 
 export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close', ATTEMPT = 'cycle.attempt';
 export const ATTEMPT_OUTCOMES = ['reviewed', 'failed'];
@@ -116,7 +129,7 @@ const cycleOfReview = (view, review) => cites(view, view.entry(review), CYCLE)[0
 export function deriveCycle(view, cycle) {
   const c = view.payload(cycle);
   const out = {hash: cycle, cycle: c, author_turns: (view.entry(cycle)?.derived_from ?? []).filter(h => view.entry(h)?.kind === 'turn'),
-    reviews: [], findings: [], resolutions: new Map(), close: null, attempts: []};
+    reviews: [], findings: [], resolutions: new Map(), close: null, attempts: [], dispositions: []};
   const reviews = new Set(), findings = new Set();
   for (const h of view.entries()) {
     const e = view.entry(h);
@@ -133,6 +146,7 @@ export function deriveCycle(view, cycle) {
       out.resolutions.set(e.derived_from.find(x => findings.has(x)), {hash: h, payload: view.payload(h)});
     } else if (e.kind === CLOSE && e.derived_from.includes(cycle)) out.close = h;
     else if (e.kind === ATTEMPT && e.derived_from[0] === cycle) out.attempts.push({hash: h, ...view.payload(h)});
+    else if (e.kind === PRACTICE && e.derived_from[0] === cycle) out.dispositions.push({hash: h, payload: view.payload(h)});
   }
   return out;
 }
@@ -156,8 +170,15 @@ export function closeClaim(state) {
     if (res.payload.status === 'fixed') fixed++; else deferred++;
     if (f.payload.reproduction === null) unreproduced++;
   }
-  return {claim: {outcome: unreproduced ? 'unverified' : 'verified', reviews: reviews.map(r => r.hash).sort(), labs: [...labs].sort(),
-    findings: {total: findings.length, fixed, deferred, unreproduced}}};
+  const claim = {outcome: unreproduced ? 'unverified' : 'verified', reviews: reviews.map(r => r.hash).sort(), labs: [...labs].sort(),
+    findings: {total: findings.length, fixed, deferred, unreproduced}};
+  // The old contract's close is exactly what it was. Under v2 the cycle also carries its practice decision.
+  if (c.contract !== CYCLE_CONTRACT) return {claim};
+  const dispositions = state.dispositions ?? [];
+  if (!dispositions.some(d => d.payload.stage === 'assessment')) {
+    return {why: `no practice assessment/disposition is recorded for this cycle (${CYCLE_CONTRACT} requires one; an explicit insufficient_evidence or retain is enough)`};
+  }
+  return {claim: {...claim, practice: dispositions.map(d => d.hash).sort()}};
 }
 
 /** The latest cycle of a scope before the entry being checked, or null. */
@@ -176,12 +197,27 @@ export function cycleKinds({authors = () => true} = {}) {
       validate: p => (str(p?.scope) && COMMIT.test(p.base ?? '') && COMMIT.test(p.head ?? '') && SHA.test(p.diff_sha ?? '') && SHA.test(p.brief_sha ?? '')
         && HEX.test(p.prompt_sha ?? '') && Array.isArray(p.files) && p.files.every(str) && Number.isInteger(p.reviewers) && p.reviewers >= 1
         && Array.isArray(p.author_labs) && p.author_labs.every(str) && ISO(p.opened_at)
-        ? null : 'a cycle names {scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}'),
+        ? (p.contract === undefined ? null
+          : p.contract === CYCLE_CONTRACT && validPolicy(p.policy) && str(p.practice_scope) && (p.prior === null || SHA.test(p.prior ?? '')) ? null
+            : `a ${CYCLE_CONTRACT} cycle also names {policy: {version, hash, profile}, practice_scope, prior}; a cycle without a contract field is the old contract`)
+        : 'a cycle names {scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}'),
       rederive: (e, view) => {
         const p = e.payload;
         if (p.base === p.head) return 'a cycle reviews a change: its base and head differ';
-        if (e.derived_from.some(h => ![CLOSE, 'turn'].includes(view.entry(h)?.kind))) return 'a cycle cites only the author\'s turns and the previous cycle\'s close';
+        const v2 = p.contract === CYCLE_CONTRACT;
+        if (e.derived_from.some(h => ![CLOSE, 'turn', ...(v2 ? [PRACTICE] : [])].includes(view.entry(h)?.kind))) {
+          return v2 ? 'a cycle cites only the author\'s turns, the previous cycle\'s close and the practice decision it loaded'
+            : 'a cycle cites only the author\'s turns and the previous cycle\'s close';
+        }
         const prev = latestCycle(view, p.scope), closes = cites(view, e, CLOSE);
+        if (v2) {
+          // The admitted decision it loaded is the one the ledger admits as of this entry, and it is cited.
+          const admitted = admittedPractice(view, {scope: p.practice_scope, profile: p.policy.profile})?.disposition ?? null;
+          if (p.prior !== admitted) return `the cycle's prior practice decision is ${admitted ?? 'none'} on this ledger, not ${p.prior ?? 'none'}`;
+          if (canonical(cites(view, e, PRACTICE)) !== canonical(admitted ? [admitted] : [])) return 'a cycle cites the prior practice decision it loaded, and no other';
+        } else if (prev && view.payload(prev).contract === CYCLE_CONTRACT) {
+          return `the previous cycle of this scope opened under ${CYCLE_CONTRACT}: the scope may not return to the old contract`;
+        }
         if (!prev) return closes.length ? 'the first cycle of a scope cites no close' : null;
         const close = closedAt(view, prev);
         if (!close) return 'the previous cycle of this scope is not closed';
@@ -304,11 +340,22 @@ export function cycleRecorder({ledger, controller, order}) {
   };
   return {
     lastCycle,
-    openCycle({scope, base, head, diff, files, prompt, brief = REVIEW_BRIEF, reviewers = 3, author_labs = [], author_turns = [], opened_at = new Date().toISOString()}) {
+    /**
+     * Open a cycle. `contract` is CYCLE_CONTRACT by default: the cycle names `policy` (the selection policy
+     * in effect, default this code's ARGO policy with no pools) and `practice_scope`, and loads and cites
+     * the admitted practice decision (`prior`). CYCLE_CONTRACT_V1 writes the old payload, byte for byte.
+     */
+    openCycle({scope, base, head, diff, files, prompt, brief = REVIEW_BRIEF, reviewers = 3, author_labs = [], author_turns = [], opened_at = new Date().toISOString(),
+      contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE}) {
+      if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT} or ${CYCLE_CONTRACT_V1}`);
       const prev = lastCycle(scope);
       const payload = {scope, base, head, diff_sha: sha(diff), files: [...files], prompt_sha: promptSha(prompt),
         brief_sha: sha(brief), reviewers, author_labs: [...author_labs], opened_at};
-      return append(CYCLE, payload, [...(prev?.close ? [prev.close] : []), ...author_turns]);
+      if (contract === CYCLE_CONTRACT_V1) return append(CYCLE, payload, [...(prev?.close ? [prev.close] : []), ...author_turns]);
+      const inEffect = policy ?? currentPolicy('argo');
+      const prior = admittedPractice(ledgerView(ledger), {scope: practice_scope, profile: inEffect.profile})?.disposition ?? null;
+      return append(CYCLE, {...payload, contract, policy: inEffect, practice_scope, prior},
+        [...(prev?.close ? [prev.close] : []), ...(prior ? [prior] : []), ...author_turns]);
     },
     recordFinding({review, index, finding}) { return append(FINDING, {index, ...findingOf(normalFinding(finding) ?? finding)}, [review]); },
     fixFinding({finding, commit, test, before, after}) { return append(RESOLUTION, {status: 'fixed', fix: {commit, test, before, after}}, [finding]); },

@@ -247,9 +247,14 @@ async function fixtureCycleLedger() {
   const fx = r.reviews.find(x => x.lab === 'xai').findings[0], fo = r.reviews.find(x => x.lab === 'openai').findings[0];
   rec.fixFinding({finding: fx.hash, commit: C('c'), test: 'node --test tests/x.test.mjs', before: {commit: C('b'), exit: 1}, after: {commit: C('c'), exit: 0}});
   rec.deferFinding({finding: fo.hash, reason: 'docs pass scheduled next cycle'});
+  // Audit C3: a cycle opened under the practice contract closes only with its practice assessment.
+  rec.recordDisposition({cycle: r.cycle, outcome: 'insufficient_evidence', question: 'fixture: no practice question is assessed here',
+    provenance: {by: {role: 'lead@orch'}, method: 'fixture; no practice telemetry'}});
   const closed = rec.closeCycle(r.cycle);
   // A second cycle, still open.
   const r2 = await reviewCycle({ledger: rec, change: {scope: 'ophanim', head: C('d'), diff: DIFF, files: ['src/x.mjs'], author_labs: ['anthropic']}, turn: scripted({})});
+  rec.recordDisposition({cycle: r2.cycle, outcome: 'insufficient_evidence', question: 'fixture: no practice question is assessed here',
+    provenance: {by: {role: 'lead@orch'}, method: 'fixture; no practice telemetry'}});
   fs.rmSync(path.join(root, 'keys'), {recursive: true, force: true});       // a reader holds no keys
   return {root, cycle: r.cycle, open: r2.cycle, author, closed};
 }
