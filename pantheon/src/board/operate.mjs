@@ -548,7 +548,9 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
       progress({ event: "run.pending", code: pending.code, why: pending.why });
       // Kept as evidence for the four-lab evaluation (practice/review-capacity.mjs): a refusal is an outcome too.
       mkdirSync(join(store, "review-pending"), { recursive: true });
-      writeFileSync(join(store, "review-pending", `${item}-${Date.now()}.json`), JSON.stringify({ item, at: new Date().toISOString(), ...pending }, null, 2) + "\n");
+      writeFileSync(join(store, "review-pending", `${item}-${Date.now()}.json`), JSON.stringify({ item, at: new Date().toISOString(), ...pending,
+        // What would have answered, as run.json records it: the capacity report counts only live refusals under its rule.
+        providers: { kind: String((runOpts.providers ?? makeClientFor.providers ?? null)?.kind ?? "undeclared") } }, null, 2) + "\n");
       return { bundle: null, dir: null, proposal: null, pending, why: `${pending.code} before any work: ${pending.why}` };
     }
   }
