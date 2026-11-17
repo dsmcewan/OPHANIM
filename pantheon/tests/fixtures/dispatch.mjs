@@ -38,13 +38,14 @@ export async function withDispatch(fn) {
   for (const k of ["PANTHEON_AGY_TRANSPORT", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE"]) delete process.env[k];
   const calls = [];
   let implement = () => "export const ok = true;\n";
-  const makeClientFor = scriptedClients(calls, prompt => implement(prompt));
+  let fault = () => null;
+  const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call));
   let n = 0;
   const agy = () => existsSync(agyLog) ? readFileSync(agyLog, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
   const spec = (key, extra = {}) => ({ key, repo_root: dir, title: "fixture", goal: "fixture goal", question: "q", copy: [],
     acceptance_cmd: "true", slot: "code", path: "code.mjs", ...extra });
   try {
-    return await fn({ dir, calls, agy, makeClientFor, spec, implement: f => { implement = f; },
+    return await fn({ dir, calls, agy, makeClientFor, spec, implement: f => { implement = f; }, fault: f => { fault = f; },
       opts: (extra = {}) => ({ dir: join(dir, `board-${++n}`), makeClientFor, scouts: ["xai"], ...extra }) });
   } finally {
     for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -52,8 +53,19 @@ export async function withDispatch(fn) {
   }
 }
 
-/** makeClientFor(vendor, {pool, poolConfig}) over the three streaming surfaces, recording each request. */
-export function scriptedClients(calls = [], implement = () => "export const ok = true;\n") {
+// What every scripted provider reports it used, in its own surface's shape (Responses and Messages
+// `usage`, Google `usageMetadata`). A Messages stream reports input on message_start and output on
+// message_delta, as the provider does.
+export const USAGE = { input_tokens: 1234, output_tokens: 56 };
+const GOOGLE_USAGE = { promptTokenCount: 1234, candidatesTokenCount: 56, totalTokenCount: 1290 };
+
+/**
+ * makeClientFor(vendor, {pool, poolConfig}) over the three streaming surfaces, recording each request.
+ * `fault({vendor, model, pool, prompt})` may refuse a request: `{ error }` throws it before any output
+ * (the request is recorded with `failed: true`), and `{ incomplete: true }` ends the stream truncated
+ * (with usage). Returning null serves the request normally.
+ */
+export function scriptedClients(calls = [], implement = () => "export const ok = true;\n", fault = () => null) {
   let n = 0;
   const answer = prompt => {
     if (/VERDICT/i.test(prompt)) return /exited 1\b/.test(prompt) ? "VERDICT: request_changes" : "VERDICT: approve";
@@ -62,29 +74,43 @@ export function scriptedClients(calls = [], implement = () => "export const ok =
     return implement(prompt);
   };
   const makeClientFor = (vendor, { pool = null, poolConfig = null } = {}) => {
-    const note = (req, prompt) => { calls.push({ vendor, model: req.model, pool, poolConfig, prompt, effort: req.reasoning?.effort ?? req.output_config?.effort ?? null }); return answer(prompt); };
+    const note = (req, prompt) => {
+      const row = { vendor, model: req.model, pool, poolConfig, prompt, effort: req.reasoning?.effort ?? req.output_config?.effort ?? null,
+        max_output_tokens: req.max_output_tokens ?? req.max_tokens ?? req.config?.maxOutputTokens ?? null };
+      const f = fault({ vendor, model: req.model, pool, prompt });
+      if (f?.error) { calls.push({ ...row, failed: true }); throw f.error; }
+      calls.push(f?.incomplete ? { ...row, incomplete: true } : row);
+      return { text: answer(prompt), incomplete: Boolean(f?.incomplete) };
+    };
     return {
       responses: { inputTokens: { count: async () => ({ input_tokens: 1000 }) }, create: async req => {
-        const text = note(req, typeof req.input === "string" ? req.input : req.input?.at(-1)?.content ?? ""), id = `fixture_${++n}`;
+        const { text, incomplete } = note(req, typeof req.input === "string" ? req.input : req.input?.at(-1)?.content ?? ""), id = `fixture_${++n}`;
         return { async *[Symbol.asyncIterator]() {
           yield { type: "response.created", response: { id } };
           yield { type: "response.output_text.delta", delta: text };
-          yield { type: "response.completed", response: { id, status: "completed", output_text: text, output: [{ type: "message", content: [{ type: "output_text", text }] }] } };
+          if (incomplete) {
+            yield { type: "response.incomplete", response: { id, status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [], usage: { ...USAGE } } };
+            return;
+          }
+          yield { type: "response.completed", response: { id, status: "completed", output_text: text, output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { ...USAGE } } };
         } };
       } },
       messages: { create: async req => {
         const last = req.messages?.at(-1)?.content;
-        const text = note(req, typeof last === "string" ? last : (last ?? []).map(p => p.text ?? "").join(""));
+        const { text, incomplete } = note(req, typeof last === "string" ? last : (last ?? []).map(p => p.text ?? "").join(""));
         return { async *[Symbol.asyncIterator]() {
+          yield { type: "message_start", message: { usage: { input_tokens: USAGE.input_tokens, output_tokens: 1 } } };
           yield { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } };
           yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } };
-          yield { type: "message_delta", delta: { stop_reason: "end_turn" } };
+          yield { type: "message_delta", delta: { stop_reason: incomplete ? "max_tokens" : "end_turn" }, usage: { output_tokens: USAGE.output_tokens } };
           yield { type: "message_stop" };
         } };
       } },
       models: { countTokens: async () => ({ totalTokens: 1000 }), generateContentStream: async req => {
-        const text = note(req, (req.contents?.at?.(-1)?.parts ?? []).map(p => p.text ?? "").join("") || String(req.contents ?? ""));
-        return { async *[Symbol.asyncIterator]() { yield { candidates: [{ finishReason: "STOP", content: { parts: [{ text }] } }] }; } };
+        const { text, incomplete } = note(req, (req.contents?.at?.(-1)?.parts ?? []).map(p => p.text ?? "").join("") || String(req.contents ?? ""));
+        return { async *[Symbol.asyncIterator]() {
+          yield { candidates: [{ finishReason: incomplete ? "MAX_TOKENS" : "STOP", content: { parts: [{ text }] } }], usageMetadata: { ...GOOGLE_USAGE } };
+        } };
       } },
     };
   };

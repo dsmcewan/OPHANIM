@@ -199,12 +199,30 @@ export function openRuntime(root, { store = null, ledger = null } = {}) {
     const binding = store ? "store" : "unchecked";
     // Derived, never stored. A stored counter is a second source of truth, and when it drifts it
     // drifts towards "still under budget".
-    const spent_turns = bound.reduce((n, r) => n + (r.turns ?? 1), 0);
-    const spent_usd = bound.reduce((n, r) => n + (r.usd ?? 0), 0);
-    if (!declared) return { declared: null, spent_turns, spent_usd, exhausted: false, binding, unbound_rows, declared_binding, why: "no budget declared" };
-    const exhausted = spent_turns >= declared.max_turns || (declared.max_usd !== undefined && spent_usd >= declared.max_usd);
-    return { declared, spent_turns, spent_usd, exhausted, rows: rows.length, binding, unbound_rows, declared_binding, declared_file_mismatch,
-      why: exhausted ? `budget exhausted: ${spent_turns}/${declared.max_turns} turns, ${spent_usd.toFixed(4)}/${declared.max_usd ?? "-"} usd` : null };
+    // These rows are PUBLICATION bookkeeping -- one per commit the board made -- not provider requests: a
+    // provider call that published nothing has no row here, and a row costs nothing a provider billed. The
+    // count keeps its historical name (spent_turns, against max_turns) and states its basis; provider calls
+    // and their usage are run evidence (run.json `attempts`/`resources`), bounded where they are made.
+    const spent_turns = bound.reduce((n, r) => n + (r.publications ?? r.turns ?? 1), 0);
+    // UNKNOWN COST STAYS UNKNOWN (audit M5). A row that states no finite USD figure makes the total unknown
+    // (null), never $0. What the stated rows add up to is still reported, labelled as a partial figure.
+    const usdKnown = r => typeof r.usd === "number" && Number.isFinite(r.usd);
+    const usd_unknown_rows = bound.filter(r => !usdKnown(r)).length;
+    const stated_usd = bound.filter(usdKnown).reduce((n, r) => n + r.usd, 0);
+    const spent_usd = usd_unknown_rows === 0 ? stated_usd : null;
+    const usd_status = usd_unknown_rows === 0 ? "known" : "unknown";
+    const usd_note = usd_unknown_rows === 0 ? null
+      : `cost unknown: ${usd_unknown_rows} of ${bound.length} counted row(s) state no USD; no price source is attached, so none is estimated`;
+    const basis = { spent_publications: spent_turns, spend_basis: "publication_commits", usd_status, usd_unknown_rows, stated_usd, usd_note };
+    if (!declared) return { declared: null, spent_turns, spent_usd, ...basis, exhausted: false, binding, unbound_rows, declared_binding, why: "no budget declared" };
+    // A USD limit is exhausted only by a cost that is known to reach it: a full known total, or a stated
+    // partial figure (a lower bound) that already does. An unknown cost neither passes as $0 nor invents
+    // an exhausted budget; it is reported in usd_note.
+    const usdReached = declared.max_usd !== undefined && stated_usd >= declared.max_usd;
+    const exhausted = spent_turns >= declared.max_turns || usdReached;
+    const usdText = spent_usd === null ? `unknown (stated ${stated_usd.toFixed(4)})` : spent_usd.toFixed(4);
+    return { declared, spent_turns, spent_usd, ...basis, exhausted, rows: rows.length, binding, unbound_rows, declared_binding, declared_file_mismatch,
+      why: exhausted ? `budget exhausted: ${spent_turns}/${declared.max_turns} publication(s), ${usdText}/${declared.max_usd ?? "-"} usd` : null };
   }
 
   return { dir, leaseFor, leases: load, acquire, fence, renew, release, verify, locked,

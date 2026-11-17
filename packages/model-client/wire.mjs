@@ -4,6 +4,15 @@ import {reasoningContextReport} from './reasoning.mjs';
 const textOf=parts=>parts.filter(p=>p.type==='text'||(!p.type&&!p.thought)).map(p=>p.text??'').join('');
 const responseText=res=>res.output_text??(res.output??[]).filter(x=>x.type==='message')
   .flatMap(x=>x.content??[]).filter(x=>x.type==='output_text').map(x=>x.text??'').join('');
+// Usage is evidence, kept as the provider reported it (audit M5). Google continuation hops are separate
+// billed requests, so their usage objects are summed field by field; within one hop the provider's last
+// usage object is cumulative and wins.
+const sumUsage=(a,b)=>{
+  if(!a)return b?structuredClone(b):null;if(!b)return a;
+  const out={...a};
+  for(const [k,v] of Object.entries(b))out[k]=typeof v==='number'&&typeof out[k]==='number'?out[k]+v:(out[k]??structuredClone(v));
+  return out;
+};
 
 export async function exchange(prepared,client,onEvent){
   const {cap,request,options,vendor,continuity,history,prompt,label}=prepared;
@@ -54,7 +63,9 @@ export async function exchange(prepared,client,onEvent){
           else if(delta.type==='thinking_delta'){block.thinking=(block.thinking??'')+delta.thinking;emit('thinking',{bytes:Buffer.byteLength(delta.thinking)});}
           else if(delta.type==='signature_delta')block.signature=(block.signature??'')+delta.signature;
           else if(delta.type==='input_json_delta')jsonParts.set(event.index,(jsonParts.get(event.index)??'')+delta.partial_json);
-        }else if(event.type==='message_delta'){stop=event.delta?.stop_reason??stop;usage=event.usage??usage;}
+        }else if(event.type==='message_start'){if(event.message?.usage)usage={...event.message.usage};}
+        // message_start reports input; message_delta reports the (cumulative) output. Both are kept.
+        else if(event.type==='message_delta'){stop=event.delta?.stop_reason??stop;if(event.usage)usage={...usage,...event.usage};}
         else if(event.type==='message_stop')sawStop=true;
         else if(event.type==='error')throw Object.assign(new Error('Provider stream error'),{status:event.error?.status});
       }
@@ -84,21 +95,22 @@ export async function exchange(prepared,client,onEvent){
     // repeated checkpoint. Its unchecked loop can spend indefinitely and duplicate generated code.
     for(let hop=0;hop<16;hop++){
       const req={...request,config:{...request.config,automaticContinuation:false,...(checkpoint?{continuationToken:checkpoint}:{})}};
-      let reason=null,token=null,blocked=false;const hopStart=output.length;
+      let reason=null,token=null,blocked=false,hopUsage=null;const hopStart=output.length;
       if(onEvent){
         const stream=await client.models.generateContentStream(req);
         for await(const chunk of stream){
           const candidate=chunk.candidates?.[0];reason=candidate?.finishReason??reason;
           token=candidate?.continuationToken??chunk.continuationToken??chunk.continuation_token??token;
-          blocked=blocked||Boolean(chunk.promptFeedback?.blockReason);usage=chunk.usageMetadata??usage;
+          blocked=blocked||Boolean(chunk.promptFeedback?.blockReason);hopUsage=chunk.usageMetadata??hopUsage;
           for(const [index,part] of (candidate?.content?.parts??[]).entries())append(part,index===0,hopStart);
         }
       }else{
         response=await client.models.generateContent(req);const candidate=response?.candidates?.[0];
         reason=candidate?.finishReason;token=candidate?.continuationToken??response?.continuationToken??response?.continuation_token;
-        blocked=Boolean(response?.promptFeedback?.blockReason);usage=response?.usageMetadata??usage;
+        blocked=Boolean(response?.promptFeedback?.blockReason);hopUsage=response?.usageMetadata??null;
         for(const part of candidate?.content?.parts??[])append(part);
       }
+      usage=sumUsage(usage,hopUsage);
       terminal=blocked?'BLOCKED':reason;
       if(reason==='STOP'&&!blocked){complete=true;break;}
       // A caller's explicit output budget covers this turn, not each of an

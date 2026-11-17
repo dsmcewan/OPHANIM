@@ -203,7 +203,9 @@ export async function publish({ store, refs, runtime = null, ref, author, entrie
   if (!swap.ok) return { ok: false, ...swap, commit, written, changed, steps };                                            // step 7
 
   if (runtime) {
-    try { runtime.recordSpend({ commit, seat: author.seat_id ?? author.vendor, vendor: author.vendor, turns: 1 }); }
+    // A publication row counts a commit, not a provider request, and states that its cost is unknown:
+    // the board does not know what (if anything) a provider billed for it (audit M5).
+    try { runtime.recordSpend({ commit, seat: author.seat_id ?? author.vendor, vendor: author.vendor, publications: 1, usd: null }); }
     catch { /* spend is a side log; losing a row must not undo a published commit */ }
   }
   return { ok: true, ref, from: before, commit, tree, written, changed, steps };

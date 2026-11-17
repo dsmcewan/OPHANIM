@@ -229,8 +229,17 @@ export function makeClient(vendor, opts = {}) {
 // client is observed at one point, so both paths, unary and streamed, report it the same way.
 const reported = o => (o && typeof o === "object" ? (o.model ?? o.modelVersion ?? o.response?.model ?? o.message?.model ?? null) : null);
 async function* watched(stream, seen) { for await (const e of stream) { seen.model ??= reported(e); yield e; } }
+// The settings each generation request actually carried, read off the request handed to the SDK (audit
+// M5): the output cap and effort as sent, after every default and policy has been applied.
+const sentSettings = req => !req || typeof req !== "object" ? null : {
+  model: req.model ?? null,
+  max_output_tokens: req.max_output_tokens ?? req.max_tokens ?? req.config?.maxOutputTokens ?? null,
+  effort: req.reasoning?.effort ?? req.output_config?.effort ?? req.config?.thinkingConfig?.thinkingLevel?.toLowerCase() ?? null,
+};
 function observe(fn, seen) {
   return async (...args) => {
+    seen.requests = (seen.requests ?? 0) + 1;
+    seen.sent = sentSettings(args[0]);
     const out = await fn(...args);
     if (out && typeof out[Symbol.asyncIterator] === "function") return watched(out, seen);
     seen.model ??= reported(out);
@@ -253,9 +262,16 @@ function observedClient(client, seen) {
 }
 
 export async function sendTurn(args) {
-  const seen = { model: null };
-  const result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client });
-  return { ...result, served_model: seen.model };
+  const seen = { model: null, sent: null, requests: 0 };
+  let result;
+  try { result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client }); }
+  catch (e) {
+    // A failed request's evidence: what it carried and how many requests reached the SDK. Attached to
+    // the error the caller already receives, never in place of it.
+    if (e && typeof e === "object") { try { Object.assign(e, { sent: seen.sent, provider_requests: seen.requests }); } catch { /* frozen error */ } }
+    throw e;
+  }
+  return { ...result, served_model: seen.model, sent: seen.sent, provider_requests: seen.requests };
 }
 
 async function sendTurnOn({
@@ -320,7 +336,7 @@ async function sendTurnOn({
         ...replayResult({
           vendor, text: acc.text, tools: acc.tools, resumed: prior.length > 0,
           history: items, terminal: acc.terminal_state ? { state: acc.terminal_state } : null,
-          complete: acc.complete, why_incomplete: acc.why_incomplete,
+          complete: acc.complete, why_incomplete: acc.why_incomplete, usage: acc.usage,
         }),
         ...(spec.surface === "responses" ? { reasoning_context: reasoningContextReport(req.reasoning?.context, acc.final) } : {}),
       };
@@ -336,7 +352,7 @@ async function sendTurnOn({
       usable_for_resume: Boolean(acc.response_id) && acc.complete,
       why_unusable: !acc.complete ? acc.why_incomplete
         : (acc.response_id ? null : "vendor returned no response id; the next turn cannot resume"),
-      usage: null,
+      usage: acc.usage ?? null,
     };
   }
 
@@ -396,7 +412,7 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     return replayResult({
       vendor, text, resumed, terminal,
       history: [...contents, { role: "model", parts }],
-      complete: terminal.complete, why_incomplete: terminal.why,
+      complete: terminal.complete, why_incomplete: terminal.why, usage: res?.usageMetadata ?? null,
     });
   }
   if (spec.surface === "messages") {
@@ -418,7 +434,7 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
     return replayResult({
       vendor, text, tools, resumed, terminal,
       history: [...messages, { role: "assistant", content: res?.content ?? text }],
-      complete: terminal.complete, why_incomplete: terminal.why,
+      complete: terminal.complete, why_incomplete: terminal.why, usage: res?.usage ?? null,
     });
   }
   throw new Error(`sendTurn: unhandled surface "${spec.surface}"`);
@@ -503,7 +519,7 @@ function collectGenaiText(res) {
 // the history we hold. `usable_for_resume` is therefore true whenever we captured a reply: the
 // thing that must exist is the history, not an id. Saying otherwise would make every replay turn
 // look like a continuity failure.
-function replayResult({ vendor, text, tools = [], resumed, history, complete, why_incomplete = null, terminal = null }) {
+function replayResult({ vendor, text, tools = [], resumed, history, complete, why_incomplete = null, terminal = null, usage = null }) {
   if (typeof complete !== "boolean") throw new Error("replayResult: completion must be decided from the provider's terminal state");
   const ok = Array.isArray(history) && history.length > 0 && complete;
   return {
@@ -521,7 +537,7 @@ function replayResult({ vendor, text, tools = [], resumed, history, complete, wh
     usable_for_resume: ok,
     why_unusable: ok ? null
       : (why_incomplete ?? "no history captured; the next turn would silently start a new conversation"),
-    usage: null,
+    usage,
   };
 }
 

@@ -41,7 +41,7 @@ import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord } from "../route/protocol.mjs";
 import { defaultOutputFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat } from "../route/frontier.mjs";
-import { routeCall, openCooldownStore, isFrontier } from "../../../packages/model-client/index.mjs";
+import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
 
 // This repo's own root (for Antigravity role-card discovery and PANTHEON_HEAD provenance) -- NOT the ticket's
 // target repo. src/board/run-item.mjs -> src/board -> src -> repo root, so two levels up.
@@ -106,6 +106,39 @@ const escalationState = c => ({ effort: c.effort ?? null, forced: c.forced ?? nu
 const savedChoice = ch => ch && { seat: ch.seat, candidates: ch.candidates, selection: ch.selection };
 // The context a selection must admit, estimated from the characters the seat will be sent.
 const contextEstimate = chars => Math.ceil(chars / 4);
+
+// RESOURCE EVIDENCE (audit M5). A provider's usage report, kept verbatim (`reported`) beside the two
+// counts every surface states in its own words. A count the provider did not report is null, never 0;
+// no report at all is null.
+const num = v => typeof v === "number" && Number.isFinite(v) ? v : null;
+function usageOf(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const input = num(raw.input_tokens) ?? num(raw.prompt_tokens) ?? num(raw.promptTokenCount);
+  // Google reports thinking tokens apart from candidates; both are generated output.
+  const google = num(raw.candidatesTokenCount) === null && num(raw.thoughtsTokenCount) === null ? null
+    : (num(raw.candidatesTokenCount) ?? 0) + (num(raw.thoughtsTokenCount) ?? 0);
+  const output = num(raw.output_tokens) ?? num(raw.completion_tokens) ?? google;
+  return { input_tokens: input, output_tokens: output, reported: structuredClone(raw) };
+}
+// What an attempt that ended in an error was: the router's own classification, so a quota refusal recorded
+// here is the same quota refusal the fallback acted on.
+function failureOutcome(e) {
+  if (/^CONTEXT_|^INPUT_CEILING$/.test(String(e?.code ?? ""))) return "refused_preflight";
+  const f = classifyFailure(e);
+  return f.quota ? "quota" : f.retryable ? "transient" : "error";
+}
+// The run's resource summary, derived from its attempts. Cost is not estimated: no versioned price source
+// is attached, so USD is unknown (null) and says why.
+function resourcesOf(attempts) {
+  const by_outcome = {};
+  for (const a of attempts) by_outcome[a.outcome] = (by_outcome[a.outcome] ?? 0) + 1;
+  const sum = key => attempts.reduce((n, a) => n + (num(a.usage?.[key]) ?? 0), 0);
+  const attempts_without_usage = attempts.filter(a => a.usage?.input_tokens == null || a.usage?.output_tokens == null).length;
+  return { provider_calls: attempts.length, by_outcome,
+    reported_input_tokens: sum("input_tokens"), reported_output_tokens: sum("output_tokens"),
+    attempts_without_usage, usage_complete: attempts_without_usage === 0,
+    usd: null, usd_basis: "unknown: no versioned price source is attached, so cost is not estimated" };
+}
 
 const capFor = (vendor, extra) => extra?.tokens == null ? undefined
   : vendor === "agy_google" ? { config: { maxOutputTokens: extra.tokens } }
@@ -186,6 +219,13 @@ export async function runOpenItem(spec, opts = {}) {
   // `retryStopped: "<reason>"` (resume only): the explicit action that lifts recorded escalation stops.
   const RETRY_STOPPED = typeof opts.retryStopped === "string" && opts.retryStopped.trim() ? opts.retryStopped.trim() : null;
   if (opts.retryStopped !== undefined && (!RETRY_STOPPED || !RESUME)) throw new Error("retryStopped is a stated reason, and applies only to a resume");
+  // `maxProviderCalls`: a bound on the provider calls this invocation may make, checked at the generation
+  // boundary before EVERY call -- retries, fallbacks and truncation re-asks included -- rather than inferred
+  // from commit bookkeeping (audit M5). It authorises nothing; omitted, no bound is imposed.
+  const MAX_PROVIDER_CALLS = opts.maxProviderCalls ?? null;
+  if (MAX_PROVIDER_CALLS !== null && !(Number.isSafeInteger(MAX_PROVIDER_CALLS) && MAX_PROVIDER_CALLS > 0))
+    throw new Error("maxProviderCalls is a positive integer");
+  let providerCalls = 0;
   // The ledger (pantheon/src/ledger, on packages/ledger) is ON BY DEFAULT: a run records on the ledger
   // at OPHANIM_LEDGER (one ledger shared by every run) or, unset, at <board root>/ledger, opened with
   // Pantheon's kinds. `ledger: false` turns it off; a recorder passed in is used as is (OPHANIM passes
@@ -267,7 +307,29 @@ export async function runOpenItem(spec, opts = {}) {
   let recordAllowed = false;
   const run = { format: 2, isolation: ACCEPTANCE_ISOLATION, ticket_cid: ticketCid, repo_root: REPO_ROOT,
     key: spec.key, started_at: new Date().toISOString(), board: root, reseats: OVERRIDES,
-    package_context: packageBinding, turns: [], gates: null, shipped: false, artifacts: [], files: [] };
+    package_context: packageBinding, turns: [], gates: null, shipped: false, artifacts: [], files: [],
+    // Every provider call this run made, successful or not, in order (audit M5); `resources` is derived from it.
+    attempts: [], resources: resourcesOf([]), provider_calls: { limit: MAX_PROVIDER_CALLS, made: 0, refused: null } };
+  // Admitted at the generation boundary, before the call: past the bound, nothing is sent and the refusal
+  // is named (PROVIDER_CALL_LIMIT). The routers treat it as non-retryable, so it ends the role's routing.
+  function admitProviderCall({ vendor, model, pool, transport, purpose }) {
+    if (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS) {
+      const why = `PROVIDER_CALL_LIMIT: this run has made ${providerCalls} of its ${MAX_PROVIDER_CALLS} permitted provider call(s); ` +
+        `${vendor}/${model} (${purpose}) was not called`;
+      run.provider_calls = { limit: MAX_PROVIDER_CALLS, made: providerCalls,
+        refused: { code: "PROVIDER_CALL_LIMIT", at: new Date().toISOString(), vendor, model, pool: pool ?? vendor, transport, purpose, why } };
+      progress({ event: "turn.refused", seat: vendor, model, detail: why });
+      record();
+      throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT" });
+    }
+    providerCalls++;
+    run.provider_calls = { limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
+  }
+  function recordAttempt(a) {
+    const attempts = (run.attempts ??= []);
+    attempts.push({ n: attempts.length + 1, at: new Date().toISOString(), ...a });
+    run.resources = resourcesOf(attempts);
+  }
   const record = () => {
     if (!recordAllowed) return;
     const text = JSON.stringify(run, null, 2);
@@ -390,14 +452,24 @@ export async function runOpenItem(spec, opts = {}) {
     const lane = transport ? transport !== "api" : vendor === "agy_google" && !isFrontier(model);
     const chosen = selection ? { selection } : {};
     if (lane) {
+      // The lane takes no effort or output cap: none is sent, so none is recorded as sent.
+      const settings = { model, pool: pool ?? vendor, transport: transport ?? "agy", effort: null, max_output_tokens: null, output_budget_policy: null };
+      admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose });
       let r;
+      const a0 = Date.now();
       try { r = await agyTurn({ purpose, model, prompt, declared: transport }); }
-      catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
+      catch (e) {
+        recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: failureOutcome(e),
+          status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200), usage: null, settings, ms: Date.now() - a0 });
+        progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e;
+      }
       const ms = Date.now() - t0;
+      const usage = usageOf(r.usage);
+      recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: "ok", status: null, code: null, why: null, usage, settings, ms: Date.now() - a0 });
       // The agy transports take no effort. The protocol never decides one for these seats; if one
       // arrives anyway it is recorded as not carried rather than silently dropped.
       run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "agy", purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
-        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage: r.usage, ...(effort ? { effort_not_carried: effort } : {}), ...chosen });
+        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}), ...chosen });
       // The agy transports report no served model; it is recorded as unreported (null), never guessed.
       recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: 1 },
         requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt, ...chosen });
@@ -417,15 +489,41 @@ export async function runOpenItem(spec, opts = {}) {
     let r, steps = 0, budget = extra;
     const work = `turn:${purpose}:${++escalationWork}`;   // one truncation trail per turn
     if (budget === undefined && vendor === "anthropic") budget = capFor(vendor, { tokens: defaultOutputFor(vendor, model, TIER) });
+    // The settings an attempt ran with: as SENT where the adapter observed the request (after every default
+    // and policy applied), otherwise as requested -- and `basis` says which (audit M5).
+    const settingsOf = (res, asked) => {
+      const sent = res?.sent ?? null;
+      return { model: sent?.model ?? model, pool: pool ?? vendor, transport: transport ?? "api",
+        effort: sent ? sent.effort : (effort ?? null),
+        max_output_tokens: sent ? sent.max_output_tokens : (asked?.max_tokens ?? asked?.max_output_tokens ?? asked?.config?.maxOutputTokens ?? null),
+        output_budget_policy: res?.output_budget_policy ?? null, basis: sent ? "sent" : "requested" };
+    };
+    const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...extraFields });
+    let turnAttempts = 0, settings = null;
     for (;;) {
       // With a ledger, the seat's stored conversation is checked against the ledger's turn entries for
       // the same seat before it is continued (seat-sdk: LEDGER_MISMATCH), not only against itself.
       const seatLedger = typeof LEDGER?.exchanges === "function" ? { exchanges: () => LEDGER.exchanges(`${vendor}-${purpose}@${model}`) } : null;
+      admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose });
+      turnAttempts++;
+      const a0 = Date.now(), asked = budget;
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
         ...(seatLedger ? { ledger: seatLedger } : {}),
         architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
         ...(effort ? { effort } : {}) }); }
-      catch (e) { progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e; }
+      catch (e) {
+        // A failed request is evidence too: its outcome as the router classifies it, and what it carried.
+        recordAttempt(attemptOf({ outcome: failureOutcome(e), status: e?.status ?? null, code: e?.code ?? null,
+          why: String(e?.message ?? e).slice(0, 200), usage: null, settings: settingsOf(e, asked), provider_requests: e?.provider_requests ?? null }, a0));
+        progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e;
+      }
+      settings = settingsOf(r.result, asked);
+      // ok: a usable reply. incomplete: the provider answered but the reply is not usable (truncated,
+      // refused by its terminal state) -- its usage is still what it consumed. refused_seat: the seat layer
+      // refused before any request (a held conversation, an unresolved turn), so nothing was sent.
+      recordAttempt(attemptOf({ outcome: r.ok ? "ok" : r.result ? "incomplete" : "refused_seat", status: null, code: r.code ?? null,
+        why: r.ok ? null : r.why ?? null, terminal_state: r.result?.terminal_state ?? null, usage: usageOf(r.result?.usage),
+        settings, provider_requests: r.result ? r.result.provider_requests ?? null : 0 }, a0));
       if (r.ok || !r.result) break;
       // A reply cut off by its output budget is an outcome for the protocol: the only change it makes is
       // a larger budget within the model's documented ceiling. The refused turn was not persisted, so
@@ -445,8 +543,9 @@ export async function runOpenItem(spec, opts = {}) {
     if (!r.ok) { progress({ event: "turn.error", seat: vendor, model, detail: r.why }); throw new Error(`${vendor}/${purpose}: ${r.why}`); }
     const text = r.result.text ?? "";
     const ms = Date.now() - t0;
+    // The successful request's usage and settings; every request the turn took is in run.attempts.
     run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
-      served_model: r.result.served_model ?? null, ...chosen });
+      served_model: r.result.served_model ?? null, usage: usageOf(r.result.usage), settings, attempts: turnAttempts, ...chosen });
     // On the ledger: signed by this seat occupancy, with the served model the provider reported beside
     // the requested one. The seat is identified as the conversation layer keys it (vendor, purpose and
     // model: sdkTurn's seat is `${purpose}@${pool}@${model}`), so two slots running different models are
@@ -520,7 +619,10 @@ export async function runOpenItem(spec, opts = {}) {
           JSON.stringify(previous.package_context) !== JSON.stringify(packageBinding)) {
         throw new Error("resume: ticket/spec differs or this is a legacy run without isolated recovery state");
       }
-      Object.assign(run, previous, { error: null, salvaged: null, resumed_from: { board: root, previous_error: previous.error ?? null } });
+      // Earlier attempts stay on the record; the provider-call bound applies to this invocation's calls.
+      Object.assign(run, previous, { error: null, salvaged: null, resumed_from: { board: root, previous_error: previous.error ?? null },
+        attempts: previous.attempts ?? [], provider_calls: { limit: MAX_PROVIDER_CALLS, made: 0, refused: null } });
+      run.resources = resourcesOf(run.attempts);
     } else if (existsSync(statePath)) {
       throw new Error("board already has a run; use resume instead of overwriting recovery state");
     }
