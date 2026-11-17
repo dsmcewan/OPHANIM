@@ -59,6 +59,7 @@ const b = cli('tick', '--init');
 const bj = parse(b.stdout);
 report.phases.B = {what: 'tick --init at the default limits (total provider calls 0)', exit: b.exit,
   dispatched: bj?.tick?.dispatched ?? bj?.dispatched ?? null, intake: (x => (Array.isArray(x) ? x.length : x ?? 0))(bj?.intake),
+  recovery: (bj?.recovery ?? []).map(x => ({item: x.item, outcome: x.outcome, searched: x.searched})),
   stopped: bj?.tick?.stopped ?? bj?.stopped ?? null, note: bj?.note ?? null, refusal: b.exit ? (b.stderr || b.stdout).trim().split('\n')[0] : null};
 
 // C. A declared budget, recording executors.
@@ -96,6 +97,14 @@ const L = ['# What the scheduler dispatched (demonstration)', '',
   '**What this is and is not.** The CLI, reconciliation, gates, scheduler, claims, handoff verification and work ledger are the real code. The stage executors in phase C are RECORDING executors: they call no provider, produce nothing, and return a block that names them. No provider was called. The real stage executors are exercised end to end over scripted (synthetic) providers in `ophanim/operate/stages.test.mjs`. Nothing here is a live demonstration.', '',
   '## A. No work ledger', '', `Exit ${report.phases.A.exit}: ${report.phases.A.refusal}. Work ledger created: ${report.phases.A.work_ledger_created}.`, '',
   '## B. `tick --init` at the default limits', '', `Exit ${report.phases.B.exit}${report.phases.B.refusal ? ` (${report.phases.B.refusal})` : ''}. The real stage executors (stages.mjs) were seated (the clone has no installed vendor SDKs, so its live seats refuse when used); none was used. Intake recorded: ${report.phases.B.intake}. Dispatched: ${JSON.stringify(report.phases.B.dispatched)}. Stopped: ${report.phases.B.stopped ?? '—'}.`, '',
+  '### Evidence recovery in that tick (no provider call)', '',
+  (() => {
+    const r = report.phases.B.recovery ?? [];
+    const by = r.reduce((m, x) => (m[x.outcome] = (m[x.outcome] ?? 0) + 1, m), {});
+    return `${r.length} item(s) Resolved without completion evidence were searched: ${Object.entries(by).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}. `
+      + 'The clone has no retained-runs directory (the owner\'s board runs are not in this repository) and no outcome on its new work ledger, so nothing could be recovered here; '
+      + 'each search is recorded on the work ledger with what was searched, and is repeated only when the item\'s sources change.';
+  })(), '',
   `## C. A declared budget (${JSON.stringify(limits)}), recording executors`, '',
   `Dispatched ${c.dispatched.length} stage(s); ${report.phases.C.blocked} item(s) reported blocked (${report.phases.C.blocked_by_gate.map(([g, n]) => `${g} ${n}`).join(', ')}); stopped: ${c.stopped ?? '—'}.`, '',
   '| # | Item | Stage | Mode | Attempt | Handoff from | Budget (provider calls) | Why it was ready |', '|---|---|---|---|---|---|---|---|',
