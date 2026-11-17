@@ -9,7 +9,8 @@ import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs'
 import {openWorkLedger} from './work-ledger.mjs';
 import {tick} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
-import {makeExecutors, REVIEW_INDEPENDENCE} from './stages.mjs';
+import {makeExecutors, REVIEW_INDEPENDENCE, workContributions} from './stages.mjs';
+import {reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
 import {readServiceConfig, SERVICE_CONFIG_SCHEMA} from './service.mjs';
 import {modelIdentity, contributorKeys} from '../../pantheon/src/review/identity.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
@@ -130,4 +131,13 @@ test('four real labs, repeated revisions: contributions come to span all four la
     assert.ok(!history.models.includes(idOf(val2.outputs.validator)));
     assert.notEqual(idOf(val2.outputs.validator), idOf(val1.outputs.validator));
   });
+});
+
+test('an implementer turn that asked for one model and was served by another excludes both, in the contributions later stages carry', () => {
+  const run = {turns: [{purpose: 'work', vendor: 'openai', model: 'gpt-6-astra', served_model: 'gpt-6-sol', slot: 'alpha'}], files: []};
+  const carried = workContributions(run);
+  assert.deepEqual(contributorKeys(carried).models, ['openai/gpt-6-astra', 'openai/gpt-6-sol']);
+  // With both excluded, the only OpenAI model left in the real inventory is the third one.
+  const openai = reviewSeatsByModel({n: 4, contributions: carried}).find(x => x.lab === 'openai');
+  assert.equal(openai.identity, 'openai/gpt-6-luna');
 });

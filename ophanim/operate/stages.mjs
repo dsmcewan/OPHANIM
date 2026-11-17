@@ -304,6 +304,12 @@ const runPolicy = run => {
 // it is switched on here, by the owner, after the independent review of the rule change (docs/review-independence.md).
 // The service and the CLI take no option for it.
 export const REVIEW_INDEPENDENCE = 'lab';
+/**
+ * The contributions a run made to the change, as later stages carry them. A turn that asked for one model and was
+ * served by another keeps BOTH names (`requested_model`): under model-level independence each is a contributor.
+ */
+export const workContributions = run => changeScope(run).contributions.map(c => ({purpose: c.purpose, vendor: c.vendor, model: c.model,
+  ...(c.requested_model ? {requested_model: c.requested_model} : {}), lab: c.lab, via: c.via}));
 const withServed = f => (f.served_model && f.served_model !== f.model ? {served_model: f.served_model} : {});
 
 // --- the executors -------------------------------------------------------------------------------------------
@@ -607,7 +613,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const sys = openPantheonLedger({root: path.join(boardDir, 'ledger'), board: openBoard(boardDir)});
     const v = sys.recorder().verify();
     if (!v.ok) throw new Error(`the run ledger does not verify: ${v.why}`);
-    const work = changeScope(run).contributions.map(c => ({purpose: c.purpose, vendor: c.vendor, model: c.model, lab: c.lab, via: c.via}));
+    const work = workContributions(run);
     const board = readBoard({statusRoot: statusAt});
     return result('passed', {
       outputs: {commit, branch, base, files: files.map(f => f.path), run_json_digest: sha256(fs.readFileSync(runFile)), run_ledger_anchor: sys.anchor,
