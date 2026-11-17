@@ -116,6 +116,8 @@ export function scriptedClients(calls = [], implement = () => "export const ok =
       } },
     };
   };
+  // What answered, as a run records it (run.json `providers`): fakes, so every fixture run is synthetic evidence.
+  makeClientFor.providers = { kind: "fake", fixture: "pantheon/tests/fixtures/dispatch.mjs scriptedClients" };
   return makeClientFor;
 }
 

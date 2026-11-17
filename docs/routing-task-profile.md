@@ -171,3 +171,73 @@ node pantheon/bin/pantheon-compare.mjs --live --item <item-a> --item <item-b> \
 ```
 
 The live record comes out `synthetic: false`, and it is scoped to the tickets and bounds it names. Its USD stays null until a versioned price source is attached. With fewer than 20 runs per arm per stakes stratum, every rate is `insufficient`. Steps 2 and 3 of the adoption path still apply: an independent review, then a recorded disposition.
+
+## Continuous evaluation
+
+The owner asked for routing to be evaluated continuously, from the current state, on the work that runs anyway (design: `docs/reviews/2026-11-17-routing-evaluation/DESIGN.md`). It adds no provider spend beyond the work itself. Nothing below runs an extra provider call: the shadow is a second pure selection, the assignment is a hash, and the evaluator reads files.
+
+Code: `pantheon/src/practice/shadow.mjs`, `assign.mjs` and `evaluate.mjs`. The wiring is in `pantheon/src/board/run-item.mjs` (dispatch) and `pantheon/src/board/operate.mjs` (board runs and cycle close). Tests: `pantheon/tests/practice-continuous.test.mjs`.
+
+### What is recorded
+
+- **Shadow selection, on every dispatch.** For every role choice, the dispatcher also computes what the other profile would choose from the same inputs: `argo` and `fit` shadow each other, and `legacy` is shadowed by `fit`. Each turn's selection records it as `shadow: {profile, vendor, model, effort, class?, policy_hash}` and `agrees` (same vendor and model as the seat that answered). If the other profile admits no seat, `shadow` carries an `error` and `agrees` is null. The shadow is never sent to a provider. The primary choice is unchanged: the same candidates, the same order and the same policy hash, and the `argo` and `legacy` hashes stay pinned.
+- **Interleaved assignment (opt-in).** `runOpenItem(spec, {interleave: true})` or `pantheon-board run <item> --interleave` hashes the ticket key (sha256, 50/50) to choose an arm:
+  - Only eligible stakes strata are interleaved: `low` and `normal` (`DEFAULT_ELIGIBLE_STRATA`).
+  - `high`, `critical` and unknown stakes stay on `argo`, with basis `stratum not eligible`.
+  - A stratum the stop rule has halted stays on `argo`, with basis `stratum halted by the stop rule`. A board run reads the halted strata from the evidence store before it dispatches.
+  - An explicit `--profile` wins. It is recorded with basis `explicit profile` and `randomized: false`.
+
+  `run.json` records `assignment: {arm, basis, stakes, randomized, ...}` and the `profile` it ran. Every turn's selection records `assignment: {arm, basis, randomized}`.
+- **What answered.** `run.json` records `providers: {kind}`. `live` comes from the CLI's SDK clients. `fake` comes from the test fixtures. A caller can declare it with the `providers` option or on `makeClientFor.providers`. A run that declares nothing is `undeclared`, and the evaluator counts it as synthetic.
+- **The evidence store.** `pantheon-board run` copies every run's `run.json` (shipped or not) to `<store>/<board>/run.json`. The store is `--evidence-store DIR`, else `PANTHEON_EVIDENCE_STORE`, else `<OPHANIM_LEDGER>/../runs`. With no shared ledger, it is `<board>/runs`, which holds only that board's run. To accumulate evidence across runs, set `OPHANIM_LEDGER` or the store.
+
+### The rules
+
+`evaluate({runs})` reads a store directory, a run.json path, a run object, or a list of these. Only runs with a randomized assignment are evidence. Every other run is listed under `excluded` with the reason: an arm somebody chose is not a randomized arm. Each included run becomes one `runMetrics` row (`metrics.mjs`, the same definitions as the matched comparison). The rows are aggregated per arm and per stakes stratum, taken from the assignment.
+
+For each stratum, with differences taken as fit minus argo:
+
+1. **Stop rule.** After at least `STOP_MIN_N` = 10 decided runs per arm, if the upper bound of the accepted difference is at or below `-STOP_MARGIN` (-0.10), the stratum is halted. Its outcome is `retain`, and assignment stops interleaving it.
+2. **`insufficient_evidence`** until there are `MIN_N` = 20 (`MIN_N_PER_STRATUM`) decided runs per arm.
+3. **`propose_policy`** only if all of the following hold:
+   - `fit` is non-inferior on accepted and on first-pass: the lower bound of each difference is at or above `-NONINFERIORITY_MARGIN` (-0.05).
+   - Its median calls, tokens or elapsed time per accepted run is lower on at least one of the three.
+   - It is worse on none of them by more than `COST_WORSE_MARGIN` (calls 10%, tokens 10%, elapsed 25%, relative to argo).
+
+   A median counts only when every accepted run of both arms has the value. Tokens without complete usage are therefore `unknown`, which is never cheaper and never worse. Unknown usage cannot make an arm look cheaper.
+4. **`retain`** otherwise.
+
+The intervals are Newcombe's hybrid score interval for a difference of proportions, built from Wilson bounds.
+
+**Repeated looks.** The rule runs at every cycle close, on a growing sample. At 95%, repeated looks would find a difference by chance well over 5% of the time. So both decisions that change something, the stop rule and a proposal, use 99% intervals (`STOP_CONFIDENCE`, `PROMOTION_CONFIDENCE`). This is a simple conservative alpha for each look, not a formal alpha-spending boundary. The cost is stated plainly: at 99%, even when both arms accept every ticket, non-inferiority within 5 points needs about 126 decided runs per arm. `MIN_N` is a floor below which nothing is claimed. It is not the sample size that decides.
+
+The thresholds are named, exported and provisional: `MIN_N`, `NONINFERIORITY_MARGIN`, `STOP_MARGIN`, `STOP_MIN_N`, `PROMOTION_CONFIDENCE`, `STOP_CONFIDENCE`, `COST_WORSE_MARGIN` and `DEFAULT_ELIGIBLE_STRATA`.
+
+The overall outcome follows from the strata. It is `propose_policy` if any stratum proposes. Otherwise it is `retain` if any stratum retains, halts included. Otherwise it is `insufficient_evidence`. A record is `synthetic` if any included run did not declare live providers. The shadow selections of every run, excluded runs included, are summarised as a disagreement map. That map says nothing about quality.
+
+### Every cycle close gets an assessment
+
+A cycle opened under `pantheon.cycle/v2` cannot close without a practice assessment (C3). When such a cycle is waiting on nothing but its assessment, and none was stated (`--practice-outcome`), the controller records one from `evaluate` over the evidence store:
+
+- The evaluation record goes to `<store>/evaluations/<digest>.json`. It is cited as `{kind: digest, schema: pantheon.evaluation/v1, sha, synthetic}`, and the ledger now requires that flag on such a digest.
+- The disposition is `measured: true` only when the deciding strata have n at or above `MIN_N`. Otherwise it is `provisional`.
+- Halts are part of the record and the question, and they are recorded as `retain`.
+- A stated assessment always wins.
+- A cycle that cannot close for another reason, such as a missing review or an open finding, gets nothing yet.
+
+The automatic assessment never records `promote`. A promote is a candidate disposition by an independent seat of another lab than the proposer's. The ledger also refuses a promote that rests on synthetic evidence. So the strongest automatic outcome is `propose_policy`. It names `fit` as the candidate and `FIT_PROPOSER` (the anthropic seat that authored `fit`, configurable) as the proposer, so an anthropic seat can never promote it.
+
+On a cycle whose policy in effect is `fit` itself (a fit-arm run), neither `propose_policy` nor `retain` can say what was found. So the assessment is recorded as `propose_measurement`, with the evaluation's own outcome in the question and in the cited record.
+
+### Reading it
+
+```sh
+node pantheon/bin/pantheon-board.mjs evaluate [--runs DIR] [--json]
+```
+
+This prints each stratum's outcome, n per arm, accepted and first-pass rates, the difference interval, costs per accepted run, the halted strata and the shadow summary. It reads files only.
+
+Not done:
+
+- No live run has accumulated in a store from this checkout. Every record made here is synthetic.
+- Only `argo` and `fit` are interleaved. `legacy` is shadowed, never assigned.
