@@ -248,3 +248,84 @@ test('ME1: the orderer cannot author an entry in a seat\'s name', async () => {
     assert.match(v.why, /author signature invalid/);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+// Independent review 2026-11-16, Components (mutants L2, L3, L5): each check below was masked by another
+// one, so deleting it failed no test. Each case is the forgery ONLY that check catches: every other
+// signature, link and object is valid, re-signed with the key the forger really holds.
+async function forgery() {
+  const {sign, createPrivateKey} = await import('node:crypto');
+  const {canonical, digest} = await import('../canonical.mjs');
+  const H = v => 'sha256:' + digest(v);
+  const bodyOf = e => ({schema: e.schema, kind: e.kind, author: e.author, derived_from: e.derived_from, payload_ref: e.payload_ref});
+  const orderOf = e => ({seq: e.seq, parent: e.parent, body: H(bodyOf(e))});
+  const sig = (v, s) => sign(null, Buffer.from(canonical(v)), createPrivateKey(s.privatePem)).toString('base64');
+  return {H, canonical, signAuthor: (e, s) => { e.author_sig = sig(bodyOf(e), s); }, signOrder: (e, s) => { e.order_sig = sig(orderOf(e), s); }};
+}
+const linesOf = dir => fs.readFileSync(path.join(dir, 'chain.jsonl'), 'utf8').trimEnd().split('\n').map(l => JSON.parse(l));
+const writeLines = (dir, entries) => fs.writeFileSync(path.join(dir, 'chain.jsonl'), entries.map(e => JSON.stringify(e) + '\n').join(''));
+
+// L2: a seat holds a valid author key but not the orderer's. It may sign its own body; it may not
+// place that body in the chain. Its self-co-signed entry is refused for the order signature alone.
+test('L2: a seat that co-signs its own entry without the orderer key is refused', async () => {
+  const f = await forgery();
+  withLedger((L, dir) => {
+    L.append({kind: 'measure', payload: {value: 1}, ...by(scout)});
+    const entries = linesOf(dir);
+    f.signOrder(entries.at(-1), scout);                   // author_sig, parent, seq and payload untouched
+    writeLines(dir, entries);
+    const v = L.verify();
+    assert.equal(v.ok, false);
+    assert.match(v.why, /entry 1: order signature invalid/);
+  });
+});
+
+// L3: the orderer holds the order key, so it can co-sign any (seq, parent). The parent check is what
+// stops it forking the chain: an entry whose parent skips its predecessor is refused even though both
+// signatures over it are valid.
+test('L3: the orderer cannot fork: a validly co-signed entry on the wrong parent is refused', async () => {
+  const f = await forgery();
+  withLedger((L, dir) => {
+    L.append({kind: 'measure', payload: {value: 1}, ...by(scout)});
+    L.append({kind: 'measure', payload: {value: 2}, ...by(scout)});
+    const entries = linesOf(dir);
+    const last = entries.at(-1);
+    last.parent = f.H(entries[0]);                         // genesis, not entry 1: a sibling of entry 1
+    f.signOrder(last, orderer);                            // the orderer co-signs the fork
+    writeLines(dir, entries);
+    for (const mode of ['full', 'frontier']) {
+      const v = L.verify({mode});
+      assert.equal(v.ok, false, `${mode} refuses the fork`);
+      assert.match(v.why, /entry 2: parent is not the previous entry/);
+    }
+  });
+});
+
+// L5: the orderer signs checkpoints, so a checkpoint's signatures prove only who wrote it. What it
+// commits to is checked against the chain: a checkpoint over a different prefix, or at the wrong
+// position, is refused.
+test('L5: a checkpoint that does not commit to the chain before it is refused', async () => {
+  const f = await forgery();
+  withLedger((L, dir) => {
+    L.append({kind: 'measure', payload: {value: 1}, ...by(scout)});
+    L.append({kind: 'measure', payload: {value: 2}, ...by(scout)});
+    const honest = linesOf(dir);
+    assert.equal(honest.at(-1).kind, CHECKPOINT);
+    assert.equal(L.verify().ok, true);
+    const put = v => { fs.writeFileSync(path.join(dir, 'objects', f.H(v).slice(7) + '.json'), f.canonical(v)); return f.H(v); };
+    const hashes = honest.slice(0, -1).map(e => f.H(e));
+    for (const [label, payload] of [
+      ['a root over another prefix', {through: 3, root: f.H({hashes: hashes.slice(0, -1)})}],
+      ['the wrong position', {through: 2, root: f.H({hashes})}],
+    ]) {
+      const entries = structuredClone(honest), cp = entries.at(-1);
+      cp.payload_ref = put(payload);
+      f.signAuthor(cp, orderer); f.signOrder(cp, orderer);
+      writeLines(dir, entries);
+      const v = L.verify();
+      assert.equal(v.ok, false, label);
+      assert.match(v.why, /entry 3: checkpoint does not commit to the chain before it/, label);
+    }
+    writeLines(dir, honest);
+    assert.equal(L.verify().ok, true, 'restored, it verifies again');
+  }, {checkpointEvery: 3});
+});
