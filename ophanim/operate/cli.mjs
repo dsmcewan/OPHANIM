@@ -78,16 +78,18 @@ export function openWorkReadOnly(workRoot) {
 }
 
 /** Whether this machine holds the controller's keys (an operator and the orderer of the work ledger). */
-export function authorityOf(work, workRoot) {
+// `keys` is reported relative to the repository (`shown`), so a report or projection never carries a machine path.
+export function authorityOf(work, workRoot, repo = null) {
   const keys = path.join(workRoot, 'keys');
-  if (!work) return {held: false, keys, why: 'there is no work ledger here'};
+  const shown = repo ? (path.relative(repo, keys) || keys) : keys;
+  if (!work) return {held: false, keys: shown, why: 'there is no work ledger here'};
   const auth = work.ledger.verify().authority;
   const has = id => fs.existsSync(path.join(keys, encodeURIComponent(id) + '.json'));
   const op = auth.operators.find(has);
   if (!op || !has(auth.orderer)) {
-    return {held: false, keys, why: `no controller key is held at ${keys} (operator ${auth.operators.join('|')}, orderer ${auth.orderer}): the work ledger can be verified, not changed`};
+    return {held: false, keys: shown, why: `no controller key is held at ${shown} (operator ${auth.operators.join('|')}, orderer ${auth.orderer}): the work ledger can be verified, not changed`};
   }
-  return {held: true, keys, operator: op};
+  return {held: true, keys: shown, operator: op};
 }
 
 /** The NO_AUTHORITY block: what is missing, who supplies it, and when the run resumes. */
@@ -128,7 +130,7 @@ export function reconcileView({repo, statusRoot, workRoot, bundlesDir = null, is
   }
   const byStatus = {};
   for (const i of rec.items) byStatus[i.status] = (byStatus[i.status] ?? 0) + 1;
-  return {...rec, work: {...ledger, root: path.relative(repo, workRoot) || workRoot}, authority: authorityOf(work, workRoot),
+  return {...rec, work: {...ledger, root: path.relative(repo, workRoot) || workRoot}, authority: authorityOf(work, workRoot, repo),
     status: {root: path.relative(repo, statusRoot) || statusRoot}, issues_source: issuesSource, unknown_markers: unknownMarkers, drift,
     counts: {...rec.counts, duplicates: rec.duplicates.length, unknown_markers: unknownMarkers.length, drift: drift.length, by_status: byStatus}};
 }

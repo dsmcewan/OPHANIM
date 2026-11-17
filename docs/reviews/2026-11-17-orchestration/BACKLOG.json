@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-17T16:13:59.992Z",
+  "at": "2026-11-17T16:21:24.726Z",
   "ledger": {
     "head": "sha256:f8526a6753aaad321653ae2d232c36125b47081fd8177ad0735a8fb59ca0c009",
     "entries": 85
@@ -1519,7 +1519,7 @@
   },
   "authority": {
     "held": false,
-    "keys": "/home/user/OPHANIM/.claude/worktrees/agent-abfe5c690ed8e5e6d/status/work/keys",
+    "keys": "status/work/keys",
     "why": "there is no work ledger here"
   },
   "status": {
