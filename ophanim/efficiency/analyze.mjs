@@ -1,6 +1,7 @@
 // Pure analysis of bounded controller observations. This module does not read
 // files, call providers, infer unobserved timings, or authorize policy changes.
 import {createHash} from 'node:crypto';
+import {canonicalCodeUnit} from '../../packages/ledger/canonical.mjs';
 
 const LIMITS = Object.freeze({obligations:1000, attempts:10000, verifications:20000, workers:32, dependencies:32, spanMs:7*24*60*60*1000, bytes:16*1024*1024});
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,191}$/;
@@ -26,11 +27,8 @@ function uniqueIds(value,label,max){
   if(new Set(items).size!==items.length)fail(`duplicate ${label}`);
   return items.sort(compare);
 }
-function canonical(value){
-  if(Array.isArray(value))return `[${value.map(canonical).join(',')}]`;
-  if(value&&typeof value==='object')return `{${Object.keys(value).sort(compare).map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
-}
+// The analysis digests are CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order they were always computed in.
+const canonical=value=>canonicalCodeUnit(value);
 const digest = value => createHash('sha256').update(canonical(value)).digest('hex');
 
 function graphOf(obligations){

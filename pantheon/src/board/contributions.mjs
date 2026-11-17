@@ -5,6 +5,7 @@
 // authorizes no seat change: it is the evidence a measured adjustment would need, and the input the
 // investigation ranking reads. A seat change stays a signed, scoped decision elsewhere.
 import { createHash } from "node:crypto";
+import { canonicalCodeUnit } from "../../../packages/ledger/canonical.mjs";
 import { occupancyTrail } from "./occupancy.mjs";
 
 export const CONTRIBUTIONS_SCHEMA = "pantheon.chair-contributions/v1";
@@ -13,9 +14,8 @@ export const CONTRIBUTIONS_SCHEMA = "pantheon.chair-contributions/v1";
 export const CHAIR_OF_MODE = Object.freeze({ plan: "lead@orch", work: "impl@build", critique: "check@review",
   explore: "scout@opt", refute: "scout@opt", synthesize: "arbiter@judge" });
 
-const stable = v => Array.isArray(v) ? `[${v.map(stable).join(",")}]`
-  : v && typeof v === "object" ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`
-  : JSON.stringify(v);
+// The projection digest is CODE_UNIT_V1 (packages/ledger/canonical.mjs), the order it was always computed in.
+const stable = v => canonicalCodeUnit(v);
 const sha = v => createHash("sha256").update(stable(v)).digest("hex");
 const occupant = a => `${a.vendor}/${a.model ?? "unrecorded"}`;
 

@@ -11,35 +11,19 @@
 //   * unstable key order -- the same node re-serialised in another engine gets a second cid, and
 //     dedup silently stops working.
 //
-// So all three are refused rather than normalised. The codec is bound INTO the digest: a blob and
-// an entry that happen to share bytes must not share a cid, or relabelling a node is free.
+// So all three are refused rather than normalised, and so is everything else that is not plain JSON (a
+// Date or a class instance used to hash as {} here, and a sparse array as `[,1]`). The codec is bound
+// INTO the digest: a blob and an entry that happen to share bytes must not share a cid, or relabelling
+// a node is free.
 import { createHash } from "node:crypto";
+import { canonicalCas } from "../../../packages/ledger/canonical.mjs";
 
 export const CODECS = new Set(["blob", "entry", "tree", "commit"]);
 
-export function canonicalize(value, path = "$") {
-  if (value === null) return "null";
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError(`canonicalize: ${path} is not finite (${value})`);
-    if (Object.is(value, -0)) throw new TypeError(`canonicalize: ${path} is -0, which is indistinguishable from 0 once serialised`);
-    return JSON.stringify(value);
-  }
-  if (typeof value === "string") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((v, i) => canonicalize(v, `${path}[${i}]`)).join(",")}]`;
-  if (typeof value === "object") {
-    const keys = Object.keys(value).sort();          // code-unit order, engine independent
-    const parts = keys.map(k => {
-      if (value[k] === undefined) {
-        throw new TypeError(`canonicalize: ${path}.${k} is undefined; omit the key or use null, ` +
-          `because dropping it would hash equal to a node that never had it`);
-      }
-      return `${JSON.stringify(k)}:${canonicalize(value[k], `${path}.${k}`)}`;
-    });
-    return `{${parts.join(",")}}`;
-  }
-  throw new TypeError(`canonicalize: ${path} is a ${typeof value}, which has no canonical form`);
-}
+// The implementation is the shared one (packages/ledger/canonical.mjs), in the board's key order: plain
+// code-unit order (CODE_UNIT_V1) with -0 refused. Every cid already on a board was computed in that order,
+// which differs from the ledger's for integer-like keys, so the board keeps it by name.
+export const canonicalize = (value, path = "$") => canonicalCas(value, path);
 
 /** Bytes that get hashed. Blobs hash their own bytes; every other node hashes canonical JSON. */
 export function nodeBytes(codec, node) {

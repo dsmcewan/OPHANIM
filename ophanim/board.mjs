@@ -8,26 +8,13 @@ import {openStore} from '../pantheon/src/board/cas.mjs';
 import {openRefs} from '../pantheon/src/board/refs.mjs';
 import {publish} from '../pantheon/src/board/dag.mjs';
 import {withSeatLock} from '../pantheon/src/seat/lock.mjs';
+import {canonical,digest} from '../packages/ledger/canonical.mjs';
 
 export const STATE_SCHEMA='ophanim.runtime/v1';
 const REF='refs/board/ophanim';
 const CONTROLLER=Object.freeze({vendor:'controller'});
-export function canonical(value){
-  const seen=new Set();
-  function walk(v,depth=0){
-    if(depth>60)throw Error('JSON nesting bound exceeded');
-    if(v===null||typeof v==='string'||typeof v==='boolean')return v;
-    if(typeof v==='number'&&Number.isFinite(v))return v;
-    if(!v||typeof v!=='object'||seen.has(v)||(!Array.isArray(v)&&![Object.prototype,null].includes(Object.getPrototypeOf(v))))throw Error('Plain finite JSON required');
-    seen.add(v);
-    const out=Array.isArray(v)?v.map(item=>walk(item,depth+1)):Object.fromEntries(Object.keys(v).sort().map(k=>{
-      const d=Object.getOwnPropertyDescriptor(v,k);if(d.get||d.set)throw Error('JSON accessors refused');return [k,walk(v[k],depth+1)];
-    }));
-    seen.delete(v);return out;
-  }
-  return JSON.stringify(walk(value));
-}
-export const digest=value=>createHash('sha256').update(canonical(value)).digest('hex');
+// The canonical form is the ledger core's (LEDGER_V1), imported rather than copied: one implementation.
+export {canonical,digest};
 export const clone=value=>JSON.parse(canonical(value));
 export const boardPath=stateDir=>join(resolve(stateDir),'pantheon');
 // Controller commits carry either a full state snapshot (the v1 shape) or a
