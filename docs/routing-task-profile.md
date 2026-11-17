@@ -88,7 +88,8 @@ These apply under `fit` only. `argo` and `legacy` keep one configured scout vend
   - If fewer labs are eligible than required, the run refuses with `REVIEW_LABS_UNAVAILABLE` before any reviewer is called. It never runs fewer.
   - Every member's critique lands on the board, so the existing REVIEW gate refuses any rejection. The run also refuses to ship (`REVIEW_PANEL`) unless every member approved.
   - `run.json` `review.panels` records each member's lab, verdict and selection.
-  - Only four labs exist, so 3 review labs requires the planner and the maker to share a lab. When they do not, a critical-stakes run is refused.
+  - Only four labs exist, and the reviewer role allows three of them (xai, google, anthropic). Law 3 bars a reviewer from both the maker's and the planner's labs. So the producers are seated to keep the panel possible: when `review_labs` is 2 or more, a lab is reserved, and not offered to the planner or the maker, if a producer there would leave fewer eligible reviewer labs than required. Each turn's selection records the exclusion (`reserved for review`) and `reserved_review_labs`. For critical stakes this puts both planner and maker on openai, the one lab outside the reviewer set. That trades plan-versus-build lab independence for three independent reviews.
+  - An explicit seat (operator override, pin, escalation) is never moved by the reservation. If the explicit seats already leave no producer lab that keeps the panel possible, the run is refused with `REVIEW_LABS_UNAVAILABLE` before any work or review call is made.
 - **Escalation.** The slot's effort is the one the answering seat ran with. When a fallback answers, a later raise starts from the fallback's own mapped effort.
 
 ## What is provisional

@@ -64,12 +64,16 @@ test("fit, critical stakes: one of the three reviewers rejects, so the change is
 
 test("fit, critical stakes with too few eligible labs: a named refusal, and no reviewer is called", async () => {
   await withDispatch(async ({ spec, opts, calls }) => {
-    // fit seats the planner (anthropic) and the maker (openai) on different labs: only xai and google remain.
-    const r = await runOpenItem(spec("fitTooFewLabs", { stakes: "critical" }), opts({ profile: "fit" }));
+    // The operator seats the planner on a reviewer lab (anthropic) and the maker lands on openai: only xai and
+    // google remain. An explicit seat is the operator's and is not moved to reserve labs, so this still refuses.
+    const r = await runOpenItem(spec("fitTooFewLabs", { stakes: "critical" }),
+      opts({ profile: "fit", seatOverrides: { planner: seat("anthropic", "claude-fable-5-2") } }));
     assert.equal(r.shipped, false);
-    assert.equal(r.error?.stage, "check");
+    // Refused at the maker's seating, before any implementer or reviewer call: no producer lab can keep 3 review labs.
+    assert.equal(r.error?.stage, "work");
     assert.match(r.error.message, /REVIEW_LABS_UNAVAILABLE/);
     assert.match(r.error.message, /3 independent review labs/);
+    assert.equal(calls.filter(c => WORK.test(c.prompt)).length, 0, "no generation is spent on work that cannot be reviewed");
     assert.equal(calls.filter(c => REVIEW.test(c.prompt)).length, 0, "it refuses rather than running fewer reviewers");
     assert.equal(runJson(r).turns.filter(t => t.purpose === "critique").length, 0);
   });
@@ -147,5 +151,33 @@ test("fit: when a fallback answered, the effort escalation starts from the ANSWE
     const carbon = calls.filter(c => WORK.test(c.prompt) && c.model === "gemini-4-carbon");
     assert.deepEqual(carbon.map(c => c.effort), ["medium", "high"], "the next revision carried the raised effort");
     assert.equal(r.shipped, true, JSON.stringify(r.error));
+  });
+});
+
+test("fit, critical stakes with NO overrides: producers are seated outside the reviewer labs, so three labs still review and it ships", async () => {
+  await withDispatch(async ({ spec, opts, calls }) => {
+    const r = await runOpenItem(spec("fitCriticalDefault", { stakes: "critical" }), opts({ profile: "fit" }));
+    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    const run = runJson(r);
+    const plan = run.turns.find(t => t.purpose === "plan"), work = run.turns.find(t => t.purpose === "work");
+    const critiques = run.turns.filter(t => t.purpose === "critique");
+    const labs = critiques.map(lab);
+    assert.equal(new Set(labs).size, 3, `three distinct review labs (${labs})`);
+    assert.ok(!labs.includes(lab(plan)) && !labs.includes(lab(work)), `no reviewer shares the planner's (${lab(plan)}) or maker's (${lab(work)}) lab`);
+    for (const t of [plan, work]) {
+      assert.ok(t.selection.excluded.some(e => /reserved for review/.test(e.why)), `${t.purpose}: the reservation is recorded with its reason`);
+      assert.equal(t.selection.reserved_review_labs, 3);
+    }
+    assert.equal(calls.filter(c => REVIEW.test(c.prompt)).length, 3);
+  });
+});
+
+test("fit, high stakes with NO overrides: at most one producer takes a reviewer lab, so two independent labs review", async () => {
+  await withDispatch(async ({ spec, opts }) => {
+    const r = await runOpenItem(spec("fitHighDefault", { stakes: "high" }), opts({ profile: "fit" }));
+    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    const run = runJson(r);
+    const critiques = run.turns.filter(t => t.purpose === "critique");
+    assert.equal(new Set(critiques.map(lab)).size, 2);
   });
 });

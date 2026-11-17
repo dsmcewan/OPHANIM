@@ -149,7 +149,7 @@ const windowOf=model=>documentedWindow(model)??CAPABILITIES[model]?.window??null
  * inputs; it performs no call. Throws when nothing is admitted.
  */
 export function selectSeat(role,{profile='argo',difficulty='medium',needsContext=null,avoid=[],avoidLabs=[],pools=[],
-  pin=null,slotOverride=null,roleOverride=null,explicit=null,task=null}={}){
+  pin=null,slotOverride=null,roleOverride=null,explicit=null,task=null,reserve=null}={}){
   if(!PROFILES.includes(profile))throw new Error(`unknown routing profile "${profile}" (known: ${PROFILES.join(', ')})`);
   const id=selectionPolicy(profile,{pools});
   // Under `fit` every selection, explicit seats included, records the task profile it ran under.
@@ -176,15 +176,15 @@ export function selectSeat(role,{profile='argo',difficulty='medium',needsContext
   if(pin&&roleOverride?.model===pin)return finish([as(roleOverride,'operator-override',`operator seat for ${role}, also the ticket's pin: ${why(roleOverride)}`)]);
   if(pin){
     const rest=roleOverride?[as(roleOverride,'operator-override',`fallback after the ticket's pin: ${why(roleOverride)}`)]
-      :policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base}).filter(([c])=>c.model!==pin);
+      :policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base,reserve}).filter(([c])=>c.model!==pin);
     return finish([as({...resolvePinned(pin),why:'the ticket pins this model'},'ticket-pin',`the ticket pins ${pin} for this slot`),...rest]);
   }
   if(roleOverride)return finish([as(roleOverride,'operator-override',`operator seat for ${role}: ${why(roleOverride)}`)]);
-  return finish(policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base}));
+  return finish(policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base,reserve}));
 }
 
-function policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base}){
-  if(profile==='fit')return fitCandidates(role,{needsContext,avoid,avoidLabs,base});
+function policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base,reserve=null}){
+  if(profile==='fit')return fitCandidates(role,{needsContext,avoid,avoidLabs,base,reserve});
   const excluded=[];
   const admit=c=>{
     if(avoid.includes(c.vendor)){excluded.push({model:c.model,why:`vendor ${c.vendor} is avoided`});return false;}
@@ -253,7 +253,11 @@ export function roleLabs(role){
 }
 const classRank=m=>CLASSES.order.indexOf(CLASSES.models[m]?.class);
 
-function fitCandidates(role,{needsContext,avoid,avoidLabs,base}){
+// `reserve` ({labs, review_labs}): labs held back from a PRODUCER seat so the review panel the stakes require
+// stays possible. Law 3 bars a reviewer from the maker's and the planner's labs and only four labs exist, so a
+// producer seated on a reviewer lab can leave fewer independent review labs than required. Fit only; an explicit
+// seat (operator, pin, escalation) is the operator's and is never moved by it.
+function fitCandidates(role,{needsContext,avoid,avoidLabs,base,reserve=null}){
   const task=base.task;
   const labs=roleLabs(role);
   const tableOrder=[...new Set((roleTables()[role]??[]).map(c=>c.model))];
@@ -268,6 +272,7 @@ function fitCandidates(role,{needsContext,avoid,avoidLabs,base}){
     if(classRank(c.model)===-1){excluded.push({model:c.model,why:'no class in classes.json'});return false;}
     if(avoid.includes(c.vendor)){excluded.push({model:c.model,why:`vendor ${c.vendor} is avoided`});return false;}
     if(avoidLabs.includes(c.lab)){excluded.push({model:c.model,why:`the ${c.lab} lab is avoided (independence)`});return false;}
+    if(reserve?.labs?.includes(c.lab)){excluded.push({model:c.model,why:`the ${c.lab} lab is reserved for review: ${reserve.review_labs} independent review labs are required and a producer there would leave too few`});return false;}
     const w=windowOf(c.model);
     if(needsContext!==null&&w===null){excluded.push({model:c.model,why:`window unrecorded; cannot admit an estimated ${needsContext}`});return false;}
     if(needsContext!==null&&w<needsContext){excluded.push({model:c.model,why:`documented window ${w} < estimated ${needsContext}`});return false;}
@@ -295,7 +300,7 @@ function fitCandidates(role,{needsContext,avoid,avoidLabs,base}){
     const cls=CLASSES.models[c.model];
     return [{vendor:c.vendor,model:c.model,basis:cls.basis,band:null,effort:effort.value,why:`fit: ${cls.class} class (${cls.basis}, ${cls.status})`},
       {...base,source:'policy',band:null,excluded,class_floor:floor,class:{value:cls.class,model:c.model,basis:cls.basis,status:cls.status},
-        eligibility:c.eligibility,effort,output,requirements,kind,latency:{value:task.latency.value,basis:task.latency.basis,climb},lab_order:labs,
+        eligibility:c.eligibility,effort,output,requirements,kind,...(reserve?{reserved_review_labs:reserve.review_labs,reserved_labs:reserve.labs}:{}),latency:{value:task.latency.value,basis:task.latency.basis,climb},lab_order:labs,
         reason:(i?`admitted fallback ${i}: `:'')+`fit profile (provisional, unmeasured): lowest admitted class >= floor ${floor.value} (${floor.why}); `+
           `${c.model} is ${cls.class} (${cls.basis}) from the ${c.lab} lab (${c.eligibility}); effort ${effort.mapped}`}];
   });
