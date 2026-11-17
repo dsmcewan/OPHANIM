@@ -5,7 +5,7 @@
 //       the verified board's dispatchable items, in dependency order, each with its ticket and the team
 //       it would seat (vendor, model, lab per chair, and the cycle reviewers)
 //   node pantheon/bin/pantheon-board.mjs run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model]...
-//       [--n 3] [--dir BOARD] [--out DIR] [--branch NAME] [--checked YYYY-MM-DD]
+//       [--n 3] [--dir BOARD] [--out DIR] [--branch NAME] [--checked YYYY-MM-DD] [--profile argo|legacy|fit]
 //       runOpenItem on the item's ticket (the run ledger on), the shipped change committed on a branch,
 //       a review cycle over it on distinct labs, an evidence bundle and an UNSIGNED status proposal
 //   node pantheon/bin/pantheon-board.mjs resume <item> --out DIR [--turn MODULE] [--max-attempts N]
@@ -44,7 +44,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json>`);
+  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json>`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -111,7 +111,8 @@ try {
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
     const r = await runBoardItem({ repo, item: args[0], statusRoot, anchor, makeClientFor, turn, n: Number(opts.n ?? 3),
       dir: opts.dir ? resolve(opts.dir) : null, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
-      checked: opts.checked, runOpts: { seatOverrides },
+      // --profile selects the routing profile for this run only; omitted, runOpenItem's default (argo) applies.
+      checked: opts.checked, runOpts: { seatOverrides, ...(opts.profile ? { profile: opts.profile } : {}) },
       progress: ev => {
         if (ev.from !== "pipeline") console.error(JSON.stringify(ev));
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  [${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
