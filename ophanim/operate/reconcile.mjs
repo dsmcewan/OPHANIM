@@ -78,7 +78,8 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     const ticket = fs.existsSync(ticketFile) ? readTicket({repo, item: s.item}) : null;
     const stages = workLedger ? workLedger.stages(s.item) : [];
     const activeClaim = workLedger ? workLedger.activeClaim(s.item, now) : null;
-    const gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, now});
+    const gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, now,
+      recovery: workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry).at(-1) ?? null : null});
     return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length,
       ticket: ticket ? (ticket.why ? {invalid: ticket.why} : {path: ticket.path, digest: ticket.digest}) : null,
       issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate};

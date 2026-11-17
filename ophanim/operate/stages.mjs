@@ -27,6 +27,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {digest} from '../../packages/ledger/canonical.mjs';
+import {boardScopeOf} from '../../packages/ledger/status.mjs';
 import {readTicket, readBoard, commitShipped, changeScope, cycleReviewers, seatTeam, proposeFromBundle, BUNDLE_SCHEMA, TICKET_SCHEMA}
   from '../../pantheon/src/board/operate.mjs';
 import {runOpenItem, providerCallsOf} from '../../pantheon/src/board/run-item.mjs';
@@ -469,7 +470,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const sys = openPantheonLedger({root: o.run.ledger, anchor: o.run.ledger_anchor, board: openBoard(o.run.board)});
     const rec = sys.recorder();
     const top = git(repo)(['rev-parse', '--show-toplevel']).trim(), G = git(top);
-    const cscope = `operate/${item}/${o.base.slice(0, 12)}/${o.commit.slice(0, 12)}`;
+    // The board scope the status ledger binds completion evidence to (status.mjs checkReview): one cycle per run ledger,
+    // and each implement attempt has its own run ledger, so the scope is this attempt's change.
+    const cscope = boardScopeOf(item, o.base);
     const diff = G(['diff', '--no-color', o.base, o.commit]);
     const files = G(['diff', '--name-only', o.base, o.commit]).split('\n').filter(Boolean);
     const authorTurns = sys.ledger.read().filter(e => e.kind === 'turn' && ['plan', 'work'].includes(sys.ledger.payloadOf(e).purpose)).map(e => sys.ledger.hashOf(e));
@@ -593,7 +596,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const o = impl.outputs;
     const dir = dirOf(ctx, `outcome-${commit.slice(0, 12)}`);
     const bundle = {schema: BUNDLE_SCHEMA, item, title: ctx.gate.requirement.title, made_against: o.made_against, checked: today(),
-      ticket: o.ticket, board: o.run.board, base: o.base, branch: o.branch, commit,
+      // The ticket file, so the owner's apply re-checks its bytes (status.mjs checkEvidenceLedgers: locations.ticket).
+      ticket: {...o.ticket, file: path.resolve(repo, o.ticket.path)}, board: o.run.board, base: o.base, branch: o.branch, commit,
       run: {ledger: o.run.ledger, ledger_anchor: o.run.ledger_anchor, ledger_head: o.run.ledger_head, run_json: o.run.run_json, run_json_digest: o.run_json_digest,
         shipped: true, gate_entry: o.run.gate_entry, tests: o.run.tests},
       review: {ledger: o.run.ledger, ledger_anchor: rv.outputs.cycle_ledger_anchor, scope: rv.outputs.scope, review_scope: rv.outputs.review_scope, cycle: rv.outputs.cycle,

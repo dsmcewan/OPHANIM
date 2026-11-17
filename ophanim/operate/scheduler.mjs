@@ -15,6 +15,7 @@
 // executor produces a recorded block or a refusal, never a skipped verification.
 import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
 import {reconcile} from './reconcile.mjs';
+import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,7 +28,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   elapsed_ms: 60 * 60_000,
   concurrency: 1,
   lease_ms: 30 * 60_000,
-  retry_after_ms: 15 * 60_000,      // a TRANSIENT pending (a reviewer seat failed) is retried after this, within stage_attempts
+  retry_after_ms: 15 * 60_000,
+  recoveries: 50,                   // evidence-recovery searches per tick (no provider calls; reads and re-checks only)      // a TRANSIENT pending (a reviewer seat failed) is retried after this, within stage_attempts
 });
 const fail = (why, code) => { throw Object.assign(new Error(why), {code}); };
 
@@ -75,7 +77,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const L = {...DEFAULT_LIMITS, ...limits};
   const started = clock();
   const work = openWorkLedger({root: workRoot});
-  const log = {dispatched: [], released_expired: [], intake: [], blocked: [], skipped: [], stopped: null};
+  const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null};
   // Interrupted work: a claim past its lease is released as expired; its item resumes from its last valid stage.
   for (const c of work.expiredClaims(clock())) {
     work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted'});
@@ -86,6 +88,21 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const known = new Set(work.intakes().map(i => i.ref));
   for (const i of rec.items) if (!known.has(`status:${i.item}`)) { work.intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item' }); log.intake.push(`status:${i.item}`); }
   for (const c of rec.candidates) if (!known.has(`issue:${c.number}`)) { work.intake({source: 'issue', ref: `issue:${c.number}`, item: null, classification: 'candidate', why: c.why}); log.intake.push(`issue:${c.number}`); }
+  // Evidence recovery: each item Resolved without completion evidence is searched for applicable retained evidence once
+  // per status entry and set of sources (evidence-recovery.mjs). What applies becomes an UNSIGNED proposal for the
+  // owner; nothing is recorded on the status ledger. No provider is called.
+  let searches = 0;
+  for (const i of rec.items.filter(x => x.gate.gate === 'evidence-gap')) {
+    if (searches >= L.recoveries) { log.recovery.push({item: i.item, outcome: 'deferred', why: `recovery limit ${L.recoveries} per tick reached`}); continue; }
+    const sources = sourcesDigest({repo, item: i.item, bundles: bundlesOf({item: i.item, bundlesDir, work})});
+    if (work.recoveries(i.item).some(r => r.status_entry === i.entry && r.sources === sources)) continue;
+    searches++;
+    const r = recoverEvidence({repo, statusRoot, item: i.item, bundlesDir, work, outDir: path.join(path.dirname(workRoot), 'operate', 'recovery'), now: clock()});
+    work.recordRecovery({item: r.item, status_entry: r.status_entry, sources: r.sources, outcome: r.outcome, searched: r.searched,
+      ...(r.proposal ? {proposal: {digest: r.proposal.digest, commit: r.proposal.commit, in_head: r.proposal.in_head}} : {}), at: new Date(clock()).toISOString()});
+    log.recovery.push({item: r.item, outcome: r.outcome, ...(r.proposal ? {proposal: r.proposal.file, digest: r.proposal.digest} : {}), searched: r.searched.length});
+  }
+  if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
   const order = dependencyOrder(rec.items);
   let iterations = 0;
   const budgetLeft = () => L.total_provider_calls - spent(work).calls;

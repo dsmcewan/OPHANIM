@@ -14,6 +14,10 @@
 //                 ticket, requirement) matches the previous stage's, and the inputs it names are exactly the
 //                 previous stage's outputs (by digest). Team, contributions, findings, usage, next stage and any
 //                 blocker are part of the record.
+//   work.recovery an evidence-recovery attempt for an item Resolved without completion evidence: the status entry
+//                 it was made against, the digest of the sources searched, every source with its result, and, when
+//                 evidence was recovered, the digest of the UNSIGNED proposal written for the owner. Only the owner
+//                 applies it to the status ledger (evidence-recovery.mjs).
 //
 // Inputs: an absolute root (default <repo>/status/work). Outputs: the API below. Must never: sign a status, read
 // the owner's keys, or accept a stage whose handoff does not re-derive.
@@ -33,6 +37,7 @@ export const STAGE_STATUS = Object.freeze(['passed', 'returned', 'failed', 'pend
 export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed', 'blocked', 'interrupted', 'expired']);
 export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket']);
 export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
+export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
 const ID = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 const SHA = /^sha256:[0-9a-f]{64}$/;
 const ISO = s => typeof s === 'string' && !Number.isNaN(Date.parse(s));
@@ -62,6 +67,24 @@ function kinds({operators}) {
   const entriesOf = (view, kind) => view.entries().filter(h => view.entry(h)?.kind === kind);
   const releaseOf = (view, claim) => entriesOf(view, 'work.release').find(h => view.entry(h).derived_from.includes(claim)) ?? null;
   return {
+    'work.recovery': {
+      authors: byController,
+      validate: p => {
+        if (p?.schema !== WORK_SCHEMA || !ID.test(p.item ?? '') || !SHA.test(p.status_entry ?? '') || !SHA.test(p.sources ?? '') || !ISO(p.at)) {
+          return 'a recovery names {item, status_entry, sources, outcome, searched, at}';
+        }
+        if (!RECOVERY_OUTCOMES.includes(p.outcome)) return `a recovery outcome is one of ${RECOVERY_OUTCOMES.join(', ')}`;
+        if (!Array.isArray(p.searched) || !p.searched.every(x => plain(x) && str(x.source) && str(x.result) && str(x.why))) return 'a recovery lists every source searched {source, ref, result, why}';
+        if (p.outcome === 'recovered' ? !(plain(p.proposal) && SHA.test(p.proposal.digest ?? '') && p.searched.some(x => x.result === 'recovered'))
+          : p.proposal !== undefined) return 'a recovered outcome names the proposal digest it wrote, and only a recovered one does';
+        return null;
+      },
+      // One attempt per item, status entry and set of sources: the same search is never recorded (or paid for) twice.
+      rederive: (e, view) => entriesOf(view, 'work.recovery').some(h => {
+        const q = view.payload(h);
+        return q.item === e.payload.item && q.status_entry === e.payload.status_entry && q.sources === e.payload.sources;
+      }) ? `a recovery of "${e.payload.item}" against these sources and this status is already recorded` : null,
+    },
     'work.intake': {
       authors: byController,
       validate: p => p?.schema === WORK_SCHEMA && INTAKE_SOURCES.includes(p.source) && str(p.ref) && INTAKE_CLASSES.includes(p.classification)
@@ -201,6 +224,10 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     release: ({claim, item, stage, outcome, why, at = new Date().toISOString()}) => append('work.release', {item, stage, outcome, why, at}, [claim]),
     /** Record a stage's result under its claim; `from` is the stage record it received (verified on append). */
     recordStage: ({claim, from = null, ...rec}) => append('work.stage', {...rec, handoff: {from}}, [claim, ...(from ? [from] : [])]),
+    /** Record an evidence-recovery attempt (evidence-recovery.mjs). Writes nothing to the status ledger. */
+    recordRecovery: ({item, status_entry, sources, outcome, searched, proposal = undefined, at = new Date().toISOString()}) =>
+      append('work.recovery', {item, status_entry, sources, outcome, searched, ...(proposal !== undefined ? {proposal} : {}), at}),
+    recoveries: item => of('work.recovery', r => item === undefined || r.item === item),
     intakes: () => of('work.intake'),
     claims: item => of('work.claim', c => item === undefined || c.item === item),
     stages: item => of('work.stage', s => item === undefined || s.identity.item === item),

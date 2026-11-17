@@ -1,0 +1,78 @@
+// Shared fixtures for the operate tests and the bounded demonstration: a git repository with Ready items, and
+// SCRIPTED providers for every seat (no network, no live model). Everything produced with them is synthetic.
+import fs from 'node:fs';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {openStatusLedger} from '../../packages/ledger/status.mjs';
+import {SEATING} from '../../pantheon/src/role/seating.mjs';
+import {SEAT_FACTS} from '../../pantheon/src/route/router.mjs';
+
+
+export const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], {encoding: 'utf8'});
+export const TICKET = item => ({schema: 'ophanim.ticket/v1', item, slice: 'the whole item: alpha.mjs exports ok = true', proposes: {state: 'Resolved', basis: 'alpha.mjs exports ok = true'},
+  title: 'alpha.mjs exports ok = true', goal: 'Make alpha.mjs export `ok` as true.', question: 'fixture', repo_root: '.', slot: 'alpha', path: 'alpha.mjs',
+  copy: ['alpha.mjs', 'verify.mjs'], acceptance_cmd: 'node verify.mjs', difficulty: 'easy'});
+
+/** A git repository with Ready items (no tickets unless asked), the status ledger and the work ledger roots. */
+export function fixture(repo, items, {tickets = []} = {}) {
+  fs.writeFileSync(path.join(repo, 'alpha.mjs'), 'export const ok = false;\n');
+  fs.writeFileSync(path.join(repo, 'verify.mjs'), 'import assert from "node:assert/strict"; import {ok} from "./alpha.mjs"; assert.equal(ok, true);\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), 'outputs/\ncooldowns/\nstatus/\nagy.log\nfake-agy\n');
+  fs.mkdirSync(path.join(repo, 'tickets'), {recursive: true});
+  for (const t of tickets) fs.writeFileSync(path.join(repo, 'tickets', `${t}.json`), JSON.stringify(TICKET(t), null, 2) + '\n');
+  const statusRoot = path.join(repo, 'status', 'ledger'), workRoot = path.join(repo, 'status', 'work');
+  const S = openStatusLedger({root: statusRoot});
+  for (const i of items) S.set({checked: '2026-11-17', basis: `the requirement of ${i.item}: alpha.mjs exports ok = true`, state: 'Ready', title: `Alpha for ${i.item}`, ...i});
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'config', 'user.name', 'Fixture Owner');
+  git(repo, 'config', 'user.email', 'owner@example.invalid');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'fixture base');
+  return {statusRoot, workRoot, S, stateDir: path.join(repo, 'status', 'operate')};
+}
+
+export const APPROVE = '```json\n{"verdict": "approve", "findings": []}\n```';
+export const json = o => '```json\n' + JSON.stringify(o) + '\n```';
+/** A substantive plan for the alpha fixture; it answers every finding the prompt names and re-validates when asked. */
+export function planFor(prompt, extra = {}) {
+  const section = /## Findings to answer[^\n]*\n((?:- .*\n?)*)/.exec(prompt)?.[1] ?? '';
+  const ids = [...section.matchAll(/^- (\S+) \[/gm)].map(m => m[1]);
+  return {
+    problem: {statement: 'alpha.mjs exports ok = false at HEAD, so verify.mjs fails; the requirement is that it exports ok = true.',
+      justification: 'verify.mjs asserts ok === true against alpha.mjs, which exports false in the evidence read below.'},
+    scope: ['alpha.mjs: export ok = true'], exclusions: ['verify.mjs is not changed'], dependencies: [], capabilities: ['edit one ES module'],
+    acceptance: [{id: 'a1', criterion: 'alpha.mjs exports ok === true', test: {cmd: 'node verify.mjs'}}], regression: null,
+    slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}], copy: ['alpha.mjs', 'verify.mjs'], difficulty: 'easy',
+    proposes: {state: 'Resolved', basis: 'alpha.mjs exports ok = true'}, limits: {provider_calls: 20, revisions: 2, elapsed_ms: 600000},
+    stopping: ['acceptance passes and the review closes', 'the stage budget is exhausted'], recovery: 'resume from the last recorded stage', rollback: 'delete the branch pantheon/<item>',
+    unresolved: [], evidence: [{path: 'alpha.mjs', why: 'the current export'}, {path: 'verify.mjs', why: 'the acceptance check'}],
+    ...(/Mode: revalidate/.test(prompt) ? {ticket_assessment: {still_valid: true, reasons: ['alpha.mjs still exports false; the ticket\'s command still tests the requirement']}} : {}),
+    ...(ids.length ? {answers: ids.map(id => ({finding: id, response: 'addressed in this version'}))} : {}),
+    ...extra,
+  };
+}
+export const ACCEPT = json({verdict: 'accept', reasons: ['alpha.mjs exports ok === true, as the requirement asks'], criteria: [{id: 'a1', met: true, why: 'verify.mjs passes and the diff sets ok = true'}]});
+/** The scripted single-turn seats: planner, plan reviewer, change reviewer, validator. Each call is logged. */
+export function scriptedTurn(over = {}) {
+  const log = [];
+  const kindOf = p => p.startsWith('You are the planner') ? 'planner' : p.startsWith('You are an independent reviewer of a PLAN') ? 'plan-review'
+    : p.startsWith('You are the independent validator') ? 'validator' : 'review';
+  const defaults = {planner: ({prompt}) => json(planFor(prompt)), 'plan-review': () => APPROVE, review: () => APPROVE, validator: () => ACCEPT};
+  const fn = async ({vendor, model, prompt}) => {
+    const kind = kindOf(prompt);
+    const k = log.filter(l => l.kind === kind).length + 1;
+    log.push({kind, vendor, model});
+    const text = await (over[kind] ?? defaults[kind])({vendor, model, prompt, k, item: /"item":"([^"]+)"/.exec(prompt)?.[1] ?? null});
+    return {text, response_id: `t_${kind}_${log.length}`, served_model: model};
+  };
+  fn.log = log;
+  return fn;
+}
+export const LIMITS = {total_provider_calls: 1000, stage_provider_calls: 40};
+// A SYNTHETIC fifth reviewer lab, injected only through the reviewer pool these tests pass. It exists nowhere in the
+// configuration and qualifies nothing (no fifth lab is set up; owner 2026-11-17). It lets the full lifecycle run past
+// the coordinated change review, which under the four configured labs is a recorded capacity pending once a model
+// planner and an implementer from another lab have both contributed (see the first test).
+export const SYNTH = {vendor: 'synthlab', model: 'synthetic-reviewer-1', band: 'medium', basis: 'SYNTHETIC', why: 'a test-only fifth lab; never configured'};
+export const FIVE = {seating: {...SEATING, reviewer: [...SEATING.reviewer, SYNTH]}, facts: {...SEAT_FACTS, synthlab: {vendor: 'synthlab', quota_pool: 'synthlab', models: {}}}};
+export const stagesOf = r => r.dispatched.map(d => `${d.stage}:${d.status}`);

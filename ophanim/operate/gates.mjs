@@ -73,13 +73,25 @@ function chainFrom(plan, stages) {
  * `depStatus(id)` the latest status of a dependency or null; `ticket` the readTicket result ({spec, digest, path}
  * or {why}) or null; `stages` this item's work.stage records in ledger order; `activeClaim` the live claim or null.
  */
-export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now()}) {
+export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now(), recovery = null}) {
   const base = {item: item.item, state: item.state};
   if (activeClaim) return {...base, gate: 'claimed', reason: `claimed: ${activeClaim.stage}, attempt ${activeClaim.attempt} (lease)`, claim: activeClaim.hash};
   if (item.state === 'Resolved') {
     const ev = completionEvidence(item);
-    return ev.ok ? {...base, gate: 'complete', reason: 'Resolved with completion evidence bound to its ticket, commit and a three-lab verified review'}
-      : {...base, gate: 'evidence-gap', reason: ev.why, blocker: {what: ev.why, role: 'decision-authority', resume_when: 'the owner re-opens the item for the lifecycle, or records completion evidence'}};
+    if (ev.ok) return {...base, gate: 'complete', reason: 'Resolved with completion evidence bound to its ticket, commit and a three-lab verified review'};
+    // Evidence recovery (evidence-recovery.mjs) for THIS status entry: recovered evidence waits for the owner's
+    // signature; a search that found none says what it searched. The status itself is never changed here.
+    if (recovery?.outcome === 'recovered') {
+      return {...base, gate: 'awaiting-owner', reason: `${ev.why}; completion evidence was recovered from a retained run (proposal ${recovery.proposal.digest.slice(0, 19)})`,
+        recovery: {outcome: recovery.outcome, record: recovery.hash, proposal: recovery.proposal.digest},
+        blocker: {what: 'an unsigned proposal re-recording Resolved with recovered, structurally re-checked completion evidence', role: 'decision-authority',
+          resume_when: 'the owner applies the proposal (node packages/ledger/status.mjs apply <file>) or declines it'}};
+    }
+    const searched = recovery ? `; evidence recovery searched ${recovery.searched.length} source(s) and none applies (${recovery.searched.map(x => `${x.ref}: ${x.result}`).join('; ')})`
+      : '; evidence recovery has not searched yet';
+    return {...base, gate: 'evidence-gap', reason: ev.why + searched, ...(recovery ? {recovery: {outcome: recovery.outcome, record: recovery.hash}} : {}),
+      blocker: {what: ev.why + searched, role: 'decision-authority',
+        resume_when: 'applicable retained evidence appears (searched again automatically when the item\'s sources change), or the owner records the item Ready to re-verify it through the lifecycle'}};
   }
   if (item.state === 'On Hold') {
     const what = item.waiting_on ? `waiting on ${item.waiting_on}: ${item.basis}` : `held: ${item.basis}`;
