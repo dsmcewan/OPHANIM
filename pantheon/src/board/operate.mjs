@@ -38,7 +38,7 @@ import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
-import { closeClaim } from "../ledger/cycle-kinds.mjs";
+import { closeClaim, REQUIRED_REVIEW_LABS } from "../ledger/cycle-kinds.mjs";
 import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
 import { DEFAULT_ELIGIBLE_STRATA, BASELINE_ARM, CANDIDATE_ARM, PAIR_SCHEMA, pairFor, assignArm, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { runMetrics } from "../practice/metrics.mjs";
@@ -56,6 +56,17 @@ const fail = (why, code = "BOARD_REFUSED") => { throw Object.assign(new Error(wh
 const str = v => typeof v === "string" && v.trim() !== "";
 const sha256 = bytes => "sha256:" + createHash("sha256").update(bytes).digest("hex");
 export const today = () => new Date().toISOString().slice(0, 10);
+
+// A board run's change gets a coordinated cycle review by REQUIRED_REVIEW_LABS (3) independent labs, and a caller
+// cannot lower it (86ce18a review, defect 2: `n: 1` closed verified on one lab and the proposal resolved the item).
+// More is allowed; fewer is a named refusal before any work, and the cycle records the requirement.
+export const REVIEW_LABS_BELOW_REQUIRED = "REVIEW_LABS_BELOW_REQUIRED";
+function checkReviewLabs(n, where) {
+  if (!(Number.isInteger(n) && n >= REQUIRED_REVIEW_LABS)) {
+    fail(`${REVIEW_LABS_BELOW_REQUIRED}: ${where}: a board run's coordinated cycle review needs ${REQUIRED_REVIEW_LABS} independent labs; ` +
+      `${n} was asked for, and a caller cannot lower it`, REVIEW_LABS_BELOW_REQUIRED);
+  }
+}
 
 export const defaultStatusRoot = repo => resolve(process.env.OPHANIM_STATUS_LEDGER ?? join(repo, "status", "ledger"));
 export const ticketPath = (repo, item) => join(repo, "tickets", `${item}.json`);
@@ -471,6 +482,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null,
   pairRate = 0, pairMaxProviderCalls = null, pairBudgetCalls = null, pairDir = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
+  checkReviewLabs(n, "runBoardItem");
   // A board run's change gets a coordinated three-lab cycle review. Its work item's title is the ticket's own title
   // by default (planTitle `ticket`): with a model-written title the planner's lab also contributes, and the configured
   // cycle pool then has too few labs for the default seats (docs/reviews/2026-11-17-review-capacity/ANALYSIS.md).
@@ -618,7 +630,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     return { bundle, dir: bundleDir, proposal: null, why: `${chosen.pending.code}: ${chosen.pending.why}` };
   }
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
-    seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined });
+    seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined, required_reviewers: REQUIRED_REVIEW_LABS });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, review_scope: chosen.scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
@@ -680,6 +692,9 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
   const last = rec.lastCycle(bundle.review.scope);
   if (last?.hash !== bundle.review.cycle) fail(`the bundle's cycle ${bundle.review.cycle.slice(0, 19)} is not the last cycle of ${bundle.review.scope} on the run ledger`);
   const state = rec.cycleState(bundle.review.cycle);
+  // A cycle opened on fewer than three labs (a run before this was enforced) is not continued: its review cannot be
+  // completion evidence. Re-dispatch the item.
+  checkReviewLabs(state.cycle.reviewers, `resumeBoardItem: the bundle's cycle ${bundle.review.cycle.slice(0, 19)} names ${state.cycle.reviewers} reviewer(s)`);
   if (!state.close) {
     // The reviewers the run seated, re-derived from the run.json the bundle names (its digest is checked).
     if (!bundle.run.run_json || !existsSync(bundle.run.run_json) || sha256(readFileSync(bundle.run.run_json)) !== bundle.run.run_json_digest) {

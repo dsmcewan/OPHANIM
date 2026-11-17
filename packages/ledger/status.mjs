@@ -171,6 +171,8 @@ export function openStatusLedger({root, anchor = null, create = true, keys = nul
 export const PROPOSAL_SCHEMA = 'ophanim.status-proposal/v1';
 export const EVIDENCE_SCHEMA = 'ophanim.status-evidence/v2';
 export const EVIDENCE_SCHEMA_V1 = 'ophanim.status-evidence/v1';
+/** The independent labs a completed item's coordinated cycle review needs (86ce18a review, defect 2). Not a parameter. */
+export const REQUIRED_REVIEW_LABS = 3;
 /** The repository-relative ticket of `item`, as the board dispatcher reads it (operate.mjs ticketPath). */
 export const itemTicketPath = item => `tickets/${item}.json`;
 /** The review-cycle scope a board run of `item` opens over `base` (operate.mjs runBoardItem). */
@@ -235,6 +237,13 @@ function resolvedRefusal(ev, reason) {
   }
   return null;
 }
+// A change to Resolved cites a review by at least REQUIRED_REVIEW_LABS reviewers on as many distinct labs (the
+// close names them: checkReview). A caller's smaller panel is never completion evidence.
+function reviewLabsRefusal(ev) {
+  const reviewers = ev.review?.reviewers ?? [];
+  return reviewers.length >= REQUIRED_REVIEW_LABS && new Set(reviewers.map(x => x.lab)).size >= REQUIRED_REVIEW_LABS ? null
+    : `a change to Resolved cites a review by at least ${REQUIRED_REVIEW_LABS} reviewers on ${REQUIRED_REVIEW_LABS} distinct labs (this one has ${reviewers.length})`;
+}
 function evidenceCore(ev) {
   return runRefusal(ev.run)
     ?? (ev.review === undefined || ev.review === null ? null : reviewRefusal(ev.review))
@@ -257,7 +266,7 @@ export function evidenceRefusal(ev, state) {
   // applied. A v1 entry keeps v1's rules, so the historical chain verifies exactly as before.
   if (ev.ticket === undefined) return `${EVIDENCE_SCHEMA} evidence names the item's ticket`;
   if (state === 'Resolved' && ev.checked !== 'structural') return `${EVIDENCE_SCHEMA} evidence for Resolved was checked structurally where it was applied`;
-  return null;
+  return state === 'Resolved' ? reviewLabsRefusal(ev) : null;
 }
 
 /** The proposal's digest: canonical JSON of everything but its local `locations`. */
@@ -288,7 +297,7 @@ export function proposalRefusal(p) {
   // Bound to the item: the evidence names this item's own ticket.
   if (ev.ticket === undefined) return `a proposal carries evidence.ticket: the ticket of "${p.item}" (${itemTicketPath(p.item)})`;
   if (ev.ticket.path !== itemTicketPath(p.item)) return `evidence.ticket is ${ev.ticket.path}, not the ticket of "${p.item}" (${itemTicketPath(p.item)})`;
-  return t.state === 'Resolved' ? resolvedRefusal(ev, p.accept_unverified_reason) : null;
+  return t.state === 'Resolved' ? resolvedRefusal(ev, p.accept_unverified_reason) ?? reviewLabsRefusal(ev) : null;
 }
 
 /** Build a proposal against the item's latest status on `board` (from: that entry). Needs no key. */

@@ -14,7 +14,8 @@ const commit = 'a'.repeat(40);
 const evidence = (over = {}) => ({
   run: {ledger_anchor: h('1'), ledger_head: h('2'), run_json_digest: h('3'), shipped: true, gate_entry: h('4')},
   review: {cycle_ledger_anchor: h('1'), cycle: h('5'), close_entry: h('6'), outcome: 'verified',
-    reviewers: [{vendor: 'xai', model: 'grok-4.7', served_model: 'grok-4.7', lab: 'xai'}, {vendor: 'openai', model: 'gpt-6-sol', served_model: null, lab: 'openai'}]},
+    reviewers: [{vendor: 'xai', model: 'grok-4.7', served_model: 'grok-4.7', lab: 'xai'}, {vendor: 'openai', model: 'gpt-6-sol', served_model: null, lab: 'openai'},
+      {vendor: 'agy_google', model: 'gemini-3.5-pro', served_model: null, lab: 'google'}]},
   commit, tests: {cmd: 'npm test', exit: 0}, ticket: {path: 'tickets/k1.json', digest: h('7'), slice: 'all of it'}, ...over,
 });
 const to = (state = 'Resolved') => ({state, basis: 'shipped and reviewed', checked: '2026-11-18'});
@@ -51,6 +52,11 @@ test('a proposal is made against the latest status without any key, and is well 
   refuse(evidence({review: {...evidence().review, outcome: 'unverified'}}), /accept_unverified_reason/);
   assert.equal(proposalRefusal({...p, evidence: evidence({review: {...evidence().review, outcome: 'unverified'}}), accept_unverified_reason: 'owner accepts the deferred note'}), null);
   refuse(evidence({review: {...evidence().review, reviewers: [evidence().review.reviewers[0], evidence().review.reviewers[0]]}}), /share a lab/);
+  // Three independent labs (86ce18a review, defect 2): a smaller panel is never completion evidence.
+  refuse(evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 2)}}), /at least 3 reviewers on 3 distinct labs \(this one has 2\)/);
+  refuse(evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 1)}}), /at least 3 reviewers/);
+  assert.equal(proposalRefusal({...p, to: to('Ready'), evidence: evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 1)}})}), null,
+    'a slice that leaves the item Ready is not completion evidence');
   refuse(evidence({ticket: {path: '/abs/t.json', digest: h('7'), slice: 's'}}), /repository-relative/);
   // Bound to the item (86ce18a review, defect 1): every proposal names this item's own ticket.
   refuse(evidence({ticket: undefined}), /carries evidence.ticket: the ticket of "k1" \(tickets\/k1.json\)/);
@@ -82,7 +88,7 @@ test('apply records the status with evidence using keys it only reads; a stale p
   assert.equal(item.evidence.schema, EVIDENCE_SCHEMA);
   assert.equal(item.evidence.proposal, proposalDigest(p));
   assert.equal(item.evidence.checked, 'not-available', 'no cited ledger was on this machine');
-  assert.match(renderBoard(r.board), /evidence: commit aaaaaaaaaaaa; tests exit 0; review cycle 555555555555 verified \(xai, openai\)/);
+  assert.match(renderBoard(r.board), /evidence: commit aaaaaaaaaaaa; tests exit 0; review cycle 555555555555 verified \(xai, openai, google\)/);
   assert.throws(() => applyProposal({root, proposal: p, keys}), /stale proposal/);
   // Reopened from disk, the evidence re-validates.
   assert.equal(openStatusLedger({root, create: false}).board().items[0].evidence.commit, commit);
