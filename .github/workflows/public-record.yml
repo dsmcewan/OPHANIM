@@ -1,0 +1,36 @@
+# The public record (docs/public-record.md): GitHub issues and labels as a projection of the status
+# ledger. Runs only on push to main and by hand, never on pull requests: a pull request's code never
+# runs with a token that can write issues. Nothing reads GitHub to decide anything about the work.
+name: Public record
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: public-record
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Verify the status ledger
+        run: node packages/ledger/status.mjs verify
+      - name: Plan (dry run)
+        run: node ophanim/public/github.mjs plan | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Apply
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: the one real person who may be assigned, and only to decision-authority items.
+          OPHANIM_OWNER_LOGIN: ${{ vars.OPHANIM_OWNER_LOGIN }}
+          # Optional Projects v2 sync: skipped, with the reason logged, unless both are set.
+          PROJECT_URL: ${{ vars.OPHANIM_PROJECT_URL }}
+          OPHANIM_PROJECT_TOKEN: ${{ secrets.OPHANIM_PROJECT_TOKEN }}
+        run: node ophanim/public/github.mjs apply

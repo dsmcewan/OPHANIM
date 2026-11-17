@@ -22,5 +22,16 @@ jobs:
           git clone --no-checkout https://github.com/dsmcewan/TELOS.git "$OPHANIM_TELOS_ROOT"
           git -C "$OPHANIM_TELOS_ROOT" checkout --detach 0c9b539ddbb08e1464603faf786e0d5cdfc33fb8
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm test
-      - run: npm run test:proof
+      - name: npm test
+        shell: bash
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/npm-test.log"
+      - name: npm run test:proof
+        shell: bash
+        run: npm run test:proof 2>&1 | tee "$RUNNER_TEMP/test-proof.log"
+      - name: Verification summary
+        if: always()
+        run: >-
+          node ophanim/public/ci-summary.mjs
+          "npm test=$RUNNER_TEMP/npm-test.log"
+          "test:proof=$RUNNER_TEMP/test-proof.log"
+          >> "$GITHUB_STEP_SUMMARY"
