@@ -3,10 +3,10 @@
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
      with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
-**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:79860d3d2aedf8acde56ea6a4255da6245f713e84817e08ed3634f0a10cd8c8c` · 77 entries.
+**Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:708cd7e6e338e3feef4753a178b59bcb11df73d094fb360bfa66f7c3ee8ba1c8` · 79 entries.
 Verify it: `node packages/ledger/status.mjs verify`.
 
-**Counts:** Resolved: 35 · In progress: 1 · Ready: 2 · On Hold: 18.
+**Counts:** Resolved: 35 · In progress: 2 · Ready: 2 · On Hold: 17.
 
 **Rule** (enforced when a status is recorded): On Hold only for something outside the work, meaning governance, a credential, evidence from real runs, an unpublished fact, or a person's decision, or for an item that depends on one. An item that is merely not started is Ready, and starts.
 
@@ -27,10 +27,10 @@ Verify it: `node packages/ledger/status.mjs verify`.
 | **Q7 seat adjustment from evidence** (`q7-adjustment`) | On Hold | depends on k6 | needs the pinned verifier to admit a seating dimension | 2026-11-17 |
 | **RU3: governance.mjs, which holds the pins, is not itself pinned** (`ru3-pin-boundary`) | On Hold | governance | what the pinned verifier covers is a governance decision | 2026-11-17 |
 | **Signed transitions** (`signed-transitions`) | On Hold | depends on k6 | governance decision on the pinned verifier | 2026-11-17 |
-| **Operator key custody (hardware or remote signer)** (`signer`) | On Hold | decision | keys generated in an agent session stay there (independent review SY1/WF2); the status board key is the same question. Needs the owner to hold the operator key or name a signer | 2026-11-17 |
 | **SY3: proofs bind absolute paths and cannot be checked on another machine** (`sy3-portable-proofs`) | On Hold | decision | whether a retained proof must verify elsewhere is review decision 8 | 2026-11-17 |
 | **Adjusting the output tiers** (`tier-adjustment`) | On Hold | evidence | moves only on recorded truncations from real runs | 2026-11-17 |
 | **Surviving mutants: order signature, parent linkage, checkpoint, revision continuity, ready-set, handoff, effect confirmation, RU4, CO2** (`review-mutants`) | In progress |  | independent review: checks no test protects; each gets a killing test | 2026-11-17 |
+| **Operator key custody** (`signer`) | In progress |  | authority over the status ledger transferred by an operator-signed authority entry to owner-held successor keys (operator, status-orderer) prepared in the owner account; pending the owner's local verification. Run ledgers and seat keys are not covered | 2026-11-17 |
 | **CO1: ophanim/ is expensive to review (6% comments, long lines)** (`co1-readability`) | Ready |  | reformat and document without behaviour change | 2026-11-17 |
 | **ME3: nine canonical-JSON functions that disagree at the edges** (`me3-canonical`) | Ready |  | unify without changing hashes existing records depend on; needs a differential over every committed ledger and TELOS-bound digest first | 2026-11-17 |
 | **Escalation on agy seats** (`agy-escalation`) | Resolved |  | steps a rung instead of an effort the transport drops | 2026-11-17 |
