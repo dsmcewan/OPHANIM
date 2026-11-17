@@ -318,6 +318,27 @@
         "why": "session conduct before push; CI (qualification.yml, npm run test:proof) detected it only after the push",
         "next": "gate every commit and push on the parsed '# fail' counts of the suites being 0, never on a pipeline's exit status"
       }
+    },
+    {
+      "id": "output-checked-not-consumed",
+      "class": "A produced artifact is checked field by field in a test but never passed to the consumer that must accept it, so it is reported working while the consumer would refuse it.",
+      "source": "self-observed 2026-11-17: the lifecycle's outcome proposal was asserted in stages.test but never applied; status apply refused it (operate/ cycle scope, no ticket location)",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "ophanim/operate/stages.mjs before 2ae2116",
+          "detected_by": "the evidence-recovery tests, which re-check proposals as apply does",
+          "corrected_by": "integrator",
+          "note": "the PR description had said the outcome is a proposal for the owner; it would not have applied. Not counted as mechanism success: no registered detector existed for the class"
+        }
+      ],
+      "fixed_in": "2ae2116",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/stages.test.mjs",
+        "name": "with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes through reviewed planning"
+      }
     }
   ]
 }
