@@ -339,6 +339,25 @@
         "file": "ophanim/operate/stages.test.mjs",
         "name": "with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes through reviewed planning"
       }
+    },
+    {
+      "id": "stored-not-delivered",
+      "class": "Information is recorded somewhere (a ticket field, a ledger, a file) and the record says a model was given it, but it never enters that model's prompt.",
+      "source": "owner direction 2026-11-17 'provide evidence before asking the model to diagnose or plan'; docs/context-and-evidence.md",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "1fbe96c",
+          "note": "the owner asked for the trace; it found the planner shown an alphabetical 48 KB of files, reviewers shown only diffs, and revision findings stored as ticket constraints the worker never reads"
+        }
+      ],
+      "fixed_in": "this commit (context.mjs dossier and retrieval; the carried plan delivered in the run's goal)",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/context.test.mjs",
+        "name": "reviewers and validators use their own evidence"
+      }
     }
   ]
 }

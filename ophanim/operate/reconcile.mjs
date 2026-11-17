@@ -15,6 +15,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
+import {buildDossier} from './context.mjs';
 import {earliestGate} from './gates.mjs';
 
 export const MARKER = /<!--\s*ophanim:item=([a-z0-9][a-z0-9.-]{0,63})\s*-->/;
@@ -79,7 +80,10 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     const stages = workLedger ? workLedger.stages(s.item) : [];
     const activeClaim = workLedger ? workLedger.activeClaim(s.item, now) : null;
     const gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, now,
-      recovery: workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry).at(-1) ?? null : null});
+      recovery: workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry).at(-1) ?? null : null,
+      // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
+      evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
+        ? (() => { try { return buildDossier({repo, statusRoot, item: s.item, work: workLedger, issues, bundlesDir}).stable; } catch { return null; } })() : null});
     return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length,
       ticket: ticket ? (ticket.why ? {invalid: ticket.why} : {path: ticket.path, digest: ticket.digest}) : null,
       issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate};

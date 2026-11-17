@@ -73,7 +73,7 @@ function chainFrom(plan, stages) {
  * `depStatus(id)` the latest status of a dependency or null; `ticket` the readTicket result ({spec, digest, path}
  * or {why}) or null; `stages` this item's work.stage records in ledger order; `activeClaim` the live claim or null.
  */
-export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now(), recovery = null}) {
+export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now(), recovery = null, evidenceStable = null}) {
   const base = {item: item.item, state: item.state};
   if (activeClaim) return {...base, gate: 'claimed', reason: `claimed: ${activeClaim.stage}, attempt ${activeClaim.attempt} (lease)`, claim: activeClaim.hash};
   if (item.state === 'Resolved') {
@@ -117,6 +117,13 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
       return {...base, gate: 'plan', mode: lastPlan.outputs?.mode ?? (t ? 'revalidate' : 'author'), requirement, retry_of: lastPlan.hash, stale,
         ...(returnedBy ? {returned_by: returnedBy, findings: stages.find(x => x.hash === returnedBy)?.findings ?? []} : {}),
         reason: `plan was pending on a transient failure (${lastPlan.blocker.what}); its retry is due`};
+    }
+    // A plan that waited for evidence is planned again when the evidence changed (the dossier's stable digest), within
+    // the scheduler's attempt bound; unchanged evidence is not paid for twice.
+    if (lastPlan.blocker?.code === 'EVIDENCE_INSUFFICIENT' && evidenceStable && evidenceStable !== lastPlan.outputs?.context?.dossier?.stable) {
+      return {...base, gate: 'plan', mode: lastPlan.outputs?.mode ?? (t ? 'revalidate' : 'author'), requirement, retry_of: lastPlan.hash, stale,
+        ...(returnedBy ? {returned_by: returnedBy, findings: stages.find(x => x.hash === returnedBy)?.findings ?? []} : {}),
+        reason: 'the plan waited for evidence, and the evidence available to it has changed'};
     }
     return {...base, gate: 'blocked', stage: 'plan', requirement, blocker: lastPlan.blocker, stale,
       reason: `plan is ${lastPlan.status}: ${lastPlan.blocker?.what ?? lastPlan.next?.why ?? ''}`};

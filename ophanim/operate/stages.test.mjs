@@ -139,7 +139,8 @@ test('plan review findings cause a revision and a re-review of the new version; 
           : APPROVE;
       },
     });
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+    // A SYNTHETIC fifth lab: the revision answers xai's finding, so xai may not review it, and four labs leave too few.
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan, implement: ex.implement}, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:pending']);
     const [plan, impl] = openWorkLedger({root: f.workRoot}).stages('rev-item');
@@ -154,6 +155,8 @@ test('plan review findings cause a revision and a re-review of the new version; 
     assert.ok(plan.outputs.plan.answers.length >= 1, 'the revision answers the finding');
     assert.ok(v1.reviews.some(x => x.verdict === 'request_changes'));
     assert.ok(v2.reviews.every(x => x.verdict === 'approve'));
+    assert.ok(!v2.reviews.some(x => x.lab === 'xai'), 'the lab whose finding the revision answers does not review the revision');
+    assert.equal(new Set(v2.reviews.map(x => x.lab)).size, 3);
     assert.equal(turn.log.filter(l => l.kind === 'plan-review').length, 6);
     assert.ok(plan.contributions.some(c => c.purpose === 'plan-review' && c.lab === 'xai'), 'the finder\'s critique reached the plan');
     // That critique makes xai a contributor: with the planner's lab, the configured pool is short of three
@@ -163,6 +166,20 @@ test('plan review findings cause a revision and a re-review of the new version; 
     assert.equal(impl.usage.provider_calls, 0);
     assert.equal(calls.length, 0, 'no work seat was called');
     assert.ok(readTicket({repo, item: 'rev-item'}).digest, 'the approved plan\'s ticket is kept');
+
+    // The four configured labs: the revision would need three labs outside the planner's and the finder's. It is not
+    // paid for; the reviewed version and its findings are kept and the plan waits on review capacity.
+    const g = path.join(repo, 'four');
+    fs.mkdirSync(g);
+    const fg = fixture(g, [{item: 'rev-four'}]);
+    const t4 = scriptedTurn({'plan-review': ({vendor}) => (vendor === 'xai'
+      ? json({verdict: 'request_changes', findings: [{severity: 'major', file: null, line: null, claim: 'no regression check', reproduction: null}]}) : APPROVE)});
+    const r4 = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: {plan: makeExecutors({repo: g, makeClientFor, turn: t4, stateDir: fg.stateDir}).plan}, limits: LIMITS});
+    assert.deepEqual(stagesOf(r4), ['plan:pending']);
+    const p4 = openWorkLedger({root: fg.workRoot}).stages('rev-four')[0];
+    assert.match(p4.blocker.what, /^REVIEW_CAPACITY_PENDING: the revised plan would answer findings from xai/);
+    assert.equal(t4.log.filter(l => l.kind === 'planner').length, 1, 'the revision was not paid for');
+    assert.equal(p4.findings.length, 1, 'the findings are kept');
   });
 });
 
@@ -280,7 +297,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const fh = fixture(h, [{item: 'tight'}]);
     const tight = scriptedTurn({'plan-review': ({vendor}) => (vendor === 'xai'
       ? json({verdict: 'request_changes', findings: [{severity: 'block', file: null, line: null, claim: 'no rollback for importers', reproduction: null}]}) : APPROVE)});
-    const hx = makeExecutors({repo: h, makeClientFor, turn: tight, stateDir: fh.stateDir});
+    const hx = makeExecutors({repo: h, makeClientFor, turn: tight, stateDir: fh.stateDir, ...FIVE});
     const rh = await tick({repo: h, statusRoot: fh.statusRoot, workRoot: fh.workRoot, executors: hx, limits: {total_provider_calls: 100, stage_provider_calls: 5}});
     assert.deepEqual(stagesOf(rh), ['plan:failed']);
     const ph = openWorkLedger({root: fh.workRoot}).stages('tight')[0];

@@ -17,6 +17,9 @@
 //       Without the controller key (status/work/keys) the run stops with a concrete NO_AUTHORITY block (exit 3):
 //       the work ledger is still verified first, nothing is recorded and nothing is skipped silently. A missing
 //       work ledger is created only with --init (it generates the controller key on this machine).
+//   node ophanim/operate/cli.mjs context --item ID [--issues FILE | --github] [--bundles DIR] [--retrieve JSON] [--json]
+//       Read-only: the evidence dossier a judging seat is given for the item (context.mjs), or one retrieval result.
+//       Works for any item, Resolved ones included; nothing is recorded, reopened or signed.
 //   node ophanim/operate/cli.mjs serve --config FILE [--max-ticks N]
 //       The execution service (service.mjs): watch under a validated config (declared provider-call cap, interval,
 //       issue source, seats), one instance per work ledger, status and log files under its state directory.
@@ -52,7 +55,7 @@ const usage = why => { throw Object.assign(new Error(why), {usage: true}); };
 const BOOLEAN = new Set(['json', 'github', 'once', 'init']);
 export function parseArgs(argv) {
   const [first, ...rest] = argv;
-  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, tick, watch or report');
+  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, tick, watch, serve, context or report');
   const opts = {}, pos = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { pos.push(rest[i]); continue; }
@@ -356,6 +359,22 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
       const ticks = await watch({...common, fetchIssues: fetchIssuesNow, interval_ms: Number(opts.interval ?? 60) * 1000, once: !!opts.once, signal: ac.signal});
       process.off('SIGINT', stop); process.off('SIGTERM', stop);
       log(JSON.stringify({ticks: ticks.map(t => tickSummary(t, limits))}, null, 2));
+      return 0;
+    }
+    if (verb === 'context') {
+      // Read-only investigation of ANY item, a Resolved one included: the dossier a judging seat would be given, and
+      // optionally one retrieval. Nothing is recorded, claimed, reopened or signed.
+      const item = opts.item ?? usage('context needs --item ID');
+      const {buildDossier, renderDossier, makeRetriever} = await import('./context.mjs');
+      const {issues} = await loadIssues(opts, {fetchImpl, env});
+      const {work} = openWorkReadOnly(paths.workRoot);
+      const d = buildDossier({repo: paths.repo, statusRoot: paths.statusRoot, item, work, issues, bundlesDir: paths.bundlesDir});
+      if (opts.retrieve) {
+        let req; try { req = JSON.parse(opts.retrieve); } catch { usage('--retrieve is one JSON request, e.g. {"op":"file","path":"x"}'); }
+        log(JSON.stringify(makeRetriever({repo: paths.repo, statusRoot: paths.statusRoot, work, issues}).run(req), null, 2));
+        return 0;
+      }
+      log(opts.json ? JSON.stringify(d, null, 2) : renderDossier(d));
       return 0;
     }
     if (verb === 'serve') {

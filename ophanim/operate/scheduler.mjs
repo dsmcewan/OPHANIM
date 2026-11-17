@@ -137,7 +137,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       iterations++;
       progress({event: 'dispatch', item, stage: gate.gate, attempt, mode: gate.mode ?? null});
       let result;
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}}); }
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir}); }
       catch (e) {
         result = {status: 'failed', outputs: {error: String(e.message).slice(0, 300)}, team: [], contributions: [], findings: [], usage: {provider_calls: e.provider_calls ?? null},
           next: {stage: gate.gate, why: `the ${gate.gate} executor failed: ${String(e.message).slice(0, 200)}`}};
