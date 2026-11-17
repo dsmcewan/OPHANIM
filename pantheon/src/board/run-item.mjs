@@ -173,9 +173,10 @@ export async function runOpenItem(spec, opts = {}) {
   // can never fire is not caution, it is a landmine for a future SEATING change that adds a role
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
-  // The ledger (ophanim/ledger) is ON BY DEFAULT: a run records on the ledger at OPHANIM_LEDGER (one
-  // ledger shared by every run) or, unset, at <board root>/ledger. `ledger: false` turns it off; a
-  // recorder passed in is used as is. The run verifies it before relying on anything, and every turn,
+  // The ledger (pantheon/src/ledger, on packages/ledger) is ON BY DEFAULT: a run records on the ledger
+  // at OPHANIM_LEDGER (one ledger shared by every run) or, unset, at <board root>/ledger, opened with
+  // Pantheon's kinds. `ledger: false` turns it off; a recorder passed in is used as is (OPHANIM passes
+  // its full composition's recorder for a ledger that also holds efficiency records). The run verifies it before relying on anything, and every turn,
   // review and escalation is an entry that re-derives. run.json keeps its copy for display only.
   let LEDGER = opts.ledger === false ? null : (opts.ledger ?? null);
   let escalationWork = 0;
@@ -201,14 +202,14 @@ export async function runOpenItem(spec, opts = {}) {
 
   const board = openBoard(root);
   if (opts.ledger === undefined) {
-    const { openSystemLedger } = await import("../../../ophanim/ledger/system.mjs");
-    LEDGER = openSystemLedger({ root: process.env.OPHANIM_LEDGER ?? join(root, "ledger"), board }).recorder();
+    const { openPantheonLedger } = await import("../ledger/system.mjs");
+    LEDGER = openPantheonLedger({ root: process.env.OPHANIM_LEDGER ?? join(root, "ledger"), board }).recorder();
   }
   if (LEDGER) {
     const v = LEDGER.verify();
     if (!v.ok) throw new Error(`ledger does not verify, refusing to run: ${v.why}`);
     // The board's own records on the same ledger: lease changes, budget limits and ref moves are entries
-    // first (ophanim/ledger/board-kinds.mjs), and a change the ledger refuses does not happen.
+    // first (pantheon/src/ledger/board-kinds.mjs), and a change the ledger refuses does not happen.
     if (typeof LEDGER.board === "function") board.useLedger(LEDGER.board(root));
   }
   const HUMAN = { vendor: "human" };

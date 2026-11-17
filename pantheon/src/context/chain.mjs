@@ -8,7 +8,7 @@ const link = (prev, t) => createHash("sha256")
   .digest("hex");
 
 // The digests an SDK exchange is recorded under (seat-sdk exchangeTurns). Shared, so the ledger's turn
-// entries (ophanim/ledger/lineage-kinds.mjs) name the same digests a seat file holds, and a seat file
+// entries (pantheon/src/ledger/lineage-kinds.mjs) name the same digests a seat file holds, and a seat file
 // can be checked against them.
 const hex = s => createHash("sha256").update(s).digest("hex");
 export const promptSha = prompt => hex(`text:${prompt}`);

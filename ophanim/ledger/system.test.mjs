@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {openSystemLedger, keyStore} from './system.mjs';
-import {seatKeyId} from './lineage-kinds.mjs';
+import {seatKeyId} from '../../pantheon/src/ledger/lineage-kinds.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-system-ledger-'));
 const mode = f => fs.statSync(f).mode & 0o777;

@@ -235,8 +235,8 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
 });
 
 test("K3: with a ledger, the run verifies it first and records each escalation as an entry that re-derives", async () => {
-  const { openLedger, createLedger, defineKinds, generateSigner } = await import("../../ophanim/ledger/chain.mjs");
-  const { pantheonKinds, escalationRecorder } = await import("../../ophanim/ledger/kinds.mjs");
+  const { openLedger, createLedger, defineKinds, generateSigner } = await import("../../packages/ledger/chain.mjs");
+  const { pantheonKinds, escalationRecorder } = await import("../src/ledger/kinds.mjs");
   const dir = mkdtempSync(join(tmpdir(), "pantheon-protocol-ledger-"));
   try {
     const operator = generateSigner("operator"), controller = generateSigner("controller");
@@ -244,10 +244,10 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     const ledgerDir = join(dir, "ledger");
     mkdirSync(ledgerDir);
     const anchor = createLedger({ dir: ledgerDir, authority, operator, order: controller });
-    const { lineageKinds: lk } = await import("../../ophanim/ledger/lineage-kinds.mjs");
+    const { lineageKinds: lk } = await import("../src/ledger/lineage-kinds.mjs");
     const ledger = openLedger({ dir: ledgerDir, kinds: defineKinds({ ...pantheonKinds({
       authors: { inputs: a => a.key_id === "operator", decisions: a => a.key_id === "controller" } }), ...lk() }), anchor });
-    const { lineageKinds, lineageRecorder } = await import("../../ophanim/ledger/lineage-kinds.mjs");
+    const { lineageKinds, lineageRecorder } = await import("../src/ledger/lineage-kinds.mjs");
     const recorder = { ...escalationRecorder({ ledger, controller, order: controller, operator }), ...lineageRecorder({ ledger, operator, order: controller }) };
     const clients = scripted({ cutAt: 20000 });
     const result = await runFixture(dir, clients, { ledger: recorder });
@@ -284,9 +284,9 @@ test("the ledger is on by default: a run records at <board>/ledger, and `ledger:
     const on = await runFixture(join(dir, "on"), scripted({ cutAt: 20000 }));
     assert.equal(on.shipped, true, JSON.stringify(on.error));
     const ledgerDir = join(on.board, "ledger");
-    const { openSystemLedger } = await import("../../ophanim/ledger/system.mjs");
+    const { openPantheonLedger } = await import("../src/ledger/system.mjs");
     const { openBoard } = await import("../src/board/index.mjs");
-    const reopened = openSystemLedger({ root: ledgerDir, board: openBoard(on.board) });
+    const reopened = openPantheonLedger({ root: ledgerDir, board: openBoard(on.board) });
     const kinds = reopened.ledger.read().map(e => e.kind);
     for (const k of ["genesis", "facts", "seating", "turn", "review", "escalation", "lease", "ref.move"]) assert.ok(kinds.includes(k), `${k} recorded by default`);
     assert.equal(reopened.ledger.verify().ok, true);

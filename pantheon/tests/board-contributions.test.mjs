@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { openBoard } from "../src/board/index.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { chairContributions, verifyChairContributions } from "../src/board/contributions.mjs";
-import { rankChairQuestions } from "../../ophanim/efficiency/investigation/chairs.mjs";
 import { withPipeline } from "./fixtures/pipeline.mjs";
 
 test("a refused-then-revised ticket yields the contributions its board records", async () => {
@@ -40,11 +39,7 @@ test("a refused-then-revised ticket yields the contributions its board records",
     assert.equal(verifyChairContributions(p, board).ok, true);
     const forged = structuredClone(p); forged.chairs[1].metrics.rework = 0;
     assert.throws(() => verifyChairContributions(forged, board), /differ from the board/);
-
-    // The OPHANIM ranking reads the real projection. Rework in one chair is not an attribution question.
-    const { models, decision } = rankChairQuestions(p);
-    assert.equal(models.traceSha, p.projectionSha);
-    assert.equal(decision.candidates.some(c => c.id === "attribute.rework"), false);
-    assert.equal(decision.limits.promotionAuthorized, false);
+    // OPHANIM's ranking of this projection is checked on OPHANIM's side (Pantheon does not import it):
+    // ophanim/efficiency/investigation/chairs-board.test.mjs.
   });
 });

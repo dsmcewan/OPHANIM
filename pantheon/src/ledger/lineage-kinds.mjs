@@ -10,9 +10,9 @@
 //     (`seat:<seat_id>#<occupancy_gen>`), admitted to the ledger by an operator's authority entry. A
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
-import {LANES} from '../../pantheon/src/config/models.mjs';
-import {promptSha, replySha} from '../../pantheon/src/context/chain.mjs';
-import {generateSigner, AUTHORITY} from './chain.mjs';
+import {LANES} from '../config/models.mjs';
+import {promptSha, replySha} from '../context/chain.mjs';
+import {generateSigner, AUTHORITY} from '../../../packages/ledger/chain.mjs';
 
 const PLACEHOLDER = /^$|_self$|^self$|placeholder/i;           // TELOS's own rule (proposal-ledger.mjs)
 const sha = text => 'sha256:' + createHash('sha256').update(text).digest('hex');

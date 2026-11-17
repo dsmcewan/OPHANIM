@@ -13,9 +13,9 @@
 // With lease entries on the ledger (board-kinds.mjs), the lease rows stop being a bare signed input: a
 // verdict that names `lease_scope` cites the latest lease entry of every lease active on that board, and
 // its rows must be exactly the ones those entries derive. A row dropped, added or altered is refused.
-import {gatesAt, shipClaim} from '../../pantheon/src/board/integrate.mjs';
+import {gatesAt, shipClaim} from '../board/integrate.mjs';
 import {boardResolver} from './anchors.mjs';
-import {canonical} from '../board.mjs';
+import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {LEASE, leaseTableAt, leaseRows} from './board-kinds.mjs';
 
 const CID = /^commit:[0-9a-f]{64}$/;

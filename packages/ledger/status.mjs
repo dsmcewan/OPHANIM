@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
-import {keyStore} from './system.mjs';
+import {keyStore} from './home.mjs';
 
 export const STATUS_SCHEMA = 'ophanim.status/v1';
 export const STATES = ['Resolved', 'In progress', 'Ready', 'On Hold'];
@@ -134,10 +134,10 @@ export function renderBoard(board) {
     '# Status board',
     '',
     '<!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change',
-    '     with `node ophanim/ledger/status.mjs set ...`, then `node ophanim/ledger/status.mjs render`. -->',
+    '     with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->',
     '',
     `**Ledger:** \`status/ledger\` · anchor \`${board.anchor}\` · head \`${board.head}\` · ${board.entries} entries.`,
-    `Verify it: \`node ophanim/ledger/status.mjs verify\`.`,
+    `Verify it: \`node packages/ledger/status.mjs verify\`.`,
     '',
     `**Counts:** ${counts}.`,
     '',
@@ -150,7 +150,7 @@ export function renderBoard(board) {
   ].join('\n');
 }
 
-// CLI: node ophanim/ledger/status.mjs <verify|render|set> [--json '{"item":...}']
+// CLI: node packages/ledger/status.mjs <verify|render|set> [--json '{"item":...}']
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = path.resolve(HERE, '../../status/ledger');
 export const DEFAULT_BOARD = path.resolve(HERE, '../../docs/STATUS.md');

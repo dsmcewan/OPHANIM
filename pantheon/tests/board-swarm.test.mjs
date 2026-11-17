@@ -145,6 +145,5 @@ test("the contribution projection reports all five chairs, including the swarm's
   assert.deepEqual([scout.metrics.forks, scout.metrics.refutations, judge.metrics.syntheses], [2, 1, 1]);
   assert.deepEqual(judge.occupants.map(o => `${o.vendor}/${o.model}`), ["agy_google/gemini-4-carbon"]);
   assert.equal(verifyChairContributions(p, board).ok, true);
-  const { rankChairQuestions } = await import("../../ophanim/efficiency/investigation/chairs.mjs");
-  assert.equal(rankChairQuestions(p).models.functions.length, 5);
+  // OPHANIM ranks this five-chair projection on its own side: ophanim/efficiency/investigation/chairs-board.test.mjs.
 }));

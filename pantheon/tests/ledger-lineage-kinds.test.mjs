@@ -5,15 +5,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
-import {lineageKinds, lineageRecorder, seatKeyId, labOf} from './lineage-kinds.mjs';
-import {sendTurn} from '../../pantheon/src/sdk/adapter.mjs';
+import {openLedger, createLedger, defineKinds, generateSigner} from '../../packages/ledger/chain.mjs';
+import {lineageKinds, lineageRecorder, seatKeyId, labOf} from '../src/ledger/lineage-kinds.mjs';
+import {sendTurn} from '../src/sdk/adapter.mjs';
 
 const operator = generateSigner('operator'), controller = generateSigner('controller');
 const authority = {keyring: {operator: operator.publicJwk, controller: controller.publicJwk}, orderer: 'controller', operators: ['operator']};
 
 async function withLedger(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-lineage-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-lineage-'));
   try {
     const anchor = createLedger({dir, authority, operator, order: controller});
     const L = openLedger({dir, kinds: defineKinds(lineageKinds()), anchor});

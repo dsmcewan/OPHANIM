@@ -13,7 +13,7 @@
 // and refuses any commit citing the dead gen. History is not rewritten -- a name is stopped from
 // moving.
 //
-// WITH A LEDGER (`ledger`, a board recorder from ophanim/ledger/board-kinds.mjs, injected so this module
+// WITH A LEDGER (`ledger`, a board recorder from pantheon/src/ledger/board-kinds.mjs, injected so this module
 // never imports the ledger): every lease grant, renewal, release, expiry and fence, and every declared
 // budget, is recorded as a ledger entry citing the previous one BEFORE the file changes. The ledger
 // re-derives each entry against the previous (generation monotonic, holder and expiry consistent), so a

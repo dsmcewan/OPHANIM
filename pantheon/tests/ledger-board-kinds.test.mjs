@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openSystemLedger, CONTROLLER as CTL} from './system.mjs';
-import {gateRecord, gateLeaseCitations} from './gate-kind.mjs';
-import {openBoard} from '../../pantheon/src/board/index.mjs';
-import {publish, treeSlots} from '../../pantheon/src/board/dag.mjs';
-import {merge} from '../../pantheon/src/board/merge.mjs';
+import {openPantheonLedger, CONTROLLER as CTL} from '../src/ledger/system.mjs';
+import {gateRecord, gateLeaseCitations} from '../src/ledger/gate-kind.mjs';
+import {openBoard} from '../src/board/index.mjs';
+import {publish, treeSlots} from '../src/board/dag.mjs';
+import {merge} from '../src/board/merge.mjs';
 
 const REF = 'refs/board/runtime-demo', SLOT = 'src/lock.mjs', ITEM = 'lock', CMD = 'node --test tests/lock.test.mjs';
 const HUMAN = {vendor: 'human'}, CONTROLLER = {vendor: 'controller'};
@@ -21,11 +21,11 @@ const ok = r => assert.equal(r.ok, true, r.why);
 
 // A board whose runtime records on the system ledger, as runOpenItem wires it by default.
 async function withBoard(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-board-kinds-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-board-kinds-'));
   try {
     const root = path.join(dir, 'board');
     const board = openBoard(root);
-    const sys = openSystemLedger({root: path.join(dir, 'ledger'), board});
+    const sys = openPantheonLedger({root: path.join(dir, 'ledger'), board});
     const rec = sys.recorder().board(root);
     board.useLedger(rec);
     const L = sys.ledger, controller = sys.keys.get(CTL);
@@ -218,7 +218,7 @@ test('ref moves: each swap is an entry citing the previous move; a ref moved by 
 }));
 
 test('without a ledger the board behaves as before: no records, edits go unchecked', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-board-noledger-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-board-noledger-'));
   try {
     const board = openBoard(root);
     const a = seat('openai', 'work', 'a');

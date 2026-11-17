@@ -4,7 +4,7 @@ import { openStore } from "./cas.mjs";
 import { openRefs } from "./refs.mjs";
 import { openRuntime } from "./runtime.mjs";
 
-// `ledger` is a board recorder (ophanim/ledger/board-kinds.mjs boardRecorder, or the system ledger's
+// `ledger` is a board recorder (pantheon/src/ledger/board-kinds.mjs boardRecorder, or the system ledger's
 // `recorder().board(root)`): with one, lease changes, budget limits and ref moves are ledger entries first.
 // It is injected, so this module never imports the ledger; `useLedger` attaches one after opening, for a
 // ledger opened with this board.

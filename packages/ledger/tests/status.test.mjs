@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openStatusLedger, renderBoard} from './status.mjs';
+import {openStatusLedger, renderBoard} from '../status.mjs';
 
 const withRoot = fn => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-status-')); try { return fn(path.join(d, 'ledger')); } finally { fs.rmSync(d, {recursive: true, force: true}); } };
 const base = {checked: '2026-11-17'};

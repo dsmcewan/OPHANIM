@@ -11,12 +11,12 @@
 //
 // Inputs are entries, never edits: a changed fact is a new `facts` entry, and decisions cite the one
 // they used. That is the Merkle cascade, applied to routing.
-import {verifyEscalation, PROTOCOL} from '../../pantheon/src/route/protocol.mjs';
-import {chairContributions, CONTRIBUTIONS_SCHEMA} from '../../pantheon/src/board/contributions.mjs';
-import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
-import {LANES} from '../../pantheon/src/config/models.mjs';
-import {FACTS} from '../../pantheon/src/config/facts.mjs';
-import {canonical, digest} from '../board.mjs';
+import {verifyEscalation, PROTOCOL} from '../route/protocol.mjs';
+import {chairContributions, CONTRIBUTIONS_SCHEMA} from '../board/contributions.mjs';
+import {SEATING, candidatesFor} from '../role/seating.mjs';
+import {LANES} from '../config/models.mjs';
+import {FACTS} from '../config/facts.mjs';
+import {canonical, digest} from '../../../packages/ledger/canonical.mjs';
 
 // A figure is either UNRECORDED (never guessed) or carries the source and quote it was read from.
 const isCited = f => f === 'UNRECORDED' || f === undefined

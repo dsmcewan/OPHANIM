@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
+import {openLedger, createLedger, defineKinds, generateSigner} from '../../packages/ledger/chain.mjs';
 import {efficiencyKinds, efficiencyRecorder, efficiencyTotals, MAX_USES, PROMOTION, USE, RESULT, DEBIT, TRACE, ASSESSED, RETAINED} from './efficiency-kinds.mjs';
 import {digest, readRuntimeSnapshot} from '../board.mjs';
 import {runRuntime, loadRuntime} from '../runtime.mjs';
