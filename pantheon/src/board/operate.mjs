@@ -38,7 +38,8 @@ import { reviewCycle, reviewSeats } from "../ledger/review-cycle.mjs";
 import { CYCLE_CONTRACT } from "../ledger/practice-kinds.mjs";
 import { closeClaim } from "../ledger/cycle-kinds.mjs";
 import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
-import { DEFAULT_ELIGIBLE_STRATA } from "../practice/assign.mjs";
+import { DEFAULT_ELIGIBLE_STRATA, BASELINE_ARM, CANDIDATE_ARM, PAIR_SCHEMA, pairFor } from "../practice/assign.mjs";
+import { runMetrics } from "../practice/metrics.mjs";
 
 export const TICKET_SCHEMA = "ophanim.ticket/v1";
 export const BUNDLE_SCHEMA = "pantheon.board-run/v1";
@@ -268,6 +269,94 @@ function recordAutomaticPractice(rec, cycle, store) {
 }
 const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_model ?? t.model)))];
 
+// --- paired runs -------------------------------------------------------------------------------------
+// The owner's decision of 2026-11-17 (docs/routing-task-profile.md, "Continuous evaluation", "Paired runs"):
+// a sampled ticket (assign.mjs pairFor) is also run under the other profile, so that `fit` and `argo` are
+// compared on the SAME ticket and the between-ticket variance drops out of the comparison.
+export const PAIR_REFUSAL = Object.freeze({
+  PAIR_UNBOUNDED: "pairing needs an explicit provider-call bound for the counterpart (pairMaxProviderCalls, --pair-max-provider-calls N): no counterpart runs without one",
+  PAIR_PROFILE: "the primary ran a profile that is neither argo nor fit: there is no counterpart profile",
+  PAIR_NO_PRIMARY: "the primary produced no run record: there is nothing to pair with",
+});
+const RUN_DEFAULT_REVISIONS = 3; // runOpenItem's own default (run-item.mjs), used when the primary named none
+// Options of the primary that the counterpart does not inherit: its profile is the other one, it is never
+// interleaved, an operator reseat would seat both arms alike, and its bound, ledger and board are its own.
+const NOT_INHERITED = ["profile", "interleave", "assignmentPolicy", "seatOverrides", "maxProviderCalls", "ledger", "ledgerRoot", "revisions", "dir", "resume", "retryStopped", "progress", "makeClientFor"];
+
+/**
+ * The paths of the target repository a ticket reads, relative to the repository's top: what the dry snapshot
+ * holds (the run copies `copy` into its own worktree and reads the slots, sources, attachments and oracle).
+ */
+function ticketPaths(spec, top) {
+  const rel = p => relative(top, join(spec.repo_root, p));
+  const slots = normalizeSlots(spec).flatMap(s => [s.path, s.source].filter(Boolean));
+  return [...new Set([...(spec.copy ?? []), ...(spec.attach ?? []), spec.tests_file, spec.source, ...slots].filter(Boolean).map(rel))].sort();
+}
+
+/**
+ * The counterpart of a paired run: `spec` under the other profile, in a separate DRY board, on a snapshot of
+ * the ticket's paths at `base` (git archive into the dry directory: the target repository is only read). So it
+ * never ships to the real shipping ref (it ships, if at all, to its own board's ref), never merges into the
+ * target repository (nothing is committed there and its working tree is never written: the run's outputs go to
+ * the snapshot), never writes the status ledger or the shared run ledger (its ledger is <dry>/ledger), and never
+ * opens or closes the real review cycle. It runs under an explicit provider-call bound and the primary's
+ * revisions. Its failure or refusal is an outcome, recorded. The pair record goes to <store>/pairs/<pair_id>/.
+ */
+async function runCounterpart({ spec, ticket, top, base, boardDir, store, runOpts, run, runJsonFile, makeClientFor, sampling, bound, pairDir, progress }) {
+  const primaryProfile = run?.profile ?? runOpts.profile ?? BASELINE_ARM;
+  const other = primaryProfile === BASELINE_ARM ? CANDIDATE_ARM : primaryProfile === CANDIDATE_ARM ? BASELINE_ARM : null;
+  const revisions = runOpts.revisions ?? RUN_DEFAULT_REVISIONS;
+  const primaryBytes = run ? readFileSync(runJsonFile) : null;
+  const primaryDigest = primaryBytes ? sha256(primaryBytes) : null;
+  const pair_id = "pair-" + createHash("sha256").update([PAIR_SCHEMA, spec.key, ticket.digest, primaryDigest ?? boardDir].join("\0")).digest("hex").slice(0, 24);
+  const dir = join(store, "pairs", pair_id);
+  mkdirSync(dir, { recursive: true });
+  if (primaryBytes) writeFileSync(join(dir, "primary.run.json"), primaryBytes);
+  const bounds = { max_provider_calls: bound, revisions };
+  const record = { schema: PAIR_SCHEMA, pair_id, ticket: { key: spec.key, item: ticket.item, path: ticket.path, digest: ticket.digest },
+    stakes: sampling.stakes, sampling: { basis: sampling.basis, rate: sampling.rate, u: sampling.u },
+    primary: { profile: primaryProfile, run_digest: primaryDigest, board: boardDir }, bounds };
+  const write = rec => { writeFileSync(join(dir, "pair.json"), JSON.stringify(rec, null, 2) + "\n"); return rec; };
+  const refuse = code => {
+    progress({ event: "pair.refused", pair_id, code, why: PAIR_REFUSAL[code] });
+    return write({ ...record, status: "refused", refusal: { code, why: PAIR_REFUSAL[code] }, counterpart: null, at: new Date().toISOString() });
+  };
+  if (!run) return refuse("PAIR_NO_PRIMARY");
+  if (!other) return refuse("PAIR_PROFILE");
+  if (!(Number.isSafeInteger(bound) && bound > 0)) return refuse("PAIR_UNBOUNDED");
+
+  let dry = pairDir ?? join(boardDir, `pair-${other}`);
+  if (existsSync(dry)) dry = `${dry}-${Date.now()}`;
+  const snapshot = join(dry, "repo");
+  mkdirSync(snapshot, { recursive: true });
+  const git = gitIn(top);
+  const present = ticketPaths(spec, top).filter(p => { try { git(["cat-file", "-e", `${base}:${p}`]); return true; } catch { return false; } });
+  if (present.length) execFileSync("tar", ["-x", "-C", snapshot], { input: git(["archive", "--format=tar", base, "--", ...present], { encoding: "buffer" }) });
+  const cspec = { ...spec, repo_root: join(snapshot, relative(top, spec.repo_root)) };
+  mkdirSync(cspec.repo_root, { recursive: true });
+  const inherited = Object.fromEntries(Object.entries(runOpts).filter(([k]) => !NOT_INHERITED.includes(k)));
+  const cboard = join(dry, "board");
+  progress({ event: "pair.start", pair_id, board: dry, profile: other, bound, revisions });
+  let result = null, error = null;
+  try {
+    result = await runOpenItem(cspec, { ...inherited, dir: cboard, makeClientFor, profile: other, revisions, maxProviderCalls: bound,
+      ledgerRoot: join(dry, "ledger"), progress: ev => progress({ ...ev, from: "pair" }) });
+  } catch (e) { error = { message: String(e.message ?? e).slice(0, 500), code: e.code ?? null }; }
+  const cfile = join(cboard, "run.json");
+  const cbytes = existsSync(cfile) ? readFileSync(cfile) : null;
+  if (cbytes) writeFileSync(join(dir, "counterpart.run.json"), cbytes);
+  const crun = cbytes ? JSON.parse(cbytes.toString("utf8")) : null;
+  const row = crun ? runMetrics(crun, { profile: other, result }) : null;
+  // Kept as an outcome whatever happened: a counterpart that failed, hit its bound or threw is not accepted.
+  const outcome = { accepted: row?.accepted === true, first_pass: row?.first_pass === true, shipped: crun?.shipped === true,
+    status: row?.status ?? "failed", why: row?.why ?? error?.message ?? result?.error?.message ?? null };
+  progress({ event: "pair.end", pair_id, board: dry, profile: other, accepted: outcome.accepted, status: outcome.status });
+  return write({ ...record, status: "completed",
+    counterpart: { profile: other, dry: true, board: cboard, snapshot, run_digest: cbytes ? sha256(cbytes) : null, outcome,
+      providers: makeClientFor.providers ?? null, ...(error ? { error } : {}) },
+    at: new Date().toISOString() });
+}
+
 /**
  * `run <item>`: the ticket through runOpenItem (the ledger on, by default at <board>/ledger or
  * OPHANIM_LEDGER), the shipped change committed on a branch, a review cycle over base..head with `n`
@@ -276,8 +365,10 @@ const labsOf = turns => [...new Set(turns.map(t => labOf(t.vendor, t.served_mode
  * status proposal (`proposeFromBundle`). Never writes the status ledger.
  */
 export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(repo), anchor = null, makeClientFor, turn, n = 3,
-  dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null }) {
+  dir = null, out = null, branch = null, runOpts = {}, checked = today(), progress = () => {}, practice = null, evidenceStore = null,
+  pairRate = 0, pairMaxProviderCalls = null, pairDir = null }) {
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
+  pairFor({ ticketKey: "rate-check", policy: { pairRate } }); // a rate outside [0, 1] is refused before any work
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
   const board = readBoard({ statusRoot, anchor });
   const d = dispatchable(board, item, { repo });
@@ -301,11 +392,15 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   // The evidence store the continuous evaluation reads (src/practice/evaluate.mjs): configured, else
   // PANTHEON_EVIDENCE_STORE, else beside the run ledger (<OPHANIM_LEDGER>/../runs, or <board>/runs).
   const store = evidenceStore ? resolve(evidenceStore) : defaultEvidenceStore({ ledgerRoot });
-  // Interleaving (opt-in) consults the store for the strata the stop rule has halted.
+  // Interleaving and pairing (both opt-in) consult the store for the strata the stop rule has halted.
+  let halted = null;
+  const haltedNow = () => (halted ??= existsSync(store) ? evaluate({ runs: store }).halted : []);
   if (runOpts.interleave === true && !runOpts.assignmentPolicy) {
-    const halted = existsSync(store) ? evaluate({ runs: store }).halted : [];
-    runOpts = { ...runOpts, assignmentPolicy: { eligible: [...DEFAULT_ELIGIBLE_STRATA], halted } };
+    runOpts = { ...runOpts, assignmentPolicy: { eligible: [...DEFAULT_ELIGIBLE_STRATA], halted: haltedNow() } };
   }
+  let stakes = null;
+  try { stakes = taskProfile(spec, { paths: normalizeSlots(spec).map(s => s.path), mode: "batch" }).stakes.value; } catch { stakes = null; }
+  const sampling = pairFor({ ticketKey: spec.key, stakes, policy: { pairRate, halted: pairRate > 0 ? haltedNow() : [] } });
   const result = await runOpenItem(spec, { dir: boardDir, makeClientFor, progress: ev => progress({ ...ev, from: "pipeline" }), ...runOpts });
   const runJsonFile = join(boardDir, "run.json");
   const run = existsSync(runJsonFile) ? JSON.parse(readFileSync(runJsonFile, "utf8")) : null;
@@ -314,6 +409,17 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     mkdirSync(join(store, basename(boardDir)), { recursive: true });
     writeFileSync(join(store, basename(boardDir), "run.json"), readFileSync(runJsonFile));
   }
+  // A sampled ticket's counterpart, before anything of the primary is committed or reviewed (it reads only the
+  // base commit, so the order cannot change what the primary commits); its record joins the store.
+  let pairRecord = null;
+  if (sampling.sampled) {
+    pairRecord = await runCounterpart({ spec, ticket: { item, path: ticketRel, digest: ticketDigest }, top, base, boardDir, store, runOpts, run, runJsonFile,
+      makeClientFor, sampling, bound: pairMaxProviderCalls, pairDir, progress });
+  }
+  const pairSummary = pairRecord ? { pair_id: pairRecord.pair_id, status: pairRecord.status, file: join(store, "pairs", pairRecord.pair_id, "pair.json"),
+    ...(pairRecord.refusal ? { refusal: pairRecord.refusal } : {}),
+    ...(pairRecord.counterpart ? { counterpart: { profile: pairRecord.counterpart.profile, outcome: pairRecord.counterpart.outcome } } : {}) }
+    : { status: "not_sampled", basis: sampling.basis, rate: sampling.rate };
   const sys = openPantheonLedger({ root: ledgerRoot, board: openBoard(boardDir) });
   const rec = sys.recorder();
   const v = rec.verify();
@@ -329,7 +435,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
       tests: run?.acceptance ? { cmd: run.acceptance.cmd, exit: run.acceptance.exit } : null,
       seats: [...new Map((run?.turns ?? []).map(t => [`${t.purpose}|${t.vendor}|${t.model}`, { purpose: t.purpose, vendor: t.vendor, model: t.model,
         served_model: t.served_model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model) }])).values()] },
-    review: null, proposal: null,
+    review: null, proposal: null, pair: pairSummary,
   };
   const save = () => writeFileSync(join(bundleDir, "evidence.json"), JSON.stringify(bundle, null, 2) + "\n");
   if (!result.shipped) { save(); progress({ event: "run.refused", why: result.error?.message ?? "not shipped" }); return { bundle, dir: bundleDir }; }
