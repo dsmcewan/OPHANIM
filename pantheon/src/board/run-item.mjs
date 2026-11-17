@@ -133,12 +133,17 @@ function failureOutcome(e) {
 }
 // The run's resource summary, derived from its attempts. Cost is not estimated: no versioned price source
 // is attached, so USD is unknown (null) and says why.
+// The provider calls an attempt list made: every attempt but one the seat layer refused before sending any
+// request (`provider_requests: 0`), which reached no provider. Unknown (null) counts as a call.
+export function providerCallsOf(attempts = []) {
+  return attempts.filter(a => a?.provider_requests !== 0).length;
+}
 function resourcesOf(attempts) {
   const by_outcome = {};
   for (const a of attempts) by_outcome[a.outcome] = (by_outcome[a.outcome] ?? 0) + 1;
   const sum = key => attempts.reduce((n, a) => n + (num(a.usage?.[key]) ?? 0), 0);
   const attempts_without_usage = attempts.filter(a => a.usage?.input_tokens == null || a.usage?.output_tokens == null).length;
-  return { provider_calls: attempts.length, by_outcome,
+  return { provider_calls: providerCallsOf(attempts), by_outcome,
     reported_input_tokens: sum("input_tokens"), reported_output_tokens: sum("output_tokens"),
     attempts_without_usage, usage_complete: attempts_without_usage === 0,
     usd: null, usd_basis: "unknown: no versioned price source is attached, so cost is not estimated" };
@@ -256,7 +261,11 @@ export async function runOpenItem(spec, opts = {}) {
   // `maxProviderCalls`: a bound on the provider calls this invocation may make, checked at the generation
   // boundary before EVERY call -- retries, fallbacks and truncation re-asks included -- rather than inferred
   // from commit bookkeeping (audit M5). It authorises nothing; omitted, no bound is imposed.
-  const MAX_PROVIDER_CALLS = opts.maxProviderCalls ?? null;
+  // On a RESUME the bound is the run's, not a fresh one: omitted, the limit recorded in run.json is inherited and
+  // the provider calls its attempts already made count against it (basis "inherited"); passed, it is the
+  // operator's explicit new bound for this invocation's calls (basis "operator"). Which applied is recorded.
+  const BOUND_GIVEN = opts.maxProviderCalls !== undefined && opts.maxProviderCalls !== null;
+  let MAX_PROVIDER_CALLS = opts.maxProviderCalls ?? null;
   if (MAX_PROVIDER_CALLS !== null && !(Number.isSafeInteger(MAX_PROVIDER_CALLS) && MAX_PROVIDER_CALLS > 0))
     throw new Error("maxProviderCalls is a positive integer");
   let providerCalls = 0;
@@ -359,19 +368,25 @@ export async function runOpenItem(spec, opts = {}) {
     if (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS) {
       const why = `PROVIDER_CALL_LIMIT: this run has made ${providerCalls} of its ${MAX_PROVIDER_CALLS} permitted provider call(s); ` +
         `${vendor}/${model} (${purpose}) was not called`;
-      run.provider_calls = { limit: MAX_PROVIDER_CALLS, made: providerCalls,
+      run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls,
         refused: { code: "PROVIDER_CALL_LIMIT", at: new Date().toISOString(), vendor, model, pool: pool ?? vendor, transport, purpose, why } };
       progress({ event: "turn.refused", seat: vendor, model, detail: why });
       record();
       throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT" });
     }
     providerCalls++;
-    run.provider_calls = { limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
+    run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
   }
   function recordAttempt(a) {
     const attempts = (run.attempts ??= []);
     attempts.push({ n: attempts.length + 1, at: new Date().toISOString(), ...a });
     run.resources = resourcesOf(attempts);
+    // Admitted before the call, but the seat layer refused it before any request was sent: no provider was
+    // called, so it does not count against the bound.
+    if (a.provider_requests === 0 && providerCalls > 0) {
+      providerCalls--;
+      run.provider_calls = { ...run.provider_calls, made: providerCalls };
+    }
   }
   const record = () => {
     if (!recordAllowed) return;
@@ -747,9 +762,18 @@ export async function runOpenItem(spec, opts = {}) {
           JSON.stringify(previous.package_context) !== JSON.stringify(packageBinding)) {
         throw new Error("resume: ticket/spec differs or this is a legacy run without isolated recovery state");
       }
-      // Earlier attempts stay on the record; the provider-call bound applies to this invocation's calls.
+      // Earlier attempts stay on the record. The provider-call bound is the run's: inherited with the calls
+      // already made counted against it, unless the operator passed a new one for this invocation.
+      // `counted_from` is the attempt index the bound in force counts from: 0 for the run's own bound, the attempts
+      // already recorded when an operator's new bound took effect (so a later inheriting resume counts from there).
+      const earlier = previous.attempts ?? [];
+      const basis = BOUND_GIVEN ? "operator" : "inherited";
+      const counted_from = BOUND_GIVEN ? earlier.length : (previous.provider_calls?.counted_from ?? 0);
+      const prior = providerCallsOf(earlier.slice(counted_from));
+      if (!BOUND_GIVEN) { MAX_PROVIDER_CALLS = previous.provider_calls?.limit ?? null; providerCalls = prior; }
       Object.assign(run, previous, { error: null, salvaged: null, resumed_from: { board: root, previous_error: previous.error ?? null },
-        attempts: previous.attempts ?? [], provider_calls: { limit: MAX_PROVIDER_CALLS, made: 0, refused: null } });
+        attempts: earlier, provider_calls: { limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null, basis, counted_from,
+          prior: providerCallsOf(earlier), previous_limit: previous.provider_calls?.limit ?? null } });
       run.resources = resourcesOf(run.attempts);
     } else if (existsSync(statePath)) {
       throw new Error("board already has a run; use resume instead of overwriting recovery state");

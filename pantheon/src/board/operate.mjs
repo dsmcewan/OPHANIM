@@ -24,7 +24,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { openStatusLedger, propose, proposalRefusal, proposalDigest, STATES } from "../../../packages/ledger/status.mjs";
 import { digest } from "../../../packages/ledger/canonical.mjs";
-import { runOpenItem } from "./run-item.mjs";
+import { runOpenItem, providerCallsOf } from "./run-item.mjs";
 import { openBoard } from "./index.mjs";
 import { cidOf } from "./canon.mjs";
 import { certifiedArtifacts } from "./artifacts.mjs";
@@ -370,6 +370,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   if (typeof makeClientFor !== "function") fail("runBoardItem: pass makeClientFor(vendor) for the seats");
   pairFor({ ticketKey: "rate-check", policy: { pairRate } }); // a rate outside [0, 1] is refused before any work
   if (typeof turn !== "function") fail("runBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
+  checkBound(runOpts.maxProviderCalls);
   const board = readBoard({ statusRoot, anchor });
   const d = dispatchable(board, item, { repo });
   if (d.why) fail(`"${item}" is not dispatchable: ${d.why}`);
@@ -436,6 +437,8 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
       seats: [...new Map((run?.turns ?? []).map(t => [`${t.purpose}|${t.vendor}|${t.model}`, { purpose: t.purpose, vendor: t.vendor, model: t.model,
         served_model: t.served_model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model) }])).values()] },
     review: null, proposal: null, pair: pairSummary,
+    provider_calls: { limit: runOpts.maxProviderCalls ?? null, basis: "run", pipeline: providerCallsOf(run?.attempts ?? []), review: 0,
+      made: providerCallsOf(run?.attempts ?? []), refused: run?.provider_calls?.refused ? [run.provider_calls.refused] : [] },
   };
   const save = () => writeFileSync(join(bundleDir, "evidence.json"), JSON.stringify(bundle, null, 2) + "\n");
   if (!result.shipped) { save(); progress({ event: "run.refused", why: result.error?.message ?? "not shipped" }); return { bundle, dir: bundleDir }; }
@@ -463,7 +466,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   const changed = git(["diff", "--name-only", base, head]).split("\n").filter(Boolean);
   const scope = `board/${item}/${base.slice(0, 12)}`;
   const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
-    seats: chosen.seats, turn, n, policy: runPolicy(run) ?? undefined });
+    seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, ...(chosen.note ? { note: chosen.note } : {}), author_turns: authorTurns,
     reviews: bundleReviews(r.reviews), failed: r.failed, close: null, outcome: null };
@@ -472,6 +475,29 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     findings: r.reviews.reduce((n, x) => n + x.findings.length, 0) });
   const proposed = proposeFromBundle({ dir: bundleDir, statusRoot, anchor, sys, practice });
   return { bundle: proposed.bundle, dir: bundleDir, proposal: proposed.proposal, why: proposed.why };
+}
+
+// --- the board run's provider-call bound (audit M5) ---------------------------------------------------
+// `runOpts.maxProviderCalls` bounds every provider call made for the board run: the pipeline's (runOpenItem
+// enforces it at its generation boundary and records its attempts in run.json) and then the cycle reviewers',
+// each admitted here before it is called. A refused reviewer is a failed seat of the cycle, which stays open.
+// A resume inherits the recorded bound with the calls already counted against it, unless the operator passes
+// a new bound (basis "operator"), which then counts from zero. bundle.provider_calls records which.
+const BOUND_CODE = "PROVIDER_CALL_LIMIT";
+function checkBound(n, name = "maxProviderCalls") {
+  if (n !== null && n !== undefined && !(Number.isSafeInteger(n) && n > 0)) fail(`${name} is a positive integer`, "USAGE");
+}
+function boundedTurn(turn, calls) {
+  return args => {
+    if (calls.limit !== null && calls.made >= calls.limit) {
+      const why = `${BOUND_CODE}: this board run has made ${calls.made} of its ${calls.limit} permitted provider call(s); ` +
+        `the ${args.vendor}/${args.model} cycle review was not called`;
+      calls.refused.push({ code: BOUND_CODE, at: new Date().toISOString(), vendor: args.vendor, model: args.model, why });
+      return Promise.reject(Object.assign(new Error(why), { code: BOUND_CODE }));
+    }
+    calls.made++; calls.review++;
+    return turn(args);
+  };
 }
 
 const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.model, served_model: x.served_model, lab: x.lab, review: x.review, verdict: x.verdict,
@@ -486,8 +512,10 @@ const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.
  * re-derived from its run.json. Reviews already recorded are kept; each try is a recorded attempt, up to
  * the cycle's limit. Then, as after a run, the cycle closes if it can and the proposal is written.
  */
-export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {}, practice = null }) {
+export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot = defaultStatusRoot(repo), anchor = null, max_attempts, progress = () => {}, practice = null,
+  maxProviderCalls = null }) {
   if (typeof turn !== "function") fail("resumeBoardItem: pass turn({vendor, model, prompt, seat}) for the cycle reviewers");
+  checkBound(maxProviderCalls);
   const file = join(dir, "evidence.json");
   if (!existsSync(file)) fail(`no evidence bundle at ${file}: resume names the --out DIR of the run`);
   const bundle = JSON.parse(readFileSync(file, "utf8"));
@@ -511,11 +539,22 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
     const git = gitIn(gitTop(repo));
     const diff = git(["diff", "--no-color", bundle.base, bundle.commit]);
     const files = git(["diff", "--name-only", bundle.base, bundle.commit]).split("\n").filter(Boolean);
-    progress({ event: "resume.start", cycle: bundle.review.cycle, reviews: state.reviews.length, reviewers: state.cycle.reviewers });
-    const r = await reviewCycle({ ledger: rec, resume: true, turn, max_attempts, seats: chosen.seats,
+    // The bound: inherited with the calls already counted against it (a bundle written before bounds were recorded
+    // counts its run.json attempts and the cycle's recorded attempts), or the operator's new one, from zero.
+    const recorded = bundle.provider_calls ?? null;
+    const prior = recorded?.made ?? providerCallsOf(run.attempts ?? []) + state.attempts.length;
+    const given = maxProviderCalls !== null && maxProviderCalls !== undefined;
+    const calls = given ? { limit: maxProviderCalls, basis: "operator", made: 0, review: 0, refused: [] }
+      : { limit: recorded?.limit ?? null, basis: "inherited", made: prior, review: 0, refused: [] };
+    progress({ event: "resume.start", cycle: bundle.review.cycle, reviews: state.reviews.length, reviewers: state.cycle.reviewers,
+      provider_calls: { limit: calls.limit, basis: calls.basis, made: calls.made } });
+    const r = await reviewCycle({ ledger: rec, resume: true, turn: boundedTurn(turn, calls), max_attempts, seats: chosen.seats,
       change: { scope: bundle.review.scope, base: bundle.base, head: bundle.commit, diff, files, author_labs: bundle.review.author_labs, author_turns: bundle.review.author_turns } });
     Object.assign(bundle.review, { reviews: bundleReviews(r.reviews), failed: r.failed,
-      resumes: [...(bundle.review.resumes ?? []), { retained: r.retained, attempted: r.attempted, failed: r.failed.length, complete: r.complete }] });
+      resumes: [...(bundle.review.resumes ?? []), { retained: r.retained, attempted: r.attempted, failed: r.failed.length, complete: r.complete,
+        provider_calls: { limit: calls.limit, basis: calls.basis, prior, made: calls.review, refused: calls.refused } }] });
+    bundle.provider_calls = { limit: calls.limit, basis: calls.basis, pipeline: recorded?.pipeline ?? providerCallsOf(run.attempts ?? []),
+      review: (recorded?.review ?? state.attempts.length) + calls.review, made: calls.made, refused: [...(recorded?.refused ?? []), ...calls.refused] };
     writeFileSync(file, JSON.stringify(bundle, null, 2) + "\n");
     progress({ event: "resumed", cycle: r.cycle, reviews: r.reviews.length, retained: r.retained.length, attempted: r.attempted.length, failed: r.failed.length });
   }

@@ -91,6 +91,8 @@ const result = await runOpenItem(SPEC, {
   dir: flag("--dir"),
   resume: flag("--resume"),
   revisions: Number(flag("--revisions") ?? 3),
+  // A provider-call bound (audit M5). With --resume and no bound, the run's recorded bound is inherited.
+  ...(flag("--max-provider-calls") !== null ? { maxProviderCalls: Number(flag("--max-provider-calls")) } : {}),
   seatOverrides,
   makeClientFor: clientFor,
   progress: printEvent,

@@ -8,9 +8,15 @@
 //       [--n 3] [--dir BOARD] [--out DIR] [--branch NAME] [--checked YYYY-MM-DD] [--profile argo|legacy|fit]
 //       runOpenItem on the item's ticket (the run ledger on), the shipped change committed on a branch,
 //       a review cycle over it on distinct labs, an evidence bundle and an UNSIGNED status proposal
-//   node pantheon/bin/pantheon-board.mjs resume <item> --out DIR [--turn MODULE] [--max-attempts N]
+//   node pantheon/bin/pantheon-board.mjs resume <item> --out DIR [--turn MODULE] [--max-attempts N] [--max-provider-calls N]
 //       a run whose review cycle a failed reviewer left open: ask again only the seats with no review, on
 //       the same cycle and change (never a new cycle; the item is not run again), then close and propose
+//
+// --max-provider-calls N (run, resume; audit M5): at most N provider calls for the board run, the pipeline's
+// (checked before every call, retries and fallbacks included) and then the cycle reviewers'. A resume without
+// it inherits the run's recorded bound and counts the calls already made against it; with it, N is the
+// operator's new bound for the resume (recorded as basis "operator"). A seat-layer refusal that sent no request
+// is not a provider call.
 //   node pantheon/bin/pantheon-board.mjs propose --bundle DIR [--accept-unverified REASON]
 //       close the bundle's review cycle once its findings are fixed or deferred, and write the proposal
 //   node pantheon/bin/pantheon-board.mjs check <proposal.json>
@@ -64,7 +70,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N] | resume <item> --out DIR [--turn MODULE] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N] [--max-provider-calls N] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -84,6 +90,13 @@ async function liveClients() {
   make.providers = { kind: "live" };
   return make;
 }
+// A positive integer flag, or null when absent.
+const intFlag = name => {
+  if (opts[name] === undefined) return null;
+  const v = Number(opts[name]);
+  if (!(Number.isSafeInteger(v) && v > 0)) usage(`--${name} is a positive integer, got ${opts[name]}`);
+  return v;
+};
 const pct = x => (x === null || x === undefined ? "-" : `${(x * 100).toFixed(1)}%`);
 const ci = c => (c ? `[${c[0].toFixed(3)}, ${c[1].toFixed(3)}]` : "-");
 function printEvaluation(e, store) {
@@ -184,13 +197,14 @@ try {
     if (pairMax !== null && !(Number.isSafeInteger(pairMax) && pairMax > 0)) usage(`--pair-max-provider-calls is a positive integer, got ${opts["pair-max-provider-calls"]}`);
     if (pairRate > 0 && pairMax === null) usage("--pair-rate needs --pair-max-provider-calls N: a counterpart never runs without an explicit provider-call bound (PAIR_UNBOUNDED)");
     if (args.length !== 1) usage("run names one item");
+    const maxCalls = intFlag("max-provider-calls");
     const makeClientFor = opts.clients ? await load(opts.clients) : await liveClients();
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
     const r = await runBoardItem({ repo, item: args[0], statusRoot, anchor, makeClientFor, turn, n: Number(opts.n ?? 3),
       dir: opts.dir ? resolve(opts.dir) : null, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
       // --profile selects the routing profile for this run only; omitted, runOpenItem's default (argo) applies.
       // --interleave: the ticket's hash-assigned arm for an eligible stratum; an explicit --profile still wins.
-      checked: opts.checked, runOpts: { seatOverrides, ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}) }, practice,
+      checked: opts.checked, runOpts: { seatOverrides, ...(maxCalls !== null ? { maxProviderCalls: maxCalls } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}) }, practice,
       evidenceStore: opts["evidence-store"] ? resolve(opts["evidence-store"]) : null,
       pairRate, pairMaxProviderCalls: pairMax,
       progress: ev => {
@@ -198,6 +212,7 @@ try {
         else if (["stage.start", "ship", "run.end", "run.error"].includes(ev.event)) console.error(`  ${ev.from === "pair" ? "[pair] " : ""}[${ev.stage}] ${ev.event} ${ev.detail ?? ""}`);
       } });
     console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null, pair: r.bundle.pair ?? null,
+      provider_calls: r.bundle.provider_calls ?? null,
       shipped: r.bundle.run.shipped, commit: r.bundle.commit, branch: r.bundle.branch, cycle: r.bundle.review?.cycle ?? null,
       outcome: r.bundle.review?.outcome ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
     process.exit(r.proposal ? 0 : 1);
@@ -205,13 +220,14 @@ try {
   if (verb === "resume") {
     if (args.length !== 1) usage("resume names one item");
     if (!opts.out) usage("resume needs --out DIR, the run's evidence bundle");
+    const maxCalls = intFlag("max-provider-calls");
     const turn = opts.turn ? await load(opts.turn) : await liveTurn();
-    const r = await resumeBoardItem({ repo, item: args[0], dir: resolve(opts.out), statusRoot, anchor, turn,
+    const r = await resumeBoardItem({ maxProviderCalls: maxCalls, repo, item: args[0], dir: resolve(opts.out), statusRoot, anchor, turn,
       max_attempts: opts["max-attempts"] === undefined ? undefined : Number(opts["max-attempts"]), practice,
       progress: ev => console.error(JSON.stringify(ev)) });
     console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null,
       cycle: r.bundle.review?.cycle ?? null, outcome: r.bundle.review?.outcome ?? null, failed: r.bundle.review?.failed ?? [],
-      resumes: r.bundle.review?.resumes ?? [], findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
+      resumes: r.bundle.review?.resumes ?? [], provider_calls: r.bundle.provider_calls ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
     process.exit(r.proposal ? 0 : 1);
   }
   if (verb === "propose") {
