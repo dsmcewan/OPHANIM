@@ -1,0 +1,1 @@
+{"basis":"packages/ledger holds the domain-free core; Pantheon kinds under pantheon/src/ledger, OPHANIM kinds under ophanim/ledger; dependency runs OPHANIM -> Pantheon -> packages/ledger, enforced by layering.test","checked":"2026-11-17","item":"shared-package","schema":"ophanim.status/v1","state":"Resolved","title":"Ledger as a shared package","waiting_on":null}
