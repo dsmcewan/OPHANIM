@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {openPantheonLedger} from '../src/ledger/system.mjs';
 import {reviewCycle, reviewSeatsByModel} from '../src/ledger/review-cycle.mjs';
-import {reviewerIdentity, reviewerRefusal, candidateIdentity, candidateRefusal, currentPolicy, policyDigest, RESOLVER} from '../src/review/identity.mjs';
+import {reviewerIdentity, reviewerRefusal, candidateIdentity, candidateRefusal, currentPolicy, policyDigest, RESOLVER, contributorKeys, policyRefusal} from '../src/review/identity.mjs';
 import {nextStep, escalationRecord, verifyEscalation, documentedEfforts, PROTOCOL, PROTOCOL_V2, MAX_STEPS} from '../src/route/protocol.mjs';
 
 const C = n => String(n).repeat(40).slice(0, 40);
@@ -26,8 +26,11 @@ const PLAN = {purpose: 'plan', vendor: 'anthropic', model: 'claude-fable-5-2'};
 const SEATS = [{vendor: 'xai', model: 'grok-4.7'}, {vendor: 'openai', model: 'gpt-6-sol'}, {vendor: 'anthropic', model: 'claude-sonnet-5'}];
 const change = (scope, extra = {}) => ({scope, base: C('a'), head: C('b'), diff: DIFF, files: ['x'], independence: 'model', contributions: [PLAN], ...extra});
 
+// The current rules as an earlier resolver recorded them: `route_labs` exists only from resolver 3.
+const UNDER = resolver => { const {route_labs, ...rules} = currentPolicy(); return {...rules, resolver}; };
+
 test('1. selection and admission are separate: a seat may be asked on the model asked for; an answer counts only on the model that answered', () => {
-  assert.equal(RESOLVER, 2);
+  assert.equal(RESOLVER, 3);
   // Before a call: the model asked for is all there is.
   assert.deepEqual(candidateIdentity({vendor: 'xai', model: 'grok-4.7'}), {lab: 'xai', id: 'xai/grok-4.7'});
   assert.equal(candidateRefusal({vendor: 'xai', model: 'grok-4.7'}, {models: [], labs: []}), null);
@@ -42,7 +45,7 @@ test('1. selection and admission are separate: a seat may be asked on the model 
   assert.equal(reviewerIdentity({vendor: 'xai', model: 'grok-4.7', served_model: 'grok-unknown'}).code, 'UNRESOLVED');
   assert.deepEqual(reviewerIdentity({vendor: 'xai', model: 'grok-4.7', served_model: 'grok-4.7'}), {lab: 'xai', ids: ['xai/grok-4.7']});
   // The earlier admission rule, kept only for cycles recorded under it.
-  assert.deepEqual(reviewerIdentity({vendor: 'xai', model: 'grok-4.7', served_model: null}, {...currentPolicy(), resolver: 1}), {lab: 'xai', ids: ['xai/grok-4.7']});
+  assert.deepEqual(reviewerIdentity({vendor: 'xai', model: 'grok-4.7', served_model: null}, UNDER(1)), {lab: 'xai', ids: ['xai/grok-4.7']});
   assert.equal(reviewSeatsByModel({n: 3, contributions: [PLAN]}).length, 3, 'candidates need no serving model to be asked');
 });
 
@@ -78,7 +81,7 @@ test('1. history: a cycle recorded under the earlier admission rule still verifi
   const dir = tmp();
   try {
     const sys = openPantheonLedger({root: path.join(dir, 'ledger')}), rec = sys.recorder();
-    const earlier = {...currentPolicy(), resolver: 1};
+    const earlier = UNDER(1);
     const r = await reviewCycle({ledger: rec, change: change('recorded-under-1', {identity_policy: earlier}), seats: SEATS, turn: turnWith(() => null)});
     assert.equal(r.failed.length, 0, 'under the rule it records, an unnamed answer was taken as served by the model asked for');
     const c = sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === r.cycle));
@@ -143,4 +146,24 @@ test('3. the run ledger: an in-run review made under the model rule carries its 
     review('xai', 'grok-4.7', work, {identity_policy: policy});
     assert.equal(sys.ledger.verify().ok, true);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('resolver 3: Antigravity is seated for Gemini models only; contributors still resolve by model; earlier policies are unchanged', () => {
+  assert.deepEqual(currentPolicy().route_labs, {agy_google: ['google']});
+  // A Claude model through the route: not asked, and its answer not admitted, even when the answer names its model.
+  const claude = {vendor: 'agy_google', model: 'claude-opus-4-6-thinking'};
+  assert.equal(candidateIdentity(claude).code, 'ROUTE_LAB');
+  assert.match(candidateRefusal(claude, {models: [], labs: []}), /agy_google route is seated for google models only, and this is a anthropic model/);
+  assert.equal(reviewerIdentity({...claude, served_model: 'claude-opus-4-6'}).code, 'ROUTE_LAB');
+  // A Gemini model through the route is seated as before, and admitted on the model its answer names.
+  assert.deepEqual(candidateIdentity({vendor: 'agy_google', model: 'gemini-4-carbon'}), {lab: 'google', id: 'google/gemini-4-carbon'});
+  assert.deepEqual(reviewerIdentity({vendor: 'agy_google', model: 'gemini-4-carbon', served_model: 'gemini-4-carbon'}), {lab: 'google', ids: ['google/gemini-4-carbon']});
+  assert.equal(reviewerIdentity({vendor: 'agy_google', model: 'gemini-4-carbon', served_model: null}).code, 'NO_SERVED_IDENTITY', 'the policy itself never fills in a model');
+  // A recorded Claude contribution through the route still excludes that model: history is not unresolved.
+  assert.deepEqual(contributorKeys([{vendor: 'agy_google', model: 'claude-opus-4-6-thinking'}]).models, ['anthropic/claude-opus-4-6']);
+  // A cycle recorded under resolver 2 carries no route_labs and is judged without it.
+  assert.equal(policyRefusal(UNDER(2)), null);
+  assert.deepEqual(candidateIdentity(claude, UNDER(2)), {lab: 'anthropic', id: 'anthropic/claude-opus-4-6'});
+  assert.match(policyRefusal({...UNDER(2), route_labs: {agy_google: ['google']}}), /identity policy/);
+  assert.match(policyRefusal(UNDER(3)), /identity policy/, 'resolver 3 records its route_labs');
 });

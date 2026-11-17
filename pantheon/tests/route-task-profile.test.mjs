@@ -82,10 +82,15 @@ test("fit: two tickets with the same legacy difficulty but different stakes/dept
   assert.notDeepEqual(firstSeat("implementer", { profile: "fit", difficulty: "easy" }), firstSeat("implementer", { profile: "fit", difficulty: "hard" }));
 });
 
-test("argo and legacy are unchanged: the same picks for every role and the same policy hashes as before fit existed", () => {
-  // Pinned from the tree before this change (e481e77).
+test("argo is unchanged since before fit existed; legacy was re-pinned 2026-11-17 when the Claude-via-Antigravity rungs were removed", () => {
+  // argo: pinned from the tree before fit existed (e481e77), and still that value.
   assert.equal(selectionPolicy("argo").hash, "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56");
-  assert.equal(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d");
+  // legacy: RE-PINNED 2026-11-17. It was sha256:276ee015...b07d (e481e77) until the three Claude rungs that ran
+  // through Antigravity left the seating tables (owner direction: Antigravity serves Gemini models only). The
+  // legacy policy hashes those tables, so the hash and the implementer candidates below changed with them.
+  assert.equal(selectionPolicy("legacy").hash, "sha256:ab6ad2bdb11347f3b79d188a78219e35c898c6db92eb4599e2a8f503f7ae2969");
+  assert.notEqual(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d",
+    "the pre-2026-11-17 legacy policy is a different policy and must not be reported under the same hash");
   const ARGO = { planner: "claude-fable-5-2,gemini-4-carbon,gpt-6-astra", implementer: "gpt-6-astra,claude-fable-5-2,gemini-4-carbon",
     reviewer: "grok-4.7,gemini-4-carbon", scout: "grok-4.3", synthesis: "gemini-4-carbon", fast_loop: "gemini-4-argon" };
   const task = taskProfile({ difficulty: "easy", stakes: "critical", depth: "max" });
@@ -95,10 +100,15 @@ test("argo and legacy are unchanged: the same picks for every role and the same 
     assert.equal(s.candidates.map(c => c.model).join(","), [...new Set(frontierCandidates(role).map(c => c.model))].join(","));
     assert.ok(s.candidates.every(c => c.effort === undefined), "argo sets no up-front effort");
   }
-  const LEGACY = { easy: "gpt-6-luna,claude-sonnet-4-6,gpt-6-astra,gpt-6-sol", medium: "gpt-6-sol,claude-sonnet-4-6,gpt-6-astra,gpt-6-luna",
-    hard: "claude-sonnet-4-6,gpt-6-astra,gpt-6-sol,gpt-6-luna" };
+  const LEGACY = { easy: "gpt-6-luna,gpt-6-astra,gpt-6-sol", medium: "gpt-6-sol,gpt-6-astra,gpt-6-luna",
+    hard: "gpt-6-astra,gpt-6-sol,gpt-6-luna" };
   for (const [difficulty, want] of Object.entries(LEGACY)) {
     assert.equal(selectSeat("implementer", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
+  }
+  const LEGACY_PLANNER = { easy: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol", medium: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol",
+    hard: "claude-fable-5-2,claude-opus-5-5,gpt-6-sol" };
+  for (const [difficulty, want] of Object.entries(LEGACY_PLANNER)) {
+    assert.equal(selectSeat("planner", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
   }
   assert.notEqual(selectionPolicy("fit").hash, selectionPolicy("argo").hash);
 });
@@ -164,7 +174,8 @@ test("fit fallbacks cross labs at the same class before stepping class, and neve
 
 test("fit candidates come from the whole registry the role's labs allow, and record which basis admitted each", () => {
   const registry = registryModels();
-  assert.equal(registry.length, 21, "18 API registry models + 3 lane models");
+  assert.equal(registry.length, 19, "18 API registry models + the 1 live lane model; retired lanes are never candidates");
+  for (const retired of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) assert.ok(!registry.some(r => r.model === retired), `${retired} is retired`);
   for (const { model } of registry) {
     const c = CLASSES.models[model];
     assert.ok(c && CLASSES.order.includes(c.class), `${model} has a declared class`);
@@ -187,7 +198,10 @@ test("fit still excludes unrecorded windows (M7) against a measured context esti
   for (const lane of ["claude-sonnet-4-6", "claude-opus-4-6-thinking", "gemini-3.8-flash-high"]) {
     assert.ok(!s.candidates.some(c => c.model === lane), `${lane} is not admitted`);
   }
-  assert.ok(s.selection.excluded.some(e => e.model === "claude-sonnet-4-6" && /window unrecorded/.test(e.why)));
+  // The retired Claude lanes are not candidates at all, so they are not listed as excluded either.
+  assert.ok(!s.selection.excluded.some(e => /^claude-(sonnet|opus)-4-6/.test(e.model)));
+  const ex = selectSeat("scout", { profile: "fit", needsContext: 3000, task: taskProfile({}) }).selection.excluded;
+  assert.ok(ex.some(e => e.model === "gemini-3.8-flash-high" && /window unrecorded/.test(e.why)), JSON.stringify(ex));
   assert.deepEqual(s.selection.task.context, { value: 3000, basis: "derived:prompt-chars" });
   const big = selectSeat("reviewer", { profile: "fit", needsContext: 600000, task: taskProfile({}) });
   assert.ok(big.candidates.every(c => !/^grok-4\.[567]$/.test(c.model)), "500k-window models are excluded for a 600k estimate");

@@ -49,8 +49,18 @@ test("every seated model resolves to the registry or a declared lane", () => {
     const r = resolveSeatModel(model);
     if (r.source === "lane") lanes.push(model);
   }
-  assert.deepEqual(lanes.sort(), Object.keys(LANES.agy_cli).sort(),
-    "the agy CLI lane models are exactly the seated models outside the registry");
+  // A retired lane (2026-11-17: Antigravity serves Gemini models only) stays declared so recorded ledgers
+  // still resolve its name to a lab, and is never seated.
+  const live = Object.entries(LANES.agy_cli).filter(([, l]) => !l.retired).map(([m]) => m);
+  const retired = Object.entries(LANES.agy_cli).filter(([, l]) => l.retired).map(([m]) => m);
+  assert.deepEqual(lanes.sort(), live.sort(),
+    "the non-retired agy CLI lane models are exactly the seated models outside the registry");
+  assert.deepEqual(live, ["gemini-3.8-flash-high"], "the only live lane is the Gemini one");
+  assert.deepEqual(retired.sort(), ["claude-opus-4-6-thinking", "claude-sonnet-4-6"]);
+  for (const model of retired) {
+    assert.ok(!seated.includes(model), `retired lane ${model} must not be seated anywhere`);
+    assert.notEqual(LANES.agy_cli[model].lab, "google", `${model} is retired because it is not a Gemini model`);
+  }
 });
 
 test("a model neither the registry nor a lane declares is refused by name", () => {

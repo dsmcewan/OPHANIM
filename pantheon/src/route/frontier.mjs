@@ -57,6 +57,7 @@ export function resolvePinned(pin){
   const found=Object.entries(models).find(([,names])=>Object.values(names).includes(pin));
   if(found)return {vendor:found[0]==='google'?'agy_google':found[0],model:pin};
   const lane=laneOf(pin);
+  if(lane?.retired)throw new Error(`Pinned model ${pin} is a retired lane: ${lane.retired}`);
   if(lane)return {vendor:lane.vendor,model:pin};
   throw new Error(`Pinned model ${pin} is in neither the model registry nor a declared lane`);
 }
@@ -252,7 +253,8 @@ const VENDOR_OF_REGISTRY=v=>v==='google'?'agy_google':v;
 /** Every registered model: the API registry, then each declared lane. */
 export function registryModels(){
   const api=Object.entries(models).flatMap(([vendor,names])=>Object.values(names).map(model=>({vendor:VENDOR_OF_REGISTRY(vendor),model,source:'registry'})));
-  const lanes=Object.entries(LANES).flatMap(([lane,names])=>Object.entries(names).map(([model,l])=>({vendor:l.vendor,model,source:`lane:${lane}`})));
+  // A retired lane is declared only so recorded ledgers resolve its name; it is never a candidate.
+  const lanes=Object.entries(LANES).flatMap(([lane,names])=>Object.entries(names).filter(([,l])=>!l.retired).map(([model,l])=>({vendor:l.vendor,model,source:`lane:${lane}`})));
   return [...api,...lanes];
 }
 function roleTables(){

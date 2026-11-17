@@ -4,13 +4,15 @@
       "vendor": "agy_google",
       "transport": "agy-cli",
       "lab": "anthropic",
-      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner and pantheon-implementer"
+      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner and pantheon-implementer",
+      "retired": "2026-11-17, owner direction: Antigravity serves Gemini models only. Kept so recorded ledgers still resolve this name to its lab; never seated or dispatched. Also no longer offered by `agy models` (2026-11-17)."
     },
     "claude-opus-4-6-thinking": {
       "vendor": "agy_google",
       "transport": "agy-cli",
       "lab": "anthropic",
-      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner"
+      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner",
+      "retired": "2026-11-17, owner direction: Antigravity serves Gemini models only. Kept so recorded ledgers still resolve this name to its lab; never seated or dispatched. Also no longer offered by `agy models` (2026-11-17)."
     },
     "gemini-3.8-flash-high": {
       "vendor": "agy_google",

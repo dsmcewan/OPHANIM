@@ -35,8 +35,11 @@ const SNAPSHOT = /-\d{8}$/;
 //      served by the model asked for. Kept only so those cycles verify as they were recorded.
 //   2  an answer is admitted only on the identity of the model that ANSWERED: a missing, blank or unresolved
 //      serving model does not qualify, and the model asked for is never evidence of which model answered.
-export const RESOLVER = 2;
-export const RESOLVERS = Object.freeze([1, 2]);
+//   3  (owner direction 2026-11-17) as 2, and a ROUTE is seated only for the labs the policy lists for it
+//      (`route_labs`): Antigravity serves Gemini models only. A seat on a route for a model of any other lab is not
+//      asked and its answer is not admitted. Contributors are still resolved by model, whatever route reached them.
+export const RESOLVER = 3;
+export const RESOLVERS = Object.freeze([1, 2, 3]);
 
 /** A base model name under `policy`: lower case, through `same_model`, without a date snapshot (applied to a fixpoint). */
 function baseOf(model, policy) {
@@ -67,7 +70,9 @@ function build() {
   // lanes.json: each lane model names its lab.
   for (const lane of Object.values(LANES)) for (const [m, spec] of Object.entries(lane)) declare(m, spec.lab, "lanes.json");
   const vendor_lab = Object.fromEntries(Object.keys(MODELS).filter(v => !routes.includes(v)).sort().map(v => [v, v]));
-  const policy = { schema: IDENTITY_POLICY_SCHEMA, resolver: RESOLVER, snapshot: "-YYYYMMDD", same_model, model_lab: Object.fromEntries(Object.entries(model_lab).sort()), vendor_lab, routes };
+  const route_labs = Object.fromEntries(Object.entries(rules.route_labs ?? {}).sort().map(([v, labs]) => [v, [...labs].sort()]));
+  for (const v of Object.keys(route_labs)) if (!routes.includes(v)) throw new Error(`identity policy: route_labs names ${v}, which is not a route`);
+  const policy = { schema: IDENTITY_POLICY_SCHEMA, resolver: RESOLVER, snapshot: "-YYYYMMDD", same_model, model_lab: Object.fromEntries(Object.entries(model_lab).sort()), vendor_lab, routes, route_labs };
   return Object.freeze(policy);
 }
 let CURRENT = null;
@@ -77,8 +82,9 @@ export const policyDigest = policy => "sha256:" + createHash("sha256").update(ca
 export function policyRefusal(policy) {
   const map = (o, ok) => o && typeof o === "object" && !Array.isArray(o) && Object.entries(o).every(([k, v]) => str(k) && ok(v));
   return policy?.schema === IDENTITY_POLICY_SCHEMA && RESOLVERS.includes(policy.resolver) && map(policy.same_model, str) && map(policy.model_lab, str)
-    && map(policy.vendor_lab, str) && Array.isArray(policy.routes) && policy.routes.every(str) ? null
-    : `an identity policy is a ${IDENTITY_POLICY_SCHEMA} object {resolver, same_model, model_lab, vendor_lab, routes}`;
+    && map(policy.vendor_lab, str) && Array.isArray(policy.routes) && policy.routes.every(str)
+    && (policy.resolver >= 3 ? map(policy.route_labs, v => Array.isArray(v) && v.every(str)) : policy.route_labs === undefined) ? null
+    : `an identity policy is a ${IDENTITY_POLICY_SCHEMA} object {resolver, same_model, model_lab, vendor_lab, routes} (and route_labs from resolver 3)`;
 }
 
 /** Resolve a model reached through `vendor`. Unresolved: {known: false, id: null, lab: null, why}. */
@@ -96,6 +102,12 @@ export function resolveModel(vendor, model, policy = currentPolicy()) {
 }
 /** Kept name: the identity of a model (see resolveModel). */
 export const modelIdentity = resolveModel;
+
+/** Why a seat on `vendor` may not be seated for a model of `lab` under `policy` (resolver 3: route_labs), or null. */
+function routeRefusal(vendor, lab, policy) {
+  const allowed = policy.route_labs?.[vendor];
+  return allowed && !allowed.includes(lab) ? `the ${vendor} route is seated for ${allowed.join(", ")} models only, and this is a ${lab} model` : null;
+}
 
 /**
  * What a set of contributions excludes from reviewing:
@@ -125,6 +137,8 @@ export function contributorKeys(contributions = [], policy = currentPolicy()) {
 export function candidateIdentity(seat, policy = currentPolicy()) {
   const asked = resolveModel(seat.vendor, seat.model, policy);
   if (!asked?.known) return { code: "UNRESOLVED", why: `the seat's identity is unresolved: ${asked?.why ?? "no model is named"}` };
+  const route = routeRefusal(seat.vendor, asked.lab, policy);
+  if (route) return { code: "ROUTE_LAB", why: route };
   return { lab: asked.lab, id: asked.id };
 }
 /** Why `seat` ({vendor, model}) may not be asked to review work with contributor `keys`, or null. */
@@ -145,6 +159,8 @@ export function candidateRefusal(seat, keys, policy = currentPolicy()) {
 export function reviewerIdentity(answer, policy = currentPolicy()) {
   const asked = resolveModel(answer.vendor, answer.model, policy);
   if (!asked?.known) return { code: "UNRESOLVED", why: `the reviewer's identity is unresolved: ${asked?.why ?? "no model is named"}` };
+  const route = routeRefusal(answer.vendor, asked.lab, policy);
+  if (route) return { code: "ROUTE_LAB", why: route };
   let served;
   if (str(answer.served_model)) served = resolveModel(answer.vendor, answer.served_model, policy);
   else if (policy.resolver >= 2) return { code: "NO_SERVED_IDENTITY", why: `the answer names no serving model: ${asked.id} was asked, and that is not evidence of which model answered` };

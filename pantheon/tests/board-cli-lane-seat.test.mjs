@@ -1,11 +1,14 @@
 // Audit M6 (docs/reviews/2026-11-16-routing-coordination): an operator's lane seat on the command line,
-// `pantheon-board.mjs run <item> --seat implementer=agy_google/claude-sonnet-4-6`, must reach the lane's
+// `pantheon-board.mjs run <item> --seat implementer=agy_google/<lane model>`, must reach the lane's
 // declared transport (agy-cli), never an API-only registry lookup -- and the run must say so on the turn.
+// The lane this was first written against (claude-sonnet-4-6) was retired 2026-11-17, owner direction:
+// Antigravity serves Gemini models only. The positive case now runs on the remaining live lane
+// (gemini-3.8-flash-high); the old seat is kept as a refusal that must make no Antigravity call.
 // Everything is a fake: the seats (--clients), the cycle reviewers (--turn), the agy CLI (a script that logs
 // its launch), a temporary git repository and a status ledger signed by test keys moved out of the repo.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, chmodSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, chmodSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -19,7 +22,8 @@ const FIXTURE = pathToFileURL(join(HERE, "fixtures", "dispatch.mjs")).href;
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 const ITEM = "lane-seat-item";
 
-test("M6: --seat implementer=agy_google/claude-sonnet-4-6 through pantheon-board.mjs reaches the agy lane transport", async () => {
+// One CLI run of the fixture item with the given --seat values; returns what the run left behind.
+async function runCli(seats, fn) {
   await withDispatch(async ({ dir: repo, agy }) => {
     writeFileSync(join(repo, "alpha.mjs"), "export const ok = false;\n");
     writeFileSync(join(repo, "verify.mjs"), 'import assert from "node:assert/strict"; import {ok} from "./alpha.mjs"; assert.equal(ok, true);\n');
@@ -50,16 +54,34 @@ test("M6: --seat implementer=agy_google/claude-sonnet-4-6 through pantheon-board
 
       const out = spawnSync(process.execPath, [BOARD_CLI, "run", ITEM, "--repo", repo, "--status-ledger", statusRoot,
         "--clients", join(repo, "clients.fixture.mjs"), "--turn", join(repo, "turn.fixture.mjs"),
-        "--seat", "planner=anthropic/claude-fable-5-2", "--seat", "implementer=agy_google/claude-sonnet-4-6", "--seat", "reviewer=xai/grok-4.6",
+        ...seats.flatMap(s => ["--seat", s]),
         "--dir", join(repo, "board"), "--out", join(repo, "bundle"), "--checked", "2026-11-18"], { encoding: "utf8", env: process.env, timeout: 120_000 });
-      const result = JSON.parse(out.stdout);
-      assert.equal(result.shipped, true, `${out.stdout}\n${out.stderr.slice(-2000)}`);
-      assert.deepEqual(agy().filter(a => a.agent === "pantheon-implementer"), [{ agent: "pantheon-implementer", model: "claude-sonnet-4-6" }],
-        "the implementer turn launched the agy lane with the operator's model");
-      const run = JSON.parse(readFileSync(join(repo, "board", "run.json"), "utf8"));
-      const work = run.turns.filter(t => t.purpose === "work");
-      assert.deepEqual(work.map(t => [t.vendor, t.model, t.transport, t.pool, t.selection?.source]),
-        [["agy_google", "claude-sonnet-4-6", "agy-cli", "agy_google", "operator-override"]]);
+      const runPath = join(repo, "board", "run.json");
+      await fn({ out, result: JSON.parse(out.stdout), agy, run: existsSync(runPath) ? JSON.parse(readFileSync(runPath, "utf8")) : null });
     } finally { rmSync(keys, { recursive: true, force: true }); }
+  });
+}
+
+test("M6: --seat implementer=agy_google/gemini-3.8-flash-high through pantheon-board.mjs reaches the agy lane transport", async () => {
+  await runCli(["planner=anthropic/claude-fable-5-2", "implementer=agy_google/gemini-3.8-flash-high", "reviewer=xai/grok-4.6"], ({ out, result, agy, run }) => {
+    assert.equal(result.shipped, true, `${out.stdout}\n${out.stderr.slice(-2000)}`);
+    assert.deepEqual(agy().filter(a => a.agent === "pantheon-implementer"), [{ agent: "pantheon-implementer", model: "gemini-3.8-flash-high" }],
+      "the implementer turn launched the agy lane with the operator's model");
+    const work = run.turns.filter(t => t.purpose === "work");
+    assert.deepEqual(work.map(t => [t.vendor, t.model, t.transport, t.pool, t.selection?.source]),
+      [["agy_google", "gemini-3.8-flash-high", "agy-cli", "agy_google", "operator-override"]]);
+    // The Antigravity transport reports no serving model; the turn carries the requested one, marked as an input.
+    assert.deepEqual(work.map(t => [t.served_model, t.served_model_source]), [["gemini-3.8-flash-high", "input"]]);
+  });
+});
+
+test("M6: --seat implementer=agy_google/claude-sonnet-4-6 (a retired lane) is refused, and no Antigravity call is made", async () => {
+  await runCli(["planner=anthropic/claude-fable-5-2", "implementer=agy_google/claude-sonnet-4-6", "reviewer=xai/grok-4.6"], ({ out, result, agy, run }) => {
+    const said = `${out.stdout}\n${out.stderr.slice(-2000)}`;
+    assert.equal(result.shipped, false, said);
+    assert.equal(result.commit, null, said);
+    assert.match(out.stderr, /the Antigravity transport serves Gemini models only: claude-sonnet-4-6 is a anthropic model/);
+    assert.deepEqual(agy(), [], "the fake agy CLI was never launched: the refusal precedes any Antigravity call");
+    assert.deepEqual((run?.turns ?? []).filter(t => t.purpose === "work"), [], "no work turn was recorded");
   });
 });

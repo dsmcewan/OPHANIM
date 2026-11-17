@@ -173,14 +173,17 @@ export function lineageRecorder({ledger, operator, order, keys: store = null}) {
     return s;
   };
   return {
-    recordTurn({seat, requested_model, served_model = null, response_id = null, reply, purpose = null, cites = [], prompt = null, tools = [], selection = null}) {
+    recordTurn({seat, requested_model, served_model = null, served_model_source = null, response_id = null, reply, purpose = null, cites = [], prompt = null, tools = [], selection = null}) {
       const s = signerFor(seat);
       const prev = last.get(seat.seat_id);
       // `selection` (optional, additive): why this seat was chosen and under which policy version/hash
       // (pantheon/src/route/frontier.mjs selectSeat). Entries written before it existed verify unchanged.
       const payload = {seat, requested_model, served_model, response_id, reply, reply_sha: sha(reply), purpose,
         ...(typeof prompt === 'string' ? {prompt_sha: promptSha(prompt)} : {}), ...(tools?.length ? {tools: tools.map(String)} : {}),
-        ...(selection ? {selection} : {})};
+        ...(selection ? {selection} : {}),
+        // (optional, additive) "input": the transport reports no serving model, and the required input model is
+        // recorded as the output's model (owner direction 2026-11-17, Antigravity). Absent: the provider named it.
+        ...(served_model_source ? {served_model_source} : {})};
       const h = ledger.append({kind: 'turn', payload, author: {key_id: s.key_id}, signer: s, order, derivedFrom: [...(prev ? [prev] : []), ...cites]}).hash;
       last.set(seat.seat_id, h);
       return h;

@@ -71,23 +71,23 @@ test("every seat declares a basis from the closed set, and TASTE travels with th
 });
 
 test("a full seating spreads across quota pools and names the contention it cannot avoid", () => {
-  // NO LONGER FOUR INDEPENDENT POOLS, by operator decision 2026-09-29 ("Planners are Opus 4.6
-  // through Agy... implementers will be Sonnet 4.6 through Agy as well"). Planner, implementer and
-  // explorer's first rungs now all read agy_google -- deliberately, to avoid both the rationed
-  // anthropic pool and openai's dead credits -- so three of four roles genuinely share one hose.
-  // That is exactly the fact this test exists to name, not hide.
+  // FOUR INDEPENDENT POOLS AGAIN. The Claude-via-Antigravity rungs (operator seating 2026-09-29) were removed 2026-11-17, owner
+  // direction: Antigravity serves Gemini models only. Planner is back on anthropic and
+  // implementer on openai, so these four roles each spend from their own subscription and nothing contends.
   const p = seatingPlan({ roles: ["planner", "implementer", "reviewer", "explorer"] });
   assert.equal(p.ok, true);
-  assert.deepEqual(p.pools.sort(), ["agy_google", "xai"], "only two distinct pools now, not four");
-  assert.match(p.contention.quota, /agy_google: planner, implementer, explorer \(3 roles, one hose\)/,
-    "the counter must name the pool and all three roles sharing it");
+  assert.deepEqual(p.pools.sort(), ["agy_google", "anthropic", "openai", "xai"], "four roles, four distinct pools");
+  assert.deepEqual(Object.fromEntries(Object.entries(p.assigned).map(([role, a]) => [role, a.vendor])),
+    { planner: "anthropic", implementer: "openai", reviewer: "xai", explorer: "agy_google" });
+  assert.equal(p.contention.quota, null, "no two of these roles share a hose, and the counter must not invent one");
 
-  // Adding judge does NOT grow the contention: judge is still anthropic-seated and untouched by
-  // today's change, so it lands on a pool nothing else in this set is using.
+  // Adding judge is the contention it cannot avoid: judge is anthropic-seated, and so is the planner.
+  // The counter must name the pool and both roles, and must not drag the other three roles into it.
   const five = seatingPlan({ roles: ["planner", "implementer", "reviewer", "explorer", "judge"] });
-  assert.match(five.contention.quota, /agy_google: planner, implementer, explorer \(3 roles, one hose\)/,
-    "a fifth role landing on a fresh pool must not be reported as new contention");
-  assert.equal(five.assigned.judge.vendor, "anthropic", "judge is unaffected by the planner/implementer reseat");
+  assert.equal(five.assigned.judge.vendor, "anthropic");
+  assert.equal(five.contention.quota, "anthropic: planner, judge (2 roles, one hose)",
+    "the counter names the pool and exactly the two roles sharing it");
+  assert.deepEqual(five.pools.sort(), ["agy_google", "anthropic", "openai", "xai"], "a fifth role on a used pool adds no pool");
 });
 
 test("a seating falls through to the next candidate and says it did", () => {
@@ -239,45 +239,44 @@ test("the planner's last resort is another lab, and it is unreachable while the 
   // it was this table's documented trade -- one hose, nowhere to reseat, only somewhere to wait --
   // and the subscription it waits on is the same one the operator's own session spends.
   //
-  // UPDATED 2026-09-29 TWICE. First: agy_google/claude-opus-4-6-thinking landed banded hard,
-  // ahead of anthropic's own hard rung. Then, the same day, the operator corrected the shape:
-  // "Sonnet will suffice at most of what it's given to plan, saving tokens on a lesser model. But
-  // if it needs advice Opus can step in. Not everything needs to be routed through Opus." Sonnet
-  // now leads the table (band easy, real default via array position) with Opus second (band hard,
-  // the escalation) -- both still agy_google, both still ahead of the anthropic hose.
-  assert.equal(selectFor("planner", { difficulty: "hard" }).vendor, "agy_google",
-    "a hard plan escalates to Opus, live-validated 2026-09-29");
-  assert.equal(selectFor("planner", { difficulty: "hard" }).model, "claude-opus-4-6-thinking");
+  // The Claude-via-Antigravity rungs (operator seating 2026-09-29) were removed 2026-11-17, owner
+  // direction: Antigravity serves Gemini models only. The planner ladder is again the two anthropic
+  // rungs with openai as the unbanded last resort.
+  const hard = selectFor("planner", { difficulty: "hard" });
+  assert.equal(hard.vendor, "anthropic", "a hard plan is the anthropic hard rung");
+  assert.equal(hard.model, "claude-fable-5-2");
   for (const difficulty of ["easy", "medium"]) {
     const s = selectFor("planner", { difficulty });
-    assert.equal(s.vendor, "agy_google", `a ${difficulty} plan is the actual default: Sonnet via agy_google`);
-    assert.equal(s.model, "claude-sonnet-4-6");
-  }
-
-  // What used to be "the last resort is another lab" is now "the FIRST resort is another lab":
-  // agy_google is unavoidable's own vendor too, so avoiding it is what now reaches anthropic's
-  // full ladder, exactly as avoiding anthropic used to reach openai.
-  for (const difficulty of ["easy", "medium"]) {
-    const s = selectFor("planner", { difficulty, avoid: ["agy_google"] });
-    assert.equal(s.vendor, "anthropic", `a ${difficulty} plan without agy_google falls back to the operator's anthropic ladder`);
+    assert.equal(s.vendor, "anthropic", `a ${difficulty} plan stays on the anthropic ladder while the hose is open`);
     assert.equal(s.model, "claude-opus-5-5");
   }
-  const hardNoAgy = selectFor("planner", { difficulty: "hard", avoid: ["agy_google"] });
-  assert.equal(hardNoAgy.vendor, "anthropic");
-  assert.equal(hardNoAgy.model, "claude-fable-5-2");
 
-  // And avoiding anthropic itself (the ORIGINAL scenario this test pins) no longer ends at openai:
-  // agy_google is live, openai's credits are confirmed dead, and agy_google covers every difficulty
-  // itself now (Sonnet for easy/medium, Opus for hard) once anthropic is out of the running.
+  // No planner rung runs through Antigravity, so avoiding agy_google changes nothing.
+  assert.ok(!candidatesFor("planner").some(c => c.vendor === "agy_google"), "no planner rung is seated on agy_google");
   for (const difficulty of ["easy", "medium", "hard"]) {
-    const shut = selectFor("planner", { difficulty, avoid: ["anthropic"] });
-    assert.equal(shut.ok, true, "a shut anthropic hose must no longer end the run");
-    assert.equal(shut.vendor, "agy_google");
-    assert.equal(shut.model, difficulty === "hard" ? "claude-opus-4-6-thinking" : "claude-sonnet-4-6");
+    const s = selectFor("planner", { difficulty, avoid: ["agy_google"] });
+    assert.equal(s.vendor, "anthropic");
+    assert.equal(s.model, difficulty === "hard" ? "claude-fable-5-2" : "claude-opus-5-5");
   }
 
-  // The true last resort -- both anthropic AND agy_google unavailable -- is still openai, and it
-  // is still reached only through cands[0], the same "if and when" design as before.
+  // UNREACHABLE WHILE THE HOSE IS OPEN: with anthropic available, no difficulty lands on the openai seat.
+  for (const difficulty of ["easy", "medium", "hard"]) {
+    assert.notEqual(selectFor("planner", { difficulty }).vendor, "openai",
+      `a ${difficulty} plan must not reach the last resort while an anthropic rung is alive`);
+  }
+
+  // THE SCENARIO THIS TEST PINS: the anthropic hose is shut. The run must not end; every difficulty
+  // reseats on the other lab, reached only through cands[0] because the seat is unbanded.
+  for (const difficulty of ["easy", "medium", "hard"]) {
+    const shut = selectFor("planner", { difficulty, avoid: ["anthropic"] });
+    assert.equal(shut.ok, true, "a shut anthropic hose must not end the run");
+    assert.equal(shut.vendor, "openai");
+    assert.equal(shut.model, "gpt-6-sol");
+    assert.equal(shut.exact, false, "it is a fallback, not a rung anyone asked for");
+    assert.match(shut.why_rung, /no banded rung/);
+  }
+
+  // Both hoses named shut (anthropic and agy_google) still reaches openai, the same way.
   const bothShut = selectFor("planner", { difficulty: "hard", avoid: ["anthropic", "agy_google"] });
   assert.equal(bothShut.ok, true, "both hoses shut must still not end the run");
   assert.equal(bothShut.vendor, "openai");
@@ -297,24 +296,25 @@ test("difficulty picks the rung; the cheap rung is the answer to an easy task, n
   // `hard` on the anthropic ladder specifically, because falling UP to it would burn the dearest
   // seat on a brief whose whole output is one line.
   //
-  // UPDATED 2026-09-29 TWICE: agy_google now leads this ladder for every difficulty -- Sonnet for
-  // easy/medium (the operator's actual default, "Sonnet will suffice at most of what it's given to
-  // plan"), Opus for hard (the escalation, "if it needs advice"). See "the planner's last resort is
-  // another lab" for the full case. fable/opus-5-5 are still reachable, one avoid away from the top.
-  assert.equal(selectFor("planner", { difficulty: "easy" }).model, "claude-sonnet-4-6");
-  assert.equal(selectFor("planner", { difficulty: "medium" }).model, "claude-sonnet-4-6");
-  assert.equal(selectFor("planner", { difficulty: "hard" }).model, "claude-opus-4-6-thinking");
-  assert.equal(selectFor("planner", { difficulty: "easy", avoid: ["agy_google"] }).model, "claude-opus-5-5",
-    "opus-5-5 is still easy/medium's answer on the anthropic ladder once agy_google is out of the running");
-  assert.equal(selectFor("planner", { difficulty: "hard", avoid: ["agy_google"] }).model, "claude-fable-5-2",
-    "fable is still hard's answer on the anthropic ladder once agy_google is out of the running");
-  assert.notEqual(selectFor("planner", { difficulty: "medium" }).model, "claude-fable-5-2",
+  // The Claude-via-Antigravity rungs (operator seating 2026-09-29) were removed 2026-11-17, owner
+  // direction: Antigravity serves Gemini models only. The anthropic ladder leads again.
+  const easy = selectFor("planner", { difficulty: "easy" });
+  assert.equal(easy.model, "claude-opus-5-5");
+  assert.equal(easy.exact, true, "the easy rung is the answer to an easy task, not a fallback");
+  const medium = selectFor("planner", { difficulty: "medium" });
+  assert.equal(medium.model, "claude-opus-5-5");
+  assert.equal(medium.exact, false);
+  assert.match(medium.why_rung, /no medium rung; fell to easy rather than upgrading past what was asked/);
+  assert.equal(selectFor("planner", { difficulty: "hard" }).model, "claude-fable-5-2",
+    "fable is reached only by asking for hard");
+  assert.notEqual(medium.model, "claude-fable-5-2",
     "a medium plan must never fall UP onto the hard rung");
   assert.equal(selectFor("implementer", { difficulty: "easy" }).model, "gpt-6-luna");
-  // UPDATED 2026-09-29, same reseat as planner above: hard now resolves to agy_google's new rung.
-  assert.equal(selectFor("implementer", { difficulty: "hard" }).model, "claude-sonnet-4-6");
-  assert.equal(selectFor("implementer", { difficulty: "hard", avoid: ["agy_google"] }).model, "gpt-6-astra",
-    "astra is still hard's answer on the openai ladder once agy_google is out of the running");
+  assert.equal(selectFor("implementer", { difficulty: "medium" }).model, "gpt-6-sol");
+  assert.equal(selectFor("implementer", { difficulty: "hard" }).model, "gpt-6-astra");
+  // The implementer ladder is one lab: with openai out there is no seat, and that is said, not defaulted.
+  assert.deepEqual(selectFor("implementer", { difficulty: "hard", avoid: ["openai"] }),
+    { ok: false, why: 'no seated candidate for "implementer"' });
 
   // Every rung holds a 1M window, so CONTEXT never ordered them and cost never did either.
   assert.equal(SEAT_FACTS.anthropic.windows["claude-sonnet-5"], SEAT_FACTS.anthropic.windows["claude-fable-5-2"]);
@@ -364,17 +364,19 @@ test("effort escalates before the rung does, on the LAB's own value list", () =>
 });
 
 test("contention has three fields with three meanings, and they are not glued together", () => {
-  // WAS planner+judge (both anthropic) until 2026-09-29's reseat moved planner to agy_google and
-  // left judge on anthropic alone -- see the previous test. planner+implementer now demonstrates
-  // the identical point (one QUOTA hose, two DIFFERENT checkouts), and is the more honest example
-  // today since it is the pair the operator's own instruction put on one hose.
-  const p = seatingPlan({ roles: ["planner", "implementer"] });
+  // planner+judge: both anthropic, so one QUOTA hose, on two DIFFERENT checkouts. (planner+implementer
+  // stood in for this pair while both ran through Antigravity; those rungs were removed 2026-11-17, owner
+  // direction: Antigravity serves Gemini models only, and planner+implementer no longer share a hose.)
+  const p = seatingPlan({ roles: ["planner", "judge"] });
   assert.equal(p.ok, true);
-  assert.equal(p.assigned.planner.vendor, p.assigned.implementer.vendor);
-    // Named, and counted per pool: "1 role(s) share" was the count BEYOND the first in each pool, which
+  assert.equal(p.assigned.planner.vendor, p.assigned.judge.vendor);
+  assert.equal(p.assigned.planner.vendor, "anthropic");
+  // Named, and counted per pool: "1 role(s) share" was the count BEYOND the first in each pool, which
   // for two roles on one hose reads as one.
-  assert.match(p.contention.quota, /agy_google: planner, implementer \(2 roles, one hose\)/,
+  assert.equal(p.contention.quota, "anthropic: planner, judge (2 roles, one hose)",
     "the counter names the pool and both roles");
+  // And the pair that no longer shares a hose is not reported as contending.
+  assert.equal(seatingPlan({ roles: ["planner", "implementer"] }).contention.quota, null);
   assert.equal(p.contention.pack, null, "the checkout is not, which is what matters");
   assert.equal(p.contention.review, null, "and neither is the maker/checker lab");
 
@@ -665,37 +667,22 @@ test("the specified ladders are single-hose, so they can only be waited out", ()
   // died at the plan stage on a 429 with no retry-after. Its first two rungs still share a hose;
   // what changed is that the ladder no longer ENDS there.
   //
-  // UPDATED 2026-09-29 TWICE: two agy_google rungs now lead the table, not one -- Sonnet (the
-  // operator's actual default: "Sonnet will suffice at most of what it's given to plan") then Opus
-  // (the escalation: "if it needs advice, Opus can step in"). Both share agy_google's pool, so this
-  // is still three DISTINCT pools despite five total rungs: agy_google (the new lead, two rungs),
-  // the anthropic hose behind it, and openai as the still-unreachable-while-anything-above-is-alive
-  // last resort.
-  //
-  // THE IMPLEMENTER IS NO LONGER SINGLE-HOSE EITHER, same day, same reason: "The implementers will
-  // be Sonnet 4.6 through Agy as well." Its openai ladder (Astra -> Sol -> Luna) is untouched and
-  // still shares one hose among themselves -- what changed is a second pool now leads it.
+  // The Claude-via-Antigravity rungs (operator seating 2026-09-29) were removed 2026-11-17, owner
+  // direction: Antigravity serves Gemini models only. So the planner is two anthropic rungs plus the
+  // openai way out, and the implementer is single-hose again (Astra -> Sol -> Luna, all openai).
   const planner = candidatesFor("planner");
-  assert.deepEqual(planner.map(c => c.model),
-    ["claude-sonnet-4-6", "claude-opus-4-6-thinking", "claude-fable-5-2", "claude-opus-5-5", "gpt-6-sol"]);
-  assert.equal(new Set(planner.map(c => c.pool)).size, 3, "three pools: agy_google (two rungs), the anthropic hose, and the way out");
-  assert.equal(planner[0].basis, "TASTE", "the operator's stated default rung, named as a preference, not a measurement");
-  assert.equal(planner[1].basis, "TASTE", "the escalation rung, same reasoning");
-  assert.equal(planner[0].pool, planner[1].pool, "Sonnet and Opus share agy_google's one pool");
-  // The escape must genuinely be a different pool from the HOSE (the anthropic rungs, planner[2]
-  // onward) -- not merely from planner[0]/[1], which are agy_google's own pool and would make every
-  // other rung look like "an escape" by that narrower comparison.
-  const plannerHose = planner[2].pool;
+  assert.deepEqual(planner.map(c => c.model), ["claude-fable-5-2", "claude-opus-5-5", "gpt-6-sol"]);
+  assert.deepEqual(planner.map(c => c.pool), ["anthropic", "anthropic", "openai"], "two pools: the anthropic hose, and the way out");
+  const plannerHose = planner[0].pool;
+  assert.equal(planner[1].pool, plannerHose, "fable and opus-5-5 share the one anthropic hose");
   assert.notEqual(planner.at(-1).pool, plannerHose,
     "the last resort must not draw on the pool that just refused");
   assert.equal(planner.at(-1).band, undefined,
     "no band is how 'if and when' is enforced: selectFor reaches an unbanded seat only via cands[0]");
 
   const implementer = candidatesFor("implementer");
-  assert.deepEqual(implementer.map(c => c.model),
-    ["claude-sonnet-4-6", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
-  assert.equal(new Set(implementer.map(c => c.pool)).size, 2, "two pools: agy_google leading, then the openai hose");
-  assert.equal(implementer[0].basis, "TASTE", "the operator's stated top rung for implementing, same reasoning as planner's");
+  assert.deepEqual(implementer.map(c => c.model), ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
+  assert.deepEqual([...new Set(implementer.map(c => c.pool))], ["openai"], "one pool: the implementer ladder is single-hose");
 
   // The property, which is NOT that the lower rungs are worse: it is that no rung may claim a MEASURED
   // basis it does not have. All three hold 1M, so CONTEXT cannot separate them, and the band each one
@@ -705,10 +692,7 @@ test("the specified ladders are single-hose, so they can only be waited out", ()
   // the models instead of a map from difficulty to fit.
   const MEASURED = ["CONTEXT", "CONTINUITY", "QUOTA", "SURFACE"];
   const HONEST = ["TASTE", "UNMEASURED"];
-  // slice(2): both agy_google rungs (Sonnet, Opus) are the operator's own TASTE pick, not the
-  // cross-pool escape this loop is checking -- that escape is gpt-6-sol alone, reached only past
-  // the anthropic hose starting at planner[2].
-  for (const c of planner.slice(2)) {
+  for (const c of planner) {
     if (c.pool !== plannerHose) {
       // The cross-pool seat is the one place a MEASURED basis is earned rather than borrowed:
       // being on another quota pool is a checkable fact, and it is the entire reason the seat
@@ -723,25 +707,22 @@ test("the specified ladders are single-hose, so they can only be waited out", ()
     assert.ok(!MEASURED.includes(c.basis), `${c.model} must not claim a measured basis`);
   }
 
-  // Same shape for implementer: agy_google leads (TASTE, the operator's pick), the openai hose
-  // (astra/sol/luna) follows and keeps its original SURFACE-then-honest structure unchanged.
-  const implHose = implementer[1].pool;
-  assert.equal(implementer[1].basis, "SURFACE", "the Responses-API constraint is about the LAB, unchanged");
-  for (const c of implementer.slice(2)) {
-    assert.equal(c.pool, implHose, "astra/sol/luna all still share the one openai hose");
+  // Same shape for implementer: the top rung carries SURFACE (a fact about the LAB), the rest are honest labels.
+  const implHose = implementer[0].pool;
+  assert.equal(implementer[0].basis, "SURFACE", "the Responses-API constraint is about the LAB, unchanged");
+  for (const c of implementer.slice(1)) {
+    assert.equal(c.pool, implHose, "astra/sol/luna all share the one openai hose");
     assert.ok(HONEST.includes(c.basis), "the rungs are banded by fit, never by a measurement");
     assert.ok(!MEASURED.includes(c.basis), `${c.model} must not claim a measured basis`);
   }
 
   const p = seatingPlan({ roles: ["planner", "implementer", "reviewer"] });
-  // BOTH planner and implementer have now DROPPED OUT of wait_only, 2026-09-29, same reseat: each
-  // ladder gained a cross-pool rung, so neither is single-hose anymore -- and reviewer's own ladder
-  // already had more than one pool before today. With nothing left in this role set to report,
-  // wait_only collapses to null entirely rather than an empty-of-these-names string. Nothing in
-  // seatingPlan was edited to make this happen -- it reports the ladders whose every rung shares a
-  // pool, and none of these three stayed being one. That is the check that the escape is real
-  // rather than described: if the new seats were cosmetic, this field would still name them.
-  assert.equal(p.wait_only, null, "no role in this set has a single-pool ladder anymore");
+  // The implementer is the one single-hose ladder in this set, and wait_only names it and only it. The
+  // planner stays out because its ladder ends on another pool; the reviewer's ladder always had several.
+  // Nothing in seatingPlan knows these names -- it reports the ladders whose every rung shares a pool --
+  // so this is the check that the planner's escape is real rather than described.
+  assert.equal(p.wait_only, "implementer: every rung is on one hose, so a 429 with no retry-after can only be waited out");
+  assert.doesNotMatch(p.wait_only, /planner|reviewer/, "only the single-hose ladder is named");
 
   // And the rule the runtime applies to that: no interval means nothing to wait FOR, so the whole
   // ladder is out for the turn rather than tried rung by rung.

@@ -572,6 +572,9 @@ export async function runOpenItem(spec, opts = {}) {
     if (lane) {
       // The lane takes no effort or output cap: none is sent, so none is recorded as sent.
       const settings = { model, pool: pool ?? vendor, transport: transport ?? "agy", effort: null, max_output_tokens: null, output_budget_policy: null };
+      // Antigravity serves Gemini models only (owner direction 2026-11-17). Refused before any call or charge.
+      const made = resolveModel(vendor, model);
+      if (made?.known && made.lab !== "google") throw Object.assign(new Error(`the Antigravity transport serves Gemini models only: ${model} is a ${made.lab} model`), { code: "AGY_GEMINI_ONLY" });
       admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose });
       let r;
       const a0 = Date.now();
@@ -587,10 +590,14 @@ export async function runOpenItem(spec, opts = {}) {
       // The agy transports take no effort. The protocol never decides one for these seats; if one
       // arrives anyway it is recorded as not carried rather than silently dropped.
       run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "agy", purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
-        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}), ...chosen });
-      // The agy transports report no served model; it is recorded as unreported (null), never guessed.
+        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}),
+        served_model: model, served_model_source: "input", ...chosen });
+      // FORMAT REQUIREMENT (owner direction 2026-11-17). The Antigravity transports return no serving model. The model
+      // is a REQUIRED INPUT of the call (the CLI lane also checks it against the model the CLI reports at start, and
+      // fails on a mismatch or an unknown model), so the output carries that input as its model, marked
+      // served_model_source "input": it is the pinned model, not a statement by the provider about this answer.
       recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: 1 },
-        requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt, ...chosen });
+        requested_model: model, served_model: model, served_model_source: "input", response_id: r.response_id ?? null, reply: r.text, purpose, prompt, ...chosen });
       progress({ event: "turn.done", seat: vendor, model, ms, detail: `${r.text.length} chars, ${r.tool_calls} tool call(s), ${r.subagent_calls} subagent(s)` });
       return r.text;
     }

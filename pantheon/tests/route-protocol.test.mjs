@@ -46,7 +46,7 @@ test("a truncated reply raises only the output budget, within the documented cei
 });
 
 test("an agy seat's effort is not carried, so a rejection steps a rung instead of raising a dropped dial", () => {
-  assert.equal(carriesEffort({ vendor: "agy_google", model: "claude-sonnet-4-6" }), false, "CLI lane model");
+  assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-3.8-flash-high" }), false, "CLI lane model");
   assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-3.6-flash" }), false, "agy-seat.py takes no effort either");
   assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-4-argon" }), true, "frontier client carries it");
   assert.equal(carriesEffort(sol), true);
@@ -60,10 +60,16 @@ test("an agy seat's effort is not carried, so a rejection steps a rung instead o
   assert.match(d.why, /not carried by the agy transport/);
   const rec = escalationRecord({ role: "implementer", seat: agy, outcome: rejected, steps: 0, seating });
   assert.equal(verifyEscalation([rec], { seating }).ok, true);
-  // The planner's default ladder: the Sonnet lane rung steps to the Opus lane rung, then stops.
-  const up = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "claude-sonnet-4-6" }, outcome: rejected });
-  assert.deepEqual([up.action, up.to.model], ["step_rung", "claude-opus-4-6-thinking"]);
-  const top = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "claude-opus-4-6-thinking" }, outcome: rejected });
+  // A ladder of agy rungs: the lower rung steps to the lane rung above it, then stops. A fixture seating, because
+  // the default planner ladder's agy rungs (Sonnet lane -> Opus lane) were removed 2026-11-17 (owner: Antigravity
+  // serves Gemini models only) and no default ladder has two agy rungs now.
+  const agyLadder = { planner: [
+    { vendor: "agy_google", model: "gemini-3.6-flash", band: "easy", basis: "TASTE", why: "x" },
+    { vendor: "agy_google", model: "gemini-3.8-flash-high", band: "hard", basis: "TASTE", why: "x" },
+  ] };
+  const up = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "gemini-3.6-flash" }, outcome: rejected, seating: agyLadder });
+  assert.deepEqual([up.action, up.to.model, up.to.effort], ["step_rung", "gemini-3.8-flash-high", null]);
+  const top = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "gemini-3.8-flash-high" }, outcome: rejected, seating: agyLadder });
   assert.equal(top.action, "stop");
   assert.match(top.why, /not carried by the agy transport and there is no higher banded rung/);
   const frontier = nextStep({ role: "implementer", seat: { vendor: "agy_google", model: "gemini-4-argon" }, outcome: rejected,

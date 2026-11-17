@@ -164,11 +164,37 @@ When the lifecycle runs under the model rule it now asks the run for the same ru
 **Limits found, not worked around:**
 
 1. **Default routing has two in-run reviewer candidates** (`xai/grok-4.7`, `agy_google/gemini-4-carbon`). So at most two rounds of in-run findings fit; the third is the blocker above. More rounds need more configured reviewer candidates, which is a routing decision.
-2. **Seats served through Antigravity cannot be admitted under the model rule.** The vendor name `agy_google` covers two different paths:
-   - **Frontier Google models** (`gemini-4-carbon`) go to the Gemini API directly. That API names the model in each response (`modelVersion`), so these answers can be admitted. The second default in-run reviewer is on this path.
-   - **Every other `agy_google` model** (the Gemini flash models and the Claude lane models in `lanes.json`) goes through Antigravity: the `agy` CLI or the `google-antigravity` SDK agent. Pantheon records those turns with `served_model: null`. Google's documentation shows no field that names the answering model: the SDK response has text, usage and a stop reason; the CLI's `init.model` is only the `--model` override echoed back. Using it would be substituting the requested name.
-   - So these seats are still chosen as candidates (the validator ladder includes `agy_google/claude-sonnet-4-6`), their answers are refused, and the next seat is asked. Each costs a call. Removing them from reviewing seats under the model rule, or accepting a pinned model as evidence, is the owner's decision; neither was done here.
-   - An earlier version of this section said the second default in-run reviewer was affected. That was wrong: it conflated the vendor name with the Antigravity transport.
+2. **Antigravity returns no model name.** See "Antigravity" below for what was decided.
+
+### Antigravity: Gemini only, and the output carries the input model
+
+Owner direction, 2026-11-17, after the documentation and the owner's `agy models` output were checked.
+
+**Background.** The vendor name `agy_google` covers two paths:
+
+- **The Gemini API**, for frontier Google models (`gemini-4-carbon`). Each response names its model (`modelVersion`). Nothing changes here.
+- **Antigravity** (the `agy` CLI and the `google-antigravity` SDK agent), for every other `agy_google` model. It is an agent harness: a turn is several model calls and tool calls, and what comes back is text, usage and a stop reason. Google's documentation shows no field naming the model that answered. The CLI's `init.model` is the `--model` override echoed back.
+
+**Decision 1: Antigravity serves Gemini models only.**
+
+- The identity policy (resolver 3) records `route_labs: {agy_google: ["google"]}`. A seat on that route for a model of another lab is not asked, and an answer from one is not admitted.
+- The Antigravity transport refuses a non-Google model before any call (`AGY_GEMINI_ONLY`).
+- The three seating rows that ran Claude through Antigravity are removed (planner `claude-sonnet-4-6` and `claude-opus-4-6-thinking`, implementer `claude-sonnet-4-6`). Those ids are also no longer offered: the owner's `agy models` lists Claude 5.5 only.
+- The two lane declarations stay in `lanes.json`, marked `retired`, so recorded ledgers still resolve those names to the Anthropic lab. A retired lane cannot be pinned or dispatched.
+- Contributors are still resolved by model. A recorded Claude contribution that came through Antigravity still excludes that model.
+
+**Decision 2: the Antigravity output carries the required input model.**
+
+- The model is a required input of every Antigravity call. The transport now records it as the output's model: `served_model: <input model>`, with `served_model_source: "input"` on the run's turn and on the ledger turn.
+- The marker matters. It says the name is the pinned input, not a statement by the provider about that answer. A turn without the marker was named by its provider.
+- What supports it: the CLI lane compares the model the CLI reports at start-up with the one requested and fails on a mismatch, and headless mode fails on an unknown model instead of falling back. What it does not cover: subagents inside the turn.
+- The identity policy itself never fills in a model. An answer that reaches admission with no served model is still refused on every route.
+
+**Versioning.** Cycles recorded under resolver 1 or 2 carry no `route_labs` and are checked without it. The `served_model_source` field is additive: turns recorded without it hash and verify as before. Escalation records cite the seating they were decided under, so removing seats does not change how recorded escalations verify.
+
+**Scope.** Only in-run turns use Antigravity. The single-turn seats (planner, plan reviewers, change reviewers, validator) call the provider APIs directly, including the Gemini API for `agy_google`, and are not affected by decision 2.
+
+**For the independent review.** Decision 2 relaxes "never substitute the requested identity" for one route, by the owner's decision. The reviewer should judge whether pinning plus a start-up check is enough for a reviewing seat, and whether the SDK lane, which has no start-up check in Pantheon, should be treated the same as the CLI lane.
 
 ### After a reassessment
 
@@ -190,7 +216,8 @@ Points worth another lab's attention:
 2. **Undeclared aliases.** Two declared names that are one model, and are not in the rules, would count as two reviewers. The inventory was read for this; the two lane variants found are declared. A reassessment is how a later correction is recorded.
 3. **Each cycle carries a full copy of the policy** (about 1 KB). That makes replay self-contained at the cost of repetition.
 4. **Capacity is finite.** xAI and Google have two models each in the tables. After both models of a lab have contributed, that lab is out; after that happens to two labs, the review is pending.
-5. **Inside a Pantheon run** under default routing there are two in-run reviewer candidates. Separately, seats served through Antigravity name no answering model and cannot be admitted.
+5. **Inside a Pantheon run** under default routing there are two in-run reviewer candidates.
+5a. **Antigravity turns are admitted on the input model** (marked `served_model_source: "input"`), Gemini only. Is that enough for a reviewing seat, on both lanes?
 6. **Protocol v2 lets one model revise up to four times** on critiques alone. Is that bound right, and should it apply outside the lifecycle?
 7. **Validator capacity** was not shown reachable in a complete lifecycle; the argument is above and is not a proof.
 8. **After a reassessment** the re-review is automatic for active work. A Resolved item waits for the owner.
