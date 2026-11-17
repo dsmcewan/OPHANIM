@@ -1,3 +1,5 @@
+// ophanim/ledger/efficiency-kinds.mjs -- the efficiency records as ledger kinds, and their recorder.
+//
 // K5: OPHANIM's efficiency records as ledger kinds (docs/ledger-provenance-evaluation.md).
 //
 //   efficiency.promotion  an authorized 1 -> 3 slot policy and the figures it was qualified on
@@ -21,6 +23,19 @@
 // The side files these replace could be added, edited or negated by anyone with the directory (the
 // "debit loophole"). Here every figure is signed by its author and re-derived from the entries it cites
 // before it is written and on every replay, and totals are read only from a ledger that verifies.
+//
+// Purpose: define the seven efficiency.* kinds (validate = shape, rederive = meaning against the entries
+//   they cite and the board snapshot) and the recorder ophanim/efficiency/assessment.mjs writes through.
+// Inputs:  efficiencyKinds({authors, snapshot}): who may author promotions / other events, and how to read
+//   a board commit's snapshot. efficiencyRecorder({ledger, controller, order, snapshot}): an open ledger
+//   (packages/ledger), the signing controller and the append order. efficiencyTotals(ledger, promotion).
+// Outputs: kind specs; ledger entries (via the recorder); totals for one promotion.
+// Invariants: a rederive function returns null when the entry holds and a human-readable reason when it
+//   does not, and never throws (attempt() turns a thrown check into a reason); every count is taken
+//   from earlier entries on the chain; the recorder is idempotent on content (re-recording returns the
+//   entry already there); totals are computed only after the whole ledger verifies.
+// Must never: trust a figure from a side file or from the caller that the chain can re-derive (e.g.
+//   `charged`), let a promotion exceed MAX_USES uses, or count a result or debit twice.
 import path from 'node:path';
 import {canonical, digest, readRuntimeSnapshot} from '../board.mjs';
 import {rederiveAssessment, traceBinding} from '../efficiency/assessment.mjs';
@@ -40,6 +55,7 @@ const REF = /^sha256:[0-9a-f]{64}$/;
 const count = v => Number.isSafeInteger(v) && v >= 0;
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
+// The hashes in `hashes` whose entry is of `kind`.
 const cited = (view, hashes, kind) => hashes.filter(h => view.entry(h)?.kind === kind);
 // Earlier entries of `kind` that cite `hash`, with their payloads.
 const citing = (view, kind, hash) => view.entries()
@@ -54,8 +70,13 @@ const DEBIT_KEYS = ['schema', 'traceSha', 'assessmentCostMs', 'charged', 'interr
 const TRACE_KEYS = ['schema', 'stateDir', 'traceSha', 'trace'];
 const ASSESSED_KEYS = ['schema', 'traceSha', 'report'];
 const RETAINED_KEYS = ['schema', 'marker'];
-const TOTAL_KEYS = ['qualifiedConvergences', 'uses', 'originalOptimizationCostMs', 'additionalAssessmentCostMs', 'unmeasuredAssessments', 'measuredNetMs'];
-const reportDirOf = (stateDir, boardCommit) => path.join(stateDir, 'efficiency', 'convergences', boardCommit.replace(':', '-'));
+const TOTAL_KEYS = [
+  'qualifiedConvergences', 'uses', 'originalOptimizationCostMs', 'additionalAssessmentCostMs',
+  'unmeasuredAssessments', 'measuredNetMs'];
+// The directory assessment.mjs keeps a convergence's files in (mirrors its own path rule).
+const reportDirOf = (stateDir, boardCommit) => path.join(
+  stateDir, 'efficiency', 'convergences', boardCommit.replace(':', '-'));
+// Run a check that throws; its message becomes the rederive reason, null when it passes.
 const attempt = fn => { try { fn(); return null; } catch (error) { return String(error.message); } };
 
 // Totals for one promotion over a list of entries ({hash, kind, derived_from, payload}) in chain order.
@@ -63,15 +84,21 @@ function totalsOver(list, promotionHash) {
   const promotion = list.find(e => e.hash === promotionHash);
   if (promotion?.kind !== 'efficiency.promotion') throw Error('no such efficiency.promotion on this ledger');
   const efficiency = promotion.payload.efficiency;
-  const uses = new Set(list.filter(e => e.kind === 'efficiency.use' && e.derived_from[0] === promotionHash).map(e => e.hash));
-  const under = kind => list.filter(e => e.kind === kind && uses.has(e.derived_from[0])).map(e => ({use: e.derived_from[0], ...e.payload}));
+  // Uses cite their promotion first; results and debits cite their use first.
+  const uses = new Set(
+    list.filter(e => e.kind === 'efficiency.use' && e.derived_from[0] === promotionHash).map(e => e.hash));
+  const under = kind => list.filter(e => e.kind === kind && uses.has(e.derived_from[0])).map(
+    e => ({use: e.derived_from[0], ...e.payload}));
   const results = under('efficiency.result'), debits = under('efficiency.debit');
   const additionalAssessmentCostMs = debits.reduce((s, d) => s + (d.charged ? d.assessmentCostMs : 0), 0);
+  // Interrupted runs are counted once per (use, interrupted trace), however many debits name them.
   const unmeasuredAssessments = new Set(debits.filter(d => d.interrupted).map(d => `${d.use}:${d.interrupted}`)).size;
   return {
-    qualifiedConvergences: results.length, uses: uses.size, originalOptimizationCostMs: efficiency.totalAssessmentCostMs,
+    qualifiedConvergences: results.length, uses: uses.size,
+    originalOptimizationCostMs: efficiency.totalAssessmentCostMs,
     additionalAssessmentCostMs, unmeasuredAssessments,
-    measuredNetMs: results.reduce((s, r) => s + r.observedSavingMs, -efficiency.totalAssessmentCostMs - additionalAssessmentCostMs),
+    measuredNetMs: results.reduce(
+      (s, r) => s + r.observedSavingMs, -efficiency.totalAssessmentCostMs - additionalAssessmentCostMs),
   };
 }
 
@@ -81,7 +108,9 @@ function retainedOutcome(view, {marker, assessed}, trace, snapshot) {
   const traced = view.entry(assessed).derived_from[0];
   const {report} = view.payload(assessed), {stateDir, trace: prior} = view.payload(traced);
   return retainedExperimentFrom({marker, trace,
-    prior: dir => { if (dir !== reportDirOf(stateDir, prior.boardCommit)) throw Error('Prior experiment path differs from its trace entry'); return prior; },
+    prior: dir => {
+      if (dir !== reportDirOf(stateDir, prior.boardCommit))
+        throw Error('Prior experiment path differs from its trace entry'); return prior; },
     report: () => report,
     state: (dir, commit) => snapshot(dir, commit).state});
 }
@@ -96,22 +125,29 @@ function measuredValueWhy(report, trace, debitHash, view) {
   if (!m || typeof m !== 'object') return 'the assessment carries a measured value';
   if (!m.ledger) {
     if (debitHash) return 'the assessment cites a debit its measured value does not name';
-    if (!exact(m, ['qualifiedConvergences', 'originalOptimizationCostMs', 'measuredNetMs']) || m.qualifiedConvergences !== 0 ||
-        m.originalOptimizationCostMs !== report.cost?.wallMs || m.measuredNetMs !== -m.originalOptimizationCostMs)
+    if (!exact(m, ['qualifiedConvergences', 'originalOptimizationCostMs', 'measuredNetMs']) ||
+      m.qualifiedConvergences !== 0 ||
+      m.originalOptimizationCostMs !== report.cost?.wallMs || m.measuredNetMs !== -m.originalOptimizationCostMs)
       return 'outside a use the measured value is the assessment cost, unrecovered (a use is measured on the ledger)';
     return null;
   }
-  if (!debitHash || m.ledger.debit !== debitHash) return 'the measured value ends on a debit the assessment does not cite';
+  if (!debitHash || m.ledger.debit !== debitHash)
+    return 'the measured value ends on a debit the assessment does not cite';
   const debit = view.payload(debitHash), use = view.entry(debitHash).derived_from[0];
   if (debit.traceSha !== report.traceSha || m.ledger.use !== use) return 'the cited debit is for another trace or use';
   const result = m.ledger.result;
+  // A result is named exactly when the convergence was accepted, and it must be this use's result.
   if ((result !== undefined) !== (trace.original.convergence === 'accepted_change') ||
-      result !== undefined && !(view.entry(result)?.kind === 'efficiency.result' && view.entry(result).derived_from[0] === use))
+      result !== undefined &&
+      !(view.entry(result)?.kind === 'efficiency.result' && view.entry(result).derived_from[0] === use))
     return 'an accepted convergence names the result realized under its use, and nothing else does';
   const order = view.entries(), at = order.indexOf(m.ledger.head);
-  if (at < 0 || m.head !== m.ledger.head || order.indexOf(debitHash) > at) return 'the measured value names a head that is not on the chain after its debit';
+  if (at < 0 || m.head !== m.ledger.head || order.indexOf(debitHash) > at)
+    return 'the measured value names a head that is not on the chain after its debit';
+  // Recompute the promotion's totals over the chain prefix ending at the named head.
   const list = order.slice(0, at + 1).filter(h => LEDGER_KINDS.has(view.entry(h).kind))
-    .map(h => ({hash: h, kind: view.entry(h).kind, derived_from: view.entry(h).derived_from, payload: view.payload(h)}));
+    .map(h => ({hash: h, kind: view.entry(h).kind, derived_from: view.entry(h).derived_from,
+      payload: view.payload(h)}));
   const totals = totalsOver(list, view.entry(use).derived_from[0]);
   if (TOTAL_KEYS.some(k => m[k] !== totals[k]) || m.measuredNetIsUpperBound !== (totals.unmeasuredAssessments > 0))
     return 'the measured value does not re-derive from the ledger up to its head';
@@ -121,7 +157,8 @@ function measuredValueWhy(report, trace, debitHash, view) {
 // The use an entry cites (exactly one), and the promotion that use cites.
 function useAndPromotion(e, view) {
   const uses = cited(view, e.derived_from, 'efficiency.use');
-  if (uses.length !== 1 || e.derived_from.length !== 1) return {why: 'it cites exactly one efficiency.use and nothing else'};
+  if (uses.length !== 1 || e.derived_from.length !== 1)
+    return {why: 'it cites exactly one efficiency.use and nothing else'};
   const use = view.entry(uses[0]);
   const promotion = use.derived_from[0];
   return {use: uses[0], promotion, promotionPayload: view.payload(promotion)};
@@ -133,15 +170,19 @@ export function efficiencyKinds({authors = {}, snapshot = readRuntimeSnapshot} =
   return {
     'efficiency.promotion': {
       authors: promoters,
-      validate: p => (exact(p, PROMOTION_KEYS) && p.schema === PROMOTION ? null : 'a promotion is an efficiency-promotion record'),
+      validate: p => (
+        exact(p, PROMOTION_KEYS) && p.schema === PROMOTION ? null : 'a promotion is an efficiency-promotion record'),
       rederive: e => {
         const p = e.payload, f = p.efficiency;
-        if (e.derived_from.length) return 'a promotion cites nothing on this chain; its authority is the signed decision it names';
+        if (e.derived_from.length)
+          return 'a promotion cites nothing on this chain; its authority is the signed decision it names';
         if (!SHA.test(p.scopeSha) || !REF.test(p.decisionId)) return 'a promotion names its scope and decision by hash';
         if (p.fromSlots !== 1 || p.toSlots !== 3) return 'the admitted experiment is 1 -> 3 slots only';
         if (p.maxUses !== MAX_USES) return `a promotion is bounded to ${MAX_USES} qualified uses`;
-        if (!exact(f, FIGURES) || !FIGURES.every(k => count(f[k]))) return 'efficiency figures are non-negative integers';
-        if (f.conservativeSavedMs !== f.baselineConservativeMs - f.candidateConservativeMs) return 'conservativeSavedMs is not baseline - candidate';
+        if (!exact(f, FIGURES) || !FIGURES.every(k => count(f[k])))
+          return 'efficiency figures are non-negative integers';
+        if (f.conservativeSavedMs !== f.baselineConservativeMs - f.candidateConservativeMs)
+          return 'conservativeSavedMs is not baseline - candidate';
         return null;
       },
     },
@@ -151,12 +192,16 @@ export function efficiencyKinds({authors = {}, snapshot = readRuntimeSnapshot} =
       rederive: (e, view) => {
         const p = e.payload;
         const promotions = cited(view, e.derived_from, 'efficiency.promotion');
-        if (promotions.length !== 1 || e.derived_from.length !== 1) return 'a use cites exactly one efficiency.promotion and nothing else';
+        if (promotions.length !== 1 || e.derived_from.length !== 1)
+          return 'a use cites exactly one efficiency.promotion and nothing else';
         const promotion = view.payload(promotions[0]);
-        if (typeof p.stateDir !== 'string' || !p.stateDir.startsWith('/') || p.useId !== digest(p.stateDir)) return 'useId is the digest of the state directory';
-        if (p.scopeSha !== promotion.scopeSha || p.decisionId !== promotion.decisionId) return 'the use names a different scope or decision than the promotion it cites';
+        if (typeof p.stateDir !== 'string' || !p.stateDir.startsWith('/') || p.useId !== digest(p.stateDir))
+          return 'useId is the digest of the state directory';
+        if (p.scopeSha !== promotion.scopeSha || p.decisionId !== promotion.decisionId)
+          return 'the use names a different scope or decision than the promotion it cites';
         const earlier = citing(view, 'efficiency.use', promotions[0]);
-        if (earlier.some(u => u.payload.useId === p.useId)) return 'this state directory already has a use under this promotion';
+        if (earlier.some(u => u.payload.useId === p.useId))
+          return 'this state directory already has a use under this promotion';
         if (earlier.length >= promotion.maxUses) return `the promotion's ${promotion.maxUses} uses are spent`;
         return null;
       },
@@ -167,9 +212,11 @@ export function efficiencyKinds({authors = {}, snapshot = readRuntimeSnapshot} =
       rederive: (e, view) => {
         const p = e.payload, at = useAndPromotion(e, view);
         if (at.why) return `a result: ${at.why}`;
-        if (!SHA.test(p.traceSha) || !count(p.executionMs) || !count(p.assessmentCostMs) || !Number.isSafeInteger(p.observedSavingMs)) return 'a result names its trace and non-negative integer times';
+        if (!SHA.test(p.traceSha) || !count(p.executionMs) || !count(p.assessmentCostMs) ||
+          !Number.isSafeInteger(p.observedSavingMs)) return 'a result names its trace and non-negative integer times';
         const expected = at.promotionPayload.efficiency.baselineConservativeMs - p.executionMs - p.assessmentCostMs;
-        if (p.observedSavingMs !== expected) return `observedSavingMs is ${p.observedSavingMs}, but the cited promotion's baseline gives ${expected}`;
+        if (p.observedSavingMs !== expected)
+          return `observedSavingMs is ${p.observedSavingMs}, but the cited promotion's baseline gives ${expected}`;
         if (citing(view, 'efficiency.result', at.use).length) return 'this use already realized its result';
         return null;
       },
@@ -180,11 +227,18 @@ export function efficiencyKinds({authors = {}, snapshot = readRuntimeSnapshot} =
       rederive: (e, view) => {
         const p = e.payload, at = useAndPromotion(e, view);
         if (at.why) return `a debit: ${at.why}`;
-        if (!SHA.test(p.traceSha) || !count(p.assessmentCostMs)) return 'a debit is a non-negative integer cost for one trace';
-        if (typeof p.charged !== 'boolean' || !(p.interrupted === null || SHA.test(p.interrupted))) return 'charged is a boolean and interrupted a trace hash or null';
-        if (citing(view, 'efficiency.debit', at.use).some(d => d.payload.traceSha === p.traceSha)) return 'this trace is already debited under this use';
+        if (!SHA.test(p.traceSha) || !count(p.assessmentCostMs))
+          return 'a debit is a non-negative integer cost for one trace';
+        if (typeof p.charged !== 'boolean' || !(p.interrupted === null || SHA.test(p.interrupted)))
+          return 'charged is a boolean and interrupted a trace hash or null';
+        if (citing(view, 'efficiency.debit', at.use).some(d => d.payload.traceSha === p.traceSha))
+          return 'this trace is already debited under this use';
         const deducted = citing(view, 'efficiency.result', at.use).some(r => r.payload.traceSha === p.traceSha);
-        if (p.charged === deducted) return deducted ? 'the realized result already deducts this cost; it is not charged twice' : 'an assessment with no realized result is charged';
+        // `charged` must be exactly "no result for this trace under this use already deducts the cost".
+        if (p.charged === deducted)
+          return deducted ?
+            'the realized result already deducts this cost; it is not charged twice'
+            : 'an assessment with no realized result is charged';
         return null;
       },
     },
@@ -194,42 +248,64 @@ export function efficiencyKinds({authors = {}, snapshot = readRuntimeSnapshot} =
       rederive: (e, view) => {
         const p = e.payload;
         if (e.derived_from.length) return 'a trace cites nothing on this chain; it names its board commit';
-        if (typeof p.stateDir !== 'string' || !path.isAbsolute(p.stateDir) || path.resolve(p.stateDir) !== p.stateDir) return 'a trace names an absolute state directory';
+        if (typeof p.stateDir !== 'string' || !path.isAbsolute(p.stateDir) || path.resolve(p.stateDir) !== p.stateDir)
+          return 'a trace names an absolute state directory';
         if (!SHA.test(p.traceSha) || digest(p.trace) !== p.traceSha) return 'traceSha is not the digest of the trace';
-        if (view.entries().some(h => view.entry(h).kind === 'efficiency.trace' && view.payload(h).traceSha === p.traceSha)) return 'this trace is already on the chain';
+        if (view.entries().some(
+          h => view.entry(h).kind === 'efficiency.trace' && view.payload(h).traceSha === p.traceSha))
+          return 'this trace is already on the chain';
         const why = attempt(() => traceBinding(p.trace, snapshot(p.stateDir, p.trace.boardCommit)));
         return why && `the trace does not bind to its board: ${why}`;
       },
     },
     'efficiency.assessed': {
       authors: events,
-      validate: p => (exact(p, ASSESSED_KEYS) && p.schema === ASSESSED && p.report && typeof p.report === 'object' ? null : 'an assessment is an efficiency-assessed record'),
+      validate: p => (
+        exact(p, ASSESSED_KEYS) && p.schema === ASSESSED && p.report &&
+        typeof p.report === 'object' ? null : 'an assessment is an efficiency-assessed record'),
       rederive: (e, view) => {
         const p = e.payload, report = p.report;
-        const traces = cited(view, e.derived_from, 'efficiency.trace'), retained = cited(view, e.derived_from, 'efficiency.retained');
+        const traces = cited(view, e.derived_from, 'efficiency.trace'),
+          retained = cited(view, e.derived_from, 'efficiency.retained');
         const debits = cited(view, e.derived_from, 'efficiency.debit');
         if (traces.length !== 1 || e.derived_from[0] !== traces[0] || retained.length > 1 || debits.length > 1 ||
-            e.derived_from.length !== 1 + retained.length + debits.length) return 'an assessment cites its trace first, then at most one retained experiment and one debit';
+            e.derived_from.length !== 1 + retained.length + debits.length)
+          return 'an assessment cites its trace first, then at most one retained experiment and one debit';
         const {stateDir, traceSha, trace} = view.payload(traces[0]);
-        if (p.traceSha !== traceSha || report.traceSha !== traceSha) return 'the assessment names a different trace than the one it cites';
-        if (view.entries().some(h => view.entry(h).kind === 'efficiency.assessed' && view.payload(h).traceSha === traceSha)) return 'this trace is already assessed on the chain';
+        if (p.traceSha !== traceSha || report.traceSha !== traceSha)
+          return 'the assessment names a different trace than the one it cites';
+        if (view.entries().some(
+          h => view.entry(h).kind === 'efficiency.assessed' && view.payload(h).traceSha === traceSha))
+          return 'this trace is already assessed on the chain';
         const prior = report.admission?.inputs?.priorOutcome;
-        if (!!prior !== (retained.length === 1)) return prior ? 'the admission read a retained experiment the assessment does not cite' : 'the assessment cites a retained experiment its admission did not read';
-        const why = attempt(() => rederiveAssessment({assessment: report, trace, snapshot: snapshot(stateDir, trace.boardCommit),
-          reportDir: reportDirOf(stateDir, trace.boardCommit), priorOutcome: () => retainedOutcome(view, retainedAt(view, retained[0]), trace, snapshot)}));
+        // A retained experiment is cited exactly when the admission read a prior outcome.
+        if (!!prior !== (retained.length === 1))
+          return prior ?
+            'the admission read a retained experiment the assessment does not cite'
+            : 'the assessment cites a retained experiment its admission did not read';
+        // The same re-derivation verifyEfficiencyRecord runs on files, here on the cited entries.
+        const why = attempt(
+          () => rederiveAssessment({assessment: report, trace, snapshot: snapshot(stateDir, trace.boardCommit),
+            reportDir: reportDirOf(stateDir, trace.boardCommit),
+            priorOutcome: () => retainedOutcome(view, retainedAt(view, retained[0]), trace, snapshot)}));
         if (why) return `the report does not re-derive from its trace: ${why}`;
         return measuredValueWhy(report, trace, debits[0] ?? null, view);
       },
     },
     'efficiency.retained': {
       authors: events,
-      validate: p => (exact(p, RETAINED_KEYS) && p.schema === RETAINED ? null : 'a retained experiment is an efficiency-retained record'),
+      validate: p => (exact(p, RETAINED_KEYS) &&
+        p.schema === RETAINED ? null : 'a retained experiment is an efficiency-retained record'),
       rederive: (e, view) => {
         const p = e.payload;
         const assessed = cited(view, e.derived_from, 'efficiency.assessed');
-        if (assessed.length !== 1 || e.derived_from.length !== 1) return 'a retained experiment cites exactly one efficiency.assessed and nothing else';
-        if (view.payload(assessed[0]).traceSha !== p.marker?.traceSha) return 'the marker names a different trace than the assessment it cites';
-        if (view.entries().some(h => view.entry(h).kind === 'efficiency.retained' && view.payload(h).marker.traceSha === p.marker.traceSha)) return 'this experiment is already retained';
+        if (assessed.length !== 1 || e.derived_from.length !== 1)
+          return 'a retained experiment cites exactly one efficiency.assessed and nothing else';
+        if (view.payload(assessed[0]).traceSha !== p.marker?.traceSha)
+          return 'the marker names a different trace than the assessment it cites';
+        if (view.entries().some(
+          h => view.entry(h).kind === 'efficiency.retained' &&
+            view.payload(h).marker.traceSha === p.marker.traceSha)) return 'this experiment is already retained';
         const {trace} = view.payload(view.entry(assessed[0]).derived_from[0]);
         const why = attempt(() => retainedOutcome(view, {marker: p.marker, assessed: assessed[0]}, trace, snapshot));
         return why && `the experiment does not re-derive as retained evidence: ${why}`;
@@ -259,10 +335,14 @@ export function efficiencyTotals(ledger, promotionHash) {
  */
 export function efficiencyRecorder({ledger, controller, order, snapshot = readRuntimeSnapshot}) {
   const by = {author: {key_id: controller.key_id}, signer: controller, order};
+  // A read-only view of the current chain, in the shape the kinds' rederive functions take.
   const viewOf = () => {
     const at = new Map(ledger.read().map(e => [ledger.hashOf(e), e]));
-    return {entry: h => at.get(h) ?? null, payload: h => (at.has(h) ? ledger.payloadOf(at.get(h)) : null), entries: () => [...at.keys()]};
+    return {
+      entry: h => at.get(h) ?? null, payload: h => (at.has(h) ? ledger.payloadOf(at.get(h)) : null),
+      entries: () => [...at.keys()]};
   };
+  // The hash of the first entry of `kind` whose (entry, payload) matches, or null.
   const find = (kind, match) => {
     const e = ledger.read().find(x => x.kind === kind && match(x, ledger.payloadOf(x)));
     return e ? ledger.hashOf(e) : null;
@@ -304,7 +384,6 @@ export function efficiencyRecorder({ledger, controller, order, snapshot = readRu
       const charged = !find('efficiency.result', (e, x) => e.derived_from[0] === use && x.traceSha === traceSha);
       return append('efficiency.debit', {schema: DEBIT, traceSha, assessmentCostMs, charged, interrupted}, [use]);
     },
-    /** The trace an assessment reads, carried whole and bound to the board commit it names. */
     /** The entries already recorded for a trace (an equilibrium reuse cites these, never new ones). */
     entriesFor(traceSha) {
       const trace = find('efficiency.trace', (e, x) => x.traceSha === traceSha);
@@ -312,6 +391,7 @@ export function efficiencyRecorder({ledger, controller, order, snapshot = readRu
       const retained = assessed && find('efficiency.retained', e => e.derived_from.includes(assessed));
       return trace && assessed ? {trace, assessed, ...(retained ? {retained} : {})} : null;
     },
+    /** The trace an assessment reads, carried whole and bound to the board commit it names. */
     trace({stateDir, trace}) {
       const traceSha = digest(trace);
       return find('efficiency.trace', (e, x) => x.traceSha === traceSha)
@@ -321,7 +401,8 @@ export function efficiencyRecorder({ledger, controller, order, snapshot = readRu
     assessed({trace, report, retained = null, debit = null}) {
       const existing = find('efficiency.assessed', (e, x) => x.traceSha === report.traceSha);
       if (existing) {
-        if (canonical(viewOf().payload(existing).report) !== canonical(report)) throw Error('this trace already has a different assessment on the ledger');
+        if (canonical(viewOf().payload(existing).report) !== canonical(report))
+          throw Error('this trace already has a different assessment on the ledger');
         return existing;
       }
       return append('efficiency.assessed', {schema: ASSESSED, traceSha: report.traceSha, report},
