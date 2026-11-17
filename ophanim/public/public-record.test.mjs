@@ -319,6 +319,32 @@ test('cycle reports: docs/cycles/<cycle>.md and index.md, generated from the led
   assert.throws(() => openLedgerReadOnly({root: fx.root}), /does not verify/);
 });
 
+test('cycle reports and PR provenance show the cycle\'s practice dispositions: outcome, measured or provisional, synthetic evidence, admitted', async () => {
+  const root = path.join(tmp(), 'practice');
+  const sys = openPantheonLedger({root}), rec = sys.recorder();
+  const r = await reviewCycle({ledger: rec, change: {scope: 'ophanim', base: C('a'), head: C('b'), diff: DIFF, files: ['src/x.mjs'], author_labs: ['anthropic']}, turn: scripted({})});
+  const synthetic = {kind: 'digest', schema: 'pantheon.compare/v1', sha: 'sha256:' + '1'.repeat(64), synthetic: true};
+  const measure = rec.recordDisposition({cycle: r.cycle, outcome: 'propose_measurement', question: 'Does fit change accepted results against argo?',
+    evidence: [synthetic], provenance: {by: {role: 'lead@orch'}, method: 'synthetic matched comparison (fake providers)'}});
+  const retain = rec.recordDisposition({cycle: r.cycle, outcome: 'retain', question: 'Keep argo as the default?',
+    provenance: {by: {role: 'lead@orch'}, method: 'no live comparison yet'}});
+  rec.closeCycle(r.cycle);
+  const r2 = await reviewCycle({ledger: rec, change: {scope: 'ophanim', head: C('d'), diff: DIFF, files: ['src/x.mjs'], author_labs: ['anthropic']}, turn: scripted({})});
+  fs.rmSync(path.join(root, 'keys'), {recursive: true, force: true});
+  const opened = openLedgerReadOnly({root});
+  const record = cycleRecord(opened.view, r.cycle);
+  assert.deepEqual(record.practice.map(d => [d.entry, d.outcome, d.provisional, d.synthetic, d.admitted]),
+    [[measure, 'propose_measurement', true, true, true], [retain, 'retain', true, false, true]]);
+  for (const md of [cycleReport(opened.view, r.cycle, {anchor: opened.anchor, slug: 'ophanim-001'}), prProvenance(opened.view, r.cycle, {anchor: opened.anchor})]) {
+    assert.match(md, /Practice dispositions/);
+    assert.match(md, new RegExp(`\\| assessment \\| \`propose_measurement\` \\| provisional \\| \\*\\*synthetic\\*\\* \\(mechanics only, not a measurement\\) \\| Does fit change accepted results against argo\\? \\| listed by the close \\| \`${measure}\` \\|`));
+    assert.match(md, new RegExp(`\\| assessment \\| \`retain\` \\| provisional \\| none cited \\| Keep argo as the default\\? \\| listed by the close \\| \`${retain}\` \\|`));
+    assert.match(md, /policy `pantheon\.selection\/v1`/);
+  }
+  // A cycle with no disposition yet says so; an open cycle's are not admitted.
+  assert.match(cycleReport(opened.view, r2.cycle, {anchor: opened.anchor}), /No practice disposition is recorded for this cycle yet/);
+});
+
 test('the public-record workflow runs only on push to main and dispatch, with issues: write', () => {
   const wf = fs.readFileSync(new URL('../../.github/workflows/public-record.yml', import.meta.url), 'utf8');
   assert.doesNotMatch(wf, /pull_request/);

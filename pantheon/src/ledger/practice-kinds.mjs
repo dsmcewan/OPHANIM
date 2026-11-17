@@ -32,6 +32,16 @@
 // policy. The dispatcher records the entry hash it loaded on every turn's selection (run-item.mjs); only
 // a ledger entry changes it.
 //
+// SYNTHETIC EVIDENCE (CYCLE_CONTRACT acceptance: "A synthetic matched comparison verifies the mechanics; a
+// scoped live comparison is needed before claiming measured provider cost/quality improvement"). A matched
+// comparison record (pantheon/src/practice/compare.mjs, schema COMPARE_SCHEMA) is cited as {kind: digest,
+// schema: COMPARE_SCHEMA, sha, synthetic}, and such a digest must say whether it is synthetic. A
+// disposition whose comparison evidence is only synthetic (a synthetic digest, or a disposition resting on
+// one) may propose a measurement, but a promote resting on it is refused: a promote that cites synthetic
+// evidence also cites a live (synthetic: false) comparison. Additive: an entry with no comparison digest,
+// as every entry written before this rule, re-derives exactly as it did. The flag is what the record
+// declares; whether a live record really was live is for the independent reviewer of the evidence.
+//
 // What this does NOT do: run a comparison, read provider usage, or make the dispatcher execute a promoted
 // candidate's tables. A promoted policy whose hash is not the one this dispatcher implements is loaded and
 // recorded with `applies: false` and the reason; nothing pretends it ran.
@@ -45,6 +55,8 @@ export const CYCLE_CONTRACT = 'pantheon.cycle/v2';
 /** The contract a cycle without a `contract` field opened under. Never written: an old cycle's payload is unchanged. */
 export const CYCLE_CONTRACT_V1 = 'pantheon.cycle/v1';
 export const DEFAULT_PRACTICE_SCOPE = 'routing-coordination';
+/** A matched-comparison record's schema (pantheon/src/practice/compare.mjs), as a digest citation names it. */
+export const COMPARE_SCHEMA = 'pantheon.compare/v1';
 export const ASSESSMENT_OUTCOMES = Object.freeze(['retain', 'insufficient_evidence', 'propose_measurement', 'propose_policy']);
 export const CANDIDATE_OUTCOMES = Object.freeze(['promote', 'retain', 'reject']);
 const ADMITTING = ['promote', 'retain'];
@@ -66,6 +78,7 @@ const validSeat = s => plain(s) && str(s.vendor, 64) && str(s.model, 200) && str
 const seatLab = s => (labOf(s.vendor, s.model) === s.lab ? null : `the ${s.vendor}/${s.model} seat's lab is ${labOf(s.vendor, s.model)}, not ${s.lab}`);
 const validEvidence = e => plain(e) && (e.kind === 'ledger' ? ENTRY.test(e.hash ?? '')
   : e.kind === 'digest' ? str(e.schema, 200) && SHA.test(e.sha ?? '')
+    && (e.schema !== COMPARE_SCHEMA || typeof e.synthetic === 'boolean')
   : e.kind === 'document' ? str(e.path, 500) && SHA.test(e.sha ?? '') : false);
 const validCandidate = c => plain(c) && str(c.id, 120) && validPolicy(c.policy) && str(c.change);
 const validConditions = c => plain(c) && ['applicability', 'rollback', 'reevaluate'].every(k => str(c[k]));
@@ -80,7 +93,7 @@ function validate(p) {
   if (!str(p.question)) return 'a practice disposition names the question it assessed';
   if (typeof p.measured !== 'boolean' || typeof p.provisional !== 'boolean') return 'a practice disposition says whether it was measured and whether it is provisional';
   if (!p.measured && !p.provisional) return 'unmeasured judgment is labelled provisional';
-  if (!Array.isArray(p.evidence) || p.evidence.length > 32 || !p.evidence.every(validEvidence)) return 'evidence is a list of {kind: ledger, hash} | {kind: digest, schema, sha} | {kind: document, path, sha}';
+  if (!Array.isArray(p.evidence) || p.evidence.length > 32 || !p.evidence.every(validEvidence)) return `evidence is a list of {kind: ledger, hash} | {kind: digest, schema, sha} | {kind: document, path, sha}; a ${COMPARE_SCHEMA} digest says whether it is synthetic (synthetic: true|false)`;
   if (!plain(p.provenance) || !plain(p.provenance.by) || !str(p.provenance.by.role ?? p.provenance.by.vendor, 120) || !str(p.provenance.method)) {
     return 'provenance names who assessed (by) and how (method)';
   }
@@ -125,11 +138,33 @@ function rederive(e, view) {
     }
   }
   if (p.proposer) { const why = seatLab(p.proposer); if (why) return why; }
+  if (p.outcome === 'promote' && evidenceBasis(view, p.evidence) === 'synthetic') {
+    return 'a promote may not rest on synthetic evidence: a synthetic comparison verifies the mechanics only; cite a live (synthetic: false) comparison';
+  }
   const ledgerRefs = p.evidence.filter(x => x.kind === 'ledger').map(x => x.hash);
   if (new Set(ledgerRefs).size !== ledgerRefs.length || canonical(cited) !== canonical(ledgerRefs)) {
     return 'a practice disposition cites its cycle, the proposal it decides, and exactly its ledger evidence, in that order';
   }
   return null;
+}
+
+/**
+ * What a disposition's evidence rests on, as far as comparisons go: `synthetic` when it cites synthetic
+ * comparison evidence and no live comparison, `live` when it cites a live comparison, `none` otherwise.
+ * A digest declares its own flag; a cited practice disposition contributes what its own evidence rests on;
+ * any other entry or document is neither. Pure over the view.
+ */
+export function evidenceBasis(view, evidence, seen = new Set()) {
+  let synthetic = false, live = false;
+  for (const e of evidence ?? []) {
+    if (e?.kind === 'digest' && typeof e.synthetic === 'boolean') { if (e.synthetic) synthetic = true; else live = true; }
+    else if (e?.kind === 'ledger' && !seen.has(e.hash) && view.entry(e.hash)?.kind === PRACTICE) {
+      seen.add(e.hash);
+      const b = evidenceBasis(view, view.payload(e.hash)?.evidence, seen);
+      if (b === 'synthetic') synthetic = true; else if (b === 'live') live = true;
+    }
+  }
+  return live ? 'live' : synthetic ? 'synthetic' : 'none';
 }
 
 /** Kind spec. `authors` decides who records dispositions (the controller, which signs what the seats decided). */
