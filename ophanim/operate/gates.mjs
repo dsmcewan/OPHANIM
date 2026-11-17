@@ -73,7 +73,7 @@ function chainFrom(plan, stages) {
  * `depStatus(id)` the latest status of a dependency or null; `ticket` the readTicket result ({spec, digest, path}
  * or {why}) or null; `stages` this item's work.stage records in ledger order; `activeClaim` the live claim or null.
  */
-export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf}) {
+export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, now = Date.now()}) {
   const base = {item: item.item, state: item.state};
   if (activeClaim) return {...base, gate: 'claimed', reason: `claimed: ${activeClaim.stage}, attempt ${activeClaim.attempt} (lease)`, claim: activeClaim.hash};
   if (item.state === 'Resolved') {
@@ -119,6 +119,12 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
     const back = chain.find(s => s.stage === STAGES[STAGES.indexOf(to) - 1]) ?? null;
     return {...base, gate: to, mode: 'revise', requirement, reuse: Object.fromEntries(chain.filter(s => STAGES.indexOf(s.stage) < STAGES.indexOf(to)).map(s => [s.stage, s.hash])),
       from: back?.hash ?? null, findings: latestTry.findings, returned_by: latestTry.hash, stale, reason: `${latestTry.stage} returned the work to ${to}: ${latestTry.next.why}`};
+  }
+  // A transient pending whose retry is due goes back to its stage (the executor resumes its open cycle; the scheduler
+  // bounds the retries on the same inputs). Before it is due, or for a structural pending, the item is blocked.
+  if (latestTry?.status === 'pending' && latestTry.blocker?.transient && Date.parse(latestTry.blocker.retry_at ?? '') <= now) {
+    return {...base, gate: latestTry.stage, mode: 'resume', requirement, reuse, from: last.hash, retry_of: latestTry.hash, stale,
+      reason: `${latestTry.stage} was pending on a transient failure (${latestTry.blocker.what}); its retry is due`};
   }
   if (latestTry && (latestTry.status === 'pending' || latestTry.status === 'blocked')) {
     return {...base, gate: 'blocked', stage: latestTry.stage, requirement, reuse, from: last.hash, blocker: latestTry.blocker, stale,

@@ -14,6 +14,7 @@ import {makeExecutors, planRefusal} from './stages.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {SEATING} from '../../pantheon/src/role/seating.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
+import {SEAT_FACTS} from '../../pantheon/src/route/router.mjs';
 
 const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], {encoding: 'utf8'});
 const TICKET = item => ({schema: 'ophanim.ticket/v1', item, slice: 'the whole item: alpha.mjs exports ok = true', proposes: {state: 'Resolved', basis: 'alpha.mjs exports ok = true'},
@@ -76,13 +77,41 @@ function scriptedTurn(over = {}) {
   return fn;
 }
 const LIMITS = {total_provider_calls: 1000, stage_provider_calls: 40};
+// A SYNTHETIC fifth reviewer lab, injected only through the reviewer pool these tests pass. It exists nowhere in the
+// configuration and qualifies nothing (no fifth lab is set up; owner 2026-11-17). It lets the full lifecycle run past
+// the coordinated change review, which under the four configured labs is a recorded capacity pending once a model
+// planner and an implementer from another lab have both contributed (see the first test).
+const SYNTH = {vendor: 'synthlab', model: 'synthetic-reviewer-1', band: 'medium', basis: 'SYNTHETIC', why: 'a test-only fifth lab; never configured'};
+const FIVE = {seating: {...SEATING, reviewer: [...SEATING.reviewer, SYNTH]}, facts: {...SEAT_FACTS, synthlab: {vendor: 'synthlab', quota_pool: 'synthlab', models: {}}}};
 const stagesOf = r => r.dispatched.map(d => `${d.stage}:${d.status}`);
 
-test('a Ready item with no ticket goes through reviewed planning, ticket creation, implementation, review, validation and an unsigned outcome', async () => {
+test('the four configured labs: a Ready item with no ticket gets a reviewed plan and its ticket, then the change review is a recorded capacity pending, nothing narrowed', async () => {
+  await withDispatch(async ({dir: repo, makeClientFor, calls}) => {
+    const f = fixture(repo, [{item: 'four-labs'}]);
+    const turn = scriptedTurn();
+    const executors = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
+    assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:pending'], JSON.stringify(r.dispatched));
+    const [plan, impl] = openWorkLedger({root: f.workRoot}).stages('four-labs');
+    const plannerLab = plan.outputs.planner.lab;
+    assert.equal(plan.outputs.plan_review.labs.length, 3);
+    assert.ok(!plan.outputs.plan_review.labs.includes(plannerLab));
+    assert.ok(readTicket({repo, item: 'four-labs'}).digest, 'the reviewed plan\'s ticket is written and kept');
+    // The planner is chosen on its own merits, not moved into the implementer's lab to free a reviewer lab.
+    assert.match(impl.blocker.what, /^REVIEW_CAPACITY_PENDING/);
+    assert.equal(impl.blocker.role, 'check@review');
+    assert.ok(impl.blocker.resume_when, 'the pending names its resume condition');
+    assert.equal(impl.usage.provider_calls, 0, 'no work is launched that its review could not judge');
+    assert.equal(calls.length, 0);
+    assert.ok(r.blocked.some(b => b.item === 'four-labs'));
+  });
+});
+
+test('with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes through reviewed planning, ticket creation, implementation, review, validation and an unsigned outcome', async () => {
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'alpha-item'}]);
     const turn = scriptedTurn();
-    const executors = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const executors = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...FIVE});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], JSON.stringify(r.dispatched));
     const w = openWorkLedger({root: f.workRoot});
@@ -211,7 +240,7 @@ test('validation returns an implementation defect to implement and an inadequate
         ? json({verdict: 'implementation_defect', reasons: ['alpha.mjs also drops a trailing newline the requirement keeps'], criteria: [{id: 'a1', met: false, why: 'see reasons'}]})
         : json({verdict: 'plan_defect', reasons: ['criterion a1 does not test that alpha.mjs keeps its other exports'], criteria: [{id: 'a1', met: true, why: 'passes, but is inadequate'}]});
     }});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     const seq = item => w.stages(item).map(s => `${s.stage}:${s.status}`);
@@ -242,7 +271,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const f = fixture(repo, [{item: 'flaky-review'}]);
     let down = true;
     const turn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai' && down) throw Object.assign(new Error('503 service unavailable'), {status: 503}); return APPROVE; }});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:pending']);
     const w = openWorkLedger({root: f.workRoot});
@@ -251,14 +280,44 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     assert.match(rev.blocker.what, /REVIEW_PENDING: 2 of 3/);
     assert.ok(r.blocked.some(b => b.item === 'flaky-review' && /REVIEW_PENDING/.test(b.blocker.what)));
     assert.equal(git(repo, 'rev-parse', 'refs/heads/pantheon/flaky-review').trim(), impl.outputs.commit, 'the commit is kept');
-    // The reviewer comes back: the SAME open cycle is resumed; only the missing seat is asked, the two reviews kept.
+    // The failure is transient: the pending carries a retry time. Before it is due, the scheduler dispatches nothing.
+    assert.equal(rev.blocker.transient, true);
+    const due = Date.parse(rev.blocker.retry_at);
+    assert.ok(Number.isFinite(due));
+    const early = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, clock: () => due - 1000});
+    assert.deepEqual(stagesOf(early), [], 'not before the retry is due');
+    assert.ok(early.blocked.some(b => b.item === 'flaky-review'));
+    // The reviewer comes back; at the retry time the scheduler re-dispatches review on its own: the SAME open cycle is
+    // resumed, only the missing seat is asked, the two reviews kept, and the item goes on to validation and outcome.
     down = false;
     const asked = turn.log.length;
-    const again = await ex.review({item: 'flaky-review', gate: {}, upstream: impl, attempt: 2, budget: {provider_calls: 5}, repo, work: w, reuse: {}});
-    assert.equal(again.status, 'passed', JSON.stringify(again.blocker ?? again.next));
+    const later = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, clock: () => due + 1000});
+    assert.deepEqual(stagesOf(later), ['review:passed', 'validate:passed', 'outcome:passed']);
+    const again = openWorkLedger({root: f.workRoot}).stages('flaky-review').find(s => s.stage === 'review' && s.status === 'passed');
+    assert.equal(again.attempt, 2);
     assert.equal(again.outputs.cycle, rev.outputs.cycle, 'resumed, not reopened');
-    assert.deepEqual(turn.log.slice(asked).map(l => [l.kind, l.vendor]), [['review', 'xai']]);
+    assert.deepEqual(turn.log.slice(asked).filter(l => l.kind === 'review').map(l => l.vendor), ['xai']);
     assert.equal(again.usage.provider_calls, 1);
+
+    // A reviewer that never comes back: the retries are bounded by stage_attempts on the same inputs, then the item is
+    // blocked for the orchestration lead with the attempts counted; nothing is reviewed by fewer labs.
+    const d = path.join(repo, 'down');
+    fs.mkdirSync(d);
+    const fd = fixture(d, [{item: 'always-down'}]);
+    const deadTurn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai') throw Object.assign(new Error('503'), {status: 503}); return APPROVE; }});
+    const dx = makeExecutors({repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...FIVE});
+    let t0 = Date.parse('2026-11-17T00:00:00Z');
+    const seen = [];
+    for (let i = 0; i < 5; i++, t0 += 60 * 60_000) {
+      const ti = await tick({repo: d, statusRoot: fd.statusRoot, workRoot: fd.workRoot, executors: dx, limits: LIMITS, clock: () => t0});
+      seen.push(...stagesOf(ti));
+      if (i === 4) assert.ok(ti.blocked.some(b => b.item === 'always-down' && /3 attempts of review/.test(b.blocker.what)), JSON.stringify(ti.blocked));
+    }
+    assert.deepEqual(seen, ['plan:passed', 'implement:passed', 'review:pending', 'review:pending', 'review:pending']);
+    // One try of the failed seat per attempt, in the same open cycle: three calls, no more.
+    assert.equal(deadTurn.log.filter(l => l.kind === 'review' && l.vendor === 'xai').length, 3);
+    const downRevs = openWorkLedger({root: fd.workRoot}).stages('always-down').filter(s => s.stage === 'review');
+    assert.equal(new Set(downRevs.map(s => s.outputs.cycle)).size, 1, 'one cycle, resumed, never reopened');
 
     // A short pool: the configured reviewer seating offers two labs outside the planner's. Nothing is planned and
     // no provider is called; the plan is pending, never reviewed by fewer labs.

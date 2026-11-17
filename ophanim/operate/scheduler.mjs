@@ -27,6 +27,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   elapsed_ms: 60 * 60_000,
   concurrency: 1,
   lease_ms: 30 * 60_000,
+  retry_after_ms: 15 * 60_000,      // a TRANSIENT pending (a reviewer seat failed) is retried after this, within stage_attempts
 });
 const fail = (why, code) => { throw Object.assign(new Error(why), {code}); };
 
@@ -128,7 +129,11 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         ...(result.identity?.ticket ?? upstream?.identity.ticket ? {ticket: result.identity?.ticket ?? upstream.identity.ticket} : {})};
       const stageHash = work.recordStage({claim, from: upstream?.hash ?? null, stage: gate.gate, attempt, status: result.status, identity,
         inputs: {...inputs, ...(result.inputs ?? {})}, outputs: result.outputs ?? {}, team: result.team ?? [], contributions: result.contributions ?? [],
-        findings: result.findings ?? [], usage: result.usage ?? {provider_calls: null}, next: result.next ?? null, ...(result.blocker ? {blocker: result.blocker} : {})});
+        findings: result.findings ?? [], usage: result.usage ?? {provider_calls: null}, next: result.next ?? null,
+        // A transient pending (an unavailable reviewer) is retried when due, bounded by stage_attempts on the same inputs;
+        // a structural one (capacity, a missing prerequisite) waits for a change of inputs.
+        ...(result.blocker ? {blocker: result.blocker.transient && result.status === 'pending'
+          ? {...result.blocker, retry_at: new Date(clock() + L.retry_after_ms).toISOString()} : result.blocker} : {})});
       const outcome = {passed: 'completed', returned: 'returned', failed: 'failed', pending: 'blocked', blocked: 'blocked'}[result.status];
       work.release({claim, item, stage: gate.gate, outcome, why: result.next?.why ?? result.status});
       log.dispatched.push({item, stage: gate.gate, attempt, status: result.status, record: stageHash, next: result.next?.stage ?? null,
@@ -162,9 +167,14 @@ export async function watch({repo, statusRoot, workRoot, fetchIssues = async () 
   for (;;) {
     const issues = await fetchIssues();
     const sig = inputSignature({repo, statusRoot, workRoot, issues});
-    if (sig !== state.last) {
-      ticks.push(await tick({repo, statusRoot, workRoot, issues, ...rest}));
+    // A tick runs when an input changed, or when a transient pending's retry is due (time is not an input).
+    const now = (rest.clock ?? Date.now)();
+    if (sig !== state.last || (state.due !== null && state.due !== undefined && now >= state.due)) {
+      const t = await tick({repo, statusRoot, workRoot, issues, ...rest});
+      ticks.push(t);
       state.last = inputSignature({repo, statusRoot, workRoot, issues});
+      const dues = t.blocked.map(b => Date.parse(b.blocker?.retry_at ?? '')).filter(Number.isFinite);
+      state.due = dues.length ? Math.min(...dues) : null;
     }
     if (once || signal?.aborted) return ticks;
     await new Promise(r => setTimeout(r, interval_ms));

@@ -18,7 +18,8 @@
 //              commit. Never signed: the owner applies it.
 //
 // Inputs: {repo, makeClientFor (the work seats), turn (single-turn seats: planner, reviewers, validator), n = 3,
-// statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's)}. Every stage
+// statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
+// tests inject a synthetic pool with both)}. Every stage
 // stays within ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -231,7 +232,7 @@ const runPolicy = run => {
 
 // --- the executors -------------------------------------------------------------------------------------------
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
-  seating = undefined, profile = 'argo', checked = null, progress = () => {}} = {}) {
+  seating = undefined, facts = undefined, profile = 'argo', checked = null, progress = () => {}} = {}) {
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
   if (typeof makeClientFor !== 'function') throw new Error('makeExecutors: pass makeClientFor(vendor) for the work seats');
@@ -239,7 +240,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   if (!(Number.isInteger(n) && n >= COORDINATED_LABS)) throw Object.assign(new Error(`the coordinated review needs ${COORDINATED_LABS} labs; n = ${n} would lower it`), {code: 'REVIEW_FLOOR'});
   const statusAt = statusRoot ?? path.join(repo, 'status', 'ledger');
   const dirOf = (ctx, ...p) => { const d = path.join(stateDir ?? path.join(path.dirname(ctx.work.root), 'operate'), ctx.item, ...p); fs.mkdirSync(d, {recursive: true}); return d; };
-  const seatsFor = avoidLabs => reviewSeats({n, avoidLabs, ...(seating ? {seating} : {})});
+  const seatsFor = avoidLabs => reviewSeats({n, avoidLabs, ...(seating ? {seating} : {}), ...(facts ? {facts} : {})});
   const today = () => checked ?? new Date().toISOString().slice(0, 10);
 
   // ---- plan ----
@@ -252,15 +253,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const existing = fs.existsSync(path.join(repo, 'tickets', `${item}.json`)) ? readTicket({repo, item}) : null;
     const ticket = existing && !existing.why ? existing : null;
     const previous = [...ctx.work.stages(item)].reverse().find(s => s.stage === 'plan' && s.status === 'passed')?.outputs.plan ?? null;
-    // The planner seat: the policy's planner order; a candidate in the predicted implementer's lab is preferred, with
-    // the reason recorded, because a planner in another lab is one more contributor the change review must avoid.
-    const predictedImpl = selectSeat('implementer', {profile, needsContext: 1, pools: readPools()}).seat;
-    const ladder = selectSeat('planner', {profile, needsContext: 1, pools: readPools()}).candidates;
-    const implLab = labOf(predictedImpl.vendor, predictedImpl.model);
-    const pick = ladder.find(c => labOf(c.vendor, c.model) === implLab) ?? ladder[0];
-    const planner = {...seatOf(pick), selection: {source: pick.selection?.source ?? null,
-      reason: labOf(pick.vendor, pick.model) === implLab ? `planner order candidate in the predicted implementer's lab (${implLab}): one contributing lab, leaving the coordinated review its pool`
-        : 'the first planner candidate (no candidate in the implementer\'s lab)'}};
+    // The planner seat: the policy's first planner, chosen on its own merits. It is NOT moved into the implementer's
+    // lab to leave the coordinated review its pool (owner direction 2026-11-17: never force planner and implementer
+    // onto one lab to manufacture reviewer availability); a short pool later is a recorded capacity pending.
+    const pick = selectSeat('planner', {profile, needsContext: 1, pools: readPools()}).seat;
+    const planner = {...seatOf(pick), selection: {source: pick.selection?.source ?? null, reason: pick.selection?.reason ?? 'the policy\'s first planner candidate'}};
     const team = [{role: 'planner', ...seatOf(planner)}];
     // Review capacity BEFORE work: the plan needs n reviewer labs outside the planner's.
     let planSeats;
@@ -340,7 +337,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         return result('pending', {outputs: {mode, plan: doc, plan_digest: planDigest, refused, versions, cycle: r.cycle, plan_ledger_anchor: sys.anchor},
           team: [...team, ...planSeats.map(s => ({role: 'plan-reviewer', ...seatOf(s)}))], contributions, usage: usage(),
           blocker: {what: `REVIEW_PENDING: ${r.failed.length} plan reviewer seat(s) failed (${r.failed.map(f => `${f.lab}: ${f.why}`).join('; ')}); the plan and its open cycle are kept`,
-            role: 'check@review', resume_when: 'the reviewer is available; the open plan cycle is resumed, never reopened'},
+            role: 'check@review', resume_when: 'the reviewer is available; the open plan cycle is resumed, never reopened', transient: true},
           next: {stage: 'plan', why: 'plan review incomplete'}});
       }
       const rows = findingRows(state);
@@ -397,7 +394,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // Review capacity BEFORE work: the change will need n labs outside every contributor, the predicted workers included.
     const predicted = seatTeam({pools: readPools(), spec: t.spec, profile, planTitle: 'ticket'});
     const predictedWork = [...new Map(predicted.implementers.map(l => [l[0].lab, {purpose: 'work', vendor: l[0].vendor, model: l[0].model, lab: l[0].lab}])).values()];
-    const cap = cycleReviewers({scope: fullScope(null, [...contributions, ...predictedWork]), n, ...(seating ? {seating} : {})});
+    const cap = cycleReviewers({scope: fullScope(null, [...contributions, ...predictedWork]), n, ...(seating ? {seating} : {}), ...(facts ? {facts} : {})});
     if (cap.pending) {
       return result('pending', {outputs: {stage: 'before-work', predicted_contributors: cap.scope.contributions, ticket: {path: t.path, digest: t.digest}}, contributions,
         usage: usage(0), blocker: pendingCapacity(cap.pending.why, {stage: 'implement'}), next: {stage: 'implement', why: 'review capacity is short; no work was launched'}});
@@ -464,7 +461,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     const run = JSON.parse(fs.readFileSync(o.run.run_json, 'utf8'));
     const scope = fullScope(changeScope(run), o.contributions ?? []);
-    const chosen = cycleReviewers({scope, n, ...(seating ? {seating} : {})});
+    const chosen = cycleReviewers({scope, n, ...(seating ? {seating} : {}), ...(facts ? {facts} : {})});
     const outputs = {commit: o.commit, base: o.base, review_scope: chosen.scope, author_labs: chosen.author_labs};
     if (chosen.pending) {
       return result('pending', {outputs, usage: usage(), blocker: pendingCapacity(chosen.pending.why), next: {stage: 'review', why: 'review capacity is short; the commit is kept'}});
@@ -491,7 +488,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const failed = state.attempts.filter(a => a.outcome === 'failed').map(a => `${a.seat.lab}: ${a.why}`);
       return result('pending', {outputs, team, usage: usage(),
         blocker: {what: `REVIEW_PENDING: ${state.reviews.length} of ${state.cycle.reviewers} reviews recorded (${failed.join('; ') || 'reviewer unavailable'}); the commit and the open cycle are kept`,
-          role: 'check@review', resume_when: 'the reviewer is available; the open cycle is resumed with its recorded reviews kept'},
+          role: 'check@review', resume_when: 'the reviewer is available; the open cycle is resumed with its recorded reviews kept', transient: true},
         next: {stage: 'review', why: 'a reviewer seat failed'}});
     }
     // Findings with no resolution (fixed, or deferred under the existing review-cycle rules) return the change.
@@ -543,8 +540,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const reviewFinders = ctx.work.stages(item).filter(s => s.stage === 'review' && s.findings?.length).flatMap(s => s.findings.map(f => f.lab)).filter(Boolean);
     const contributors = [...new Set([...labsOfContribs(impl.outputs.contributions ?? []), ...reviewFinders])];
     let seat, independent = true;
-    try { [seat] = reviewSeats({n: 1, avoidLabs: contributors, ...(seating ? {seating} : {})}); }
-    catch { independent = false; [seat] = reviewSeats({n: 1, avoidLabs: labsOfContribs((impl.outputs.contributions ?? []).filter(c => ['plan', 'work'].includes(c.purpose))), ...(seating ? {seating} : {})}); }
+    try { [seat] = reviewSeats({n: 1, avoidLabs: contributors, ...(seating ? {seating} : {}), ...(facts ? {facts} : {})}); }
+    catch { independent = false; [seat] = reviewSeats({n: 1, avoidLabs: labsOfContribs((impl.outputs.contributions ?? []).filter(c => ['plan', 'work'].includes(c.purpose))), ...(seating ? {seating} : {}), ...(facts ? {facts} : {})}); }
     const team = [{role: 'validator', ...seatOf(seat)}];
     const diff = G(['diff', '--no-color', impl.outputs.base, commit]);
     const prompt = ['You are the independent validator of one implemented change (Ophanim operate, validate stage). You did not plan, write or review it.',
