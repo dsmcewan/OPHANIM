@@ -88,20 +88,20 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 | Item | Status | Basis |
 |---|---|---|
 | TELOS as the single ledger as is | Resolved: no | Limits T1–T6 above, read from the pinned source. |
-| K1 chain core | Resolved | `ophanim/ledger/chain.mjs`. See "K1 implemented" below. |
-| K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority) and `ophanim/ledger/anchors.mjs`. See "K2 implemented" below. |
-| K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `ophanim/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
-| K3 `gate` kind (ship gate verdicts) | Resolved | Ship's gates now evaluate against named heads (`gatesAt`, `pinnedRefs` in `integrate.mjs`); `ophanim/ledger/gate-kind.mjs` records and re-derives the verdict. See "Gate kind implemented" below. |
-| K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `ophanim/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
+| K1 chain core | Resolved | `packages/ledger/chain.mjs`. See "K1 implemented" below. |
+| K2 genesis and anchoring | Resolved | `chain.mjs` (genesis, authority), `ophanim/ledger/anchors.mjs` (TELOS) and `pantheon/src/ledger/anchors.mjs` (board). See "K2 implemented" below. |
+| K3 first kinds (facts, seating, escalation, contribution) and the run path | Resolved | `pantheon/src/ledger/kinds.mjs`; `runOpenItem({ledger})`. See "K3 implemented" below. |
+| K3 `gate` kind (ship gate verdicts) | Resolved | Ship's gates now evaluate against named heads (`gatesAt`, `pinnedRefs` in `integrate.mjs`); `pantheon/src/ledger/gate-kind.mjs` records and re-derives the verdict. See "Gate kind implemented" below. |
+| K4 turns, served-model lineage, cold review, per-seat keys | Resolved | `pantheon/src/ledger/lineage-kinds.mjs`; served model captured in `sendTurn`; turns and reviews recorded on the run path. See "K4 implemented" below. |
 | K5 efficiency events as entries, and the debit loophole | Resolved | `ophanim/ledger/efficiency-kinds.mjs`; `assessConvergence({ledger})`, `chooseEfficiencySlots({ledger})`. See "K5 implemented" below. |
 | K5 `assessed` and `retained` kinds | Resolved | `efficiency.trace`, `efficiency.assessed`, `efficiency.retained` in `ophanim/ledger/efficiency-kinds.mjs`, re-derived by the same computations the file verifiers run; a fresh assessment is verified before `cli.mjs` uses it. See "K5b implemented" below. |
-| Lease rows, budget limits, ref moves and seat files on the ledger | Resolved | `ophanim/ledger/board-kinds.mjs`; seat files checked in `sdkTurn`. See "Remaining records on the ledger" below. |
+| Lease rows, budget limits, ref moves and seat files on the ledger | Resolved | `pantheon/src/ledger/board-kinds.mjs`; seat files checked in `sdkTurn`. See "Remaining records on the ledger" below. |
 | K6 TELOS reviewers bound to real seats, and pinned-verifier admission | On Hold | Governance decision on the pinned TELOS verifier and on who is trusted. |
 | Earlier L1–L8 | Superseded | Re-aimed as K1–K6. The ledger is the improved chain anchored to TELOS, not the board DAG alone. |
 
 ## K1 implemented (2026-11-16)
 
-`ophanim/ledger/chain.mjs`: one append-only chain (`chain.jsonl`) plus content-addressed payload objects.
+`packages/ledger/chain.mjs`: one append-only chain (`chain.jsonl`) plus content-addressed payload objects.
 
 | Property | How |
 |---|---|
@@ -114,7 +114,7 @@ The improved ledger keeps TELOS's concepts and generalizes them. It sits **above
 
 One trust assumption is stated rather than hidden: in frontier mode, entries before a checkpoint are trusted to have been verified when the orderer signed it. `verify({mode: "full"})` re-derives everything.
 
-*Check.* `ophanim/ledger/chain.test.mjs` (8 tests, in `npm run test:proof`) covers:
+*Check.* `packages/ledger/tests/chain.test.mjs` (8 tests then; it ran in `npm run test:proof` until the move to `packages/ledger`, see "Layering") covers:
 - multi-author chains re-deriving;
 - refusal before writing;
 - the closed registry and per-kind authorship;
@@ -137,7 +137,7 @@ One trust assumption is stated rather than hidden: in frontier mode, entries bef
 - A revoked key signs nothing after the revocation.
 - A change that would leave no valid orderer or operator is refused.
 
-**Anchors** (`ophanim/ledger/anchors.mjs`). The pinned TELOS chains and the board DAG are not changed. They are anchored.
+**Anchors** (`ophanim/ledger/anchors.mjs` for TELOS, `pantheon/src/ledger/anchors.mjs` for the board). The pinned TELOS chains and the board DAG are not changed. They are anchored.
 
 | Kind | Payload | Re-derives by |
 |---|---|---|
@@ -145,7 +145,7 @@ One trust assumption is stated rather than hidden: in frontier mode, entries bef
 | `board.anchor` | `{ref, commit}` | Walking the ref's history: the commit must still be in it. The board moving on is fine; a rewrite is not. |
 
 *Check.*
-- `ophanim/ledger/chain.test.mjs` (10 tests) adds two genesis cases:
+- `packages/ledger/tests/chain.test.mjs` (10 tests) adds two genesis cases:
   - a forged ledger under another authority verifies only against its own anchor, never the pinned one;
   - only an operator changes the authority, and revocation takes effect from that entry.
 - `ophanim/ledger/anchors.test.mjs` (3 tests) covers:
@@ -174,7 +174,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - `run.json` keeps its copy for display; the ledger entry is the one that re-derives.
 
 *Check.*
-- `ophanim/ledger/kinds.test.mjs` (5 tests) covers uncited facts, seating citations, escalations re-deriving against cited facts, step continuity by citation, and contributions after the board moves on.
+- `pantheon/tests/ledger-kinds.test.mjs` (5 tests) covers uncited facts, seating citations, escalations re-deriving against cited facts, step continuity by citation, and contributions after the board moves on.
 - `pantheon/tests/route-protocol.test.mjs` adds an end-to-end run. A truncation is recorded on the ledger, citing its inputs, and verifies on replay. A ledger altered afterwards stops the next run before it starts.
 - Suites:
   - `npm run test:proof`: 146 of 146, with TELOS at the pin;
@@ -191,7 +191,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - A provider that reports nothing yields `null`, never a guess.
 - `run.json` turns carry it too.
 
-**Kinds** (`ophanim/ledger/lineage-kinds.mjs`).
+**Kinds** (`pantheon/src/ledger/lineage-kinds.mjs`).
 
 | Kind | Re-derives by |
 |---|---|
@@ -206,7 +206,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - The critique is recorded as a `review` citing the work turn, so cold review covers the planner's lab as well. That is the same rule `assertReviewCutsAcross` enforces live, now re-derivable from the ledger.
 
 *Check.*
-- `ophanim/ledger/lineage-kinds.test.mjs` (4 tests) covers:
+- `pantheon/tests/ledger-lineage-kinds.test.mjs` (4 tests) covers:
   - per-seat signing and refusal of another key;
   - reply, placeholder and model-change refusals;
   - cold review across direct, transitive and lane-model lineage, and self-review;
@@ -233,7 +233,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - Ship's gate code moved into a synchronous `evaluateGates`; `ship` calls it, then writes its one commit exactly as before. Refusals and dry runs return the same objects.
 - `gatesAt({store, heads, ref, from, actor, graft, leases, now})` runs the same evaluator through `pinnedRefs(heads)` and returns the `shipClaim`. It is a second caller of the evaluator, not a copy. It is synchronous, as a re-deriver must be.
 
-**The kind** (`ophanim/ledger/gate-kind.mjs`; `kinds.mjs` is unchanged):
+**The kind** (`pantheon/src/ledger/gate-kind.mjs`; `kinds.mjs` is unchanged):
 
 | Kind | Payload | Re-derives by |
 |---|---|---|
@@ -242,7 +242,7 @@ Inputs are entries, never edits. A changed fact is a new `facts` entry, and a de
 - `gateKinds({authors, board: {store, refs}})`: authors is the controller.
 - `gateRecord(...)` builds the payload from the live board. It reads the heads and leases once, computes the claim from that record, and refuses if a live `shipClaim` at the same moment disagrees.
 
-*Check.* `ophanim/ledger/gate-kind.test.mjs` (4 tests, on a real Pantheon board) covers:
+*Check.* `pantheon/tests/ledger-gate-kind.test.mjs` (4 tests, on a real Pantheon board) covers:
 - a held-lease refusal and a green verdict recorded, the ship landing, the branch moving on, and both entries still re-deriving;
 - forgeries refused: `tests_passed` flipped, LEASE quietly green, lease rows dropped, a later `now`, a non-controller author;
 - heads refused when they are not on this board (a commit from another board, a made-up cid) or not in the ref's history;
@@ -284,7 +284,7 @@ Suites:
 *Check.*
 - `ophanim/efficiency/measured-value.test.mjs` (2 tests): a negative or invented legacy aggregate and a negative debit are refused; forged result files (no use; a use whose state directory holds no such trace) are not counted. Both tests fail against the pre-change `assessment.mjs` (the `-100000` aggregate is accepted; 3 convergences counted instead of 1) and pass after.
 - `ophanim/ledger/efficiency-kinds.test.mjs` (5 tests): promotion figures, the 20-use cap counted on the chain, savings re-derived from the cited promotion, debits non-negative and never double-charged, totals refused on an edited ledger, and an assessment recording on the ledger and refusing an altered one.
-- `ophanim/ledger/chain.test.mjs` (11 tests) adds `view.entries()`: an entry sees only what came before it, on append and on replay.
+- `packages/ledger/tests/chain.test.mjs` (11 tests) adds `view.entries()`: an entry sees only what came before it, on append and on replay.
 - Suites:
   - `npm run test:proof`: 154 of 154, with TELOS at the pin;
   - Pantheon: 811 pass, plus the 1 known environment failure.
@@ -355,7 +355,7 @@ The cycle review named "the ledger is opt-in" as the largest remaining gap. It i
 
 | Piece | How |
 |---|---|
-| Ledger home | `ophanim/ledger/system.mjs`, `openSystemLedger({root, board, anchor})`. It opens, or on first use creates, a ledger with every kind registered: facts, seating, escalation, contribution, turn, review, the efficiency kinds, and, when a board is given, gate and board anchors. |
+| Ledger home | `ophanim/ledger/system.mjs`, `openSystemLedger({root, board, anchor})` (since the layering move: the home itself is `packages/ledger/home.mjs`, and a Pantheon run opens `openPantheonLedger` in `pantheon/src/ledger/system.mjs`). It opens, or on first use creates, a ledger with every kind registered: facts, seating, escalation, contribution, turn, review, the efficiency kinds, and, when a board is given, gate and board anchors. |
 | Trust | First use writes the genesis and pins its hash in `ANCHOR`. An expected anchor (argument or `OPHANIM_LEDGER_ANCHOR`) must match. A chain without its anchor is refused, never trusted on its own word. |
 | Key custody | `keys/` (0700) holds one owner-only file (0600) per private key: operator, controller, and each seat occupancy. Keys never enter the chain. A key readable by others, or one that does not match the authority's public key, is refused. |
 | Seat keys across runs | A seat occupancy keeps its key and is admitted once. `rotateSeatKey` revokes and re-admits, and earlier entries still verify. |
@@ -378,7 +378,7 @@ The cycle review named "the ledger is opt-in" as the largest remaining gap. It i
   - model client: 48 pass.
 
 **Still to do.**
-- **Layering:** Pantheon reaches the ledger through a dynamic import of `ophanim/ledger`. The ledger belongs in a shared package (`packages/ledger`).
+- **Layering:** Pantheon reaches the ledger through a dynamic import of `ophanim/ledger`. The ledger belongs in a shared package (`packages/ledger`). Done: see "Layering" below.
 - **Shared ledger:** gate and contribution kinds re-derive against the board the ledger was opened with, so one shared ledger across boards needs a board resolver per entry.
 - **Key custody:** it is a local key store; a hardware or remote signer would replace `keyStore`.
 
@@ -394,7 +394,7 @@ The cycle review (item 5) named the records still off the ledger or only signed 
 | Ref moves (`refs/`, reflog) | Ref files plus a display reflog | A `ref.move` entry per successful swap, citing the previous move of that ref |
 | Seat conversation files | Self-attesting: the chain is recomputed from the file | Checked against the ledger's `turn` entries for the seat at handoff |
 
-**Kinds** (`ophanim/ledger/board-kinds.mjs`, registered in `systemKinds`, authored by the controller). Each entry names its board (`scope`, the board root) and cites exactly the latest entry for the same lease, budget or ref; a skipped, stale or forked citation is refused.
+**Kinds** (`pantheon/src/ledger/board-kinds.mjs`, registered in `systemKinds`, authored by the controller). Each entry names its board (`scope`, the board root) and cites exactly the latest entry for the same lease, budget or ref; a skipped, stale or forked citation is refused.
 
 | Kind | Payload | Re-derives by |
 |---|---|---|
@@ -416,14 +416,14 @@ The cycle review (item 5) named the records still off the ledger or only signed 
 - `ledger: false`, or no recorder: every file path is unchanged.
 
 *Check.*
-- `ophanim/ledger/board-kinds.test.mjs` (6 tests), on a real Pantheon board recording on the system ledger:
+- `pantheon/tests/ledger-board-kinds.test.mjs` (6 tests), on a real Pantheon board recording on the system ledger:
   - lease events and generations recorded; forged grants, fences, renewals, uncited and early-expiry records refused;
   - a lease row edited in the file is refused at its next change, and the file is left unchanged;
   - the gate citing its lease entries; a dropped row, missing citation or missing scope refused;
   - an edited `budget.json` not raising the cap; caps uncited, out of order or negative refused;
   - a ref moved by hand and a history rewrite refused as `LEDGER_REFUSED`; a recorded reset accepted; forged moves refused;
   - without a ledger, the earlier behaviour.
-- `ophanim/ledger/seat-ledger.test.mjs` (5 tests): an honest seat continues; an edited reply or prompt, reordered or injected exchanges, and an exchange persisted but never recorded are refused as `LEDGER_MISMATCH`; without a ledger, only the file check applies.
+- `pantheon/tests/ledger-seat.test.mjs` (5 tests): an honest seat continues; an edited reply or prompt, reordered or injected exchanges, and an exchange persisted but never recorded are refused as `LEDGER_MISMATCH`; without a ledger, only the file check applies.
 - Against the pre-change Pantheon files, all 6 board tests and the 3 seat-refusal tests fail.
 - `pantheon/tests/route-protocol.test.mjs`: the default-ledger run also records `lease` and `ref.move`, every ref is where its last recorded move left it, and every turn carries `prompt_sha`.
 - Suites:
@@ -437,3 +437,32 @@ The cycle review (item 5) named the records still off the ledger or only signed 
 - Prompts are not on the ledger, only their digests. A turn recorded before `prompt_sha` existed matches any prompt.
 - A seat file from a run whose turns were not recorded (a board resumed from before the ledger) is refused, not adopted.
 - The gate's lease citations are available to callers; no gate entry is recorded on the run path yet, as before.
+
+## Layering (2026-11-17)
+
+The dependency ran both ways: Pantheon dynamic-imported `ophanim/ledger/system.mjs`, and `ophanim/ledger/*` imported OPHANIM (`board.mjs`'s canonical form, `efficiency/*`) and Pantheon (route protocol, contributions, seating, config, integrate, dag). It now runs one way: OPHANIM -> Pantheon -> `packages/ledger`.
+
+| Layer | Holds | Imports |
+|---|---|---|
+| `packages/ledger` (`@argo/ledger`) | `canonical.mjs` (canonical JSON and digest, the same bytes as `ophanim/board.mjs`); `chain.mjs` (chain, genesis, authority, checkpoints, `defineKinds`); `home.mjs` (`keyStore`, `openLedgerHome`: ANCHOR pinning, create/open, key checks, `rotateKey`); `status.mjs` (the status board and its CLI) | nothing outside itself |
+| `pantheon/src/ledger` | Pantheon's kinds: `kinds.mjs` (facts, seating, escalation, contribution), `lineage-kinds.mjs` (turn, review), `gate-kind.mjs` (gate), `board-kinds.mjs` (lease, budget, ref.move), `anchors.mjs` (board.anchor, `boardResolver`); `system.mjs`: `pantheonLedgerKinds`, `openPantheonLedger`, the default for `runOpenItem` | `packages/ledger`, Pantheon |
+| `ophanim/ledger` | OPHANIM's kinds: `efficiency-kinds.mjs`, `anchors.mjs` (telos.anchor, `telosResolver`, composed with the board anchor); `system.mjs`: `systemKinds`, `openSystemLedger`, the full composition the OPHANIM CLI opens | `packages/ledger`, `pantheon/src/ledger`, OPHANIM |
+
+**A move, not a redesign.** No kind's name, authors, rules or payload shape changed, and `LEDGER_SCHEMA` is still `ophanim.ledger/v1`. `systemKinds` is `pantheonLedgerKinds` plus the efficiency kinds, so an entry a Pantheon run records re-derives the same way under OPHANIM's composition. No shims were left at the old `ophanim/ledger` paths; every import was updated. The status CLI is now `node packages/ledger/status.mjs verify|render|set`, and `docs/STATUS.md` was regenerated with `render` so its instructions name that path.
+
+**One consequence of the closed registry.** A ledger that already holds efficiency entries (an `OPHANIM_LEDGER` shared with the OPHANIM CLI) is refused by Pantheon's composition (`kind "efficiency.trace" is not in the registry`), where before the move Pantheon opened OPHANIM's. Such a run takes OPHANIM's recorder (`runOpenItem(spec, {ledger: openSystemLedger(...).recorder()})`). The other direction always works.
+
+*Check.*
+- `ophanim/ledger/layering.test.mjs` (4 tests, in `npm run test:proof`):
+  - no file in `packages/ledger` imports outside it, and no file in `pantheon/` imports `ophanim/`;
+  - the core's canonical form and digest equal `ophanim/board.mjs`'s on edge values, with the same refusals;
+  - every Pantheon kind is in `systemKinds` under the same name and the same rule functions, and OPHANIM adds only `efficiency.*`;
+  - a ledger written with `openPantheonLedger` (facts, seating, turn, review, budget, ref.move, board.anchor) verifies and keeps growing under `openSystemLedger`, and Pantheon still reads what OPHANIM appended with Pantheon's kinds.
+- `packages/ledger/tests` (`npm test` in that package, and in the root `npm test`): chain (11), status (3), home (4), canonical (3). The canonical tests pin digests recorded from `ophanim/board.mjs` before the move and verify the committed `status/ledger` against its anchor.
+- Ledgers written by the pre-move code (a Pantheon run alone; a Pantheon run and an OPHANIM CLI run on one ledger) verify under the new compositions, and a new Pantheon run appends to the pre-move one and still verifies under `openSystemLedger`.
+- The chair-ranking checks that made Pantheon's tests import `ophanim/efficiency/investigation/chairs.mjs` moved to `ophanim/efficiency/investigation/chairs-board.test.mjs`.
+- Suites (before -> after; tests moved, none dropped):
+  - `npm run test:proof`: 184 -> 152 of 152, with TELOS at the pin (38 moved out: 14 to `packages/ledger`, 24 to Pantheon; 6 added);
+  - Pantheon: 812 -> 836 pass (24 moved in), plus the 1 known environment failure;
+  - `packages/ledger`: 21 pass (14 moved in, 7 added);
+  - model client: 48 pass.

@@ -6,10 +6,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openSystemLedger} from './system.mjs';
-import {sdkTurn, unmatchedExchange} from '../../pantheon/src/sdk/seat-sdk.mjs';
-import {record, replySha, promptSha} from '../../pantheon/src/context/chain.mjs';
-import {seatKey} from '../../pantheon/src/seat/identity.mjs';
+import {openPantheonLedger} from '../src/ledger/system.mjs';
+import {sdkTurn, unmatchedExchange} from '../src/sdk/seat-sdk.mjs';
+import {record, replySha, promptSha} from '../src/context/chain.mjs';
+import {seatKey} from '../src/seat/identity.mjs';
 
 const MODEL = 'gpt-6-sol';
 const LEDGER_SEAT = {seat_id: `openai-work@${MODEL}`, vendor: 'openai', mode: 'work', occupancy_gen: 1};
@@ -25,9 +25,9 @@ function client() {
 }
 
 async function withSeat(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-seat-ledger-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-seat-ledger-'));
   try {
-    const rec = openSystemLedger({root: path.join(dir, 'ledger')}).recorder();
+    const rec = openPantheonLedger({root: path.join(dir, 'ledger')}).recorder();
     const home = path.join(dir, 'home'), cwd = path.join(dir, 'work');
     fs.mkdirSync(cwd, {recursive: true});
     const c = client();

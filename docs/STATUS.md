@@ -1,10 +1,10 @@
 # Status board
 
 <!-- Generated from the status ledger (status/ledger). Do not edit by hand: record a status change
-     with `node ophanim/ledger/status.mjs set ...`, then `node ophanim/ledger/status.mjs render`. -->
+     with `node packages/ledger/status.mjs set ...`, then `node packages/ledger/status.mjs render`. -->
 
 **Ledger:** `status/ledger` · anchor `sha256:816a79525846cb2ade6173260237f1236cd5bea103d9027be51ea2981a2b536d` · head `sha256:16858786b4399cb99a0bd56097f44fdbabb8f7b43631ae6ba5eced706f6712e0` · 45 entries.
-Verify it: `node ophanim/ledger/status.mjs verify`.
+Verify it: `node packages/ledger/status.mjs verify`.
 
 **Counts:** Resolved: 24 · In progress: 1 · Ready: 3 · On Hold: 10.
 

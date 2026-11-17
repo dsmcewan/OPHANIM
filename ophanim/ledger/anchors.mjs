@@ -1,4 +1,6 @@
-// K2: anchoring the ledgers that already exist, without changing them.
+// K2: anchoring the ledgers that already exist, without changing them. The TELOS resolver is OPHANIM's
+// (it is read with TELOS's pinned code, checked against ophanim/governance.mjs); the board side is
+// Pantheon's and composed here.
 //
 // The pinned TELOS proposal chains and the Pantheon board DAG stay exactly as they are. An anchor entry
 // records a point in one of them (a TELOS proposal head after n events; a board commit on a ref), and
@@ -10,10 +12,10 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {TELOS_COMMIT, TELOS_PINS} from '../governance.mjs';
-import {history} from '../../pantheon/src/board/dag.mjs';
+import {boardAnchorKinds, boardResolver} from '../../pantheon/src/ledger/anchors.mjs';
 
+export {boardResolver};
 const SHA = /^sha256:[0-9a-f]{64}$/;
-const CID = /^commit:[0-9a-f]{64}$/;
 
 /**
  * Kind specs for the two anchors. `telos.events(proposal_id)` returns the hashes of a chain TELOS has
@@ -33,23 +35,9 @@ export function anchorKinds({telos = null, board = null, authors = () => true} =
       return hashes[e.payload.events - 1] === e.payload.head ? null : 'TELOS event at the anchored position is not the anchored head';
     },
   };
-  if (board) kinds['board.anchor'] = {
-    authors,
-    validate: p => (typeof p?.ref === 'string' && CID.test(p.commit ?? '') ? null : 'a board anchor names {ref, commit}'),
-    rederive: e => (board.reaches(e.payload.ref, e.payload.commit) ? null : `commit ${e.payload.commit.slice(0, 12)} is no longer in ${e.payload.ref}'s history`),
-  };
+  // The board side is Pantheon's (pantheon/src/ledger/anchors.mjs): the same kind, the same rule.
+  Object.assign(kinds, boardAnchorKinds({board, authors}));
   return kinds;
-}
-
-/** Board side: a commit is anchored while it stays in the ref's history. */
-export function boardResolver({store, refs, limit = 100_000}) {
-  return {
-    reaches(ref, commit) {
-      const head = refs.resolve(ref);
-      return Boolean(head) && history(store, head, {limit}).commits.some(c => c.cid === commit);
-    },
-    head: ref => refs.resolve(ref),
-  };
 }
 
 /**

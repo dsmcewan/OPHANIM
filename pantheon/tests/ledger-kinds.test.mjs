@@ -4,12 +4,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
-import {pantheonKinds, currentFacts, currentSeating, escalationRecorder} from './kinds.mjs';
-import {escalationRecord} from '../../pantheon/src/route/protocol.mjs';
-import {chairContributions} from '../../pantheon/src/board/contributions.mjs';
-import {openBoard} from '../../pantheon/src/board/index.mjs';
-import {publish, putBlob} from '../../pantheon/src/board/dag.mjs';
+import {openLedger, createLedger, defineKinds, generateSigner} from '../../packages/ledger/chain.mjs';
+import {pantheonKinds, currentFacts, currentSeating, escalationRecorder} from '../src/ledger/kinds.mjs';
+import {escalationRecord} from '../src/route/protocol.mjs';
+import {chairContributions} from '../src/board/contributions.mjs';
+import {openBoard} from '../src/board/index.mjs';
+import {publish, putBlob} from '../src/board/dag.mjs';
 
 const operator = generateSigner('operator'), controller = generateSigner('controller');
 const authority = {keyring: {operator: operator.publicJwk, controller: controller.publicJwk}, orderer: 'controller', operators: ['operator']};
@@ -17,7 +17,7 @@ const by = s => ({author: {key_id: s.key_id}, signer: s, order: controller});
 const authors = {inputs: a => a.key_id === 'operator', decisions: a => a.key_id === 'controller'};
 
 async function withLedger(fn, {board = null} = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-kinds-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-kinds-'));
   try {
     const anchor = createLedger({dir, authority, operator, order: controller});
     return await fn(openLedger({dir, kinds: defineKinds(pantheonKinds({authors, board})), anchor}));
@@ -77,7 +77,7 @@ test('the recorder keeps the run annotations beside the record and chains decisi
 }));
 
 test('a contribution re-derives from the board heads it names, after the board has moved on', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-kinds-board-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-kinds-board-'));
   try {
     const board = openBoard(root);
     const ref = 'refs/board/demo';

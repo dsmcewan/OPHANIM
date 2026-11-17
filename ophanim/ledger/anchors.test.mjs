@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
+import {openLedger, createLedger, defineKinds, generateSigner} from '../../packages/ledger/chain.mjs';
 import {anchorKinds, boardResolver, telosResolver} from './anchors.mjs';
 import {openBoard} from '../../pantheon/src/board/index.mjs';
 import {publish, putBlob} from '../../pantheon/src/board/dag.mjs';

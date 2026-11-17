@@ -1,0 +1,19 @@
+{
+  "name": "@argo/ledger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./chain": "./chain.mjs",
+    "./canonical": "./canonical.mjs",
+    "./home": "./home.mjs",
+    "./status": "./status.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

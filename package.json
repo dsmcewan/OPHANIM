@@ -10,12 +10,13 @@
     "ophanim": "./ophanim/cli.mjs"
   },
   "scripts": {
-    "test": "npm --prefix packages/model-client test && npm --prefix pantheon test -- --test-concurrency=2",
+    "test": "npm --prefix packages/model-client test && npm --prefix packages/ledger test && npm --prefix pantheon test -- --test-concurrency=2",
     "test:proof": "node --test ophanim/governance/*.test.mjs ophanim/efficiency/*.test.mjs ophanim/efficiency/investigation/*.test.mjs ophanim/tests/*.test.mjs ophanim/ledger/*.test.mjs"
   },
   "workspaces": [
     "pantheon",
-    "packages/model-client"
+    "packages/model-client",
+    "packages/ledger"
   ],
   "devDependencies": {
     "typescript": "5.9.3",

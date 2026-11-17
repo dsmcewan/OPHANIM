@@ -19,7 +19,7 @@
 // first and refuses the change when the ledger does (pantheon/src/board/runtime.mjs, refs.mjs).
 import fs from 'node:fs';
 import path from 'node:path';
-import {openStore} from '../../pantheon/src/board/cas.mjs';
+import {openStore} from '../board/cas.mjs';
 
 export const LEASE = 'lease', BUDGET = 'budget', REF_MOVE = 'ref.move';
 const EVENTS = ['observed', 'granted', 'renewed', 'released', 'expired', 'fenced'];

@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {sign as edSign, verify as edVerify, createPrivateKey, createPublicKey, generateKeyPairSync} from 'node:crypto';
-import {canonical, digest} from '../board.mjs';
+import {canonical, digest} from './canonical.mjs';
 
 export const LEDGER_SCHEMA = 'ophanim.ledger/v1';
 export const CHECKPOINT = 'checkpoint';

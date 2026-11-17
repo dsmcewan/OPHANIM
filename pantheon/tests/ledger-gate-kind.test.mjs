@@ -4,12 +4,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openLedger, createLedger, defineKinds, generateSigner} from './chain.mjs';
-import {gateKinds, gateRecord} from './gate-kind.mjs';
-import {openBoard} from '../../pantheon/src/board/index.mjs';
-import {publish, treeSlots} from '../../pantheon/src/board/dag.mjs';
-import {merge} from '../../pantheon/src/board/merge.mjs';
-import {ship, shipClaim, gatesAt} from '../../pantheon/src/board/integrate.mjs';
+import {openLedger, createLedger, defineKinds, generateSigner} from '../../packages/ledger/chain.mjs';
+import {gateKinds, gateRecord} from '../src/ledger/gate-kind.mjs';
+import {openBoard} from '../src/board/index.mjs';
+import {publish, treeSlots} from '../src/board/dag.mjs';
+import {merge} from '../src/board/merge.mjs';
+import {ship, shipClaim, gatesAt} from '../src/board/integrate.mjs';
 
 const operator = generateSigner('operator'), controller = generateSigner('controller');
 const authority = {keyring: {operator: operator.publicJwk, controller: controller.publicJwk}, orderer: 'controller', operators: ['operator']};
@@ -24,8 +24,8 @@ const TICKET = {title: 'fence the lock', goal: 'a fenced lease', repo: 'pantheon
   acceptance: [{type: 'tests', cmd: CMD, expect: 'exit0'}]};
 
 async function withBoardAndLedger(fn) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-gate-board-'));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-gate-ledger-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-gate-board-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-gate-ledger-'));
   try {
     const board = openBoard(root);
     const anchor = createLedger({dir, authority, operator, order: controller});
@@ -120,7 +120,7 @@ test('heads that are not on this board are refused', () => withBoardAndLedger(as
   const {wip} = await drive(board);
   const rec = await gateRecord({...board, ref: REF, from: wip, actor: CONTROLLER});
   // A commit from another board: a real cid, just not one this store holds.
-  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-gate-other-'));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'pantheon-ledger-gate-other-'));
   try {
     const elsewhere = openBoard(other);
     const r = await publish({...elsewhere, ref: REF, author: HUMAN, msg: 'ticket', entries: [{kind: 'ticket', payload: {...TICKET, title: 'another board'}}]});

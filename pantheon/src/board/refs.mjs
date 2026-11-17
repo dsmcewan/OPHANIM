@@ -89,7 +89,7 @@ export function slotsAllowed(name, changedSlots) {
   return { ok: true };
 }
 
-// WITH A LEDGER (`ledger`, a board recorder from ophanim/ledger/board-kinds.mjs, injected): every
+// WITH A LEDGER (`ledger`, a board recorder from pantheon/src/ledger/board-kinds.mjs, injected): every
 // successful swap is recorded as a `ref.move` entry {name, from, to, msg, by, reset} citing the previous
 // move of that ref, BEFORE the ref file changes. The ledger re-derives it: `from` is where the previous
 // move left the ref, and `to` is a commit in this store whose history contains `from`, unless the swap
