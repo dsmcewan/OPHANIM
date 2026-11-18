@@ -19,6 +19,14 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** What agy 1.5.10 printed on stderr when `agy agents` / `agy mcp list` got --log-file (observed, owner's probe of 5893432, 2026-11-18). */
+export const AGY_1_5_10_BAD_FLAG_STDERR = Object.freeze({
+  agents: "Usage: agy agent [flags]\n\nList available agents\n\nFlags:\n  -h      Show help\n  --help  Show help\nError: flags provided but not defined: -log-file\n",
+  mcp_list: "Usage: agy mcp list [flags]\n\nList all configured MCP servers\n\nFlags:\n  -h      Show help\n  --help  Show help\nError: flags provided but not defined: -log-file\n",
+});
+/** The fake credential the fake `agy mcp list` prints (as the real one printed a global server's credential): it must never reach a record. */
+export const FAKE_MCP_CREDENTIAL = "ctx7sk-FAKE-CREDENTIAL-do-not-store-7f3a9c";
+
 const FAKE_AGY = `#!/bin/sh
 here=$(cd "$(dirname "$0")" && pwd)
 # The quota probe (\`agy -p /quota\`): prints the scripted report next to this script (agyQuotaReport) and exits with
@@ -26,7 +34,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 # Also the structured form the probe uses (\`agy --print /usage --output-format json\`, as observed on agy 1.5.10): a
 # scripted report that is itself the JSON envelope is printed as is; a text report is wrapped in one.
 if { [ "$1" = "-p" ] || [ "$1" = "--print" ]; } && { [ "$2" = "/quota" ] || [ "$2" = "/usage" ]; }; then
-  printf 'quota %s\\n' "$#" >> "$here/agy.quota.log"
+  { printf 'quota %s\\n' "$#" >> "$here/agy.quota.log"; } 2>/dev/null   # silent when the fixture dir is read-only (inside a jail)
+  # FAKE_AGY_AUTH_MARKER (see the tools script, "sub"): logged out unless the marker exists; then the /usage envelope
+  # has no groups and stderr says so (the observed "Auth mode is unspecified" line).
+  if [ -n "$FAKE_AGY_AUTH_MARKER" ] && [ ! -e "$HOME/.gemini/antigravity-cli/$FAKE_AGY_AUTH_MARKER" ]; then
+    echo "W1118 00:00:00.000000 $$ models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response" >&2
+    printf '{"conversation_id":"","status":"SUCCESS","response":"","num_turns":0,"usage":{"total_tokens":0},"command":{"name":"usage","data":{"groups":[]}}}\\n'
+    exit 0
+  fi
   if [ "$3" = "--output-format" ] && [ "$4" = "json" ] && [ -f "$here/quota-report.txt" ]; then
     if head -c 1 "$here/quota-report.txt" | grep -q '{'; then cat "$here/quota-report.txt"
     else node -e 'const t=require("fs").readFileSync(process.argv[1],"utf8");process.stdout.write(JSON.stringify({conversation_id:"",status:"SUCCESS",response:t,num_turns:0,usage:{total_tokens:0},command:{name:"usage"}}))' "$here/quota-report.txt"; fi
@@ -199,7 +214,7 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fake-a
 // (run_command, MCP, call_mcp_tool, invoke_subagent) unless a hook said "auto_approve"; a file edit inside the
 // workspace and a read run on "allow" / empty / no hook.
 const FAKE_AGY_TOOLS = String.raw`import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 const [cmd, ...rest] = process.argv.slice(2);
 // Observed on agy 1.5.10 (owner's probe 2026-11-18): call_mcp_tool is not in the tool registry; grep_search, list_dir
@@ -321,15 +336,62 @@ if (cmd === "write") {
   save(); event("view_file", "DONE", { AbsolutePath: p });
   process.stdout.write(readFileSync(p, "utf8"));
 } else if (cmd === "sub") {
-  // agy agents: the agents of ./.agents/agents/*/agent.md, one per line (name, "workspace", tool count); a card naming a
-  // tool in BAD_TOOLS is not listed and an "unknown component ... not found in registry" line is logged for each.
-  // agy mcp list: the servers of ./.agents/mcp_config.json, one per line (name, command and args; never env).
-  // Log lines go to stderr and to --log-file when given. Exit 0, as an informational command would.
-  const i = rest.indexOf("--log-file"), log = i >= 0 ? rest[i + 1] : null;
-  const say = line => { process.stderr.write(line + "\n"); if (log) { try { appendFileSync(log, line + "\n"); } catch { process.stderr.write("fake-agy: cannot write --log-file " + log + "\n"); } } };
-  if (rest[0] === "agents") {
+  // agy agents / agy mcp list, as OBSERVED on agy 1.5.10 (owner's probe of 5893432, 2026-11-18):
+  //   - both REJECT --log-file: exit 1, their usage text, then exactly "Error: flags provided but not defined: -log-file".
+  //   - both write the CLI's own log under $HOME/.gemini/antigravity-cli/log/ and a
+  //     $HOME/.gemini/config/projects/default-cli-project.json.<rand>.tmp (then renamed); a write that fails logs an
+  //     E-level "read-only file system" line to stderr.
+  //   - logged out (FAKE_AGY_NOT_LOGGED_IN=1, or FAKE_AGY_AUTH_MARKER=<path under antigravity-cli/> naming a file that
+  //     is absent under $HOME/.gemini/antigravity-cli): the observed stderr lines ("Auth mode is unspecified, ...",
+  //     "error getting token source: You are not logged into Antigravity.", "doRefreshQuota: skipped (not logged in)"),
+  //     and agents exits 0 with EMPTY stdout (observed); mcp list still lists the global server.
+  //   - both print the observed benign 'Failed to resolve GeminiDir ".gemini": ...' line when logged out.
+  //   - both print "hooks_manager.go:54] loaded N named hooks from N hooks.json file(s)": N = 1 only when the cwd has
+  //     .agents/hooks.json AND is a git repo (a stand-in for "project root" detection: the real rule is not known; the
+  //     observed run printed 0 for a control dir that is not a git repo), else 0.
+  //   - any other --flag is refused the same way as --log-file (an ASSUMPTION: only --log-file was observed).
+  //   - FAKE_AGY_GLOBAL_ONLY=1: both list the GLOBAL configuration only (observed): agents lists none of the
+  //     workspace's, mcp list only the global server.
+  //   - mcp list ALWAYS prints the global server "context7" with a FAKE credential (observed: the real one printed the
+  //     server's configured credential), so a test can prove it never reaches a record.
+  // Otherwise agents lists ./.agents/agents/*/agent.md (name, "workspace", tool count); a card naming a tool in
+  // BAD_TOOLS is not listed and an "unknown component ... not found in registry" line is logged for each.
+  const agents = rest[0] === "agents";
+  const flag = rest.find(a => a.startsWith("--"));
+  if (flag) {
+    const name = flag.replace(/^--/, "").replace(/=.*$/, "");
+    process.stderr.write((agents ? ${JSON.stringify(AGY_1_5_10_BAD_FLAG_STDERR.agents)} : ${JSON.stringify(AGY_1_5_10_BAD_FLAG_STDERR.mcp_list)}).replace(/-log-file\n$/, "-" + name + "\n"));
+    process.exit(1);
+  }
+  const home = process.env.HOME, g = home ? join(home, ".gemini") : null, rnd = process.pid;
+  let cliLog = null;
+  const say = line => { process.stderr.write(line + "\n"); if (cliLog) { try { appendFileSync(cliLog, line + "\n"); } catch { /* reported when opened */ } } };
+  const tryWrite = (p, content, what) => {
+    try { if (!existsSync(dirname(p))) mkdirSync(dirname(p)); writeFileSync(p, content); return true; }   // one level, so a read-only parent reports EROFS
+    catch (e) { say("E1118 00:00:00.000000 " + rnd + " state.go:7] " + what + ": open " + p + ": " + (e.code === "EROFS" ? "read-only file system" : e.code)); return false; }
+  };
+  if (g && existsSync(g)) {
+    const lp = join(g, "antigravity-cli", "log", "cli-" + rnd + ".log");
+    if (tryWrite(lp, "I1118 00:00:00.000000 " + rnd + " main.go:1] fake-agy " + rest.join(" ") + "\n", "Failed to redirect output for CLI: creating log file: opening log file")) cliLog = lp;
+    const tmp = join(g, "config", "projects", "default-cli-project.json." + rnd + ".tmp");
+    if (tryWrite(tmp, "{}", "failed to resolve project: project: write project config")) renameSync(tmp, join(g, "config", "projects", "default-cli-project.json"));
+  }
+  const globalOnly = process.env.FAKE_AGY_GLOBAL_ONLY === "1";
+  const marker = process.env.FAKE_AGY_AUTH_MARKER;
+  const loggedOut = process.env.FAKE_AGY_NOT_LOGGED_IN === "1" || Boolean(marker && !(g && existsSync(join(g, "antigravity-cli", marker))));
+  const hooksFound = existsSync(join(cwd, ".agents", "hooks.json")) && existsSync(join(cwd, ".git")) ? 1 : 0;
+  say("I1118 00:00:00.000000 " + rnd + " hooks_manager.go:54] loaded " + hooksFound + " named hooks from " + hooksFound + " hooks.json file(s)");
+  if (loggedOut) {
+    say("W1118 00:00:00.000000 " + rnd + " settings.go:3] Failed to resolve GeminiDir \".gemini\": .gemini must be an absolute path: path is not absolute, falling back to default");
+    say("I1118 00:00:00.000000 " + rnd + " settings.go:4] CLI app data directory: " + (g ? join(g, "antigravity-cli") : "?"));
+    say("W1118 00:00:00.000000 " + rnd + " models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response");
+    say("E1118 00:00:00.000000 " + rnd + " auth.go:2] error getting token source: You are not logged into Antigravity.");
+    say("I1118 00:00:00.000000 " + rnd + " quota.go:5] doRefreshQuota: skipped (not logged in)");
+  }
+  if (agents) {
+    if (loggedOut) process.exit(0);
     const base = join(cwd, ".agents", "agents"), listed = [];
-    for (const n of existsSync(base) ? readdirSync(base).sort() : []) {
+    for (const n of existsSync(base) && !globalOnly ? readdirSync(base).sort() : []) {
       const f = join(base, n, "agent.md");
       if (!existsSync(f)) continue;
       const text = readFileSync(f, "utf8");
@@ -341,12 +403,13 @@ if (cmd === "write") {
       if (unknown.length) { for (const t of unknown) say("E1118 00:00:00.000000 1 agents.go:42] failed to resolve components: unknown component: tool \"" + t + "\" not found in registry"); continue; }
       listed.push(name + "\tworkspace\t" + tools.length + " tools");
     }
-    process.stdout.write(listed.length ? listed.join("\n") + "\n" : "No agents found.\n");
+    if (listed.length) process.stdout.write(listed.join("\n") + "\n");
   } else {
     const f = join(cwd, ".agents", "mcp_config.json");
-    const servers = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")).mcpServers ?? {} : {};
-    const names = Object.keys(servers).sort();
-    process.stdout.write(names.length ? names.map(n => n + "\tstdio\t" + [servers[n].command, ...(servers[n].args ?? [])].join(" ")).join("\n") + "\n" : "No MCP servers configured.\n");
+    const servers = existsSync(f) && !globalOnly ? JSON.parse(readFileSync(f, "utf8")).mcpServers ?? {} : {};
+    const out = ["context7\tstdio\tnpx -y @upstash/context7-mcp --api-key " + ${JSON.stringify(FAKE_MCP_CREDENTIAL)}, "  headers: Authorization: Bearer " + ${JSON.stringify(FAKE_MCP_CREDENTIAL)}];
+    for (const n of Object.keys(servers).sort()) out.push(n + "\tstdio\t" + [servers[n].command, ...(servers[n].args ?? [])].join(" "));
+    process.stdout.write(out.join("\n") + "\n");
   }
   process.exit(0);
 } else if (cmd === "finish") {
@@ -370,7 +433,7 @@ export function fakeAgy(dir) {
 // The switches every fixture saves, clears and restores. PANTHEON_AGY_STATE_DIRS is set to the fixture dir: the unit
 // worker runs inside the bwrap jail, where only the worktree, the control dir's run/ and the agy state dirs are
 // writable, and the fake CLI writes its logs ($FAKE_AGY_LOG*) in the fixture dir.
-const AGY_SWITCHES = ["FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER", "FAKE_AGY_GEMINI_WRITES", "FAKE_AGY_MCP_NAME",
+const AGY_SWITCHES = ["FAKE_AGY_AUTH_MARKER", "FAKE_AGY_NOT_LOGGED_IN", "FAKE_AGY_GLOBAL_ONLY", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER", "FAKE_AGY_GEMINI_WRITES", "FAKE_AGY_MCP_NAME",
   "FAKE_AGY_QUOTA_SOFT", "FAKE_AGY_HANG", "FAKE_AGY_PRINT_TIMEOUT", "FAKE_AGY_STREAM", "FAKE_AGY_GARBLE"];
 /** The worker-turn controls a fixture hands its test (see FAKE_AGY): failure switches and the scripted /quota report. */
 function workerControls(dir) {

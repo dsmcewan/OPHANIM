@@ -327,7 +327,7 @@ test("(i) the ~/.gemini layout around a worker turn (fake HOME): ~/.gemini read-
     assert.equal(s.dir, c);
     assert.deepEqual(s.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.copied, x.changed]), [["jetbox_summaries_proto.pb.<rand>.tmp", false, true], ["settings.json", true, false]]);
     assert.deepEqual(Object.fromEntries(Object.entries(s.subdirs).map(([k, v]) => [k, v.map(x => x.path.replace(/\d+/g, "N"))])),
-      { brain: ["fake-agy-conversation/task.md"], cache: ["last_conversations.json"], conversations: ["fake-agy-conversation.db"], crashes: [], implicit: ["N.N.tmp"], mcp: ["pantheon-subagents/state.json"], presence: ["fake-agy-conversation.lock"] },
+      { brain: ["fake-agy-conversation/task.md"], cache: ["last_conversations.json"], conversations: ["fake-agy-conversation.db"], crashes: [], implicit: ["N.N.tmp"], log: [], mcp: ["pantheon-subagents/state.json"], presence: ["fake-agy-conversation.lock"] },
       "the observed writes landed in the scratch; the host's earlier.db was hidden");
     assert.match(r.stderr_tail, /settings\.json write failed: EROFS/);
     assert.match(r.stderr_tail, /oauth_creds\.json refresh write failed: EROFS/, "a refresh cannot rewrite the login (the probe shows the EROFS)");

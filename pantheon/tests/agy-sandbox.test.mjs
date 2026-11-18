@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpath
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { bwrapArgs, sandboxAvailable, repoGitDirs, geminiState, dropGeminiState, defaultAgyStateDirs, GEMINI_STATE_SUBDIRS } from "../src/agy/sandbox.mjs";
+import { bwrapArgs, sandboxAvailable, repoGitDirs, geminiState, dropGeminiState, defaultAgyStateDirs, GEMINI_CLI_COPY, GEMINI_STATE_SUBDIRS, GEMINI_WRITABLE_COPIES } from "../src/agy/sandbox.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
 import { sh } from "./fixtures/pipeline-stages.mjs";
 
@@ -103,76 +103,133 @@ const snapshot = dir => {
   return out;
 };
 
-/** A fake HOME with the agy 1.5.10 layout (observed on the owner's machine, 2026-11-18), the host side of the jail. */
+/**
+ * A fake HOME with the agy 1.5.10 layout OBSERVED on the owner's machine (2026-11-18), the host side of the jail: the
+ * top-level files of antigravity-cli (antigravity-oauth-token, conversation_summaries.db, history.jsonl, installation_id,
+ * jetbox_summaries_proto.pb, jetski_state.pbtxt, last_check.timestamp, settings.json), state and unknown subdirs, and
+ * ~/.gemini/config/projects.
+ */
 function fakeHome(root) {
   const home = join(root, "home"), g = join(home, ".gemini"), c = join(g, "antigravity-cli");
-  mkdirSync(join(c, "conversations"), { recursive: true }); mkdirSync(join(c, "plugins"), { recursive: true }); mkdirSync(join(c, "cache"));
+  mkdirSync(join(c, "conversations"), { recursive: true }); mkdirSync(join(c, "plugins"), { recursive: true }); mkdirSync(join(c, "cache")); mkdirSync(join(c, "log"));
   for (const f of ["GEMINI.md", "google_accounts.json", "installation_id", "projects.json", "state.json", "trustedFolders.json"]) writeFileSync(join(g, f), `${f}\n`);
   writeFileSync(join(g, "settings.json"), "{}");
   writeFileSync(join(g, "oauth_creds.json"), '{"refresh_token":"fake"}');
   writeFileSync(join(c, "settings.json"), '{"cli":"host"}', { mode: 0o640 });
+  writeFileSync(join(c, "antigravity-oauth-token"), "fake-oauth-token", { mode: 0o600 });
+  for (const f of ["installation_id", "jetski_state.pbtxt", "last_check.timestamp"]) writeFileSync(join(c, f), `${f}\n`);
+  writeFileSync(join(c, "history.jsonl"), '{"prompt":"host history"}\n');
+  writeFileSync(join(c, "conversation_summaries.db"), "summaries-db");
+  writeFileSync(join(c, "jetbox_summaries_proto.pb"), "jetbox");
   writeFileSync(join(c, "conversations", "old.db"), "host history");
   writeFileSync(join(c, "cache", "last_conversations.json"), "[1]");
+  writeFileSync(join(c, "log", "old.log"), "host log");
   writeFileSync(join(c, "plugins", "p.json"), "plugin");
   symlinkSync("settings.json", join(c, "linked.json"));
-  return { home, g, c };
+  const proj = join(g, "config", "projects");
+  mkdirSync(join(proj, "nested"), { recursive: true });
+  writeFileSync(join(proj, "default-cli-project.json"), '{"p":1}', { mode: 0o640 });
+  writeFileSync(join(proj, "nested", "n.json"), "nested");
+  writeFileSync(join(g, "config", "other.json"), "{}");
+  return { home, g, c, proj };
 }
 
-test("~/.gemini (a FAKE home): read-only inside; ~/.gemini/antigravity-cli is a per-run scratch COPY (its settings.json readable from the copy, the state subdirs empty and writable, an unknown subdir read-only from the host); the host is unchanged and nothing is created under HOME", { skip: have.ok ? false : `bwrap unavailable: ${have.why}` }, async t => {
+test("~/.gemini (a FAKE home): read-only inside; ~/.gemini/antigravity-cli is a per-run scratch COPY of the ALLOWLISTED top-level files only (history, summaries and databases withheld), its state subdirs (log/ included) empty and writable, an unknown subdir read-only; ~/.gemini/config/projects a writable copy; the host is unchanged and nothing is created under HOME", { skip: have.ok ? false : `bwrap unavailable: ${have.why}` }, async t => {
   const { root, wt, ctl } = await layout(t);
-  const { home, g, c } = fakeHome(root);
+  const { home, g, c, proj } = fakeHome(root);
   const before = snapshot(home);
   const st = await geminiState({ home, run_dir: join(ctl, "run") });
   assert.equal(st.enabled, true);
   assert.equal(st.cli_dir, c);
   assert.ok(st.scratch_cli.startsWith(join(ctl, "run", "agy-state") + "/") && st.scratch_cli.endsWith("/antigravity-cli"), st.scratch_cli);
-  assert.deepEqual(st.mounts, [{ dest: c, src: st.scratch_cli, mode: "rw" }, { dest: join(c, "plugins"), src: join(c, "plugins"), mode: "ro" }]);
-  assert.deepEqual([st.copied, st.skipped, st.hidden_state, st.readonly_subdirs], [["settings.json"], [{ name: "linked.json", kind: "symlink" }], ["conversations", "cache"], ["plugins"]]);
+  assert.equal(statSync(st.scratch_root).mode & 0o777, 0o700, "the scratch root (it holds the OAuth token) is 0700");
+  const projCopy = join(st.scratch_root, "writable", "config", "projects");
+  assert.deepEqual(st.mounts, [{ dest: c, src: st.scratch_cli, mode: "rw" }, { dest: join(c, "plugins"), src: join(c, "plugins"), mode: "ro" },
+    { dest: proj, src: projCopy, mode: "rw" }, { dest: join(proj, "nested"), src: join(proj, "nested"), mode: "ro" }]);
+  assert.deepEqual(GEMINI_CLI_COPY, ["settings.json", "antigravity-oauth-token", "installation_id", "jetski_state.pbtxt", "last_check.timestamp"]);
+  assert.ok(GEMINI_STATE_SUBDIRS.includes("log"));
+  assert.deepEqual(GEMINI_WRITABLE_COPIES, ["config/projects"]);
+  assert.deepEqual(st.copied, ["antigravity-oauth-token", "installation_id", "jetski_state.pbtxt", "last_check.timestamp", "settings.json"]);
+  assert.deepEqual(st.withheld, [{ name: "conversation_summaries.db", size: 12 }, { name: "history.jsonl", size: 26 }, { name: "jetbox_summaries_proto.pb", size: 6 }]);
+  assert.deepEqual([st.skipped, st.hidden_state, st.readonly_subdirs], [[{ name: "linked.json", kind: "symlink" }], ["conversations", "cache", "log"], ["plugins"]]);
+  assert.deepEqual(st.writable_copies, [{ path: "config/projects", dest: proj, status: "copied", src: projCopy, copied: ["default-cli-project.json"], skipped: [], readonly_subdirs: ["nested"] }]);
   assert.equal(statSync(join(st.scratch_cli, "settings.json")).mode & 0o777, 0o640, "the copy keeps the mode");
-  assert.deepEqual(readdirSync(st.scratch_cli).sort(), [...GEMINI_STATE_SUBDIRS, "plugins", "settings.json"].sort());
+  assert.equal(statSync(join(st.scratch_cli, "antigravity-oauth-token")).mode & 0o777, 0o600);
+  assert.equal(statSync(join(projCopy, "default-cli-project.json")).mode & 0o777, 0o640);
+  assert.deepEqual(readdirSync(st.scratch_cli).sort(), [...GEMINI_STATE_SUBDIRS, ...st.copied, "plugins"].sort());
+  for (const f of ["history.jsonl", "conversation_summaries.db", "jetbox_summaries_proto.pb"]) assert.equal(existsSync(join(st.scratch_cli, f)), false, `${f} is NOT in the scratch`);
   assert.deepEqual(snapshot(home), before, "preparing the layout wrote nothing under HOME");
   mkdirSync(join(root, "probe"));
   const { argv, binds } = bwrapArgs({ worktree: wt, control_dir: ctl, gemini_state: st, extra_ro: [join(root, "probe"), home] });
-  // Parent-first: ~/.gemini ro, then the scratch rw over antigravity-cli, then the host's unknown subdir ro over its
-  // mount point inside the scratch; the main .git read-only bind last.
-  const i = argv.lastIndexOf(g), j = argv.lastIndexOf(c), k = argv.lastIndexOf(join(c, "plugins"));
-  assert.deepEqual([argv.slice(i - 2, i + 1), argv.slice(j - 2, j + 1), argv.slice(k - 2, k + 1)],
-    [["--ro-bind", g, g], ["--bind", st.scratch_cli, c], ["--ro-bind", join(c, "plugins"), join(c, "plugins")]]);
-  assert.ok(i < j && j < k);
+  // Parent-first: ~/.gemini ro, then the scratch rw over antigravity-cli and the projects copy rw over config/projects,
+  // then the host's unknown subdirs ro over their mount points inside the scratch; the main .git read-only bind last.
+  const at = p => argv.lastIndexOf(p);
+  const [i, j, k, l, n] = [at(g), at(c), at(join(c, "plugins")), at(proj), at(join(proj, "nested"))];
+  assert.deepEqual([argv.slice(i - 2, i + 1), argv.slice(j - 2, j + 1), argv.slice(k - 2, k + 1), argv.slice(l - 2, l + 1), argv.slice(n - 2, n + 1)],
+    [["--ro-bind", g, g], ["--bind", st.scratch_cli, c], ["--ro-bind", join(c, "plugins"), join(c, "plugins")], ["--bind", projCopy, proj], ["--ro-bind", join(proj, "nested"), join(proj, "nested")]]);
+  assert.ok(i < j && j < k && j < l && l < n);
   assert.ok(!argv.some(a => a.includes("/.gemini/antigravity/")), "the old antigravity/ layout is gone");
   assert.equal(binds.at(-1).mode, "ro");
   const probe = join(root, "probe", "gemini-probe.mjs");
   writeFileSync(probe, `
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
-const [g, log] = process.argv.slice(2), c = g + "/antigravity-cli";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+const [g, log] = process.argv.slice(2), c = g + "/antigravity-cli", p = g + "/config/projects";
 const out = {};
 const tryIt = (k, f) => { try { out[k] = f() ?? "ok"; } catch (e) { out[k] = e.code; } };
 tryIt("read_oauth", () => readFileSync(g + "/oauth_creds.json", "utf8"));
 tryIt("write_settings", () => writeFileSync(g + "/settings.json", "{1}"));
 tryIt("write_top", () => writeFileSync(g + "/new.json", "x"));
 tryIt("read_cli_settings", () => readFileSync(c + "/settings.json", "utf8"));
+tryIt("read_cli_token", () => readFileSync(c + "/antigravity-oauth-token", "utf8"));
+tryIt("read_history", () => readFileSync(c + "/history.jsonl", "utf8"));
+tryIt("read_summaries", () => readFileSync(c + "/conversation_summaries.db", "utf8"));
 tryIt("list_conv", () => readdirSync(c + "/conversations").join(","));
+tryIt("list_log", () => readdirSync(c + "/log").join(","));
 tryIt("write_conv", () => writeFileSync(c + "/conversations/x", "conv"));
+tryIt("write_log", () => writeFileSync(c + "/log/cli.log", "log line"));
 tryIt("mkdir_brain", () => { mkdirSync(c + "/brain/id1"); writeFileSync(c + "/brain/id1/task.md", "b"); });
 tryIt("write_jetbox", () => writeFileSync(c + "/jetbox_summaries_proto.pb.1.tmp", "j"));
 tryIt("rewrite_cli_settings", () => writeFileSync(c + "/settings.json", '{"cli":"inside"}'));
 tryIt("read_plugin", () => readFileSync(c + "/plugins/p.json", "utf8"));
 tryIt("write_plugin", () => writeFileSync(c + "/plugins/x", "x"));
+tryIt("read_project", () => readFileSync(p + "/default-cli-project.json", "utf8"));
+tryIt("write_project", () => { writeFileSync(p + "/default-cli-project.json.r1.tmp", '{"p":2}'); renameSync(p + "/default-cli-project.json.r1.tmp", p + "/default-cli-project.json"); });
+tryIt("read_nested", () => readFileSync(p + "/nested/n.json", "utf8"));
+tryIt("write_nested", () => writeFileSync(p + "/nested/x", "x"));
+tryIt("write_config", () => writeFileSync(g + "/config/other.json", "x"));
 tryIt("log", () => writeFileSync(log, "agy log line\\n"));
 console.log(JSON.stringify(out));
 `);
   const r = await run([...argv, process.execPath, probe, g, join(ctl, "run", "agy.log")], { env: { ...process.env, HOME: home } });
   assert.equal(r.code, 0, r.err);
-  assert.deepEqual(JSON.parse(r.out), { read_oauth: '{"refresh_token":"fake"}', write_settings: "EROFS", write_top: "EROFS", read_cli_settings: '{"cli":"host"}', list_conv: "",
-    write_conv: "ok", mkdir_brain: "ok", write_jetbox: "ok", rewrite_cli_settings: "ok", read_plugin: "plugin", write_plugin: "EROFS", log: "ok" },
-    "inside: the CLI's state subdirs start empty (host history hidden) and are writable; the rest of ~/.gemini and the unknown subdir are read-only");
+  assert.deepEqual(JSON.parse(r.out), { read_oauth: '{"refresh_token":"fake"}', write_settings: "EROFS", write_top: "EROFS", read_cli_settings: '{"cli":"host"}', read_cli_token: "fake-oauth-token",
+    read_history: "ENOENT", read_summaries: "ENOENT", list_conv: "", list_log: "", write_conv: "ok", write_log: "ok", mkdir_brain: "ok", write_jetbox: "ok", rewrite_cli_settings: "ok",
+    read_plugin: "plugin", write_plugin: "EROFS", read_project: '{"p":1}', write_project: "ok", read_nested: "nested", write_nested: "EROFS", write_config: "EROFS", log: "ok" },
+    "inside: the CLI's state subdirs (log/ included) start empty (host history hidden) and are writable, the withheld files are absent, config/projects is writable; the rest of ~/.gemini and the unknown subdirs are read-only");
   // What the CLI wrote is listed (names and sizes), then the scratch is removed; the HOST is exactly as before.
   const listing = await dropGeminiState(st);
   assert.deepEqual(listing, { dir: c,
-    top_level: [{ name: "jetbox_summaries_proto.pb.1.tmp", size: 1, copied: false, changed: true }, { name: "settings.json", size: 16, copied: true, changed: true }],
-    subdirs: { brain: [{ path: "id1/task.md", size: 1 }], cache: [], conversations: [{ path: "x", size: 4 }], crashes: [], implicit: [], mcp: [], presence: [] } });
+    top_level: [{ name: "antigravity-oauth-token", size: 16, copied: true, changed: false }, { name: "installation_id", size: 16, copied: true, changed: false },
+      { name: "jetbox_summaries_proto.pb.1.tmp", size: 1, copied: false, changed: true }, { name: "jetski_state.pbtxt", size: 19, copied: true, changed: false },
+      { name: "last_check.timestamp", size: 21, copied: true, changed: false }, { name: "settings.json", size: 16, copied: true, changed: true }],
+    subdirs: { brain: [{ path: "id1/task.md", size: 1 }], cache: [], conversations: [{ path: "x", size: 4 }], crashes: [], implicit: [], log: [{ path: "cli.log", size: 8 }], mcp: [], presence: [] },
+    writable_copies: { "config/projects": [{ path: "default-cli-project.json", size: 7, copied: true, changed: true }] } });
   assert.equal(existsSync(st.scratch_root), false);
   assert.deepEqual(snapshot(home), before, "the host ~/.gemini is unchanged and nothing was created under HOME");
+});
+
+test("config/projects absent on the host: not created, recorded as absent, and the rest of the layout still works", async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pantheon-gemini-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home"), run_dir = join(root, "run");
+  mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true }); mkdirSync(run_dir);
+  const before = snapshot(home);
+  const st = await geminiState({ home, run_dir });
+  assert.deepEqual(st.writable_copies.map(w => [w.path, w.status]), [["config/projects", "absent"]]);
+  assert.deepEqual(st.mounts.map(m => m.dest), [join(home, ".gemini", "antigravity-cli")]);
+  assert.equal(existsSync(join(home, ".gemini", "config")), false, "nothing is created under HOME");
+  assert.deepEqual((await dropGeminiState(st)).writable_copies, {});
+  assert.deepEqual(snapshot(home), before);
 });
 
 test("the ~/.gemini layout: off without a ~/.gemini; AGY_STATE_LAYOUT (and nothing created) when ~/.gemini/antigravity-cli is absent or a symlink; \"rw\" binds ~/.gemini writable and \"off\" adds nothing (the explicit overrides); no writable state dir is defaulted", async t => {

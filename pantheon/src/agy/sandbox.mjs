@@ -21,14 +21,30 @@
 // trustedFolders.json) were untouched and no OAuth refresh failure was seen. So:
 //   ~/.gemini                         READ-ONLY (the login and the top-level files stay readable)
 //   ~/.gemini/antigravity-cli         a per-run SCRATCH COPY bound read-write over it:
-//                                       <control_dir>/run/agy-state/<run id>/antigravity-cli/
-//     top-level regular files         COPIED from the host (mode kept), so e.g. its settings.json is read; symlinks
-//                                     and other non-regular entries are skipped and recorded
+//                                       <control_dir>/run/agy-state/<run id>/antigravity-cli/   (scratch root mode 0700)
+//     top-level regular files         ONLY the allowlist GEMINI_CLI_COPY is COPIED (mode kept): settings.json, the
+//                                     OAuth token, installation_id, jetski_state.pbtxt, last_check.timestamp. Every
+//                                     other top-level file is WITHHELD (not copied; recorded by name and size only).
+//                                     (Observed, owner's probe of 5893432, 2026-11-18: copying every top-level file
+//                                     put history.jsonl (37 KB), conversation_summaries.db (7 MB) and
+//                                     jetbox_summaries_proto.pb, i.e. the owner's history, into the scratch.)
+//                                     Symlinks and other non-regular entries are skipped and recorded.
 //     the known state subdirs         EMPTY (GEMINI_STATE_SUBDIRS): host history and caches stay hidden and untouched
 //     every other host subdir         an empty mount point in the scratch with the HOST subdir --ro-bind over it
-//                                     (readable, never writable: plugins/config the CLI may only read)
-// Bind order: --ro-bind ~/.gemini, then --bind <scratch>/antigravity-cli ~/.gemini/antigravity-cli, then the ro-binds
-// of the unknown subdirs (parent-first, by depth). NOTHING is ever created under the real home: every mount point is
+//                                     (readable, never writable: plugins/config the CLI may only read; observed host
+//                                     subdirs: annotations, bin, builtin, knowledge, persistent_terminals, plugin_data,
+//                                     scratch, updater)
+//   ~/.gemini/config/projects         (GEMINI_WRITABLE_COPIES) when it is a plain directory on the host: a per-run
+//                                     scratch copy (files copied, mode kept; subdirs ro-bound like above) bound
+//                                     read-write over it; the rest of ~/.gemini/config stays read-only. When absent
+//                                     it is NOT created (recorded as absent). (Observed, `agy agents` in the jail,
+//                                     2026-11-18: it failed "read-only file system" writing
+//                                     ~/.gemini/config/projects/default-cli-project.json.<rand>.tmp.)
+// THE SCRATCH HOLDS A COPY OF THE OAuth TOKEN: its root is mode 0700 and dropGeminiState removes it after every run
+// unless the caller explicitly keeps it (the probe's --keep, which then says kept_contains_credentials: true).
+// Bind order: --ro-bind ~/.gemini, then --bind <scratch>/antigravity-cli ~/.gemini/antigravity-cli and
+// --bind <scratch>/config/projects ~/.gemini/config/projects, then the ro-binds of the unknown subdirs (parent-first, by
+// depth). NOTHING is ever created under the real home: every mount point is
 // either an existing host directory or a directory inside the scratch (the earlier layout mkdir'ed an empty
 // ~/.gemini/antigravity/mcp on the host as a mount point; that never happens again).
 // WHEN ~/.gemini/antigravity-cli IS ABSENT: refused with code AGY_STATE_LAYOUT (CHOICE: the simplest correct
@@ -157,21 +173,63 @@ export function defaultAgyStateDirs(env = process.env) {
 export const GEMINI_CLI_DIR = "antigravity-cli";
 /**
  * The subdirectories of ~/.gemini/antigravity-cli the CLI WRITES (observed on agy 1.5.10, owner's probe 2026-11-18:
- * each one failed "read-only file system"). They start EMPTY in the scratch; the host's copies stay hidden.
+ * each one failed "read-only file system"; `log` observed in the probe of 5893432: `agy agents` failed writing
+ * ~/.gemini/antigravity-cli/log/...). They start EMPTY in the scratch; the host's copies stay hidden.
  */
-export const GEMINI_STATE_SUBDIRS = Object.freeze(["conversations", "brain", "presence", "cache", "implicit", "crashes", "mcp"]);
+export const GEMINI_STATE_SUBDIRS = Object.freeze(["conversations", "brain", "presence", "cache", "implicit", "crashes", "mcp", "log"]);
+/**
+ * The ONLY top-level files of ~/.gemini/antigravity-cli copied into the scratch (mode kept). Every other top-level file
+ * (observed on the owner's host 2026-11-18: history.jsonl, conversation_summaries.db, jetbox_summaries_proto.pb) is
+ * withheld: history, summaries and databases never leave the host directory.
+ */
+export const GEMINI_CLI_COPY = Object.freeze(["settings.json", "antigravity-oauth-token", "installation_id", "jetski_state.pbtxt", "last_check.timestamp"]);
+/**
+ * Directories under ~/.gemini (relative) that get a per-run writable scratch copy when they are plain directories on
+ * the host (observed, owner's probe of 5893432, 2026-11-18: `agy agents` in the jail failed "read-only file system"
+ * writing ~/.gemini/config/projects/default-cli-project.json.<rand>.tmp). Absent ones are not created.
+ */
+export const GEMINI_WRITABLE_COPIES = Object.freeze(["config/projects"]);
 const layoutError = (message, more = {}) => Object.assign(new Error(message), { code: "AGY_STATE_LAYOUT", ...more });
+const byName = (a, b) => a.name.localeCompare(b.name);
+
+/**
+ * Copy the regular files of host dir `from` into the (existing) scratch dir `to` (mode kept) when `want(name)`; for each
+ * host subdir not in `emptySubdirs`, create a mount point in the scratch and ro-bind the host subdir over it. Returns
+ * {copied: [names], withheld: [{name, size}], skipped: [{name, kind}], readonly: [names], mounts}.
+ */
+export async function copyLevel(from, to, { want = () => true, emptySubdirs = [] } = {}) {
+  const out = { copied: [], withheld: [], skipped: [], readonly: [], mounts: [] };
+  for (const e of (await readdir(from, { withFileTypes: true })).sort(byName)) {
+    const host = join(from, e.name), dst = join(to, e.name);
+    if (e.isSymbolicLink()) { out.skipped.push({ name: e.name, kind: "symlink" }); continue; }
+    if (e.isFile()) {
+      const st = await stat(host);
+      if (!want(e.name)) { out.withheld.push({ name: e.name, size: st.size }); continue; }
+      await copyFile(host, dst);
+      await chmod(dst, st.mode & 0o7777);
+      out.copied.push(e.name);
+    } else if (e.isDirectory()) {
+      if (emptySubdirs.includes(e.name)) continue;   // created empty by the caller
+      await mkdir(dst);                                 // the mount point, inside the scratch
+      out.mounts.push({ dest: host, src: host, mode: "ro" });
+      out.readonly.push(e.name);
+    } else out.skipped.push({ name: e.name, kind: "other" });
+  }
+  return out;
+}
 
 /**
  * Prepare the agy state layout for one run (see the header). `mode` "scratch" (default) | "rw" | "off".
  * Returns {enabled, mode, home, gemini_dir, cli_dir, mounts: [{dest, src, mode}], scratch_root, scratch_cli, copied,
- * skipped, hidden_state, readonly_subdirs, why?}. Disabled (enabled: false, with why) when mode is "off" or
- * <home>/.gemini is not a directory (nothing to protect or to read). Throws AGY_STATE_LAYOUT when <home>/.gemini exists
- * but <home>/.gemini/antigravity-cli does not (see the header) or is not a plain directory. Never writes under `home`.
+ * withheld: [{name, size}], skipped, hidden_state, readonly_subdirs, writable_copies: [{path, dest, status: "copied" |
+ * "absent" | "skipped", src?, copied?, skipped?, readonly_subdirs?, why?}], why?}. Disabled (enabled: false, with why)
+ * when mode is "off" or <home>/.gemini is not a directory (nothing to protect or to read). Throws AGY_STATE_LAYOUT when
+ * <home>/.gemini exists but <home>/.gemini/antigravity-cli does not (see the header) or is not a plain directory.
+ * Never writes under `home`; on any failure the partial scratch is removed.
  */
 export async function geminiState({ home = homedir(), run_dir, mode = "scratch" } = {}) {
   const gemini_dir = join(real(home), ".gemini"), cli_dir = join(gemini_dir, GEMINI_CLI_DIR);
-  const base = { mode, home, gemini_dir, cli_dir, mounts: [], scratch_root: null, scratch_cli: null, copied: [], skipped: [], hidden_state: [], readonly_subdirs: [] };
+  const base = { mode, home, gemini_dir, cli_dir, mounts: [], scratch_root: null, scratch_cli: null, copied: [], withheld: [], skipped: [], hidden_state: [], readonly_subdirs: [], writable_copies: [] };
   if (mode === "off") return { enabled: false, ...base, why: "gemini_state is off" };
   if (mode !== "scratch" && mode !== "rw") throw layoutError(`geminiState: unknown mode ${JSON.stringify(mode)} (scratch | rw | off)`);
   let isDir = false;
@@ -188,60 +246,78 @@ export async function geminiState({ home = homedir(), run_dir, mode = "scratch" 
   // very binds it backs.
   if (inside(gemini_dir, scratch_root)) throw layoutError(`the scratch ${scratch_root} would be inside ${gemini_dir}; put the control dir elsewhere`);
   const scratch_cli = join(scratch_root, GEMINI_CLI_DIR);
-  await mkdir(scratch_cli, { recursive: true, mode: 0o700 });
-  const out = { enabled: true, ...base, scratch_root, scratch_cli, mounts: [{ dest: cli_dir, src: scratch_cli, mode: "rw" }] };
-  for (const e of (await readdir(cli_dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-    const host = join(cli_dir, e.name), dst = join(scratch_cli, e.name);
-    if (e.isSymbolicLink()) { out.skipped.push({ name: e.name, kind: "symlink" }); continue; }
-    if (e.isFile()) {
-      const m = (await stat(host)).mode & 0o7777;
-      await copyFile(host, dst);
-      await chmod(dst, m);
-      out.copied.push(e.name);
-    } else if (e.isDirectory()) {
-      if (GEMINI_STATE_SUBDIRS.includes(e.name)) continue;   // created empty below
-      await mkdir(dst);                                         // the mount point, inside the scratch
-      out.mounts.push({ dest: host, src: host, mode: "ro" });
-      out.readonly_subdirs.push(e.name);
-    } else out.skipped.push({ name: e.name, kind: "other" });
+  try {
+    await mkdir(scratch_cli, { recursive: true, mode: 0o700 });
+    await chmod(scratch_root, 0o700);   // it holds a copy of the OAuth token (whatever the umask)
+    const out = { enabled: true, ...base, scratch_root, scratch_cli, mounts: [{ dest: cli_dir, src: scratch_cli, mode: "rw" }] };
+    const top = await copyLevel(cli_dir, scratch_cli, { want: n => GEMINI_CLI_COPY.includes(n), emptySubdirs: GEMINI_STATE_SUBDIRS });
+    Object.assign(out, { copied: top.copied, withheld: top.withheld, skipped: top.skipped, readonly_subdirs: top.readonly });
+    out.mounts.push(...top.mounts);
+    for (const d of GEMINI_STATE_SUBDIRS) {
+      if (existsSync(join(cli_dir, d))) out.hidden_state.push(d);
+      await mkdir(join(scratch_cli, d), { recursive: true, mode: 0o700 });
+    }
+    for (const rel of GEMINI_WRITABLE_COPIES) {
+      const dest = join(gemini_dir, ...rel.split("/"));
+      let s = null;
+      try { s = lstatSync(dest); } catch { /* absent */ }
+      if (!s) { out.writable_copies.push({ path: rel, dest, status: "absent", why: "not on the host: not created (it stays absent, under the read-only ~/.gemini)" }); continue; }
+      if (!s.isDirectory()) { out.writable_copies.push({ path: rel, dest, status: "skipped", why: `not a plain directory (${s.isSymbolicLink() ? "a symlink" : "another file type"}): left read-only` }); continue; }
+      const src = join(scratch_root, "writable", ...rel.split("/"));
+      await mkdir(src, { recursive: true, mode: 0o700 });
+      const lvl = await copyLevel(dest, src);
+      out.mounts.push({ dest, src, mode: "rw" }, ...lvl.mounts);
+      out.writable_copies.push({ path: rel, dest, status: "copied", src, copied: lvl.copied, skipped: lvl.skipped, readonly_subdirs: lvl.readonly });
+    }
+    return out;
+  } catch (e) {
+    await rm(scratch_root, { recursive: true, force: true }).catch(() => {});
+    throw e;
   }
-  for (const d of GEMINI_STATE_SUBDIRS) {
-    if (existsSync(join(cli_dir, d))) out.hidden_state.push(d);
-    await mkdir(join(scratch_cli, d), { recursive: true, mode: 0o700 });
-  }
-  return out;
 }
 
-/**
- * What the CLI wrote into the per-run scratch copy, then remove it unless `keep`. Returns null when there was none, else
- * {dir, top_level: [{name, size, copied, changed}], subdirs: {<name>: [{path, size}]}} — `top_level` the files directly
- * in antigravity-cli/ (copied: it came from the host; changed: its bytes differ from the host's now), `subdirs` every
- * directory of the scratch except the read-only mount points (whose content is the host's, not a write).
- */
-export async function dropGeminiState(state, { keep = false } = {}) {
-  if (!state?.enabled || !state.scratch_root) return null;
-  const root = state.scratch_cli, listing = { dir: state.cli_dir, top_level: [], subdirs: {} };
-  const ro = new Set(state.readonly_subdirs ?? []);
-  const walk = async (d, pre, files) => {
-    for (const e of (await readdir(d, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))) {
-      const r = pre ? `${pre}/${e.name}` : e.name, p = join(d, e.name);
-      if (e.isDirectory()) await walk(p, r, files);
+const listFiles = async (d, skipTop = new Set()) => {
+  const files = [];
+  const walk = async (dir, pre) => {
+    for (const e of (await readdir(dir, { withFileTypes: true }).catch(() => [])).sort(byName)) {
+      const r = pre ? `${pre}/${e.name}` : e.name, p = join(dir, e.name);
+      if (e.isDirectory()) { if (!pre && skipTop.has(e.name)) continue; await walk(p, r); }
       else files.push({ path: r, size: (await lstat(p).catch(() => null))?.size ?? null });
     }
   };
-  for (const e of (await readdir(root, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))) {
+  await walk(d, "");
+  return files;
+};
+const sameBytes = async (a, b) => { const [x, y] = await Promise.all([readFile(a).catch(() => null), readFile(b).catch(() => null)]); return Boolean(x && y && x.equals(y)); };
+
+/**
+ * What the CLI wrote into the per-run scratch copy, then remove it unless `keep`. Returns null when there was none, else
+ * {dir, top_level: [{name, size, copied, changed}], subdirs: {<name>: [{path, size}]}, writable_copies: {<rel>: [{path,
+ * size, copied, changed}]}} — `top_level` the files directly in antigravity-cli/ (copied: it came from the host;
+ * changed: its bytes differ from the host's now), `subdirs` every directory of the scratch except the read-only mount
+ * points (whose content is the host's, not a write), `writable_copies` the files of each GEMINI_WRITABLE_COPIES copy.
+ */
+export async function dropGeminiState(state, { keep = false } = {}) {
+  if (!state?.enabled || !state.scratch_root) return null;
+  const root = state.scratch_cli, listing = { dir: state.cli_dir, top_level: [], subdirs: {}, writable_copies: {} };
+  const ro = new Set(state.readonly_subdirs ?? []);
+  for (const e of (await readdir(root, { withFileTypes: true }).catch(() => [])).sort(byName)) {
     const p = join(root, e.name);
     if (e.isDirectory()) {
       if (ro.has(e.name)) continue;
-      const files = [];
-      await walk(p, "", files);
-      listing.subdirs[e.name] = files;
+      listing.subdirs[e.name] = await listFiles(p);
     } else {
       const size = (await lstat(p).catch(() => null))?.size ?? null;
       const copied = (state.copied ?? []).includes(e.name);
-      let changed = !copied;
-      if (copied) { const [a, b] = await Promise.all([readFile(p).catch(() => null), readFile(join(state.cli_dir, e.name)).catch(() => null)]); changed = !(a && b && a.equals(b)); }
-      listing.top_level.push({ name: e.name, size, copied, changed });
+      listing.top_level.push({ name: e.name, size, copied, changed: copied ? !(await sameBytes(p, join(state.cli_dir, e.name))) : true });
+    }
+  }
+  for (const w of (state.writable_copies ?? []).filter(x => x.status === "copied")) {
+    const files = await listFiles(w.src, new Set(w.readonly_subdirs ?? []));
+    listing.writable_copies[w.path] = [];
+    for (const f of files) {
+      const copied = !f.path.includes("/") && (w.copied ?? []).includes(f.path);
+      listing.writable_copies[w.path].push({ ...f, copied, changed: copied ? !(await sameBytes(join(w.src, f.path), join(w.dest, f.path))) : true });
     }
   }
   if (!keep) await rm(state.scratch_root, { recursive: true, force: true }).catch(() => {});

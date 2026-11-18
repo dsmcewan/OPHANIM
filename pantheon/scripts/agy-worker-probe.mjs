@@ -29,15 +29,26 @@
 // ["allowed/**"] and verify_cmd `node -e "process.exit(0)"`, start the REAL A2A shim (Unix socket, token, role
 // probe-helper) with a MOCK subagent answer (no Grok, no API), prepare the workspace with the real
 // prepareWorkerWorkspace, build the real jail once (prepareWorkerJail) and run in it, BEFORE any model turn, the
-// zero-spend PREFLIGHT (runAgyPreflight: the card's tool list, `agy agents`, `agy mcp list`, a scan of their
-// --log-file); if any check fails it ABORTS (exit 2, spent nothing) with the raw outputs under `preflight`. Then it runs
+// zero-spend PREFLIGHT (runAgyPreflight: the card's tool list, `agy agents`, `agy mcp list` -- WITHOUT --log-file,
+// which both reject (observed, agy 1.5.10, 2026-11-18) -- the login, and a scan of their output and of the CLI's log
+// dir); if a BLOCKING check fails it ABORTS (exit 2, spent nothing) with the redacted outputs under `preflight` (never
+// the raw `agy mcp list` output, which was observed to print a credential: only its server names). Discovery (are the
+// worker and the MCP server listed?) is ADVISORY: those subcommands were observed to list global configuration only.
+// Every check the run did not exercise is null, not false. Then it runs
 // the real runAgyWorkerTurn inside the same jail (refusing to run unsandboxed), --print-timeout 180s by default.
 // The prompt asks for four steps in order: (1) write forbidden.txt (outside owned_paths: must be denied); (2) write
 // allowed/probe.txt = "probe-ok"; (3) ask_subagent once (maybe through call_mcp_tool); (4) run the verify command.
 // Then it verifies from disk and prints ONE JSON object (schema pantheon.agy-worker-probe/v1) and exits 0 when every
 // check passed, 1 otherwise, 2 when it aborted before spending. Diagnostics: `startup_errors` (E-level and read-only
 // file system lines of the CLI log and stderr up to the first tool step, de-duplicated, at most 60), `deprecations`,
-// `stderr_tail`, `log_tail`, and `gemini_state.scratch_written` (what the CLI wrote into the scratch copy).
+// `stderr_tail`, `log_tail`, `gemini_state.scratch_written` (what the CLI wrote into the scratch copy),
+// `gemini_state.copied` / `withheld` / `writable_copies` (what the scratch was given and what was kept from it), and
+// `diagnostics` {gemini_dir_lines, auth_lines}: every redacted line naming GeminiDir or saying "not logged in", from
+// the preflight and the turn (to diagnose the auth failure observed on 2026-11-18), and `hooks_loaded` {preflight,
+// turn}: {named, files} parsed from the CLI's "loaded N named hooks from M hooks.json file(s)" line (null: not seen;
+// observed 2026-11-18: 0 files from `agy agents` with <ctl>/.agents/hooks.json present).
+// THE SCRATCH HOLDS A COPY OF THE OAuth TOKEN: it is always removed unless --keep, and then the summary says
+// `kept_contains_credentials: true`.
 //
 // Metered API failover is STRICTLY disabled: this script imports no API client and never calls one (runAgyWorkerTurn
 // has no failover; the pipeline's turns.mjs, which has, is not used). It never prints the A2A token or credentials:
@@ -54,7 +65,7 @@ import { probeQuota, minimalEnv } from "../src/agy/quota.mjs";
 import { dropGeminiState, GEMINI_CLI_DIR, sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
 import { HARD_DENY, MCP_SERVER, MCP_TOOL, WRITE_TOOLS } from "../src/agy/jail-hook.mjs";
-import { prepareWorkerJail, runAgyPreflight, runAgyWorkerTurn, SECRETISH, workerEnv } from "../src/board/agy-cli.mjs";
+import { AGY_NOT_LOGGED_IN, parseHooksLoaded, prepareWorkerJail, redactStrong, runAgyPreflight, runAgyWorkerTurn, SECRETISH, workerEnv } from "../src/board/agy-cli.mjs";
 import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -116,6 +127,16 @@ export function startupErrors({ logText = "", stderrText = "", toolSteps = 0 }) 
 }
 export const deprecationsOf = ({ logText = "", stderrText = "" }) => dedupe(`${logText}\n${stderrText}`.split("\n").filter(l => /deprecated/i.test(l)).map(l => l.trimEnd()), 30);
 const same = (a, b) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
+const untouched = (before, after) => (before && after ? same(before.cli_state, after.cli_state) && same(before.config_projects, after.config_projects) && JSON.stringify(before.top) === JSON.stringify(after.top) : null);
+/** The redacted lines of `text` naming GeminiDir / saying "not logged in" (de-duplicated). */
+export function diagnosticLines(text, env = {}) {
+  const ls = String(text ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
+  const pick = re => [...new Set(ls.filter(l => re.test(l)).map(l => redactStrong(l, env).slice(0, 500)))].slice(0, 20);
+  return { gemini_dir_lines: pick(/GeminiDir/i), auth_lines: pick(AGY_NOT_LOGGED_IN) };
+}
+const mergeDiag = (a, b) => ({ hooks_loaded: a?.hooks_loaded ?? { preflight: null, turn: null }, gemini_dir_lines: [...new Set([...(a?.gemini_dir_lines ?? []), ...(b?.gemini_dir_lines ?? [])])], auth_lines: [...new Set([...(a?.auth_lines ?? []), ...(b?.auth_lines ?? [])])] });
+/** What the summary says about the state layout given to the CLI: copied, withheld (name + size only), writable copies. */
+const layoutView = gs => (gs ? { copied: gs.copied ?? [], withheld: gs.withheld ?? [], writable_copies: (gs.writable_copies ?? []).map(w => ({ path: w.path, dest: w.dest, status: w.status, ...(w.copied ? { copied: w.copied } : {}), ...(w.why ? { why: w.why } : {}) })) } : { copied: [], withheld: [], writable_copies: [] });
 
 export function probePrompt(wt) {
   return [
@@ -209,10 +230,17 @@ async function main() {
   const summary = { schema: SCHEMA, agy: { path: null, version: null, sha256: null }, lane: LANE, timeout_s: timeoutS, quota_before: null, quota_after: null,
     launch: { argv: null, cwd: null, env_added: null, bwrap_binds: null, sandbox: null }, preflight: null,
     hook: { payloads: [], decisions: [], decisions_by_tool: {}, call_mcp_tool_seen: false, direct_mcp_seen: false, invoke_subagent_attempted: false },
-    checks: { forbidden_denied: false, allowed_written: false, mcp_called: false, verify_ran: false, gemini_state_untouched: false },
+    // null = not exercised (an early abort); false = exercised and failed.
+    checks: { forbidden_denied: null, allowed_written: null, mcp_called: null, verify_ran: null, gemini_state_untouched: null },
     mcp: { shim_calls: [], mock_subagent_turns: 0, api_calls: 0 }, tools_run: [], turn: { exit_code: null, status: null, num_turns: null, usage: null, error: null },
-    startup_errors: [], deprecations: [], stderr_tail: null, log_tail: null, owner_stated_mechanics: null, gemini_state: null, aborted: null, kept: null };
-  const abort = (reason, token = null, spent = "nothing: no model turn was started") => { summary.aborted = { reason, spent }; output(summary, token, 2); };
+    startup_errors: [], deprecations: [], diagnostics: { hooks_loaded: { preflight: null, turn: null }, gemini_dir_lines: [], auth_lines: [] }, stderr_tail: null, log_tail: null, owner_stated_mechanics: null, gemini_state: null,
+    aborted: null, kept: null, kept_contains_credentials: null };
+  // The host snapshots (taken once the fake/real HOME is known): an abort still reports whether ~/.gemini was touched.
+  let hostSnap = null;
+  const abort = (reason, token = null, spent = "nothing: no model turn was started") => {
+    if (hostSnap) summary.checks.gemini_state_untouched = untouched(hostSnap.before, hostSnap.take());
+    summary.aborted = { reason, spent }; output(summary, token, 2);
+  };
 
   if (!Number.isFinite(timeoutS) || timeoutS <= 0) return abort(`--timeout must be a positive number of seconds, not ${JSON.stringify(opt("--timeout"))}`);
   if (cardOpt && !existsSync(cardOpt)) return abort(`--card ${cardOpt} does not exist`);
@@ -260,23 +288,29 @@ async function main() {
 
     const home = process.env.HOME ?? homedir();
     const g = join(home, ".gemini"), cliState = join(g, GEMINI_CLI_DIR);
-    const before = { cli_state: snapshot(cliState), top: topFiles(g) };
+    const take = () => ({ cli_state: snapshot(cliState), config_projects: snapshot(join(g, "config", "projects")), top: topFiles(g) });
+    const before = take();
+    hostSnap = { before, take };
     const sandbox = { home };
     const env = workerEnv(a2a_env);
 
     // ONE jail for the preflight and the turn (the same control dir, workspace and state scratch).
     try { jail = await prepareWorkerJail({ cli, control_dir: ctl, worktree: wt, env, sandbox, a2a_socket: shim.socket }); }
-    catch (e) { summary.gemini_state = { home_gemini: g, error: { code: e.code ?? null, message: String(e.message ?? e).slice(0, 500) } }; return abort(`the jail could not be built (${e.code ?? "error"}): ${String(e.message ?? e).slice(0, 300)}`, token); }
+    catch (e) { summary.gemini_state = { home_gemini: g, ...layoutView(null), error: { code: e.code ?? null, message: String(e.message ?? e).slice(0, 500) } }; return abort(`the jail could not be built (${e.code ?? "error"}): ${String(e.message ?? e).slice(0, 300)}`, token); }
     summary.launch.bwrap_binds = jail.sandboxRec.binds ?? null;
     summary.launch.sandbox = { enabled: jail.sandboxRec.enabled, kind: jail.sandboxRec.kind ?? null, gemini_state: jail.sandboxRec.gemini_state ?? null };
 
     const pf = await runAgyPreflight({ cli, control_dir: ctl, worktree: wt, env: a2a_env, jail });
     summary.preflight = pf;
+    summary.diagnostics = mergeDiag(summary.diagnostics, pf.diagnostics);
+    summary.diagnostics.hooks_loaded.preflight = pf.diagnostics?.hooks_loaded ?? null;
     if (!pf.ok) {
       const scratch = await dropGeminiState(jail.gstate, { keep }).catch(() => null);
-      summary.gemini_state = { home_gemini: g, before: { cli_state: before.cli_state, top_files: before.top }, after: { cli_state: snapshot(cliState), top_files: topFiles(g) }, scratch_written: scratch };
+      const after = take();
+      summary.gemini_state = { home_gemini: g, ...layoutView(jail.gstate), before: { cli_state: before.cli_state, config_projects: before.config_projects, top_files: before.top },
+        after: { cli_state: after.cli_state, config_projects: after.config_projects, top_files: after.top }, scratch_written: scratch };
+      if (keep) { summary.kept = root; summary.kept_contains_credentials = Boolean(jail.gstate?.scratch_root); }
       jail = null;
-      if (keep) summary.kept = root;
       return abort(`preflight failed: ${pf.failed.map(k => `${k} (${pf.checks[k].why})`).join("; ")}`, token, "nothing: preflight failed before any model turn");
     }
 
@@ -285,8 +319,9 @@ async function main() {
     catch (e) { err = e; }
     const res = r ?? err ?? {};
     const scratch = await dropGeminiState(jail.gstate, { keep }).catch(() => null);
+    const layout = layoutView(jail.gstate), hadScratch = Boolean(jail.gstate?.scratch_root);
     jail = null;
-    const after = { cli_state: snapshot(cliState), top: topFiles(g) };
+    const after = take();
 
     const rows = Array.isArray(res.jail_log) ? res.jail_log : [];
     const steps = Array.isArray(res.tool_steps) ? res.tool_steps : [];
@@ -310,7 +345,7 @@ async function main() {
       allowed_written: typeof allowed === "string" && allowed.trim() === "probe-ok",
       mcp_called: shim.calls.some(c => c.role === ROLE && c.status === "answered"),
       verify_ran: verifyApproved && runSteps.some(s => !BAD_STATE.test(s.state ?? "")),
-      gemini_state_untouched: same(before.cli_state, after.cli_state) && JSON.stringify(before.top) === JSON.stringify(after.top),
+      gemini_state_untouched: untouched(before, after),
     };
     summary.mcp = { shim_calls: shimCalls, mock_subagent_turns: mockTurns, api_calls: 0, socket_inside_bwrap: res.sandbox?.kind === "bwrap" };
     summary.tools_run = steps;
@@ -320,16 +355,20 @@ async function main() {
     const stderrText = res.stderr_tail ?? "";
     summary.startup_errors = startupErrors({ logText, stderrText, toolSteps: steps.length });
     summary.deprecations = deprecationsOf({ logText, stderrText });
+    summary.diagnostics = mergeDiag(summary.diagnostics, diagnosticLines(`${stderrText}\n${logText}`, env));
+    const turnHooks = parseHooksLoaded(`${stderrText}\n${logText}`);
+    summary.diagnostics.hooks_loaded.turn = turnHooks ? { named: turnHooks.named, files: turnHooks.files } : null;
     summary.stderr_tail = tail(res.stderr_tail ?? null);
     summary.log_tail = tail(logText);
-    summary.gemini_state = { home_gemini: g, before: { cli_state: before.cli_state, top_files: before.top }, after: { cli_state: after.cli_state, top_files: after.top }, scratch_written: scratch };
+    summary.gemini_state = { home_gemini: g, ...layout, before: { cli_state: before.cli_state, config_projects: before.config_projects, top_files: before.top },
+      after: { cli_state: after.cli_state, config_projects: after.config_projects, top_files: after.top }, scratch_written: scratch };
     let mcpConfig = null;
     try { mcpConfig = JSON.parse(readFileSync(ws.mcp_config, "utf8")); } catch { /* reported as not eager */ }
     summary.owner_stated_mechanics = judge({ rows, steps, shimCalls, checks: { ...summary.checks, forbidden_absent }, turnRan: Boolean(res.launch) && res.exit_code !== undefined,
       turnOk: Boolean(r), launchArgs, agentsDir: join(ws.control_dir, ".agents"), mcpConfig, scratch,
       stderrText, logText, hookPaths: { command: ws.hook_command } });
     summary.quota_after = quotaView(await probeQuota({ cli, model: LANE }));
-    if (keep) summary.kept = root;
+    if (keep) { summary.kept = root; summary.kept_contains_credentials = hadScratch; }
     const ok = Object.values(summary.checks).every(Boolean);
     output(summary, token, ok ? 0 : 1);
   } finally {

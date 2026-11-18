@@ -123,7 +123,7 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
 //                    unparseable stream, an init identity mismatch) | spawn (the CLI or bwrap could not start it)
 //   SANDBOX_UNAVAILABLE  bwrap is missing or fails its probe and `sandbox.allowUnsandboxed` is not true
 //   ABORTED          the signal fired
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
@@ -201,10 +201,14 @@ export async function prepareWorkerJail({ cli, control_dir, worktree, env = work
       // gets its directory bound read-only.
       if (a2a_socket) { const d = dirOf(resolveOf(a2a_socket)); const r = relOf(resolveOf(control_dir), d); if (r.startsWith("..") || resolveOf(r) === r) extra_ro.push(d); }
       const gstate = await geminiState({ home: sandbox.home ?? env.HOME ?? homeOf(), run_dir: join(control_dir, "run"), mode: sandbox.gemini_state ?? "scratch" });
-      const b = bwrapArgs({ worktree, control_dir, agy_state_dirs: sandbox.agy_state_dirs ?? defaultAgyStateDirs(), extra_ro: extra_ro.filter(p => existsSync(p)), gemini_state: gstate, bwrap: sandbox.bwrap ?? "bwrap" });
+      let b;
+      try { b = bwrapArgs({ worktree, control_dir, agy_state_dirs: sandbox.agy_state_dirs ?? defaultAgyStateDirs(), extra_ro: extra_ro.filter(p => existsSync(p)), gemini_state: gstate, bwrap: sandbox.bwrap ?? "bwrap" }); }
+      catch (e) { await dropGeminiState(gstate).catch(() => null); throw e; }   // the scratch holds the OAuth token: never leave it behind
       return { prefix: b.argv, gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
         gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, cli_dir: gstate.cli_dir, mounts: gstate.mounts, copied: gstate.copied,
-          skipped: gstate.skipped, hidden_state: gstate.hidden_state, readonly_subdirs: gstate.readonly_subdirs, ...(gstate.why ? { why: gstate.why } : {}) } } };
+          withheld: gstate.withheld, skipped: gstate.skipped, hidden_state: gstate.hidden_state, readonly_subdirs: gstate.readonly_subdirs,
+          writable_copies: (gstate.writable_copies ?? []).map(w => ({ path: w.path, dest: w.dest, status: w.status, ...(w.copied ? { copied: w.copied } : {}), ...(w.readonly_subdirs?.length ? { readonly_subdirs: w.readonly_subdirs } : {}), ...(w.why ? { why: w.why } : {}) })),
+          ...(gstate.why ? { why: gstate.why } : {}) } } };
     }
     if (sandbox.allowUnsandboxed === true) return { prefix: [], gstate: null, sandboxRec: { enabled: false, reason: probe.why, allowUnsandboxed: true } };
     throw Object.assign(new Error(`agy worker: the bwrap sandbox is unavailable (${probe.why}); refusing to run the worker unjailed (pass sandbox.allowUnsandboxed: true to override)`), { code: "SANDBOX_UNAVAILABLE" });
@@ -214,23 +218,61 @@ export async function prepareWorkerJail({ cli, control_dir, worktree, env = work
 }
 
 // ---- THE ZERO-SPEND PREFLIGHT: what the CLI itself says about the workspace, before any model turn ------------------
-// `agy agents` and `agy mcp list` start no model turn. Observed on agy 1.5.10 (owner's probe 2026-11-18): a card tool
-// the CLI does not know ("unknown component: tool \"call_mcp_tool\" not found in registry") and state writes that hit a
-// read-only file system were visible only in the --log-file, after a 5-minute hung turn. The preflight runs both
-// commands in the SAME jail, control dir and workspace as the turn, with a --log-file (a global flag in agy's top-level
-// help; if a subcommand refuses it the command is re-run without, and the record says so), and fails on:
+// `agy agents` and `agy mcp list` start no model turn. They run in the SAME jail, control dir and workspace as the turn.
+// What was observed (agy 1.5.10, owner's machine; probe of 5893432, 2026-11-18; zero model turns):
+//   - observed: both subcommands REJECT `--log-file` (exit 1, stderr ending exactly
+//     "Error: flags provided but not defined: -log-file" after their usage text). So the preflight passes NO
+//     --log-file to them (the earlier preflight did, and its BAD_FLAG matcher only knew the singular "flag provided",
+//     so the no-flag retry never ran). AGY_BAD_FLAG still recognises a flag refusal, as a blocking `agents` failure.
+//   - observed: without --log-file, `agy agents` exited 0 with EMPTY stdout and "You are not logged into Antigravity."
+//     on stderr, plus read-only-file-system failures writing ~/.gemini/antigravity-cli/log/... and
+//     ~/.gemini/config/projects/default-cli-project.json.<rand>.tmp (src/agy/sandbox.mjs now makes both writable), and
+//     a message about a relative GeminiDir setting (exact text not yet available: captured as diagnostics). Exit 0 is
+//     therefore NOT evidence of a usable session.
+//   - observed: `agy mcp list` exited 0 and listed only a GLOBAL server, not the workspace's pantheon-subagents, and
+//     printed that server's configured credential. These subcommands take no --add-dir, so their listings show the
+//     global configuration only: DISCOVERY IS ADVISORY. The mcp list output is NEVER stored: only the server names
+//     (first token of each entry line) and `credential_redacted: true`.
+// BLOCKING checks (in `failed` when not ok; the turn must not start):
 //   card_tools  the control dir's card lists a name in AGY_1_5_10_UNKNOWN_OR_DEPRECATED (validateCardTools)
-//   agents      exit != 0, `pantheon-unit-worker` not present as a word, or an unknown-component / not-in-registry /
-//               error line in its output
-//   mcp_list    exit != 0, `pantheon-subagents` not present, or a line naming it that says it failed
-//   log_scan    a `read-only file system`, `unknown component`, `not found in registry` or `deprecated` line in the
-//               preflight's --log-file or in either command's output
-// The output formats are NOT known: matching is conservative and the raw text (secret-redacted) is recorded so the
-// owner can paste it back as a fixture.
+//   agents      `agy agents` exited non-zero, was killed, or refused a flag
+//   auth        either command's stdout/stderr says the CLI is not logged in (whatever the exit code)
+//   log_scan    a `read-only file system` / EROFS, `unknown component`, `not found in registry` or `deprecated` line in
+//               either command's output or in what the CLI wrote to its log dir (the scratch's antigravity-cli/log/)
+// ADVISORY checks (recorded, in `warnings` when not ok, never blocking):
+//   mcp_list    `agy mcp list` exited non-zero, refused a flag, or a line naming the server says it failed
+//   discovery   {agent_listed, server_listed, note}: whether the listings name pantheon-unit-worker / pantheon-subagents
+//   hooks_discovery  {seen, named, files, lines}: the CLI's "loaded N named hooks from M hooks.json file(s)" line;
+//               M == 0 is a warning (observed 2026-11-18: 0 files with <ctl>/.agents/hooks.json present; whether a
+//               --print run with --add-dir behaves differently is not known), surfaced in `warnings`
+// The "Failed to resolve GeminiDir ".gemini": ... falling back to default" line (observed, benign: the CLI then uses
+// ~/.gemini/antigravity-cli) is recorded under `diagnostics.gemini_dir_lines`, never blocking.
+// Every stored output is redacted with redactStrong.
 export const PREFLIGHT_LOG_PATTERNS = Object.freeze({ read_only: /read-only file system|EROFS/i, unknown_component: /unknown component/i,
   not_in_registry: /not found in registry/i, deprecated: /deprecated/i });
-const ERROR_LINE = /\b(error|fatal|panic)\b|^E\d{4}\s/i;
-const BAD_FLAG = /unknown (flag|shorthand flag)|flag provided but not defined|unrecognized (option|argument)|unexpected argument/i;
+/** A CLI refusing a flag (observed on agy 1.5.10: "Error: flags provided but not defined: -log-file"). */
+export const AGY_BAD_FLAG = /unknown (shorthand )?flag|flags? provided but not defined|unrecognized (option|argument)|unexpected argument/i;
+/**
+ * The CLI saying it has no session. Observed on agy 1.5.10 (2026-11-18, `agy agents` in the jail): "error getting token
+ * source: You are not logged into Antigravity.", "doRefreshQuota: skipped (not logged in)", and "Auth mode is
+ * unspecified, skipping fetchAvailableModels and returning empty response".
+ */
+export const AGY_NOT_LOGGED_IN = /not logged in(to)?\b|You are not logged into Antigravity|Auth mode is unspecified/i;
+/**
+ * The CLI's hook discovery line, observed on agy 1.5.10 (2026-11-18): "hooks_manager.go:54] loaded 0 named hooks from 0
+ * hooks.json file(s)" (with <ctl>/.agents/hooks.json present). Returns {named, files, lines} for the LAST such line of
+ * `text` (lines: every such line, up to 10), or null when none is seen.
+ */
+export function parseHooksLoaded(text) {
+  const found = String(text ?? "").split("\n").filter(l => HOOKS_LOADED.test(l));
+  if (!found.length) return null;
+  const m = HOOKS_LOADED.exec(found.at(-1));
+  return { named: Number(m[1]), files: Number(m[2]), lines: found.slice(-10).map(l => l.trim().slice(0, 300)) };
+}
+const HOOKS_LOADED = /loaded (\d+) named hooks? from (\d+) hooks\.json file/i;
+const GEMINI_DIR_LINE = /GeminiDir/i;
+export const PREFLIGHT_BLOCKING = Object.freeze(["card_tools", "agents", "auth", "log_scan"]);
+export const PREFLIGHT_ADVISORY = Object.freeze(["mcp_list", "discovery", "hooks_discovery"]);
 const lines = t => String(t ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
 /** Redact every value of a secret-looking env variable (8+ chars) from `text`. */
 export function redactSecrets(text, env = {}) {
@@ -238,56 +280,108 @@ export function redactSecrets(text, env = {}) {
   for (const [k, v] of Object.entries(env ?? {})) if (SECRETISH.test(k) && typeof v === "string" && v.length >= 8) out = out.split(v).join(`<redacted:${k}>`);
   return out;
 }
+const LONG_RUN = /[A-Za-z0-9_\-.=+/]{24,}/g;
 /**
- * Run the zero-spend preflight (above). Returns {ok, failed: [check names], checks: {card_tools, agents, mcp_list,
- * log_scan}, log_file}. Each command check: {ok, why, argv, log_file_accepted, exit_code, stdout, stderr} (redacted).
+ * STRONG redaction for any CLI output a record keeps: the env-derived secrets (redactSecrets), `Bearer <x>`,
+ * `authorization|api_key|token|secret|password <: or => <x>`, `--header <x>`, and every run of 24+ characters of
+ * [A-Za-z0-9_-.=+/]. ONE NARROWING (a choice, so the EROFS and GeminiDir diagnostics keep their paths): a run that
+ * starts with "/" is an absolute path; in it only 24+ runs of [A-Za-z0-9+=] (no separator: a token, not a file name)
+ * are redacted.
+ */
+export function redactStrong(text, env = {}) {
+  let out = redactSecrets(text, env);
+  out = out.replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
+  out = out.replace(/(?<![A-Za-z0-9_-])(authorization|api[_-]?key|token|secret|password)(\s*[:=]\s*)(?!<redacted)\S+/gi, "$1$2<redacted>");
+  out = out.replace(/--header(\s+|=)\S+/g, "--header$1<redacted>");
+  out = out.replace(LONG_RUN, run => (run.startsWith("/") ? run.replace(/[A-Za-z0-9+=]{24,}/g, "<redacted>") : "<redacted>"));
+  return out;
+}
+const ENTRY = /^(?:[-*•✓✗✔✘]\s+)?([A-Za-z][A-Za-z0-9_.@-]{0,63})(?=[\s:,]|$)/;
+const NOT_A_SERVER = /^(no|none|name|names|server|servers|configured|mcp|usage|error|warning|warn|info|flags|list|available|total|global|workspace|authorization|headers?|env|command|args|url|bearer)$/i;
+const CREDENTIAL_SHAPED = /^(sk-|ctx7sk|ya29\.|ghp_|gho_|AIza|xox[abp]-)/i;
+/**
+ * The server names of an `agy mcp list` stdout, parsed conservatively: the first token of each non-indented,
+ * non-empty line that looks like an entry (a name followed by whitespace, ":" or the end), headers and key words
+ * skipped, anything credential-shaped dropped. Returns {servers: [names] | null (nothing parsed), line_count}.
+ * Never returns the rest of a line.
+ */
+export function mcpServerNames(stdout) {
+  const ls = String(stdout ?? "").split("\n").filter(l => l.trim());
+  const names = [];
+  for (const l of ls) {
+    if (/^\s/.test(l) && !/^\s*[-*•]\s/.test(l)) continue;   // an indented continuation (config, headers, env)
+    const m = ENTRY.exec(l.trimStart());
+    if (!m || NOT_A_SERVER.test(m[1]) || CREDENTIAL_SHAPED.test(m[1]) || redactStrong(m[1]) !== m[1]) continue;
+    if (!names.includes(m[1])) names.push(m[1]);
+  }
+  return { servers: names.length ? names : null, line_count: ls.length };
+}
+/**
+ * Run the zero-spend preflight (above). Returns {ok, failed: [blocking check names not ok], warnings: [advisory check
+ * names not ok], blocking: PREFLIGHT_BLOCKING, advisory: PREFLIGHT_ADVISORY, checks: {card_tools, agents, mcp_list,
+ * auth, log_scan, discovery, hooks_discovery}, diagnostics: {hooks_loaded: {named, files} | null, gemini_dir_lines, auth_lines}}. `agents` keeps {argv, exit_code, killed_for,
+ * bad_flag, stdout, stderr} (strongly redacted); `mcp_list` keeps {argv, exit_code, killed_for, bad_flag, servers,
+ * line_count, stderr_line_count, credential_redacted: true} and never its output.
  * `jail` (optional) a prepareWorkerJail() result; without one a jail is built and its state dropped afterwards.
  */
 export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME }) {
   const env = workerEnv(extraEnv);
   const own = !jail;
   const j = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
-  const log_file = join(control_dir, "run", "agy-preflight.log");
-  const red = t => redactSecrets(t, env);
+  const red = t => redactStrong(t, env);
   const checks = {};
+  let diagnostics = { hooks_loaded: null, gemini_dir_lines: [], auth_lines: [] };
   try {
     const cardText = await readFile(join(control_dir, ".agents", "agents", agent, "agent.md"), "utf8").catch(() => null);
     const tools = cardText == null ? null : cardTools(cardText);
     const v = validateCardTools(tools);
     checks.card_tools = { ok: v.ok, why: v.why, tools, bad: v.bad };
-    const runSub = async sub => {
-      const withLog = [...sub, "--log-file", log_file];
-      const go = async args => {
-        const argv = j.prefix.length ? [...j.prefix.slice(1), cli, ...args] : args;
-        const r = await spawnPromise(j.prefix.length ? j.prefix[0] : cli, argv, { cwd: control_dir, env, timeout: timeoutS * 1000 }).catch(e => ({ status: null, stdout: "", stderr: `spawn failed: ${e?.code ?? e?.message ?? e}`, killedFor: null }));
-        return { args, r };
-      };
-      let { args, r } = await go(withLog);
-      let accepted = true;
-      if (r.status !== 0 && BAD_FLAG.test(`${r.stdout}\n${r.stderr}`)) { accepted = false; ({ args, r } = await go(sub)); }
-      return { argv: [cli, ...args], log_file_accepted: accepted, exit_code: r.status, killed_for: r.killedFor ?? null, stdout: red(r.stdout), stderr: red(r.stderr) };
+    // NO --log-file: both subcommands reject it (observed, agy 1.5.10, 2026-11-18).
+    const runSub = async args => {
+      const argv = j.prefix.length ? [...j.prefix.slice(1), cli, ...args] : args;
+      const r = await spawnPromise(j.prefix.length ? j.prefix[0] : cli, argv, { cwd: control_dir, env, timeout: timeoutS * 1000 })
+        .catch(e => ({ status: null, stdout: "", stderr: `spawn failed: ${e?.code ?? e?.message ?? e}`, killedFor: null }));
+      const stdout = String(r.stdout ?? ""), stderr = String(r.stderr ?? "");
+      return { argv: [cli, ...args], exit_code: r.status, killed_for: r.killedFor ?? null, bad_flag: AGY_BAD_FLAG.test(`${stdout}\n${stderr}`), raw: { stdout, stderr } };
     };
     const word = name => new RegExp(`(^|[^A-Za-z0-9_-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^A-Za-z0-9_-])`, "m");
     const a = await runSub(["agents"]);
-    const aText = `${a.stdout}\n${a.stderr}`;
-    const aBad = lines(aText).filter(l => PREFLIGHT_LOG_PATTERNS.unknown_component.test(l) || PREFLIGHT_LOG_PATTERNS.not_in_registry.test(l) || ERROR_LINE.test(l));
-    checks.agents = { ok: a.exit_code === 0 && word(agent).test(a.stdout) && !aBad.length,
-      why: a.exit_code !== 0 ? `agy agents exited ${a.exit_code ?? a.killed_for}` : !word(agent).test(a.stdout) ? `${agent} is not listed` : aBad.length ? `error lines: ${aBad.slice(0, 3).join(" | ")}` : null, ...a };
+    checks.agents = { ok: a.exit_code === 0 && !a.bad_flag && !a.killed_for,
+      why: a.exit_code !== 0 || a.killed_for ? `agy agents exited ${a.exit_code ?? a.killed_for}${a.bad_flag ? " (it refused a flag)" : ""}` : a.bad_flag ? "agy agents refused a flag" : null,
+      argv: a.argv, exit_code: a.exit_code, killed_for: a.killed_for, bad_flag: a.bad_flag, stdout: red(a.raw.stdout), stderr: red(a.raw.stderr) };
     const m = await runSub(["mcp", "list"]);
-    const mText = `${m.stdout}\n${m.stderr}`;
-    const mBad = lines(mText).filter(l => l.includes(server) && /\b(fail(ed|ure)?|error|unavailable|disconnected)\b/i.test(l));
-    checks.mcp_list = { ok: m.exit_code === 0 && word(server).test(m.stdout) && !mBad.length,
-      why: m.exit_code !== 0 ? `agy mcp list exited ${m.exit_code ?? m.killed_for}` : !word(server).test(m.stdout) ? `${server} is not listed` : mBad.length ? `the server reports: ${mBad.slice(0, 3).join(" | ")}` : null, ...m };
-    const logText = red(await readFile(log_file, "utf8").catch(() => ""));
+    const parsed = mcpServerNames(m.raw.stdout);
+    const mBad = lines(`${m.raw.stdout}\n${m.raw.stderr}`).filter(l => l.includes(server) && /\b(fail(ed|ure)?|error|unavailable|disconnected)\b/i.test(l));
+    checks.mcp_list = { ok: m.exit_code === 0 && !m.bad_flag && !m.killed_for && !mBad.length,
+      why: m.exit_code !== 0 || m.killed_for ? `agy mcp list exited ${m.exit_code ?? m.killed_for}` : m.bad_flag ? "agy mcp list refused a flag" : mBad.length ? `a line naming ${server} reports a failure` : null,
+      argv: m.argv, exit_code: m.exit_code, killed_for: m.killed_for, bad_flag: m.bad_flag, servers: parsed.servers, line_count: parsed.line_count,
+      stderr_line_count: lines(m.raw.stderr).length, credential_redacted: true };
+    const allText = `${a.raw.stdout}\n${a.raw.stderr}\n${m.raw.stdout}\n${m.raw.stderr}`;
+    const authLines = [...new Set(lines(allText).filter(l => AGY_NOT_LOGGED_IN.test(l)).map(red))].slice(0, 10);
+    checks.auth = { ok: !authLines.length, why: authLines.length ? "the CLI says it is not logged in (exit 0 is not evidence of a usable session)" : null, lines: authLines };
+    // What the CLI wrote to its own log dir (in the per-run scratch: antigravity-cli/log/ is a state subdir).
+    let logText = "";
+    const logDir = j.gstate?.scratch_cli ? join(j.gstate.scratch_cli, "log") : null;
+    if (logDir) for (const f of (await readdir(logDir, { recursive: true }).catch(() => [])).sort()) logText += await readFile(join(logDir, f), "utf8").catch(() => "");
+    const scanned = `${allText}\n${logText}`;
     const found = {};
-    for (const [k, re] of Object.entries(PREFLIGHT_LOG_PATTERNS)) found[k] = [...new Set(lines(`${logText}\n${aText}\n${mText}`).filter(l => re.test(l)))].slice(0, 30);
-    const hits = Object.entries(found).filter(([, v]) => v.length).map(([k]) => k);
-    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.join(", ")}` : null, lines: found, log_text: logText.slice(-8000) };
+    for (const [k, re] of Object.entries(PREFLIGHT_LOG_PATTERNS)) found[k] = [...new Set(lines(scanned).filter(l => re.test(l)).map(red))].slice(0, 30);
+    const hits = Object.entries(found).filter(([, x]) => x.length).map(([k]) => k);
+    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.join(", ")}` : null, lines: found, log_text: red(logText.slice(-8000)) };
+    const agent_listed = word(agent).test(a.raw.stdout), server_listed = (parsed.servers ?? []).includes(server);
+    checks.discovery = { ok: agent_listed && server_listed, agent_listed, server_listed,
+      note: "advisory: `agy agents` and `agy mcp list` take no --add-dir and were observed (agy 1.5.10, 2026-11-18) to list the global configuration only; the turn's --add-dir workspace is what counts" };
+    const hooks = parseHooksLoaded(scanned);
+    checks.hooks_discovery = hooks ? { ok: hooks.files > 0, seen: true, named: hooks.named, files: hooks.files, lines: hooks.lines.map(red),
+      why: hooks.files > 0 ? null : "the CLI loaded hooks from 0 hooks.json files: the workspace's .agents/hooks.json was not discovered by these subcommands" }
+      : { ok: true, seen: false, named: null, files: null, lines: [], why: null };
+    diagnostics = { hooks_loaded: hooks ? { named: hooks.named, files: hooks.files } : null, gemini_dir_lines: [...new Set(lines(scanned).filter(l => GEMINI_DIR_LINE.test(l)).map(red))].slice(0, 20), auth_lines: authLines };
   } finally {
     if (own) await dropGeminiState(j.gstate).catch(() => null);
   }
-  const failed = Object.entries(checks).filter(([, c]) => !c.ok).map(([k]) => k);
-  return { ok: !failed.length, failed, checks, log_file };
+  const failed = PREFLIGHT_BLOCKING.filter(k => checks[k] && !checks[k].ok);
+  const warnings = PREFLIGHT_ADVISORY.filter(k => checks[k] && !checks[k].ok);
+  return { ok: !failed.length, failed, warnings, blocking: [...PREFLIGHT_BLOCKING], advisory: [...PREFLIGHT_ADVISORY], checks, diagnostics };
 }
 
 /**
