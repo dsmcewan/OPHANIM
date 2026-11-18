@@ -460,8 +460,23 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 - The probe now uses that JSON form and decides on the lane's own group only: a spent Claude/GPT bucket does not move a Gemini lane to the metered API. The text form is the fallback. Both observed outputs are test fixtures (`pantheon/tests/agy-quota-observed.test.mjs`).
 - Workers now also pass `--disable-slash-commands`, so prompt text can't expand into a slash command or skill, and set `AGY_CLI_DISABLE_AUTO_UPDATE=true`.
 
-**Not yet exercised against the real `agy`** (the probe ran no model turn):
+**First passing live worker turn (agy 1.5.10, owner's machine, commit `7ca325c`, 2026-11-18).** `scripts/agy-worker-probe.mjs` exited 0: one `gemini-3.8-flash-low` turn, inside the real `bwrap` jail, with a mock subagent and no API client.
 
-- whether hooks run in headless mode, and how MCP tools are named in hook input;
-- the hook exit-code semantics;
-- where the CLI keeps its state, and whether its own sandbox works inside `bwrap`.
+- The `--print` session loaded the workspace hook ("loaded 1 named hooks from 1 hooks.json file(s)"). Its workspace was the control directory plus the worktree (`--add-dir`), and each hook ran with cwd `<control dir>/.agents`.
+- A write outside the owned paths was denied by the owned-path check before it happened. The owned write was approved and landed.
+- The subagent tool is named `mcp_pantheon-subagents_ask_subagent`. It reached the mock over the Unix socket inside the jail.
+- The exact `cd '<worktree>' && <verify_cmd>` ran and reported exit code 0.
+- No host path the jail could write changed. Two SQLite sidecars of the host's own `conversation_summaries.db` appeared in a directory the jail could not see; a long-running host `agy` process was present, but the writer was not established.
+- Contracts learned on the way, each now a regression fixture:
+  - the CLI's state lives in `~/.gemini/antigravity-cli`;
+  - the write tool is `write_file {Path, Content}`;
+  - `run_command` takes no `Cwd` and needs a writable `bin/`;
+  - the subcommands reject `--log-file` and `--add-dir`;
+  - their "not logged in" lines are routine output.
+
+Not yet exercised:
+
+- the CLI's own command sandbox inside `bwrap` (the card uses `commandExecutionPolicy: auto`);
+- the lazy `call_mcp_tool` path (the CLI called the tool directly);
+- a real Grok subagent;
+- a full lifecycle item through the pipeline.
