@@ -1,0 +1,40 @@
+{
+  "_fill_in": "A TEMPLATE for ophanim/operate/live-run.mjs (schema ophanim.live-run/v1). Copy it OUTSIDE the repository and fill it in. Every limit is null here ON PURPOSE: the owner chooses each one, and the launcher refuses a null (it fills in no default). limits: total_provider_calls = the whole run's provider-call cap (calls, not dollars; one agy worker call is a whole multi-turn session on the subscription); stage_provider_calls = per claimed stage, at most the total; revisions = per-file revisions (used only without work units); stage_attempts = retries of one stage on the same inputs; elapsed_ms = the wall-clock bound of the run; pipeline.max_provider_calls (at most stage_provider_calls), pipeline.max_revisions (implementer attempts after the first, per unit), pipeline.max_concurrent_units, pipeline.verify_timeout_ms. billing.metered_gemini_failover: false = a lane quota refusal blocks the unit instead of calling the metered Gemini API (then credentials.gemini_api_key is \"not-used\"); true = allowed (then \"required\"). require_subagent (optional; delete it if not part of acceptance): the run is not accepted without min_calls answered subagent calls of that role served by that model. ledgers.status_root is opened read-only; ledgers.work_root must be empty or absent (an isolated single-item work ledger is created there). out_dir is outside the repository. candidate_commit is the full HEAD the run is made against. Run with --dry-run first; then --confirm-spend \"<item>@<first 7 of candidate_commit>\".",
+  "schema": "ophanim.live-run/v1",
+  "item": "replace-with-the-status-item-id",
+  "candidate_commit": "0000000000000000000000000000000000000000",
+  "profile": "fit",
+  "independence": "model",
+  "limits": {
+    "total_provider_calls": null,
+    "stage_provider_calls": null,
+    "revisions": null,
+    "stage_attempts": null,
+    "elapsed_ms": null,
+    "pipeline": {
+      "max_provider_calls": null,
+      "max_revisions": null,
+      "max_concurrent_units": null,
+      "verify_timeout_ms": null
+    }
+  },
+  "billing": {
+    "scope": "replace: what this run may bill, in the owner's words",
+    "metered_gemini_failover": false,
+    "note": ""
+  },
+  "require_subagent": {
+    "role": "replace-with-the-subagent-role",
+    "model": "grok-4.7",
+    "min_calls": 1
+  },
+  "ledgers": {
+    "status_root": "/absolute/path/to/OPHANIM/status/ledger",
+    "work_root": "/absolute/path/outside/the/repo/live-run/work"
+  },
+  "credentials": {
+    "required": ["anthropic-oauth", "OPENAI_API_KEY", "XAI_API_KEY", "agy-login"],
+    "gemini_api_key": "not-used"
+  },
+  "out_dir": "/absolute/path/outside/the/repo/live-run"
+}

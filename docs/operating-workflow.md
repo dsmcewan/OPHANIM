@@ -136,7 +136,13 @@ The workflow is **operational** when one live cycle meets all of these:
 
 Until then the workflow is rehearsed, not operational.
 
-## One live cycle, on the owner's machine
+## One live cycle, on the owner's machine (older board-run flow)
+
+> **Superseded for the `fit` lifecycle.** This recipe is the older per-file board run (`pantheon-board.mjs run`).
+> Its `--seat ...=agy_google/claude-sonnet-4-6` seats are **retired**: Antigravity serves Gemini lanes only, and the
+> Claude/GPT lanes it once offered are gone. The `fit` lifecycle (planner, dispatcher, Antigravity Gemini implementer,
+> Grok subagent, pinned reviewer, then the three-lab review, the validator and an unsigned outcome) is launched for one
+> item with `ophanim/operate/live-run.mjs`: see "One live fit item" below. The recipe is kept as a record of that flow.
 
 `scripts/operate-cycle.sh <item>` runs the sequence with confirmations. By hand:
 
@@ -165,6 +171,45 @@ the authoring lab is Anthropic's and the cycle reviewers are xAI (`grok-4.7`), G
 and OpenAI (`gpt-6-sol`), all reachable with the keys above. The in-run reviewer is xAI by default. Add
 `--turn pantheon/bin/cycle-review-http-turn.mjs` to `run` to review over plain HTTPS where a proxy injects
 the provider keys.
+
+## One live fit item
+
+`ophanim/operate/live-run.mjs` runs ONE status item through the `fit` lifecycle with live seats, scoped and with a
+declared budget. Nothing else on the board is dispatched (it runs `tick` with the item selector, `--item`), and it
+never writes the status ledger.
+
+1. Copy `ophanim/operate/live-run.example.json` outside the repository and fill it in (schema `ophanim.live-run/v1`;
+   unknown keys are refused):
+   - `item`, `candidate_commit` (the full HEAD; the launcher refuses another HEAD or uncommitted tracked changes),
+     `profile: "fit"`, `independence: "model"`;
+   - `limits`: `total_provider_calls`, `stage_provider_calls`, `revisions`, `stage_attempts`, `elapsed_ms` and
+     `pipeline` {`max_provider_calls`, `max_revisions`, `max_concurrent_units`, `verify_timeout_ms`}. Every one is
+     `null` in the example and must be chosen: a null is refused. The limits bound **calls, not dollars**; one call
+     of the agy CLI is a whole multi-turn worker session on the subscription;
+   - `billing`: `scope`, `metered_gemini_failover` (false: a lane's quota refusal blocks the unit instead of calling
+     the metered Gemini API), `note`;
+   - `require_subagent` (optional): `{role, model: "grok-4.6" | "grok-4.7", min_calls}` when a real Grok call is part
+     of acceptance: without it recorded, the run is not accepted;
+   - `ledgers`: `status_root` (opened read-only) and `work_root` (empty or absent: an isolated single-item work
+     ledger is created there, with its own anchor and controller key);
+   - `credentials`: `required` (one of `ANTHROPIC_API_KEY` / `anthropic-oauth`, plus `OPENAI_API_KEY`,
+     `XAI_API_KEY`, `agy-login`) and `gemini_api_key` (`required` exactly when the failover is allowed, else
+     `not-used`). Only presence is checked; no value is printed;
+   - `out_dir`, outside the repository.
+2. Load the provider keys in your shell, then **dry-run first** (the default; no provider call):
+   `node ophanim/operate/live-run.mjs --manifest ~/live/manifest.json`. It validates the manifest, verifies the
+   status ledger and records its head, checks the commit and the tree, checks credential presence, runs the
+   zero-spend agy preflight (card, in-jail `/usage` login, the quota of the matrix implementer lane of each
+   difficulty), shows the item's gate, the predicted seats per stage and the policy hashes, and prints one JSON plan
+   (`ophanim.live-run-plan/v1`). Exit 1 names every refusal.
+3. Run it with the confirm string `<item>@<first 7 characters of candidate_commit>`:
+   `node ophanim/operate/live-run.mjs --manifest ~/live/manifest.json --confirm-spend "co1-readability@1a2b3c4"`.
+   It writes `<out_dir>/run.json` (`ophanim.live-run-record/v1`: the plan, every tick, every stage record hash,
+   findings, evidence, budget stops, served identities, the subagent receipt, the pipeline records, the final gate
+   and a fresh read-only verification of the work ledger and the run ledgers). Exit 0 only when the item reached its
+   outcome and every acceptance criterion held; exit 3 records why it stopped.
+4. The outcome proposal is UNSIGNED. The launcher prints the exact `packages/ledger/status.mjs apply` command; you run
+   it, with your status keys, after reading the record.
 
 ## The first ticket
 

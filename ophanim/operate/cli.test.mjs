@@ -175,6 +175,28 @@ test('tick and watch dispatch through makeExecutors only within the declared pro
   assert.equal(limitsOf({}).total_provider_calls, 0);
 });
 
+test('tick and watch --item ID dispatch only that item; the other runnable items are skipped "outside the --item scope"', async () => {
+  const f = fixture(['one', 'two', 'three'].map(item => ({item, title: item, state: 'Ready'})));
+  const stagesFile = path.join(f.repo, 'stages.mjs');
+  fs.writeFileSync(stagesFile, `
+    export function makeExecutors(ctx) {
+      const pass = stage => async x => ({status: 'passed', outputs: {[stage]: x.item}, team: [{role: stage}], contributions: [], findings: [],
+        usage: {provider_calls: 1}, next: {stage: null, why: 'ok'}});
+      return Object.fromEntries(['plan', 'implement', 'review', 'validate', 'outcome'].map(s => [s, pass(s)]));
+    }`);
+  const r = await cli(['tick', '--init', '--item', 'three', '--total-provider-calls', '100', '--stage-provider-calls', '1', '--iterations', '2', ...at(f)], {stagesFile});
+  assert.equal(r.code, 0, r.err);
+  const t = JSON.parse(r.out);
+  assert.deepEqual(t.dispatched.map(d => `${d.item}:${d.stage}`), ['three:plan', 'three:implement']);
+  assert.deepEqual(t.skipped.map(s => [s.item, s.why]), [['one', 'outside the --item scope'], ['two', 'outside the --item scope']]);
+  assert.deepEqual(t.scope, {only: 'three', on_ledger: true, gate: 'plan', runnable: true});
+  const w = await cli(['watch', '--once', '--item', 'three', '--total-provider-calls', '100', '--stage-provider-calls', '1', ...at(f)], {stagesFile});
+  assert.deepEqual(JSON.parse(w.out).ticks[0].dispatched.map(d => d.item), ['three', 'three', 'three']);
+  const work = openWorkLedger({root: f.workRoot});
+  assert.deepEqual([work.claims('one').length, work.claims('two').length, work.stages('three').length], [0, 0, 5]);
+  assert.equal((await cli(['tick', '--item', 'Not An Id', ...at(f)], {stagesFile})).code, 2);
+});
+
 test('the issues intake reads through the public record\'s REST client, GET only, pages followed, pull requests dropped', async () => {
   const calls = [];
   const pages = {

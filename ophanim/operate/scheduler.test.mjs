@@ -207,3 +207,22 @@ test('a plan pending on a transient failure is retried once due and within the a
     assert.deepEqual(w.stages('short').map(s => s.status), ['pending']);
   } finally { f.done(); }
 });
+
+test('the item selector: with `only`, intake still records every item, but only the selected one is dispatched; every other runnable item is skipped "outside the --item scope"', async () => {
+  const f = fixture(['one', 'two', 'three'].map(item => ({item, title: item, state: 'Ready'})));
+  try {
+    const {ex, seen} = scripted(f);
+    const r = await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: 'two'});
+    assert.deepEqual([...new Set(seen.map(s => s.item))], ['two']);
+    assert.deepEqual(r.dispatched.map(d => `${d.item}:${d.stage}`), ['plan', 'implement', 'review', 'validate', 'outcome'].map(s => `two:${s}`));
+    assert.deepEqual(r.intake.sort(), ['status:one', 'status:three', 'status:two']);
+    assert.deepEqual(r.skipped, [{item: 'one', gate: 'plan', why: 'outside the --item scope'}, {item: 'three', gate: 'plan', why: 'outside the --item scope'}]);
+    assert.deepEqual(r.scope, {only: 'two', on_ledger: true, gate: 'plan', runnable: true});
+    const w = openWorkLedger({root: f.workRoot});
+    assert.deepEqual([w.claims('one').length, w.claims('three').length, w.stages('two').length], [0, 0, 5]);
+    // An item that is not on the ledger dispatches nothing, and says so.
+    const none = await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: 'nope'});
+    assert.deepEqual([none.dispatched, none.scope], [[], {only: 'nope', on_ledger: false, gate: null, runnable: false}]);
+    await assert.rejects(tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: ''}), /names one status item/);
+  } finally { f.done(); }
+});

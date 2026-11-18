@@ -50,7 +50,9 @@ export async function agySingleTurn({ vendor, model, prompt, seat = null, timeou
  * classifyFailure classifies it), and the answer then says so (`quota_failover`). Any other lane failure is thrown as
  * it is: it never moves the turn to the metered API. A lane whose base model has no API id has no failover.
  */
-export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null }, { lane, api }) {
+// `failover: false` (the caller's budget allows no metered Gemini spend) keeps the lane's quota refusal as it is: it is
+// thrown, marked quota_failover {used: false, disabled: true}, and the metered API is not called.
+export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null }, { lane, api, failover = true }) {
   const transport = seatTransport(vendor, model);
   const isLane = transport === "agy-cli";
   const viaLane = isLane ? { vendor, model } : vendor === "agy_google" && transport === "api" && laneLevels(model).length ? laneFor(model, seat?.effort ?? null) : null;
@@ -61,6 +63,10 @@ export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra 
     return { ...r, transport: "agy-cli", requested_model: model };
   } catch (e) {
     if (!spare || !classifyFailure(e).quota) throw e;
+    if (failover === false) {
+      throw Object.assign(e, { quota_failover: { used: false, disabled: true, lanes: [viaLane.model], rule: "metered Gemini API failover disabled by the caller",
+        after: [{ lane: viaLane.model, outcome: "quota", source: "attempt", status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200) }] } });
+    }
     const r = await api({ vendor: spare.vendor, model: spare.model, prompt, seat });
     return { ...r, transport: "api", requested_model: model,
       quota_failover: { used: true, base: spare.model, lanes: [viaLane.model], rule: QUOTA_FAILOVER_RULE,

@@ -24,7 +24,8 @@
 // Inputs: {repo, makeClientFor (the work seats), turn (single-turn seats: planner, reviewers, validator), n = 3,
 // statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
 // tests inject a synthetic pool with both), pipelineLimits (overrides of the pipeline's DEFAULT_LIMITS under `fit`; the
-// provider-call bound is always the stage budget)}. Every stage
+// provider-call bound is the stage budget, or a lower max_provider_calls given here), meteredFailover (default true; false:
+// a Gemini lane's quota refusal in the pipeline is never answered by the metered Gemini API, pipeline/turns.mjs)}. Every stage
 // stays within ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -368,7 +369,7 @@ const withServed = f => (f.served_model && f.served_model !== f.model ? {served_
 // selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
   seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
-  pipelineLimits = {}} = {}) {
+  pipelineLimits = {}, meteredFailover = true} = {}) {
   independence ??= independenceFor(profile);
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
@@ -813,10 +814,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const sameModel = (asked, served) => { const a = resolveModel(null, asked), b = resolveModel(null, served); return Boolean(a?.known && b?.known && a.id === b.id); };
     let run;
     try {
-      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn}), dir, sameModel,
+      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}}), dir, sameModel,
         planner: {vendor: planRec.outputs.planner.vendor, model: planRec.outputs.planner.model},
-        // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here.
-        limits: {...pipelineLimits, max_provider_calls: ctx.budget.provider_calls}});
+        // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here
+        // (a lower pipelineLimits.max_provider_calls is kept: the stricter bound wins).
+        limits: {...pipelineLimits, max_provider_calls: Math.min(ctx.budget.provider_calls, pipelineLimits.max_provider_calls ?? Infinity)}});
     } catch (e) {
       return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile}, error: String(e?.message ?? e).slice(0, 300)}, contributions, usage: usage(ctx.budget.provider_calls),
         next: {stage: 'implement', why: `the pipeline run failed: ${String(e?.message ?? e).slice(0, 200)}`}});

@@ -194,6 +194,11 @@ test("a single-turn seat: lane first; the API only as the lane's quota failover,
   asked.length = 0;
   await assert.rejects(laneFirstTurn({ vendor: "agy_google", model: "gemini-4-carbon", prompt: "p" }, { lane: async () => { throw new Error("agy CLI timed out after 900s"); }, api }), /timed out/);
   assert.deepEqual(asked, []);
+  // failover: false (a run that allows no metered Gemini spend): the quota refusal is thrown, marked; the API is not asked.
+  asked.length = 0;
+  await assert.rejects(laneFirstTurn({ vendor: "agy_google", model: "gemini-4-hydrogen-xhigh", prompt: "p" }, { lane: laneQuota, api, failover: false }),
+    e => e.status === 429 && e.quota_failover?.used === false && e.quota_failover.disabled === true && e.quota_failover.lanes[0] === "gemini-4-hydrogen-xhigh");
+  assert.deepEqual(asked, ["lane:gemini-4-hydrogen-xhigh"]);
   // A lane whose base model has no API id has no failover, even on quota.
   await assert.rejects(laneFirstTurn({ vendor: "agy_google", model: "gemini-3.8-flash-high", prompt: "p" }, { lane: laneQuota, api }), e => e.status === 429);
   // Through the real single-turn seat and the fake CLI.

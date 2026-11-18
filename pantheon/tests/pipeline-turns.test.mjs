@@ -147,6 +147,25 @@ test("a QUOTA refusal of the lane falls over to the metered API of the same base
   });
 });
 
+test("meteredFailover: false -- a proven QUOTA refusal is NOT answered by the metered API: the turn throws quota_exhausted (disabled), the pipeline steps its subscription ladder and the unit ends blocked; no API call", async t => {
+  const env = await fixture(t);
+  await withFakeAgy(env.root, async agy => {
+    const ladder = seats().implementer(unit("a")).ladder.map(s => s.model);
+    agy.agyQuota(ladder);
+    agy.agyQuotaReport("Five-hour: 3% used\nWeekly: 9% used\n");
+    const calls = [];
+    const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls), agy: { meteredFailover: false } }));
+    assert.equal(out.status, "incomplete");
+    assert.equal(calls.length, 0, "the metered Gemini API was never called");
+    assert.deepEqual([out.units.a.status, out.units.a.code], ["blocked", "LANE_LADDER_EXHAUSTED"]);
+    const at = out.units.a.attempts.at(-1);
+    assert.equal(at.code, "QUOTA_EXHAUSTED");
+    assert.ok(at.lane_failures.every(f => f.cause === "quota"));
+    assert.deepEqual([at.quota_failover.used, at.quota_failover.disabled], [false, true]);
+    assert.deepEqual(agy.agy().map(a => a.model), ladder, "each subscription lane was tried once; none fell over to the API");
+  });
+});
+
 test("the API fallback's answer must be the strict files object: prose, or a path outside the unit, is a failed attempt and nothing is written", async t => {
   const env = await fixture(t);
   await withFakeAgy(env.root, async agy => {

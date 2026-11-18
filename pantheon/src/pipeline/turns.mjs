@@ -28,6 +28,10 @@
 // the metered API is not called. If the metered API also cannot answer, the turn throws `quota_exhausted`. A failover
 // is recorded on the returned object: quota_failover {used, base, lanes, rule, after, probe}. This adapter never
 // retries a lane itself (the pipeline retries once and steps the ladder).
+// `agy.meteredFailover: false` (a run whose budget does not allow metered Gemini spend; ophanim/operate/live-run.mjs
+// passes it from its manifest) DISABLES that failover: a proven quota refusal is thrown as `quota_exhausted` with
+// quota_failover {used: false, disabled: true, ...} and the metered API is never called. The pipeline then treats it
+// as any quota refusal of a lane (index.mjs: the next subscription rung, and the unit BLOCKED when the ladder is spent).
 //
 // THE API FALLBACK CANNOT WRITE FILES, so its contract is the minimal honest one: the API is shown the unit prompt
 // and the current contents of the unit's owned files, and its WHOLE reply must be one strict JSON object
@@ -39,7 +43,7 @@
 // written is then judged by the controller's write jail like any other attempt: this adapter is not the jail.
 //
 // Inputs: the injected `turn` and `makeClientFor(vendor)` (the lifecycle's own), and `agy` options {cli?, timeoutS?,
-// sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?} — `run` replaces runAgyWorkerTurn, `api`
+// sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?, meteredFailover? (default true)} — `run` replaces runAgyWorkerTurn, `api`
 // the metered-API call and `probe` the quota probe, for tests.
 // Outputs: for every role, {text, served_model, served_model_source} (+ transport, quota_failover on the implementer).
 //
@@ -218,6 +222,10 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       if (!explicit && seen.state !== "exhausted") {
         throw laneFailure("exit", `${String(e?.message ?? e)}; a soft quota phrase ("${e.quota?.matched ?? "?"}") and the quota probe reads "${seen.state}": not a proven quota refusal, so the metered API is not used`,
           { quota_probe: seen, quota_failover: { used: false, lanes: [model], after, probe: seen }, jail_log: e.jail_log ?? [] });
+      }
+      if (agy.meteredFailover === false) {
+        throw Object.assign(fail("quota_exhausted", `${model} was refused for quota, and the metered Gemini API failover is DISABLED for this run (meteredFailover: false): the API is not called`),
+          { status: 429, quota_probe: seen, quota_failover: { used: false, disabled: true, lanes: [model], rule: "metered Gemini API failover disabled by the caller", after, probe: seen }, jail_log: e.jail_log ?? [] });
       }
       const spare = quotaFailoverFor(model);
       if (!spare) throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and has no metered API failover`), { status: 429, quota_probe: seen });

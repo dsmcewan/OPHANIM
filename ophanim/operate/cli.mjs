@@ -6,14 +6,18 @@
 //       candidates (issues with no item marker), orphan tickets, duplicate issue markers, issues naming no ledger
 //       item, projection drift (issue open/closed against the item's state), and the counts. Read-only: the work
 //       ledger is verified, never created; the controller authority held here is reported.
-//   node ophanim/operate/cli.mjs tick  [limits] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--turn MODULE] [--clients MODULE] [--json]
-//   node ophanim/operate/cli.mjs watch [limits] [--interval S] [--once] [same as tick]
+//   node ophanim/operate/cli.mjs tick  [limits] [--item ID] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--turn MODULE] [--clients MODULE] [--json]
+//   node ophanim/operate/cli.mjs watch [limits] [--item ID] [--interval S] [--once] [same as tick]
 //       Run the scheduler (scheduler.mjs) with the stage executors of ophanim/operate/stages.mjs `makeExecutors`
 //       (refused, with the reason, when that module is absent), seated with the live SDK seats or with --turn and
 //       --clients modules (pantheon-board's convention). Limits, declared before dispatch:
 //       --total-provider-calls N   the whole run's provider-call budget. Default 0: nothing that may call a
 //                                  provider is dispatched (intake is still recorded).
 //       --stage-provider-calls N, --iterations N, --concurrency N, --elapsed-ms N  (scheduler DEFAULT_LIMITS otherwise)
+//       --item ID   the item selector: intake, expired-claim release and evidence recovery still run for every item, but
+//                   ONLY this item is dispatched; every other runnable item is listed in `skipped` ("outside the --item
+//                   scope"). Without it every runnable item is queued (--concurrency 1 only serialises them). For one
+//                   live `fit` item with a declared budget, use ophanim/operate/live-run.mjs, which runs tick this way.
 //       Without the controller key (status/work/keys) the run stops with a concrete NO_AUTHORITY block (exit 3):
 //       the work ledger is still verified first, nothing is recorded and nothing is skipped silently. A missing
 //       work ledger is created only with --init (it generates the controller key on this machine).
@@ -319,7 +323,7 @@ export async function prepareDispatch({paths, opts, limits, stagesFile, progress
 
 export const tickSummary = (t, limits) => ({
   dispatched: t.dispatched, released_expired: t.released_expired, intake: t.intake.length, recovery: t.recovery ?? [], blocked: t.blocked.length, skipped: t.skipped,
-  stopped: t.stopped, spent: t.spent, by_gate: t.reconcile.counts.by_gate,
+  stopped: t.stopped, spent: t.spent, by_gate: t.reconcile.counts.by_gate, ...(t.scope ? {scope: t.scope} : {}),
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
 });
 
@@ -348,7 +352,9 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
       const prep = await prepareDispatch({paths, opts, limits, stagesFile, progress});
       if (prep.blocked) { log(JSON.stringify(prep.blocked, null, 2)); return 3; }
       const holder = opts.holder ?? 'controller';
-      const common = {repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, bundlesDir: paths.bundlesDir, executors: prep.executors, limits, holder, progress};
+      if (opts.item !== undefined && !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(opts.item)) usage('--item names one status item id');
+      const common = {repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, bundlesDir: paths.bundlesDir, executors: prep.executors, limits, holder, progress,
+        ...(opts.item !== undefined ? {only: opts.item} : {})};
       if (verb === 'tick') {
         const {issues} = await loadIssues(opts, {fetchImpl, env});
         const t = await tick({...common, issues});

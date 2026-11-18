@@ -72,8 +72,12 @@ export function inputSignature({repo, statusRoot, workRoot, issues = null}) {
  * One tick. Returns what it dispatched, what it reused, refused or blocked, and why it stopped.
  * executors: {plan, implement, review, validate, outcome}: async (ctx) => stage result.
  */
+// `only` (an item id, optional): the ITEM SELECTOR. Intake, expired-claim release and evidence recovery still run for
+// every item (bookkeeping, no provider call), but only that item is dispatched; every other runnable item is listed in
+// `skipped` with why "outside the --item scope". Without it every runnable item is queued, as before.
 export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDir = null, executors = {}, limits = {}, holder = 'controller',
-  clock = () => Date.now(), progress = () => {}}) {
+  clock = () => Date.now(), progress = () => {}, only = null}) {
+  if (only !== null && (typeof only !== 'string' || !only)) fail('tick: `only` names one status item id', 'USAGE');
   const L = {...DEFAULT_LIMITS, ...limits};
   const started = clock();
   const work = openWorkLedger({root: workRoot});
@@ -163,7 +167,13 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     }
   };
   // Concurrency: up to L.concurrency items at once; the work ledger's claims keep them from colliding.
-  const queue = order.filter(i => STAGES.includes(i.gate.gate)).map(i => i.item);
+  let queue = order.filter(i => STAGES.includes(i.gate.gate)).map(i => i.item);
+  if (only !== null) {
+    for (const i of order) if (i.item !== only && STAGES.includes(i.gate.gate)) log.skipped.push({item: i.item, gate: i.gate.gate, why: 'outside the --item scope'});
+    const found = rec.items.find(i => i.item === only);
+    log.scope = {only, on_ledger: Boolean(found), gate: found?.gate.gate ?? null, runnable: queue.includes(only)};
+    queue = queue.filter(i => i === only);
+  }
   for (const i of rec.items) if (!STAGES.includes(i.gate.gate) && i.gate.blocker) log.blocked.push({item: i.item, gate: i.gate.gate, blocker: i.gate.blocker});
   const workers = Array.from({length: Math.max(1, L.concurrency)}, async () => { for (let it = queue.shift(); it; it = queue.shift()) await runItem(it); });
   await Promise.all(workers);

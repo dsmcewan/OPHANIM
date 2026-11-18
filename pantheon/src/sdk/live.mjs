@@ -16,7 +16,8 @@ export async function liveClients() {
   return make;
 }
 
-export async function liveTurn({ label = "cycle-review" } = {}) {
+// `meteredFailover: false`: a Gemini lane's quota refusal is not answered by the metered Gemini API (laneFirstTurn).
+export async function liveTurn({ label = "cycle-review", meteredFailover = true } = {}) {
   const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient, sendTurn }] = await Promise.all([
     import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("./adapter.mjs")]);
   const clients = new Map();
@@ -30,7 +31,7 @@ export async function liveTurn({ label = "cycle-review" } = {}) {
   };
   // A declared Antigravity lane is not an API id: it is served by the agy CLI (agy-turn.mjs). A Gemini seat goes
   // through its lane first; the metered API answers only as that lane's 429/quota failover (laneFirstTurn).
-  const turn = args => laneFirstTurn(args, { lane: agySingleTurn, api });
+  const turn = args => laneFirstTurn(args, { lane: agySingleTurn, api, failover: meteredFailover });
   turn.providers = { kind: "live" };
   return turn;
 }
