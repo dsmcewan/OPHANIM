@@ -30,6 +30,10 @@ End with a short list of the defects you would block a live run on.
 
 Name your lab and model and the commit you reviewed. Return the findings as `findings-<n>-<lab>.md` in this directory, or as a PR comment.
 
+## Running a review
+
+The owner runs each assignment on their own machine, with their own key, using `node pantheon/scripts/run-review.mjs --assignment <n> --commit <40-hex> --max-turns N --max-tool-calls N --max-output-tokens N --timeout-s N` (`--dry-run` prints the plan and makes no provider call). The reviewer is given this README and its assignment file verbatim, plus the fixed preamble in [HARNESS.md](HARNESS.md), and works on a disposable worktree of the commit. The runner writes `findings-<n>-<lab>.md` and its transcript to this directory.
+
 ## Running the existing suites
 
 From the repository root:
