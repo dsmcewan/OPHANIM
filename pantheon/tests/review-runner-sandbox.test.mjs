@@ -110,7 +110,7 @@ test("assignment 4: no write_test, no run_suite, run_tests only on the listed fi
 
 test("child env is built from nothing: no keys, tokens, secrets or credentialed proxies", () => {
   const parent = {
-    PATH: "/usr/bin", LANG: "en_US.UTF-8", HOME: "/home/owner",
+    PATH: "/usr/bin", LANG: "en_US.UTF-8", HOME: "/home/fixture",
     OPENAI_API_KEY: "sk-live", XAI_API_KEY: "xai-live", GEMINI_API_KEY: "AIza-live", GITHUB_TOKEN: "ghp", AWS_SECRET_ACCESS_KEY: "s",
     NODE_OPTIONS: "--require /x", HTTPS_PROXY: "http://proxy:3128", HTTP_PROXY: "http://user:pw@proxy:3128", ALL_PROXY: "socks://x",
     OPHANIM_TELOS_ROOT: "/owner/telos", ANTHROPIC_BASE_URL: "http://x",
