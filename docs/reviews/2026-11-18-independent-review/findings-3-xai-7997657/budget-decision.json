@@ -1,0 +1,15 @@
+{
+  "reason": "max_turns reached (40)",
+  "initial_provider_calls": 40,
+  "initial_tool_calls": 104,
+  "retry_limits": {
+    "max_turns": 60,
+    "max_tool_calls": 180,
+    "max_output_tokens": 16000,
+    "timeout_s": 600
+  },
+  "commit": "7997657e77d597c6dfda8b7d971d0e4499c88b3a",
+  "model": "grok-4.7",
+  "separate_output_path": "/review/.review-retry-3",
+  "note": "One fresh attempt per owner instruction for limit stops; runner has no resume option."
+}
