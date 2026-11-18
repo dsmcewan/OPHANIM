@@ -24,8 +24,11 @@ const refused = (message, run, result) => {
     : new Error(`${message} (inspect local CLI diagnostics)`);
 };
 
+// `env` (optional) ADDS variables to the child's environment (the pipeline's implementer is given its unit's A2A
+// endpoint this way); `signal` (optional) cancels the child. Neither can restore a Google API key: those are
+// stripped after `env` is merged.
 export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, timeoutS,
-  schemaPath = null, onEvent = () => {} }) {
+  schemaPath = null, onEvent = () => {}, env: extraEnv = null, signal = undefined }) {
   if (!/^[a-z][a-z-]*$/.test(role)) throw new Error(`agy CLI invalid role ${role}`);
   const agent = `pantheon-${role}`;
   const cardPath = join(repo, ".agents", "agents", agent, "agent.md");
@@ -43,7 +46,7 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
 
   // A child inheriting GEMINI_API_KEY could silently use the API-key route while appearing to
   // validate OAuth. Strip both Google API-key spellings at the subprocess boundary.
-  const env = { ...process.env };
+  const env = { ...process.env, ...(extraEnv ?? {}) };
   delete env.GEMINI_API_KEY;
   delete env.GOOGLE_API_KEY;
 
@@ -72,7 +75,8 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
   };
 
   const run = await spawnPromise(cli, args, { cwd: repo, env,
-    timeout: (timeoutS + 15) * 1000, onStdoutLine });
+    timeout: (timeoutS + 15) * 1000, onStdoutLine, ...(signal ? { signal } : {}) });
+  if (run.killedFor === "cancelled") throw Object.assign(new Error("agy CLI turn was cancelled"), { code: "ABORTED" });
   if (run.signal === "SIGTERM") throw new Error(`agy CLI timed out after ${timeoutS}s`);
   if (run.status !== 0) throw refused(`agy CLI exited ${run.status}; status ${result?.status ?? "missing"}`, run, result);
   // init echoes launch selection; it does not prove the CLI actually applied the role card.

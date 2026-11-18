@@ -8,14 +8,21 @@
 // `agyQuotaOnce(marker)` refuses for quota the first lane turn whose prompt contains the marker. The fake CLI reports the
 // `agyMode("frozen" | "reject")` gives a lane seat the lifecycle's stateless review/revise behaviour. The fake CLI reports the
 // same usage as the scripted API clients (USAGE below), so a run's token totals do not depend on which transport answered.
+//
+// THE PIPELINE'S IMPLEMENTER (pantheon/src/pipeline: a multi-turn worker that writes files itself). When the prompt is
+// a work unit's implementer prompt the fake CLI WRITES INTO ITS --add-dir (the unit's worktree): by default
+// `export const ok = true;` to the unit's first owned path; `agyWorker(sh)` replaces that with a shell snippet that
+// is sourced with $dir (the worktree), $unit, $model, $agent and $prompt set and may set $reply. Every such launch is
+// logged to "$FAKE_AGY_LOG.ctx" as: agent, model, --add-dir, and whether PANTHEON_A2A_URL / _TOKEN and a Google API
+// key were in its environment (`agyContext()`).
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const FAKE_AGY = `#!/bin/sh
-agent="none"; model="none"; prompt=""
+agent="none"; model="none"; prompt=""; dir="none"
 for a in "$@"; do
-  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; esac
+  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; esac
   prev="$a"
 done
 printf '%s %s\\n' "$agent" "$model" >> "$FAKE_AGY_LOG"
@@ -39,6 +46,17 @@ case "$agent" in
   pantheon-implementer) reply='export const ok = true;' ;;
   pantheon-reviewer) reply='VERDICT: approve' ;;
   *) reply='RAN: nothing' ;;
+esac
+# A work unit's implementer (the five-stage pipeline): a worker that writes files in its worktree itself.
+case "$prompt" in *"the single implementer of work unit"*)
+  unit=$(printf '%s\\n' "$prompt" | sed -n 's/.*the single implementer of work unit "\\([^"]*\\)".*/\\1/p' | head -n 1)
+  printf '%s %s %s a2a_url=%s a2a_token=%s google_key=%s\\n' "$agent" "$model" "$dir" "\${PANTHEON_A2A_URL:+yes}" "\${PANTHEON_A2A_TOKEN:+yes}" "\${GEMINI_API_KEY:+yes}\${GOOGLE_API_KEY:+yes}" >> "$FAKE_AGY_LOG.ctx"
+  reply='done'
+  if [ -n "$FAKE_AGY_WORKER" ]; then . "$FAKE_AGY_WORKER"
+  else
+    first=$(printf '%s\\n' "$prompt" | sed -n '/^PATHS YOU OWN/,/^Do not commit/p' | sed -n 's/^- //p' | head -n 1)
+    mkdir -p "$(dirname "$dir/$first")" && printf 'export const ok = true;\\n' > "$dir/$first"
+  fi ;;
 esac
 # FAKE_AGY_MODE (the lifecycle's stateless hooks, ophanim/operate/test-restart-child.mjs, for a lane seat):
 #   frozen  the reviewer rejects bytes not marked "// frozen"; the implementer revises when given REQUESTED CHANGES
@@ -66,14 +84,33 @@ export function fakeAgy(dir) {
  * seat goes through its lane first, so a run that reaches one needs the CLI. `fn` gets `agy()`, the lane turns so far.
  */
 export async function withFakeAgy(dir, fn) {
-  const keys = ["PANTHEON_AGY_CLI", "FAKE_AGY_LOG", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE"];
+  const keys = ["PANTHEON_AGY_CLI", "FAKE_AGY_LOG", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER"];
   const before = Object.fromEntries(keys.map(k => [k, process.env[k]]));
   const log = join(dir, "agy.log");
   Object.assign(process.env, { PANTHEON_AGY_CLI: fakeAgy(dir), FAKE_AGY_LOG: log });
   for (const k of keys.slice(2)) delete process.env[k];
   const agy = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
-  try { return await fn({ agy }); }
+  try { return await fn({ agy, agyContext: () => contextOf(log), agyWorker: sh => setWorker(dir, sh),
+    agyQuota: models => { process.env.FAKE_AGY_QUOTA = models.join(" "); }, agyFail: models => { process.env.FAKE_AGY_FAIL = models.join(" "); } }); }
   finally { for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+}
+
+/** The fake CLI's launches as it saw them: [{agent, model, dir (its --add-dir), a2a_url, a2a_token, google_key}]. */
+function contextOf(log) {
+  const file = `${log}.ctx`;
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8").split("\n").filter(Boolean).map(l => {
+    const [agent, model, dir, ...flags] = l.split(" ");
+    const flag = k => flags.includes(`${k}=yes`) || flags.includes(`${k}=yesyes`);
+    return { agent, model, dir, a2a_url: flag("a2a_url"), a2a_token: flag("a2a_token"), google_key: flag("google_key") };
+  });
+}
+/** Install a shell snippet as the pipeline implementer's behaviour (see the header); null restores the default. */
+function setWorker(dir, sh) {
+  if (sh == null) { delete process.env.FAKE_AGY_WORKER; return; }
+  const file = join(dir, "fake-agy-worker.sh");
+  writeFileSync(file, sh);
+  process.env.FAKE_AGY_WORKER = file;
 }
 
 export const WORK = /Output ONLY the complete new contents of/;
@@ -81,13 +118,13 @@ export const WORK = /Output ONLY the complete new contents of/;
 export async function withDispatch(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pantheon-dispatch-"));
   const keys = ["PANTHEON_COOLDOWN_DIR", "PANTHEON_AGY_CLI", "PANTHEON_AGY_PYTHON", "PANTHEON_AGY_TRANSPORT", "FAKE_AGY_LOG",
-    "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE"];
+    "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER"];
   const before = Object.fromEntries(keys.map(k => [k, process.env[k]]));
   const agyLog = join(dir, "agy.log");
   writeFileSync(join(dir, "fake-agy"), FAKE_AGY, { mode: 0o755 });
   Object.assign(process.env, { PANTHEON_COOLDOWN_DIR: join(dir, "cooldowns"), PANTHEON_AGY_CLI: join(dir, "fake-agy"),
     PANTHEON_AGY_PYTHON: "/nonexistent/no-agy-sdk-in-tests", FAKE_AGY_LOG: agyLog });
-  for (const k of ["PANTHEON_AGY_TRANSPORT", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE"]) delete process.env[k];
+  for (const k of ["PANTHEON_AGY_TRANSPORT", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER"]) delete process.env[k];
   const calls = [];
   let implement = () => "export const ok = true;\n";
   let fault = () => null;
@@ -105,6 +142,7 @@ export async function withDispatch(fn) {
     return await fn({ dir, calls, agy, agyRevisions, makeClientFor, spec, implement: f => { implement = f; }, fault: f => { fault = f; }, review: f => { review = f; }, serve: f => { served = f; },
       agyQuota: models => { process.env.FAKE_AGY_QUOTA = models.join(" "); }, agyFail: models => { process.env.FAKE_AGY_FAIL = models.join(" "); },
       agyQuotaOnce: marker => { process.env.FAKE_AGY_QUOTA_ONCE = marker; }, agyMode: mode => { process.env.FAKE_AGY_MODE = mode; },
+      agyContext: () => contextOf(agyLog), agyWorker: sh => setWorker(dir, sh),
       opts: (extra = {}) => ({ dir: join(dir, `board-${++n}`), makeClientFor, scouts: ["xai"], ...extra }) });
   } finally {
     for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }

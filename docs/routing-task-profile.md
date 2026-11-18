@@ -353,3 +353,77 @@ Gemini goes through Antigravity first under both `argo` and `fit`:
 - Explicit operator seats and ticket pins are used as named.
 - `gemini-4-hydrogen` is in the catalog on the owner's statement (window 1048576, output 65536, thinking low/medium/high/xhigh). Both Orchestrator ids stay undeclared.
 - Antigravity reports a spent quota in words this repository has no documentation for. The CLI transport recognises `429`, `RESOURCE_EXHAUSTED` and quota or rate-limit wording in the CLI's result and stderr; anything else is an ordinary failure.
+
+## Five-stage specialist pipeline
+
+Under `fit`, the lifecycle's implement stage runs the plan's work units through a supervised pipeline (`pantheon/src/pipeline`, wired in `ophanim/operate/stages.mjs`). `argo` and `legacy` keep the per-file `runOpenItem` path, unchanged.
+
+**Stages**
+
+1. **Plan** (Claude, read-only). The plan stage's planner writes `work_units` with the plan. The three-lab plan review sees them. A `fit` plan without valid `work_units` is refused like any other malformed plan.
+2. **Dispatch** (OpenAI, read-only). One turn per unit: is the unit cohesive, what role, what difficulty (it may raise it, never lower it), and the acceptance rubric. The controller freezes and hashes the rubric.
+3. **Implement** (Gemini through an Antigravity lane). One worker owns the whole unit in the unit's own git worktree and writes the files itself.
+4. **Subagents** (Grok). The implementer may ask one stateless question at a time over a local A2A endpoint. A subagent has no tools and no files.
+5. **Review** (OpenAI, read-only). The dispatcher's exact model, pinned. It judges the diff and the output of the unit's `verify_cmd`, both read from disk by the controller.
+
+After the pipeline: the same coordinated three-lab change review, the validator and the outcome as before. Stage 5 is the in-run reviewer. It replaces none of them.
+
+**Matrix** (`pantheon/src/route/fit-matrix.mjs`)
+
+| role | easy | medium | hard |
+|---|---|---|---|
+| planner | claude-sonnet-5 | claude-opus-5-5 | claude-fable-5-2 |
+| dispatcher | gpt-6-luna | gpt-6.1-sol | gpt-6-astra |
+| implementer | gemini-4-hydrogen-medium | gemini-4-hydrogen-high | gemini-4-carbon-high |
+| subagent | grok-4.6 | grok-4.6 | grok-4.7 |
+| reviewer | the unit's dispatcher model | same | same |
+
+- The dispatcher, implementer, subagent and reviewer are seated per unit, by the unit's difficulty. A difficulty the dispatcher raises moves the implementer and the subagent with it.
+- The plan-stage planner is seated before any unit exists, so it is the medium seat.
+
+**Ladders**
+
+- Implementer, on a rejection: the lane's thinking level first, then the next rung. Easy: `hydrogen-medium -> hydrogen-high -> hydrogen-xhigh -> 3.8-flash-high`. Medium: `hydrogen-high -> hydrogen-xhigh -> argon-high`. Hard: `carbon-high -> hydrogen-xhigh -> argon-high`.
+- Reviewer: raised one rung only after two consecutive rejections by the same reviewer, and only inside OpenAI: `gpt-6-luna -> gpt-6.1-sol -> gpt-6-astra`.
+- Revisions per unit are bounded (default 3). When they run out the unit is blocked with every finding kept.
+- Quota: the metered Gemini API of the lane's base model is used only after the lane was refused for quota (429). It cannot write files, so its whole reply must be `{"files": [{"path", "content"}]}`; the adapter writes those files and the write jail then checks them. Any other reply is a failed attempt.
+
+**Work unit** (`work-units.mjs`; unknown keys are refused)
+
+```json
+{"unit_id": "codec", "depends_on": [], "owned_paths": ["src/codec/**"], "difficulty": "medium",
+ "specialist_role": "node-esm-library-engineer", "allowed_subagents": [], "verify_cmd": "node src/codec/codec.test.mjs",
+ "invariants": ["encode and decode round-trip"]}
+```
+
+- A unit is one cohesive multi-file change. Coupled types, implementation and tests stay in one unit.
+- Under `fit`, every slice path of the plan must be owned by a unit.
+- The plan's exclusions, and the findings a revision must answer, are appended to every unit's invariants for the run.
+
+**Controller rules** (code, not a model)
+
+- Units whose owned paths overlap must have a dependency order. Without one the plan is refused and the item returns to planning.
+- Units run in waves: a unit starts only after every unit it depends on was approved and merged. Units in one wave run at the same time, each in its own worktree.
+- Write jail: after each implementer turn the controller reads the worktree from disk. Any change outside the unit's owned paths discards the whole attempt.
+- Ground truth: the controller runs `verify_cmd`. An approval while it fails is void.
+- A reviewer answer is admitted only if it names the model that answered and that is the model asked for.
+- Approved units are merged on `pantheon/pipeline/<run_id>`. The lifecycle commits that tree once on `pantheon/<item>` (parent: the base) and deletes the integration branch.
+- The stage's provider-call budget bounds every turn of the run.
+
+**How results map to the lifecycle**
+
+- Completed: the commit goes to the three-lab review.
+- A plan error (overlap without order, or a unit the dispatcher calls not cohesive): returned to plan, with the reason as a finding.
+- A unit that ends blocked or refused: the stage is blocked; the run record and findings are kept.
+- Budget used up: the stage fails as "did not ship", naming the bound.
+
+**What is scripted only, and known gaps**
+
+- Every test uses scripted model turns and a fake `agy` CLI. No live model, no live quota and no real `agy` binary has run this pipeline.
+- The `pantheon-implementer` role card says the seat has no tools and replies with file text. The pipeline needs a worker that writes files. A tool-enabled card has not been written or tried against the real CLI.
+- The implementer is not sandboxed at OS level. The write jail detects and discards out-of-scope writes inside the worktree after the turn. It cannot see or undo a write elsewhere on the machine. The real `agy` process also starts in Pantheon's directory (for its role cards) with the worktree as `--add-dir`.
+- Whether the real `agy` sandbox lets the worker reach the A2A endpoint on `127.0.0.1` is not verified.
+- `liveTurn` does not forward `extra` (`reasoning.context`) to the provider yet; the adapter passes it and tests check that.
+- A lane failure that is not a rejection retries the same lane; the pipeline does not step to another lane on it.
+- A pipeline run is not resumed. A stage that is retried starts a new run.
+- The run's ledger holds the review cycle only. The pipeline's own record is `pipeline.json`, bound by digest in `run.json`.

@@ -50,11 +50,11 @@ export async function agySingleTurn({ vendor, model, prompt, seat = null, timeou
  * classifyFailure classifies it), and the answer then says so (`quota_failover`). Any other lane failure is thrown as
  * it is: it never moves the turn to the metered API. A lane whose base model has no API id has no failover.
  */
-export async function laneFirstTurn({ vendor, model, prompt, seat = null }, { lane, api }) {
+export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null }, { lane, api }) {
   const transport = seatTransport(vendor, model);
   const isLane = transport === "agy-cli";
   const viaLane = isLane ? { vendor, model } : vendor === "agy_google" && transport === "api" && laneLevels(model).length ? laneFor(model, seat?.effort ?? null) : null;
-  if (!viaLane) return api({ vendor, model, prompt, seat });
+  if (!viaLane) return api({ vendor, model, prompt, seat, extra });
   const spare = isLane ? quotaFailoverFor(model) : { vendor, model, effort: seat?.effort ?? null };
   try {
     const r = await lane({ vendor: viaLane.vendor, model: viaLane.model, prompt, seat });

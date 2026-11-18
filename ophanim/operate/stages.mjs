@@ -8,6 +8,10 @@
 //              approved plan version writes (or, re-validated, keeps byte-identical) tickets/<item>.json.
 //   implement  the approved ticket through runOpenItem (acceptance and in-run review), the shipped bytes committed
 //              on pantheon/<item> (commitShipped). Review capacity is checked before any work call.
+//              UNDER THE `fit` PROFILE, with a plan that carries `work_units`: the five-stage specialist pipeline
+//              (pantheon/src/pipeline runPipeline: dispatcher -> implementer in a per-unit worktree -> subagents ->
+//              pinned reviewer -> integration), its integrated tree committed on pantheon/<item> the same way.
+//              `argo` and `legacy` keep the per-file runOpenItem path, unchanged.
 //   review     the coordinated three-lab cycle review of base..commit (reviewCycle), independent of every recorded
 //              contribution (changeScope plus the plan's and the critiques'). n is 3 and is never lowered; a short
 //              pool or a failed reviewer is `pending`, the work and the open cycle kept (resumed, never reopened).
@@ -19,7 +23,8 @@
 //
 // Inputs: {repo, makeClientFor (the work seats), turn (single-turn seats: planner, reviewers, validator), n = 3,
 // statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
-// tests inject a synthetic pool with both)}. Every stage
+// tests inject a synthetic pool with both), pipelineLimits (overrides of the pipeline's DEFAULT_LIMITS under `fit`; the
+// provider-call bound is always the stage budget)}. Every stage
 // stays within ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -41,6 +46,11 @@ import {CYCLE_CONTRACT_V3} from '../../pantheon/src/ledger/practice-kinds.mjs';
 import {REVIEW_BRIEF} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {selectSeat, readPools} from '../../pantheon/src/route/frontier.mjs';
+import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, implementerEscalation} from '../../pantheon/src/route/fit-matrix.mjs';
+import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT} from '../../pantheon/src/pipeline/index.mjs';
+import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
+import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
+import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
@@ -116,7 +126,7 @@ const jsonOf = text => {
  * Why the planner's answer is not a plan (a list; empty when it is one). Deterministic: shape, substance and
  * consistency with the repository, the requirement's dependencies, the mode and the ticket it would write.
  */
-export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null} = {}) {
+export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional'} = {}) {
   if (!plain(j)) return ['the answer is not one JSON plan object (a title or prose is not a plan)'];
   const why = [];
   // What the planner was actually given (dossier entries and retrieved records). A citation of anything else is refused.
@@ -169,6 +179,18 @@ export function planRefusal(j, {shown = [], delivered = null, depends_on = [], m
     else for (const r of j.relevance) if (!has(r.ref)) why.push(`relevance names ${r.ref}, which was never delivered to the planner`);
   }
   if (j.difficulty !== undefined && !['easy', 'medium', 'hard'].includes(j.difficulty)) why.push('difficulty is easy, medium or hard');
+  // WORK UNITS (pantheon/src/pipeline/work-units.mjs): required under the `fit` profile, whose implement stage is the
+  // five-stage pipeline over them; when another profile's plan carries them they must still be well-formed. Nothing
+  // is repaired: every broken rule is one named reason, like any other malformed plan.
+  if (j.work_units === undefined) {
+    if (workUnits === 'required') why.push('work_units is required: [{unit_id, depends_on, owned_paths, difficulty, specialist_role, allowed_subagents, verify_cmd, invariants}], cohesive multi-file units (coupled types, implementation and tests in ONE unit)');
+  } else {
+    const v = validateWorkUnits({work_units: j.work_units});
+    if (!v.ok) for (const r of v.refusals) why.push(`work_units: ${r.message}`);
+    // The ticket's slices are what the item ships; under fit every one of them must be owned by a unit, or no
+    // implementer could write it.
+    else if (workUnits === 'required') for (const sl of slices) if (plain(sl) && str(sl.path) && !v.units.some(u => matchesOwned(sl.path, u.owned_paths))) why.push(`slice ${sl.id ?? sl.path} writes ${sl.path}, which no work unit owns`);
+  }
   if (mode === 'revalidate') {
     const a = j.ticket_assessment;
     if (!plain(a) || typeof a.still_valid !== 'boolean' || !strs(a.reasons)) why.push('a re-validation states ticket_assessment {still_valid, reasons}');
@@ -198,7 +220,11 @@ export function ticketOf({plan, item, requirement}) {
     copy: [...plan.copy], acceptance_cmd: cmds.join(' && '), ...(plan.difficulty ? {difficulty: plan.difficulty} : {})};
 }
 
-function plannerPrompt({mode, requirement, deps, ticket, previous, findings, refusals, dossier, limits}) {
+// The work-unit rules, in the pipeline's own words (PLANNER_PROMPT), so the lifecycle's planner and a stand-alone
+// Stage 1 planner are told the same thing.
+const UNIT_RULES = (() => { const t = PLANNER_PROMPT({task: '-'}); return t.slice(t.indexOf('WHAT A WORK UNIT IS'), t.indexOf('OUTPUT:')).trim(); })();
+
+function plannerPrompt({mode, requirement, deps, ticket, previous, findings, refusals, dossier, limits, units = false}) {
   return [
     'You are the planner for one work item of this repository (Ophanim operate, plan stage). Write a PLAN, not a title.',
     `Mode: ${mode}. ${mode === 'revalidate' ? 'A ticket exists: check that its assumptions, scope, dependencies and acceptance criteria are still valid against the evidence; say so in ticket_assessment.' : mode === 'revise' ? 'Revise the previous plan to answer every finding below.' : 'There is no ticket: plan the work from the requirement.'}`,
@@ -214,12 +240,17 @@ function plannerPrompt({mode, requirement, deps, ticket, previous, findings, ref
     '', renderDossier(dossier), '', RETRIEVAL_HELP(limits),
     '', '## Questions that guide the investigation (examine the ones the work needs; do not invent answers for the rest)',
     ...Object.entries(QUESTIONS).map(([k, q]) => `- ${k}: ${q}`),
+    ...(units ? ['', '## Work units (required: the implement stage runs them as a supervised pipeline)',
+      'You are Stage 1 of that pipeline, a READ-ONLY specialist: you decompose the change into work_units; you write no code, edit no file and run no command.',
+      UNIT_RULES,
+      'Paths are relative to the repository root. Every slice path must be owned by one of the units. Unknown keys in a unit are refused.'] : []),
     '', `## Answer`, `When the evidence supports a plan, answer with ONE JSON object in a \`\`\`json block (schema ${PLAN_SCHEMA}): {problem: {statement, justification, symptom?, trigger?, mechanism?, alternatives?: [..]},`,
     ' context: {sufficient: true, gaps: [what you could not see], uncertainty: [what remains unproven]},',
     ' investigation: {historical_cause, operational_position, change_impact, success_adequacy}: each {examined: true, finding, sources: [refs]} or {examined: false, why},',
     ' relevance?: [{ref, decision: "used" | "dismissed", why}], scope: [..], exclusions: [..],',
     ' dependencies: [item ids], capabilities: [..], acceptance: [{id, criterion, test: {cmd}}], regression: {cmd} | null,',
     ' slices: [{id, title, slot, path}], copy: [repo paths the work reads], difficulty?: easy|medium|hard, proposes: {state, basis},',
+    ...(units ? [' work_units: [{unit_id, depends_on: [unit ids], owned_paths: [path or glob], difficulty: easy|medium|hard, specialist_role, allowed_subagents: [role ids], verify_cmd, invariants: [..]}],'] : []),
     ' limits: {provider_calls, revisions, elapsed_ms}, stopping: [..], recovery, rollback, unresolved: [..], evidence: [{ref, why}],',
     ' ticket_assessment?: {still_valid, reasons: [..]}, answers?: [{finding, response}]}',
     'A ref is a dossier id (S3), a source (file:path, status:item, issue:7) or a repository path. If the evidence does NOT support a plan even after retrieval, answer instead',
@@ -299,6 +330,17 @@ const runPolicy = run => {
   return s ? {version: s.policy, hash: s.policy_hash, profile: s.profile} : undefined;
 };
 
+/**
+ * The implementer's REJECTION path at a difficulty, as the fit matrix states it: the lane's next thinking level first
+ * (same base model), and only at its top the next rung of the difficulty's ladder. The pipeline raises the implementer
+ * one step along this list per rejection. (hard: carbon-high -> hydrogen-xhigh -> argon-high.)
+ */
+export function implementerPath(difficulty) {
+  const ladder = IMPLEMENTER_LADDERS[difficulty].map(x => x.model), out = [{...IMPLEMENTER_LADDERS[difficulty][0]}];
+  for (let next; (next = implementerEscalation(out.at(-1), ladder)) && !out.some(x => x.model === next.model);) out.push({vendor: next.vendor, model: next.model});
+  return out;
+}
+
 // REVIEW INDEPENDENCE in force for the lifecycle. 'lab' (the rule every recorded cycle was opened under): no reviewer
 // from a lab that contributed. 'model' (pantheon.cycle/v3; owner direction 2026-11-17): no reviewer that IS a contributing
 // model, three distinct labs still required, a shared lab recorded. 'model' is implemented and tested but NOT ACTIVE:
@@ -318,7 +360,8 @@ const withServed = f => (f.served_model && f.served_model !== f.model ? {served_
 // (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
 // selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
-  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = REVIEW_INDEPENDENCE} = {}) {
+  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = REVIEW_INDEPENDENCE,
+  pipelineLimits = {}} = {}) {
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
   if (typeof makeClientFor !== 'function') throw new Error('makeExecutors: pass makeClientFor(vendor) for the work seats');
@@ -336,6 +379,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   const independenceOf = (contributions, policy = null) => (byModel ? {independence: 'model', contributions, ...(policy ? {identity_policy: policy} : {})} : {});
   const reviewerRow = (role, s) => ({role, ...seatOf(s), ...(s.shared_lab ? {shared_lab: true, shared_with: s.shared_with} : {})});
   const today = () => checked ?? new Date().toISOString().slice(0, 10);
+  // The `fit` profile's implement stage is the five-stage pipeline: its plan must carry work units.
+  const needsUnits = profile === 'fit';
   // Evidence for every judging seat (context.mjs): the dossier of the item, and bounded read-only retrieval.
   const INV = {...DEFAULT_INVESTIGATION, ...investigation};
   const evidenceFor = (ctx, extra = {}) => {
@@ -374,6 +419,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // The planner seat: the policy's first planner, chosen on its own merits. It is NOT moved into the implementer's
     // lab to leave the coordinated review its pool (owner direction 2026-11-17: never force planner and implementer
     // onto one lab to manufacture reviewer availability); a short pool later is a recorded capacity pending.
+    // (Under `fit` this is Stage 1 of the pipeline. It is seated BEFORE any work unit — and so any unit difficulty —
+    // exists: the matrix's planner at the default difficulty, not a per-unit seat.)
     const pick = selectSeat('planner', {profile, needsContext: 1, pools: readPools()}).seat;
     const planner = {...seatOf(pick), selection: {source: pick.selection?.source ?? null, reason: pick.selection?.reason ?? 'the policy\'s first planner candidate'}};
     const team = [{role: 'planner', ...seatOf(planner)}];
@@ -424,7 +471,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       for (let k = 0; k < PLANNER_TRIES && !doc; k++) {
         if (m.left() < 1 + n) return stop(`stage budget: ${m.left()} provider call(s) left, a plan and its review need ${1 + n}`);
         const first = plannerPrompt({mode, requirement: gate.requirement, deps, ticket: ticket?.ticket ?? null, previous: prevDoc, findings,
-          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier, limits: INV});
+          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier, limits: INV, units: needsUnits});
         let reply, prompt = first, inv = null;
         try {
           // The planner investigates before it answers: each retrieval round is a counted call, and the review's calls are kept in reserve.
@@ -449,7 +496,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
             next: {stage: 'plan', why: 'the evidence does not yet support a plan'}});
         }
         const delivered = deliveryOf(dossier, inv);
-        const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item});
+        const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional'});
         progress({event: 'plan.answer', item, version: v, try: k + 1, refused: why.length});
         if (why.length) { refused.push({version: v, try: k + 1, why}); continue; }
         turnHash = rec.recordTurn({seat: {seat_id: `${planner.vendor}-plan@${planner.model}`, vendor: planner.vendor, mode: 'operate-plan', occupancy_gen: 1},
@@ -567,6 +614,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const critiques = ctx.gate.mode === 'revise' ? (ctx.gate.findings ?? []) : [];
     const contributions = dedupe([...(planRec.contributions ?? []),
       ...critiques.filter(f => f.lab).map(f => ({purpose: 'critique', vendor: f.vendor ?? null, model: f.model ?? null, ...withServed(f), lab: f.lab, via: `finding ${String(f.id).slice(0, 19)} was fed to this revision`}))]);
+    // `fit` with a plan that carries work units: the five-stage pipeline. (A plan record without them — one approved
+    // before the plan carried units, or under another profile — keeps the per-file path below.)
+    if (needsUnits && Array.isArray(planRec.outputs.plan?.work_units)) return implementUnits(ctx, {t, t0, critiques, contributions});
     // Review capacity BEFORE work: the change will need n labs outside every contributor, the predicted workers included.
     const predicted = seatTeam({pools: readPools(), spec: t.spec, profile, planTitle: 'ticket'});
     const predictedWork = [...new Map(predicted.implementers.map(l => [l[0].lab, {purpose: 'work', vendor: l[0].vendor, model: l[0].model, lab: l[0].lab}])).values()];
@@ -673,6 +723,202 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'the goal of the run (delivered to the worker)'},
         ...(critiques.length ? {answers: critiques.map(f => f.id)} : {})},
       team, contributions: dedupe([...contributions, ...work]), usage: usage(calls), next: {stage: 'review', why: `shipped as ${commit.slice(0, 12)} on ${branch}`}});
+  }
+
+  // ---- implement, under `fit`: the five-stage specialist pipeline over the plan's work units ----
+  //
+  //   Stage 1  plan        the plan stage above (Claude, read-only): `work_units`, reviewed by three labs with the plan
+  //   Stage 2  dispatch    an OpenAI dispatcher per unit (matrix: by the unit's difficulty) + the deterministic controller
+  //   Stage 3  implement   an Antigravity lane per unit, in the unit's own worktree, behind the write jail
+  //   Stage 4  subagents   Grok, one stateless question at a time, over the unit's A2A shim
+  //   Stage 5  review      the dispatcher's exact model, pinned; escalates only inside OpenAI
+  //   then                 the integrated tree is committed on pantheon/<item> and handed to the SAME coordinated
+  //                        three-lab change review, validator and outcome as every other implement stage.
+  //
+  // ============================================================================================================
+  // OWNER GOVERNANCE DECISION 2026-11-17 — FLAGGED FOR INDEPENDENT REVIEW.
+  // Stage 2 (the dispatcher) is a NON-AUTHORING ARBITER. It writes the acceptance rubric of a unit and none of the
+  // work, and it is recorded in `outputs.arbiters` and in `team` (role `dispatcher`, `authored: false`) — NOT in
+  // `contributions`. The reason is the pin: Stage 5 is the SAME OpenAI model as Stage 2, and under model-level review
+  // independence a contributing model may not review. If the dispatcher were a contributor, its pinned reviewer
+  // would be barred from the unit it must review. This is the owner's decision, not a consequence of the code; a
+  // reader who holds that writing the criteria a change is judged by IS a contribution will disagree, and
+  // `[...contributions, ...outputs.arbiters]` is the stricter list to evaluate that position against.
+  // What is NOT relaxed: a Stage 5 reviewer whose FINDING was fed to an implementer revision IS a `critique`
+  // contributor (the existing rule of this repository) and is excluded from the later three-lab review and from
+  // validating; a Stage 5 reviewer that only approved is not a contributor.
+  // ============================================================================================================
+  //
+  // Stage 5 is the IN-RUN reviewer. It replaces neither the coordinated three-lab change review nor the validator:
+  // both run after this stage, unchanged, on the commit it hands over.
+  async function implementUnits(ctx, {t, t0, critiques, contributions}) {
+    const item = ctx.item, planRec = ctx.upstream, planDoc = planRec.outputs.plan;
+    const usage = calls => ({provider_calls: calls, elapsed_ms: Date.now() - t0});
+    const ticketOut = {path: t.path, digest: t.digest};
+    const toPlan = (why, findings = [], extra = {}) => result('returned', {outputs: {why, ...extra}, findings, contributions, usage: usage(extra.calls ?? 0), next: {stage: 'plan', why}});
+    const v = validateWorkUnits({work_units: planDoc.work_units});
+    if (!v.ok) return toPlan(`the plan's work units are refused: ${v.refusals.map(r => r.message).join('; ')}`.slice(0, 600),
+      v.refusals.map((r, i) => ({id: `units-${i + 1}`, severity: 'block', cause: 'inadequate-plan', text: `[${r.code}] ${r.message}`})));
+    // Review capacity BEFORE work. The predicted contributors are the matrix's: each unit's implementer (the lane the
+    // matrix starts it on; its base model is what counts) and, where the unit allows subagents, its subagent model.
+    // The dispatcher is an arbiter and is not predicted as a contributor (the decision above).
+    const predicted = dedupe(v.units.flatMap(u => [{purpose: 'work', ...seatOf(IMPLEMENTER_LADDERS[u.difficulty][0])},
+      ...(u.allowed_subagents.length ? [{purpose: 'subtask', ...seatOf(fitMatrix('subagent', u.difficulty))}] : [])]));
+    const cap = cycleReviewers({scope: fullScope(null, [...contributions, ...predicted]), n, ...pool, independence});
+    if (cap.pending) {
+      return result('pending', {outputs: {stage: 'before-work', predicted_contributors: cap.scope.contributions, ticket: ticketOut}, contributions,
+        usage: usage(0), blocker: pendingCapacity(cap.pending.why, {stage: 'implement'}), next: {stage: 'implement', why: 'review capacity is short; no work was launched'}});
+    }
+    const top = (await gitAsync(repo, ['rev-parse', '--show-toplevel'])).trim();
+    // A unit's owned paths and verify_cmd are relative to the root of the git repository the worktrees are made from.
+    if (fs.realpathSync(repo) !== fs.realpathSync(top)) return result('failed', {outputs: {repo, top}, contributions, next: {stage: 'implement', why: `work units are relative to the repository root (${top}); the lifecycle's repository is a subdirectory of it`}});
+    const dirty = (await gitAsync(top, ['status', '--porcelain', '--', ...t.spec.copy.map(c => path.relative(top, path.join(t.spec.repo_root, c)) || '.')])).trim();
+    if (dirty) return result('failed', {outputs: {dirty}, next: {stage: 'implement', why: 'the ticket\'s copy paths have uncommitted changes'}});
+    const base = (await gitAsync(top, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+    // What the reviewed plan excludes, and the findings a revision must answer, reach every stage of the pipeline the
+    // only way a unit carries a constraint: as invariants (the dispatcher's rubric must cover each; the implementer and
+    // the reviewer are shown them). The planned units are unchanged on the plan record; what ran is in the run record.
+    const carried = [...(planDoc.exclusions ?? []).map(x => `Out of scope in the reviewed plan: ${x}`),
+      ...critiques.map(f => `Fix ${String(f.id).slice(0, 19)} [${f.severity}${f.cause ? `, ${f.cause}` : ''}]: ${f.text}`)];
+    const units = v.units.map(u => ({...u, invariants: [...u.invariants, ...carried.filter(c => !u.invariants.includes(c))]}));
+    const dir = dirOf(ctx, `pipeline-${ctx.attempt}-${Date.now()}`);
+    const recordFile = path.join(dir, 'pipeline.json');
+    const seats = {
+      dispatcher: u => fitMatrix('dispatcher', u.difficulty),
+      // Called with the unit AS DISPATCHED: a difficulty the dispatcher raised moves the implementer and its ladder.
+      // The ladder is the matrix's rejection path (thinking level first, then the next rung).
+      implementer: u => ({seat: {...IMPLEMENTER_LADDERS[u.difficulty][0]}, ladder: implementerPath(u.difficulty)}),
+      subagent: u => fitMatrix('subagent', u.difficulty),
+      // Rung 0 is the dispatcher's exact model (the pin); the rungs above it are the rest of the OpenAI-only path.
+      reviewerLadder: d => [pinnedReviewer(d), ...REVIEWER_ESCALATION.slice(REVIEWER_ESCALATION.findIndex(x => x.vendor === d.vendor && x.model === d.model) + 1).map(x => ({...x}))],
+    };
+    // "The model asked for answered": the same model identity under the identity policy (a dated snapshot of the
+    // model is that model; another model of the same lab is not).
+    const sameModel = (asked, served) => { const a = resolveModel(null, asked), b = resolveModel(null, served); return Boolean(a?.known && b?.known && a.id === b.id); };
+    let run;
+    try {
+      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn}), dir, sameModel,
+        planner: {vendor: planRec.outputs.planner.vendor, model: planRec.outputs.planner.model},
+        // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here.
+        limits: {...pipelineLimits, max_provider_calls: ctx.budget.provider_calls}});
+    } catch (e) {
+      return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile}, error: String(e?.message ?? e).slice(0, 300)}, contributions, usage: usage(ctx.budget.provider_calls),
+        next: {stage: 'implement', why: `the pipeline run failed: ${String(e?.message ?? e).slice(0, 200)}`}});
+    }
+    const calls = run.provider_calls.total;
+    const unitsOut = Object.values(run.units);
+    // CONTRIBUTIONS: the plan record's, the critiques fed to this revision, and what the run AUTHORED (record.mjs
+    // contributionsOf): every implementer attempt that reached a worktree, every subagent answer returned to an
+    // implementer, and every Stage 5 reviewer whose finding was fed to a revision. The run's own `plan` row is the
+    // planner already carried from the plan record. The dispatcher is not here: see the decision above.
+    const authored = new Map();
+    for (const c of contributionsOf(run).filter(c => c.kind !== 'plan')) {
+      const model = c.served_model ?? c.model;
+      const row = {purpose: c.kind, vendor: c.vendor, model, ...(c.served_model && c.model && c.served_model !== c.model ? {requested_model: c.model} : {}), lab: labOf(c.vendor, model)};
+      const k = JSON.stringify(row);
+      authored.set(k, {row, role: c.role, units: [...new Set([...(authored.get(k)?.units ?? []), c.unit_id])]});
+    }
+    const VIA = {work: 'wrote in the unit\'s worktree', subtask: 'answered the implementer as a subagent', critique: 'its Stage 5 finding was fed to an implementer revision'};
+    const work = [...authored.values()].map(a => ({...a.row, via: `pipeline ${a.role}, unit(s) ${a.units.join(', ')}: ${VIA[a.row.purpose] ?? a.row.purpose}`}));
+    const all = dedupe([...contributions, ...work]);
+    const arbiters = arbitersOf(run);
+    const team = [...new Map([
+      // Non-authoring: on the team, not among the contributions.
+      ...arbiters.map(a => ({role: 'dispatcher', vendor: a.vendor, model: a.served_model ?? a.model, lab: labOf(a.vendor, a.model), standing: 'arbiter', authored: false})),
+      ...unitsOut.flatMap(u => [
+        ...(u.attempts ?? []).map(a => ({role: 'implementer', vendor: a.vendor, model: a.model, lab: labOf(a.vendor, a.model), authored: a.status === 'written'})),
+        ...(u.a2a?.calls ?? []).filter(c => c.vendor && c.model).map(c => ({role: 'subagent', vendor: c.vendor, model: c.model, lab: labOf(c.vendor, c.model), authored: c.status === 'answered'})),
+        ...(u.reviews ?? []).map(r => ({role: 'unit-reviewer', vendor: r.vendor, model: r.model, lab: labOf(r.vendor, r.model), pinned_to_dispatcher: r.pinned_to_dispatcher, authored: false, fed_revision: Boolean(r.fed_revision)})),
+      ]),
+    ].map(r => [`${r.role}|${r.vendor}|${r.model}|${r.authored}|${r.fed_revision ?? ''}`, r])).values()];
+    const branchOf = run.integration?.branch ?? null;
+    const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
+      units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length}]))};
+    const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'}};
+    // Every finding the run kept (the Stage 5 reviewers' and the controller's own: write jail, ground truth), by unit.
+    const findings = unitsOut.flatMap(u => (u.findings ?? []).flatMap(f => f.findings.map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller', unit: u.unit_id, attempt: f.attempt, code: f.code ?? null,
+      text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null, lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null}))))
+      .map((f, i) => ({id: `unit-${i + 1}`, ...f}));
+
+    if (run.status !== 'completed') {
+      const kept = {...common, shipped: false, ...(branchOf ? {integration: {...run.integration, kept: true}} : {})};
+      // The plan (or the run's inputs) was refused before any turn. A plan error goes back to the planner, who
+      // revises the work units; anything else is a failure of this attempt.
+      if (run.status === 'refused') {
+        const planErrors = run.refusals.filter(r => !['INPUT', 'BASE'].includes(r.code));
+        if (!planErrors.length) return result('failed', {outputs: kept, team, contributions: all, usage: usage(calls), next: {stage: 'implement', why: `the pipeline refused its inputs: ${run.reason}`}});
+        return result('returned', {outputs: {...kept, why: run.reason}, team, contributions: all, usage: usage(calls),
+          findings: planErrors.map((r, i) => ({id: `units-${i + 1}`, severity: 'block', cause: 'inadequate-plan', text: `[${r.code}] ${r.message}`})),
+          next: {stage: 'plan', why: `the controller refused the plan's work units: ${String(run.reason).slice(0, 300)}`}});
+      }
+      // The stage's provider-call budget ran out: the existing "did not ship" failure, with the bound named.
+      if (run.provider_calls.refused_at_limit > 0) {
+        return result('failed', {outputs: kept, team, contributions: all, findings, usage: usage(calls),
+          next: {stage: 'implement', why: `the run did not ship: PROVIDER_CALL_LIMIT: the stage's ${ctx.budget.provider_calls} provider call(s) were used (${run.provider_calls.refused_at_limit} more refused)`}});
+      }
+      // A unit the dispatcher judged not cohesive goes back to the planner.
+      const back = unitsOut.filter(u => u.status === 'returned');
+      if (back.length) {
+        return result('returned', {outputs: kept, team, contributions: all, usage: usage(calls),
+          findings: back.map((u, i) => ({id: `units-${i + 1}`, severity: 'block', cause: 'inadequate-plan', unit: u.unit_id, text: `unit ${u.unit_id}: ${u.reason}`})),
+          next: {stage: 'plan', why: `the dispatcher returned unit(s) ${back.map(u => u.unit_id).join(', ')} to the planner as not cohesive`}});
+      }
+      // Units that ended blocked or refused: the work, the run record and every finding are kept; nothing is retried
+      // from scratch, which would repeat the work and drop the findings.
+      const stuck = unitsOut.filter(u => ['blocked', 'refused'].includes(u.status));
+      if (stuck.length) {
+        const names = stuck.map(u => `${u.unit_id} (${u.status}: ${String(u.reason).slice(0, 160)})`).join('; ');
+        return result('blocked', {outputs: kept, team, contributions: all, findings, usage: usage(calls),
+          blocker: {code: 'PIPELINE_UNITS_UNRESOLVED', what: `PIPELINE_UNITS_UNRESOLVED: unit(s) ${names}; ${findings.length} finding(s) are unresolved; the run record and its work are kept (${recordFile})`,
+            role: 'lead@orch', resume_when: 'the owner lifts the stop with a stated reason, reseats the work, or returns the item to planning'},
+          next: {stage: 'implement', why: `unit(s) ${stuck.map(u => u.unit_id).join(', ')} did not reach approval`}});
+      }
+      return result('failed', {outputs: kept, team, contributions: all, findings, usage: usage(calls),
+        next: {stage: 'implement', why: `the run did not ship: ${run.reason ?? unitsOut.filter(u => u.status !== 'approved').map(u => `${u.unit_id} ${u.status}: ${u.reason}`).join('; ').slice(0, 300)}`}});
+    }
+
+    // COMPLETED: every unit was approved against a passing verify_cmd and merged on pantheon/pipeline/<run_id>. The
+    // integrated TREE is handed on exactly as the per-file path hands its shipped bytes: one commit on pantheon/<item>
+    // whose parent is the base the run started from (so the reviewed diff is base..commit). The integration branch is
+    // then deleted; its per-unit patches stay in the run directory, by digest in the run record.
+    const head = run.integration.head;
+    const files = (await gitAsync(top, ['diff', '--name-only', '--no-renames', base, head])).split('\n').filter(Boolean);
+    if (!files.length) return result('failed', {outputs: {...common, shipped: false}, team, contributions: all, usage: usage(calls), next: {stage: 'implement', why: 'the run did not ship: every unit was approved and the integrated tree is the base unchanged'}});
+    const exists = async ref => (await gitAsync(top, ['rev-parse', '--verify', '--quiet', `refs/heads/${ref}`], {allowFail: true})).code === 0;
+    let branch = `pantheon/${item}`;
+    for (let k = 2; await exists(branch); k++) branch = `pantheon/${item}-r${k}`;
+    const tree = (await gitAsync(top, ['rev-parse', `${head}^{tree}`])).trim();
+    const commit = (await gitAsync(top, ['commit-tree', tree, '-p', base, '-F', '-'], {input: [`${item}: ${t.spec.title}`, '', `Slice: ${t.ticket.slice}`, '',
+      `Produced by an Ophanim operate implement stage (Pantheon five-stage pipeline, run ${run.run_id}); every work unit was approved against its verify command and merged.`, '',
+      `Pantheon-Ticket: ${t.digest}`, `Ophanim-Plan: ${planRec.outputs.plan_digest}`, `Pantheon-Pipeline-Integration: ${head}`, ''].join('\n')})).trim();
+    await gitAsync(top, ['update-ref', `refs/heads/${branch}`, commit, '0'.repeat(commit.length)]);
+    await gitAsync(top, ['update-ref', '-d', `refs/heads/${branchOf}`, head]);
+    // The evidence the later stages bind to. The run record is pipeline.json (by digest). The run's ledger is opened
+    // here, empty of work entries: the coordinated review records its cycle on it, as it does on a board run's ledger.
+    // (There is no acceptance gate entry: the ground truth is each unit's verify_cmd, in the run record.)
+    const boardDir = path.join(dir, 'board');
+    fs.mkdirSync(boardDir, {recursive: true});
+    const sys = openPantheonLedger({root: path.join(dir, 'ledger'), board: openBoard(boardDir)});
+    const lv = sys.recorder().verify();
+    if (!lv.ok) throw new Error(`the run ledger does not verify: ${lv.why}`);
+    const verifies = unitsOut.map(u => u.reviews.at(-1).verify);
+    const tests = {cmd: [...new Set(verifies.map(x => x.cmd))].join(' && '), exit: verifies.every(x => x.exit_code === 0) ? 0 : 1};
+    const board = readBoard({statusRoot: statusAt});
+    // run.json: the run as the status ledger's evidence check reads it (packages/ledger/status.mjs: the ticket key the
+    // run ran under, by the file's digest). It binds the pipeline's own record, pipeline.json, by digest, and names
+    // what was handed on; it restates nothing the record does not hold.
+    const runFile = path.join(dir, 'run.json');
+    fs.writeFileSync(runFile, JSON.stringify({schema: 'ophanim.pipeline-run/v1', key: t.spec.key, item, ticket: t.digest, plan: planRec.outputs.plan_digest,
+      pipeline: {schema: run.schema, run_id: run.run_id, record: recordFile, record_digest: sha256(fs.readFileSync(recordFile)), status: run.status},
+      base, commit, branch, integration: {branch: branchOf, head, tree}, files, acceptance: tests, contributions: all, arbiters}, null, 2) + '\n');
+    return result('passed', {
+      outputs: {commit, branch, base, files, run_json_digest: sha256(fs.readFileSync(runFile)), run_ledger_anchor: sys.anchor,
+        run: {...runOut, board: boardDir, ledger: path.join(dir, 'ledger'), ledger_anchor: sys.anchor, ledger_head: lv.head, run_json: runFile, gate_entry: null, tests},
+        integration: {branch: branchOf, head, tree, merged: run.integration.merged, deleted: true}, arbiters,
+        ticket: {path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key},
+        made_against: board.items.find(i => i.item === item)?.entry ?? null, contributions: all, carried: common.carried,
+        ...(critiques.length ? {answers: critiques.map(f => f.id)} : {})},
+      team, contributions: all, findings, usage: usage(calls), next: {stage: 'review', why: `integrated ${run.integration.merged.length} unit(s) as ${commit.slice(0, 12)} on ${branch}`}});
   }
 
   // ---- review ----

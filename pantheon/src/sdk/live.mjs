@@ -20,9 +20,11 @@ export async function liveTurn({ label = "cycle-review" } = {}) {
   const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient, sendTurn }] = await Promise.all([
     import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("./adapter.mjs")]);
   const clients = new Map();
-  const api = async ({ vendor, model, prompt }) => {
+  // `extra` carries per-seat request options (e.g. reasoning.context for an OpenAI reviewer); only OpenAI receives it.
+  const api = async ({ vendor, model, prompt, extra = null }) => {
     if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
-    const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-${label}` });
+    const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-${label}`,
+      ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}) });
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null };
   };

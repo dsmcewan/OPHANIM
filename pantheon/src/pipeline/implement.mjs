@@ -172,6 +172,8 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
   rec.text_digest = typeof out?.text === "string" ? sha256(out.text) : null;
   rec.served_model = str(out?.served_model) ? out.served_model : null;   // an author's unnamed served model is recorded as unnamed, not guessed
   rec.served_model_source = out?.served_model_source ?? null;
+  // A transport that fell over from an Antigravity lane to the metered API of the same base model says so; kept as said.
+  if (out?.quota_failover) rec.quota_failover = clone(out.quota_failover);
 
   const jail = await inspectWrites({ worktree, owned_paths: unit.owned_paths, checkpoint: start, scratch_paths });
   Object.assign(rec, { changed: jail.changed, violations: jail.violations, scratch_discarded: jail.scratch_discarded });

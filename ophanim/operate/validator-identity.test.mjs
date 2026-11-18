@@ -8,8 +8,8 @@ import path from 'node:path';
 import {openWorkLedger} from './work-ledger.mjs';
 import {tick} from './scheduler.mjs';
 import {makeExecutors} from './stages.mjs';
-import {withDispatch, WORK} from '../../pantheon/tests/fixtures/dispatch.mjs';
-import {fixture, APPROVE, json, ACCEPT, scriptedTurn, LIMITS} from './test-fixtures.mjs';
+import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
+import {fixture, APPROVE, json, ACCEPT, scriptedTurn, unitApprove, unitReject, LIMITS} from './test-fixtures.mjs';
 
 const seq = (w, item) => w.stages(item).map(s => `${s.stage}:${s.status}`);
 // One plan-review finding from the xai seat, so that xai's grok-4.7 is a contributor to everything that follows.
@@ -71,46 +71,43 @@ test('4. after a rejected answer the next eligible seat is asked; the accepted r
   });
 });
 
-test('an in-run code-review finding is followed by a code revision: the stopped run is RESUMED, the finding reaches the worker, and that reviewer model is excluded from the change review', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor, review, implement, calls, serve, agy, agyMode, agyRevisions}) => {
-    serve((_vendor, model) => model);   // the scripted providers report the model they served
-    // Under the fit matrix the worker is an Antigravity lane (the fake CLI): it revises when given REQUESTED CHANGES.
-    agyMode('frozen');
-    const built = () => builds + agy().filter(a => a.agent === 'pantheon-implementer').length;
+// (Rewritten 2026-11-18 for the five-stage pipeline, which is what `fit` runs: the in-run reviewer is Stage 5, the
+// revision happens inside the same run instead of by resuming a stopped board run, and — OWNER GOVERNANCE DECISION
+// 2026-11-17, flagged for independent review — the pinned Stage 5 reviewer STAYS the unit's reviewer after its
+// finding fed a revision. What is unchanged, and still asserted: the finding reaches the worker, the work is not
+// repeated, every call is charged once, and that reviewer model is a contributor excluded from the three-lab change
+// review and from validating. The resumed-run form of this test is kept for `argo` in revision-reassessment.test.mjs.)
+test('an in-run code-review finding is followed by a code revision: the finding reaches the worker in the same run, and that reviewer model is excluded from the change review', async () => {
+  await withDispatch(async ({dir: repo, makeClientFor, calls, agy, agyWorker}) => {
+    const FINDING = 'export ok as a frozen constant; a comment must say why';
+    // Under the fit matrix the worker is an Antigravity lane (the fake CLI, writing in the unit's worktree): it revises
+    // when its prompt carries the finding.
+    agyWorker(`case "$prompt" in *"${FINDING}"*) : >> "$FAKE_AGY_LOG.told"; printf '// frozen: the importer reads it lazily\\nexport const ok = true;\\n' > "$dir/alpha.mjs" ;; *) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;; esac\n`);
     const f = fixture(repo, [{item: 'inrun'}]);
-    // Pantheon's own in-run checker requests changes of the first, passing revision. (`fit` routing: the worker has
-    // effort headroom, so the escalation protocol decides a revision. The fixture routes any prompt that mentions a
-    // verdict to this hook; the worker's revision prompt quotes the reviewer, so the hook answers that one as the worker.)
-    let reviews = 0, builds = 0;
-    review(({prompt}) => (WORK.test(prompt) ? (builds++, '// frozen: the importer reads it lazily\nexport const ok = true;\n')
-      : /^Attack the artifact/.test(prompt) && ++reviews === 1 ? 'export ok as a frozen constant; a comment must say why\nVERDICT: request_changes' : null));
-    implement(() => (builds++, 'export const ok = true;\n'));
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model', profile: 'fit'});
-    const go = () => tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
-    await go();
+    // The in-run reviewer (Stage 5, pinned to the dispatcher's model) requests changes of the first, passing revision.
+    let reviews = 0;
+    const turn = scriptedTurn({'unit-review': ({rubric, passed}) => JSON.stringify(++reviews === 1 || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', profile: 'fit'});
+    await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = () => openWorkLedger({root: f.workRoot});
-    // The run stops unshipped with the finding pending (Pantheon ends a run on a rejection of passing work).
-    assert.deepEqual(seq(w(), 'inrun'), ['plan:passed', 'implement:failed']);
-    assert.equal(w().stages('inrun')[1].outputs.pending_revision, true);
-    await go();
-    assert.deepEqual(seq(w(), 'inrun'), ['plan:passed', 'implement:failed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
-    const [, stopped, impl, rev, val] = w().stages('inrun');
-    // Resumed, not restarted: the same board, one first build and one revision, each attempt charged its own calls.
-    assert.equal(impl.outputs.resumed_from, stopped.hash);
-    assert.equal(impl.outputs.run.board, stopped.outputs.board);
-    assert.equal(built(), 2, 'the work was not repeated');
-    assert.ok(calls.some(c => WORK.test(c.prompt) && /export ok as a frozen constant/.test(c.prompt)) || agyRevisions().some(a => a.agent === 'pantheon-implementer'),
-      'the finding reached the worker\'s revision prompt');
-    assert.equal(stopped.usage.provider_calls + impl.usage.provider_calls, calls.length + agy().length, 'no call is charged twice or dropped');
+    // The rejection is answered by a revision inside the run: one implement stage, which ships.
+    assert.deepEqual(seq(w(), 'inrun'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
+    const [, impl, rev, val] = w().stages('inrun');
+    const built = agy().filter(a => a.agent === 'pantheon-implementer').length;
+    assert.equal(built, 2, 'one first build and one revision: the work was not repeated');
+    assert.ok(fs.existsSync(path.join(repo, 'agy.log.told')), 'the finding reached the worker\'s revision prompt');
+    const inRun = turn.log.filter(l => ['dispatcher', 'unit-review', 'subagent'].includes(l.kind)).length;
+    assert.equal(impl.usage.provider_calls, calls.length + built + inRun, 'no call is charged twice or dropped');
     // The in-run reviewer is now a contributor to the change, by model.
     const critic = impl.contributions.find(c => c.purpose === 'critique');
     assert.ok(critic && critic.model, JSON.stringify(impl.contributions));
     const work = impl.contributions.find(c => c.purpose === 'work');
-    // Inside the run the checker still follows the LAB rule: the revised bytes were reviewed by a lab that is neither
-    // the worker's nor the critic's.
-    const run = JSON.parse(fs.readFileSync(path.join(impl.outputs.run.board, 'run.json'), 'utf8'));
-    const second = run.turns.filter(t => t.purpose === 'critique').at(-1);
-    assert.ok(![work.lab, critic.lab].includes(second.vendor === 'agy_google' ? 'google' : second.vendor), JSON.stringify(run.turns.map(t => [t.purpose, t.vendor, t.model])));
+    assert.notEqual(work.lab, critic.lab);
+    // Inside the run the pin holds (the owner's decision): the revised bytes were judged by the same Stage 5 model, and
+    // the record says its finding fed the revision.
+    const unit = JSON.parse(fs.readFileSync(impl.outputs.run.record, 'utf8')).units.alpha;
+    assert.deepEqual(unit.reviews.map(r => [r.model, r.status, r.fed_revision]), [[critic.model, 'request_changes', true], [critic.model, 'approved', false]]);
+    assert.equal(unit.reviewer_fed_revision, true);
     // The change review (model rule): three distinct labs, none of the planner's, worker's or critic's models.
     assert.ok(rev.outputs.author_models.includes(`${critic.lab}/${critic.model}`), JSON.stringify(rev.outputs.author_models));
     const panel = rev.team.filter(t => t.role === 'cycle-reviewer');

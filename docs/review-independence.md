@@ -229,6 +229,43 @@ Owner direction, 2026-11-17, after the documentation and the owner's `agy models
 
 `REVIEW_INDEPENDENCE` is still `'lab'`. Under the lab rule the run uses the lab rule as before. The only change that applies with the policy off is protocol v2 for lifecycle runs, and the requirement that a validator answer names its model.
 
+## Decision 5: the dispatcher is a non-authoring arbiter
+
+Owner governance decision, 2026-11-17. Flagged for independent review. It applies to the five-stage pipeline that `fit` runs (`docs/routing-task-profile.md`, "Five-stage specialist pipeline").
+
+**The rule**
+
+- The Stage 2 dispatcher writes a unit's acceptance rubric and none of the work. It is recorded as an arbiter (`outputs.arbiters`, and `team` with `authored: false`). It is not in `contributions`.
+- So, under the model rule, the dispatcher's model is not excluded from reviewing. Stage 5 is pinned to that exact model.
+
+**Why the owner chose it**
+
+- The owner wants Stage 5 to be the same OpenAI model as Stage 2: the model that wrote the criteria checks them.
+- Under the model rule a contributor may not review. If the dispatcher counted as a contributor, its pinned reviewer would be barred from the unit it must review.
+- This is a decision, not something the code proves. Someone who holds that writing the criteria is a contribution will disagree. `[...contributions, ...outputs.arbiters]` is the stricter list to test that view against a recorded run.
+
+**What still becomes a contributor**
+
+- A Stage 5 reviewer whose finding was fed to an implementer revision. It is a `critique` contributor and is excluded from the later three-lab review and from validating.
+- A Stage 5 reviewer that only approved is not a contributor.
+- The planner, every implementer attempt that reached a worktree (by base model), and every subagent whose answer was returned to an implementer.
+
+**What changes inside the run**
+
+- A Stage 5 reviewer whose finding fed a revision stays that unit's reviewer for the revised work. On the per-file path (`argo`) such a reviewer does not review the revised bytes. This follows from the pin and is part of what should be reviewed.
+- The reviewer is raised only inside OpenAI, after repeated rejections. No other lab reviews inside the run.
+
+**What is unchanged**
+
+- The coordinated three-lab change review runs after the pipeline, on three distinct labs, with every contributing model excluded.
+- The validator is still independent of every contribution, and its answer is admitted by the model that answered.
+- `REVIEW_INDEPENDENCE` is still `'lab'`. Under the lab rule a contributing reviewer's lab (OpenAI) is excluded from the later review, as before.
+
+**Shown by tests** (`ophanim/operate/fit-lifecycle.test.mjs`, scripted seats)
+
+- With approve-only OpenAI seats, no OpenAI model is a contributor and an OpenAI model sits on the three-lab panel.
+- After `gpt-6-luna` rejects twice, it is a contributor and is not on the panel; `gpt-6.1-sol`, which only approved, is not a contributor.
+
 ## For the independent review
 
 Points worth another lab's attention:
