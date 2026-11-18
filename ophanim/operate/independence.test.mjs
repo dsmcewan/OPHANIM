@@ -56,15 +56,18 @@ test('four real labs: an item without a ticket and one with an existing ticket c
       assert.equal(new Set(pr.map(t => t.lab)).size, 3);
       assert.ok(pr.every(t => REAL_LABS.includes(t.lab)), 'only configured labs');
       assert.ok(!pr.map(idOf).includes(idOf(plan.outputs.planner)));
-      // Change review: contributors are an Anthropic planner and an OpenAI implementer; the panel is still three labs.
+      // Change review: contributors are an Anthropic planner and a Google implementer (the lifecycle's default profile
+      // is `fit` since 2026-11-17: the worker is an Antigravity Gemini lane; under argo it was an OpenAI seat); the
+      // panel is still three labs.
       const keys = contributorKeys(impl.contributions);
-      assert.deepEqual(keys.contributing_labs, ['anthropic', 'openai']);
+      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google']);
+      assert.deepEqual(impl.contributions.filter(c => c.purpose === 'work').map(c => `${c.vendor}/${c.model}`), ['agy_google/gemini-4-hydrogen-medium']);
       const cr = reviewers(rev);
       assert.equal(new Set(cr.map(t => t.lab)).size, 3);
       for (const t of cr) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
       assert.deepEqual(rev.outputs.author_models, keys.models);
       assert.equal(rev.outputs.shared_labs.length, 1, 'one seat shares a lab with a contributor, and the record says which');
-      assert.ok(['anthropic', 'openai'].includes(rev.outputs.shared_labs[0]));
+      assert.ok(['anthropic', 'google'].includes(rev.outputs.shared_labs[0]));
       // The cycle on the run ledger is v3 and its close names the shared lab.
       const sys = openPantheonLedger({root: impl.outputs.run.ledger, anchor: impl.outputs.run.ledger_anchor, board: openBoard(impl.outputs.run.board)});
       const payload = h => sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === h));
@@ -124,7 +127,9 @@ test('four real labs, repeated revisions: contributions come to span all four la
           : json({verdict: 'accept', reasons: ['meets the requirement and every criterion'], criteria: met}); },
     });
     implement(() => 'export const ok = true;\nexport const mode = \'strict\';\nexport const legacy = 1;\n');
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    // profile 'argo', named since 2026-11-17 (the lifecycle default is now `fit`): this scenario scripts the worker
+    // through the API `implement` hook, and argo's worker is an API seat. Under fit the worker is an Antigravity lane.
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', profile: 'argo'});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(w.stages('cyc').map(s => `${s.stage}:${s.status}`),

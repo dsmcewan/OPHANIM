@@ -1,6 +1,6 @@
 # Routing candidate `fit`: a task profile with independent dimensions
 
-Status: **candidate, unmeasured, not the default.** `argo` remains the owner-approved default routing profile. `fit` is selectable for one run (`runOpenItem(spec, { profile: "fit" })`, `pantheon-board run <item> --profile fit`). Nothing below claims that `fit` routes better. Its tables are routing judgments. Until the comparison in [Adoption path](#adoption-path) is done, it stays provisional (CYCLE_CONTRACT steps 4, 6 and 7).
+Status: **unmeasured.** Since 2026-11-17 `fit` is the lifecycle's default routing profile on the owner's direction (see [The fit matrix](#the-fit-matrix-and-antigravity-first-gemini-owner-direction-2026-11-17)); `argo` is still the default of `selectSeat` and `runOpenItem` called on their own. `fit` is selectable for one run (`runOpenItem(spec, { profile: "fit" })`, `pantheon-board run <item> --profile fit`). Nothing below claims that `fit` routes better. Its tables are routing judgments. Until the comparison in [Adoption path](#adoption-path) is done, it stays provisional (CYCLE_CONTRACT steps 4, 6 and 7).
 
 ## The problem
 
@@ -325,14 +325,31 @@ Not done:
 - Only `argo` and `fit` are interleaved. `legacy` is shadowed, never assigned.
 - No paired run has been made against live providers. The pair rate is 0 until the owner sets it.
 
-## Seat triage (experimental, 2026-11-17)
+## The fit matrix and Antigravity-first Gemini (owner direction 2026-11-17)
 
-Owner request: instead of always seating the top model, ask the seat's cheap default model which model of its lab should take the seat.
+`fit` now starts every matrix role on a fixed pick per difficulty (`pantheon/src/route/fit-matrix.mjs`). It is the default routing profile of the lifecycle (`ophanim/operate/stages.mjs` `makeExecutors`); `selectSeat` and `runOpenItem` called on their own still default to `argo`. The orderings are the owner's direction. None is measured.
 
-- `pantheon/src/route/triage.mjs`: `triageSeat({role, task, turn})`. Sonnet is asked for the planner seat and chooses among Anthropic's registry models; Luna is asked for the implementer seat and chooses among OpenAI's. One call each.
-- The answer is a routing input only. A model outside the listed options, an unparseable answer or a failed asker is not followed: the seat starts on the lowest-class option and the record says why. Escalation after a rejection is unchanged.
-- It is **not wired into the lifecycle or any default path.** The test (`pantheon/tests/route-triage.test.mjs`) feeds the answers into a board run as seat overrides.
-- Scripted only. Whether a live Sonnet or Luna triages well is unmeasured.
-- Open question before wiring it in: under model-level independence, should the asker count as a contributor to the work it routed?
+| Role | easy | medium | hard |
+|---|---|---|---|
+| planner | `claude-sonnet-5` | `claude-opus-5-5` | `claude-fable-5-2` |
+| dispatcher | `gpt-6-luna` | `gpt-6.1-sol` | `gpt-6-astra` |
+| implementer | `gemini-4-hydrogen-medium` | `gemini-4-hydrogen-high` | `gemini-4-carbon-high` |
+| subagent | `grok-4.6` | `grok-4.6` | `grok-4.7` |
+| reviewer | the dispatcher's exact model for that unit, pinned | | |
 
-A trial of `fit` as the lifecycle default (not committed): 250 of 252 lifecycle tests passed. The two that failed assert behaviour specific to `argo` (a same-seat revision at the top of the dial). Under `fit` a medium item was planned by `claude-sonnet-5` and implemented by `gpt-6-astra`; an in-run rejection raised the worker's effort instead.
+- **Column.** The ticket's difficulty, raised by the profile's class floor when that floor is higher (stakes; ambiguity for the planner). `fast`, `standard` and `frontier` are the easy, medium and hard columns. A floor never lowers a pick. `easy` now carries low stakes by default, so an easy ticket reaches the easy column.
+- **OpenAI order.** `classes.json` now places `gpt-6-luna` < `gpt-6-sol` (and `gpt-6.1-sol`) < `gpt-6-astra`. The medium dispatcher is `gpt-6.1-sol`; other OpenAI medium seats stay `gpt-6-sol`.
+- **Reviewer.** Pinned to the dispatcher's model. It escalates only inside OpenAI: `gpt-6-luna` -> `gpt-6.1-sol` -> `gpt-6-astra` (`pinnedReviewer`, `reviewerEscalation`). Where a review needs more labs, or OpenAI is excluded for independence, the rest of the order is the class order described above.
+- **Implementer ladders** (Antigravity lanes, in order). easy: `gemini-4-hydrogen-medium` -> `gemini-3.8-flash-high`. medium: `gemini-4-hydrogen-high` -> `gemini-4-argon-high`. hard: `gemini-4-carbon-high` -> `gemini-4-hydrogen-xhigh` -> `gemini-4-argon-high`.
+- **Rejection.** The lane's thinking level rises first (`hydrogen-medium` -> `-high` -> `-xhigh`; `carbon-high` has none above it), then the next rung of the ladder. The decision is an escalation record (`raise_thinking` or `step_rung`) that carries its ladder and re-derives from it.
+
+Gemini goes through Antigravity first under both `argo` and `fit`:
+
+- A policy seat naming a metered Gemini API id is served by that model's Antigravity lane first (`-high` unless the seat carries an effort).
+- The API id stays in the order only as the lane's quota failover. The dispatcher reaches it only after a lane of the same base model was refused for quota: HTTP 429 or a quota-exhausted code, as `packages/model-client` `classifyFailure` classifies it (`pantheon/src/route/quota-failover.mjs`). Any other lane failure does not reach it.
+- When the API answers this way, the turn, its attempts and its `selection` carry `quota_failover` with the lane refusal it followed. An unused failover is a `quota_failover.skipped` progress event.
+- A lane and its API id resolve to one model identity, so review independence treats them as the same contributor.
+- Single-turn seats (`liveTurn`) follow the same rule (`laneFirstTurn`).
+- Explicit operator seats and ticket pins are used as named.
+- `gemini-4-hydrogen` is in the catalog on the owner's statement (window 1048576, output 65536, thinking low/medium/high/xhigh). Both Orchestrator ids stay undeclared.
+- Antigravity reports a spent quota in words this repository has no documentation for. The CLI transport recognises `429`, `RESOURCE_EXHAUSTED` and quota or rate-limit wording in the CLI's result and stderr; anything else is an ordinary failure.

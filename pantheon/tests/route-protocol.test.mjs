@@ -9,6 +9,7 @@ import { nextStep, escalationRecord, verifyEscalation, routeFor, classifyOutcome
 import { withEffort } from "../src/sdk/adapter.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { openCooldownStore } from "../../packages/model-client/index.mjs";
+import { withFakeAgy } from "./fixtures/dispatch.mjs";
 
 const rejected = { kind: "acceptance", exit: 1 };
 const sol = { vendor: "openai", model: "gpt-6-sol" };
@@ -244,7 +245,9 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
 
     reject = false;
     const before = clients.sent.length;
-    const second = await runOpenItem({ key: "escFixture", repo_root: dir, title: "one file", goal: "g", copy: ["seed"],
+    // The selector's reviewer here is the Google seat, served by its Antigravity lane first (owner direction
+    // 2026-11-17): the fake CLI answers it.
+    const second = await withFakeAgy(dir, () => runOpenItem({ key: "escFixture", repo_root: dir, title: "one file", goal: "g", copy: ["seed"],
       acceptance_cmd: "grep -q fixed alpha.mjs", question: "q", slots: [{ slot: "alpha", path: "alpha.mjs", goal: "g" }] },
     { dir: join(dir, "board"), makeClientFor: clients.makeClientFor, scouts: ["xai"], revisions: 2, resume: first.board,
       cooldown: openCooldownStore(join(dir, "cooldown")),
@@ -252,7 +255,7 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
         // 86ce18a review, defect 3: the xai reviewer's findings are given to the worker as revision input, so xai is
         // a contributor to the revised bytes and may not review them. This resume used to pin xai again (and so had
         // the rejecting lab approve the revision its own findings shaped); it now leaves the reviewer to the selector.
-        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" } } });
+        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" } } }));
     assert.equal(second.shipped, true, JSON.stringify(second.error));
     const revised = clients.sent.slice(before).find(s => s.model === "gpt-6-sol" && /Output ONLY the complete new contents/.test(s.prompt));
     assert.ok(revised, "resume revised the rejected slot instead of re-reviewing the same bytes");

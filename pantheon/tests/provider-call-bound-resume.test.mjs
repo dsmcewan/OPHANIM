@@ -13,7 +13,7 @@ const runJson = r => JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"))
 const quota = () => Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" });
 
 test("M5: a resume inherits the run's provider-call bound and counts the calls run.json already records", async () => {
-  await withDispatch(async ({ spec, opts, calls, fault }) => {
+  await withDispatch(async ({ spec, opts, calls, fault, agy }) => {
     // Every reviewer request fails, so the first run spends its whole bound and stops at the check stage.
     let failReview = true;
     fault(c => failReview && /VERDICT/.test(c.prompt) ? { error: quota() } : null);
@@ -38,7 +38,10 @@ test("M5: a resume inherits the run's provider-call bound and counts the calls r
     assert.equal(raised.shipped, true, JSON.stringify(raised.error));
     const r2 = runJson(raised);
     assert.deepEqual([r2.provider_calls.limit, r2.provider_calls.basis, r2.provider_calls.prior, r2.provider_calls.previous_limit, r2.provider_calls.counted_from], [2, "operator", 4, 4, r1.attempts.length]);
-    assert.equal(r2.provider_calls.made, calls.length - 4, "the operator's bound counts this invocation's calls");
+    // The xai pool is still in its quota cooldown, so the next reviewer answers: the Google seat, through its Antigravity
+    // lane first (owner direction 2026-11-17). A lane turn is a provider call like any other, counted by the fake CLI's log.
+    assert.equal(r2.provider_calls.made, calls.length - 4 + agy().length, "the operator's bound counts this invocation's calls");
+    assert.equal(agy().length, 1, "one lane turn: the review");
     assert.ok(r2.provider_calls.made <= 2);
   });
 });

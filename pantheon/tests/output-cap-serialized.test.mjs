@@ -17,7 +17,11 @@ const capsOf = (calls, re) => calls.filter(c => re.test(c.prompt)).map(c => [c.m
 
 for (const output of ["xs", "xl"]) {
   test(`fit output ${output}: the plan and work requests carry the declared cap; the review keeps its 4,000`, async () => {
-    await withDispatch(async ({ spec, opts, calls }) => {
+    await withDispatch(async ({ spec, opts, calls, agyQuota }) => {
+      // Under the fit matrix the implementer is an Antigravity lane, which takes no output cap. The serialized cap is
+      // observable on the work request only when the metered API answers, so both ladder lanes are refused for quota
+      // here and the quota failover (gemini-4-hydrogen through the API) carries the declared cap.
+      agyQuota(["gemini-4-hydrogen-high", "gemini-4-argon-high"]);
       const r = await runOpenItem(spec(`fitCap_${output}`, { output }), opts({ profile: "fit" }));
       assert.equal(r.shipped, true, JSON.stringify(r.error));
       const sent = [...capsOf(calls, PLAN), ...capsOf(calls, WORK)];

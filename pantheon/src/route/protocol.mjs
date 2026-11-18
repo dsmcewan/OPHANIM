@@ -23,6 +23,7 @@ import { FACTS } from "../config/facts.mjs";
 import { LANES } from "../config/models.mjs";
 import { candidatesFor, selectFor, shouldFallThrough, SEATING, DIFFICULTY } from "../role/seating.mjs";
 import { isFrontier } from "../../../packages/model-client/index.mjs";
+import { implementerEscalation } from "./fit-matrix.mjs";
 
 export const PROTOCOL = "pantheon.escalation/v1";
 // v2 separates PERMISSION to revise from the AVAILABILITY of a stronger seat. Under v1 a rejection by the cross-lab
@@ -95,7 +96,9 @@ export function classifyOutcome(outcome) {
  */
 export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS, facts = FACTS, seating = SEATING, protocol = PROTOCOL }) {
   const { cause, why, retry_after_s } = classifyOutcome(outcome);
-  const from = { vendor: seat.vendor, model: seat.model, effort: seat.effort ?? null, output: seat.output ?? null };
+  // `lane_ladder` (fit, an implementer on an Antigravity lane) is part of the recorded seat, so it is part of `from`
+  // and the decision re-derives from the record alone. A seat without one has the `from` it always had.
+  const from = { vendor: seat.vendor, model: seat.model, effort: seat.effort ?? null, output: seat.output ?? null, ...(seat.lane_ladder ? { lane_ladder: seat.lane_ladder } : {}) };
   const decide = (action, to, reason, basis = null) => ({ action, cause, from, to, why: `${why}; ${reason}`, basis });
   if (cause === "ok") return decide("hold", from, "nothing changed, so nothing moves");
   if (cause === "rate-limited") return decide("wait", from, `same seat after ${retry_after_s}s; a rate limit is not a reason to prefer another model`);
@@ -128,6 +131,22 @@ export function nextStep({ role, seat, outcome, steps = 0, maxSteps = MAX_STEPS,
       basis_supports: "the permitted effort values for this model",
       hypothesis: { claim: "raising effort before reseating recovers more cheaply or more often", status: "unqualified", evidence: null,
         qualification: "matched successful-recovery rate, total cost and latency: effort-first against reseat-first" } };
+  }
+  // FIT, AN ANTIGRAVITY LANE (owner direction 2026-11-17). The lane's thinking level is in its name, so the dial is
+  // another lane of the same base model: raise it first (hydrogen medium -> high -> xhigh), and only at its top step
+  // to the next rung of the seat's own matrix ladder. The banded tables below are not consulted for such a seat;
+  // with the ladder spent, the checker's findings still reach the same seat under v2, as for any seat.
+  if (Array.isArray(seat.lane_ladder)) {
+    const up = implementerEscalation(seat, seat.lane_ladder);
+    if (up) {
+      return decide(up.action, { vendor: up.vendor, model: up.model, effort: null, output: from.output, lane_ladder: seat.lane_ladder },
+        up.action === "raise_thinking" ? `thinking level ${up.from} -> ${up.to} on the same base model (${seat.model} -> ${up.model}), before any other rung`
+          : `${seat.model} is at its top thinking level; next rung of its ladder, ${up.model}`, "pantheon/src/route/fit-matrix.mjs");
+    }
+    if (protocol === PROTOCOL_V2 && outcome.kind === "critique") {
+      return decide("revise", from, `${seat.model} is at its top thinking level and its ladder is spent: the same seat revises with the findings (step ${steps + 1} of ${maxSteps})`);
+    }
+    return decide("stop", null, `${seat.model} is at its top thinking level and its ladder [${seat.lane_ladder}] is spent`);
   }
   // "Up" is the nearest HARDER band, not an earlier position: tables are not ordered by difficulty.
   const cands = candidatesFor(role, { seating });

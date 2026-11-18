@@ -53,7 +53,9 @@ test('4. after a rejected answer the next eligible seat is asked; the accepted r
     const turn = scriptedTurn({'plan-review': xaiFinds(),
       // The first validator turn is served by the implementer's model; later turns answer as the model asked for (a dated snapshot of it).
       validator: ({model}) => ({text: ACCEPT, served_model: ++n === 1 ? 'gpt-6-astra' : `${model}-20261101`})});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    // profile 'argo', named since 2026-11-17 (the lifecycle default is now `fit`): the scenario names argo's implementer
+    // model (gpt-6-astra) as the one that wrongly serves the first validator turn.
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', profile: 'argo'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'val2'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
@@ -70,8 +72,11 @@ test('4. after a rejected answer the next eligible seat is asked; the accepted r
 });
 
 test('an in-run code-review finding is followed by a code revision: the stopped run is RESUMED, the finding reaches the worker, and that reviewer model is excluded from the change review', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor, review, implement, calls, serve}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, review, implement, calls, serve, agy, agyMode, agyRevisions}) => {
     serve((_vendor, model) => model);   // the scripted providers report the model they served
+    // Under the fit matrix the worker is an Antigravity lane (the fake CLI): it revises when given REQUESTED CHANGES.
+    agyMode('frozen');
+    const built = () => builds + agy().filter(a => a.agent === 'pantheon-implementer').length;
     const f = fixture(repo, [{item: 'inrun'}]);
     // Pantheon's own in-run checker requests changes of the first, passing revision. (`fit` routing: the worker has
     // effort headroom, so the escalation protocol decides a revision. The fixture routes any prompt that mentions a
@@ -93,9 +98,10 @@ test('an in-run code-review finding is followed by a code revision: the stopped 
     // Resumed, not restarted: the same board, one first build and one revision, each attempt charged its own calls.
     assert.equal(impl.outputs.resumed_from, stopped.hash);
     assert.equal(impl.outputs.run.board, stopped.outputs.board);
-    assert.equal(builds, 2, 'the work was not repeated');
-    assert.ok(calls.some(c => WORK.test(c.prompt) && /export ok as a frozen constant/.test(c.prompt)), 'the finding reached the worker\'s revision prompt');
-    assert.equal(stopped.usage.provider_calls + impl.usage.provider_calls, calls.length, 'no call is charged twice or dropped');
+    assert.equal(built(), 2, 'the work was not repeated');
+    assert.ok(calls.some(c => WORK.test(c.prompt) && /export ok as a frozen constant/.test(c.prompt)) || agyRevisions().some(a => a.agent === 'pantheon-implementer'),
+      'the finding reached the worker\'s revision prompt');
+    assert.equal(stopped.usage.provider_calls + impl.usage.provider_calls, calls.length + agy().length, 'no call is charged twice or dropped');
     // The in-run reviewer is now a contributor to the change, by model.
     const critic = impl.contributions.find(c => c.purpose === 'critique');
     assert.ok(critic && critic.model, JSON.stringify(impl.contributions));

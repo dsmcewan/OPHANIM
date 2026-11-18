@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runOpenItem } from "../src/board/run-item.mjs";
+import { selectSeat } from "../src/route/frontier.mjs";
 import { openBoard } from "../src/board/index.mjs";
 import { openPantheonLedger } from "../src/ledger/system.mjs";
 import { withDispatch, seat, WORK } from "./fixtures/dispatch.mjs";
@@ -36,13 +37,14 @@ test("M1: easy and hard tickets through the real dispatcher (banded profile) req
     // used to lead these ladders (and were excluded under M7 for an unrecorded window) were removed
     // 2026-11-17, owner direction: Antigravity serves Gemini models only. The same day unbanded Antigravity
     // Gemini fallbacks were APPENDED to both ladders ("seat Carbon and the other Gemini ids through
-    // Antigravity"): no context window is documented for them, so with a context estimate in hand they are
-    // excluded under M7 ("window unrecorded") and no lane is launched.
+    // Antigravity"). Later that day every live lane was given a cited window (owner direction: Antigravity lanes are
+    // primary; lanes.json), so M7 now ADMITS them as fallbacks: they are no longer excluded for an unrecorded window.
+    // They stay fallbacks here: each band's own rung answers, so no lane is launched.
     const asked = (cs, re) => cs.filter(c => re.test(c.prompt)).map(c => `${c.vendor}/${c.model}`);
     assert.deepEqual(asked(calls.slice(0, easyCalls), WORK), ["openai/gpt-6-luna"], "easy: Luna implements (easy band)");
     assert.deepEqual(asked(calls.slice(easyCalls), WORK), ["openai/gpt-6-astra"], "hard: Astra implements (hard band)");
-    assert.deepEqual(agy(), [], "no lane seat was launched: the Antigravity Gemini fallbacks were excluded, not run");
-    // And why, on every turn: the band, the policy and its hash, and what was excluded (the unbounded lane seats).
+    assert.deepEqual(agy(), [], "no lane seat was launched: the Antigravity Gemini fallbacks are admitted fallbacks, and the band's own rung answered");
+    // And why, on every turn: the band, the policy and its hash, and what was excluded (nothing: every lane has a cited window).
     const LANE_FALLBACKS = { plan: ["gemini-4-carbon-high"], work: ["gemini-4-carbon-high", "gemini-4-argon-high"] };
     for (const [result, band, planner] of [[easy, "easy", "claude-opus-5-5"], [hard, "hard", "claude-fable-5-2"]]) {
       const run = runJson(result);
@@ -59,9 +61,11 @@ test("M1: easy and hard tickets through the real dispatcher (banded profile) req
         assert.equal(t.selection.difficulty, band);
         assert.equal(t.selection.band, band, `${purpose}: served by the ${band} band's own rung`);
         assert.match(t.selection.reason, new RegExp(`^difficulty band: ${t.model} is the ${band} rung`));
-        assert.deepEqual(t.selection.excluded.map(e => e.model), LANE_FALLBACKS[purpose],
-          `${purpose}: exactly the ladder's Antigravity Gemini fallbacks were excluded`);
-        for (const e of t.selection.excluded) assert.match(e.why, /window unrecorded/, `${e.model}: excluded for its undocumented window (M7)`);
+        assert.deepEqual(t.selection.excluded.map(e => e.model), [],
+          `${purpose}: the ladder's Antigravity Gemini fallbacks are admitted on their cited windows (M7), not excluded`);
+        const role = purpose === "plan" ? "planner" : "implementer";
+        const admitted = selectSeat(role, { profile: "legacy", difficulty: band, needsContext: 500 }).candidates.map(c => c.model);
+        for (const lane of LANE_FALLBACKS[purpose]) assert.ok(admitted.includes(lane), `${purpose}: ${lane} is an admitted fallback`);
         assert.ok(!LANE_FALLBACKS[purpose].includes(t.model), `${purpose}: no Antigravity lane served the turn`);
         assert.ok(!JSON.stringify(t.selection.excluded).includes("claude-sonnet-4-6"), "a removed rung is not a candidate, so it is not reported as excluded");
       }
@@ -261,19 +265,29 @@ test("M7: one context rule for both selectors -- an estimate needs a cited windo
   // The lane rule is shown on the live lane (gemini-3.8-flash-high, the explorer's first seat; grok-4.7 is its
   // second). It used the Sonnet lane on the planner ladder until that rung was removed 2026-11-17, owner
   // direction: Antigravity serves Gemini models only.
-  const LANE = "gemini-3.8-flash-high";
-  assert.equal(documentedWindow(LANE), null, "the Gemini lane has no recorded window today");
+  // Since the owner's direction of 2026-11-17 every LIVE lane carries a cited window in lanes.json, so the live lane
+  // shows the admitted side of the rule. The refused side is shown on a lane name that still has no cited window (a
+  // retired lane, seated here by a test-only table; it is never a real candidate).
+  const LANE = "gemini-3.8-flash-high", UNCITED = "claude-sonnet-4-6";
+  assert.equal(documentedWindow(LANE), 1048576, "the Gemini lane's window is cited on the lane itself (lanes.json)");
+  assert.equal(documentedWindow(UNCITED), null, "a lane with no cited window has none");
   assert.equal(documentedWindow("gpt-6-astra") > 0, true);
   assert.equal(routeFor("explorer", { difficulty: "easy" }).model, LANE, "with no stated need the lane is the explorer's pick");
-  const lanePick = facts => routeFor("explorer", { difficulty: "easy", needsContext: 500, facts });
+  assert.equal(routeFor("explorer", { difficulty: "easy", needsContext: 500 }).model, LANE, "a cited bound admits the lane");
+  assert.deepEqual(routeFor("explorer", { difficulty: "easy", needsContext: 500 }).skipped, []);
+  const tooBig = routeFor("explorer", { difficulty: "easy", needsContext: 2_000_000 });
+  assert.match(tooBig.skipped.find(s => s.model === LANE).why, /documented window 1048576 < 2000000/, "and bounds it: work larger than the cited window is not admitted");
+  const { SEATING } = await import("../src/role/seating.mjs");
+  const seating = { ...SEATING, explorer: [{ ...SEATING.explorer[0], model: UNCITED }, ...SEATING.explorer.slice(1)] };
+  const lanePick = facts => routeFor("explorer", { difficulty: "easy", needsContext: 500, facts, seating });
   assert.equal(lanePick(FACTS).model, "grok-4.7", "unrecorded: the lane is skipped with its reason");
-  assert.match(lanePick(FACTS).skipped.find(s => s.model === LANE).why, /window unrecorded/);
-  const cited = { ...FACTS, models: { ...FACTS.models, [LANE]: { window: { value: 200000, source: "fixture", quote: "fixture" } } } };
-  assert.equal(lanePick(cited).model, LANE, "a cited bound admits the lane");
+  assert.match(lanePick(FACTS).skipped.find(s => s.model === UNCITED).why, /window unrecorded/);
+  const cited = { ...FACTS, models: { ...FACTS.models, [UNCITED]: { window: { value: 200000, source: "fixture", quote: "fixture" } } } };
+  assert.equal(lanePick(cited).model, UNCITED, "a cited bound admits the lane");
   assert.deepEqual(lanePick(cited).skipped, []);
-  const bare = { ...FACTS, models: { ...FACTS.models, [LANE]: { window: 200000 } } };
+  const bare = { ...FACTS, models: { ...FACTS.models, [UNCITED]: { window: 200000 } } };
   assert.equal(lanePick(bare).model, "grok-4.7", "an uncited number is not a window");
-  assert.match(lanePick(bare).skipped.find(s => s.model === LANE).why, /window unrecorded/);
+  assert.match(lanePick(bare).skipped.find(s => s.model === UNCITED).why, /window unrecorded/);
   // The ARGO path applies the same rule: no seat in its order is admitted on an unknown window.
   const { selectSeat } = await import("../src/route/frontier.mjs");
   const { CAPABILITIES } = await import("../../packages/model-client/index.mjs");

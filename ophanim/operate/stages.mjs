@@ -314,8 +314,11 @@ export const workContributions = run => changeScope(run).contributions.map(c => 
 const withServed = f => (f.served_model && f.served_model !== f.model ? {served_model: f.served_model} : {});
 
 // --- the executors -------------------------------------------------------------------------------------------
+// `profile` defaults to `fit` (owner direction 2026-11-17): the lifecycle routes by the fit matrix
+// (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
+// selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
-  seating = undefined, facts = undefined, profile = 'argo', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = REVIEW_INDEPENDENCE} = {}) {
+  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = REVIEW_INDEPENDENCE} = {}) {
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
   if (typeof makeClientFor !== 'function') throw new Error('makeExecutors: pass makeClientFor(vendor) for the work seats');

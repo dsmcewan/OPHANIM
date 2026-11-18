@@ -70,7 +70,8 @@ test("through real board runs: a completed review, a refusal before work, and a 
         if (first === null) { first = req.vendor; return null; }
         return req.vendor === first ? { error: Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" }) } : null;
       });
-      await go("mixed", { planTitle: "ticket", profile: "fit", revisions: 3 });
+      // legacy: its implementer fallbacks cross labs. (fit until the fit matrix, whose implementer ladder is one lab.)
+      await go("mixed", { planTitle: "ticket", profile: "legacy", revisions: 3 });
       const r = capacityReport({ bundles: join(repo, "boards"), store });
       // 86ce18a review, defect 4: fixture runs answer from fake providers, so they are synthetic observations, reported
       // beside the live rule and never in it (they used to be counted under it).

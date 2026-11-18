@@ -30,8 +30,11 @@ const FAKE = { kind: "fake", clients: "tests/fixtures/dispatch.mjs scriptedClien
 const quota = () => Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" });
 
 test("compareProfiles: the same tickets under argo and fit, through the real dispatcher, with the same bounds; nothing dropped", async () => {
-  await withDispatch(async ({ dir, spec, makeClientFor, fault }) => {
-    // The first implementer request of each "flaky" run is refused for quota: the router falls back.
+  await withDispatch(async ({ dir, spec, makeClientFor, fault, agyQuotaOnce }) => {
+    // The first implementer request of each "flaky" run is refused for quota: the router falls back. Under argo the
+    // implementer is an API seat (the scripted fault); under the fit matrix it is an Antigravity lane, so the fake CLI
+    // refuses that run's first lane turn for quota and the next rung of the lane ladder answers.
+    agyQuotaOnce("flaky-marker");
     let refuseNext = true;
     fault(c => {
       if (!WORK.test(c.prompt) || !/flaky-marker/.test(c.prompt)) return null;
@@ -98,7 +101,10 @@ test("compareProfiles: the same tickets under argo and fit, through the real dis
       const a = flaky[arm];
       assert.equal(a.by_outcome.quota, 1, `${arm}: the refused request is counted`);
       assert.equal(a.failed_attempts.value, 1);
-      assert.equal(a.retries.value + a.fallbacks.value, 1, `${arm}: the recovery from it is counted`);
+      // baseline: the fallback after the refused API request. candidate (fit matrix): the next lane rung after the
+      // refused lane, and the reviewer's fallback -- its pinned OpenAI seat is on the pool the baseline arm's quota
+      // refusal just closed (the shared cooldown store), so the next admitted reviewer answered.
+      assert.equal(a.retries.value + a.fallbacks.value, arm === "baseline" ? 1 : 2, `${arm}: the recovery from it is counted`);
       assert.equal(a.usage_complete, false, "the refused request reported no usage");
       assert.equal(a.tokens_in.value, null, "so the token total is unknown, not a partial sum");
       assert.equal(a.tokens_in.missing, 1);

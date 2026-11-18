@@ -16,10 +16,11 @@ const REVIEW = /VERDICT/;
 const SCOUT = /RAN: nothing/;
 const lab = t => labOf(t.vendor, t.model);
 const quota = () => Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" });
-// A planner the operator seats on the maker's lab leaves the configured in-run reviewer pool three labs (xai,
-// google, anthropic): law 3 avoids both the maker's and the assigner's lab. That is this configuration's pool,
-// not a count of possible reviewers.
-const SAME_LAB_PLANNER = { planner: seat("openai", "gpt-6-sol") };
+// A planner the operator seats on the maker's lab leaves the configured in-run reviewer pool three labs (openai,
+// xai, anthropic): law 3 avoids both the maker's and the assigner's lab. That is this configuration's pool,
+// not a count of possible reviewers. Under the fit matrix (owner direction 2026-11-17) the maker is an Antigravity
+// Gemini lane, so the maker's lab is google (it was openai before the matrix).
+const SAME_LAB_PLANNER = { planner: seat("agy_google", "gemini-4-carbon-high") };
 
 test("fit, critical stakes: three reviewers from three distinct labs, none the maker's, all approving, then ship", async () => {
   await withDispatch(async ({ spec, opts, calls }) => {
@@ -33,7 +34,7 @@ test("fit, critical stakes: three reviewers from three distinct labs, none the m
     assert.equal(new Set(labs).size, 3, `three distinct labs (${labs})`);
     assert.equal(new Set(critiques.map(t => t.vendor)).size, 3, "three distinct vendors, so three critique slots");
     assert.ok(!labs.includes(lab(work)), `none is the maker's lab ${lab(work)} (${labs})`);
-    assert.ok(!labs.includes("openai"), "none is the planner's lab either (law 3)");
+    assert.ok(!labs.includes("google"), "none is the planner's lab either (law 3)");
     for (const t of critiques) {
       assert.equal(t.selection.profile, "fit");
       assert.equal(t.selection.requirements.review_labs.value, 3);
@@ -49,8 +50,8 @@ test("fit, critical stakes: three reviewers from three distinct labs, none the m
 
 test("fit, critical stakes: one of the three reviewers rejects, so the change is not shipped", async () => {
   await withDispatch(async ({ spec, opts, review }) => {
-    // The google reviewer rejects; the other two approve.
-    review(c => c.vendor === "agy_google" ? "The ticket's case is missing.\nVERDICT: request_changes" : null);
+    // The xai reviewer rejects; the other two approve.
+    review(c => c.vendor === "xai" ? "The ticket's case is missing.\nVERDICT: request_changes" : null);
     const r = await runOpenItem(spec("fitOneRejects", { stakes: "critical" }), opts({ profile: "fit", seatOverrides: SAME_LAB_PLANNER }));
     assert.equal(r.shipped, false);
     const run = runJson(r);
@@ -80,7 +81,7 @@ test("fit, critical stakes with too few eligible labs: a named pending state bef
 });
 
 test("fit, contested ambiguity: three intake scouts from three distinct labs, each chosen by the fit selector and recorded", async () => {
-  await withDispatch(async ({ spec, opts, calls }) => {
+  await withDispatch(async ({ spec, opts, calls, agy }) => {
     const r = await runOpenItem(spec("fitContested", { ambiguity: "contested" }), opts({ profile: "fit" }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = runJson(r);
@@ -95,7 +96,9 @@ test("fit, contested ambiguity: three intake scouts from three distinct labs, ea
     assert.equal(run.intake.explorer_width.value, 3);
     assert.deepEqual(run.intake.scouts.map(s => s.model), scouts.map(t => t.model), "each scout's selection is recorded");
     assert.ok(run.intake.scouts.every(s => s.selection?.policy_hash));
-    assert.equal(calls.filter(c => SCOUT.test(c.prompt)).length, 3);
+    // The Google scout goes through Antigravity first (owner direction 2026-11-17): two API requests and one lane turn.
+    assert.equal(calls.filter(c => SCOUT.test(c.prompt)).length + agy().filter(a => a.agent === "pantheon-scout").length, 3);
+    assert.ok(!calls.some(c => c.vendor === "agy_google"), "the metered Gemini API was not called");
   });
 });
 
@@ -130,26 +133,28 @@ test("argo and legacy are unchanged: one scout from the configured vendor and on
 });
 
 test("fit: when a fallback answered, the effort escalation starts from the ANSWERING seat's effort", async () => {
-  await withDispatch(async ({ spec, opts, calls, fault, implement }) => {
-    // The implementer's openai and anthropic seats are refused on quota, so gemini-4-carbon (a fallback) answers
-    // at its own mapped effort for depth standard ("medium" on [low, medium, high]); the primary gpt-6-astra
-    // was mapped to "high" on its five-rung ladder.
-    fault(c => WORK.test(c.prompt) && ["openai", "anthropic"].includes(c.vendor) ? { error: quota() } : null);
+  await withDispatch(async ({ spec, opts, calls, agyQuota, implement }) => {
+    // Under the fit matrix the medium implementer's ladder is two Antigravity lanes (gemini-4-hydrogen-high, then
+    // gemini-4-argon-high). Both are refused for quota, so the metered API id gemini-4-hydrogen -- the quota failover of
+    // the Hydrogen lane -- answers at that lane's thinking level ("high"). It was the openai/anthropic/carbon chain
+    // before the matrix; the property is the same: the escalation starts from what the ANSWERING seat ran with.
+    agyQuota(["gemini-4-hydrogen-high", "gemini-4-argon-high"]);
     implement(p => /FAILED the executed acceptance/.test(p) ? "export const ok = true; // fixed\n" : "export const ok = true;\n");
     const r = await runOpenItem(spec("fitFallbackEffort", { acceptance_cmd: "grep -q fixed code.mjs" }), opts({ profile: "fit" }));
     const run = runJson(r);
     const work = run.turns.filter(t => t.purpose === "work");
-    assert.equal(work[0].model, "gemini-4-carbon", "a fallback answered the first revision");
+    assert.equal(work[0].model, "gemini-4-hydrogen", "a fallback answered the first revision");
     assert.equal(work[0].selection.fallback, true);
-    assert.equal(work[0].settings.effort, "medium", "it ran at its own mapped effort");
+    assert.equal(work[0].settings.effort, "high", "it ran at the thinking level of the lane it stands behind");
+    assert.equal(work[0].quota_failover.used, true, "and the turn says the metered API was used as quota failover");
     const esc = run.escalations.find(e => e.slot === "code" && e.rev === 1);
     assert.ok(esc, "the failed acceptance was escalated");
-    assert.equal(esc.seat.model, "gemini-4-carbon");
-    assert.equal(esc.seat.effort, "medium", "the escalation's input is the effort the answering seat ran with");
+    assert.equal(esc.seat.model, "gemini-4-hydrogen");
+    assert.equal(esc.seat.effort, "high", "the escalation's input is the effort the answering seat ran with");
     assert.equal(esc.decision.action, "raise_effort");
-    assert.equal(esc.decision.to.effort, "high");
-    const carbon = calls.filter(c => WORK.test(c.prompt) && c.model === "gemini-4-carbon");
-    assert.deepEqual(carbon.map(c => c.effort), ["medium", "high"], "the next revision carried the raised effort");
+    assert.equal(esc.decision.to.effort, "xhigh");
+    const hydrogen = calls.filter(c => WORK.test(c.prompt) && c.model === "gemini-4-hydrogen");
+    assert.deepEqual(hydrogen.map(c => c.effort), ["high", "xhigh"], "the next revision carried the raised effort");
     assert.equal(r.shipped, true, JSON.stringify(r.error));
   });
 });

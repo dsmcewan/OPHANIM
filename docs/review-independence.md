@@ -201,6 +201,16 @@ Owner direction, 2026-11-17, after the documentation and the owner's `agy models
 - **Context windows.** Antigravity's documentation states no context window for any model. Under the documented-window rule, a lane without a cited window is excluded whenever the work has a context estimate. In practice these seats are admitted only when no estimate is supplied, until a window is cited for the lane.
 - **Default (`argo`) routing is unchanged.** Carbon there still goes to the Gemini API.
 
+**Decision 4 (owner direction, later on 2026-11-17): Gemini goes through Antigravity first; the Gemini API is a quota failover.** This supersedes the last three points of decision 3 and the scope note below where they differ.
+
+- **Lanes first, under `argo` and `fit`.** A policy seat for a Google model starts on its Antigravity lane (`-high` unless the seat carries an effort). The metered Gemini API id of the same model stays in the order only as that lane's quota failover: it is reached only after the lane was refused for quota (HTTP 429 or a quota-exhausted code, as `packages/model-client` `classifyFailure` classifies it). Any other lane failure does not reach it. See `docs/routing-task-profile.md`.
+- **Recorded.** A turn the API answered as quota failover carries `quota_failover` (the lanes, the refusal it followed) on the turn, its attempts and its `selection`.
+- **Hydrogen is seated.** `gemini-4-hydrogen` is in the catalog on the owner's statement: window 1048576, max output 65536, thinking low, medium, high, xhigh. The source recorded is the owner's statement; no vendor page was read.
+- **Lane windows.** Every live lane now carries a cited `window`. Hydrogen's is the owner-stated figure. For Carbon, Argon and 3.8 Flash it is the base model's documented Gemini API window, recorded as such, because Antigravity documents none.
+- **Single-turn seats** follow the same rule (`laneFirstTurn` in `pantheon/src/sdk/agy-turn.mjs`).
+- **Identity is unchanged.** A lane and its API id resolve to one model, so a contributor under one name is excluded under the other. No independence rule is relaxed. The Orchestrator ids stay undeclared.
+- **Not verified here.** No live Antigravity turn was made. How the CLI words a spent quota is not documented in this repository; the transport recognises `429`, `RESOURCE_EXHAUSTED` and quota or rate-limit wording, and treats anything else as an ordinary failure.
+
 **Versioning.** Cycles recorded under resolver 1 or 2 carry no `route_labs` and are checked without it. The `served_model_source` field is additive: turns recorded without it hash and verify as before. Escalation records cite the seating they were decided under, so removing seats does not change how recorded escalations verify.
 
 **Scope.** Only in-run turns use Antigravity. The single-turn seats (planner, plan reviewers, change reviewers, validator) call the provider APIs directly, including the Gemini API for `agy_google`, and are not affected by decision 2.

@@ -215,7 +215,9 @@ test('reviewers and validators use their own evidence: incomplete criteria are c
     // The implementer: the first revision is right; the SECOND cycle's adds an export the plan excludes (tests stay green).
     let builds = 0;
     implement(prompt => { builds++; return `export const ok = true;\nexport const mode = 'strict';\nexport const legacy = 1;\n${/Acceptance a3/.test(prompt) ? 'export const debug = true;\n' : ''}`; });
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...labs(3)});
+    // profile 'argo', named since 2026-11-17 (the lifecycle default is now `fit`): this scenario scripts the worker
+    // through the API `implement` hook, and argo's worker is an API seat. Under fit the worker is an Antigravity lane.
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, profile: 'argo', ...labs(3)});
     const r = await run(repo, f, ex);
     const w = openWorkLedger({root: f.workRoot});
     const seq = w.stages('cyc').map(s => `${s.stage}:${s.status}`);

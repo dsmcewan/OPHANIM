@@ -1,5 +1,6 @@
-// Corrections after the review of 10cbd52 (reproduction appendix), through the lifecycle. Default routing (the `argo`
-// profile); model-level independence asked for explicitly (it is NOT active by default); the four real labs and the
+// Corrections after the review of 10cbd52 (reproduction appendix), through the lifecycle. `argo` routing, named
+// explicitly since 2026-11-17 (the lifecycle's default profile is now `fit`; fit-lifecycle.test.mjs covers it);
+// model-level independence asked for explicitly (it is NOT active by default); the four real labs and the
 // real model inventory; no synthetic lab. Seats are scripted: these show enforcement, routing and persistence, not
 // model judgment.
 //
@@ -31,13 +32,16 @@ const idOf = t => resolveModel(t.vendor, t.model).id;
 const runJson = rec => JSON.parse(fs.readFileSync(path.join(rec.outputs.run?.board ?? rec.outputs.board, 'run.json'), 'utf8'));
 const hook = (ctx, h) => { ctx.implement(h.implement); ctx.review(h.review); ctx.serve(h.serve); };
 
-test('LIFECYCLE, default routing: an in-run finding is followed by a revision by the same worker model, across a process restart, for an item without a ticket and one with a ticket', async () => {
+test('LIFECYCLE, argo routing: an in-run finding is followed by a revision by the same worker model, across a process restart, for an item without a ticket and one with a ticket', async () => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor, calls} = ctx;
     assert.equal(REVIEW_INDEPENDENCE, 'lab', 'the model rule is asked for here; it is not the default');
     const f = fixture(repo, [{item: 'fresh'}, {item: 'ticketed'}], {tickets: ['ticketed']});
     hook(ctx, statelessHooks());
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model'});   // profile: the default (argo)
+    // argo's second in-run reviewer is its Google seat, which goes through its Antigravity lane first (owner direction
+    // 2026-11-17): the fake CLI is given the same stateless behaviour as the scripted API hooks.
+    ctx.agyMode('frozen');
+    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model', profile: 'argo'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     let w = openWorkLedger({root: f.workRoot});
     for (const item of ['fresh', 'ticketed']) {
@@ -52,7 +56,7 @@ test('LIFECYCLE, default routing: an in-run finding is followed by a revision by
     }
     const parentCalls = calls.length;
     // PROCESS RESTART: the next tick runs in a new process, with everything rebuilt from disk.
-    const child = JSON.parse(execFileSync(process.execPath, [CHILD, repo, f.statusRoot, f.workRoot, f.stateDir], {encoding: 'utf8', env: process.env}).trim().split('\n').at(-1));
+    const child = JSON.parse(execFileSync(process.execPath, [CHILD, repo, f.statusRoot, f.workRoot, f.stateDir, 'argo'], {encoding: 'utf8', env: process.env}).trim().split('\n').at(-1));
     assert.notEqual(child.pid, process.pid);
     w = openWorkLedger({root: f.workRoot});
     assert.equal(w.verify().ok, true);
@@ -84,16 +88,20 @@ test('LIFECYCLE, default routing: an in-run finding is followed by a revision by
       assert.equal(stopped.usage.provider_calls + impl.usage.provider_calls, run.turns.length);
     }
     assert.deepEqual(child.work_prompts, [{model: 'gpt-6-astra', told: true}, {model: 'gpt-6-astra', told: true}], 'in the new process the worker was given the finding');
-    assert.equal(parentCalls + child.work_calls, w.stages().filter(s => s.stage === 'implement').reduce((n, s) => n + s.usage.provider_calls, 0), 'no call is charged twice or dropped across the restart');
+    // A lane turn is a provider call too: the second in-run review of each item went through the Antigravity lane (the
+    // fake CLI's log), and is charged like the API calls.
+    assert.deepEqual(ctx.agy(), [{agent: 'pantheon-reviewer', model: 'gemini-4-carbon-high'}, {agent: 'pantheon-reviewer', model: 'gemini-4-carbon-high'}]);
+    assert.equal(parentCalls + child.work_calls + ctx.agy().length, w.stages().filter(s => s.stage === 'implement').reduce((n, s) => n + s.usage.provider_calls, 0), 'no call is charged twice or dropped across the restart');
   });
 });
 
-test('LIFECYCLE, default routing: repeated in-run findings are revised within bounds; when no eligible in-run reviewer is left the work is blocked with every finding kept, not restarted', async () => {
+test('LIFECYCLE, argo routing: repeated in-run findings are revised within bounds; when no eligible in-run reviewer is left the work is blocked with every finding kept, not restarted', async () => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor, calls} = ctx;
     const f = fixture(repo, [{item: 'rounds'}]);
     hook(ctx, statelessHooks({alwaysReject: true}));
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model'});
+    ctx.agyMode('reject');   // the Google reviewer answers through its Antigravity lane (the fake CLI), and rejects too
+    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model', profile: 'argo'});
     const go = () => tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     for (let i = 0; i < 3; i++) await go();
     const w = openWorkLedger({root: f.workRoot});
@@ -103,13 +111,17 @@ test('LIFECYCLE, default routing: repeated in-run findings are revised within bo
     assert.equal(new Set([a, b, c].map(x => x.outputs.board)).size, 1);
     assert.equal(calls.filter(x => WORK.test(x.prompt)).length, 3);
     assert.deepEqual(c.outputs.escalations.map(e => [e.protocol, e.action, e.steps]), [['pantheon.escalation/v2', 'revise', 0], ['pantheon.escalation/v2', 'revise', 1]]);
-    // Each revision was reviewed by a model that had not contributed; the two default-routing reviewer models are then used up.
+    // Each revision was reviewed by a model that had not contributed; the two argo reviewer models are then used up.
+    // The Google one is named by its Antigravity lane (gemini-4-carbon-high), the same model identity as gemini-4-carbon:
+    // its metered API id is only that lane's quota failover and is not a third reviewer.
     const critics = runJson(c).turns.filter(t => t.purpose === 'critique').map(t => `${t.vendor}/${t.model}`);
-    assert.deepEqual(critics, ['xai/grok-4.7', 'agy_google/gemini-4-carbon']);
+    assert.deepEqual(critics, ['xai/grok-4.7', 'agy_google/gemini-4-carbon-high']);
+    assert.equal(resolveModel('agy_google', 'gemini-4-carbon-high').id, resolveModel('agy_google', 'gemini-4-carbon').id);
+    assert.ok(!calls.some(x => x.vendor === 'agy_google'), 'the metered Gemini API was never called');
     // Blocked, explicitly, with both findings and who made them; the rejected work is still there.
     assert.equal(c.blocker.code, 'IN_RUN_REVIEW_UNRESOLVED');
     assert.match(c.blocker.what, /no in-run reviewer is eligible for the revised work.*2 in-run finding\(s\) are unresolved; the run and its work are kept/);
-    assert.deepEqual(c.findings.map(x => [x.cause, `${x.vendor}/${x.model}`]), [['in-run-review', 'xai/grok-4.7'], ['in-run-review', 'agy_google/gemini-4-carbon']]);
+    assert.deepEqual(c.findings.map(x => [x.cause, `${x.vendor}/${x.model}`]), [['in-run-review', 'xai/grok-4.7'], ['in-run-review', 'agy_google/gemini-4-carbon-high']]);
     assert.equal(runJson(c).files[0].rev, 3);
     // It is not dispatched again on the same inputs, and nothing is charged twice.
     assert.deepEqual((await go()).dispatched, []);

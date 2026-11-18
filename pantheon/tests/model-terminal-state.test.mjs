@@ -48,10 +48,11 @@ function fakeClient(surface, ok) {
 }
 
 test("the registry walk covers every model and routes each one deliberately", () => {
-  assert.equal(ALL.length, 18);
+  // 19 since 2026-11-17: gemini-4-hydrogen joined the registry (owner-stated), the quota failover of the Hydrogen lanes.
+  assert.equal(ALL.length, 19);
   for (const { vendor, model } of ALL) assert.ok(ADAPTERS[vendor], `${model} has an adapter`);
   const frontier = ALL.filter(m => isFrontier(m.model)).map(m => m.model).sort();
-  assert.deepEqual(frontier, ["claude-fable-5-2", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "gemini-4-argon", "gemini-4-carbon",
+  assert.deepEqual(frontier, ["claude-fable-5-2", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen",
     "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "grok-4.3", "grok-4.7"]);
 });
 

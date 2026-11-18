@@ -97,10 +97,13 @@ export const SEAT_FACTS = {
     // gemini-4-carbon-high / gemini-4-argon-high (Antigravity lanes, seated 2026-11-17, owner direction): INFERRED, NOT
     // VERIFIED, on the same reasoning as gemini-3.8-flash-high above. The figure is the Gemini API's documented window
     // for the base model (capability-facts.json); Antigravity's documentation states no context window for any model
-    // (antigravity.google/docs/models, read 2026-11-17). The documented-window rule (M7) does not use these numbers:
-    // with a context estimate, these lanes stay excluded until a window is cited for the lane itself.
+    // (antigravity.google/docs/models, read 2026-11-17). The documented-window rule (M7) reads a lane's own cited
+    // `window` in config/lanes.json (owner direction 2026-11-17: Antigravity lanes are primary), not these numbers.
+    // gemini-4-hydrogen-medium / -high / -xhigh (the fit matrix's implementer lanes, seated 2026-11-17): 1,048,576,
+    // owner-stated 2026-11-17 for gemini-4-hydrogen. The API id gemini-4-hydrogen is added below from CAPABILITIES.
     windows: { "gemini-3.6-flash": 1_048_576, "gemini-3.8-flash-high": 1_048_576,
       "gemini-4-carbon-high": 1_048_576, "gemini-4-argon-high": 1_048_576,
+      "gemini-4-hydrogen-medium": 1_048_576, "gemini-4-hydrogen-high": 1_048_576, "gemini-4-hydrogen-xhigh": 1_048_576,
       "claude-opus-4-6-thinking": 1_000_000, "claude-sonnet-4-6": 1_000_000 },
     notes: "Raw Gemini API adapter requires GEMINI_API_KEY; board agent turns can opt into agy CLI OAuth. Replay: every raw-API turn resends history",
   },

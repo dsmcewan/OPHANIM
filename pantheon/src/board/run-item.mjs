@@ -39,6 +39,8 @@ import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
+import { routeSeats } from "../route/quota-failover.mjs";
+import { laneParts } from "../route/fit-matrix.mjs";
 import { currentPolicy as currentIdentityPolicy, policyDigest as identityPolicyDigest, contributorKeys, candidateRefusal, reviewerRefusal, resolveModel } from "../review/identity.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../route/frontier.mjs";
@@ -238,7 +240,8 @@ export async function runOpenItem(spec, opts = {}) {
     : opts.profile !== undefined && opts.profile !== null ? explicitAssignment({ profile: opts.profile, stakes: stakesOfTicket(), interleave: true })
     : { ...assignArm({ ticketKey: spec.key, stakes: stakesOfTicket(), policy: ASSIGNMENT_POLICY }), policy: ASSIGNMENT_POLICY };
   const profile = opts.profile ?? ASSIGNMENT?.arm ?? "argo";
-  // `fit` is a selectable candidate (src/route/task-profile.mjs), never the default: argo is the approved policy.
+  // A run called without a profile runs under argo. The lifecycle names `fit` (ophanim/operate/stages.mjs, its default
+  // since 2026-11-17); `fit` is selected, never assumed, here.
   if (!["argo", "legacy", "fit"].includes(profile)) throw new Error("unknown routing profile");
   const pools = opts.pools ?? readPools();
   const cooldown = opts.cooldown ?? openCooldownStore(join(process.env.PANTHEON_COOLDOWN_DIR ?? join(homedir(), ".cache", "pantheon"), "v2"));
@@ -341,9 +344,19 @@ export async function runOpenItem(spec, opts = {}) {
   const applyDecision = (c, rec, rev) => {
     const { action, to, cause, why } = rec.decision;
     if (action === "raise_effort") c.effort = to.effort;
-    if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
+    // raise_thinking (fit, Antigravity lanes): the same base model's next thinking level is another lane name, so it
+    // is applied as a seat, like a rung.
+    if (action === "step_rung" || action === "raise_thinking") { c.forced = { vendor: to.vendor, model: to.model, ...(action === "raise_thinking" ? { why: "thinking level raised" } : {}) }; c.effort = null; }
     if (action === "stop") c.stopped = { action, rev, cause, why };
     if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
+  };
+  // Under `fit`, an implementer on an Antigravity lane escalates on its matrix ladder (route/fit-matrix.mjs): the
+  // ladder travels on the decision's seat, so the record re-derives from its own inputs (protocol.mjs nextStep).
+  // Only a seat that RAN on a lane has one: the metered API answering as a quota failover carries effort and climbs
+  // its own documented ladder, as any API seat does.
+  const laneLadderOf = c => {
+    const ladder = profile === "fit" ? c.choice?.seat?.selection?.matrix?.ladder : null;
+    return Array.isArray(ladder) && laneParts(c.ranModel ?? c.choice.seat.model) ? { lane_ladder: ladder } : {};
   };
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
   // Under `fit` the tier is the profile's own `output` dimension (xs..xl, or the legacy label's default).
@@ -562,8 +575,16 @@ export async function runOpenItem(spec, opts = {}) {
     return { text, response_id: res.response_id, usage: res.usage, tool_calls: res.tool_calls, subagent_calls: res.subagent_calls };
   }
 
-  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null, transport = null, selection = null }) {
+  // A quota failover that was NOT used is on the progress trail with its reason, so "the metered API was not called"
+  // is a recorded fact rather than an absence.
+  function skippedFailover({ seat, why }) { progress({ event: "quota_failover.skipped", seat: seat.vendor, model: seat.model, detail: why }); }
+
+  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null, transport = null, selection = null, quota_failover = null }) {
     const t0 = Date.now();
+    // The metered Gemini API answering as the QUOTA FAILOVER of an Antigravity lane (route/quota-failover.mjs): the
+    // lane refusal it followed is recorded on every attempt and on the turn, beside the selection that carries it too.
+    const failover = quota_failover?.used ? { quota_failover } : {};
+    if (failover.quota_failover) progress({ event: "quota_failover", seat: vendor, model, detail: `metered API used as quota failover of ${quota_failover.lanes.join(", ")}: ${quota_failover.after.map(a => `${a.lane} ${a.outcome} (${a.source})`).join("; ")}` });
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
     // The seat's own transport decides the path; a seat built before transports were recorded falls back
     // to the rule the transports encode (a non-frontier agy_google model is not an API id).
@@ -628,7 +649,7 @@ export async function runOpenItem(spec, opts = {}) {
         max_output_tokens: sent ? sent.max_output_tokens : (asked?.max_tokens ?? asked?.max_output_tokens ?? asked?.config?.maxOutputTokens ?? null),
         output_budget_policy: res?.output_budget_policy ?? null, basis: sent ? "sent" : "requested" };
     };
-    const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...extraFields });
+    const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...failover, ...extraFields });
     let turnAttempts = 0, settings = null;
     for (;;) {
       // With a ledger, the seat's stored conversation is checked against the ledger's turn entries for
@@ -675,7 +696,7 @@ export async function runOpenItem(spec, opts = {}) {
     const ms = Date.now() - t0;
     // The successful request's usage and settings; every request the turn took is in run.attempts.
     run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
-      served_model: r.result.served_model ?? null, usage: usageOf(r.result.usage), settings, attempts: turnAttempts, ...chosen });
+      served_model: r.result.served_model ?? null, usage: usageOf(r.result.usage), settings, attempts: turnAttempts, ...failover, ...chosen });
     // On the ledger: signed by this seat occupancy, with the served model the provider reported beside
     // the requested one. The seat is identified as the conversation layer keys it (vendor, purpose and
     // model: sdkTurn's seat is `${purpose}@${pool}@${model}`), so two slots running different models are
@@ -698,7 +719,7 @@ export async function runOpenItem(spec, opts = {}) {
     // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
     // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
     const effortFor = candidate => effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null;
-    const routed = await routeCall({ candidates, cooldown, signal: opts.signal,
+    const routed = await routeSeats({ onSkip: skippedFailover, candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
       invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
         effort: effortFor(candidate) }) });
@@ -770,7 +791,7 @@ export async function runOpenItem(spec, opts = {}) {
       let choice;
       try { choice = choose("scout", { avoid, avoidLabs, chars: p.prompt.length, ...(k ? { roleOverride: null } : {}) }); }
       catch (e) { throw refuse(`scout ${k + 1} has no candidate after avoiding labs ${avoidLabs.join(", ")}: ${e.message}`); }
-      const routed = await routeCall({ candidates: choice.candidates, cooldown, signal: opts.signal,
+      const routed = await routeSeats({ onSkip: skippedFailover, candidates: choice.candidates, cooldown, signal: opts.signal,
         invoke: (candidate, { signal }) => {
           const cap = tokenCapFor("scout", candidate.model);
           return turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
@@ -951,7 +972,7 @@ export async function runOpenItem(spec, opts = {}) {
         const scoutChoice = profile === "argo" ? choose("scout", { chars: p.prompt.length })
           : choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake",
             reason: `intake fan-out vendor ${vendor}: the INTAKE table's ${vendor} seat` } });
-        const routed = await routeCall({ candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
+        const routed = await routeSeats({ onSkip: skippedFailover, candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;
@@ -1203,7 +1224,7 @@ export async function runOpenItem(spec, opts = {}) {
             const keepPool = c.forced && c.forced.vendor === c.choice.seat.vendor && c.choice.seat.poolNamed ? { pool: c.choice.seat.pool } : {};
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
               choice: c.forced ? choose("implementer", { explicit: { seat: { vendor: c.forced.vendor, model: c.forced.model, ...keepPool }, source: "escalation",
-                reason: `recorded escalation step_rung to ${c.forced.model}${c.forced.why ? `: ${c.forced.why}` : ""}` } }) : c.choice,
+                reason: `recorded escalation ${c.forced.why === "thinking level raised" ? "raise_thinking" : "step_rung"} to ${c.forced.model}${c.forced.why ? `: ${c.forced.why}` : ""}` } }) : c.choice,
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
             c.ranModel = made.seat.model;
@@ -1276,7 +1297,7 @@ export async function runOpenItem(spec, opts = {}) {
             // A slot already stopped takes no new decision: its stop is the record.
             for (const c of active) {
               const rec = escalationRecord({ role: "implementer", outcome: { kind: "acceptance", exit: acc.exit }, steps: c.escalationSteps ?? 0,
-                seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null } });
+                seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null, ...laneLadderOf(c) } });
               applyDecision(c, rec, rev);
               escalated(`slot:${c.sl.slot}`, { slot: c.sl.slot, rev, ...rec });
               progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
@@ -1481,7 +1502,7 @@ export async function runOpenItem(spec, opts = {}) {
         // The verdict is an outcome for the MAKER's seat: the protocol decides its next revision, which a
         // resume then runs (a passing acceptance alone would otherwise just re-review the same bytes).
         const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0, ...(ESCALATION ? { protocol: ESCALATION } : {}),
-          seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null } });
+          seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null, ...laneLadderOf(built) } });
         const { action } = rec.decision;
         applyDecision(built, rec, rev);
         // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work

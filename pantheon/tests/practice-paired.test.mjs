@@ -313,7 +313,10 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
     const store = join(repo, "store");
     try {
       let before = null, after = null, pairDir = null;
-      const skipFor = () => [join(repo, "store"), pairDir, join(repo, "cooldowns")].filter(Boolean);
+      // agy.log is the fake Antigravity CLI's own call log (tests/fixtures/dispatch.mjs writes it into the fixture
+      // directory, which is this test's repository): the fit counterpart's implementer is an Antigravity lane, so the
+      // fake CLI appends to it. It is the fixture's file, not the target repository's.
+      const skipFor = () => [join(repo, "store"), pairDir, join(repo, "cooldowns"), join(repo, "agy.log")].filter(Boolean);
       const r = await runBoardItem({ repo, item: "pair-a", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-a"), out: join(repo, "bundles", "pair-a"),
         runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, pairBudgetCalls: 200,
         progress: ev => {

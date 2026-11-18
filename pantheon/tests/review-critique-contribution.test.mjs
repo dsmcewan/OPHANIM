@@ -12,6 +12,7 @@ import { runOpenItem } from "../src/board/run-item.mjs";
 import { changeScope, cycleReviewers } from "../src/board/operate.mjs";
 import { reviewScope } from "../src/review/scope.mjs";
 import { openCooldownStore } from "../../packages/model-client/index.mjs";
+import { withFakeAgy } from "./fixtures/dispatch.mjs";
 
 function scripted({ review }) {
   const sent = [];
@@ -72,7 +73,14 @@ test("a reviewer whose findings reach the revision is a contributor: its lab is 
     assert.equal(pinned.shipped, false, "the xai reviewer whose findings shaped the revision reviewed it again, and it shipped");
     assert.match(pinned.error?.message ?? "", /xai shares the xai lab with a critique in the reviewed scope .*revision input.* cannot review it/);
     // Unpinned, the selector seats a lab that contributed nothing to the revised bytes, and the change ships.
-    const second = await runOpenItem(SPEC(dir), OPTS(dir, clients, { resume: first.board, seatOverrides: { implementer: seat("openai", "gpt-6-sol") } }));
+    // The selector's next reviewer is the Google seat, which goes through its Antigravity lane first (owner direction
+    // 2026-11-17): the fake CLI answers it, and its log is where that review is seen.
+    let lane = [];
+    const second = await withFakeAgy(dir, async ({ agy }) => {
+      const r = await runOpenItem(SPEC(dir), OPTS(dir, clients, { resume: first.board, seatOverrides: { implementer: seat("openai", "gpt-6-sol") } }));
+      lane = agy();
+      return r;
+    });
     assert.equal(second.shipped, true, JSON.stringify(second.error));
     const revised = clients.sent.slice(before).find(s => /Output ONLY the complete new contents/.test(s.prompt));
     assert.match(revised.prompt, /the boundary case is wrong/, "the xai reviewer's findings reached the worker");
@@ -85,8 +93,10 @@ test("a reviewer whose findings reach the revision is a contributor: its lab is 
     assert.ok(scope.author_labs.includes("xai"));
     // The revised bytes' in-run review was NOT by the lab whose findings shaped them.
     const reviews = clients.sent.slice(before).filter(s => /VERDICT/.test(s.prompt) && !/Output ONLY/.test(s.prompt));
-    assert.ok(reviews.length >= 1);
+    const laneReviews = lane.filter(a => a.agent === "pantheon-reviewer");
+    assert.ok(reviews.length + laneReviews.length >= 1);
     assert.ok(reviews.every(s => s.vendor !== "xai"), `the revised bytes were reviewed by ${reviews.map(s => s.vendor)}`);
+    assert.ok(run.turns.filter(t => t.purpose === "critique").slice(-1).every(t => t.vendor !== "xai"), "the last review was not by xai");
     // The contribution survives the resume in run.json, and the cycle's change scope excludes the lab too.
     assert.ok(run.files[0].contributors.some(c => c.purpose === "critique" && c.vendor === "xai"));
     const change = changeScope(run);
