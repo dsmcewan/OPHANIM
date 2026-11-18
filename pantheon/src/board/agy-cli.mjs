@@ -147,18 +147,23 @@ export function assertWorkerArgv(argv) {
   }
   return argv;
 }
-export function workerArgv({ model, worktree, prompt, timeoutS, log_file = null, control_dir = null }) {
+export function workerArgv({ model, worktree, prompt, timeoutS, log_file = null, control_dir = null, agent = WORKER_AGENT, conversation = null }) {
   if (typeof worktree !== "string" || !isAbsolute(worktree)) throw Object.assign(new Error(`agy worker: --add-dir must be an absolute worktree path, not ${JSON.stringify(worktree)}`), { code: "BAD_INPUT" });
   const log = log_file ?? (control_dir ? join(control_dir, "run", "agy.log") : null);
   if (log !== null && !isAbsolute(log)) throw Object.assign(new Error(`agy worker: --log-file must be absolute, not ${JSON.stringify(log)}`), { code: "BAD_INPUT" });
   // --disable-slash-commands ("Disable slash command and skill expansion in print mode", agy 1.5.10 --help): the prompt
   // carries plan and repository text, which must never expand into a slash command or a skill.
-  return assertWorkerArgv(["--agent", WORKER_AGENT, "--model", model, "--mode=accept-edits", "--add-dir", worktree,
+  if (typeof agent !== "string" || !/^pantheon-[a-z][a-z-]*$/.test(agent)) throw Object.assign(new Error(`agy worker: --agent must be a pantheon-<role> card name, not ${JSON.stringify(agent)}`), { code: "BAD_INPUT" });
+  // --conversation <id> (agy 1.5.10 --help: "Resume a previous conversation by ID"): only the review runner's --continue.
+  if (conversation !== null && (typeof conversation !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(conversation))) throw Object.assign(new Error(`agy worker: --conversation must be a plain id, not ${JSON.stringify(conversation)}`), { code: "BAD_INPUT" });
+  return assertWorkerArgv(["--agent", agent, ...(conversation ? ["--conversation", conversation] : []), "--model", model, "--mode=accept-edits", "--add-dir", worktree,
     "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`, ...(log ? ["--log-file", log] : []), "--print", prompt]);
 }
-export function workerEnv(extra = {}) {
+// `base` (optional): the environment to start from instead of process.env (the review runner passes an already
+// scrubbed one); the Google keys are stripped either way.
+export function workerEnv(extra = {}, base = null) {
   // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
-  const env = { ...process.env, ...(extra ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
+  const env = { ...(base ?? process.env), ...(extra ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
   delete env.GEMINI_API_KEY;
   delete env.GOOGLE_API_KEY;
   return env;
@@ -420,8 +425,8 @@ export const usageHasBuckets = env => Boolean(env && env.format === "json" && (e
  * and never its output. `model` (optional): the lane whose group is scoped (without one: the Gemini group, recorded
  * only). `jail` (optional) a prepareWorkerJail() result; without one a jail is built and its state dropped afterwards.
  */
-export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME, model = null }) {
-  const env = workerEnv(extraEnv);
+export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, base_env = null, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME, model = null }) {
+  const env = workerEnv(extraEnv, base_env);
   const own = !jail;
   const j = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
   const red = t => redactStrong(t, env);
@@ -528,22 +533,22 @@ async function turnCliLog({ logDir, before, log_file, stderr, env }) {
  * state; a thrown failure carries the same evidence fields. `jail` (optional): a prepareWorkerJail() result to run in
  * (then `gemini_scratch` is null: the caller owns and drops the state).
  */
-export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prompt, timeoutS = 1800, graceS = 15, env: extraEnv = {}, signal = undefined,
-  sandbox = {}, onEvent = () => {}, a2a_socket = null, jail = null }) {
+export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prompt, timeoutS = 1800, graceS = 15, env: extraEnv = {}, base_env = null, signal = undefined,
+  sandbox = {}, onEvent = () => {}, a2a_socket = null, jail = null, agent = WORKER_AGENT, conversation = null }) {
   if (!cli || !control_dir || !worktree || !model || typeof prompt !== "string") throw Object.assign(new Error("runAgyWorkerTurn: pass cli, control_dir, worktree, model and prompt"), { code: "BAD_INPUT" });
-  const cardPath = join(control_dir, ".agents", "agents", WORKER_AGENT, "agent.md");
+  const cardPath = join(control_dir, ".agents", "agents", agent, "agent.md");
   if (!existsSync(cardPath)) throw Object.assign(new Error(`agy worker: role card ${cardPath} missing (prepareWorkerWorkspace first)`), { code: "NO_WORKSPACE" });
   if (cli.includes("/") && !existsSync(cli)) throw laneFailure("spawn", `agy CLI absent at ${cli}`);
 
   // THE JAIL: bwrap, or a refusal. Never a silent unjailed run. A caller that already built one (the probe's preflight
   // ran in it) passes it as `jail` and drops its state itself.
-  const env = workerEnv(extraEnv);
+  const env = workerEnv(extraEnv, base_env);
   const ownJail = !jail;
   const { prefix, sandboxRec, gstate } = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
   const dropState = () => (ownJail ? dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null) : Promise.resolve(null));
 
   const log_file = join(control_dir, "run", "agy.log");
-  const args = workerArgv({ model, worktree, prompt, timeoutS, log_file });
+  const args = workerArgv({ model, worktree, prompt, timeoutS, log_file, agent, conversation });
   const cmd = prefix.length ? prefix[0] : cli;
   const argv = assertWorkerArgv(prefix.length ? [...prefix.slice(1), cli, ...args] : args);
   const launch = { cmd, args: argv.map(a => (a === prompt ? "<prompt>" : a)), cwd: control_dir, log_file,
@@ -552,13 +557,14 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   for (const k of launch.env_stripped) delete launch.env_added[k];
   for (const k of Object.keys(launch.env_added)) if (SECRETISH.test(k)) launch.env_added[k] = "<redacted>";
 
-  let init = null, result = null, sawResult = false, unparseable = 0, toolCalls = 0, subagentCalls = 0, answerChars = 0;
+  let init = null, conversationId = null, result = null, sawResult = false, unparseable = 0, toolCalls = 0, subagentCalls = 0, answerChars = 0;
   const tools = [], tool_steps = [];
   const report = ev => { try { onEvent(ev); } catch { /* telemetry is not the turn's authority */ } };
   const onStdoutLine = line => {
     if (!line.trim()) return;
     let event;
     try { event = JSON.parse(line); } catch { unparseable++; return; }
+    if (typeof event.conversation_id === "string" && event.conversation_id) conversationId = event.conversation_id;
     if (event.event === "init") {
       init = event.init;
       report({ event: "seat.start", detail: `OAuth CLI worker ${init?.agent ?? "unknown"}, model ${init?.model ?? "unknown"}` });
@@ -597,7 +603,8 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   const cli_log = await turnCliLog({ logDir, before: logBefore, log_file, stderr, env });
   const gemini_scratch = await dropState();
   const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps, gemini_scratch, cli_log, exit_code: run.status, stderr_tail: stderr.slice(-4000),
-    result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null };
+    result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null,
+    conversation_id: (typeof result?.conversation_id === "string" && result.conversation_id) || conversationId };
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED", ...more });
   if (run.killedFor === "timeout") throw laneFailure("timeout", `agy CLI timed out after ${timeoutS}s (process killed)`, more);
   if (run.killedFor) throw laneFailure("stream", `agy CLI stopped: ${run.killedFor}`, more);
@@ -612,8 +619,8 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
     if (run.status !== 0) throw laneFailure("exit", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"} (inspect local CLI diagnostics)`, { ...more, result_error: typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? null });
   }
   if (!sawResult) throw laneFailure("stream", `agy CLI stream ended without a result event${unparseable ? ` (${unparseable} unparseable line(s))` : ""}`, more);
-  if (init?.agent !== WORKER_AGENT || init?.model !== model) {
-    throw laneFailure("stream", `agy CLI identity mismatch: expected ${WORKER_AGENT}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`, { detail: "identity", ...more });
+  if (init?.agent !== agent || init?.model !== model) {
+    throw laneFailure("stream", `agy CLI identity mismatch: expected ${agent}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`, { detail: "identity", ...more });
   }
   if (result?.status !== "SUCCESS") throw laneFailure("exit", `agy CLI status ${result?.status ?? "missing"}${BAD_STATUS.has(result?.status) ? "" : " (unrecognised)"}`, more);
   const text = typeof result.response === "string" ? result.response.trim() : "";

@@ -199,14 +199,14 @@ test("refusals and usage errors: missing key, missing limit, unknown commit, exi
   // missing limit: exit 2
   const out = capture(), fetch = fakeFetch([]);
   const d = await deps({ root: repo.root, fetch, out });
-  assert.equal(await main(["--assignment", "2", "--commit", repo.commit, "--max-turns", "1", "--max-tool-calls", "1", "--timeout-s", "1"], d), EXIT.usage);
+  assert.equal(await main(["--via", "api", "--assignment", "2", "--commit", repo.commit, "--max-turns", "1", "--max-tool-calls", "1", "--timeout-s", "1"], d), EXIT.usage);
   assert.match(out.err, /--max-output-tokens is required/);
   assert.equal(await main(["--assignment", "5", "--commit", repo.commit, ...LIMITS], d), EXIT.usage);
   assert.equal(await main(["--assignment", "2", "--commit", "abc", ...LIMITS], d), EXIT.usage);
   // unknown commit: exit 1
   assert.equal(await main(["--assignment", "2", "--commit", "f".repeat(40), ...LIMITS, "--dry-run"], d), EXIT.refused);
   // above the cited output limit for the model: exit 2
-  assert.equal(await main(["--assignment", "2", "--commit", repo.commit, "--max-turns", "1", "--max-tool-calls", "1", "--max-output-tokens", "999999", "--timeout-s", "1", "--dry-run"], d), EXIT.usage);
+  assert.equal(await main(["--via", "api", "--assignment", "2", "--commit", repo.commit, "--max-turns", "1", "--max-tool-calls", "1", "--max-output-tokens", "999999", "--timeout-s", "1", "--dry-run"], d), EXIT.usage);
   assert.equal(fetch.calls.length, 0);
   // existing findings: exit 1 unless --force
   const outDir = await mkdtemp(join(tmpdir(), "rr-out-"));

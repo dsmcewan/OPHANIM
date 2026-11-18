@@ -32,7 +32,7 @@ export async function fixtureRepo({ readme } = {}) {
   const root = await mkdtemp(join(tmpdir(), "rr-repo-"));
   await mkdir(join(root, REVIEW_DIR), { recursive: true });
   for (const f of await readdir(join(REAL_ROOT, REVIEW_DIR))) {
-    if (/^(README|HARNESS|\d-.*)\.md$/.test(f)) await cp(join(REAL_ROOT, REVIEW_DIR, f), join(root, REVIEW_DIR, f));
+    if (/^(README|HARNESS|HARNESS-cli|\d-.*)\.md$/.test(f)) await cp(join(REAL_ROOT, REVIEW_DIR, f), join(root, REVIEW_DIR, f));
   }
   if (readme !== undefined) await writeFile(join(root, REVIEW_DIR, "README.md"), readme);
   await writeFile(join(root, REVIEW_DIR, "findings-4-openai.md"), "PRIOR-FINDINGS-UNIQUE-MARKER\n");
@@ -66,7 +66,8 @@ export function fakeFetch(script) {
   return fn;
 }
 
-export const LIMITS = ["--max-turns", "6", "--max-tool-calls", "6", "--max-output-tokens", "1000", "--timeout-s", "30"];
+// --via has no default (the owner chooses API spend or the subscription CLIs each time): the API tests pass it here.
+export const LIMITS = ["--via", "api", "--max-turns", "6", "--max-tool-calls", "6", "--max-output-tokens", "1000", "--timeout-s", "30"];
 
 export function capture() {
   const o = { out: "", err: "" };

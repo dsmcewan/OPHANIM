@@ -49,6 +49,10 @@ function openaiConversation({ model, system, brief, tools, maxOutputTokens }) {
     addToolResults(results) {
       pending = results.map(r => ({ type: "function_call_output", call_id: r.id, output: r.output }));
     },
+    // --continue after a reply that ended without a tool call (cut off): the partial reply is already server-side
+    // context of `previous` (previous_response_id); one user message asks for the complete document.
+    addContinuation(_partial, note) { pending = [{ role: "user", content: note }]; },
+    state() { return { previous_response_id: previous, pending }; },
   };
 }
 
@@ -73,6 +77,11 @@ function xaiConversation({ model, system, brief, tools, maxOutputTokens }) {
     addToolResults(results) {
       for (const r of results) messages.push({ role: "tool", tool_call_id: r.id, content: r.output });
     },
+    addContinuation(partial, note) {
+      if (partial && partial.trim()) messages.push({ role: "assistant", content: partial });
+      messages.push({ role: "user", content: note });
+    },
+    state() { return { messages: messages.length }; },
   };
 }
 
@@ -107,6 +116,11 @@ function geminiConversation({ model, system, brief, tools, maxOutputTokens }) {
       contents.push({ role: "user", parts: results.map(r => ({ functionResponse: {
         ...(byId.get(r.id)?.gemini_id ? { id: byId.get(r.id).gemini_id } : {}), name: r.name, response: { output: r.output } } })) });
     },
+    addContinuation(partial, note) {
+      if (partial && partial.trim()) contents.push({ role: "model", parts: [{ text: partial }] });
+      contents.push({ role: "user", parts: [{ text: note }] });
+    },
+    state() { return { contents: contents.length }; },
   };
 }
 

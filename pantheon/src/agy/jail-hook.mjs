@@ -30,6 +30,14 @@
 //       payload carries only {CommandLine, WaitMsBeforeAsync, toolSummary}: there is no Cwd to request, so the one
 //       command the worker may run sets its own directory. The plain verify_cmd is DENIED: it would run wherever the
 //       CLI happens to run commands.)
+//   run_command under a REVIEW policy (jail.json carries `run_command_policy`; absent -> the worker rule above, unchanged)
+//       {kind: "node-test", allowed_files_glob: [...], files: [...] | null, max_files, suites: {<name>: <exact command>}}:
+//       auto_approve ONLY a CommandLine (trimmed) that equals one of `suites`' commands exactly, or that is exactly
+//       `cd '<worktree>' && node --test <f1> [<f2> ...]` (decideReviewCommand: one space between files, each a plain
+//       worktree-relative path of [A-Za-z0-9_./-] not starting with '-', no '.', '..', .git or .agents segment, an
+//       existing regular file whose real path stays inside the worktree, listed in `files` when given, else matched by
+//       `allowed_files_glob`, both as written and as resolved); Cwd as for the worker; else deny. Used by the review
+//       runner (src/review-runner/agy.mjs): no shell metacharacter can reach the command, so it runs nothing else.
 //   read tools (READ_TOOLS)
 //       auto_approve (not "allow": owner-stated, "allow" may be soft-denied) when every path argument resolves inside
 //       the worktree or the control dir; deny otherwise, and deny when no path argument is found.
@@ -51,6 +59,7 @@ import { appendFileSync, lstatSync, readFileSync, realpathSync, writeSync } from
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { matchesOwned } from "../pipeline/paths.mjs";
+import { matchGlob } from "../review-runner/sandbox.mjs";
 
 export const WRITE_TOOLS = Object.freeze(["write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"]);
 /** The argument naming a write's target: the FIRST PRESENT of these wins (observed on agy 1.5.10: write_file {Path, Content}). */
@@ -160,6 +169,49 @@ export function decideCommand(policy, args) {
   return approve("the unit's worker verify command");
 }
 
+/** The exact prefix of a review's node --test command: `cd '<worktree>' && node --test ` (the real worktree). */
+export const reviewTestPrefix = worktree => `cd ${shQuote(worktree)} && node --test `;
+const REVIEW_TEST_FILE = /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/;
+
+/** run_command under a review's run_command_policy (see the decision table). */
+export function decideReviewCommand(policy, rcp, args) {
+  const cmd = typeof args?.CommandLine === "string" ? args.CommandLine.trim() : null;
+  if (!cmd) return deny("run_command names no CommandLine");
+  if (!isObj(rcp) || rcp.kind !== "node-test") return deny(`unknown run_command_policy ${JSON.stringify(rcp?.kind ?? null)}: no command is allowed`);
+  if (args.Cwd !== undefined && args.Cwd !== null && args.Cwd !== "") {
+    if (typeof args.Cwd !== "string" || !isAbsolute(args.Cwd)) return deny(`Cwd ${JSON.stringify(args.Cwd)} is not an absolute path`);
+    if (realOr(args.Cwd) !== policy.worktree) return deny(`review commands run in the worktree ${policy.worktree}, not in ${args.Cwd}`);
+  }
+  const suites = isObj(rcp.suites) ? Object.entries(rcp.suites).filter(([, c]) => typeof c === "string" && c.trim()) : [];
+  const suite = suites.find(([, c]) => c.trim() === cmd);
+  if (suite) return approve(`the review suite command "${suite[0]}"`);
+  const prefix = reviewTestPrefix(policy.worktree);
+  if (!cmd.startsWith(prefix)) return deny(`only the review's listed commands may run (${prefix}<test files>${suites.length ? ` or a listed suite command` : ""}), not ${JSON.stringify(cmd)}`);
+  const files = cmd.slice(prefix.length).split(" ");
+  const max = Number.isSafeInteger(rcp.max_files) && rcp.max_files > 0 ? rcp.max_files : 50;
+  if (files.length > max) return deny(`at most ${max} test files per command`);
+  const listed = Array.isArray(rcp.files) ? rcp.files : null;
+  const globs = Array.isArray(rcp.allowed_files_glob) ? rcp.allowed_files_glob.filter(g => typeof g === "string") : [];
+  const allowed = rel => (listed ? listed.includes(rel) : globs.some(g => matchGlob(g, [rel]).length > 0));
+  for (const f of files) {
+    if (!REVIEW_TEST_FILE.test(f)) return deny(`test file ${JSON.stringify(f)} is not a plain worktree-relative path (letters, digits, _ . / - only, one space between files)`);
+    const segs = f.split("/");
+    if (segs.some(s => s === "" || s === "." || s === "..")) return deny(`test file ${f}: empty, '.' or '..' segments are refused`);
+    const seg = forbidden(f);
+    if (seg) return deny(`test file ${f} is inside ${seg}`);
+    if (!allowed(f)) return deny(`${f} is not ${listed ? "one of the test files this review lists" : `matched by the review's allowed test files (${globs.join(", ")})`}`);
+    const abs = join(policy.worktree, ...segs);
+    const r = realOr(abs);
+    if (!r) return deny(`test file ${f} does not exist`);
+    if (!inside(policy.worktree, r) || r === policy.worktree) return deny(`test file ${f} resolves to ${r}, outside the worktree`);
+    let st; try { st = lstatSync(r); } catch { return deny(`test file ${f} cannot be read`); }
+    if (!st.isFile()) return deny(`test file ${f} is not a regular file`);
+    const realRel = relative(policy.worktree, r).split(sep).join("/");
+    if (forbidden(realRel) || !allowed(realRel)) return deny(`test file ${f} resolves to ${realRel}, which is not allowed`);
+  }
+  return approve(`node --test on ${files.length} allowed test file(s)`);
+}
+
 export function decideRead(policy, args) {
   const paths = READ_KEYS.flatMap(k => (Array.isArray(args?.[k]) ? args[k] : [args?.[k]])).filter(v => typeof v === "string" && v.trim());
   if (!paths.length) return deny("a read names no path argument the jail can check");
@@ -239,7 +291,7 @@ function decideUnsafe(policy, payload) {
   if (HARD_DENY.includes(tc.name)) return deny(`${tc.name} is not available to a unit worker: native subagents would escape the jail`);
   if (tc.args === null) return deny(`malformed hook input: the arguments of ${tc.name} are not a JSON object`);
   if (WRITE_TOOLS.includes(tc.name)) return decideWrite(policy, tc.args);
-  if (tc.name === "run_command") return decideCommand(policy, tc.args);
+  if (tc.name === "run_command") return policy.run_command_policy !== undefined && policy.run_command_policy !== null ? decideReviewCommand(policy, policy.run_command_policy, tc.args) : decideCommand(policy, tc.args);
   if (READ_TOOLS.includes(tc.name)) return decideRead(policy, tc.args);
   const mcp = mcpCallOf(tc);
   if (mcp) return decideMcp(policy, mcp);

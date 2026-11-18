@@ -1,0 +1,396 @@
+// `--via subscription`: one command-line agent per vendor, signed in to the owner's SUBSCRIPTION, instead of the metered
+// API (index.mjs, `--via api`). Assignment 1 (Google) -> agy-cli, 2 and 4 (OpenAI) -> codex-cli, 3 (xAI) -> grok-cli.
+//
+// The reviewer is shown HARNESS-cli.md (values filled in) + "\n\n---\n\n" + the README and its assignment file verbatim +
+// one commit line; the sha256 of each part and of the whole prompt is recorded. A subscription run that cannot start
+// REFUSES (exit 1): it never falls back to the API, and no API key reaches a CLI (scrubEnv), so a CLI cannot switch to
+// metered billing on its own. `--dry-run` runs only the zero-spend preflights (versions, login status, model list, agy
+// /usage) and prints the plan; no model turn.
+//
+// Limits: `--max-wall-s` (required) is the whole run's wall clock (with `--timeout-s` also given, the smaller one); the
+// CLI's process group is killed when it is reached. The API caps (--max-turns, --max-tool-calls, --max-output-tokens)
+// have no CLI equivalent and are ignored with a printed note. Usage is what the CLI reports.
+//
+// After the run the worktree is compared with its state before (git status, cli-common.mjs compareWorktree): any changed
+// path outside .review-tests/ (any change at all for assignment 4) or a moved HEAD is a policy violation, recorded in
+// the findings header, and the run's status becomes `policy_violation`.
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile, access } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { REVIEW_DIR, SEPARATOR, renderHarness, sha256 } from "./brief.mjs";
+import { WITHHELD } from "./sandbox.mjs";
+import { redact } from "./vendors.mjs";
+import { allowedCommands, compareWorktree, findCli, runCli, scrubEnv, secretValues, tail, worktreeState, writeRule, REVIEW_TESTS_DIR } from "./cli-common.mjs";
+import { codexArgv, codexPreflight, codexSandboxFor, parseCodexEvents } from "./codex.mjs";
+import { dropGrokScratch, grokArgv, grokBwrapArgs, grokPreflight, grokStateScratch, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
+import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane } from "./agy.mjs";
+import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
+import { prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
+import { CLI_CONTINUE_NOTE, ContinueRefusal, captureReviewTests, cumulative, loadContinuation, ownTranscriptAppendix, preserveFiles, restoreReviewTests } from "./continue.mjs";
+
+// --continue in subscription mode: what each CLI documents about a headless resume, and what the runner does with it.
+export const RESUME_SUPPORT = Object.freeze({
+  "agy-cli": { documented: true, source: "agy 1.5.10 --help: `--conversation <id>` \"Resume a previous conversation by ID\", `--continue` \"Continue the most recent conversation\"",
+    used: "--conversation <the earlier run's conversation_id>, with the earlier run's conversations/ and brain/ state (saved beside the transcript when it ended incomplete) restored into the new per-run scratch; without both, the replayed-own-transcript fallback" },
+  "codex-cli": { documented: true, source: "learn.chatgpt.com/docs/developer-commands (read 2026-11-18): `codex exec resume [SESSION_ID]` \"Resume an exec session by ID or add --last to continue the most recent session from the current working directory ... Accepts an optional follow-up prompt\"; the resume subcommand's documented options are --all, --image, --last, PROMPT, SESSION_ID",
+    used: "NOT used: the docs list no --sandbox, -C, -m, --json or -o for `exec resume`, so the resumed session's sandbox and workspace root (the earlier, deleted worktree) cannot be set; the replayed-own-transcript fallback instead" },
+  "grok-cli": { documented: false, source: "docs.x.ai/build/overview (read 2026-11-18) documents no resume", used: "the replayed-own-transcript fallback" },
+});
+const AGY_SAVED = ["conversations", "brain"];
+const CLI_OWN_CAP = 256 * 1024;
+const capOwn = own => { const out = []; let n = 0; for (const x of [...own].reverse()) { n += Buffer.byteLength(x.text); if (n > CLI_OWN_CAP) break; out.unshift(x); } return out; };
+
+export const SUB_PLAN_SCHEMA = "ophanim.review-run-plan/v2-subscription";
+export const TRANSPORT_FOR = Object.freeze({ gemini: "agy-cli", openai: "codex-cli", xai: "grok-cli" });
+export const COVERAGE = Object.freeze({ "agy-cli": "documented", "codex-cli": "documented", "grok-cli": "undocumented" });
+const DROP = { "codex-cli": ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"], "grok-cli": ["XAI_API_KEY", "GROK_API_KEY"], "agy-cli": ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
+const LANES = new URL("../config/lanes.json", import.meta.url);
+const exists = p => access(p).then(() => true, () => false);
+
+// What each transport's plan says is verified by the preflight, assumed, and enforced by the runner itself.
+const KNOWLEDGE = {
+  "codex-cli": {
+    verified_by_preflight: ["`codex --version` runs", "`codex login status` reports a ChatGPT sign-in (refused when it reports an API key, unless --allow-api-key-in-cli)", "`codex debug models` lists the requested model (unless --skip-model-check and the catalog could not be read)"],
+    assumed: ["the `codex exec` flags and JSONL events as documented by OpenAI (read 2026-11-18); no codex is installed where this runner was written, every test uses a fake",
+      "a ChatGPT sign-in bills the run to the subscription (documented: \"Sign in with ChatGPT for subscription access\")",
+      "--sandbox read-only blocks every write and workspace-write limits writes to the -C worktree (and codex's own temporary dirs); codex runs its OWN bubblewrap sandbox, NOT nested in the runner's (nested user namespaces are unverified)",
+      "-a never: no command is escalated out of the sandbox; codex has no per-command allowlist, so the listed test commands are asked for, not enforced",
+      "the served model is the requested one: no codex event names the served model (served_model_source: input)"],
+    enforced_by_runner: ["no key, token or secret in the CLI's environment (OPENAI_API_KEY and CODEX_API_KEY included)", "the wall clock: the process group is killed", "the post-run git check of the worktree (writes outside .review-tests/, any write for assignment 4, a moved HEAD)"],
+  },
+  "grok-cli": {
+    verified_by_preflight: ["`grok --version` runs", "the state dir (--grok-state-dir) exists and is not empty", "bwrap runs"],
+    assumed: ["the browser login lives in the state dir (nothing was discovered; no documented login-status command)",
+      "UNDOCUMENTED: whether a SuperGrok / X Premium subscription covers Grok Build CLI usage (subscription_coverage: undocumented)",
+      "`-p`, `--output-format streaming-json`, `-m` as documented (docs.x.ai/build/overview, read 2026-11-18); the event schema is undocumented and parsed tolerantly",
+      "the CLI needs to write only its state dir, /tmp and (assignments 1-3) .review-tests/; its own tool permissions are undocumented, so the runner's bwrap jail is the containment",
+      "the served model is the requested one (served_model_source: input)"],
+    enforced_by_runner: ["XAI_API_KEY and every other key, token or secret scrubbed (a CLI that then asks for a key is a refusal)", "the bwrap jail: the host read-only, the worktree read-only except .review-tests/ (1-3), a per-run scratch copy of the state dir", "the wall clock", "the post-run git check of the worktree"],
+  },
+  "agy-cli": {
+    verified_by_preflight: ["the review card's tool list", "the login and the lane's quota by an in-jail `agy --print /usage --output-format json` (no model turn)", "`agy agents` runs in the jail", "no read-only-file-system / unknown-component lines in the CLI's output and log"],
+    assumed: ["the hook semantics observed on agy 1.5.10 / owner-stated (an empty hook stdout allows, so the hook always prints a decision; headless accept-edits soft-denies run_command unless auto_approve)",
+      "the served model is the lane id (Antigravity names no served model; served_model_source: input)"],
+    enforced_by_runner: ["the unit worker's bwrap jail (prepareWorkerJail: ~/.gemini read-only, per-run scratch state)", "the PreToolUse jail hook with the review policy (writes only under .review-tests/ for 1-3, none for 4; run_command only the listed commands; no MCP; no native subagents)", "no Google API key in the CLI's environment", "the wall clock", "the post-run git check of the worktree"],
+  },
+};
+
+const UNKNOWNS_GROK = ["Does the owner's subscription cover Grok Build CLI usage? (undocumented)", "Where does the CLI keep its browser login? (assumed: --grok-state-dir, default ~/.grok)",
+  "Does the CLI write outside its state dir and /tmp? (a write elsewhere fails inside the jail)", "What does its streaming-json look like? (parsed tolerantly; unparsed lines are counted)",
+  "Can the CLI run tools without its own approval prompt headless? (undocumented; with none, it may only read)"];
+
+function git(repoRoot, args) {
+  return runCli({ cmd: "git", args: ["-C", repoRoot, ...args], env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: tmpdir(), LANG: "C.UTF-8" }, timeoutMs: 120_000 })
+    .then(r => ({ code: r.exit_code, stdout: r.stdout, stderr: r.stderr }));
+}
+
+/**
+ * Run (or dry-run) one assignment in subscription mode. `a` is index.mjs's loadAssignment result. Returns the exit code.
+ */
+export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err, EXIT, outPaths }) {
+  const { row, b, permissions } = a;
+  const transport = TRANSPORT_FOR[row.vendor];
+  const wall = opts.limits.timeout_s ? Math.min(opts.limits.max_wall_s, opts.limits.timeout_s) : opts.limits.max_wall_s;
+  const scrub = scrubEnv(env, { drop: DROP[transport], set: transport === "grok-cli" ? { TMPDIR: "/tmp" } : {} });
+  const childEnv = scrub.env;
+  const secrets = secretValues(env);
+  const write_allowed = Boolean(permissions.write_test);
+  const harnessTemplate = await readFile(join(repoRoot, REVIEW_DIR, "HARNESS-cli.md"), "utf8").catch(() => null);
+  if (harnessTemplate === null) { err(`run-review: refused: ${REVIEW_DIR}/HARNESS-cli.md is missing\n`); return EXIT.refused; }
+
+  // The lane (agy only).
+  let lane = null;
+  if (transport === "agy-cli") {
+    const lanes = JSON.parse(await readFile(LANES, "utf8"));
+    const l = reviewLane(lanes, row.model);
+    if (!l.ok) { err(`run-review: refused: ${l.why}\n`); return EXIT.refused; }
+    lane = l.id;
+  }
+  const cliName = { "codex-cli": "codex", "grok-cli": "grok", "agy-cli": "agy" }[transport];
+  const explicit = { "codex-cli": opts.codexCli, "grok-cli": opts.grokCli, "agy-cli": opts.agyCli ?? env.PANTHEON_AGY_CLI }[transport];
+  let cli = await findCli(cliName, explicit, env);
+  if (!cli && transport === "agy-cli" && !explicit && env.HOME) cli = await findCli(cliName, join(env.HOME, ".local", "bin", "agy"), env).catch(() => null);
+  const grokStateDir = transport === "grok-cli" ? resolve(opts.grokStateDir ?? join(env.HOME ?? homedir(), ".grok")) : null;
+
+  let resume = null, method = null;
+  if (opts.continue) {
+    try { resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: row.lab.toLowerCase(), vendor: row.vendor, model: row.model, commit: opts.commit, via: "subscription", transport, brief_sha256: sha256(b.brief) }); }
+    catch (e) { if (e instanceof ContinueRefusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; } throw e; }
+    const saved = resume.t.agy_state?.dir ? join(resolve(resume.path, ".."), resume.t.agy_state.dir) : null;
+    method = transport === "agy-cli" && resume.t.cli?.conversation_id && saved && await exists(join(saved, "conversations")) ? "agy --conversation" : "replayed-own-transcript";
+    resume.agy_saved = method === "agy --conversation" ? saved : null;
+  }
+  const tmp = await realpath(await mkdtemp(join(deps.tmpBase ?? tmpdir(), "ophanim-review-")));
+  const wtPath = join(tmp, "worktree"), control = join(tmp, "control"), runDir = join(tmp, "run"), outTmp = join(tmp, "out");
+  await mkdir(runDir, { recursive: true, mode: 0o700 }); await mkdir(outTmp);
+  let worktreeAdded = false, agyJail = null, grokScratch = null, code = EXIT.refused;
+  const cleanup = async () => {
+    if (agyJail) await dropGeminiState(agyJail.gstate).catch(() => null);   // the scratch holds the OAuth token: always dropped
+    await dropGrokScratch(grokScratch);                                     // the copy of the Grok login: always dropped
+    if (worktreeAdded && !opts.keep) { await git(repoRoot, ["worktree", "remove", "--force", wtPath]); await git(repoRoot, ["worktree", "prune"]); }
+    if (!opts.keep) await rm(tmp, { recursive: true, force: true });
+  };
+  try {
+    // THE WORKTREE: a real detached worktree for a run; an empty stand-in for a dry run (only the preflights run).
+    if (opts.dryRun) await mkdir(wtPath);
+    else {
+      const add = await git(repoRoot, ["worktree", "add", "--detach", wtPath, opts.commit]);
+      if (add.code !== 0) { err(`run-review: refused: git worktree add failed: ${add.stderr.trim()}\n`); return EXIT.refused; }
+      worktreeAdded = true;
+      for (const f of a.withheld) await rm(join(wtPath, f), { force: true });
+      if (deps.copyDependencies !== false) {
+        for (const d of ["node_modules", "pantheon/node_modules", "packages/model-client/node_modules", "packages/ledger/node_modules"]) {
+          if (await exists(join(repoRoot, d))) await cp(join(repoRoot, d), join(wtPath, d), { recursive: true, verbatimSymlinks: true });
+        }
+      }
+    }
+    if (write_allowed) await mkdir(join(wtPath, REVIEW_TESTS_DIR), { recursive: true });
+    const wt = await realpath(wtPath);
+    let restored = null;
+    if (resume && !opts.dryRun && resume.t.review_tests.files?.length) restored = await restoreReviewTests(wt, resume.t.review_tests);
+
+    const cmds = allowedCommands({ permissions, worktree: wt, prefixWithCd: transport === "agy-cli", telosRoot: opts.telosRoot });
+    const harness = renderHarness(harnessTemplate, { COMMIT: opts.commit, WORKTREE: wt, ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed, worktree: wt }), MAX_WALL_S: wall });
+    // A continuation: agy resumes its own conversation (a note, then the same prompt); every other CLI gets the same
+    // prompt PLUS the delimited appendix of the reviewer's own earlier messages and tool results (that transcript only).
+    const appendix = resume && method === "replayed-own-transcript" ? ownTranscriptAppendix(resume.t) : null;
+    const prompt = resume && method === "agy --conversation" ? CLI_CONTINUE_NOTE + SEPARATOR + harness + SEPARATOR + b.brief
+      : harness + SEPARATOR + b.brief + (appendix ? "\n\n" + appendix + "\n" : "");
+    const promptRef = `<prompt sha256:${sha256(prompt)}>`;
+
+    // ---- per transport: argv, sandbox, writable paths, preflight ------------------------------------------------
+    const plan = {
+      schema: SUB_PLAN_SCHEMA, dry_run: opts.dryRun, via: "subscription", transport,
+      assignment: { n: opts.n, title: row.title, file: `${REVIEW_DIR}/${row.file}`, scope: row.scope, testing: row.testing },
+      lab: row.lab, vendor: row.vendor, requested_model: row.model, ...(lane ? { lane } : {}), commit: opts.commit,
+      subscription_coverage: COVERAGE[transport],
+      prompt: {
+        harness_cli_template: { path: `${REVIEW_DIR}/HARNESS-cli.md`, sha256: sha256(harnessTemplate) },
+        harness_sha256: sha256(harness), brief_sha256: sha256(b.brief), readme_sha256: sha256(b.readme), assignment_sha256: sha256(b.assignmentText),
+        sha256: sha256(prompt), bytes: Buffer.byteLength(prompt),
+        ...(opts.dryRun ? { note: "computed with the dry run's stand-in worktree path; a real run's prompt names its own worktree and records its own sha256" } : {}),
+      },
+      cli: { name: cliName, path: cli, found: Boolean(cli) },
+      allowed_commands: cmds.lines, write_rule: write_allowed ? `only under ${REVIEW_TESTS_DIR}/` : "none",
+      limits: { max_wall_s: opts.limits.max_wall_s, ...(opts.limits.timeout_s ? { timeout_s: opts.limits.timeout_s } : {}), wall_clock_s: wall,
+        ignored: opts.ignoredCaps, note: "the CLIs expose no turn, tool-call or output-token caps; the wall clock kills the process group" },
+      env: { passed: Object.keys(childEnv).sort(), removed: scrub.removed, note: "names only; every key, token and secret is removed so the CLI cannot switch to metered billing" },
+      ...KNOWLEDGE[transport],
+      ...(transport === "grok-cli" ? { unknowns: UNKNOWNS_GROK } : {}),
+      worktree: { path: wt, kind: opts.dryRun ? "empty stand-in (dry run: no worktree is created)" : "detached git worktree in a new temp dir", removed_after_run: !opts.keep },
+      out: outPaths,
+      model_turns: 0,
+      ...(resume ? { continue: { from: resume.path, transcript_sha256: resume.sha256, method, resume_support: RESUME_SUPPORT[transport], prior: resume.prior,
+        review_tests_to_restore: (resume.t.review_tests.files ?? []).map(f => f.path), ...(appendix ? { appendix_sha256: sha256(appendix), appendix_bytes: Buffer.byteLength(appendix) } : {}),
+        ...(method === "agy --conversation" ? { conversation_id: resume.t.cli.conversation_id } : {}) } } : {}),
+    };
+    let pre, runner;
+    if (!cli) {
+      pre = { ok: false, failed: [`${cliName} not found (${explicit ? `at ${explicit}` : "on PATH"}); subscription mode never falls back to the API`], checks: {}, cli_version: null, auth_method_observed: null };
+    } else if (transport === "codex-cli") {
+      const lastMessage = join(outTmp, "last-message.md");
+      const argv = codexArgv({ model: row.model, worktree: wt, write_allowed, lastMessage, prompt });
+      Object.assign(plan, { argv: [cli, ...argv.slice(0, -1), promptRef], cwd: wt,
+        sandbox: { kind: "codex's own sandbox (bubblewrap + seccomp on Linux)", mode: codexSandboxFor(write_allowed), approvals: "never", nested_in_runner_bwrap: false },
+        writable_paths: write_allowed ? [`${wt} (codex workspace-write: the whole worktree; the post-run check allows only ${REVIEW_TESTS_DIR}/)`, "codex's own temporary dirs (its sandbox's choice)"] : ["none (codex read-only)"] });
+      pre = await codexPreflight({ cli, env: childEnv, model: row.model, opts });
+      runner = () => runCodex({ cli, argv, wt, childEnv, wall, lastMessage });
+    } else if (transport === "grok-cli") {
+      const bw = deps.bwrap ?? "bwrap";
+      const box = await sandboxAvailable(bw);
+      const stateOk = await exists(grokStateDir);
+      const cliDir = resolve(cli, "..");
+      const jailPlan = grokBwrapArgs({ worktree: wt, write_allowed, state: { dir: grokStateDir, scratch: join(runDir, "grok-state") }, cliDir, bwrap: bw });
+      const gargv = grokArgv({ model: row.model, prompt });
+      Object.assign(plan, { argv: [...jailPlan.argv, cli, ...gargv.map(x => (x === prompt ? promptRef : x))], cwd: wt,
+        sandbox: { kind: "the runner's bwrap jail (the Grok CLI's own permissions are undocumented)", binds: jailPlan.binds, network: "not cut (the CLI must reach xAI)", state_dir: grokStateDir, state_dir_exists: stateOk },
+        writable_paths: jailPlan.writable });
+      pre = await grokPreflight({ cli, env: childEnv, stateDir: grokStateDir, bwrapOk: box, parentEnv: env });
+      runner = async () => {
+        grokScratch = await grokStateScratch(grokStateDir, runDir);
+        const j = grokBwrapArgs({ worktree: wt, write_allowed, state: grokScratch, cliDir, bwrap: bw });
+        return runGrok({ argv: [...j.argv, cli, ...gargv], wt, childEnv, wall });
+      };
+    } else {
+      const sandbox = { home: childEnv.HOME, agy_state_dirs: defaultAgyStateDirs(childEnv), ...(deps.bwrap ? { bwrap: deps.bwrap } : {}) };
+      const ws = await prepareReviewWorkspace({ control_dir: control, worktree: wt, n: opts.n, write_allowed, run_command_policy: cmds.run_command_policy });
+      const graceS = Math.max(1, Math.min(15, Math.floor(wall / 5))), timeoutS = Math.max(1, wall - graceS);
+      const conversation = method === "agy --conversation" ? resume.t.cli.conversation_id : null;
+      const args = workerArgv({ model: lane, worktree: wt, prompt, timeoutS, log_file: ws.paths.agy_log, agent: REVIEW_AGENT, conversation });
+      Object.assign(plan, { argv: ["<bwrap jail prefix>", cli, ...args.map(x => (x === prompt ? promptRef : x))], cwd: ws.paths.control_dir,
+        print_timeout_s: timeoutS, kill_after_s: timeoutS + graceS,
+        hook_policy: { owned_paths: ws.policy.owned_paths, run_command_policy: ws.policy.run_command_policy, mcp: "none", card_tools: write_allowed ? "view_file, write_file, replace_file_content, run_command" : "view_file, run_command" },
+        writable_paths: [`${wt} (bwrap; the jail hook allows writes only under ${REVIEW_TESTS_DIR}/${write_allowed ? "" : ": none for this assignment"})`, `${ws.paths.run} (jail.log, the CLI's --log-file, the agy state scratch)`, "/tmp (a fresh tmpfs)"] });
+      const v = await runCli({ cmd: cli, args: ["--version"], env: workerEnv({}, childEnv), timeoutMs: 30_000 });
+      const version = redactStrong(`${v.stdout}${v.stderr}`, childEnv).trim().slice(0, 200) || null;
+      try {
+        agyJail = await prepareWorkerJail({ cli, control_dir: ws.paths.control_dir, worktree: wt, env: workerEnv({}, childEnv), sandbox });
+        plan.sandbox = { kind: "bwrap (the unit worker's jail, src/agy/sandbox.mjs)", binds: agyJail.sandboxRec.binds, gemini_state: { mode: agyJail.sandboxRec.gemini_state?.mode, copied: agyJail.sandboxRec.gemini_state?.copied, withheld: (agyJail.sandboxRec.gemini_state?.withheld ?? []).map(w => w.name) } };
+        const pf = await runAgyPreflight({ cli, control_dir: ws.paths.control_dir, worktree: wt, base_env: childEnv, sandbox, jail: agyJail, model: lane, agent: REVIEW_AGENT });
+        const failed = pf.failed.map(k => `agy preflight ${k}: ${pf.checks[k]?.why ?? "failed"}`);
+        if (v.exit_code !== 0) failed.unshift(`\`agy --version\` failed (exit ${v.exit_code ?? v.killed_for ?? v.spawn_error})`);
+        pre = { ok: failed.length === 0, failed, warnings: pf.warnings, checks: { version: { exit_code: v.exit_code, text: version }, auth: pf.checks.auth && { ok: pf.checks.auth.ok, why: pf.checks.auth.why, groups: pf.checks.auth.groups, num_turns: pf.checks.auth.num_turns },
+          lane_quota: pf.checks.lane_quota && { ok: pf.checks.lane_quota.ok, state: pf.checks.lane_quota.quota_scope?.state ?? null, groups: pf.checks.lane_quota.quota_scope?.groups ?? null, why: pf.checks.lane_quota.why },
+          card_tools: pf.checks.card_tools, agents: pf.checks.agents && { ok: pf.checks.agents.ok, why: pf.checks.agents.why }, log_scan: pf.checks.log_scan && { ok: pf.checks.log_scan.ok, why: pf.checks.log_scan.why } },
+          cli_version: version, auth_method_observed: pf.checks.auth?.ok ? "antigravity OAuth (in-jail /usage returned quota groups)" : "none observed" };
+      } catch (e) {
+        pre = { ok: false, failed: [`the agy jail could not be built (${e.code ?? "error"}): ${e.message}`], checks: { version: { exit_code: v.exit_code, text: version } }, cli_version: version, auth_method_observed: null };
+      }
+      runner = async () => {
+        // agy --conversation: the earlier run's conversation state, restored into this run's scratch before the turn.
+        if (conversation && agyJail?.gstate?.scratch_cli) for (const d of AGY_SAVED) if (await exists(join(resume.agy_saved, d))) await cp(join(resume.agy_saved, d), join(agyJail.gstate.scratch_cli, d), { recursive: true, force: true });
+        return runAgy({ cli, ws, wt, lane, prompt, timeoutS, graceS, childEnv, sandbox, jail: agyJail, conversation });
+      };
+    }
+    plan.preflight = { ok: pre.ok, failed: pre.failed, ...(pre.warnings?.length ? { warnings: pre.warnings } : {}), checks: pre.checks };
+    out(JSON.stringify(plan, null, 2) + "\n");
+    for (const n of opts.notes) err(`run-review: note: ${n}\n`);
+    if (opts.dryRun) {
+      if (!pre.ok) { err(`run-review: refused: preflight failed: ${pre.failed.join("; ")}\n`); return (code = EXIT.refused); }
+      return (code = EXIT.complete);
+    }
+    if (!pre.ok) { err(`run-review: refused: preflight failed (no model turn was started; no fallback to the API): ${pre.failed.join("; ")}\n`); return (code = EXIT.refused); }
+    const sameFiles = resume && resolve(resume.path) === resolve(outPaths.transcript);
+    if (sameFiles) await preserveFiles(resume, outPaths);
+    else if (!opts.force && (await exists(outPaths.findings) || await exists(outPaths.transcript))) { err(`run-review: refused: ${outPaths.findings} or its transcript exists (use --force to overwrite)\n`); return (code = EXIT.refused); }
+
+    // ---- the run ------------------------------------------------------------------------------------------------
+    const g = args => git(wt, args);
+    const before = await worktreeState(g);
+    const started = (deps.now ?? (() => new Date()))();
+    const r = await runner();
+    const ended = (deps.now ?? (() => new Date()))();
+    const after = await worktreeState(g);
+    const reviewTests = await captureReviewTests(wt).catch(e => ({ captured: false, why: e.message }));
+    // agy: an incomplete run keeps its conversation state beside the transcript, for a later --continue.
+    let agyState = null;
+    if (transport === "agy-cli" && r.status !== "complete" && agyJail?.gstate?.scratch_cli && r.record?.conversation_id) {
+      const name = outPaths.findings.split(/[\\/]/).pop().replace(/\.md$/, ".agy-state"), dir = join(resolve(outPaths.findings, ".."), name);
+      await rm(dir, { recursive: true, force: true }); await mkdir(dir, { recursive: true, mode: 0o700 });
+      const saved = [];
+      for (const d of AGY_SAVED) if (await exists(join(agyJail.gstate.scratch_cli, d))) { await cp(join(agyJail.gstate.scratch_cli, d), join(dir, d), { recursive: true }); saved.push(d); }
+      agyState = { dir: name, conversation_id: r.record.conversation_id, saved, note: "the CLI's conversation state of this run (no OAuth token: only conversations/ and brain/), for --continue" };
+    }
+    const check = compareWorktree(before, after, { write_allowed });
+    let status = r.status;
+    if (check.violations.length && status !== "refused") status = "policy_violation";
+    const finalText = r.final_text ? redact(r.final_text, secrets) : "";
+    const transcript = {
+      schema: "ophanim.review-transcript/v2-subscription", via: "subscription", transport, assignment: opts.n, lab: row.lab, vendor: row.vendor,
+      requested_model: row.model, ...(lane ? { lane } : {}), commit: opts.commit, argv: plan.argv, cwd: plan.cwd, env_names: plan.env.passed, env_removed: scrub.removed,
+      prompt: plan.prompt, sandbox: plan.sandbox, preflight: plan.preflight, limits: plan.limits, started_at: started.toISOString(), ended_at: ended.toISOString(),
+      status, stop_reason: r.stop_reason, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
+      worktree_check: { changed: check.changed, violations: check.violations, limits: check.limits }, worktree_kept: opts.keep ? wt : null,
+      review_tests: reviewTests, ...(agyState ? { agy_state: agyState } : {}),
+      ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method }, continued: method, ...(restored ? { restored_review_tests: restored.restored } : {}),
+        cumulative: cumulative(resume.prior, { usage: r.usage ?? {}, wall_s: Math.round((ended - started) / 1000) }) } : {}),
+    };
+    await mkdir(resolve(outPaths.findings, ".."), { recursive: true });
+    const tBytes = redact(JSON.stringify(transcript, null, 2) + "\n", secrets);
+    await writeFile(outPaths.transcript, tBytes);
+    const header = [
+      "<!-- Written by pantheon/scripts/run-review.mjs (--via subscription). The runner's header ends at the marker line below; the reviewer's final message follows it verbatim. -->",
+      `# Review run: assignment ${opts.n}, ${row.title}`,
+      "",
+      `- status: ${status}`,
+      `- stop_reason: ${r.stop_reason}`,
+      `- via: subscription`,
+      `- transport: ${transport}`,
+      `- cli_version: ${pre.cli_version ? `\`${pre.cli_version.replace(/`/g, "'")}\`` : "unknown"}`,
+      `- auth_method_observed: ${pre.auth_method_observed ?? "unknown"}`,
+      `- subscription_coverage: ${COVERAGE[transport]}`,
+      `- lab: ${row.lab}`,
+      `- requested_model: \`${row.model}\``,
+      ...(lane ? [`- lane: \`${lane}\``] : []),
+      `- served_model: \`${lane ?? row.model}\``,
+      `- served_model_source: input (the CLI names no served model; this is the ${lane ? "lane" : "model"} the runner asked for)`,
+      `- sandbox: ${sandboxLine(transport, plan)}`,
+      `- policy_violations: ${check.violations.length ? check.violations.map(v => `\`${v}\``).join(", ") : "none"}`,
+      `- commit: \`${opts.commit}\``,
+      `- started_at: ${started.toISOString()}`,
+      `- ended_at: ${ended.toISOString()}`,
+      `- usage_totals: \`${JSON.stringify(r.usage ?? {})}\` (as the CLI reported it)`,
+      `- limits: \`${JSON.stringify({ wall_clock_s: wall, ignored: opts.ignoredCaps })}\``,
+      `- transcript: \`${outPaths.transcript.split(/[\\/]/).pop()}\` sha256 \`${sha256(tBytes)}\``,
+      `- harness_cli_template_sha256: \`${plan.prompt.harness_cli_template.sha256}\``,
+      `- harness_sha256: \`${plan.prompt.harness_sha256}\``,
+      `- brief_sha256: \`${plan.prompt.brief_sha256}\``,
+      `- prompt_sha256: \`${plan.prompt.sha256}\``,
+      ...(resume ? [
+        `- continued_from: \`${resume.sha256}\` (\`${resume.name}\`)`,
+        `- continuation_method: ${method}${method === "agy --conversation" ? ` (conversation \`${resume.t.cli.conversation_id}\`, state restored)` : " (a new session; the prompt carries a delimited appendix of the reviewer's own earlier messages and tool results)"}`,
+        `- runs: ${transcript.cumulative.runs}`,
+        `- usage_totals_cumulative: \`${JSON.stringify(transcript.cumulative.usage)}\``,
+        `- wall_clock_cumulative_s: ${transcript.cumulative.wall_s}`,
+      ] : []),
+      "",
+      "<!-- reviewer's final message, verbatim, follows -->",
+      "",
+      "",
+    ].join("\n");
+    await writeFile(outPaths.findings, header + (status === "complete" || status === "policy_violation" ? finalText : ""));
+    err(`run-review: ${status} (${r.stop_reason}); wrote ${outPaths.findings}\n`);
+    code = status === "complete" ? EXIT.complete : status === "refused" ? EXIT.refused : EXIT.incomplete;
+    return code;
+  } finally {
+    await cleanup();
+  }
+}
+
+function sandboxLine(transport, plan) {
+  if (transport === "codex-cli") return `codex ${plan.sandbox.mode} (codex's own bubblewrap sandbox, not nested in the runner's), approvals never`;
+  if (transport === "grok-cli") return "the runner's bwrap jail (host read-only; worktree read-only" + (plan.writable_paths.some(p => p.endsWith(REVIEW_TESTS_DIR)) ? ` except ${REVIEW_TESTS_DIR}/` : "") + "; state dir a per-run scratch copy; network not cut)";
+  return "the unit worker's bwrap jail + PreToolUse jail hook (review policy)";
+}
+
+const timeoutStop = wall => `wall clock reached (${wall} s): process group killed`;
+
+async function runCodex({ cli, argv, wt, childEnv, wall, lastMessage }) {
+  const lines = [];
+  const r = await runCli({ cmd: cli, args: argv, cwd: wt, env: childEnv, timeoutMs: wall * 1000, onLine: l => lines.push(l) });
+  const ev = parseCodexEvents(lines);
+  const last = await readFile(lastMessage, "utf8").catch(() => "");
+  const final_text = last.trim() ? last : ev.final_text;
+  const record = { own: capOwn(ev.own), thread_id: ev.thread_id, events: ev.events, unparsed_lines: ev.unparsed, turns_completed: ev.turns_completed, commands: ev.commands, file_changes: ev.file_changes, errors: ev.errors.map(e => redactStrong(e, childEnv)),
+    turn_failed: ev.turn_failed && redactStrong(ev.turn_failed, childEnv), last_message_file: last.trim() ? "present" : "absent", stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
+  const base = { exit_code: r.exit_code, killed_for: r.killed_for, usage: ev.usage, record, final_text };
+  if (r.killed_for === "timeout") return { ...base, status: "incomplete", stop_reason: timeoutStop(wall) };
+  if (r.killed_for || r.spawn_error) return { ...base, status: "incomplete", stop_reason: `codex stopped (${r.killed_for ?? r.spawn_error})` };
+  if (r.exit_code !== 0) return { ...base, status: "incomplete", stop_reason: `codex exited ${r.exit_code}${ev.turn_failed ? `: ${record.turn_failed}` : ev.errors.length ? `: ${record.errors.at(-1)}` : ""}` };
+  if (ev.turn_failed) return { ...base, status: "incomplete", stop_reason: `turn failed: ${record.turn_failed}` };
+  if (!final_text || !final_text.trim()) return { ...base, status: "incomplete", stop_reason: "codex returned no final message" };
+  return { ...base, status: "complete", stop_reason: "final answer" };
+}
+
+async function runGrok({ argv, wt, childEnv, wall }) {
+  const lines = [];
+  const r = await runCli({ cmd: argv[0], args: argv.slice(1), cwd: wt, env: childEnv, timeoutMs: wall * 1000, onLine: l => lines.push(l) });
+  const ev = parseGrokStream(lines);
+  const record = { own: capOwn(ev.own), events: ev.events, unparsed_lines: ev.unparsed, error: ev.error && redactStrong(ev.error, childEnv), stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
+  const base = { exit_code: r.exit_code, killed_for: r.killed_for, usage: ev.usage, record, final_text: ev.final_text };
+  if (r.killed_for === "timeout") return { ...base, status: "incomplete", stop_reason: timeoutStop(wall) };
+  if (r.killed_for || r.spawn_error) return { ...base, status: "incomplete", stop_reason: `grok stopped (${r.killed_for ?? r.spawn_error})` };
+  const said = `${r.stderr}\n${ev.error ?? ""}\n${r.exit_code !== 0 ? r.stdout : ""}`;
+  if ((r.exit_code !== 0 || !ev.final_text) && NEEDS_KEY.test(said)) {
+    return { ...base, final_text: null, status: "refused", stop_reason: "the Grok CLI asked for an API key or a login: subscription mode never supplies XAI_API_KEY (that would be metered); sign in once with the browser (`grok`), then run again" };
+  }
+  if (r.exit_code !== 0) return { ...base, status: "incomplete", stop_reason: `grok exited ${r.exit_code}${ev.error ? `: ${record.error}` : ""}` };
+  if (!ev.final_text || !ev.final_text.trim()) return { ...base, status: "incomplete", stop_reason: `grok returned no final text (${ev.events} event(s), ${ev.unparsed} unparsed line(s))` };
+  return { ...base, status: "complete", stop_reason: "final answer" };
+}
+
+async function runAgy({ cli, ws, wt, lane, prompt, timeoutS, graceS, childEnv, sandbox, jail, conversation = null }) {
+  const summarize = async x => ({ conversation_id: x?.conversation_id ?? null,
+    own: capOwn([...(x?.tool_steps ?? []).map(st => ({ kind: `tool step ${st.tool_name ?? "?"} (${st.state ?? "?"})`, text: JSON.stringify(st.tool_info ?? null).slice(0, 16384) })),
+      ...(typeof x?.text === "string" && x.text ? [{ kind: "your message", text: x.text }] : [])]),
+    tool_steps: x?.tool_steps ?? [], jail_decisions: (await readJailLog(ws.paths.control_dir)).map(d => ({ tool: d.tool ?? null, args: d.args ?? null, decision: d.decision ?? null, reason: d.reason ?? null })),
+    launch: x?.launch ?? null, num_turns: x?.num_turns ?? null, result_status: x?.result_status ?? x?.status ?? null, exit_code: x?.exit_code ?? null, stderr_tail: x?.stderr_tail ? redactStrong(x.stderr_tail, childEnv) : null });
+  try {
+    const t = await runAgyWorkerTurn({ cli, control_dir: ws.paths.control_dir, worktree: wt, model: lane, prompt, timeoutS, graceS, base_env: childEnv, sandbox, jail, agent: REVIEW_AGENT, conversation });
+    return { status: "complete", stop_reason: "final answer", final_text: t.text, usage: t.usage ?? null, exit_code: t.exit_code ?? 0, record: await summarize(t) };
+  } catch (e) {
+    const rec = await summarize(e);
+    const why = e.code === "quota_exhausted" ? `Antigravity refused for quota (${e.quota?.matched ?? "quota"})` : e.kind === "timeout" ? `wall clock reached (${timeoutS + graceS} s) or the print timeout (${timeoutS} s): ${e.message}` : `${e.code ?? "error"}${e.kind ? `/${e.kind}` : ""}: ${e.message}`;
+    return { status: "incomplete", stop_reason: redactStrong(why, childEnv), final_text: null, usage: e.usage ?? null, exit_code: e.exit_code ?? null, killed_for: e.kind === "timeout" ? "timeout" : null, record: rec };
+  }
+}

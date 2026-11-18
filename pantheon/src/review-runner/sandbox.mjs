@@ -9,7 +9,7 @@ export class ToolRefusal extends Error {
 }
 
 // Paths the runner hides from the reviewer inside the worktree (another reviewer's findings).
-export const WITHHELD = [/^docs\/reviews\/[^/]+\/findings-[^/]*$/];
+export const WITHHELD = [/^docs\/reviews\/[^/]+\/findings-[^/]*(\/.*)?$/];   // findings, transcripts and their saved CLI state (findings-<n>-<lab>.agy-state/)
 
 const within = (root, p) => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep);
 

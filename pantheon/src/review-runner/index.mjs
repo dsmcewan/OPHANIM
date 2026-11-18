@@ -10,12 +10,20 @@ import { REVIEW_DIR, BriefError, loadBrief, sha256, inScopePaths, listedTests, t
 import { CAPS, permissionsFor, toolDefinitions, createToolbox } from "./tools.mjs";
 import { buildChildEnv, WITHHELD } from "./sandbox.mjs";
 import { VENDORS, authHeaders, createConversation, addUsage, redact } from "./vendors.mjs";
+import { subscriptionMain, TRANSPORT_FOR } from "./subscription.mjs";
+import { CONTINUE_NOTE, ContinueRefusal, preserveFiles, RESULT_CAP, captureReviewTests, cumulative, loadContinuation, replayApi, restoreReviewTests } from "./continue.mjs";
 
 export const EXIT = { complete: 0, refused: 1, usage: 2, incomplete: 3 };
 export const PLAN_SCHEMA = "ophanim.review-run-plan/v1";
 
-const USAGE = `usage: node pantheon/scripts/run-review.mjs --assignment <1|2|3|4> --commit <40-hex>
-  --max-turns N --max-tool-calls N --max-output-tokens N --timeout-s N
+const USAGE = `usage: node pantheon/scripts/run-review.mjs --via api|subscription --assignment <1|2|3|4> --commit <40-hex> ...
+  --via api            the metered API, the owner's key:
+                       --max-turns N --max-tool-calls N --max-output-tokens N --timeout-s N
+  --via subscription   one CLI agent per vendor, signed in to the owner's subscription
+                       (1: agy, 2 and 4: codex, 3: grok): --max-wall-s N [--timeout-s N]
+                       [--allow-api-key-in-cli] [--skip-model-check] [--grok-state-dir DIR]
+                       [--codex-cli PATH] [--grok-cli PATH] [--agy-cli PATH]
+  [--continue <findings-<n>-<lab>.transcript.json>]   resume an incomplete review of the same assignment
   [--out DIR] [--dry-run] [--keep] [--force] [--telos-root DIR]`;
 
 const CAPABILITY_FACTS = JSON.parse(await readFile(new URL("../config/capability-facts.json", import.meta.url), "utf8"));
@@ -45,43 +53,74 @@ function parseCli(argv) {
       "max-output-tokens": { type: "string" }, "timeout-s": { type: "string" },
       out: { type: "string" }, "dry-run": { type: "boolean" }, keep: { type: "boolean" },
       force: { type: "boolean" }, "telos-root": { type: "string" }, help: { type: "boolean" },
+      via: { type: "string" }, "max-wall-s": { type: "string" }, "allow-api-key-in-cli": { type: "boolean" }, "skip-model-check": { type: "boolean" },
+      "grok-state-dir": { type: "string" }, continue: { type: "string" }, "codex-cli": { type: "string" }, "grok-cli": { type: "string" }, "agy-cli": { type: "string" },
     } }).values;
   } catch (e) { throw new UsageError(e.message); }
   if (v.help) throw new UsageError("help");
   if (!/^[1-4]$/.test(v.assignment ?? "")) throw new UsageError("--assignment must be 1, 2, 3 or 4");
   if (!/^[0-9a-f]{40}$/.test(v.commit ?? "")) throw new UsageError("--commit must be a full 40-character lowercase hex commit id");
-  const limits = {};
-  for (const k of ["max-turns", "max-tool-calls", "max-output-tokens", "timeout-s"]) {
-    if (v[k] === undefined) throw new UsageError(`--${k} is required (there are no defaults; the owner chooses the spend)`);
-    if (!/^[1-9]\d*$/.test(v[k])) throw new UsageError(`--${k} must be a positive integer`);
-    limits[k.replace(/-/g, "_")] = Number(v[k]);
+  // --via has no default: the owner chooses between metered API spend and the subscription CLIs every time.
+  if (v.via !== "api" && v.via !== "subscription") throw new UsageError("--via is required: api (the metered API, the owner's key) or subscription (the vendors' CLIs, signed in to the owner's subscriptions)");
+  const limits = {}, notes = [], ignoredCaps = [];
+  const int = k => { if (!/^[1-9]\d*$/.test(v[k])) throw new UsageError(`--${k} must be a positive integer`); return Number(v[k]); };
+  const subOnly = ["max-wall-s", "allow-api-key-in-cli", "skip-model-check", "grok-state-dir", "codex-cli", "grok-cli", "agy-cli"];
+  if (v.via === "api") {
+    for (const k of ["max-turns", "max-tool-calls", "max-output-tokens", "timeout-s"]) {
+      if (v[k] === undefined) throw new UsageError(`--${k} is required (there are no defaults; the owner chooses the spend)`);
+      limits[k.replace(/-/g, "_")] = int(k);
+    }
+    for (const k of subOnly) if (v[k] !== undefined) notes.push(`--${k} applies to --via subscription only; ignored`);
+  } else {
+    if (v["max-wall-s"] === undefined) throw new UsageError("--max-wall-s is required with --via subscription (there are no defaults; it is the whole run's wall clock)");
+    limits.max_wall_s = int("max-wall-s");
+    if (v["timeout-s"] !== undefined) limits.timeout_s = int("timeout-s");
+    for (const k of ["max-turns", "max-tool-calls", "max-output-tokens"]) {
+      if (v[k] === undefined) continue;
+      int(k);
+      ignoredCaps.push(`--${k}`);
+      notes.push(`--${k} is an API-mode cap; the subscription CLIs expose no such cap, so it is ignored (the wall clock bounds the run)`);
+    }
   }
-  return { n: Number(v.assignment), commit: v.commit, limits, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null };
+  return { via: v.via, n: Number(v.assignment), commit: v.commit, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
+    allowApiKeyInCli: !!v["allow-api-key-in-cli"], skipModelCheck: !!v["skip-model-check"], grokStateDir: v["grok-state-dir"] ?? null,
+    codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null };
 }
 
-// Build the plan: everything the run will send and allow, computed without a worktree or network.
-export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
-  const { n, commit, limits } = opts;
+// What both modes read: the commit's file list, the brief, the assignment row, the tool permissions.
+async function loadAssignment(opts, { repoRoot, env, harnessValues }) {
+  const { n, commit } = opts;
   const t = await git(repoRoot, ["cat-file", "-t", commit], env);
   if (t.code !== 0 || t.stdout.trim() !== "commit") throw new Refusal(`commit ${commit} does not exist in ${repoRoot}`);
   const ls = await git(repoRoot, ["ls-tree", "-r", "--name-only", "-z", commit], env);
   if (ls.code !== 0) throw new Refusal(`cannot list commit ${commit}`);
   const files = ls.stdout.split("\0").filter(Boolean);
-
-  const harnessValues = {
-    MAX_TURNS: limits.max_turns, MAX_TOOL_CALLS: limits.max_tool_calls, MAX_OUTPUT_TOKENS: limits.max_output_tokens,
-    TIMEOUT_S: limits.timeout_s, READ_CAP: CAPS.READ_BYTES, GREP_CAP: CAPS.GREP_MATCHES, OUTPUT_CAP: CAPS.OUTPUT_BYTES,
-  };
   let b;
   try { b = await loadBrief({ repoRoot, n, commit, harnessValues }); }
   catch (e) { if (e instanceof BriefError || e.code === "ENOENT") throw new Refusal(e.message); throw e; }
   const { row } = b;
-
-  const fileTesting = testingLine(b.assignmentText);
   const listed = listedTests(b.assignmentText, files);
   const permissions = permissionsFor(row.testing, listed.files);
   if (!permissions) throw new Refusal(`assignment ${n}: testing limit "${row.testing}" has no tool policy in the runner; refusing rather than guessing`);
   if (permissions.run_tests.files && permissions.run_tests.files.length === 0) throw new Refusal(`assignment ${n}: the assignment lists no existing tests that exist at ${commit}`);
+  return { files, b, row, listed, permissions, withheld: files.filter(f => WITHHELD.some(re => re.test(f))) };
+}
+
+const outPathsFor = (opts, row, repoRoot, cwd) => {
+  const outDir = opts.out ? resolve(cwd, opts.out) : join(repoRoot, REVIEW_DIR);
+  const lab = row.lab.toLowerCase();
+  return { findings: join(outDir, `findings-${opts.n}-${lab}.md`), transcript: join(outDir, `findings-${opts.n}-${lab}.transcript.json`) };
+};
+
+// Build the plan: everything the run will send and allow, computed without a worktree or network.
+export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
+  const { n, commit, limits } = opts;
+  const harnessValues = {
+    MAX_TURNS: limits.max_turns, MAX_TOOL_CALLS: limits.max_tool_calls, MAX_OUTPUT_TOKENS: limits.max_output_tokens,
+    TIMEOUT_S: limits.timeout_s, READ_CAP: CAPS.READ_BYTES, GREP_CAP: CAPS.GREP_MATCHES, OUTPUT_CAP: CAPS.OUTPUT_BYTES,
+  };
+  const { files, b, row, listed, permissions } = await loadAssignment(opts, { repoRoot, env, harnessValues });
+  const fileTesting = testingLine(b.assignmentText);
   const tools = toolDefinitions(permissions);
 
   const cited = CAPABILITY_FACTS.models?.[row.model]?.output?.value ?? null;
@@ -102,6 +141,7 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
   return {
     schema: PLAN_SCHEMA,
     dry_run: opts.dryRun,
+    via: "api",
     assignment: { n, title: row.title, file: `${REVIEW_DIR}/${row.file}`, scope: row.scope, testing: row.testing, testing_line_in_file: fileTesting },
     lab: row.lab, vendor: row.vendor, model: row.model,
     model_facts: { cited_max_output: cited, reasoning_effort_sent: null },
@@ -143,6 +183,17 @@ export async function main(argv, deps = {}) {
   let opts;
   try { opts = parseCli(argv); }
   catch (e) { err(`${e.message === "help" ? "" : `run-review: ${e.message}\n`}${USAGE}\n`); return e.message === "help" ? EXIT.complete : EXIT.usage; }
+  if (opts.via === "subscription") {
+    let a;
+    try { a = await loadAssignment(opts, { repoRoot: deps.repoRoot, env, harnessValues: { MAX_TURNS: "n/a", MAX_TOOL_CALLS: "n/a", MAX_OUTPUT_TOKENS: "n/a", TIMEOUT_S: "n/a", READ_CAP: CAPS.READ_BYTES, GREP_CAP: CAPS.GREP_MATCHES, OUTPUT_CAP: CAPS.OUTPUT_BYTES } }); }
+    catch (e) {
+      if (e instanceof Refusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; }
+      throw e;
+    }
+    if (!TRANSPORT_FOR[a.row.vendor]) { err(`run-review: refused: no subscription transport for vendor ${a.row.vendor}\n`); return EXIT.refused; }
+    return subscriptionMain({ opts, a, repoRoot: deps.repoRoot, env, deps, out, err, EXIT, outPaths: outPathsFor(opts, a.row, deps.repoRoot, deps.cwd ?? process.cwd()) });
+  }
+  for (const n of opts.notes) err(`run-review: note: ${n}\n`);
   let plan;
   try { plan = await buildPlan(opts, { repoRoot: deps.repoRoot, env, cwd: deps.cwd }); }
   catch (e) {
@@ -150,20 +201,30 @@ export async function main(argv, deps = {}) {
     if (e instanceof Refusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; }
     throw e;
   }
+  let resume = null;
+  if (opts.continue) {
+    try {
+      resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: plan.lab.toLowerCase(), vendor: plan.vendor, model: plan.model, commit: plan.commit, via: "api", brief_sha256: plan.request.brief.sha256 });
+    } catch (e) { if (e instanceof ContinueRefusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; } throw e; }
+    plan.continue = { from: resume.path, transcript_sha256: resume.sha256, method: plan.vendor === "openai" ? "previous_response_id" : "replayed-history",
+      prior: resume.prior, review_tests_to_restore: (resume.t.review_tests.files ?? []).map(f => f.path) };
+  }
   out(JSON.stringify(printable(plan), null, 2) + "\n");
   if (opts.dryRun) return EXIT.complete;
 
   const key = env[plan.key.env];
   if (!plan.key.present) { err(`run-review: refused: ${plan.key.env} is not set\n`); return EXIT.refused; }
-  if (plan.out.findings_exists && !opts.force) { err(`run-review: refused: ${plan.out.findings} exists (use --force to overwrite)\n`); return EXIT.refused; }
-  if (!opts.force && await exists(plan.out.transcript)) { err(`run-review: refused: ${plan.out.transcript} exists (use --force to overwrite)\n`); return EXIT.refused; }
+  const sameFiles = resume && resolve(resume.path) === resolve(plan.out.transcript);
+  if (sameFiles) await preserveFiles(resume, plan.out);
+  else if (plan.out.findings_exists && !opts.force) { err(`run-review: refused: ${plan.out.findings} exists (use --force to overwrite)\n`); return EXIT.refused; }
+  if (!sameFiles && !opts.force && await exists(plan.out.transcript)) { err(`run-review: refused: ${plan.out.transcript} exists (use --force to overwrite)\n`); return EXIT.refused; }
 
-  const result = await liveRun({ plan, opts, key, env, deps });
+  const result = await liveRun({ plan, opts, key, env, deps, resume });
   err(`run-review: ${result.status} (${result.stop_reason}); wrote ${plan.out.findings}\n`);
   return result.status === "complete" ? EXIT.complete : EXIT.incomplete;
 }
 
-async function liveRun({ plan, opts, key, env, deps }) {
+async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   const fetchFn = deps.fetch ?? globalThis.fetch;
   const sleep = deps.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
   const now = deps.now ?? (() => new Date());
@@ -182,7 +243,10 @@ async function liveRun({ plan, opts, key, env, deps }) {
     assignment: plan.assignment.n, lab: plan.lab, vendor: plan.vendor, requested_model: plan.model, commit: plan.commit,
     endpoint: plan.endpoint,
     hashes: { harness_template: plan.request.harness_template.sha256, system: plan.request.system.sha256, brief: plan.request.brief.sha256, tools: plan.request.tools.sha256 },
-    limits: opts.limits, started_at: started.toISOString(), events: [],
+    via: "api", limits: opts.limits, started_at: started.toISOString(),
+    // A continuation carries the earlier run's events first (they are what a later --continue replays), then its own.
+    events: resume ? [...(resume.t.events ?? [])] : [],
+    ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method: plan.continue.method } } : {}),
   };
   const state = { providerCalls: 0, toolCalls: 0, usage: {}, served: [], stop: null, final: null };
   let worktreeAdded = false;
@@ -201,7 +265,47 @@ async function liveRun({ plan, opts, key, env, deps }) {
     const conv = createConversation(plan.vendor, { model: plan.model, system: b.system, brief: b.brief, tools: toolbox.definitions, maxOutputTokens: opts.limits.max_output_tokens });
 
     let turn = 0;
+    // One tool call, executed and recorded (full arguments and full result, each capped at RESULT_CAP, so that a later
+    // --continue can replay them). Returns its result, or null when max_tool_calls is reached.
+    const execCall = async (c, atTurn) => {
+      if (state.toolCalls >= opts.limits.max_tool_calls) { state.stop = `max_tool_calls reached (${opts.limits.max_tool_calls})`; return null; }
+      state.toolCalls++;
+      const t0 = Date.now();
+      const out = c.args_error ? { text: `refused: ${c.args_error}`, refused: true } : await toolbox.call(c.name, c.args);
+      const text = redact(out.text, secrets);
+      const kept = clipFull(text, RESULT_CAP);
+      transcript.events.push({
+        type: "tool_call", n: state.toolCalls, turn: atTurn, id: c.id ?? null, name: c.name, args: clipArgs(c.args), args_full: true,
+        outcome: out.refused ? "refused" : out.error ? "error" : "ok", exit_code: out.exit_code ?? null, timed_out: out.timed_out ?? false,
+        result_sha256: sha256(text), result_bytes: Buffer.byteLength(text), result_text: kept.text, result_full: true, ...(kept.truncated ? { result_truncated: true } : {}), duration_ms: Date.now() - t0,
+      });
+      return { id: c.id, name: c.name, output: text };
+    };
+    let stopped = false;
+    if (resume) {
+      // THE CONTINUATION: the earlier conversation, as recorded, then what it was waiting for.
+      if (resume.t.review_tests?.files?.length) state.restored = await restoreReviewTests(wt, resume.t.review_tests);
+      const rp = replayApi(conv, resume.t);
+      turn = Math.max(rp.last_turn, ...(resume.t.events ?? []).map(e => (Number.isInteger(e.turn) ? e.turn : 0)), 0);
+      state.replayed_turns = rp.turns;
+      const ev = { type: "continuation", from_sha256: resume.sha256, method: plan.continue.method, replayed_turns: rp.turns, restored_review_tests: state.restored?.restored ?? [] };
+      if (rp.partial !== null) { ev.note = CONTINUE_NOTE; ev.cut_off_reply_bytes = Buffer.byteLength(rp.partial); conv.addContinuation(rp.partial, CONTINUE_NOTE); }
+      if (rp.last) { ev.pending_recorded_outputs = rp.last.recorded.length; ev.pending_unrun_calls = rp.last.missing.length; }
+      transcript.events.push(ev);
+      if (rp.last) {
+        const byId = new Map(rp.last.recorded.map(r => [r.id, r]));
+        const results = [];
+        for (const c of rp.last.calls) {
+          if (byId.has(c.id)) { results.push(byId.get(c.id)); continue; }
+          const r = await execCall(c, rp.last_turn);
+          if (!r) { stopped = true; break; }
+          results.push(r);
+        }
+        if (!stopped) conv.addToolResults(results);
+      }
+    }
     outer: for (;;) {
+      if (stopped) break;
       if (state.providerCalls >= opts.limits.max_turns) { state.stop = `max_turns reached (${opts.limits.max_turns})`; break; }
       turn++;
       const req = conv.request();
@@ -218,23 +322,17 @@ async function liveRun({ plan, opts, key, env, deps }) {
       }
       const results = [];
       for (const c of r.calls) {
-        if (state.toolCalls >= opts.limits.max_tool_calls) { state.stop = `max_tool_calls reached (${opts.limits.max_tool_calls})`; break outer; }
-        state.toolCalls++;
-        const t0 = Date.now();
-        const out = c.args_error ? { text: `refused: ${c.args_error}`, refused: true } : await toolbox.call(c.name, c.args);
-        const text = redact(out.text, secrets);
-        transcript.events.push({
-          type: "tool_call", n: state.toolCalls, turn, id: c.id ?? null, name: c.name, args: clipArgs(c.args),
-          outcome: out.refused ? "refused" : out.error ? "error" : "ok", exit_code: out.exit_code ?? null, timed_out: out.timed_out ?? false,
-          result_sha256: sha256(text), result_bytes: Buffer.byteLength(text), result_text: clip(text, 8192), duration_ms: Date.now() - t0,
-        });
-        results.push({ id: c.id, name: c.name, output: text });
+        const res = await execCall(c, turn);
+        if (!res) break outer;
+        results.push(res);
       }
       conv.addToolResults(results);
     }
   } catch (e) {
     state.stop = `runner error: ${redact(e.message, secrets)}`;
   } finally {
+    // What the reviewer wrote under .review-tests/, in full (capped), so a later --continue can restore it.
+    if (worktreeAdded) state.review_tests = await captureReviewTests(wt).catch(e => ({ captured: false, why: e.message }));
     if (worktreeAdded && !opts.keep) {
       await git(repoRoot, ["worktree", "remove", "--force", wt], env);
       await git(repoRoot, ["worktree", "prune"], env);
@@ -249,7 +347,10 @@ async function liveRun({ plan, opts, key, env, deps }) {
   Object.assign(transcript, {
     ended_at: ended.toISOString(), status, stop_reason: state.stop, provider_calls: state.providerCalls, tool_calls: state.toolCalls,
     served_models: distinctServed, usage_totals: state.usage, worktree_kept: opts.keep ? wt : null,
+    review_tests: state.review_tests ?? { captured: false, why: "no worktree was created" },
   });
+  const cum = resume ? cumulative(resume.prior, { provider_calls: state.providerCalls, tool_calls: state.toolCalls, usage: state.usage, wall_s: Math.round((ended - started) / 1000) }) : null;
+  if (cum) transcript.cumulative = cum;
   const outDir = resolve(plan.out.findings, "..");
   await mkdir(outDir, { recursive: true });
   const tBytes = redact(JSON.stringify(transcript, null, 2) + "\n", [key]);
@@ -281,6 +382,14 @@ async function liveRun({ plan, opts, key, env, deps }) {
     `- brief_sha256: \`${plan.request.brief.sha256}\``,
     `- tools_sha256: \`${plan.request.tools.sha256}\``,
     ...(redactions ? [`- redactions: ${redactions} occurrence(s) of the API key were replaced in the final message`] : []),
+    ...(resume ? [
+      `- continued_from: \`${resume.sha256}\` (\`${resume.name}\`, kept as \`${resume.name.replace(/\.transcript\.json$/, `.transcript.prev-${resume.sha256.slice(0, 12)}.json`)}\` when overwritten)`,
+      `- continuation_method: ${plan.continue.method}${plan.vendor === "openai" ? " (the earlier responses are stored server-side; pending function_call_output items sent)" : " (the recorded responses and full tool results replayed as the conversation so far)"}`,
+      `- runs: ${cum.runs}`,
+      `- provider_calls_cumulative: ${cum.provider_calls}`,
+      `- tool_calls_cumulative: ${cum.tool_calls}`,
+      `- usage_totals_cumulative: \`${JSON.stringify(cum.usage)}\``,
+    ] : []),
     "",
     "<!-- reviewer's final message, verbatim, follows -->",
     "",
@@ -336,5 +445,9 @@ function clip(s, n) {
 }
 function clipArgs(a) {
   if (!a || typeof a !== "object") return a ?? null;
-  return Object.fromEntries(Object.entries(a).map(([k, v]) => [k, typeof v === "string" ? clip(v, 4096) : v]));
+  return Object.fromEntries(Object.entries(a).map(([k, v]) => [k, typeof v === "string" ? clip(v, RESULT_CAP) : v]));
+}
+function clipFull(s, n) {
+  const b = Buffer.from(String(s ?? ""));
+  return b.length <= n ? { text: String(s ?? ""), truncated: false } : { text: b.subarray(0, n).toString("utf8"), truncated: true };
 }

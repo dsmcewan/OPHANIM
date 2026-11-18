@@ -58,9 +58,9 @@ if [ "$1" = agents ] || { [ "$1" = mcp ] && [ "$2" = list ]; }; then
   { printf '%s\\n' "$*" >> "\${FAKE_AGY_LOG:-/dev/null}.sub"; } 2>/dev/null
   exec node "$here/fake-agy-tools.mjs" sub "$@"
 fi
-agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"; logfile=""; ptimeout="none"
+agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"; logfile=""; ptimeout="none"; conv=""
 for a in "$@"; do
-  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; --mode) mode="$a" ;; --log-file) logfile="$a" ;; --print-timeout) ptimeout="$a" ;; esac
+  case "$prev" in --conversation) conv="$a" ;; --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; --mode) mode="$a" ;; --log-file) logfile="$a" ;; --print-timeout) ptimeout="$a" ;; esac
   case "$a" in --mode=*) mode="\${a#--mode=}" ;; --dangerously-skip-permissions) dangerous="yes" ;; --sandbox) sbx="yes" ;; --log-file=*) logfile="\${a#--log-file=}" ;; esac
   prev="$a"
 done
@@ -110,7 +110,9 @@ esac
 # A work unit's implementer (the five-stage pipeline): a worker that writes files in its worktree itself.
 worker=no
 case "$prompt" in *"the single implementer of work unit"*) worker=yes ;; esac
-[ "$agent" = "pantheon-unit-worker" ] && worker=yes
+# The review runner's reviewer (src/review-runner/agy.mjs) is jailed exactly like a unit worker.
+jailed=no; { [ "$agent" = "pantheon-unit-worker" ] || [ "$agent" = "pantheon-reviewer-agent" ]; } && jailed=yes
+[ "$jailed" = yes ] && worker=yes
 if [ "$worker" = yes ]; then
   unit=$(printf '%s\\n' "$prompt" | sed -n 's/.*the single implementer of work unit "\\([^"]*\\)".*/\\1/p' | head -n 1)
   verify=$(printf '%s\\n' "$prompt" | sed -n '/^GROUND TRUTH/{n;p;}' | sed 's/^ *//' | head -n 1)
@@ -121,14 +123,14 @@ if [ "$worker" = yes ]; then
   printf '%s %s %s a2a_url=%s a2a_token=%s google_key=%s a2a_socket=%s mode=%s cleanup=%s dangerous=%s sandbox=%s log_file=%s\\n' "$agent" "$model" "$dir" "\${PANTHEON_A2A_URL:+yes}" "\${PANTHEON_A2A_TOKEN:+yes}" "\${GEMINI_API_KEY:+yes}\${GOOGLE_API_KEY:+yes}" "\${PANTHEON_A2A_SOCKET:+yes}" "$mode" "\${ANTIGRAVITY_AGY_CLEANUP:-none}" "$dangerous" "$sbx" "\${logfile:-none}" >> "$FAKE_AGY_LOG.ctx"
   # Owner-stated: --dangerously-skip-permissions skips the hooks, and --sandbox must never be passed inside bwrap. A
   # unit worker launched with either is a bug: the fake refuses to run it.
-  if [ "$agent" = "pantheon-unit-worker" ] && { [ "$dangerous" = yes ] || [ "$sbx" = yes ]; }; then
+  if [ "$jailed" = yes ] && { [ "$dangerous" = yes ] || [ "$sbx" = yes ]; }; then
     echo "fake-agy: refusing a unit worker launched with --dangerously-skip-permissions or --sandbox" >&2; exit 64
   fi
   # The --print session's own diagnostics, as the CLI does (observed on agy 1.5.10 for its subcommands): to
   # $HOME/.gemini/antigravity-cli/log/cli-<n>.log when that dir is writable, else to stderr (only when the CLI's state
   # dir exists: a test without a fake ~/.gemini sees nothing). The hooks line counts ./.agents/hooks.json of the cwd;
   # the workspaceDirs line names the cwd and the --add-dir. They are NOT written to --log-file.
-  if [ "$agent" = "pantheon-unit-worker" ]; then
+  if [ "$jailed" = yes ]; then
     cl="$HOME/.gemini/antigravity-cli/log"; nh=0; [ -f "$(pwd)/.agents/hooks.json" ] && nh=1
     diag=$(printf 'I1118 00:00:00.000000 %s hooks_manager.go:54] loaded %s named hooks from %s hooks.json file(s)\nI1118 00:00:00.000000 %s workspace.go:12] workspaceDirs=[%s %s]' "$$" "$nh" "$nh" "$$" "$(pwd)" "$dir")
     if [ -d "$cl" ] && [ -w "$cl" ]; then printf '%s\n' "$diag" >> "$cl/cli-$$.log"
@@ -183,7 +185,9 @@ if [ "$worker" = yes ]; then
   agy_run() { node "$tools" run "$dir" "$1"; }
   agy_verify() { node "$tools" run "$dir" "$wverify"; }
   first=$(printf '%s\\n' "$prompt" | sed -n '/^PATHS YOU OWN/,/^Do not commit/p' | sed -n 's/^- //p' | head -n 1)
+  [ "$agent" = "pantheon-reviewer-agent" ] && reply="\${FAKE_AGY_REVIEW_REPLY:-# Findings (fake agy reviewer)}"
   if [ -n "$FAKE_AGY_WORKER" ]; then . "$FAKE_AGY_WORKER"
+  elif [ "$agent" = "pantheon-reviewer-agent" ]; then :
   elif [ "$agent" = "pantheon-unit-worker" ]; then
     agy_write "$first" 'export const ok = true;
 ' || true
@@ -192,7 +196,7 @@ if [ "$worker" = yes ]; then
   else
     mkdir -p "$(dirname "$dir/$first")" && printf 'export const ok = true;\\n' > "$dir/$first"
   fi
-  if [ "$agent" = "pantheon-unit-worker" ]; then
+  if [ "$jailed" = yes ]; then
     FAKE_AGY_REPLY="$reply" node "$tools" finish "$agent"; code=$?
     rm -f "$FAKE_AGY_EVENTS" "$FAKE_AGY_EVENTS.state"
     exit $code
