@@ -1,0 +1,228 @@
+{
+ "schema": "pantheon.agy-observed/v1",
+ "agy_version": "1.5.10",
+ "lane": "gemini-3.8-flash-low",
+ "observed": "owner's machine, commit 7ca325c, 2026-11-18: probe exit 0, all five checks passed; one turn (exit 0, SUCCESS)",
+ "placeholders": {
+  "<wt>": "the unit worktree",
+  "<ctl>": "the control dir",
+  "<home>": "the owner's home"
+ },
+ "notes": "Verbatim hook stdin payloads (call ids renumbered), hook decisions and tool steps from the real run; paths normalised; no secrets. The subagent was the mock.",
+ "verify_cmd": "node -e \"process.exit(0)\"",
+ "roles": [
+  "probe-helper"
+ ],
+ "owned_paths": [
+  "allowed/**"
+ ],
+ "hook_payloads": [
+  {
+   "stepIdx": 2,
+   "modelName": "gemini-3.8-flash-low",
+   "toolCall": {
+    "args": {
+     "Content": "forbidden",
+     "Path": "<wt>/forbidden.txt"
+    },
+    "id": "call_1",
+    "name": "write_file"
+   }
+  },
+  {
+   "stepIdx": 4,
+   "modelName": "gemini-3.8-flash-low",
+   "toolCall": {
+    "args": {
+     "Content": "probe-ok",
+     "Path": "<wt>/allowed/probe.txt"
+    },
+    "id": "call_2",
+    "name": "write_file"
+   }
+  },
+  {
+   "stepIdx": 6,
+   "modelName": "gemini-3.8-flash-low",
+   "toolCall": {
+    "args": {
+     "question": "Reply with the word PROBE-ANSWER.",
+     "role": "probe-helper",
+     "toolSummary": "Probe helper question"
+    },
+    "id": "call_3",
+    "name": "mcp_pantheon-subagents_ask_subagent"
+   }
+  },
+  {
+   "stepIdx": 8,
+   "modelName": "gemini-3.8-flash-low",
+   "toolCall": {
+    "args": {
+     "CommandLine": "cd '<wt>' && node -e \"process.exit(0)\"",
+     "WaitMsBeforeAsync": 5000,
+     "toolSummary": "Run verify command"
+    },
+    "id": "call_4",
+    "name": "run_command"
+   }
+  }
+ ],
+ "hook_decisions": [
+  {
+   "tool": "write_file",
+   "decision": "deny",
+   "reason": "forbidden.txt is not one of the unit's owned paths (allowed/**)",
+   "mcp": null,
+   "cwd": "<ctl>/.agents"
+  },
+  {
+   "tool": "write_file",
+   "decision": "auto_approve",
+   "reason": "allowed/probe.txt is owned by unit probe",
+   "mcp": null,
+   "cwd": "<ctl>/.agents"
+  },
+  {
+   "tool": "mcp_pantheon-subagents_ask_subagent",
+   "decision": "auto_approve",
+   "reason": "pantheon-subagents/ask_subagent role probe-helper (direct)",
+   "mcp": {
+    "form": "direct",
+    "server": "pantheon-subagents",
+    "tool": "ask_subagent",
+    "role": "probe-helper"
+   },
+   "cwd": "<ctl>/.agents"
+  },
+  {
+   "tool": "run_command",
+   "decision": "auto_approve",
+   "reason": "the unit's worker verify command",
+   "mcp": null,
+   "cwd": "<ctl>/.agents"
+  }
+ ],
+ "tool_steps": [
+  {
+   "tool_name": "write_file",
+   "state": "ACTIVE",
+   "tool_info": {
+    "name": "write_file",
+    "parameters": {
+     "Path": "<wt>/forbidden.txt"
+    }
+   }
+  },
+  {
+   "tool_name": "write_file",
+   "state": "ERROR",
+   "tool_info": {
+    "name": "write_file",
+    "parameters": {
+     "Path": "<wt>/forbidden.txt"
+    },
+    "error": {
+     "type": "TOOL_ERROR",
+     "message": "tool call denied by pre-tool hook: forbidden.txt is not one of the unit's owned paths (allowed/**)"
+    }
+   }
+  },
+  {
+   "tool_name": "write_file",
+   "state": "ACTIVE",
+   "tool_info": {
+    "name": "write_file",
+    "parameters": {
+     "Path": "<wt>/allowed/probe.txt"
+    }
+   }
+  },
+  {
+   "tool_name": "write_file",
+   "state": "DONE",
+   "tool_info": {
+    "name": "write_file",
+    "parameters": {
+     "Path": "<wt>/allowed/probe.txt"
+    }
+   }
+  },
+  {
+   "tool_name": "mcp_pantheon-subagents_ask_subagent",
+   "state": "ACTIVE",
+   "tool_info": {
+    "name": "mcp_pantheon-subagents_ask_subagent",
+    "parameters": {
+     "question": "Reply with the word PROBE-ANSWER.",
+     "role": "probe-helper"
+    }
+   }
+  },
+  {
+   "tool_name": "mcp_pantheon-subagents_ask_subagent",
+   "state": "DONE",
+   "tool_info": {
+    "name": "mcp_pantheon-subagents_ask_subagent",
+    "parameters": {
+     "question": "Reply with the word PROBE-ANSWER.",
+     "role": "probe-helper"
+    },
+    "output": "Created At: 2026-11-18T01:05:38-05:00\nCompleted At: 2026-11-18T01:05:38-05:00\n{\"role\":\"probe-helper\",\"answer\":\"PROBE-ANSWER (mock subagent: no model was called)\",\"model\":\"mock-subagent\",\"served_model\":\"mock-subagent\"}"
+   }
+  },
+  {
+   "tool_name": "run_command",
+   "state": "ACTIVE",
+   "tool_info": {
+    "name": "run_command",
+    "parameters": {
+     "CommandLine": "cd '<wt>' && node -e \"process.exit(0)\""
+    }
+   }
+  },
+  {
+   "tool_name": "run_command",
+   "state": "DONE",
+   "tool_info": {
+    "name": "run_command",
+    "parameters": {
+     "CommandLine": "cd '<wt>' && node -e \"process.exit(0)\""
+    },
+    "output": "Created At: 2026-11-18T01:05:40-05:00\nCompleted At: 2026-11-18T01:05:41-05:00\nCommand exited with code 0.\n\nNo output from the command."
+   }
+  }
+ ],
+ "log_lines": [
+  "I1118 01:05:30.847643       1 server.go:313] Creating CLI server backend: product=antigravity workspaceDirs=[<ctl> <wt>] <redacted> languageServer=true codeAssist=true"
+ ],
+ "hooks_loaded_turn": {
+  "named": 1,
+  "files": 1,
+  "sources": [
+   "log_file"
+  ]
+ },
+ "host_changes": [
+  {
+   "path": "<home>/.gemini/antigravity-cli/conversation_summaries.db-shm",
+   "change": "added",
+   "before": null,
+   "after": "32768:1794981939016.3557",
+   "reach": "outside_jail_reach",
+   "jail_view": "hidden",
+   "why": "the jail sees <ctl>/run/agy-state/mwlpw5we-7143972e/antigravity-cli at <home>/.gemini/antigravity-cli, not the host's",
+   "possible_writer": "another host process"
+  },
+  {
+   "path": "<home>/.gemini/antigravity-cli/conversation_summaries.db-wal",
+   "change": "added",
+   "before": null,
+   "after": "0:1794981939016.3557",
+   "reach": "outside_jail_reach",
+   "jail_view": "hidden",
+   "why": "the jail sees <ctl>/run/agy-state/mwlpw5we-7143972e/antigravity-cli at <home>/.gemini/antigravity-cli, not the host's",
+   "possible_writer": "another host process"
+  }
+ ]
+}
