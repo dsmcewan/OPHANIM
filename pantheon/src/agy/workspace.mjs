@@ -28,7 +28,9 @@ import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRITE_TOOLS } from "./jail-hook.mjs";
+import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRITE_PATH_KEYS, WRITE_TOOLS, workerVerifyCommand } from "./jail-hook.mjs";
+
+export { workerVerifyCommand } from "./jail-hook.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKER_AGENT = "pantheon-unit-worker";
@@ -50,8 +52,13 @@ const SAFE_COMMAND = /^\/[A-Za-z0-9_./@%+=:,-]+$/;
 // and Antigravity's docs warn that an unmapped tool name in an agent card's `tools` "may cause the subagent process to
 // hang" (that probe's turn hung until its print timeout, with zero tool steps). The jail hook still accepts every
 // spelling (harmless: it decides per call); the CARD lists only names that agy resolved.
+// write_file, not write_to_file (observed on agy 1.5.10, owner's machine, first real worker turn of 5efbba5,
+// 2026-11-18): the card listed write_to_file and the CLI emitted `write_file {Path, Content}` regardless, so the card
+// list is not an allowlist of what the model may call, and the card now names the tool the CLI actually uses. Should
+// write_file not resolve as a card name, the CLI says "unknown component" and the zero-spend preflight's log_scan
+// blocks before any model turn. The jail hook accepts both names.
 export const AGY_1_5_10_UNKNOWN_OR_DEPRECATED = Object.freeze(["call_mcp_tool", "grep_search", "list_dir", "multi_replace_file_content"]);
-export const WORKER_CARD_TOOLS = Object.freeze(["view_file", "write_to_file", "replace_file_content", "run_command"]);
+export const WORKER_CARD_TOOLS = Object.freeze(["view_file", "write_file", "replace_file_content", "run_command"]);
 
 /** The `tools: [a, b]` list of a card's frontmatter (single line, unquoted or quoted names), or null when absent. */
 export function cardTools(text) {
@@ -76,6 +83,18 @@ export function validateCardTools(tools) {
   return bad.length ? { ok: false, bad, why: `unknown or deprecated on agy 1.5.10 (owner's probe 2026-11-18): ${bad.join(", ")}` } : { ok: true, bad: [], why: null };
 }
 
+/** The heading of the prompt's VERIFY COMMAND section (the fixture's fake agy reads the next line as the command). */
+export const VERIFY_COMMAND_HEADING = "VERIFY COMMAND";
+/**
+ * The prompt lines that give the worker its ONE command (workerVerifyCommand: `cd '<worktree>' && <verify_cmd>`), the
+ * exact string jail.json approves. Used by the pipeline's implementer prompt and the probe's. [] when there is none.
+ */
+export function workerVerifyPromptLines(cmd) {
+  if (typeof cmd !== "string" || !cmd.trim()) return [];
+  return [`${VERIFY_COMMAND_HEADING} (run it with run_command EXACTLY as written, character for character: it changes into your worktree itself, because run_command takes no working directory; any other command is refused):`,
+    `  ${cmd.trim()}`];
+}
+
 /** The hooks.json object (owner-stated shape) for the absolute hook command `command`. */
 export function hooksConfig({ command, timeout = HOOK_TIMEOUT_S }) {
   if (typeof command !== "string" || !isAbsolute(command)) throw Object.assign(new Error(`hooksConfig: the hook command must be an absolute path, not ${JSON.stringify(command)}`), { code: "HOOK_PATH_UNSAFE" });
@@ -97,7 +116,8 @@ export function hookWrapper({ node = process.execPath, hook = JAIL_HOOK, policy 
 }
 
 /**
- * Write the unit's agy workspace into `control_dir`. Returns the paths written.
+ * Write the unit's agy workspace into `control_dir`. Returns the paths written (and `worker_verify_cmd`: the exact
+ * command the worker may run, or null without a verify_cmd).
  *   a2a_env  {PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_A2A_ROLES, PANTHEON_UNIT_ID} for the MCP relay
  *   mcp_server  the absolute path of the stdio MCP relay (pipeline/a2a-mcp-server.mjs); null -> no MCP server
  */
@@ -117,8 +137,12 @@ export async function prepareWorkerWorkspace({ control_dir, worktree, unit_id, o
   await copyFile(card, paths.card);
   const servers = mcp_server ? { [MCP_SERVER]: { command: node, args: [mcp_server], env: { ...a2a_env }, tools: { [MCP_TOOL]: { eager: true } } } } : {};
   await writeFile(paths.mcp_config, JSON.stringify({ mcpServers: servers }, null, 2) + "\n");
-  const policy = { schema: "pantheon.agy-jail/v2", unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
-    owned_paths: [...owned_paths], verify_cmd: typeof verify_cmd === "string" && verify_cmd.trim() ? verify_cmd.trim() : null,
+  const verify = typeof verify_cmd === "string" && verify_cmd.trim() ? verify_cmd.trim() : null;
+  // The ONE command the worker may run (run_command has no Cwd: observed on agy 1.5.10): it cds into the REAL worktree.
+  // The prompt carries the same string (pipeline/implement.mjs, scripts/agy-worker-probe.mjs: workerVerifyCommand).
+  paths.worker_verify_cmd = verify ? workerVerifyCommand(wt, verify) : null;
+  const policy = { schema: "pantheon.agy-jail/v3", unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
+    owned_paths: [...owned_paths], verify_cmd: verify, worker_verify_cmd: paths.worker_verify_cmd, write_path_keys: [...WRITE_PATH_KEYS],
     roles: [...roles], mcp: { server: MCP_SERVER, tool: MCP_TOOL, wrapper: MCP_WRAPPER, accepted_names: [...MCP_NAMES], enabled: Boolean(mcp_server), eager: Boolean(mcp_server) },
     hard_deny: [...HARD_DENY], write_tools: [...WRITE_TOOLS], read_tools: [...READ_TOOLS] };
   await writeFile(paths.jail, JSON.stringify(policy, null, 2) + "\n");

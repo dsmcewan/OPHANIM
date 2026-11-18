@@ -114,6 +114,10 @@ case "$prompt" in *"the single implementer of work unit"*) worker=yes ;; esac
 if [ "$worker" = yes ]; then
   unit=$(printf '%s\\n' "$prompt" | sed -n 's/.*the single implementer of work unit "\\([^"]*\\)".*/\\1/p' | head -n 1)
   verify=$(printf '%s\\n' "$prompt" | sed -n '/^GROUND TRUTH/{n;p;}' | sed 's/^ *//' | head -n 1)
+  # The worker's ONE command (the prompt's VERIFY COMMAND section: \`cd '<worktree>' && <verify_cmd>\`); a prompt without
+  # one (an older caller) falls back to the plain ground-truth command.
+  wverify=$(printf '%s\\n' "$prompt" | sed -n '/^VERIFY COMMAND/{n;p;}' | sed 's/^ *//' | head -n 1)
+  [ -n "$wverify" ] || wverify="$verify"
   printf '%s %s %s a2a_url=%s a2a_token=%s google_key=%s a2a_socket=%s mode=%s cleanup=%s dangerous=%s sandbox=%s log_file=%s\\n' "$agent" "$model" "$dir" "\${PANTHEON_A2A_URL:+yes}" "\${PANTHEON_A2A_TOKEN:+yes}" "\${GEMINI_API_KEY:+yes}\${GOOGLE_API_KEY:+yes}" "\${PANTHEON_A2A_SOCKET:+yes}" "$mode" "\${ANTIGRAVITY_AGY_CLEANUP:-none}" "$dangerous" "$sbx" "\${logfile:-none}" >> "$FAKE_AGY_LOG.ctx"
   # Owner-stated: --dangerously-skip-permissions skips the hooks, and --sandbox must never be passed inside bwrap. A
   # unit worker launched with either is a bug: the fake refuses to run it.
@@ -170,20 +174,20 @@ if [ "$worker" = yes ]; then
   # The tools of a unit worker, through the same channel the real CLI uses: every write and command FIRST goes through
   # the PreToolUse hooks of ./.agents/hooks.json (a deny is obeyed); ask_subagent goes through ./.agents/mcp_config.json.
   tools="$here/fake-agy-tools.mjs"
-  FAKE_AGY_EVENTS=$(mktemp); export FAKE_AGY_EVENTS FAKE_AGY_DIR="$dir" FAKE_AGY_MODEL="$model" FAKE_AGY_VERIFY="$verify" FAKE_AGY_UNIT="$unit"
+  FAKE_AGY_EVENTS=$(mktemp); export FAKE_AGY_EVENTS FAKE_AGY_DIR="$dir" FAKE_AGY_MODEL="$model" FAKE_AGY_VERIFY="$wverify" FAKE_AGY_UNIT="$unit"
   agy_write() { node "$tools" write "$1" "$2"; }
   agy_ask() { node "$tools" ask "$1" "$2"; }
   agy_mcp() { node "$tools" mcp "$1" "$2" "\${3:-pantheon-subagents}" "\${4:-ask_subagent}"; }
   agy_invoke_subagent() { node "$tools" invoke "\${1:-helper}"; }
   agy_read() { node "$tools" read "$1"; }
   agy_run() { node "$tools" run "$dir" "$1"; }
-  agy_verify() { node "$tools" run "$dir" "$verify"; }
+  agy_verify() { node "$tools" run "$dir" "$wverify"; }
   first=$(printf '%s\\n' "$prompt" | sed -n '/^PATHS YOU OWN/,/^Do not commit/p' | sed -n 's/^- //p' | head -n 1)
   if [ -n "$FAKE_AGY_WORKER" ]; then . "$FAKE_AGY_WORKER"
   elif [ "$agent" = "pantheon-unit-worker" ]; then
     agy_write "$first" 'export const ok = true;
 ' || true
-    [ -n "$verify" ] && { agy_verify >/dev/null 2>&1 || true; }
+    [ -n "$wverify" ] && { agy_verify >/dev/null 2>&1 || true; }
     reply=''
   else
     mkdir -p "$(dirname "$dir/$first")" && printf 'export const ok = true;\\n' > "$dir/$first"
@@ -209,10 +213,16 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fake-a
 `;
 
 // The unit worker's tools for the fake CLI (node; run from the fake's cwd, the unit's control dir). See FAKE_AGY.
-//   write <path> <content>        PreToolUse write_to_file {TargetFile} -> write unless denied (exit 3 when denied)
-//   run <cwd> <cmd>               PreToolUse run_command {CommandLine, Cwd} -> run unless not approved (exit 126)
-//   ask <role> <question>         the DIRECT (eager) MCP call: PreToolUse on $FAKE_AGY_MCP_NAME (default
-//                                 pantheon-subagents/ask_subagent) {role, question}; available only when mcp_config.json
+//   write <path> <content>        PreToolUse write_file {Path, Content} (as OBSERVED on agy 1.5.10, 2026-11-18; the
+//                                 older write_to_file {TargetFile, CodeContent, Overwrite} with FAKE_AGY_WRITE_TOOL=write_to_file)
+//                                 -> write unless denied (exit 3 when denied)
+//   run <ignored> <cmd>           PreToolUse run_command {CommandLine, WaitMsBeforeAsync, toolSummary} -- NO Cwd, as
+//                                 observed -- run in the CLI's cwd (the control dir) unless not approved (exit 126). Like
+//                                 the real CLI it first writes its helper ~/.gemini/antigravity-cli/bin/agentapi (when
+//                                 ~/.gemini/antigravity-cli exists): a read-only bin/ fails the step with the observed
+//                                 "failed to write agentapi script: ... read-only file system" ERROR (exit 126)
+//   ask <role> <question>         the DIRECT (eager) MCP call: PreToolUse on $FAKE_AGY_MCP_NAME (default, as observed:
+//                                 mcp_pantheon-subagents_ask_subagent) {question, role, toolSummary}; available only when mcp_config.json
 //                                 marks the tool eager (owner-stated: lazy by default); then MCP stdio tools/call
 //   mcp <role> <question> [server] [tool]
 //                                 the LAZY form: PreToolUse call_mcp_tool {ServerName, ToolName, Arguments: {role, question}}
@@ -225,6 +235,9 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fake-a
 // anything without a decision) DENIES; "deny" blocks; --mode=accept-edits headless soft-denies Ask-tier tools
 // (run_command, MCP, call_mcp_tool, invoke_subagent) unless a hook said "auto_approve"; a file edit inside the
 // workspace and a read run on "allow" / empty / no hook.
+// TOOL STEPS EMULATED (observed on agy 1.5.10, 2026-11-18): every call emits a step ACTIVE, then DONE or ERROR; a
+// hook deny is ERROR with tool_info.error {type: "TOOL_ERROR", message: "tool call denied by pre-tool hook: <reason>"}.
+// The hook stdin is the observed shape {stepIdx, modelName, toolCall: {args, id, name}}.
 const FAKE_AGY_TOOLS = String.raw`import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -237,6 +250,7 @@ const stateFile = events + ".state";
 const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { step: 0, changed: [], denied: [], verify: null, asked: [], hooks: [] };
 const save = () => writeFileSync(stateFile, JSON.stringify(state));
 const event = (name, st, info) => appendFileSync(events, JSON.stringify({ event: "step_update", step_update: { step_type: "tool", state: st, tool_name: name, tool_info: info ?? null } }) + "\n");
+const toolError = message => ({ error: { type: "TOOL_ERROR", message } });
 const inside = (root, p) => p === root || p.startsWith(root + sep);
 const agentsDir = join(cwd, ".agents");
 function hooksFor(ev, name) {
@@ -269,18 +283,20 @@ const runHook = (h, input) => new Promise(res => {
 });
 // tier: "edit" (a file edit), "read", or "ask" (run_command, MCP, native subagents).
 async function gate(name, args, tier, editInWorkspace = true) {
-  const input = { toolCall: { name, args }, stepIdx: ++state.step, conversationId: "fake-agy-conversation", workspacePaths: [cwd, dir], transcriptPath: join(cwd, "transcript.jsonl"), modelName: model };
+  event(name, "ACTIVE", null);
+  state.calls = (state.calls ?? 0) + 1;
+  const input = { stepIdx: ++state.step, modelName: model, toolCall: { args, id: "call_" + state.calls, name } };
   const d = [];
   for (const h of hooksFor("PreToolUse", name)) d.push(await runHook(h, input));
   state.hooks.push({ tool: name, decisions: d.map(x => x.decision) });
   const denied = d.find(x => x.decision === "deny" || x.decision === "deny_unless_prior_grant");
-  if (denied) return { ok: false, why: denied.reason ?? "denied by hook", input };
+  if (denied) return { ok: false, why: denied.reason ?? "denied by hook", message: "tool call denied by pre-tool hook: " + (denied.reason ?? ""), input };
   if (d.some(x => x.decision === "auto_approve")) return { ok: true, input };
   if (tier === "read" || (tier === "edit" && editInWorkspace)) return { ok: true, input };
-  return { ok: false, why: "needs approval; headless accept-edits soft-deny", input };
+  return { ok: false, why: "needs approval; headless accept-edits soft-deny", message: "tool call needs approval: headless accept-edits soft-deny", input };
 }
 function deniedOut(name, g, info, code, what) {
-  state.denied.push({ tool: name, ...what, why: g.why }); save(); event(name, "DENIED", info);
+  state.denied.push({ tool: name, ...what, why: g.why }); save(); event(name, "ERROR", { ...info, ...toolError(g.message ?? g.why) });
   process.stderr.write(name + " denied: " + g.why + "\n"); process.exit(code);
 }
 async function mcpCall(server, tool, args) {
@@ -301,32 +317,47 @@ async function mcpCall(server, tool, args) {
 }
 async function finishMcp(name, info, role, server, tool, args) {
   const { r, text } = await mcpCall(server, tool, args);
-  state.asked.push({ role, form: name === "call_mcp_tool" ? "call_mcp_tool" : "direct", ok: !r.error && !r.result?.isError }); save(); event(name, "DONE", info);
-  if (r.error || r.result?.isError) { process.stderr.write("ask_subagent failed: " + (r.error ? JSON.stringify(r.error) : text) + "\n"); process.exit(5); }
+  state.asked.push({ role, form: name === "call_mcp_tool" ? "call_mcp_tool" : "direct", ok: !r.error && !r.result?.isError }); save();
+  if (r.error || r.result?.isError) { event(name, "ERROR", { ...info, ...toolError("ask_subagent failed") }); process.stderr.write("ask_subagent failed: " + (r.error ? JSON.stringify(r.error) : text) + "\n"); process.exit(5); }
+  const now = new Date().toISOString();
+  event(name, "DONE", { ...info, output: "Created At: " + now + "\nCompleted At: " + now + "\n" + text });
   process.stdout.write(text);
 }
 if (cmd === "write") {
   const [p, content] = rest;
   const abs = isAbsolute(p) ? p : join(dir, p);
-  const g = await gate("write_to_file", { TargetFile: abs, CodeContent: content, Overwrite: true }, "edit", inside(resolve(dir), resolve(abs)) || inside(cwd, resolve(abs)));
-  if (!g.ok) deniedOut("write_to_file", g, { TargetFile: abs }, 3, { path: abs });
+  const old = process.env.FAKE_AGY_WRITE_TOOL === "write_to_file";
+  const name = old ? "write_to_file" : "write_file", key = old ? "TargetFile" : "Path";
+  const g = await gate(name, old ? { TargetFile: abs, CodeContent: content, Overwrite: true } : { Content: content, Path: abs }, "edit", inside(resolve(dir), resolve(abs)) || inside(cwd, resolve(abs)));
+  if (!g.ok) deniedOut(name, g, { [key]: abs }, 3, { path: abs });
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content);
-  state.changed.push(abs.startsWith(dir + "/") ? abs.slice(dir.length + 1) : abs); save(); event("write_to_file", "DONE", { TargetFile: abs });
+  state.changed.push(abs.startsWith(dir + "/") ? abs.slice(dir.length + 1) : abs); save(); event(name, "DONE", { [key]: abs });
 } else if (cmd === "run") {
-  const [at, line] = rest;
-  const g = await gate("run_command", { CommandLine: line, Cwd: at }, "ask");
+  const [, line] = rest;
+  const g = await gate("run_command", { CommandLine: line, WaitMsBeforeAsync: 5000, toolSummary: "Verify unit" }, "ask");
   if (!g.ok) deniedOut("run_command", g, { CommandLine: line }, 126, { command: line });
-  const code = await new Promise(res => { const c = spawn("sh", ["-c", line], { cwd: at, stdio: ["ignore", 2, 2] }); c.on("close", c2 => res(c2 ?? 1)); });
+  // As observed: the CLI writes its shell-injection helper bin/agentapi before running anything.
+  const cliDir = process.env.HOME ? join(process.env.HOME, ".gemini", "antigravity-cli") : null;
+  if (cliDir && existsSync(cliDir)) {
+    const helper = join(cliDir, "bin", "agentapi");
+    try { mkdirSync(dirname(helper), { recursive: true }); writeFileSync(helper, "#!/bin/sh\n# fake agentapi\n", { mode: 0o755 }); }
+    catch (e) {
+      const why = e && (e.code === "EROFS" || e.code === "EACCES" || e.code === "EPERM") ? "read-only file system" : String(e && e.code);
+      save(); event("run_command", "ERROR", { CommandLine: line, ...toolError("run_command: failed to build agentapi shell injection: failed to write agentapi script: open " + helper + ": " + why) });
+      process.stderr.write("run_command failed: agentapi " + why + "\n"); process.exit(126);
+    }
+  }
+  const code = await new Promise(res => { const c = spawn("sh", ["-c", line], { cwd, stdio: ["ignore", 2, 2] }); c.on("close", c2 => res(c2 ?? 1)); });
   if (line.trim() === (process.env.FAKE_AGY_VERIFY ?? "").trim()) state.verify = { cmd: line.trim(), exit_code: code };
   save(); event("run_command", "DONE", { CommandLine: line, exit_code: code });
   process.exit(code);
 } else if (cmd === "ask") {
   const [role, question] = rest;
-  const name = process.env.FAKE_AGY_MCP_NAME || "pantheon-subagents/ask_subagent";
+  const name = process.env.FAKE_AGY_MCP_NAME || "mcp_pantheon-subagents_ask_subagent";
   const conf = existsSync(join(agentsDir, "mcp_config.json")) ? JSON.parse(readFileSync(join(agentsDir, "mcp_config.json"), "utf8")).mcpServers?.["pantheon-subagents"] : null;
   if (conf && conf.tools?.ask_subagent?.eager !== true) { process.stderr.write("fake-agy: ask_subagent is lazy (not eager): only call_mcp_tool reaches it\n"); process.exit(6); }
-  const g = await gate(name, { role, question }, "ask");
+  const g = await gate(name, { question, role, toolSummary: "Ask " + role }, "ask");
   if (!g.ok) deniedOut(name, g, { role }, 3, { role });
   await finishMcp(name, { ServerName: "pantheon-subagents", ToolName: "ask_subagent" }, role, "pantheon-subagents", "ask_subagent", { role, question });
 } else if (cmd === "mcp") {
@@ -448,7 +479,7 @@ export function fakeAgy(dir) {
 // The switches every fixture saves, clears and restores. PANTHEON_AGY_STATE_DIRS is set to the fixture dir: the unit
 // worker runs inside the bwrap jail, where only the worktree, the control dir's run/ and the agy state dirs are
 // writable, and the fake CLI writes its logs ($FAKE_AGY_LOG*) in the fixture dir.
-const AGY_SWITCHES = ["FAKE_AGY_AUTH_MARKER", "FAKE_AGY_NOT_LOGGED_IN", "FAKE_AGY_GLOBAL_ONLY", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER", "FAKE_AGY_GEMINI_WRITES", "FAKE_AGY_MCP_NAME",
+const AGY_SWITCHES = ["FAKE_AGY_AUTH_MARKER", "FAKE_AGY_NOT_LOGGED_IN", "FAKE_AGY_GLOBAL_ONLY", "FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER", "FAKE_AGY_GEMINI_WRITES", "FAKE_AGY_MCP_NAME", "FAKE_AGY_WRITE_TOOL",
   "FAKE_AGY_QUOTA_SOFT", "FAKE_AGY_HANG", "FAKE_AGY_PRINT_TIMEOUT", "FAKE_AGY_STREAM", "FAKE_AGY_GARBLE"];
 /** The worker-turn controls a fixture hands its test (see FAKE_AGY): failure switches and the scripted /quota report. */
 function workerControls(dir) {

@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { CAPABILITIES, clone, sha256, str } from "./util.mjs";
 import { matchesOwned } from "./paths.mjs";
 import { git } from "./git.mjs";
+import { workerVerifyCommand, workerVerifyPromptLines } from "../agy/workspace.mjs";
 
 /** Absolute path of the stdio MCP relay the implementer's agent launches to reach the unit's subagent shim. */
 export const MCP_SERVER_PATH = fileURLToPath(new URL("./a2a-mcp-server.mjs", import.meta.url));
@@ -50,7 +51,13 @@ export function laneFailureOf(e) {
   return null;
 }
 
-export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, findings = [] }) {
+/**
+ * The implementer's prompt. `worker_verify` (optional) is the exact command the worker may run
+ * (workerVerifyCommand(<real worktree>, unit.verify_cmd): `cd '<worktree>' && <verify_cmd>`); observed on agy 1.5.10
+ * (2026-11-18), run_command carries no working directory, so the worker gets the one command that sets its own, and the
+ * jail hook approves exactly that string. The GROUND TRUTH line stays the plain verify_cmd: the controller's own run.
+ */
+export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, findings = [], worker_verify = null }) {
   const subs = unit.allowed_subagents ?? [];
   return [
     `ROLE: ${unit.specialist_role} — the single implementer of work unit "${unit.unit_id}" (difficulty: ${unit.difficulty}). You own this whole unit: its types, its implementation and its tests, together, in one change.`,
@@ -67,9 +74,10 @@ export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, find
     "ACCEPTANCE RUBRIC (frozen; a reviewer will check each line against your diff and the command output):",
     ...rubric.map((c, i) => `${i + 1}. ${c}`),
     "",
+    ...workerVerifyPromptLines(worker_verify),
     "GROUND TRUTH: the controller will run this command in your worktree after you finish; its exit code decides, not your report:",
     `  ${unit.verify_cmd}`,
-    "Run it yourself before you stop.",
+    worker_verify ? "Run the VERIFY COMMAND above yourself before you stop." : "Run it yourself before you stop.",
     "",
     subs.length && a2a
       ? [`SUBAGENTS: you may ask a specialist ONE stateless question at a time (it has no tools, no files and no memory). Allowed roles: ${subs.join(", ")}.`,
@@ -179,7 +187,9 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
   const level = ladder.findIndex(s => s.vendor === seat.vendor && s.model === seat.model);
   const rec = { n: attempt, role: "implementer", standing: "author", authored: true, vendor: seat.vendor, model: seat.model, level: level < 0 ? null : level, requested_model: seat.model, served_model: null, served_model_source: null,
     status: "failed", code: null, why: null, findings_in: findings.length, changed: [], violations: [], scratch_discarded: [], started_from: start, checkpoint: start, text_digest: null };
-  const prompt = IMPLEMENTER_PROMPT({ unit, rubric, a2a, attempt, findings });
+  // The worker's command cds into the REAL worktree: prepareWorkerWorkspace writes the same string into jail.json.
+  const worker_verify = typeof unit.verify_cmd === "string" && unit.verify_cmd.trim() ? workerVerifyCommand(await realpath(worktree), unit.verify_cmd) : null;
+  const prompt = IMPLEMENTER_PROMPT({ unit, rubric, a2a, attempt, findings, worker_verify });
   rec.prompt_digest = sha256(a2a ? prompt.split(a2a.token).join("<token>") : prompt);   // the digest must not depend on the secret
   // A tracked symlink that already leaves the worktree makes the jail unenforceable: a write THROUGH it lands outside
   // the worktree, where git — and so the controller — cannot see it. Refused before the turn is asked.

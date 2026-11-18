@@ -11,8 +11,10 @@ import { WRITE_TOOLS, READ_TOOLS, MCP_WRAPPER } from "../src/agy/jail-hook.mjs";
 
 const card = readFileSync(CARD_TEMPLATE, "utf8");
 
-test("the worker card's tools are exactly view_file, write_to_file, replace_file_content, run_command", () => {
-  assert.deepEqual(cardTools(card), ["view_file", "write_to_file", "replace_file_content", "run_command"]);
+// write_file replaced write_to_file: observed on agy 1.5.10 (first real worker turn, 2026-11-18) the CLI emitted
+// write_file {Path, Content} although the card listed write_to_file. A card naming the old tool again would fail here.
+test("the worker card's tools are exactly view_file, write_file, replace_file_content, run_command (the names the CLI was observed to use)", () => {
+  assert.deepEqual(cardTools(card), ["view_file", "write_file", "replace_file_content", "run_command"]);
   assert.deepEqual(cardTools(card), [...WORKER_CARD_TOOLS]);
   assert.deepEqual(validateCardTools(cardTools(card)), { ok: true, bad: [], why: null });
 });
@@ -21,7 +23,11 @@ test("the card's text no longer tells the worker to use call_mcp_tool or the dep
   const body = card.slice(card.indexOf("\n---\n", 4) + 5);
   for (const bad of AGY_1_5_10_UNKNOWN_OR_DEPRECATED.filter(t => t !== "call_mcp_tool")) assert.doesNotMatch(body, new RegExp(`\`${bad}\``), bad);
   assert.doesNotMatch(body, /"ServerName"|through the built-in `call_mcp_tool`/, "no call_mcp_tool instructions");
-  assert.match(body, /`write_to_file`/); assert.match(body, /`replace_file_content`/);
+  assert.match(body, /`write_file` with `Path` and `Content`/); assert.match(body, /`replace_file_content`/);
+  assert.doesNotMatch(body, /`write_to_file`/, "the worker is told the observed tool name");
+  assert.doesNotMatch(body, /\(`Cwd`\) set to the worktree/, "run_command has no Cwd: the worker runs the exact cd-prefixed command");
+  assert.match(body, /cd '<your worktree>' &&/);
+  assert.match(card.slice(0, card.indexOf("\n---\n", 4)), /# write_file REPLACES write_to_file \(observed on agy 1\.5\.10/, "the decision and its reason are recorded in the frontmatter");
   assert.match(body, /`ask_subagent` that the configured MCP server\s+`pantheon-subagents` provides/);
   assert.match(body, /No native subagents/);
 });
@@ -43,7 +49,7 @@ test("validateCardTools rejects every name agy 1.5.10 reported unknown or deprec
 });
 
 test("the jail hook still accepts every spelling (harmless: it decides per call)", () => {
-  for (const t of ["write_to_file", "replace_file_content", "multi_replace_file_content"]) assert.ok(WRITE_TOOLS.includes(t), t);
+  for (const t of ["write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"]) assert.ok(WRITE_TOOLS.includes(t), t);
   for (const t of ["view_file", "grep_search", "list_dir"]) assert.ok(READ_TOOLS.includes(t), t);
   assert.equal(MCP_WRAPPER, "call_mcp_tool");
 });

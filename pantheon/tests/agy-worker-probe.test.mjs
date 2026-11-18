@@ -47,6 +47,8 @@ async function setup(t, fraction = 0.8) {
   writeFileSync(join(g, "oauth_creds.json"), '{"refresh_token":"fake"}'); writeFileSync(join(g, "settings.json"), "{}");
   writeFileSync(join(c, "settings.json"), '{"cli":1}'); writeFileSync(join(c, "plugins", "p.json"), "plugin");
   writeFileSync(join(c, "conversations", "earlier.db"), "earlier");
+  // bin/ as on the owner's host: run_command writes bin/agentapi first (observed 2026-11-18); a per-run writable copy.
+  mkdirSync(join(c, "bin")); writeFileSync(join(c, "bin", "language_server"), "ls", { mode: 0o755 });
   const cli = fakeAgy(fx);
   writeFileSync(join(fx, "quota-report.txt"), JSON.stringify(usage(fraction))); writeFileSync(join(fx, "quota-exit"), "0");
   writeFileSync(join(fx, "worker.sh"), WORKER);
@@ -80,7 +82,7 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual(r.summary.aborted, null, JSON.stringify(r.summary.aborted));
     const o = r.summary;
     assert.equal(r.code, 0, `${JSON.stringify(o.checks)} ${o.turn?.error?.message ?? ""} ${o.stderr_tail ?? ""}`);
-    assert.deepEqual(Object.keys(o), ["schema", "agy", "lane", "timeout_s", "quota_before", "quota_after", "launch", "preflight", "hook", "checks", "mcp", "tools_run", "turn",
+    assert.deepEqual(Object.keys(o), ["schema", "agy", "lane", "timeout_s", "quota_before", "quota_after", "launch", "preflight", "hook", "checks", "check_evidence", "mcp", "tools_run", "turn",
       "startup_errors", "deprecations", "diagnostics", "stderr_tail", "log_tail", "owner_stated_mechanics", "gemini_state", "aborted", "kept", "kept_contains_credentials"], "stable key order");
     // The zero-spend preflight ran first, in the same jail, and passed: the card's four tools, `agy agents` (exit 0, no
     // flag refused), the login, a clean output and log dir; discovery (advisory) found the worker and the server.
@@ -89,7 +91,7 @@ for (const form of ["direct", "wrapped"]) {
     // As observed (2026-11-18): the subcommands loaded 0 hooks.json files from the control dir (not a git repo): a
     // WARNING, surfaced, never blocking.
     assert.deepEqual([o.preflight.checks.hooks_discovery.seen, o.preflight.checks.hooks_discovery.files, o.preflight.checks.hooks_discovery.ok], [true, 0, false]);
-    assert.deepEqual(o.preflight.checks.card_tools.tools, ["view_file", "write_to_file", "replace_file_content", "run_command"]);
+    assert.deepEqual(o.preflight.checks.card_tools.tools, ["view_file", "write_file", "replace_file_content", "run_command"]);
     assert.match(o.preflight.checks.agents.stdout, /^pantheon-unit-worker\b/m);
     assert.deepEqual([o.preflight.checks.discovery.ok, o.preflight.checks.discovery.agent_listed, o.preflight.checks.discovery.server_listed], [true, true, true]);
     // `agy mcp list` output is never stored: only the server names.
@@ -104,6 +106,7 @@ for (const form of ["direct", "wrapped"]) {
     // The diagnostics the owner reads first: whether the --print session loaded <ctl>/.agents/hooks.json and which
     // directories it took as workspace -- both from the CLI's log FILE (the scratch's log/), read before cleanup.
     const ctl = o.launch.cwd, wt = o.launch.argv[o.launch.argv.indexOf("--add-dir") + 1];
+    const direct = form === "direct" ? "mcp_pantheon-subagents_ask_subagent" : "call_mcp_tool";
     assert.deepEqual(Object.keys(o.diagnostics), ["hooks_loaded", "workspace_dirs", "cli_log", "gemini_dir_lines", "negative_login_lines"]);
     assert.deepEqual(o.diagnostics.hooks_loaded, { preflight: { named: 0, files: 0, sources: ["log_dir"] }, turn: { named: 1, files: 1, sources: ["log_dir"] } });
     assert.deepEqual(o.diagnostics.workspace_dirs, { preflight: null, turn: [ctl, wt] });
@@ -123,16 +126,28 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual([o.quota_before.state, o.quota_after.state, o.aborted], ["available", "available", null]);
     assert.deepEqual(o.checks, { forbidden_denied: true, allowed_written: true, mcp_called: true, verify_ran: true, gemini_state_untouched: true });
     // Forbidden: denied by the hook BEFORE any write (the first hook call, a deny; the owned write only after it).
-    assert.equal(o.hook.payloads[0].toolCall.name, "write_to_file");
-    assert.match(o.hook.payloads[0].toolCall.args.TargetFile, /\/forbidden\.txt$/);
-    assert.deepEqual(o.hook.decisions.map(d => [d.tool, d.decision]), [["write_to_file", "deny"], ["write_to_file", "auto_approve"],
-      [form === "direct" ? "pantheon-subagents/ask_subagent" : "call_mcp_tool", "auto_approve"], ["run_command", "auto_approve"]]);
+    // The observed tool and shapes (agy 1.5.10, 2026-11-18): write_file {Path, Content}; run_command without a Cwd.
+    assert.equal(o.hook.payloads[0].toolCall.name, "write_file");
+    assert.equal(o.hook.payloads[0].toolCall.args.Path, join(wt, "forbidden.txt"));
+    assert.match(o.hook.decisions[0].reason, /forbidden\.txt is not one of the unit's owned paths/, "denied by the owned-path policy, not as an unknown tool");
+    assert.deepEqual(o.hook.decisions.map(d => [d.tool, d.decision]), [["write_file", "deny"], ["write_file", "auto_approve"],
+      [direct, "auto_approve"], ["run_command", "auto_approve"]]);
+    const run = o.hook.payloads[3].toolCall.args;
+    assert.deepEqual([run.CommandLine, "Cwd" in run], [`cd '${wt}' && node -e "process.exit(0)"`, false], "the exact worker command, no Cwd");
+    // The checks' evidence: each from the hook decision AND the call's terminal step.
+    const ev = o.check_evidence;
+    assert.deepEqual(ev.forbidden.attempts.map(a => [a.decision, a.states]), [["deny", ["ACTIVE", "ERROR"]]]);
+    assert.match(ev.forbidden.attempts[0].error, /^tool call denied by pre-tool hook: /);
+    assert.deepEqual(ev.allowed.attempts.map(a => [a.decision, a.states]), [["auto_approve", ["ACTIVE", "DONE"]]]);
+    assert.deepEqual(ev.verify.attempts.map(a => [a.decision, a.states, a.exact, a.exit_status]), [["auto_approve", ["ACTIVE", "DONE"], true, 0]]);
+    assert.deepEqual([ev.verify.exit_status, ev.mcp.shim_answered, ev.unpaired_rows], [0, true, []]);
     assert.ok(o.hook.decisions.every(d => d.cwd.endsWith("/control/probe/.agents")), "every hook ran in .agents/");
     assert.deepEqual([o.hook.call_mcp_tool_seen, o.hook.direct_mcp_seen, o.hook.invoke_subagent_attempted], [form === "wrapped", form === "direct", false]);
     // MCP: reached over the Unix socket inside bwrap; the subagent is a mock; zero API calls.
     assert.deepEqual(o.mcp.shim_calls.map(c => [c.role, c.status, c.vendor]), [["probe-helper", "answered", "mock"]]);
     assert.deepEqual([o.mcp.mock_subagent_turns, o.mcp.api_calls, o.mcp.socket_inside_bwrap], [1, 0, true]);
-    assert.deepEqual(o.tools_run.map(x => [x.tool_name, x.state]), [["write_to_file", "DENIED"], ["write_to_file", "DONE"], [form === "direct" ? "pantheon-subagents/ask_subagent" : "call_mcp_tool", "DONE"], ["run_command", "DONE"]]);
+    assert.deepEqual(o.tools_run.map(x => [x.tool_name, x.state]), [["write_file", "ACTIVE"], ["write_file", "ERROR"], ["write_file", "ACTIVE"], ["write_file", "DONE"],
+      [direct, "ACTIVE"], [direct, "DONE"], ["run_command", "ACTIVE"], ["run_command", "DONE"]]);
     assert.deepEqual([o.turn.exit_code, o.turn.status, o.turn.error, o.turn.usage], [0, "SUCCESS", null, { input_tokens: 1234, output_tokens: 56 }]);
     // The launch: bwrap, the argv with the prompt redacted, the token redacted, no forbidden flags.
     assert.equal(o.launch.argv[0], "bwrap");
@@ -148,6 +163,11 @@ for (const form of ["direct", "wrapped"]) {
     assert.equal(w.dir, s.c);
     assert.deepEqual(Object.fromEntries(Object.entries(w.subdirs).map(([k, v]) => [k, v.length])), { brain: 1, cache: 1, conversations: 1, crashes: 0, implicit: 1, log: 3, mcp: 1, presence: 1 },
       "log/: one CLI log per preflight subcommand, one for the turn");
+    assert.deepEqual(w.writable_subdirs, { bin: [{ path: "agentapi", size: 26, copied: false, changed: true }, { path: "language_server", size: 2, copied: true, changed: false }] },
+      "run_command's agentapi landed in the writable copy of bin/");
+    // Host-state attribution: nothing changed on the host; the agy processes around the turn were listed (none here).
+    assert.deepEqual(o.gemini_state.host_changes, []);
+    assert.deepEqual([o.gemini_state.host_agy_processes.before.processes, o.gemini_state.host_agy_processes.after.processes], [[], []]);
     assert.deepEqual(w.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.changed]),
       [["antigravity-oauth-token", false], ["installation_id", false], ["jetbox_summaries_proto.pb.<rand>.tmp", true], ["settings.json", false]]);
     assert.deepEqual(w.writable_copies, { "config/projects": [{ path: "default-cli-project.json", size: 2, copied: true, changed: true }] }, "the preflight's project write landed in the copy");
@@ -172,7 +192,7 @@ for (const form of ["direct", "wrapped"]) {
     } else {
       assert.equal(m.state_mounts.status, "confirmed");
       assert.match(m.state_mounts.evidence.note, /writes landed in the scratch copy/);
-      assert.equal(m.state_mounts.evidence.writes_in_scratch.length, 10, "the nine state writes and the turn's log/cli-<n>.log");
+      assert.equal(m.state_mounts.evidence.writes_in_scratch.length, 11, "the nine state writes, the turn's log/cli-<n>.log and bin/agentapi");
     }
     // One model invocation; the temp repo is cleaned up.
     assert.equal(s.launches().length, 1);
@@ -180,6 +200,24 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual(probeDirs().filter(n => !dirsBefore.includes(n)), [], "no temp dir left behind");
   });
 }
+
+// OBSERVED (owner's machine, 2026-11-18): gemini_state_untouched read false only because a HOST log file under
+// ~/.gemini/antigravity-cli/log/ grew during the probe -- a file the jail cannot reach (it sees the scratch there).
+test("a host process writing ~/.gemini/antigravity-cli/log/ during the probe: classified outside_jail_reach (hidden), reported with possible_writer, NOT a failure (exit 0)", needBwrap, async t => {
+  const s = await setup(t);
+  const hostLog = join(s.c, "log", "cli-20261114_185251.log");
+  writeFileSync(hostLog, "host line\n");
+  const timer = setInterval(() => { try { writeFileSync(hostLog, "another host process\n", { flag: "a" }); } catch { /* the test's own dir */ } }, 20);
+  let r;
+  try { r = await probe(s); } finally { clearInterval(timer); }
+  const o = r.summary;
+  assert.equal(r.code, 0, JSON.stringify([o.aborted, o.checks]));
+  assert.equal(o.checks.gemini_state_untouched, true);
+  const ch = o.gemini_state.host_changes.filter(c => c.path === hostLog);
+  assert.deepEqual(ch.map(c => [c.change, c.reach, c.jail_view, c.possible_writer]), [["changed", "outside_jail_reach", "hidden", "another host process"]]);
+  assert.match(ch[0].why, /the jail sees .*agy-state.* at .*antigravity-cli, not the host's/);
+  assert.ok(o.gemini_state.host_changes.every(c => c.reach === "outside_jail_reach"));
+});
 
 test("a card listing call_mcp_tool (as on the owner's 2026-11-18 run): the PREFLIGHT aborts before any model turn (exit 2), with the CLI's own unknown-component line recorded", needBwrap, async t => {
   const s = await setup(t);

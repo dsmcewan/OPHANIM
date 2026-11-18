@@ -15,13 +15,21 @@
 //   exit code 0. Printing nothing would FAIL OPEN.
 //
 // THE DECISION TABLE (decide(policy, payload)):
-//   write tools (write_to_file, replace_file_content, multi_replace_file_content)
-//       auto_approve ONLY when args.TargetFile is an absolute path that, resolved WITHOUT following a final symlink and
-//       with every intermediate symlink resolved, stays inside the worktree, is not inside .git or .agents, and is
-//       matched by the unit's owned_paths (pipeline/paths.mjs matchesOwned) both as written and as resolved; else deny.
+//   write tools (WRITE_TOOLS: write_file, write_to_file, replace_file_content, multi_replace_file_content)
+//       the target is the FIRST PRESENT of args.Path, args.TargetFile, args.AbsolutePath, args.File (WRITE_PATH_KEYS;
+//       OBSERVED on agy 1.5.10, owner's machine, 2026-11-18: the real write tool is `write_file` with args {Path,
+//       Content}, emitted although the card listed write_to_file; the hook denied it as an unknown tool, so the owned
+//       write was blocked too and the forbidden-write deny proved nothing about the owned-path policy). auto_approve
+//       ONLY when that target is an absolute path that, resolved WITHOUT following a final symlink and with every
+//       intermediate symlink resolved, stays inside the worktree, is not inside .git or .agents, and is matched by the
+//       unit's owned_paths (pipeline/paths.mjs matchesOwned) both as written and as resolved; else deny.
 //   run_command
-//       auto_approve ONLY when args.CommandLine (trimmed) equals the unit's verify_cmd exactly and args.Cwd, if given,
-//       resolves to the worktree; else deny.
+//       auto_approve ONLY when args.CommandLine (trimmed) equals the unit's WORKER verify command exactly -- the policy's
+//       worker_verify_cmd, i.e. workerVerifyCommand(worktree, verify_cmd) = `cd '<worktree>' && <verify_cmd>` -- and
+//       args.Cwd, if given, resolves to the worktree; else deny. (OBSERVED on agy 1.5.10, 2026-11-18: the run_command
+//       payload carries only {CommandLine, WaitMsBeforeAsync, toolSummary}: there is no Cwd to request, so the one
+//       command the worker may run sets its own directory. The plain verify_cmd is DENIED: it would run wherever the
+//       CLI happens to run commands.)
 //   read tools (READ_TOOLS)
 //       auto_approve (not "allow": owner-stated, "allow" may be soft-denied) when every path argument resolves inside
 //       the worktree or the control dir; deny otherwise, and deny when no path argument is found.
@@ -44,7 +52,20 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { matchesOwned } from "../pipeline/paths.mjs";
 
-export const WRITE_TOOLS = Object.freeze(["write_to_file", "replace_file_content", "multi_replace_file_content"]);
+export const WRITE_TOOLS = Object.freeze(["write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"]);
+/** The argument naming a write's target: the FIRST PRESENT of these wins (observed on agy 1.5.10: write_file {Path, Content}). */
+export const WRITE_PATH_KEYS = Object.freeze(["Path", "TargetFile", "AbsolutePath", "File"]);
+/** Single-quote a word for a POSIX shell (always quoted: the result is compared byte for byte). */
+export const shQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
+/**
+ * THE ONE COMMAND A WORKER MAY RUN: `cd '<worktree>' && <verify_cmd>` (verify_cmd trimmed). run_command has no Cwd
+ * (observed on agy 1.5.10), so the command sets its own directory. The same string goes into the prompt and jail.json.
+ */
+export function workerVerifyCommand(worktree, verify_cmd) {
+  if (typeof worktree !== "string" || !isAbsolute(worktree)) throw Object.assign(new Error(`workerVerifyCommand: the worktree must be an absolute path, not ${JSON.stringify(worktree)}`), { code: "BAD_INPUT" });
+  if (typeof verify_cmd !== "string" || !verify_cmd.trim()) return null;
+  return `cd ${shQuote(worktree)} && ${verify_cmd.trim()}`;
+}
 // Read-only tools of the Antigravity/Cascade tool family whose path arguments the jail can check.
 export const READ_TOOLS = Object.freeze(["view_file", "grep_search", "list_dir", "find_by_name", "view_file_outline", "view_code_item", "codebase_search"]);
 export const MCP_SERVER = "pantheon-subagents", MCP_TOOL = "ask_subagent";
@@ -96,10 +117,19 @@ function onRoot(policy, p) {
   return n;
 }
 
+/** {key, value} of the first present WRITE_PATH_KEYS argument, or null. */
+export function writeTargetOf(args) {
+  if (!isObj(args)) return null;
+  const key = WRITE_PATH_KEYS.find(k => args[k] !== undefined && args[k] !== null);
+  return key ? { key, value: args[key] } : null;
+}
+
 export function decideWrite(policy, args) {
-  const target = args?.TargetFile;
-  if (typeof target !== "string" || !target.trim()) return deny("the write names no TargetFile");
-  if (!isAbsolute(target)) return deny(`TargetFile "${target}" is not absolute; the jail resolves absolute paths only`);
+  const t = writeTargetOf(args);
+  if (!t) return deny(`the write names no target (${WRITE_PATH_KEYS.join(", ")})`);
+  const target = t.value;
+  if (typeof target !== "string" || !target.trim()) return deny(`the write's ${t.key} is not a path`);
+  if (!isAbsolute(target)) return deny(`${t.key} "${target}" is not absolute; the jail resolves absolute paths only`);
   const root = policy.worktree, abs = onRoot(policy, target);
   if (!inside(root, abs) || abs === root) return deny(`${target} is outside the unit's worktree ${root}`);
   const rel = relative(root, abs).split(sep).join("/");
@@ -119,13 +149,15 @@ export function decideCommand(policy, args) {
   const cmd = typeof args?.CommandLine === "string" ? args.CommandLine.trim() : null;
   if (!cmd) return deny("run_command names no CommandLine");
   if (typeof policy.verify_cmd !== "string" || !policy.verify_cmd.trim()) return deny("this unit allows no command (no verify_cmd)");
-  if (cmd !== policy.verify_cmd.trim()) return deny(`only the unit's verify_cmd may run (${JSON.stringify(policy.verify_cmd.trim())}), not ${JSON.stringify(cmd)}`);
+  // The worker command as written into jail.json (a policy without one: derived from the real worktree, the same way).
+  const want = typeof policy.worker_verify_cmd === "string" && policy.worker_verify_cmd.trim() ? policy.worker_verify_cmd.trim() : workerVerifyCommand(policy.worktree, policy.verify_cmd);
+  if (cmd !== want) return deny(`only the unit's verify_cmd may run, exactly as the worker command ${JSON.stringify(want)}, not ${JSON.stringify(cmd)}`);
   if (args.Cwd !== undefined && args.Cwd !== null && args.Cwd !== "") {
     if (typeof args.Cwd !== "string" || !isAbsolute(args.Cwd)) return deny(`Cwd ${JSON.stringify(args.Cwd)} is not an absolute path`);
     const r = realOr(args.Cwd);
     if (r !== policy.worktree) return deny(`verify_cmd runs in the worktree ${policy.worktree}, not in ${args.Cwd}`);
   }
-  return approve("the unit's verify_cmd");
+  return approve("the unit's worker verify command");
 }
 
 export function decideRead(policy, args) {
@@ -229,7 +261,7 @@ export function loadPolicy(file) {
 
 const summary = tc => {
   const a = isObj(tc?.args) ? tc.args : {};
-  const pick = Object.fromEntries(["TargetFile", "CommandLine", "Cwd", ...READ_KEYS, "ServerName", "ToolName"].filter(k => typeof a[k] === "string").map(k => [k, a[k].slice(0, 500)]));
+  const pick = Object.fromEntries([...new Set(["TargetFile", "CommandLine", "Cwd", ...WRITE_PATH_KEYS, ...READ_KEYS, "ServerName", "ToolName"])].filter(k => typeof a[k] === "string").map(k => [k, a[k].slice(0, 500)]));
   return { tool: typeof tc?.name === "string" ? tc.name : null, args: pick };
 };
 

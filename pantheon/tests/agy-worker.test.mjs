@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runAgyWorkerTurn, AGY_CLEANUP, workerArgv, assertWorkerArgv } from "../src/board/agy-cli.mjs";
-import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
+import { prepareWorkerWorkspace, workerVerifyCommand, workerVerifyPromptLines } from "../src/agy/workspace.mjs";
 import { bwrapArgs, sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
@@ -20,8 +20,11 @@ const LANE = "gemini-4-hydrogen-medium";
 const have = await sandboxAvailable("bwrap");
 const needBwrap = { skip: have.ok ? false : `bwrap unavailable: ${have.why}` };
 
-const PROMPT = (unit, owned, verify) => [`ROLE: node-esm-library-engineer — the single implementer of work unit "${unit}" (difficulty: medium).`, "",
+// The prompt carries the worker's ONE command (`cd '<worktree>' && <verify>`: run_command has no Cwd, observed on agy
+// 1.5.10) in its VERIFY COMMAND section, as the pipeline's implementer prompt does; GROUND TRUTH stays the plain command.
+const PROMPT = (unit, owned, verify, wt) => [`ROLE: node-esm-library-engineer — the single implementer of work unit "${unit}" (difficulty: medium).`, "",
   "PATHS YOU OWN (the only paths you may create, change or delete):", ...owned.map(p => `- ${p}`), "Do not commit, do not move HEAD.", "",
+  ...workerVerifyPromptLines(workerVerifyCommand(wt, verify)),
   "GROUND TRUTH: the controller will run this command in your worktree after you finish; its exit code decides, not your report:", `  ${verify}`, "Run it yourself before you stop."].join("\n");
 
 /** A repo, a linked worktree per unit and a control dir per unit (outside the worktree), under one temp root. */
@@ -45,7 +48,7 @@ const verifyOf = u => `test -f src/${u}/impl.mjs`;
 async function prepared(f, u, extra = {}) {
   const { wt, ctl } = f.units[u];
   await prepareWorkerWorkspace({ control_dir: ctl, worktree: wt, unit_id: u, owned_paths: [`src/${u}/**`], verify_cmd: verifyOf(u), ...extra });
-  return { cli: process.env.PANTHEON_AGY_CLI, control_dir: ctl, worktree: wt, model: LANE, prompt: PROMPT(u, [`src/${u}/**`], verifyOf(u)), timeoutS: 60, sandbox: sandbox(f.fx) };
+  return { cli: process.env.PANTHEON_AGY_CLI, control_dir: ctl, worktree: wt, model: LANE, prompt: PROMPT(u, [`src/${u}/**`], verifyOf(u), wt), timeoutS: 60, sandbox: sandbox(f.fx) };
 }
 
 test("(a) under real bwrap the worker writes only owned files; a write outside them is denied by the PreToolUse hook BEFORE it happens", needBwrap, async t => {
@@ -68,20 +71,25 @@ reply=''
     assert.equal(r.sandbox.kind, "bwrap");
     // The jail log records every decision; the denies are there with their reasons, the approvals for the owned write and verify.
     const pre = r.jail_log.filter(l => l.event === "PreToolUse");
-    const by = p => pre.filter(l => l.args.TargetFile === p).map(l => l.decision);
+    const by = p => pre.filter(l => l.args.Path === p).map(l => l.decision);
     assert.ok(by(join(wt, "src/a/impl.mjs")).every(d => d === "auto_approve") && by(join(wt, "src/a/impl.mjs")).length > 0);
     for (const p of [join(wt, "README.md"), join(ctl, ".agents/hooks.json"), join(f.repo, ".git/config")]) {
       assert.ok(by(p).length > 0 && by(p).every(d => d === "deny"), `${p}: ${by(p)}`);
     }
-    assert.match(pre.find(l => l.args.TargetFile === join(wt, "README.md")).reason, /not one of the unit's owned paths/);
-    assert.ok(pre.some(l => l.tool === "run_command" && l.decision === "auto_approve" && l.args.CommandLine === verifyOf("a")));
+    assert.match(pre.find(l => l.args.Path === join(wt, "README.md")).reason, /not one of the unit's owned paths/);
+    // The ONE approved command is the cd-prefixed worker command; the fake sends it without a Cwd, as agy 1.5.10 does.
+    assert.ok(pre.some(l => l.tool === "run_command" && l.decision === "auto_approve" && l.args.CommandLine === workerVerifyCommand(wt, verifyOf("a")) && !("Cwd" in l.args)));
     assert.ok(!r.jail_log.some(l => l.event !== "PreToolUse"), "no PostToolUse hook any more: the PreToolUse log is the audit");
     assert.ok(pre.every(l => l.cwd === join(ctl, ".agents") && typeof l.raw === "string" && l.payload?.toolCall), "every raw payload is logged; the hook ran in .agents/");
     // Every tool step of the stream is captured, denied ones included.
-    assert.deepEqual(r.tool_steps.map(s => [s.tool_name, s.state]), [["write_to_file", "DONE"], ["write_to_file", "DENIED"], ["write_to_file", "DENIED"], ["write_to_file", "DENIED"], ["run_command", "DONE"]]);
-    assert.deepEqual(r.tool_steps[0].tool_info, { TargetFile: join(wt, "src/a/impl.mjs") });
+    // Every call is ACTIVE then DONE / ERROR (observed on agy 1.5.10); a hook deny is "denied by pre-tool hook".
+    assert.deepEqual(r.tool_steps.map(s => [s.tool_name, s.state]), [["write_file", "ACTIVE"], ["write_file", "DONE"], ["write_file", "ACTIVE"], ["write_file", "ERROR"],
+      ["write_file", "ACTIVE"], ["write_file", "ERROR"], ["write_file", "ACTIVE"], ["write_file", "ERROR"], ["run_command", "ACTIVE"], ["run_command", "DONE"]]);
+    assert.deepEqual(r.tool_steps[1].tool_info, { Path: join(wt, "src/a/impl.mjs") });
+    assert.match(r.tool_steps[3].tool_info.error.message, /^tool call denied by pre-tool hook: README\.md is not one of the unit's owned paths/);
+    assert.deepEqual([r.tool_calls, r.tools], [2, ["write_file", "run_command"]], "only DONE steps count as tool calls");
     // The worker's strict JSON summary is parsed when it is the whole final message.
-    assert.deepEqual([r.summary.unit_id, r.summary.status, r.summary.changed_paths, r.summary.verify], ["a", "done", ["src/a/impl.mjs"], { cmd: verifyOf("a"), exit_code: 0 }]);
+    assert.deepEqual([r.summary.unit_id, r.summary.status, r.summary.changed_paths, r.summary.verify], ["a", "done", ["src/a/impl.mjs"], { cmd: workerVerifyCommand(wt, verifyOf("a")), exit_code: 0 }]);
     assert.equal((await sh("git status --porcelain", wt)).trim(), "?? src/", "only the owned file changed");
   });
 });
@@ -99,7 +107,7 @@ printf x > "$HOME/pantheon-agy-escape" 2>/dev/null || true
     assert.equal(existsSync(join(wt, "src/a/ran")), false);
     assert.equal(existsSync(join(f.repo, "escaped.txt")), false);
     assert.equal(existsSync(join(process.env.HOME, "pantheon-agy-escape")), false);
-    assert.match(r.jail_log.find(l => l.tool === "run_command").reason, /only the unit's verify_cmd may run/);
+    assert.match(r.jail_log.find(l => l.tool === "run_command").reason, /only the unit's verify_cmd may run, exactly as the worker command/);
   });
 });
 
@@ -127,7 +135,7 @@ mkdir -p "$dir/src/$unit"; agy_write "src/$unit/impl.mjs" "// $ans
       const approved = r.jail_log.find(l => l.mcp?.tool === "ask_subagent" && l.decision === "auto_approve");
       assert.ok(approved, "the MCP tool was approved by the hook");
       assert.equal(approved.mcp.form, u === "a" ? "direct" : "call_mcp_tool");
-      assert.equal(approved.tool, u === "a" ? "pantheon-subagents/ask_subagent" : "call_mcp_tool");
+      assert.equal(approved.tool, u === "a" ? "mcp_pantheon-subagents_ask_subagent" : "call_mcp_tool", "the direct name agy 1.5.10 emitted");
       if (u === "b") assert.ok(r.sandbox.binds.some(b => b.mode === "ro" && b.path === fallback), "the fallback socket dir is bound");
     }
     assert.equal(asked.length, 2);
@@ -159,7 +167,7 @@ async function implementerTurn(f, { api = async () => ({ text: JSON.stringify({ 
   const calls = [];
   const turns = pipelineTurns({ turn: async () => ({ text: "" }), agy: { sandbox: sandbox(f.fx), api: async a => { calls.push(a); return api(a); } } });
   const { wt, ctl } = f.units.a;
-  const go = () => turns.implementer({ vendor: "agy_google", model: LANE, prompt: PROMPT("a", ["src/a/**"], verifyOf("a")), cwd: wt, control_dir: ctl, owned_paths: ["src/a/**"], verify_cmd: verifyOf("a"),
+  const go = () => turns.implementer({ vendor: "agy_google", model: LANE, prompt: PROMPT("a", ["src/a/**"], verifyOf("a"), wt), cwd: wt, control_dir: ctl, owned_paths: ["src/a/**"], verify_cmd: verifyOf("a"),
     unit_id: "a", env: {}, attempt: 1 });
   return { calls, go };
 }
@@ -293,7 +301,8 @@ reply=''
     assert.deepEqual(by("invoke_subagent"), ["deny"]);
     assert.match(r.jail_log.find(l => l.tool === "invoke_subagent").reason, /native subagents/);
     assert.deepEqual(by("view_file"), ["auto_approve", "deny"]);
-    assert.deepEqual(r.tool_steps.map(s => [s.tool_name, s.state]), [["invoke_subagent", "DENIED"], ["view_file", "DONE"], ["view_file", "DENIED"], ["write_to_file", "DONE"], ["run_command", "DONE"]]);
+    assert.deepEqual(r.tool_steps.filter(s => s.state !== "ACTIVE").map(s => [s.tool_name, s.state]), [["invoke_subagent", "ERROR"], ["view_file", "DONE"], ["view_file", "ERROR"], ["write_file", "DONE"], ["run_command", "DONE"]]);
+    assert.equal(r.tool_steps.filter(s => s.state === "ACTIVE").length, 5, "each call starts ACTIVE");
     assert.equal(r.subagent_calls, 0);
     assert.equal(r.summary.status, "done");
     assert.ok(existsSync(join(wt, "src/a/impl.mjs")));
@@ -306,6 +315,8 @@ function fakeGeminiHome(root) {
   mkdirSync(join(c, "conversations"), { recursive: true }); mkdirSync(join(c, "plugins"));
   writeFileSync(join(g, "oauth_creds.json"), "{}"); writeFileSync(join(g, "settings.json"), "{}");
   writeFileSync(join(c, "settings.json"), '{"cli":1}'); writeFileSync(join(c, "conversations", "earlier.db"), "earlier");
+  // bin/ as on the owner's host (observed 2026-11-18): run_command writes bin/agentapi before it runs anything.
+  mkdirSync(join(c, "bin")); writeFileSync(join(c, "bin", "agentapi"), "host agentapi", { mode: 0o755 });
   return { home, g, c };
 }
 /** A recursive {relative path: content} listing of a host directory. */
@@ -329,6 +340,9 @@ test("(i) the ~/.gemini layout around a worker turn (fake HOME): ~/.gemini read-
     assert.deepEqual(Object.fromEntries(Object.entries(s.subdirs).map(([k, v]) => [k, v.map(x => x.path.replace(/\d+/g, "N"))])),
       { brain: ["fake-agy-conversation/task.md"], cache: ["last_conversations.json"], conversations: ["fake-agy-conversation.db"], crashes: [], implicit: ["N.N.tmp"], log: ["cli-N.log"], mcp: ["pantheon-subagents/state.json"], presence: ["fake-agy-conversation.lock"] },
       "the observed writes landed in the scratch; the host's earlier.db was hidden");
+    // bin/ is a per-run WRITABLE COPY: run_command's agentapi write landed there (changed), not on the host.
+    assert.deepEqual(s.writable_subdirs, { bin: [{ path: "agentapi", size: 26, copied: true, changed: true }] });
+    assert.deepEqual(r.tool_steps.filter(x => x.tool_name === "run_command").map(x => x.state), ["ACTIVE", "DONE"]);
     // The CLI's log FILE (the scratch's antigravity-cli/log/cli-<n>.log, read before the scratch was dropped): the
     // hooks line and the workspaceDirs line are there, not on stderr and not in the --log-file.
     const cl = r.cli_log;
@@ -344,6 +358,29 @@ test("(i) the ~/.gemini layout around a worker turn (fake HOME): ~/.gemini read-
     assert.doesNotMatch(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /read-only file system/);
     assert.deepEqual(tree(home), before, "the host ~/.gemini is unchanged; nothing was created under HOME");
     assert.equal(existsSync(join(f.units.a.ctl, "run", "agy-state")) && readdirSync(join(f.units.a.ctl, "run", "agy-state")).length, 0, "the scratch is removed");
+  });
+});
+
+test("(i'') bin/ read-only (as at 5efbba5, observed on the owner's machine): run_command fails ACTIVE -> ERROR with the observed agentapi EROFS message and never runs; the host bin/ is untouched", needBwrap, async t => {
+  const f = await fixture(t);
+  const { home, c } = fakeGeminiHome(f.root);
+  const before = tree(home);
+  await withFakeAgy(f.fx, async agy => {
+    agy.agyWorker(`agy_write src/a/impl.mjs 'export const a = 1;
+' || exit 9
+agy_verify > /dev/null 2>&1 && echo "verify ran" >&2
+reply=''
+`);
+    const base = await prepared(f, "a");
+    // The 5efbba5 layout: the HOST bin/ ro-bound over the scratch's (an explicit read-only bind re-creates it).
+    const r = await runAgyWorkerTurn({ ...base, env: { HOME: home }, sandbox: { ...base.sandbox, home, extra_ro: [join(c, "bin")] } });
+    const run = r.tool_steps.filter(x => x.tool_name === "run_command");
+    assert.deepEqual(run.map(x => x.state), ["ACTIVE", "ERROR"]);
+    assert.equal(run[1].tool_info.error.message, `run_command: failed to build agentapi shell injection: failed to write agentapi script: open ${join(c, "bin", "agentapi")}: read-only file system`);
+    assert.ok(r.jail_log.some(l => l.tool === "run_command" && l.decision === "auto_approve"), "the hook approved it: the failure is the layout's");
+    assert.deepEqual([r.summary.status, r.summary.verify.exit_code], ["stuck", null]);
+    assert.doesNotMatch(r.stderr_tail, /verify ran/);
+    assert.deepEqual(tree(home), before, "the host bin/ is untouched");
   });
 });
 

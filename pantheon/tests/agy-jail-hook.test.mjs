@@ -75,7 +75,18 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
     ["write_to_file", { TargetFile: join(wt, "src/a/.agents/hooks.json") }, "deny", /inside \.agents/],
     ["write_to_file", { TargetFile: join(ctl, ".agents/hooks.json") }, "deny", /outside the unit's worktree/],
     ["write_to_file", { TargetFile: "src/a/impl.mjs" }, "deny", /not absolute/],
-    ["write_to_file", {}, "deny", /no TargetFile/],
+    ["write_to_file", {}, "deny", /names no target \(Path, TargetFile, AbsolutePath, File\)/],
+    // write_file {Path, Content}: the tool agy 1.5.10 actually emitted (observed 2026-11-18); every check applies to Path.
+    ["write_file", { Path: join(wt, "src/a/impl.mjs"), Content: "x" }, "auto_approve"],
+    ["write_file", { Path: join(wt, "docs/b.md"), Content: "x" }, "deny", /not one of the unit's owned paths/],
+    ["write_file", { Path: `${wt}/src/a/../../../outside/x`, Content: "x" }, "deny", /outside the unit's worktree/],
+    ["write_file", { Path: join(wt, ".git/config"), Content: "x" }, "deny", /inside \.git/],
+    ["write_file", { Path: "src/a/impl.mjs", Content: "x" }, "deny", /Path "src\/a\/impl\.mjs" is not absolute/],
+    ["write_file", { Content: "x" }, "deny", /names no target/],
+    ["write_file", { Path: join(wt, "docs/b.md"), TargetFile: join(wt, "src/a/impl.mjs") }, "deny", /docs\/b\.md is not one of/],
+    ["replace_file_content", { Path: join(wt, "src/a/x.mjs") }, "auto_approve"],
+    ["write_to_file", { AbsolutePath: join(wt, "src/a/y.mjs") }, "auto_approve"],
+    ["write_to_file", { File: join(wt, "src/b/y.mjs") }, "deny", /not one of the unit's owned paths/],
     ["write_to_file", { TargetFile: join(wt, "src/a") }, "deny", /directory/],
   ];
   for (const [name, args, want, why] of cases) {
@@ -105,19 +116,27 @@ test("symlinks: a final symlink, a symlinked directory that leaves the worktree,
   }
 });
 
-test("run_command: only the unit's exact verify_cmd, in the worktree", async t => {
-  const { wt, ctl, log, hook } = await setup(t);
+// run_command carries no Cwd (observed on agy 1.5.10, 2026-11-18: {CommandLine, WaitMsBeforeAsync, toolSummary}), so the
+// one approved command is the exact worker command that cds into the worktree; the plain verify_cmd is denied.
+test("run_command: only the unit's exact WORKER command `cd '<worktree>' && <verify_cmd>` (a Cwd, if sent, must be the worktree); the plain verify_cmd is denied", async t => {
+  const { wt, ctl, ws, log, hook } = await setup(t);
+  const wv = `cd '${ws.worktree}' && node --test tests/a.test.mjs`;
+  assert.equal(ws.worker_verify_cmd, wv);
+  assert.deepEqual([JSON.parse(readFileSync(ws.jail, "utf8")).worker_verify_cmd, JSON.parse(readFileSync(ws.jail, "utf8")).schema], [wv, "pantheon.agy-jail/v3"]);
   const want = [
-    [{ CommandLine: "node --test tests/a.test.mjs", Cwd: wt }, "auto_approve"],
-    [{ CommandLine: "  node --test tests/a.test.mjs\n" }, "auto_approve"],
-    [{ CommandLine: "node --test tests/a.test.mjs && rm -rf /", Cwd: wt }, "deny"],
-    [{ CommandLine: "git commit -am x", Cwd: wt }, "deny"],
-    [{ CommandLine: "node --test tests/a.test.mjs", Cwd: ctl }, "deny"],
-    [{ CommandLine: "node --test tests/a.test.mjs", Cwd: "." }, "deny"],
+    [{ CommandLine: wv, WaitMsBeforeAsync: 5000, toolSummary: "Verify unit" }, "auto_approve"],
+    [{ CommandLine: `  ${wv}\n` }, "auto_approve"],
+    [{ CommandLine: wv, Cwd: wt }, "auto_approve"],
+    [{ CommandLine: "node --test tests/a.test.mjs", WaitMsBeforeAsync: 5000 }, "deny"],
+    [{ CommandLine: "node --test tests/a.test.mjs", Cwd: wt }, "deny"],
+    [{ CommandLine: `${wv} && rm -rf /` }, "deny"],
+    [{ CommandLine: "git commit -am x" }, "deny"],
+    [{ CommandLine: wv, Cwd: ctl }, "deny"],
+    [{ CommandLine: wv, Cwd: "." }, "deny"],
     [{}, "deny"],
   ];
   for (const [args, decision] of want) assert.equal((await hook(call("run_command", args))).decision, decision, JSON.stringify(args));
-  assert.match(log().at(-4).reason, /only the unit's verify_cmd may run/);
+  assert.match(log().at(-4).reason, /only the unit's verify_cmd may run, exactly as the worker command/);
 });
 
 test("MCP: ask_subagent with an allowed role is auto-approved both DIRECTLY (eager) and through call_mcp_tool; other servers, tools, roles, invoke_subagent and define_subagent are denied", async t => {

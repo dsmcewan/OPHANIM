@@ -5,7 +5,7 @@
 // Gemini API is a scripted client. No network, no live model.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { runPipeline } from "../src/pipeline/index.mjs";
 import { pipelineTurns, apiFilesRefusal, writeApiFiles } from "../src/pipeline/turns.mjs";
@@ -62,7 +62,7 @@ test("the implementer runs as the unit worker through the agy CLI in the bwrap j
     for (const s of spans) {
       assert.equal(s.control_dir, join(env.dir, "control", s.worktree.split("/").at(-1)));
       assert.equal(s.r.sandbox.kind, "bwrap");
-      assert.ok(s.r.jail_log.some(l => l.event === "PreToolUse" && l.decision === "auto_approve" && /impl\.mjs$/.test(l.args.TargetFile ?? "")));
+      assert.ok(s.r.jail_log.some(l => l.event === "PreToolUse" && l.decision === "auto_approve" && /impl\.mjs$/.test(l.args.Path ?? "") && l.tool === "write_file"));
     }
     // Non-blocking: the two CLI processes overlapped, and the event loop kept ticking while they ran.
     const [a, b] = ["a", "b"].map(id => spans.find(s => s.worktree.endsWith(`/${id}`)));
@@ -85,6 +85,29 @@ test("the implementer runs as the unit worker through the agy CLI in the bwrap j
   });
 });
 
+// run_command carries no Cwd (observed on agy 1.5.10, 2026-11-18): the implementer prompt gives the worker the ONE
+// command `cd '<real worktree>' && <verify_cmd>`, jail.json approves exactly that string, and the plain verify_cmd is
+// denied. The controller's own Stage-5 verify_cmd run in the worktree is unchanged.
+test("the implementer prompt's VERIFY COMMAND is the exact cd-prefixed worker command jail.json approves; the worker runs it without a Cwd; the plain verify_cmd is denied", async t => {
+  const env = await fixture(t);
+  await withFakeAgy(env.root, async agy => {
+    agy.agyWorker(WORKER + 'agy_run "$verify" && exit 8\nagy_verify || exit 7\n');
+    const prompts = [];
+    const turns = pipelineTurns({ turn: scriptedSingle(), agy: { run: async a => { prompts.push(a.prompt); return runAgyWorkerTurn(a); } } });
+    const out = await go(env, [unit("a")], turns);
+    assert.equal(out.status, "completed", out.units.a.reason);
+    const jail = JSON.parse(readFileSync(join(env.dir, "control", "a", "jail.json"), "utf8"));
+    const wt = jail.worktree, plain = unit("a").verify_cmd;   // the worktree itself is removed after integration
+    assert.equal(wt, join(realpathSync(env.dir), "worktrees", "a"), "the REAL worktree path");
+    const wv = `cd '${wt}' && ${plain}`;
+    assert.match(prompts[0], new RegExp(`^VERIFY COMMAND .*\\n  ${wv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+    assert.match(prompts[0], new RegExp(`^GROUND TRUTH.*\\n  ${plain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), "the controller's ground truth stays the plain command");
+    assert.deepEqual([jail.verify_cmd, jail.worker_verify_cmd], [plain, wv]);
+    const runs = readFileSync(join(env.dir, "control", "a", "run", "jail.log"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)).filter(l => l.tool === "run_command");
+    assert.deepEqual(runs.map(l => [l.args.CommandLine, l.decision, "Cwd" in l.args]), [[plain, "deny", false], [wv, "auto_approve", false]]);
+  });
+});
+
 test("a worker write outside the unit's owned paths is denied by the jail hook BEFORE it happens; the pipeline's post-turn jail then sees nothing to discard", async t => {
   const env = await fixture(t);
   await withFakeAgy(env.root, async agy => {
@@ -95,7 +118,7 @@ test("a worker write outside the unit's owned paths is denied by the jail hook B
     assert.deepEqual([at.status, at.violations], ["written", []]);
     assert.deepEqual(at.changed, [{ path: "src/a/impl.mjs", state: "added" }]);
     const log = readFileSync(join(env.dir, "control", "a", "run", "jail.log"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
-    assert.ok(log.some(l => l.args?.TargetFile?.endsWith("/README.md") && l.decision === "deny"));
+    assert.ok(log.some(l => l.args?.Path?.endsWith("/README.md") && l.decision === "deny"));
     assert.doesNotMatch(await sh(`git show ${out.integration.branch}:README.md`, env.repo), /hijacked/);
   });
 });
