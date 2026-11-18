@@ -30,8 +30,8 @@
 // probe-helper) with a MOCK subagent answer (no Grok, no API), prepare the workspace with the real
 // prepareWorkerWorkspace, build the real jail once (prepareWorkerJail) and run in it, BEFORE any model turn, the
 // zero-spend PREFLIGHT (runAgyPreflight: the card's tool list, `agy agents`, `agy mcp list` -- WITHOUT --log-file,
-// which both reject (observed, agy 1.5.10, 2026-11-18) -- the login, and a scan of their output and of the CLI's log
-// dir); if a BLOCKING check fails it ABORTS (exit 2, spent nothing) with the redacted outputs under `preflight` (never
+// which both reject (observed, agy 1.5.10, 2026-11-18) -- the login and the lane's quota by an in-jail /usage, and a
+// scan of their output and of the new files of the CLI's log dir); if a BLOCKING check fails it ABORTS (exit 2, spent nothing) with the redacted outputs under `preflight` (never
 // the raw `agy mcp list` output, which was observed to print a credential: only its server names). Discovery (are the
 // worker and the MCP server listed?) is ADVISORY: those subcommands were observed to list global configuration only.
 // Every check the run did not exercise is null, not false. Then it runs
@@ -43,10 +43,14 @@
 // file system lines of the CLI log and stderr up to the first tool step, de-duplicated, at most 60), `deprecations`,
 // `stderr_tail`, `log_tail`, `gemini_state.scratch_written` (what the CLI wrote into the scratch copy),
 // `gemini_state.copied` / `withheld` / `writable_copies` (what the scratch was given and what was kept from it), and
-// `diagnostics` {gemini_dir_lines, auth_lines}: every redacted line naming GeminiDir or saying "not logged in", from
-// the preflight and the turn (to diagnose the auth failure observed on 2026-11-18), and `hooks_loaded` {preflight,
-// turn}: {named, files} parsed from the CLI's "loaded N named hooks from M hooks.json file(s)" line (null: not seen;
-// observed 2026-11-18: 0 files from `agy agents` with <ctl>/.agents/hooks.json present).
+// `diagnostics`: `hooks_loaded` {preflight, turn} ({named, files, sources} parsed from the CLI's "loaded N named hooks
+// from M hooks.json file(s)" line in stdout/stderr, the --log-file AND the CLI's log/ files: whether the --print
+// session loaded <ctl>/.agents/hooks.json), `workspace_dirs` {preflight, turn} (the last `workspaceDirs=[...]` line:
+// which directories the CLI took as workspace), `cli_log` {preflight, turn} (runAgyPreflight / runAgyWorkerTurn: the
+// new log files read before cleanup, line counts per source, EROFS paths, unknown/registry/deprecated lines, ...),
+// `gemini_dir_lines`, and `negative_login_lines` {advisory: true, note, lines}: the "not logged in" / "Auth mode is
+// unspecified" lines, ADVISORY (observed on agy 1.5.10 in every layout whenever the CLI could not write its log file,
+// while /usage succeeded; the preflight's auth is the in-jail /usage).
 // THE SCRATCH HOLDS A COPY OF THE OAuth TOKEN: it is always removed unless --keep, and then the summary says
 // `kept_contains_credentials: true`.
 //
@@ -65,7 +69,7 @@ import { probeQuota, minimalEnv } from "../src/agy/quota.mjs";
 import { dropGeminiState, GEMINI_CLI_DIR, sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
 import { HARD_DENY, MCP_SERVER, MCP_TOOL, WRITE_TOOLS } from "../src/agy/jail-hook.mjs";
-import { AGY_NOT_LOGGED_IN, parseHooksLoaded, prepareWorkerJail, redactStrong, runAgyPreflight, runAgyWorkerTurn, SECRETISH, workerEnv } from "../src/board/agy-cli.mjs";
+import { AGY_NOT_LOGGED_IN, NEGATIVE_LOGIN_NOTE, parseHooksLoaded, prepareWorkerJail, redactStrong, runAgyPreflight, runAgyWorkerTurn, SECRETISH, workerEnv } from "../src/board/agy-cli.mjs";
 import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -132,9 +136,15 @@ const untouched = (before, after) => (before && after ? same(before.cli_state, a
 export function diagnosticLines(text, env = {}) {
   const ls = String(text ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
   const pick = re => [...new Set(ls.filter(l => re.test(l)).map(l => redactStrong(l, env).slice(0, 500)))].slice(0, 20);
-  return { gemini_dir_lines: pick(/GeminiDir/i), auth_lines: pick(AGY_NOT_LOGGED_IN) };
+  return { gemini_dir_lines: pick(/GeminiDir/i), negative_login_lines: pick(AGY_NOT_LOGGED_IN) };
 }
-const mergeDiag = (a, b) => ({ hooks_loaded: a?.hooks_loaded ?? { preflight: null, turn: null }, gemini_dir_lines: [...new Set([...(a?.gemini_dir_lines ?? []), ...(b?.gemini_dir_lines ?? [])])], auth_lines: [...new Set([...(a?.auth_lines ?? []), ...(b?.auth_lines ?? [])])] });
+const emptyDiag = () => ({ hooks_loaded: { preflight: null, turn: null }, workspace_dirs: { preflight: null, turn: null }, cli_log: { preflight: null, turn: null },
+  gemini_dir_lines: [], negative_login_lines: { advisory: true, note: NEGATIVE_LOGIN_NOTE, lines: [] } });
+const negLines = x => (Array.isArray(x) ? x : x?.lines ?? []);
+const mergeDiag = (a, b) => ({ ...a, gemini_dir_lines: [...new Set([...(a?.gemini_dir_lines ?? []), ...(b?.gemini_dir_lines ?? [])])].slice(0, 40),
+  negative_login_lines: { advisory: true, note: NEGATIVE_LOGIN_NOTE, lines: [...new Set([...negLines(a?.negative_login_lines), ...negLines(b?.negative_login_lines)])].slice(0, 40) } });
+/** A cli_log record as the summary keeps it (no text tail: that goes to log_tail). */
+const cliLogView = c => { if (!c) return null; const { tail: _t, ...rest } = c; return rest; };
 /** What the summary says about the state layout given to the CLI: copied, withheld (name + size only), writable copies. */
 const layoutView = gs => (gs ? { copied: gs.copied ?? [], withheld: gs.withheld ?? [], writable_copies: (gs.writable_copies ?? []).map(w => ({ path: w.path, dest: w.dest, status: w.status, ...(w.copied ? { copied: w.copied } : {}), ...(w.why ? { why: w.why } : {}) })) } : { copied: [], withheld: [], writable_copies: [] });
 
@@ -233,7 +243,7 @@ async function main() {
     // null = not exercised (an early abort); false = exercised and failed.
     checks: { forbidden_denied: null, allowed_written: null, mcp_called: null, verify_ran: null, gemini_state_untouched: null },
     mcp: { shim_calls: [], mock_subagent_turns: 0, api_calls: 0 }, tools_run: [], turn: { exit_code: null, status: null, num_turns: null, usage: null, error: null },
-    startup_errors: [], deprecations: [], diagnostics: { hooks_loaded: { preflight: null, turn: null }, gemini_dir_lines: [], auth_lines: [] }, stderr_tail: null, log_tail: null, owner_stated_mechanics: null, gemini_state: null,
+    startup_errors: [], deprecations: [], diagnostics: emptyDiag(), stderr_tail: null, log_tail: null, owner_stated_mechanics: null, gemini_state: null,
     aborted: null, kept: null, kept_contains_credentials: null };
   // The host snapshots (taken once the fake/real HOME is known): an abort still reports whether ~/.gemini was touched.
   let hostSnap = null;
@@ -300,10 +310,12 @@ async function main() {
     summary.launch.bwrap_binds = jail.sandboxRec.binds ?? null;
     summary.launch.sandbox = { enabled: jail.sandboxRec.enabled, kind: jail.sandboxRec.kind ?? null, gemini_state: jail.sandboxRec.gemini_state ?? null };
 
-    const pf = await runAgyPreflight({ cli, control_dir: ctl, worktree: wt, env: a2a_env, jail });
+    const pf = await runAgyPreflight({ cli, control_dir: ctl, worktree: wt, env: a2a_env, jail, model: LANE });
     summary.preflight = pf;
     summary.diagnostics = mergeDiag(summary.diagnostics, pf.diagnostics);
-    summary.diagnostics.hooks_loaded.preflight = pf.diagnostics?.hooks_loaded ?? null;
+    summary.diagnostics.hooks_loaded.preflight = pf.diagnostics?.cli_log?.hooks_loaded ?? null;
+    summary.diagnostics.workspace_dirs.preflight = pf.diagnostics?.workspace_dirs ?? null;
+    summary.diagnostics.cli_log.preflight = pf.diagnostics?.cli_log ?? null;
     if (!pf.ok) {
       const scratch = await dropGeminiState(jail.gstate, { keep }).catch(() => null);
       const after = take();
@@ -351,13 +363,16 @@ async function main() {
     summary.tools_run = steps;
     summary.turn = { exit_code: res.exit_code ?? null, status: r ? r.status ?? null : res.result_status ?? null, num_turns: res.num_turns ?? null, usage: res.usage ?? null,
       error: err ? { code: err.code ?? null, kind: err.kind ?? null, message: String(err.message ?? err).slice(0, 500) } : null };
-    const logText = await readFile(ws.agy_log, "utf8").catch(() => "");
+    // The --log-file, then what the CLI wrote to its log/ dir during the turn (read by runAgyWorkerTurn before cleanup).
+    const logText = `${await readFile(ws.agy_log, "utf8").catch(() => "")}${res.cli_log?.tail ? `\n${res.cli_log.tail}` : ""}`;
     const stderrText = res.stderr_tail ?? "";
     summary.startup_errors = startupErrors({ logText, stderrText, toolSteps: steps.length });
     summary.deprecations = deprecationsOf({ logText, stderrText });
     summary.diagnostics = mergeDiag(summary.diagnostics, diagnosticLines(`${stderrText}\n${logText}`, env));
-    const turnHooks = parseHooksLoaded(`${stderrText}\n${logText}`);
-    summary.diagnostics.hooks_loaded.turn = turnHooks ? { named: turnHooks.named, files: turnHooks.files } : null;
+    const turnHooks = res.cli_log?.hooks_loaded ?? (h => (h ? { named: h.named, files: h.files, sources: null } : null))(parseHooksLoaded(`${stderrText}\n${logText}`));
+    summary.diagnostics.hooks_loaded.turn = turnHooks ?? null;
+    summary.diagnostics.workspace_dirs.turn = res.cli_log?.workspace_dirs ?? null;
+    summary.diagnostics.cli_log.turn = cliLogView(res.cli_log);
     summary.stderr_tail = tail(res.stderr_tail ?? null);
     summary.log_tail = tail(logText);
     summary.gemini_state = { home_gemini: g, ...layout, before: { cli_state: before.cli_state, config_projects: before.config_projects, top_files: before.top },

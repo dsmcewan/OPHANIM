@@ -327,8 +327,17 @@ test("(i) the ~/.gemini layout around a worker turn (fake HOME): ~/.gemini read-
     assert.equal(s.dir, c);
     assert.deepEqual(s.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.copied, x.changed]), [["jetbox_summaries_proto.pb.<rand>.tmp", false, true], ["settings.json", true, false]]);
     assert.deepEqual(Object.fromEntries(Object.entries(s.subdirs).map(([k, v]) => [k, v.map(x => x.path.replace(/\d+/g, "N"))])),
-      { brain: ["fake-agy-conversation/task.md"], cache: ["last_conversations.json"], conversations: ["fake-agy-conversation.db"], crashes: [], implicit: ["N.N.tmp"], log: [], mcp: ["pantheon-subagents/state.json"], presence: ["fake-agy-conversation.lock"] },
+      { brain: ["fake-agy-conversation/task.md"], cache: ["last_conversations.json"], conversations: ["fake-agy-conversation.db"], crashes: [], implicit: ["N.N.tmp"], log: ["cli-N.log"], mcp: ["pantheon-subagents/state.json"], presence: ["fake-agy-conversation.lock"] },
       "the observed writes landed in the scratch; the host's earlier.db was hidden");
+    // The CLI's log FILE (the scratch's antigravity-cli/log/cli-<n>.log, read before the scratch was dropped): the
+    // hooks line and the workspaceDirs line are there, not on stderr and not in the --log-file.
+    const cl = r.cli_log;
+    assert.deepEqual([cl.dir.startsWith(join(f.units.a.ctl, "run", "agy-state") + "/"), cl.files.map(x => x.name.replace(/\d+/g, "N")), cl.truncated], [true, ["cli-N.log"], false]);
+    assert.deepEqual(cl.hooks_loaded, { named: 1, files: 1, sources: ["log_dir"] });
+    assert.deepEqual([cl.workspace_dirs, cl.workspace_dirs_sources], [[f.units.a.ctl, f.units.a.wt], ["log_dir"]]);
+    assert.deepEqual([cl.received_by.log_dir, cl.received_by.log_file > 0, cl.received_by.stderr > 0], [2, true, true]);
+    assert.doesNotMatch(r.stderr_tail, /hooks_manager|workspaceDirs/);
+    assert.ok(cl.erofs_paths.includes(join(g, "oauth_creds.json")), cl.erofs_paths.join(" "));
     assert.match(r.stderr_tail, /settings\.json write failed: EROFS/);
     assert.match(r.stderr_tail, /oauth_creds\.json refresh write failed: EROFS/, "a refresh cannot rewrite the login (the probe shows the EROFS)");
     assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /read .*antigravity-cli\/settings\.json/);

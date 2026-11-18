@@ -84,8 +84,8 @@ for (const form of ["direct", "wrapped"]) {
       "startup_errors", "deprecations", "diagnostics", "stderr_tail", "log_tail", "owner_stated_mechanics", "gemini_state", "aborted", "kept", "kept_contains_credentials"], "stable key order");
     // The zero-spend preflight ran first, in the same jail, and passed: the card's four tools, `agy agents` (exit 0, no
     // flag refused), the login, a clean output and log dir; discovery (advisory) found the worker and the server.
-    assert.deepEqual([o.preflight.ok, o.preflight.failed, o.preflight.warnings, Object.keys(o.preflight.checks)], [true, [], ["hooks_discovery"], ["card_tools", "agents", "mcp_list", "auth", "log_scan", "discovery", "hooks_discovery"]]);
-    assert.deepEqual([o.preflight.blocking, o.preflight.advisory], [["card_tools", "agents", "auth", "log_scan"], ["mcp_list", "discovery", "hooks_discovery"]]);
+    assert.deepEqual([o.preflight.ok, o.preflight.failed, o.preflight.warnings, Object.keys(o.preflight.checks)], [true, [], ["hooks_discovery"], ["card_tools", "auth", "lane_quota", "agents", "mcp_list", "log_scan", "discovery", "hooks_discovery"]]);
+    assert.deepEqual([o.preflight.blocking, o.preflight.advisory], [["card_tools", "auth", "lane_quota", "agents", "log_scan"], ["mcp_list", "discovery", "hooks_discovery"]]);
     // As observed (2026-11-18): the subcommands loaded 0 hooks.json files from the control dir (not a git repo): a
     // WARNING, surfaced, never blocking.
     assert.deepEqual([o.preflight.checks.hooks_discovery.seen, o.preflight.checks.hooks_discovery.files, o.preflight.checks.hooks_discovery.ok], [true, 0, false]);
@@ -101,7 +101,19 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual([o.preflight.checks.agents.argv, o.preflight.checks.mcp_list.argv], [[s.cli, "agents"], [s.cli, "mcp", "list"]]);
     assert.deepEqual(s.subs(), ["agents", "mcp list"], "agents and mcp list ran once each, before the turn, without --log-file");
     assert.ok(!("log_file" in o.preflight) && !("log_file_accepted" in o.preflight.checks.agents));
-    assert.deepEqual(o.diagnostics, { hooks_loaded: { preflight: { named: 0, files: 0 }, turn: null }, gemini_dir_lines: [], auth_lines: [] });
+    // The diagnostics the owner reads first: whether the --print session loaded <ctl>/.agents/hooks.json and which
+    // directories it took as workspace -- both from the CLI's log FILE (the scratch's log/), read before cleanup.
+    const ctl = o.launch.cwd, wt = o.launch.argv[o.launch.argv.indexOf("--add-dir") + 1];
+    assert.deepEqual(Object.keys(o.diagnostics), ["hooks_loaded", "workspace_dirs", "cli_log", "gemini_dir_lines", "negative_login_lines"]);
+    assert.deepEqual(o.diagnostics.hooks_loaded, { preflight: { named: 0, files: 0, sources: ["log_dir"] }, turn: { named: 1, files: 1, sources: ["log_dir"] } });
+    assert.deepEqual(o.diagnostics.workspace_dirs, { preflight: null, turn: [ctl, wt] });
+    const ct = o.diagnostics.cli_log.turn;
+    assert.deepEqual([ct.files.map(x => x.name.replace(/\d+/g, "N")), ct.received_by.log_dir, ct.received_by.log_file > 0, ct.workspace_dirs_sources, "tail" in ct], [["cli-N.log"], 2, true, ["log_dir"], false],
+      "the lines reached the log/ dir, not the --log-file; the summary keeps no raw tail in cli_log");
+    assert.deepEqual(o.diagnostics.cli_log.preflight.files.map(x => x.command), ["agents", "mcp list"]);
+    assert.deepEqual([o.diagnostics.negative_login_lines.advisory, o.diagnostics.negative_login_lines.lines.length > 0, o.diagnostics.gemini_dir_lines], [true, true, []],
+      "the routine not-logged-in lines (in the log files) are advisory and did not block");
+    assert.deepEqual([o.preflight.checks.auth.ok, o.preflight.checks.auth.num_turns, o.preflight.checks.auth.total_tokens, o.preflight.checks.lane_quota.quota_scope.state], [true, 0, 0, "available"]);
     assert.equal(o.kept_contains_credentials, null);
     assert.deepEqual([o.timeout_s, o.launch.argv[o.launch.argv.indexOf("--print-timeout") + 1]], [180, "180s"], "the default print timeout is 180 s");
     assert.deepEqual([o.startup_errors.length === 0, o.deprecations], [form === "direct", []], "no deprecated tool; startup errors only from the refresh writes");
@@ -134,8 +146,8 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual(s.host(), hostBefore);
     const w = o.gemini_state.scratch_written;
     assert.equal(w.dir, s.c);
-    assert.deepEqual(Object.fromEntries(Object.entries(w.subdirs).map(([k, v]) => [k, v.length])), { brain: 1, cache: 1, conversations: 1, crashes: 0, implicit: 1, log: 2, mcp: 1, presence: 1 },
-      "log/: one CLI log per preflight subcommand");
+    assert.deepEqual(Object.fromEntries(Object.entries(w.subdirs).map(([k, v]) => [k, v.length])), { brain: 1, cache: 1, conversations: 1, crashes: 0, implicit: 1, log: 3, mcp: 1, presence: 1 },
+      "log/: one CLI log per preflight subcommand, one for the turn");
     assert.deepEqual(w.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.changed]),
       [["antigravity-oauth-token", false], ["installation_id", false], ["jetbox_summaries_proto.pb.<rand>.tmp", true], ["settings.json", false]]);
     assert.deepEqual(w.writable_copies, { "config/projects": [{ path: "default-cli-project.json", size: 2, copied: true, changed: true }] }, "the preflight's project write landed in the copy");
@@ -160,11 +172,11 @@ for (const form of ["direct", "wrapped"]) {
     } else {
       assert.equal(m.state_mounts.status, "confirmed");
       assert.match(m.state_mounts.evidence.note, /writes landed in the scratch copy/);
-      assert.equal(m.state_mounts.evidence.writes_in_scratch.length, 9);
+      assert.equal(m.state_mounts.evidence.writes_in_scratch.length, 10, "the nine state writes and the turn's log/cli-<n>.log");
     }
     // One model invocation; the temp repo is cleaned up.
     assert.equal(s.launches().length, 1);
-    assert.equal(s.quotaProbes(), 2, "the free quota probe, before and after");
+    assert.equal(s.quotaProbes(), 3, "the free quota probe before and after, and the preflight's in-jail /usage (the fixture dir is a writable state dir)");
     assert.deepEqual(probeDirs().filter(n => !dirsBefore.includes(n)), [], "no temp dir left behind");
   });
 }
@@ -181,7 +193,8 @@ test("a card listing call_mcp_tool (as on the owner's 2026-11-18 run): the PREFL
   assert.match(o.aborted.reason, /^preflight failed: card_tools \(unknown or deprecated on agy 1\.5\.10.*grep_search, call_mcp_tool\); log_scan/);
   assert.deepEqual([o.preflight.failed, o.preflight.warnings], [["card_tools", "log_scan"], ["discovery", "hooks_discovery"]], "the unlisted worker is advisory; the CLI's own error lines block");
   assert.deepEqual([o.preflight.checks.mcp_list.ok, o.preflight.checks.agents.ok, o.preflight.checks.discovery.agent_listed], [true, true, false]);
-  assert.match(o.preflight.checks.agents.stderr, /unknown component: tool "call_mcp_tool" not found in registry/);
+  assert.match(o.preflight.checks.log_scan.lines.unknown_component.join("\n"), /unknown component: tool "call_mcp_tool" not found in registry/);
+  assert.doesNotMatch(o.preflight.checks.agents.stderr, /unknown component/, "with log/ writable the line is in the log FILE, not on stderr");
   assert.deepEqual(o.preflight.checks.log_scan.lines.unknown_component.length > 0 && o.preflight.checks.log_scan.lines.deprecated.length > 0, true);
   assert.match(o.preflight.checks.log_scan.log_text, /Tool "grep_search" is deprecated and has no effect/, "the CLI's log dir (in the scratch) was written and scanned");
   assert.deepEqual(o.checks, { forbidden_denied: null, allowed_written: null, mcp_called: null, verify_ran: null, gemini_state_untouched: true }, "not exercised = null; the host snapshots are equal");
@@ -224,18 +237,22 @@ test("the probe says so and spends nothing when agy is absent (exit 2)", async t
   assert.equal(s.quotaProbes(), 0);
 });
 
-test("NOT LOGGED IN (as observed 2026-11-18: `agy agents` exit 0, empty stdout): the auth check BLOCKS with ZERO model invocations; unexercised checks are null; the auth and GeminiDir lines are surfaced; no credential anywhere", needBwrap, async t => {
+test("NOT LOGGED IN inside the jail (the host-side quota probe passed): the in-jail /usage returns no groups and the auth check BLOCKS with ZERO model invocations; the negative and GeminiDir lines are advisory diagnostics; no credential anywhere", needBwrap, async t => {
   const s = await setup(t);
   const hostBefore = s.host();
   const r = await probe(s, { FAKE_AGY_NOT_LOGGED_IN: "1" });
   const o = r.summary;
   assert.equal(r.code, 2);
+  assert.equal(o.quota_before.state, "available", "the host-side probe (a minimal env) is logged in");
   assert.equal(o.aborted.spent, "nothing: preflight failed before any model turn");
   assert.deepEqual([o.preflight.ok, o.preflight.failed, o.preflight.warnings], [false, ["auth"], ["discovery", "hooks_discovery"]]);
+  assert.match(o.aborted.reason, /^preflight failed: auth \(\/usage returned no quota group with buckets/);
+  assert.deepEqual([o.preflight.checks.auth.envelope, o.preflight.checks.auth.groups, o.preflight.checks.auth.num_turns], ["json", [], 0]);
+  assert.match(o.preflight.checks.auth.stderr, /Auth mode is unspecified/);
   assert.deepEqual([o.preflight.checks.agents.exit_code, o.preflight.checks.agents.ok, o.preflight.checks.agents.stdout], [0, true, ""], "exit 0 is not evidence of a session");
-  assert.deepEqual([...new Set(o.preflight.checks.auth.lines.map(l => l.replace(/^[IWE]1118 [\d:.]+ \d+ /, "")))], ["models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response",
-    "auth.go:2] error getting token source: You are not logged into Antigravity.", "quota.go:5] doRefreshQuota: skipped (not logged in)"], "the observed lines");
-  assert.deepEqual(o.diagnostics.auth_lines, o.preflight.checks.auth.lines);
+  assert.deepEqual([...new Set(o.diagnostics.negative_login_lines.lines.map(l => l.replace(/^[IWE]1118 [\d:.]+ \d+ /, "")))].sort(), ["auth.go:2] error getting token source: You are not logged into Antigravity.",
+    "models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response", "quota.go:5] doRefreshQuota: skipped (not logged in)"], "the observed lines, advisory");
+  assert.equal(o.diagnostics.negative_login_lines.advisory, true);
   assert.equal(o.diagnostics.gemini_dir_lines.length, 2, "benign, recorded (once per subcommand), not blocking");
   for (const l of o.diagnostics.gemini_dir_lines) assert.match(l, /Failed to resolve GeminiDir "\.gemini": \.gemini must be an absolute path: path is not absolute, falling back to default$/);
   assert.ok(!o.preflight.failed.includes("log_scan"));

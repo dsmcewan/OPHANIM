@@ -3,7 +3,7 @@
 import { spawnPromise } from "./spawn.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { quotaEvidence } from "../agy/quota.mjs";
+import { parseUsageEnvelope, quotaEvidence, scopeQuota } from "../agy/quota.mjs";
 
 // A QUOTA REFUSAL by Antigravity, read from what the CLI itself reported (its result event and its stderr): an HTTP
 // 429, RESOURCE_EXHAUSTED, or a quota/rate-limit/spend-cap/prepaid-balance message. The CLI has no status code of its
@@ -123,7 +123,7 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
 //                    unparseable stream, an init identity mismatch) | spawn (the CLI or bwrap could not start it)
 //   SANDBOX_UNAVAILABLE  bwrap is missing or fails its probe and `sandbox.allowUnsandboxed` is not true
 //   ABORTED          the signal fired
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
@@ -217,51 +217,133 @@ export async function prepareWorkerJail({ cli, control_dir, worktree, env = work
   throw Object.assign(new Error("agy worker: sandbox.enabled is false and allowUnsandboxed is not true; refusing to run the worker unjailed"), { code: "SANDBOX_UNAVAILABLE" });
 }
 
+// ---- THE CLI'S OWN LOG FILES: read before the scratch is dropped ---------------------------------------------------
+// OBSERVED (agy 1.5.10, owner's machine, bisect of 6e0d1d1 run twice, 2026-11-18): when ~/.gemini/antigravity-cli/log/
+// is writable the CLI writes its diagnostics (the hooks_manager line, the not-logged-in lines, ...) to
+// log/cli-<ts>.log INSTEAD of stderr; when it is not, they go to stderr. Every run below therefore snapshots the log dir
+// before each command and reads the NEW (or grown: only the appended bytes) files afterwards, capped at
+// CLI_LOG_CAP_BYTES in all and redacted with redactStrong, and every parser reads stdout + stderr + those files.
+export const CLI_LOG_CAP_BYTES = 2 * 1024 * 1024;
+/** The CLI's log dir as the jailed CLI sees it, on the host: the scratch's log/, else <home>/.gemini/antigravity-cli/log. */
+export function cliLogDirOf(gstate, home = null) {
+  if (gstate?.scratch_cli) return join(gstate.scratch_cli, "log");
+  if (gstate?.cli_dir) return join(gstate.cli_dir, "log");
+  return home ? join(home, ".gemini", "antigravity-cli", "log") : null;
+}
+/** {relative path: {size, mtimeMs}} of every regular file under `dir` (empty when it does not exist). Never follows a symlink. */
+export async function snapshotCliLog(dir) {
+  const out = {};
+  if (!dir) return out;
+  for (const rel of (await readdir(dir, { recursive: true }).catch(() => [])).sort()) {
+    const st = await lstat(join(dir, rel)).catch(() => null);
+    if (st?.isFile()) out[rel] = { size: st.size, mtimeMs: st.mtimeMs };
+  }
+  return out;
+}
+/**
+ * The files under `dir` that are new or grew since `before` (snapshotCliLog): {dir, files: [{name, bytes, read_bytes,
+ * truncated, grown}], text (redacted, each file's new bytes in name order), bytes_read, truncated}. `budget` (an object
+ * {left}) is shared across calls so a whole run stays within CLI_LOG_CAP_BYTES.
+ */
+export async function readNewCliLogs(dir, before = {}, { env = {}, budget = { left: CLI_LOG_CAP_BYTES } } = {}) {
+  const now = await snapshotCliLog(dir);
+  const files = [];
+  let text = "", bytes_read = 0, truncated = false;
+  for (const [name, st] of Object.entries(now)) {
+    const prev = before[name];
+    if (prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) continue;
+    const from = prev && st.size >= prev.size ? prev.size : 0;
+    const want = st.size - from, n = Math.max(0, Math.min(want, budget.left));
+    let chunk = "";
+    if (n > 0) {
+      const fh = await open(join(dir, name), "r").catch(() => null);
+      if (fh) { try { const buf = Buffer.alloc(n); const { bytesRead } = await fh.read(buf, 0, n, from); chunk = buf.subarray(0, bytesRead).toString("utf8"); } finally { await fh.close().catch(() => {}); } }
+    }
+    budget.left -= Buffer.byteLength(chunk);
+    bytes_read += Buffer.byteLength(chunk);
+    const cut = n < want;
+    truncated ||= cut;
+    files.push({ name, bytes: st.size, read_bytes: Buffer.byteLength(chunk), truncated: cut, grown: Boolean(prev) });
+    if (chunk) text += redactStrong(chunk, env) + (chunk.endsWith("\n") ? "" : "\n");
+  }
+  return { dir, files, text, bytes_read, truncated };
+}
+/**
+ * The CLI saying it has no session. Observed on agy 1.5.10: "error getting token source: You are not logged into
+ * Antigravity.", "doRefreshQuota: skipped (not logged in)", "Auth mode is unspecified, skipping fetchAvailableModels and
+ * returning empty response". NOT EVIDENCE OF A LOGOUT by itself: see NEGATIVE_LOGIN_NOTE.
+ */
+export const AGY_NOT_LOGGED_IN = /not logged in(to)?\b|You are not logged into Antigravity|Auth mode is unspecified/i;
+export const NEGATIVE_LOGIN_NOTE = "observed on agy 1.5.10 in every layout, including the real read-only directory, whenever the CLI could not write its log file; /usage succeeded in the same layouts";
+/** A `workspaceDirs=[...]` line (what the CLI took as its workspace): the LAST one's entries, or null. */
+export function parseWorkspaceDirs(text) {
+  const found = String(text ?? "").split("\n").filter(l => WORKSPACE_DIRS.test(l));
+  if (!found.length) return null;
+  const inner = WORKSPACE_DIRS.exec(found.at(-1))[1];
+  return { dirs: inner.split(/[\s,]+/).map(x => x.replace(/^["']|["']$/g, "")).filter(Boolean), lines: [...new Set(found.map(l => l.trim().slice(0, 500)))].slice(-10) };
+}
+const WORKSPACE_DIRS = /workspaceDirs=\[([^\]]*)\]/;
+/**
+ * Everything the parsers read from one or more commands: `sources` is {stdout, stderr, log_file, log_dir} text (any may
+ * be missing; all are redacted here, log_dir is already redacted by readNewCliLogs). Returns {lines_scanned,
+ * log_sources: {stdout_lines, stderr_lines, file_lines, log_file_lines}, hooks_loaded: {named, files, sources} | null,
+ * workspace_dirs: [dirs] | null, workspace_dirs_lines, erofs_paths, erofs_lines, unknown_component, not_in_registry,
+ * deprecated, negative_login_lines, gemini_dir_lines, project_resolve_errors} -- lines de-duplicated, redacted, capped.
+ */
+export function cliLogEvidence({ stdout = "", stderr = "", log_file = "", log_dir = "" } = {}, env = {}) {
+  const src = { stdout: redactStrong(stdout, env), stderr: redactStrong(stderr, env), log_file: redactStrong(log_file, env), log_dir: String(log_dir ?? "") };
+  const all = `${src.stdout}\n${src.stderr}\n${src.log_file}\n${src.log_dir}`;
+  const ls = lines(all);
+  const pick = (re, n = 30) => [...new Set(ls.filter(l => re.test(l)).map(l => l.slice(0, 500)))].slice(0, n);
+  const hooks = parseHooksLoaded(all), ws = parseWorkspaceDirs(all);
+  const erofs_lines = pick(PREFLIGHT_LOG_PATTERNS.read_only, 40);
+  return {
+    lines_scanned: ls.length,
+    log_sources: { stdout_lines: lines(src.stdout).length, stderr_lines: lines(src.stderr).length, file_lines: lines(src.log_dir).length, log_file_lines: lines(src.log_file).length },
+    hooks_loaded: hooks ? { named: hooks.named, files: hooks.files, sources: Object.entries(src).filter(([, t]) => HOOKS_LOADED.test(t)).map(([k]) => k) } : null,
+    workspace_dirs: ws ? ws.dirs : null, workspace_dirs_lines: ws ? ws.lines : [],
+    workspace_dirs_sources: ws ? Object.entries(src).filter(([, t]) => WORKSPACE_DIRS.test(t)).map(([k]) => k) : [],
+    erofs_paths: [...new Set(erofs_lines.flatMap(l => [...l.matchAll(/(\/[^\s:"'()]+)/g)].map(x => x[1])))].sort().slice(0, 40), erofs_lines,
+    unknown_component: pick(PREFLIGHT_LOG_PATTERNS.unknown_component), not_in_registry: pick(PREFLIGHT_LOG_PATTERNS.not_in_registry), deprecated: pick(PREFLIGHT_LOG_PATTERNS.deprecated),
+    negative_login_lines: pick(AGY_NOT_LOGGED_IN, 20), gemini_dir_lines: pick(GEMINI_DIR_LINE, 20), project_resolve_errors: pick(/failed to resolve project/i, 10),
+  };
+}
+
 // ---- THE ZERO-SPEND PREFLIGHT: what the CLI itself says about the workspace, before any model turn ------------------
-// `agy agents` and `agy mcp list` start no model turn. They run in the SAME jail, control dir and workspace as the turn.
-// What was observed (agy 1.5.10, owner's machine; probe of 5893432, 2026-11-18; zero model turns):
-//   - observed: both subcommands REJECT `--log-file` (exit 1, stderr ending exactly
-//     "Error: flags provided but not defined: -log-file" after their usage text). So the preflight passes NO
-//     --log-file to them (the earlier preflight did, and its BAD_FLAG matcher only knew the singular "flag provided",
-//     so the no-flag retry never ran). AGY_BAD_FLAG still recognises a flag refusal, as a blocking `agents` failure.
-//   - observed: without --log-file, `agy agents` exited 0 with EMPTY stdout and "You are not logged into Antigravity."
-//     on stderr, plus read-only-file-system failures writing ~/.gemini/antigravity-cli/log/... and
-//     ~/.gemini/config/projects/default-cli-project.json.<rand>.tmp (src/agy/sandbox.mjs now makes both writable), and
-//     a message about a relative GeminiDir setting (exact text not yet available: captured as diagnostics). Exit 0 is
-//     therefore NOT evidence of a usable session.
-//   - observed: `agy mcp list` exited 0 and listed only a GLOBAL server, not the workspace's pantheon-subagents, and
-//     printed that server's configured credential. These subcommands take no --add-dir, so their listings show the
-//     global configuration only: DISCOVERY IS ADVISORY. The mcp list output is NEVER stored: only the server names
-//     (first token of each entry line) and `credential_redacted: true`.
+// `agy --print /usage --output-format json`, `agy agents` and `agy mcp list` start no model turn. They run in the SAME
+// jail, control dir and workspace as the turn, with AGY_CLI_DISABLE_AUTO_UPDATE=true (workerEnv).
+// What was observed (agy 1.5.10, owner's machine; 2026-11-18; zero model turns):
+//   - both subcommands REJECT `--log-file` and `--add-dir` (exit 1, "Error: flags provided but not defined: ..."), so
+//     the preflight passes them neither; AGY_BAD_FLAG recognises a flag refusal, as a blocking `agents` failure.
+//   - `/usage` returned quota groups with buckets in EVERY bisect layout, the current one (L4) included: the login
+//     survives the jail. It is the AUTH check.
+//   - the subcommands' "Auth mode is unspecified, ..." / "You are not logged into Antigravity." lines appeared in
+//     exactly the layouts whose antigravity-cli/log/ was NOT writable (the real read-only dir included), and in the log
+//     FILE otherwise: routine output, NOT a logout. They are ADVISORY diagnostics (diagnostics.negative_login_lines).
+//   - `agy mcp list` listed only the GLOBAL server and printed its configured credential: DISCOVERY IS ADVISORY and the
+//     mcp list output is NEVER stored (only server names, `credential_redacted: true`).
 // BLOCKING checks (in `failed` when not ok; the turn must not start):
 //   card_tools  the control dir's card lists a name in AGY_1_5_10_UNKNOWN_OR_DEPRECATED (validateCardTools)
+//   auth        in-jail `/usage` did not parse as the observed envelope with at least one group with buckets
+//   lane_quota  the group serving `model` (the lane) reads exhausted in that envelope
 //   agents      `agy agents` exited non-zero, was killed, or refused a flag
-//   auth        either command's stdout/stderr says the CLI is not logged in (whatever the exit code)
 //   log_scan    a `read-only file system` / EROFS, `unknown component`, `not found in registry` or `deprecated` line in
-//               either command's output or in what the CLI wrote to its log dir (the scratch's antigravity-cli/log/)
+//               any command's stdout/stderr or in the NEW files of the CLI's log dir (the scratch's antigravity-cli/log/)
 // ADVISORY checks (recorded, in `warnings` when not ok, never blocking):
 //   mcp_list    `agy mcp list` exited non-zero, refused a flag, or a line naming the server says it failed
 //   discovery   {agent_listed, server_listed, note}: whether the listings name pantheon-unit-worker / pantheon-subagents
-//   hooks_discovery  {seen, named, files, lines}: the CLI's "loaded N named hooks from M hooks.json file(s)" line;
-//               M == 0 is a warning (observed 2026-11-18: 0 files with <ctl>/.agents/hooks.json present; whether a
-//               --print run with --add-dir behaves differently is not known), surfaced in `warnings`
-// The "Failed to resolve GeminiDir ".gemini": ... falling back to default" line (observed, benign: the CLI then uses
-// ~/.gemini/antigravity-cli) is recorded under `diagnostics.gemini_dir_lines`, never blocking.
+//   hooks_discovery  {seen, named, files, lines}: the CLI's "loaded N named hooks from M hooks.json file(s)" line (from
+//               stdout, stderr or the log files); M == 0 is a warning (observed for these subcommands; whether a --print
+//               session loads the workspace's hooks is what the turn's cli_log shows)
 // Every stored output is redacted with redactStrong.
 export const PREFLIGHT_LOG_PATTERNS = Object.freeze({ read_only: /read-only file system|EROFS/i, unknown_component: /unknown component/i,
   not_in_registry: /not found in registry/i, deprecated: /deprecated/i });
 /** A CLI refusing a flag (observed on agy 1.5.10: "Error: flags provided but not defined: -log-file"). */
 export const AGY_BAD_FLAG = /unknown (shorthand )?flag|flags? provided but not defined|unrecognized (option|argument)|unexpected argument/i;
 /**
- * The CLI saying it has no session. Observed on agy 1.5.10 (2026-11-18, `agy agents` in the jail): "error getting token
- * source: You are not logged into Antigravity.", "doRefreshQuota: skipped (not logged in)", and "Auth mode is
- * unspecified, skipping fetchAvailableModels and returning empty response".
- */
-export const AGY_NOT_LOGGED_IN = /not logged in(to)?\b|You are not logged into Antigravity|Auth mode is unspecified/i;
-/**
  * The CLI's hook discovery line, observed on agy 1.5.10 (2026-11-18): "hooks_manager.go:54] loaded 0 named hooks from 0
- * hooks.json file(s)" (with <ctl>/.agents/hooks.json present). Returns {named, files, lines} for the LAST such line of
- * `text` (lines: every such line, up to 10), or null when none is seen.
+ * hooks.json file(s)". Returns {named, files, lines} for the LAST such line of `text` (lines: every such line, up to
+ * 10), or null when none is seen.
  */
 export function parseHooksLoaded(text) {
   const found = String(text ?? "").split("\n").filter(l => HOOKS_LOADED.test(l));
@@ -271,8 +353,9 @@ export function parseHooksLoaded(text) {
 }
 const HOOKS_LOADED = /loaded (\d+) named hooks? from (\d+) hooks\.json file/i;
 const GEMINI_DIR_LINE = /GeminiDir/i;
-export const PREFLIGHT_BLOCKING = Object.freeze(["card_tools", "agents", "auth", "log_scan"]);
+export const PREFLIGHT_BLOCKING = Object.freeze(["card_tools", "auth", "lane_quota", "agents", "log_scan"]);
 export const PREFLIGHT_ADVISORY = Object.freeze(["mcp_list", "discovery", "hooks_discovery"]);
+export const USAGE_ARGS = Object.freeze(["--print", "/usage", "--output-format", "json"]);
 const lines = t => String(t ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
 /** Redact every value of a secret-looking env variable (8+ chars) from `text`. */
 export function redactSecrets(text, env = {}) {
@@ -316,66 +399,100 @@ export function mcpServerNames(stdout) {
   }
   return { servers: names.length ? names : null, line_count: ls.length };
 }
+/** The `/usage --output-format json` envelope of `stdout` (the whole text, else its last JSON line), parsed; or null. */
+export function usageEnvelopeOf(stdout) {
+  const tryParse = t => { try { return parseUsageEnvelope(JSON.parse(t)); } catch { return null; } };
+  const whole = tryParse(String(stdout ?? "").trim());
+  if (whole) return whole;
+  for (const l of lines(stdout).reverse()) { const e = tryParse(l); if (e) return e; }
+  return null;
+}
+/** True when the envelope is the observed JSON form with at least one group carrying buckets (the login is usable). */
+export const usageHasBuckets = env => Boolean(env && env.format === "json" && (env.buckets ?? []).length > 0);
 /**
  * Run the zero-spend preflight (above). Returns {ok, failed: [blocking check names not ok], warnings: [advisory check
- * names not ok], blocking: PREFLIGHT_BLOCKING, advisory: PREFLIGHT_ADVISORY, checks: {card_tools, agents, mcp_list,
- * auth, log_scan, discovery, hooks_discovery}, diagnostics: {hooks_loaded: {named, files} | null, gemini_dir_lines, auth_lines}}. `agents` keeps {argv, exit_code, killed_for,
- * bad_flag, stdout, stderr} (strongly redacted); `mcp_list` keeps {argv, exit_code, killed_for, bad_flag, servers,
- * line_count, stderr_line_count, credential_redacted: true} and never its output.
- * `jail` (optional) a prepareWorkerJail() result; without one a jail is built and its state dropped afterwards.
+ * names not ok], blocking: PREFLIGHT_BLOCKING, advisory: PREFLIGHT_ADVISORY, checks: {card_tools, auth, lane_quota,
+ * agents, mcp_list, log_scan, discovery, hooks_discovery}, diagnostics: {hooks_loaded, workspace_dirs, gemini_dir_lines,
+ * negative_login_lines: {advisory: true, count, lines, note}, cli_log}}. `auth` keeps {argv, exit_code, killed_for,
+ * envelope, groups, num_turns, total_tokens, stderr} (redacted; never stdout); `lane_quota` {model, quota_scope: {model,
+ * groups, state, buckets}}; `agents` {argv, exit_code, killed_for, bad_flag, stdout, stderr} (strongly redacted);
+ * `mcp_list` {argv, exit_code, killed_for, bad_flag, servers, line_count, stderr_line_count, credential_redacted: true}
+ * and never its output. `model` (optional): the lane whose group is scoped (without one: the Gemini group, recorded
+ * only). `jail` (optional) a prepareWorkerJail() result; without one a jail is built and its state dropped afterwards.
  */
-export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME }) {
+export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME, model = null }) {
   const env = workerEnv(extraEnv);
   const own = !jail;
   const j = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
   const red = t => redactStrong(t, env);
   const checks = {};
-  let diagnostics = { hooks_loaded: null, gemini_dir_lines: [], auth_lines: [] };
+  let diagnostics = { hooks_loaded: null, workspace_dirs: null, gemini_dir_lines: [], negative_login_lines: { advisory: true, count: 0, lines: [], note: NEGATIVE_LOGIN_NOTE }, cli_log: null };
   try {
     const cardText = await readFile(join(control_dir, ".agents", "agents", agent, "agent.md"), "utf8").catch(() => null);
     const tools = cardText == null ? null : cardTools(cardText);
     const v = validateCardTools(tools);
     checks.card_tools = { ok: v.ok, why: v.why, tools, bad: v.bad };
-    // NO --log-file: both subcommands reject it (observed, agy 1.5.10, 2026-11-18).
+    const logDir = cliLogDirOf(j.gstate, env.HOME);
+    const budget = { left: CLI_LOG_CAP_BYTES };
+    const logFiles = [];
+    let logDirText = "", logTruncated = false;
+    // NO --log-file and NO --add-dir: both subcommands reject them (observed, agy 1.5.10, 2026-11-18).
     const runSub = async args => {
+      const before = await snapshotCliLog(logDir);
       const argv = j.prefix.length ? [...j.prefix.slice(1), cli, ...args] : args;
       const r = await spawnPromise(j.prefix.length ? j.prefix[0] : cli, argv, { cwd: control_dir, env, timeout: timeoutS * 1000 })
         .catch(e => ({ status: null, stdout: "", stderr: `spawn failed: ${e?.code ?? e?.message ?? e}`, killedFor: null }));
+      const log = await readNewCliLogs(logDir, before, { env, budget });
+      logFiles.push(...log.files.map(f => ({ ...f, command: args.join(" ") })));
+      logDirText += log.text; logTruncated ||= log.truncated;
       const stdout = String(r.stdout ?? ""), stderr = String(r.stderr ?? "");
-      return { argv: [cli, ...args], exit_code: r.status, killed_for: r.killedFor ?? null, bad_flag: AGY_BAD_FLAG.test(`${stdout}\n${stderr}`), raw: { stdout, stderr } };
+      return { argv: [cli, ...args], exit_code: r.status, killed_for: r.killedFor ?? null, bad_flag: AGY_BAD_FLAG.test(`${stdout}\n${stderr}`), raw: { stdout, stderr }, log };
     };
     const word = name => new RegExp(`(^|[^A-Za-z0-9_-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^A-Za-z0-9_-])`, "m");
+    // AUTH: in-jail /usage (no model; observed to spend zero tokens and to return quota groups only when logged in).
+    const u = await runSub([...USAGE_ARGS]);
+    const envelope = usageEnvelopeOf(u.raw.stdout);
+    const logged_in = !u.killed_for && usageHasBuckets(envelope);
+    checks.auth = { ok: logged_in, source: "agy --print /usage --output-format json, in the jail",
+      why: logged_in ? null : u.killed_for ? `/usage was stopped (${u.killed_for})` : !envelope ? `/usage did not print the JSON envelope (exit ${u.exit_code})` : "/usage returned no quota group with buckets: the CLI has no usable session in the jail",
+      argv: u.argv, exit_code: u.exit_code, killed_for: u.killed_for, envelope: envelope ? envelope.format : null,
+      groups: envelope ? [...new Set((envelope.buckets ?? []).map(b => b.group))] : null,
+      num_turns: envelope?.spent?.num_turns ?? null, total_tokens: envelope?.spent?.total_tokens ?? null, stderr: red(u.raw.stderr).slice(-4000) };
+    const base = model ? String(model).replace(/-(low|medium|high|xhigh|max)$/, "") : null;
+    const scoped = envelope ? (base ? scopeQuota(envelope, base) : { state: (envelope.buckets ?? []).filter(b => /gemini/i.test(b.group ?? "")).some(b => b.exhausted) ? "exhausted" : "unscoped", buckets: (envelope.buckets ?? []).filter(b => /gemini/i.test(b.group ?? "")) }) : null;
+    const quota_scope = scoped ? { model: base, groups: [...new Set((scoped.buckets ?? []).map(b => b.group))], state: scoped.state,
+      buckets: (scoped.buckets ?? []).map(b => ({ group: b.group ?? null, name: b.name ?? null, window: b.window ?? null, remaining_fraction: b.remaining_fraction ?? null, exhausted: Boolean(b.exhausted) })) } : null;
+    const exhausted = quota_scope?.state === "exhausted";
+    checks.lane_quota = { ok: !exhausted, model, quota_scope,
+      why: exhausted ? `the quota of ${base ? `${model}'s group` : "the Gemini group"} (${quota_scope.groups.join(", ") || "?"}) is exhausted` : null,
+      note: !quota_scope ? "no envelope: see auth" : quota_scope.state === "unknown" ? "no group of the envelope serves this lane: not blocking" : null };
     const a = await runSub(["agents"]);
     checks.agents = { ok: a.exit_code === 0 && !a.bad_flag && !a.killed_for,
       why: a.exit_code !== 0 || a.killed_for ? `agy agents exited ${a.exit_code ?? a.killed_for}${a.bad_flag ? " (it refused a flag)" : ""}` : a.bad_flag ? "agy agents refused a flag" : null,
       argv: a.argv, exit_code: a.exit_code, killed_for: a.killed_for, bad_flag: a.bad_flag, stdout: red(a.raw.stdout), stderr: red(a.raw.stderr) };
     const m = await runSub(["mcp", "list"]);
     const parsed = mcpServerNames(m.raw.stdout);
-    const mBad = lines(`${m.raw.stdout}\n${m.raw.stderr}`).filter(l => l.includes(server) && /\b(fail(ed|ure)?|error|unavailable|disconnected)\b/i.test(l));
+    const mBad = lines(`${m.raw.stdout}\n${m.raw.stderr}\n${m.log.text}`).filter(l => l.includes(server) && /\b(fail(ed|ure)?|error|unavailable|disconnected)\b/i.test(l));
     checks.mcp_list = { ok: m.exit_code === 0 && !m.bad_flag && !m.killed_for && !mBad.length,
       why: m.exit_code !== 0 || m.killed_for ? `agy mcp list exited ${m.exit_code ?? m.killed_for}` : m.bad_flag ? "agy mcp list refused a flag" : mBad.length ? `a line naming ${server} reports a failure` : null,
       argv: m.argv, exit_code: m.exit_code, killed_for: m.killed_for, bad_flag: m.bad_flag, servers: parsed.servers, line_count: parsed.line_count,
       stderr_line_count: lines(m.raw.stderr).length, credential_redacted: true };
-    const allText = `${a.raw.stdout}\n${a.raw.stderr}\n${m.raw.stdout}\n${m.raw.stderr}`;
-    const authLines = [...new Set(lines(allText).filter(l => AGY_NOT_LOGGED_IN.test(l)).map(red))].slice(0, 10);
-    checks.auth = { ok: !authLines.length, why: authLines.length ? "the CLI says it is not logged in (exit 0 is not evidence of a usable session)" : null, lines: authLines };
-    // What the CLI wrote to its own log dir (in the per-run scratch: antigravity-cli/log/ is a state subdir).
-    let logText = "";
-    const logDir = j.gstate?.scratch_cli ? join(j.gstate.scratch_cli, "log") : null;
-    if (logDir) for (const f of (await readdir(logDir, { recursive: true }).catch(() => [])).sort()) logText += await readFile(join(logDir, f), "utf8").catch(() => "");
-    const scanned = `${allText}\n${logText}`;
-    const found = {};
-    for (const [k, re] of Object.entries(PREFLIGHT_LOG_PATTERNS)) found[k] = [...new Set(lines(scanned).filter(l => re.test(l)).map(red))].slice(0, 30);
+    const runs = [u, a, m];
+    const ev = cliLogEvidence({ stdout: runs.map(x => x.raw.stdout).join("\n"), stderr: runs.map(x => x.raw.stderr).join("\n"), log_dir: logDirText }, env);
+    const found = { read_only: ev.erofs_lines.slice(0, 30), unknown_component: ev.unknown_component, not_in_registry: ev.not_in_registry, deprecated: ev.deprecated };
     const hits = Object.entries(found).filter(([, x]) => x.length).map(([k]) => k);
-    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.join(", ")}` : null, lines: found, log_text: red(logText.slice(-8000)) };
+    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.join(", ")}` : null, lines: found, log_text: logDirText.slice(-8000) };
     const agent_listed = word(agent).test(a.raw.stdout), server_listed = (parsed.servers ?? []).includes(server);
     checks.discovery = { ok: agent_listed && server_listed, agent_listed, server_listed,
       note: "advisory: `agy agents` and `agy mcp list` take no --add-dir and were observed (agy 1.5.10, 2026-11-18) to list the global configuration only; the turn's --add-dir workspace is what counts" };
-    const hooks = parseHooksLoaded(scanned);
-    checks.hooks_discovery = hooks ? { ok: hooks.files > 0, seen: true, named: hooks.named, files: hooks.files, lines: hooks.lines.map(red),
+    const hooks = parseHooksLoaded(`${red(runs.map(x => `${x.raw.stdout}\n${x.raw.stderr}`).join("\n"))}\n${logDirText}`);
+    checks.hooks_discovery = hooks ? { ok: hooks.files > 0, seen: true, named: hooks.named, files: hooks.files, lines: hooks.lines, sources: ev.hooks_loaded?.sources ?? [],
       why: hooks.files > 0 ? null : "the CLI loaded hooks from 0 hooks.json files: the workspace's .agents/hooks.json was not discovered by these subcommands" }
-      : { ok: true, seen: false, named: null, files: null, lines: [], why: null };
-    diagnostics = { hooks_loaded: hooks ? { named: hooks.named, files: hooks.files } : null, gemini_dir_lines: [...new Set(lines(scanned).filter(l => GEMINI_DIR_LINE.test(l)).map(red))].slice(0, 20), auth_lines: authLines };
+      : { ok: true, seen: false, named: null, files: null, lines: [], sources: [], why: null };
+    const { negative_login_lines, gemini_dir_lines, ...cliRest } = ev;
+    diagnostics = { hooks_loaded: hooks ? { named: hooks.named, files: hooks.files } : null, workspace_dirs: ev.workspace_dirs, gemini_dir_lines,
+      negative_login_lines: { advisory: true, count: lines(`${red(runs.map(x => `${x.raw.stdout}\n${x.raw.stderr}`).join("\n"))}\n${logDirText}`).filter(l => AGY_NOT_LOGGED_IN.test(l)).length, lines: negative_login_lines, note: NEGATIVE_LOGIN_NOTE },
+      cli_log: { dir: logDir, files: logFiles, truncated: logTruncated, ...cliRest } };
   } finally {
     if (own) await dropGeminiState(j.gstate).catch(() => null);
   }
@@ -385,12 +502,28 @@ export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEn
 }
 
 /**
+ * A worker turn's CLI log evidence: the NEW files of the CLI's log dir (readNewCliLogs) and the --log-file, with stderr,
+ * through cliLogEvidence. Returns {dir, files, truncated, log_file, received_by: {log_dir, log_file, stderr} (line
+ * counts), tail (the redacted log-dir text, last 4000 chars), ...cliLogEvidence}.
+ */
+async function turnCliLog({ logDir, before, log_file, stderr, env }) {
+  const log = await readNewCliLogs(logDir, before, { env });
+  const fileText = await readFile(log_file, "utf8").catch(() => "");
+  const ev = cliLogEvidence({ stderr, log_file: fileText.slice(-CLI_LOG_CAP_BYTES), log_dir: log.text }, env);
+  return { dir: logDir, files: log.files, truncated: log.truncated, log_file,
+    received_by: { log_dir: ev.log_sources.file_lines, log_file: ev.log_sources.log_file_lines, stderr: ev.log_sources.stderr_lines },
+    ...ev, tail: log.text.slice(-4000) };
+}
+
+/**
  * One headless worker turn. `sandbox` {enabled = true, agy_state_dirs, allowUnsandboxed = false, bwrap = "bwrap",
  * extra_ro = [], gemini_state = "scratch" | "rw" | "off", home (default: the child env's HOME), keep_gemini_scratch};
  * `a2a_socket` (optional) the unit's A2A socket path, whose directory is bound read-only when it is not under the
  * control dir; the process is killed after timeoutS + graceS seconds. Returns {text, structured_output, summary,
  * response_id, usage, num_turns, status, tool_calls, subagent_calls, tools, tool_steps, served_model,
- * served_model_source: "input", jail_log, launch, cleanup_env, sandbox, gemini_scratch, exit_code, stderr_tail}.
+ * served_model_source: "input", jail_log, launch, cleanup_env, sandbox, gemini_scratch, cli_log, exit_code, stderr_tail}.
+ * `cli_log` (turnCliLog): what the CLI wrote to its log dir during the turn and to the --log-file, parsed (hooks loaded,
+ * workspaceDirs, EROFS paths, unknown/registry/deprecated lines, negative-login lines, GeminiDir lines).
  * `tool_steps` is EVERY stream-json step_update with step_type "tool" ({tool_name, state, tool_info}), whatever its
  * state; a thrown failure carries the same evidence fields. `jail` (optional): a prepareWorkerJail() result to run in
  * (then `gemini_scratch` is null: the caller owns and drops the state).
@@ -447,6 +580,10 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
     }
   };
 
+  // The CLI's own log dir (the scratch's antigravity-cli/log/): snapshot now, read what this turn added before the
+  // scratch is dropped (see readNewCliLogs). The --log-file is read too; cli_log says which of them got the lines.
+  const logDir = cliLogDirOf(gstate, env.HOME);
+  const logBefore = await snapshotCliLog(logDir);
   let run;
   try {
     run = await spawnPromise(cmd, argv, { cwd: control_dir, env, timeout: (timeoutS + graceS) * 1000, onStdoutLine, ...(signal ? { signal } : {}) });
@@ -456,9 +593,10 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
     throw laneFailure("spawn", `agy worker could not be started (${e?.code ?? e?.message ?? e})`, { launch, sandbox: sandboxRec, tool_steps });
   }
   const jail_log = await readJailLog(control_dir);
-  const gemini_scratch = await dropState();
   const stderr = String(run.stderr ?? "");
-  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps, gemini_scratch, exit_code: run.status, stderr_tail: stderr.slice(-4000),
+  const cli_log = await turnCliLog({ logDir, before: logBefore, log_file, stderr, env });
+  const gemini_scratch = await dropState();
+  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps, gemini_scratch, cli_log, exit_code: run.status, stderr_tail: stderr.slice(-4000),
     result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null };
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED", ...more });
   if (run.killedFor === "timeout") throw laneFailure("timeout", `agy CLI timed out after ${timeoutS}s (process killed)`, more);

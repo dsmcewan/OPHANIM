@@ -35,9 +35,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 # scripted report that is itself the JSON envelope is printed as is; a text report is wrapped in one.
 if { [ "$1" = "-p" ] || [ "$1" = "--print" ]; } && { [ "$2" = "/quota" ] || [ "$2" = "/usage" ]; }; then
   { printf 'quota %s\\n' "$#" >> "$here/agy.quota.log"; } 2>/dev/null   # silent when the fixture dir is read-only (inside a jail)
-  # FAKE_AGY_AUTH_MARKER (see the tools script, "sub"): logged out unless the marker exists; then the /usage envelope
-  # has no groups and stderr says so (the observed "Auth mode is unspecified" line).
-  if [ -n "$FAKE_AGY_AUTH_MARKER" ] && [ ! -e "$HOME/.gemini/antigravity-cli/$FAKE_AGY_AUTH_MARKER" ]; then
+  # Logged out (FAKE_AGY_NOT_LOGGED_IN=1, or FAKE_AGY_AUTH_MARKER naming a file absent under antigravity-cli/; see the
+  # tools script, "sub"): the /usage envelope has no groups and stderr says so (the observed "Auth mode is unspecified"
+  # line). Logged in, /usage succeeds whatever the subcommands print (observed on agy 1.5.10: they print the
+  # not-logged-in lines in every layout).
+  if [ "$FAKE_AGY_NOT_LOGGED_IN" = 1 ] || { [ -n "$FAKE_AGY_AUTH_MARKER" ] && [ ! -e "$HOME/.gemini/antigravity-cli/$FAKE_AGY_AUTH_MARKER" ]; }; then
     echo "W1118 00:00:00.000000 $$ models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response" >&2
     printf '{"conversation_id":"","status":"SUCCESS","response":"","num_turns":0,"usage":{"total_tokens":0},"command":{"name":"usage","data":{"groups":[]}}}\\n'
     exit 0
@@ -117,6 +119,16 @@ if [ "$worker" = yes ]; then
   # unit worker launched with either is a bug: the fake refuses to run it.
   if [ "$agent" = "pantheon-unit-worker" ] && { [ "$dangerous" = yes ] || [ "$sbx" = yes ]; }; then
     echo "fake-agy: refusing a unit worker launched with --dangerously-skip-permissions or --sandbox" >&2; exit 64
+  fi
+  # The --print session's own diagnostics, as the CLI does (observed on agy 1.5.10 for its subcommands): to
+  # $HOME/.gemini/antigravity-cli/log/cli-<n>.log when that dir is writable, else to stderr (only when the CLI's state
+  # dir exists: a test without a fake ~/.gemini sees nothing). The hooks line counts ./.agents/hooks.json of the cwd;
+  # the workspaceDirs line names the cwd and the --add-dir. They are NOT written to --log-file.
+  if [ "$agent" = "pantheon-unit-worker" ]; then
+    cl="$HOME/.gemini/antigravity-cli/log"; nh=0; [ -f "$(pwd)/.agents/hooks.json" ] && nh=1
+    diag=$(printf 'I1118 00:00:00.000000 %s hooks_manager.go:54] loaded %s named hooks from %s hooks.json file(s)\nI1118 00:00:00.000000 %s workspace.go:12] workspaceDirs=[%s %s]' "$$" "$nh" "$nh" "$$" "$(pwd)" "$dir")
+    if [ -d "$cl" ] && [ -w "$cl" ]; then printf '%s\n' "$diag" >> "$cl/cli-$$.log"
+    elif [ -d "$HOME/.gemini/antigravity-cli" ]; then printf '%s\n' "$diag" >&2; fi
   fi
   # FAKE_AGY_GEMINI_WRITES=1: behave like the CLI with its state under $HOME/.gemini/antigravity-cli, as OBSERVED on
   # agy 1.5.10 (owner's probe 2026-11-18): it reads its settings, then writes conversations/<id>.db, brain/<id>/,
@@ -340,11 +352,14 @@ if (cmd === "write") {
   //   - both REJECT --log-file: exit 1, their usage text, then exactly "Error: flags provided but not defined: -log-file".
   //   - both write the CLI's own log under $HOME/.gemini/antigravity-cli/log/ and a
   //     $HOME/.gemini/config/projects/default-cli-project.json.<rand>.tmp (then renamed); a write that fails logs an
-  //     E-level "read-only file system" line to stderr.
+  //     E-level "read-only file system" line.
+  //   - (bisect of 6e0d1d1, 2026-11-18) when the log FILE could be created, every diagnostic line below goes THERE and
+  //     not to stderr; when it could not, to stderr.
+  //   - ALWAYS (observed in every layout, logged in or not): "Auth mode is unspecified, ..." and "error getting token
+  //     source: You are not logged into Antigravity." -- routine output of these subcommands, not a logout.
   //   - logged out (FAKE_AGY_NOT_LOGGED_IN=1, or FAKE_AGY_AUTH_MARKER=<path under antigravity-cli/> naming a file that
-  //     is absent under $HOME/.gemini/antigravity-cli): the observed stderr lines ("Auth mode is unspecified, ...",
-  //     "error getting token source: You are not logged into Antigravity.", "doRefreshQuota: skipped (not logged in)"),
-  //     and agents exits 0 with EMPTY stdout (observed); mcp list still lists the global server.
+  //     is absent under $HOME/.gemini/antigravity-cli): also "doRefreshQuota: skipped (not logged in)", agents exits 0
+  //     with EMPTY stdout; mcp list still lists the global server; /usage returns no groups (the FAKE_AGY script).
   //   - both print the observed benign 'Failed to resolve GeminiDir ".gemini": ...' line when logged out.
   //   - both print "hooks_manager.go:54] loaded N named hooks from N hooks.json file(s)": N = 1 only when the cwd has
   //     .agents/hooks.json AND is a git repo (a stand-in for "project root" detection: the real rule is not known; the
@@ -365,7 +380,7 @@ if (cmd === "write") {
   }
   const home = process.env.HOME, g = home ? join(home, ".gemini") : null, rnd = process.pid;
   let cliLog = null;
-  const say = line => { process.stderr.write(line + "\n"); if (cliLog) { try { appendFileSync(cliLog, line + "\n"); } catch { /* reported when opened */ } } };
+  const say = line => { if (cliLog) { try { appendFileSync(cliLog, line + "\n"); return; } catch { /* fall through to stderr */ } } process.stderr.write(line + "\n"); };
   const tryWrite = (p, content, what) => {
     try { if (!existsSync(dirname(p))) mkdirSync(dirname(p)); writeFileSync(p, content); return true; }   // one level, so a read-only parent reports EROFS
     catch (e) { say("E1118 00:00:00.000000 " + rnd + " state.go:7] " + what + ": open " + p + ": " + (e.code === "EROFS" ? "read-only file system" : e.code)); return false; }
@@ -381,11 +396,11 @@ if (cmd === "write") {
   const loggedOut = process.env.FAKE_AGY_NOT_LOGGED_IN === "1" || Boolean(marker && !(g && existsSync(join(g, "antigravity-cli", marker))));
   const hooksFound = existsSync(join(cwd, ".agents", "hooks.json")) && existsSync(join(cwd, ".git")) ? 1 : 0;
   say("I1118 00:00:00.000000 " + rnd + " hooks_manager.go:54] loaded " + hooksFound + " named hooks from " + hooksFound + " hooks.json file(s)");
+  say("W1118 00:00:00.000000 " + rnd + " models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response");
+  say("E1118 00:00:00.000000 " + rnd + " auth.go:2] error getting token source: You are not logged into Antigravity.");
   if (loggedOut) {
     say("W1118 00:00:00.000000 " + rnd + " settings.go:3] Failed to resolve GeminiDir \".gemini\": .gemini must be an absolute path: path is not absolute, falling back to default");
     say("I1118 00:00:00.000000 " + rnd + " settings.go:4] CLI app data directory: " + (g ? join(g, "antigravity-cli") : "?"));
-    say("W1118 00:00:00.000000 " + rnd + " models.go:9] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response");
-    say("E1118 00:00:00.000000 " + rnd + " auth.go:2] error getting token source: You are not logged into Antigravity.");
     say("I1118 00:00:00.000000 " + rnd + " quota.go:5] doRefreshQuota: skipped (not logged in)");
   }
   if (agents) {
