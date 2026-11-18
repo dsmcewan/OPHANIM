@@ -1,15 +1,17 @@
 # Independent review of PR #67, split into four assignments
 
-**For:** reviewers from labs other than Anthropic, which wrote this PR. Self-review confers no approval, so nothing in this PR has been independently reviewed yet. The owner decides who takes each assignment.
+**For:** reviewers from labs other than Anthropic, which wrote this PR. Self-review confers no approval, so nothing in this PR has been independently reviewed yet. The owner assigns each assignment to a lab (table below).
 
 **Candidate:** PR #67, branch `ccr-aa24f0d5-336szn`. Pin the exact commit you review in your findings. The PR is a draft and is not merged.
 
-| # | Assignment | Scope | Testing |
-|---|---|---|---|
-| 1 | [Lifecycle and evidence](1-lifecycle-evidence.md) | Planning, handoffs, evidence freshness, scheduling, recovery | Local deterministic fixtures |
-| 2 | [Review independence](2-review-independence.md) | Model identity, contribution lineage, review quorum, validation | Synthetic identity and ledger tests |
-| 3 | [Execution reliability](3-execution-reliability.md) | Provider-call limits, concurrency, leases, retries, checkpoints | Mock providers and isolated processes |
-| 4 | [Sandbox security](4-sandbox-security.md) | Antigravity jail, filesystem permissions, credential isolation, network boundaries | Source inspection and existing authorized tests only |
+| # | Assignment | Reviewer lab (owner, 2026-11-18) | Scope | Testing |
+|---|---|---|---|---|
+| 1 | [Lifecycle and evidence](1-lifecycle-evidence.md) | Google (Gemini) | Planning, handoffs, evidence freshness, scheduling, recovery | Local deterministic fixtures |
+| 2 | [Review independence](2-review-independence.md) | OpenAI (GPT) | Model identity, contribution lineage, review quorum, validation | Synthetic identity and ledger tests |
+| 3 | [Execution reliability](3-execution-reliability.md) | xAI (Grok) | Provider-call limits, concurrency, leases, retries, checkpoints | Mock providers and isolated processes |
+| 4 | [Sandbox security](4-sandbox-security.md) | not yet assigned | Antigravity jail, filesystem permissions, credential isolation, network boundaries | Source inspection and existing authorized tests only |
+
+The owner chooses the specific model for each assignment; record it in your findings.
 
 ## Ground rules (all assignments)
 
