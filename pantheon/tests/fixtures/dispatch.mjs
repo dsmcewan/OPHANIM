@@ -33,12 +33,16 @@ if { [ "$1" = "-p" ] || [ "$1" = "--print" ]; } && { [ "$2" = "/quota" ] || [ "$
   else [ -f "$here/quota-report.txt" ] && cat "$here/quota-report.txt"; fi
   exit "$(cat "$here/quota-exit" 2>/dev/null || echo 0)"
 fi
-agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"
+# \`agy --version\`: no model, not logged as a launch.
+if [ "$1" = "--version" ]; then echo "fake-agy 0.0.0-fixture"; exit 0; fi
+agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"; logfile=""
 for a in "$@"; do
-  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; --mode) mode="$a" ;; esac
-  case "$a" in --mode=*) mode="\${a#--mode=}" ;; --dangerously-skip-permissions) dangerous="yes" ;; --sandbox) sbx="yes" ;; esac
+  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; --mode) mode="$a" ;; --log-file) logfile="$a" ;; esac
+  case "$a" in --mode=*) mode="\${a#--mode=}" ;; --dangerously-skip-permissions) dangerous="yes" ;; --sandbox) sbx="yes" ;; --log-file=*) logfile="\${a#--log-file=}" ;; esac
   prev="$a"
 done
+# --log-file (owner-stated): the CLI's own log. The fake writes a line there (inside bwrap it must be writable).
+if [ -n "$logfile" ]; then printf 'fake-agy start agent=%s model=%s add_dir=%s cwd=%s\\n' "$agent" "$model" "$dir" "$(pwd)" >> "$logfile" || echo "fake-agy: cannot write --log-file $logfile" >&2; fi
 printf '%s %s\\n' "$agent" "$model" >> "$FAKE_AGY_LOG"
 case "$prompt" in *"REQUESTED CHANGES"*) printf '%s %s\\n' "$agent" "$model" >> "$FAKE_AGY_LOG.revisions" ;; esac
 case " $FAKE_AGY_QUOTA " in *" $model "*)
@@ -87,7 +91,25 @@ case "$prompt" in *"the single implementer of work unit"*) worker=yes ;; esac
 if [ "$worker" = yes ]; then
   unit=$(printf '%s\\n' "$prompt" | sed -n 's/.*the single implementer of work unit "\\([^"]*\\)".*/\\1/p' | head -n 1)
   verify=$(printf '%s\\n' "$prompt" | sed -n '/^GROUND TRUTH/{n;p;}' | sed 's/^ *//' | head -n 1)
-  printf '%s %s %s a2a_url=%s a2a_token=%s google_key=%s a2a_socket=%s mode=%s cleanup=%s dangerous=%s sandbox=%s\\n' "$agent" "$model" "$dir" "\${PANTHEON_A2A_URL:+yes}" "\${PANTHEON_A2A_TOKEN:+yes}" "\${GEMINI_API_KEY:+yes}\${GOOGLE_API_KEY:+yes}" "\${PANTHEON_A2A_SOCKET:+yes}" "$mode" "\${ANTIGRAVITY_AGY_CLEANUP:-none}" "$dangerous" "$sbx" >> "$FAKE_AGY_LOG.ctx"
+  printf '%s %s %s a2a_url=%s a2a_token=%s google_key=%s a2a_socket=%s mode=%s cleanup=%s dangerous=%s sandbox=%s log_file=%s\\n' "$agent" "$model" "$dir" "\${PANTHEON_A2A_URL:+yes}" "\${PANTHEON_A2A_TOKEN:+yes}" "\${GEMINI_API_KEY:+yes}\${GOOGLE_API_KEY:+yes}" "\${PANTHEON_A2A_SOCKET:+yes}" "$mode" "\${ANTIGRAVITY_AGY_CLEANUP:-none}" "$dangerous" "$sbx" "\${logfile:-none}" >> "$FAKE_AGY_LOG.ctx"
+  # Owner-stated: --dangerously-skip-permissions skips the hooks, and --sandbox must never be passed inside bwrap. A
+  # unit worker launched with either is a bug: the fake refuses to run it.
+  if [ "$agent" = "pantheon-unit-worker" ] && { [ "$dangerous" = yes ] || [ "$sbx" = yes ]; }; then
+    echo "fake-agy: refusing a unit worker launched with --dangerously-skip-permissions or --sandbox" >&2; exit 64
+  fi
+  # FAKE_AGY_GEMINI_WRITES=1: behave like the CLI with its state under $HOME/.gemini (read the login, write a
+  # conversation and the MCP schema cache); =refresh also tries what an OAuth refresh would do, rewriting
+  # oauth_creds.json and settings.json (read-only inside the jail: the failure goes to stderr).
+  if [ "$FAKE_AGY_GEMINI_WRITES" = 1 ] || [ "$FAKE_AGY_GEMINI_WRITES" = refresh ]; then
+    g="$HOME/.gemini"
+    if cat "$g/oauth_creds.json" > /dev/null 2>&1; then echo "fake-agy: read oauth_creds.json" >> "\${logfile:-/dev/null}"; else echo "fake-agy: cannot read $g/oauth_creds.json" >&2; fi
+    printf 'conversation\\n' > "$g/antigravity/conversations/fake-agy-conversation.pb" 2>/dev/null || echo "fake-agy: cannot write a conversation" >&2
+    printf '{}\\n' > "$g/antigravity/mcp/pantheon-subagents.json" 2>/dev/null || echo "fake-agy: cannot write the MCP schema cache" >&2
+    if [ "$FAKE_AGY_GEMINI_WRITES" = refresh ]; then
+      { printf '{}' >> "$g/oauth_creds.json"; } 2>/dev/null || echo "fake-agy: oauth_creds.json refresh write failed: EROFS (read-only file system)" >&2
+      { printf '{}' > "$g/settings.json"; } 2>/dev/null || echo "fake-agy: settings.json write failed: EROFS (read-only file system)" >&2
+    fi
+  fi
   reply='done'
   # The tools of a unit worker, through the same channel the real CLI uses: every write and command FIRST goes through
   # the PreToolUse hooks of ./.agents/hooks.json (a deny is obeyed); ask_subagent goes through ./.agents/mcp_config.json.
@@ -95,6 +117,9 @@ if [ "$worker" = yes ]; then
   FAKE_AGY_EVENTS=$(mktemp); export FAKE_AGY_EVENTS FAKE_AGY_DIR="$dir" FAKE_AGY_MODEL="$model" FAKE_AGY_VERIFY="$verify" FAKE_AGY_UNIT="$unit"
   agy_write() { node "$tools" write "$1" "$2"; }
   agy_ask() { node "$tools" ask "$1" "$2"; }
+  agy_mcp() { node "$tools" mcp "$1" "$2" "\${3:-pantheon-subagents}" "\${4:-ask_subagent}"; }
+  agy_invoke_subagent() { node "$tools" invoke "\${1:-helper}"; }
+  agy_read() { node "$tools" read "$1"; }
   agy_run() { node "$tools" run "$dir" "$1"; }
   agy_verify() { node "$tools" run "$dir" "$verify"; }
   first=$(printf '%s\\n' "$prompt" | sed -n '/^PATHS YOU OWN/,/^Do not commit/p' | sed -n 's/^- //p' | head -n 1)
@@ -128,71 +153,81 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fake-a
 `;
 
 // The unit worker's tools for the fake CLI (node; run from the fake's cwd, the unit's control dir). See FAKE_AGY.
-//   write <path> <content>   PreToolUse write_to_file {TargetFile} -> write unless denied (exit 3 when denied)
-//   run <cwd> <cmd>          PreToolUse run_command {CommandLine, Cwd} -> run unless not approved (exit 126)
-//   ask <role> <question>    PreToolUse on the MCP tool, then MCP stdio initialize -> tools/call ask_subagent; prints the answer
-//   finish <agent>           prints init, the recorded step events and the result (reply: $FAKE_AGY_REPLY or the JSON summary)
-// Approval follows --mode=accept-edits as documented: a hook "deny" blocks; with no hook decision a file edit inside the
-// workspace is approved, a command or an MCP tool is not (it would ask, and headless soft-denies).
+//   write <path> <content>        PreToolUse write_to_file {TargetFile} -> write unless denied (exit 3 when denied)
+//   run <cwd> <cmd>               PreToolUse run_command {CommandLine, Cwd} -> run unless not approved (exit 126)
+//   ask <role> <question>         the DIRECT (eager) MCP call: PreToolUse on $FAKE_AGY_MCP_NAME (default
+//                                 pantheon-subagents/ask_subagent) {role, question}; available only when mcp_config.json
+//                                 marks the tool eager (owner-stated: lazy by default); then MCP stdio tools/call
+//   mcp <role> <question> [server] [tool]
+//                                 the LAZY form: PreToolUse call_mcp_tool {ServerName, ToolName, Arguments: {role, question}}
+//   invoke [name]                 PreToolUse invoke_subagent (a native subagent; the jail must deny it)
+//   read <path>                   PreToolUse view_file {AbsolutePath}
+//   finish <agent>                prints init, the recorded step events and the result (reply: $FAKE_AGY_REPLY or the JSON summary)
+// HOOK SEMANTICS EMULATED (owner-stated 2026-11-18): hooks.json is a top-level hook name -> {PreToolUse: [{matcher
+// (a regex), hooks: [{type, command, timeout}]}]} (the older {PreToolUse: [...]} shape with exact/"*" matchers is
+// still read); a hook command runs with cwd = .agents/; its EXIT CODE IS IGNORED; an EMPTY stdout ALLOWS; `{}` (or
+// anything without a decision) DENIES; "deny" blocks; --mode=accept-edits headless soft-denies Ask-tier tools
+// (run_command, MCP, call_mcp_tool, invoke_subagent) unless a hook said "auto_approve"; a file edit inside the
+// workspace and a read run on "allow" / empty / no hook.
 const FAKE_AGY_TOOLS = String.raw`import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 const [cmd, ...rest] = process.argv.slice(2);
 const cwd = process.cwd(), dir = process.env.FAKE_AGY_DIR, events = process.env.FAKE_AGY_EVENTS, model = process.env.FAKE_AGY_MODEL;
 const stateFile = events + ".state";
-const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { step: 0, changed: [], denied: [], verify: null, asked: [] };
+const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { step: 0, changed: [], denied: [], verify: null, asked: [], hooks: [] };
 const save = () => writeFileSync(stateFile, JSON.stringify(state));
-const event = name => appendFileSync(events, JSON.stringify({ event: "step_update", step_update: { step_type: "tool", state: "DONE", tool_name: name } }) + "\n");
+const event = (name, st, info) => appendFileSync(events, JSON.stringify({ event: "step_update", step_update: { step_type: "tool", state: st, tool_name: name, tool_info: info ?? null } }) + "\n");
 const inside = (root, p) => p === root || p.startsWith(root + sep);
+const agentsDir = join(cwd, ".agents");
 function hooksFor(ev, name) {
-  const f = join(cwd, ".agents", "hooks.json");
+  const f = join(agentsDir, "hooks.json");
   if (!existsSync(f)) return [];
-  const conf = JSON.parse(readFileSync(f, "utf8"));
-  return (conf[ev] ?? []).filter(e => e.matcher === name || e.matcher === "*").flatMap(e => e.hooks ?? []).filter(h => h.type === "command");
+  const buf = readFileSync(f);
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) { process.stderr.write("fake-agy: hooks.json starts with a UTF-8 BOM; ignored\n"); return []; }
+  const conf = JSON.parse(buf.toString("utf8"));
+  const groups = Array.isArray(conf[ev]) ? conf[ev].map(g => ({ ...g, old: true }))
+    : Object.values(conf).filter(v => v && typeof v === "object" && Array.isArray(v[ev])).flatMap(v => v[ev]);
+  const hit = g => g.matcher === "*" || (g.old ? g.matcher === name : (() => { try { return new RegExp("^(?:" + g.matcher + ")$").test(name); } catch { return false; } })());
+  return groups.filter(hit).flatMap(g => g.hooks ?? []).filter(h => h.type === "command");
 }
 const runHook = (h, input) => new Promise(res => {
-  const c = spawn("sh", ["-c", h.command], { stdio: ["pipe", "pipe", "inherit"] });
+  const c = spawn("sh", ["-c", h.command], { cwd: agentsDir, stdio: ["pipe", "pipe", "inherit"] });
   let out = "";
   const t = setTimeout(() => c.kill("SIGKILL"), (h.timeout ?? 10) * 1000);
   c.stdout.on("data", d => { out += d; });
-  c.on("close", () => { clearTimeout(t); try { res(JSON.parse(out.trim().split("\n").pop())); } catch { res(null); } });
+  c.on("close", code => {
+    clearTimeout(t);
+    const text = out.trim();
+    if (!text) return res({ decision: "allow", empty: true, exit: code });                      // empty stdout ALLOWS
+    let v = null;
+    try { v = JSON.parse(text.split("\n").pop()); } catch { /* not JSON */ }
+    if (v && typeof v === "object" && typeof v.decision === "string") return res({ ...v, exit: code });
+    res({ decision: "deny", reason: "hook printed " + JSON.stringify(text.slice(0, 80)) + " (no decision: denied)", exit: code });   // {} DENIES
+  });
+  c.stdin.on("error", () => {});
   c.stdin.end(JSON.stringify(input));
 });
-async function gate(name, args, editInWorkspace) {
+// tier: "edit" (a file edit), "read", or "ask" (run_command, MCP, native subagents).
+async function gate(name, args, tier, editInWorkspace = true) {
   const input = { toolCall: { name, args }, stepIdx: ++state.step, conversationId: "fake-agy-conversation", workspacePaths: [cwd, dir], transcriptPath: join(cwd, "transcript.jsonl"), modelName: model };
-  const decisions = [];
-  for (const h of hooksFor("PreToolUse", name)) decisions.push(await runHook(h, input));
-  const d = decisions.filter(Boolean);
+  const d = [];
+  for (const h of hooksFor("PreToolUse", name)) d.push(await runHook(h, input));
+  state.hooks.push({ tool: name, decisions: d.map(x => x.decision) });
   const denied = d.find(x => x.decision === "deny" || x.decision === "deny_unless_prior_grant");
   if (denied) return { ok: false, why: denied.reason ?? "denied by hook", input };
-  if (d.some(x => x.decision === "auto_approve" || x.decision === "allow")) return { ok: true, input };
-  return editInWorkspace ? { ok: true, input } : { ok: false, why: "needs approval; headless soft-deny", input };
+  if (d.some(x => x.decision === "auto_approve")) return { ok: true, input };
+  if (tier === "read" || (tier === "edit" && editInWorkspace)) return { ok: true, input };
+  return { ok: false, why: "needs approval; headless accept-edits soft-deny", input };
 }
-async function post(name, input) { for (const h of hooksFor("PostToolUse", name)) await runHook(h, input); }
-if (cmd === "write") {
-  const [p, content] = rest;
-  const abs = isAbsolute(p) ? p : join(dir, p);
-  const g = await gate("write_to_file", { TargetFile: abs, CodeContent: content, Overwrite: true }, inside(resolve(dir), resolve(abs)) || inside(cwd, resolve(abs)));
-  if (!g.ok) { state.denied.push({ path: abs, why: g.why }); save(); process.stderr.write("write denied: " + g.why + "\n"); process.exit(3); }
-  mkdirSync(dirname(abs), { recursive: true });
-  writeFileSync(abs, content);
-  state.changed.push(abs.startsWith(dir + "/") ? abs.slice(dir.length + 1) : abs); save(); event("write_to_file");
-  await post("write_to_file", g.input);
-} else if (cmd === "run") {
-  const [at, line] = rest;
-  const g = await gate("run_command", { CommandLine: line, Cwd: at }, false);
-  if (!g.ok) { state.denied.push({ command: line, why: g.why }); save(); process.stderr.write("command denied: " + g.why + "\n"); process.exit(126); }
-  const code = await new Promise(res => { const c = spawn("sh", ["-c", line], { cwd: at, stdio: ["ignore", 2, 2] }); c.on("close", c2 => res(c2 ?? 1)); });
-  if (line.trim() === (process.env.FAKE_AGY_VERIFY ?? "").trim()) state.verify = { cmd: line.trim(), exit_code: code };
-  save(); event("run_command");
-  process.exit(code);
-} else if (cmd === "ask") {
-  const [role, question] = rest;
-  const name = "pantheon-subagents/ask_subagent";
-  const g = await gate(name, { role, question }, false);
-  if (!g.ok) { state.denied.push({ tool: name, why: g.why }); save(); process.stderr.write("mcp denied: " + g.why + "\n"); process.exit(3); }
-  const conf = JSON.parse(readFileSync(join(cwd, ".agents", "mcp_config.json"), "utf8")).mcpServers?.["pantheon-subagents"];
-  if (!conf) { process.stderr.write("no pantheon-subagents MCP server configured\n"); process.exit(4); }
+function deniedOut(name, g, info, code, what) {
+  state.denied.push({ tool: name, ...what, why: g.why }); save(); event(name, "DENIED", info);
+  process.stderr.write(name + " denied: " + g.why + "\n"); process.exit(code);
+}
+async function mcpCall(server, tool, args) {
+  const all = JSON.parse(readFileSync(join(agentsDir, "mcp_config.json"), "utf8")).mcpServers ?? {};
+  const conf = all[server];
+  if (!conf) { process.stderr.write("no MCP server " + server + " configured\n"); process.exit(4); }
   const srv = spawn(conf.command, conf.args ?? [], { env: { ...process.env, ...(conf.env ?? {}) }, stdio: ["pipe", "pipe", "inherit"] });
   let buf = "";
   const waiting = new Map();
@@ -201,12 +236,58 @@ if (cmd === "write") {
   const init = await call(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-agy", version: "0" } });
   if (init.error) { process.stderr.write("mcp initialize failed: " + JSON.stringify(init.error) + "\n"); process.exit(4); }
   srv.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-  const r = await call(2, "tools/call", { name: "ask_subagent", arguments: { role, question } });
+  const r = await call(2, "tools/call", { name: tool, arguments: args });
   srv.stdin.end(); srv.kill();
-  const text = (r.result?.content ?? []).filter(c => c.type === "text").map(c => c.text).join("");
-  state.asked.push({ role, ok: !r.error && !r.result?.isError }); save(); event(name);
+  return { r, text: (r.result?.content ?? []).filter(c => c.type === "text").map(c => c.text).join("") };
+}
+async function finishMcp(name, info, role, server, tool, args) {
+  const { r, text } = await mcpCall(server, tool, args);
+  state.asked.push({ role, form: name === "call_mcp_tool" ? "call_mcp_tool" : "direct", ok: !r.error && !r.result?.isError }); save(); event(name, "DONE", info);
   if (r.error || r.result?.isError) { process.stderr.write("ask_subagent failed: " + (r.error ? JSON.stringify(r.error) : text) + "\n"); process.exit(5); }
   process.stdout.write(text);
+}
+if (cmd === "write") {
+  const [p, content] = rest;
+  const abs = isAbsolute(p) ? p : join(dir, p);
+  const g = await gate("write_to_file", { TargetFile: abs, CodeContent: content, Overwrite: true }, "edit", inside(resolve(dir), resolve(abs)) || inside(cwd, resolve(abs)));
+  if (!g.ok) deniedOut("write_to_file", g, { TargetFile: abs }, 3, { path: abs });
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, content);
+  state.changed.push(abs.startsWith(dir + "/") ? abs.slice(dir.length + 1) : abs); save(); event("write_to_file", "DONE", { TargetFile: abs });
+} else if (cmd === "run") {
+  const [at, line] = rest;
+  const g = await gate("run_command", { CommandLine: line, Cwd: at }, "ask");
+  if (!g.ok) deniedOut("run_command", g, { CommandLine: line }, 126, { command: line });
+  const code = await new Promise(res => { const c = spawn("sh", ["-c", line], { cwd: at, stdio: ["ignore", 2, 2] }); c.on("close", c2 => res(c2 ?? 1)); });
+  if (line.trim() === (process.env.FAKE_AGY_VERIFY ?? "").trim()) state.verify = { cmd: line.trim(), exit_code: code };
+  save(); event("run_command", "DONE", { CommandLine: line, exit_code: code });
+  process.exit(code);
+} else if (cmd === "ask") {
+  const [role, question] = rest;
+  const name = process.env.FAKE_AGY_MCP_NAME || "pantheon-subagents/ask_subagent";
+  const conf = existsSync(join(agentsDir, "mcp_config.json")) ? JSON.parse(readFileSync(join(agentsDir, "mcp_config.json"), "utf8")).mcpServers?.["pantheon-subagents"] : null;
+  if (conf && conf.tools?.ask_subagent?.eager !== true) { process.stderr.write("fake-agy: ask_subagent is lazy (not eager): only call_mcp_tool reaches it\n"); process.exit(6); }
+  const g = await gate(name, { role, question }, "ask");
+  if (!g.ok) deniedOut(name, g, { role }, 3, { role });
+  await finishMcp(name, { ServerName: "pantheon-subagents", ToolName: "ask_subagent" }, role, "pantheon-subagents", "ask_subagent", { role, question });
+} else if (cmd === "mcp") {
+  const [role, question, server, tool] = rest;
+  const args = { ServerName: server, ToolName: tool, Arguments: { role, question } };
+  const g = await gate("call_mcp_tool", args, "ask");
+  if (!g.ok) deniedOut("call_mcp_tool", g, { ServerName: server, ToolName: tool }, 3, { role, server, mcp_tool: tool });
+  await finishMcp("call_mcp_tool", { ServerName: server, ToolName: tool }, role, server, tool, { role, question });
+} else if (cmd === "invoke") {
+  const [sub] = rest;
+  const g = await gate("invoke_subagent", { Name: sub, Prompt: "do anything" }, "ask");
+  if (!g.ok) deniedOut("invoke_subagent", g, { Name: sub }, 3, { subagent: sub });
+  save(); event("invoke_subagent", "DONE", { Name: sub });
+  process.stdout.write("a native subagent ran (the jail should have denied it)\n");
+} else if (cmd === "read") {
+  const [p] = rest;
+  const g = await gate("view_file", { AbsolutePath: p }, "read");
+  if (!g.ok) deniedOut("view_file", g, { AbsolutePath: p }, 3, { path: p });
+  save(); event("view_file", "DONE", { AbsolutePath: p });
+  process.stdout.write(readFileSync(p, "utf8"));
 } else if (cmd === "finish") {
   const [agent] = rest;
   const reply = process.env.FAKE_AGY_REPLY || JSON.stringify({ unit_id: process.env.FAKE_AGY_UNIT ?? null, status: state.verify?.exit_code === 0 ? "done" : "stuck",
@@ -228,7 +309,7 @@ export function fakeAgy(dir) {
 // The switches every fixture saves, clears and restores. PANTHEON_AGY_STATE_DIRS is set to the fixture dir: the unit
 // worker runs inside the bwrap jail, where only the worktree, the control dir's run/ and the agy state dirs are
 // writable, and the fake CLI writes its logs ($FAKE_AGY_LOG*) in the fixture dir.
-const AGY_SWITCHES = ["FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER",
+const AGY_SWITCHES = ["FAKE_AGY_QUOTA", "FAKE_AGY_FAIL", "FAKE_AGY_QUOTA_ONCE", "FAKE_AGY_MODE", "FAKE_AGY_WORKER", "FAKE_AGY_GEMINI_WRITES", "FAKE_AGY_MCP_NAME",
   "FAKE_AGY_QUOTA_SOFT", "FAKE_AGY_HANG", "FAKE_AGY_PRINT_TIMEOUT", "FAKE_AGY_STREAM", "FAKE_AGY_GARBLE"];
 /** The worker-turn controls a fixture hands its test (see FAKE_AGY): failure switches and the scripted /quota report. */
 function workerControls(dir) {
@@ -261,7 +342,8 @@ export async function withFakeAgy(dir, fn) {
 
 /**
  * The fake CLI's launches as it saw them: [{agent, model, dir (its --add-dir), a2a_url, a2a_token, google_key,
- * a2a_socket, mode (--mode), cleanup ($ANTIGRAVITY_AGY_CLEANUP), dangerous (--dangerously-skip-permissions), sandbox (--sandbox)}].
+ * a2a_socket, mode (--mode), cleanup ($ANTIGRAVITY_AGY_CLEANUP), dangerous (--dangerously-skip-permissions), sandbox (--sandbox),
+ * log_file (--log-file)}].
  */
 function contextOf(log) {
   const file = `${log}.ctx`;
@@ -271,7 +353,8 @@ function contextOf(log) {
     const flag = k => flags.includes(`${k}=yes`) || flags.includes(`${k}=yesyes`);
     const value = k => flags.find(f => f.startsWith(`${k}=`))?.slice(k.length + 1) ?? null;
     return { agent, model, dir, a2a_url: flag("a2a_url"), a2a_token: flag("a2a_token"), google_key: flag("google_key"),
-      a2a_socket: flag("a2a_socket"), mode: value("mode"), cleanup: value("cleanup"), dangerous: flag("dangerous"), sandbox: flag("sandbox") };
+      a2a_socket: flag("a2a_socket"), mode: value("mode"), cleanup: value("cleanup"), dangerous: flag("dangerous"), sandbox: flag("sandbox"),
+      log_file: value("log_file") === "none" ? null : value("log_file") };
   });
 }
 /** Install a shell snippet as the pipeline implementer's behaviour (see the header); null restores the default. */

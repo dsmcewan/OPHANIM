@@ -4,10 +4,10 @@
 // subagent — the channels the real CLI is documented to use. No network, no live model.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runAgyWorkerTurn, AGY_CLEANUP } from "../src/board/agy-cli.mjs";
+import { runAgyWorkerTurn, AGY_CLEANUP, workerArgv, assertWorkerArgv } from "../src/board/agy-cli.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
@@ -75,7 +75,11 @@ reply=''
     }
     assert.match(pre.find(l => l.args.TargetFile === join(wt, "README.md")).reason, /not one of the unit's owned paths/);
     assert.ok(pre.some(l => l.tool === "run_command" && l.decision === "auto_approve" && l.args.CommandLine === verifyOf("a")));
-    assert.ok(r.jail_log.some(l => l.event === "PostToolUse" && l.args.TargetFile === join(wt, "src/a/impl.mjs")), "PostToolUse audits the write");
+    assert.ok(!r.jail_log.some(l => l.event !== "PreToolUse"), "no PostToolUse hook any more: the PreToolUse log is the audit");
+    assert.ok(pre.every(l => l.cwd === join(ctl, ".agents") && typeof l.raw === "string" && l.payload?.toolCall), "every raw payload is logged; the hook ran in .agents/");
+    // Every tool step of the stream is captured, denied ones included.
+    assert.deepEqual(r.tool_steps.map(s => [s.tool_name, s.state]), [["write_to_file", "DONE"], ["write_to_file", "DENIED"], ["write_to_file", "DENIED"], ["write_to_file", "DENIED"], ["run_command", "DONE"]]);
+    assert.deepEqual(r.tool_steps[0].tool_info, { TargetFile: join(wt, "src/a/impl.mjs") });
     // The worker's strict JSON summary is parsed when it is the whole final message.
     assert.deepEqual([r.summary.unit_id, r.summary.status, r.summary.changed_paths, r.summary.verify], ["a", "done", ["src/a/impl.mjs"], { cmd: verifyOf("a"), exit_code: 0 }]);
     assert.equal((await sh("git status --porcelain", wt)).trim(), "?? src/", "only the owned file changed");
@@ -102,7 +106,8 @@ printf x > "$HOME/pantheon-agy-escape" 2>/dev/null || true
 test("(b) the worker reaches ask_subagent through the stdio MCP relay over the unit's Unix socket, inside bwrap (socket in the control dir and in a fallback dir)", needBwrap, async t => {
   const f = await fixture(t, ["a", "b"]);
   await withFakeAgy(f.fx, async agy => {
-    agy.agyWorker(`ans=$(agy_ask math "what is six times seven?") || exit 7
+    // Unit a asks DIRECTLY (the eager tool), unit b through call_mcp_tool (the owner-stated lazy default).
+    agy.agyWorker(`if [ "$unit" = a ]; then ans=$(agy_ask math "what is six times seven?") || exit 7; else ans=$(agy_mcp math "what is six times seven?") || exit 7; fi
 mkdir -p "$dir/src/$unit"; agy_write "src/$unit/impl.mjs" "// $ans
 " || exit 9
 `);
@@ -119,7 +124,10 @@ mkdir -p "$dir/src/$unit"; agy_write "src/$unit/impl.mjs" "// $ans
       assert.equal(r.subagent_calls, 1, u);
       assert.match(readFileSync(join(f.units[u].wt, `src/${u}/impl.mjs`), "utf8"), /"answer":"42"/);
       assert.deepEqual(shim.calls.map(c => [c.role, c.status]), [["math", "answered"]]);
-      assert.ok(r.jail_log.some(l => /ask_subagent/.test(l.tool) && l.decision === "auto_approve"), "the MCP tool was approved by the hook");
+      const approved = r.jail_log.find(l => l.mcp?.tool === "ask_subagent" && l.decision === "auto_approve");
+      assert.ok(approved, "the MCP tool was approved by the hook");
+      assert.equal(approved.mcp.form, u === "a" ? "direct" : "call_mcp_tool");
+      assert.equal(approved.tool, u === "a" ? "pantheon-subagents/ask_subagent" : "call_mcp_tool");
       if (u === "b") assert.ok(r.sandbox.binds.some(b => b.mode === "ro" && b.path === fallback), "the fallback socket dir is bound");
     }
     assert.equal(asked.length, 2);
@@ -240,13 +248,78 @@ test("(f) argv has --mode=accept-edits and no --dangerously-skip-permissions or 
   await withFakeAgy(f.fx, async agy => {
     const r = await runAgyWorkerTurn({ ...(await prepared(f, "a")), env: { GEMINI_API_KEY: "nor-via-env" } });
     const inner = r.launch.args.slice(r.launch.args.indexOf("--") + 1);
-    assert.deepEqual(inner.slice(1), ["--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", "60s", "--print", "<prompt>"]);
+    assert.deepEqual(inner.slice(1), ["--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", "60s",
+      "--log-file", join(f.units.a.ctl, "run", "agy.log"), "--print", "<prompt>"]);
+    assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /^fake-agy start agent=pantheon-unit-worker /m, "the CLI's --log-file landed in the writable run dir");
     assert.equal(r.launch.cmd, "bwrap");
     assert.equal(r.launch.cwd, f.units.a.ctl);
     assert.deepEqual(r.cleanup_env, AGY_CLEANUP);
     assert.equal(AGY_CLEANUP.documented, false);
     const [ctx] = agy.agyContext();
-    assert.deepEqual([ctx.agent, ctx.mode, ctx.cleanup, ctx.google_key, ctx.dangerous, ctx.sandbox, ctx.dir], ["pantheon-unit-worker", "accept-edits", "all", false, false, false, f.units.a.wt]);
+    assert.deepEqual([ctx.agent, ctx.mode, ctx.cleanup, ctx.google_key, ctx.dangerous, ctx.sandbox, ctx.dir, ctx.log_file], ["pantheon-unit-worker", "accept-edits", "all", false, false, false, f.units.a.wt, join(f.units.a.ctl, "run", "agy.log")]);
+    assert.equal(r.launch.log_file, join(f.units.a.ctl, "run", "agy.log"));
+  });
+});
+
+test("(f') the argv guard: --add-dir must be absolute; --sandbox and --dangerously-skip-permissions are refused wherever they appear; the fake refuses a worker launched with them", needBwrap, async t => {
+  assert.throws(() => workerArgv({ model: LANE, worktree: "rel/wt", prompt: "p", timeoutS: 5 }), /--add-dir must be an absolute/);
+  for (const bad of [["--sandbox"], ["--dangerously-skip-permissions"], ["--dangerously-skip-permissions=true"], ["--model", "m", "--sandbox"]]) {
+    assert.throws(() => assertWorkerArgv(bad), e => e.code === "FORBIDDEN_FLAG", JSON.stringify(bad));
+  }
+  assert.doesNotThrow(() => assertWorkerArgv(["--print", "--sandbox is mentioned in the prompt only"]));
+  const f = await fixture(t);
+  await withFakeAgy(f.fx, async () => {
+    const { wt, ctl } = f.units.a;
+    await prepared(f, "a");
+    const out = await sh(`'${process.env.PANTHEON_AGY_CLI}' --agent pantheon-unit-worker --model ${LANE} --add-dir ${wt} --sandbox --print x; echo "exit=$?"`, ctl).catch(e => String(e.stdout ?? e.message));
+    assert.match(out, /exit=64/);
+  });
+});
+
+test("(h) native subagents are denied by the hook before they run; reads in scope are auto-approved, outside denied; a run_command after only an 'allow' is soft-denied by the fake (accept-edits)", needBwrap, async t => {
+  const f = await fixture(t);
+  await withFakeAgy(f.fx, async agy => {
+    const { wt } = f.units.a;
+    agy.agyWorker(`agy_invoke_subagent helper && echo "native subagent ran" >&2 && exit 9
+agy_read "$dir/README.md" > /dev/null || exit 8
+agy_read /etc/hostname > /dev/null 2>&1 && exit 7
+agy_write src/a/impl.mjs 'export const a = 1;
+' || exit 6
+agy_verify > /dev/null 2>&1 || exit 5
+reply=''
+`);
+    const r = await runAgyWorkerTurn(await prepared(f, "a"));
+    const by = tool => r.jail_log.filter(l => l.tool === tool).map(l => l.decision);
+    assert.deepEqual(by("invoke_subagent"), ["deny"]);
+    assert.match(r.jail_log.find(l => l.tool === "invoke_subagent").reason, /native subagents/);
+    assert.deepEqual(by("view_file"), ["auto_approve", "deny"]);
+    assert.deepEqual(r.tool_steps.map(s => [s.tool_name, s.state]), [["invoke_subagent", "DENIED"], ["view_file", "DONE"], ["view_file", "DENIED"], ["write_to_file", "DONE"], ["run_command", "DONE"]]);
+    assert.equal(r.subagent_calls, 0);
+    assert.equal(r.summary.status, "done");
+    assert.ok(existsSync(join(wt, "src/a/impl.mjs")));
+  });
+});
+
+test("(i) the ~/.gemini layout around a worker turn (fake HOME): the login readable, settings.json not writable, conversations/ and mcp/ written to per-run scratch that is listed and removed; the host state is unchanged", needBwrap, async t => {
+  const f = await fixture(t);
+  const home = join(f.root, "home"), g = join(home, ".gemini");
+  mkdirSync(join(g, "antigravity", "conversations"), { recursive: true }); mkdirSync(join(g, "antigravity", "mcp"));
+  writeFileSync(join(g, "oauth_creds.json"), "{}"); writeFileSync(join(g, "settings.json"), "{}");
+  await withFakeAgy(f.fx, async agy => {
+    process.env.FAKE_AGY_GEMINI_WRITES = "refresh";
+    const base = await prepared(f, "a");
+    const r = await runAgyWorkerTurn({ ...base, env: { HOME: home }, sandbox: { ...base.sandbox, home } });
+    assert.deepEqual([r.sandbox.gemini_state.enabled, r.sandbox.gemini_state.mode, r.sandbox.gemini_state.created_mountpoints], [true, "scratch", []]);
+    assert.ok(r.sandbox.binds.some(b => b.path === g && b.mode === "ro"));
+    assert.deepEqual(r.gemini_scratch, { [join(g, "antigravity", "conversations")]: ["fake-agy-conversation.pb"], [join(g, "antigravity", "mcp")]: ["pantheon-subagents.json"] });
+    assert.match(r.stderr_tail, /settings\.json write failed: EROFS/);
+    assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /read oauth_creds\.json/);
+    assert.deepEqual(readdirSync(join(g, "antigravity", "conversations")), []);
+    assert.deepEqual(readdirSync(join(g, "antigravity", "mcp")), []);
+    assert.equal(readFileSync(join(g, "settings.json"), "utf8"), "{}");
+    assert.equal(readFileSync(join(g, "oauth_creds.json"), "utf8"), "{}", "a refresh cannot rewrite the login (the probe shows the EROFS)");
+    assert.match(r.stderr_tail, /oauth_creds\.json refresh write failed: EROFS/);
+    assert.equal(existsSync(join(f.units.a.ctl, "run", "agy-state")) && readdirSync(join(f.units.a.ctl, "run", "agy-state")).length, 0, "the scratch is removed");
   });
 });
 

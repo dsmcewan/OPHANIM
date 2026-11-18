@@ -4,41 +4,64 @@
 // the workspace files the CLI reads from the project root are the controller's, read-only to the worker under bwrap:
 //   <control_dir>/.agents/agents/pantheon-unit-worker/agent.md   the role card (copied from the template)
 //   <control_dir>/.agents/mcp_config.json                        the stdio MCP relay to the unit's A2A socket
-//   <control_dir>/.agents/hooks.json                             the PreToolUse jail hook + PostToolUse audit
+//   <control_dir>/.agents/hooks.json                             the PreToolUse jail hook (no PostToolUse hook)
+//   <control_dir>/pantheon-jail-hook                             the hook's executable wrapper (the hook command)
 //   <control_dir>/jail.json                                      the unit's policy, read by the hook
-//   <control_dir>/run/                                           the ONLY writable part (jail.log)
+//   <control_dir>/run/                                           the ONLY writable part (jail.log, agy.log, scratch)
 //
-// hooks.json (documented shape: event -> [{matcher, hooks: [{type: "command", command, timeout}]}]). The documented
-// matcher is a tool name; one entry per write tool, run_command and the read tools. A BROAD matcher "*" is added for
-// everything else (MCP tools, unknown tools) — whether the CLI treats "*" as match-all is NOT documented. If it does
-// not, an MCP call gets no hook decision and is soft-denied in headless mode (the worker loses its subagents; nothing
-// is loosened). A tool matched by two entries runs the hook twice; the decisions are the same.
+// hooks.json, OWNER-STATED shape (2026-11-18; not in the docs we read — scripts/agy-worker-probe.mjs confirms or
+// refutes it): a TOP-LEVEL HOOK NAME mapping to event groups, written WITHOUT a UTF-8 BOM:
+//   {"pantheon-jail": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/abs/hook", "timeout": 30}]}]}}
+// One PreToolUse group with matcher ".*" covers every tool (writes, commands, reads, MCP via call_mcp_tool, native
+// subagents, unknown tools): the hook itself decides, and denies what it does not know. OWNER-STATED: agy runs hook
+// commands with cwd = the `.agents/` directory, not the worktree; so the command is an ABSOLUTE path to a per-unit
+// wrapper script with no arguments (it works whether or not agy tokenises the command with a shell, and depends on
+// no cwd). The wrapper never prints nothing: when node fails to produce a decision it prints a deny itself
+// (owner-stated: an EMPTY hook stdout ALLOWS the tool).
+//
+// mcp_config.json: our stdio server with `tools.ask_subagent.eager = true` (OWNER-STATED: MCP tools are lazy-loaded
+// through `call_mcp_tool` by default; eager asks for the tool to be loaded directly). The hook handles both forms.
 //
 // Must never: write inside the worktree; put a secret anywhere but the MCP server's env (the A2A token is there,
 // as the relay needs it).
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MCP_NAMES, MCP_SERVER, MCP_TOOL, READ_TOOLS, WRITE_TOOLS } from "./jail-hook.mjs";
+import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRITE_TOOLS } from "./jail-hook.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKER_AGENT = "pantheon-unit-worker";
 export const CARD_TEMPLATE = join(HERE, "..", "..", ".agents", "agents", WORKER_AGENT, "agent.md");
 export const JAIL_HOOK = join(HERE, "jail-hook.mjs");
+export const HOOK_NAME = "pantheon-jail";
+export const HOOK_WRAPPER = "pantheon-jail-hook";
+export const HOOK_TIMEOUT_S = 30;
 const inside = (root, p) => p === root || p.startsWith(root + sep);
 const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
-/** Quote a word for a shell only when it needs it (the hook command's tokenisation is undocumented). */
+/** Quote a word for a POSIX shell only when it needs it. */
 export const shWord = s => (/^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
+// A hook command path that needs no quoting under any tokenisation (agy's is undocumented).
+const SAFE_COMMAND = /^\/[A-Za-z0-9_./@%+=:,-]+$/;
 
-/** The hooks.json object for a policy file. */
-export function hooksConfig({ policy, hook = JAIL_HOOK, node = process.execPath, timeout = 10 }) {
-  const cmd = mode => [node, hook, policy, mode].map(shWord).join(" ");
-  const entry = (matcher, mode) => ({ matcher, hooks: [{ type: "command", command: cmd(mode), timeout }] });
-  return {
-    PreToolUse: [...WRITE_TOOLS, "run_command", ...READ_TOOLS].map(t => entry(t, "pre")).concat([entry("*", "pre")]),
-    PostToolUse: WRITE_TOOLS.map(t => entry(t, "post")),
-  };
+/** The hooks.json object (owner-stated shape) for the absolute hook command `command`. */
+export function hooksConfig({ command, timeout = HOOK_TIMEOUT_S }) {
+  if (typeof command !== "string" || !isAbsolute(command)) throw Object.assign(new Error(`hooksConfig: the hook command must be an absolute path, not ${JSON.stringify(command)}`), { code: "HOOK_PATH_UNSAFE" });
+  return { [HOOK_NAME]: { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command, timeout }] }] } };
+}
+
+/** The wrapper script: runs node on the hook with the policy; prints a deny itself if node prints nothing. */
+export function hookWrapper({ node = process.execPath, hook = JAIL_HOOK, policy }) {
+  return [
+    "#!/bin/sh",
+    "# Pantheon's PreToolUse jail hook for one unit (written by pantheon/src/agy/workspace.mjs). It takes no arguments and",
+    "# does not depend on its cwd (owner-stated: agy runs hook commands in .agents/). It ALWAYS prints one decision:",
+    "# owner-stated, an empty hook stdout ALLOWS the tool, so a node that prints nothing is answered with a deny here.",
+    `out=$(${shWord(node)} ${shWord(hook)} ${shWord(policy)})`,
+    'if [ -n "$out" ]; then printf \'%s\\n\' "$out"; else printf \'%s\\n\' \'{"decision":"deny","reason":"hook exception: the jail hook printed nothing"}\'; fi',
+    "exit 0",
+    "",
+  ].join("\n");
 }
 
 /**
@@ -47,25 +70,30 @@ export function hooksConfig({ policy, hook = JAIL_HOOK, node = process.execPath,
  *   mcp_server  the absolute path of the stdio MCP relay (pipeline/a2a-mcp-server.mjs); null -> no MCP server
  */
 export async function prepareWorkerWorkspace({ control_dir, worktree, unit_id, owned_paths, verify_cmd = null, roles = [], mcp_server = null, a2a_env = {},
-  card = CARD_TEMPLATE, hook = JAIL_HOOK }) {
+  card = CARD_TEMPLATE, hook = JAIL_HOOK, node = process.execPath }) {
   if (!control_dir || !worktree) throw Object.assign(new Error("prepareWorkerWorkspace: pass control_dir and worktree"), { code: "NO_WORKSPACE" });
   if (!Array.isArray(owned_paths) || !owned_paths.length) throw Object.assign(new Error("prepareWorkerWorkspace: the unit owns no paths"), { code: "NO_OWNED_PATHS" });
   await mkdir(control_dir, { recursive: true });
   const ctl = real(control_dir), wt = real(worktree);
   if (inside(wt, ctl) || inside(ctl, wt)) throw Object.assign(new Error(`the control dir ${ctl} and the worktree ${wt} must be disjoint`), { code: "CONTROL_IN_WORKTREE" });
   const agents = join(ctl, ".agents"), cardDir = join(agents, "agents", WORKER_AGENT), run = join(ctl, "run");
+  const paths = { control_dir: ctl, worktree: wt, card: join(cardDir, "agent.md"), mcp_config: join(agents, "mcp_config.json"), hooks: join(agents, "hooks.json"),
+    hook_command: join(ctl, HOOK_WRAPPER), jail: join(ctl, "jail.json"), run, jail_log: join(run, "jail.log"), agy_log: join(run, "agy.log") };
+  if (!SAFE_COMMAND.test(paths.hook_command)) throw Object.assign(new Error(`the hook command path ${paths.hook_command} needs quoting; put the control dir on a plain path`), { code: "HOOK_PATH_UNSAFE" });
   await mkdir(cardDir, { recursive: true });
   await mkdir(run, { recursive: true });
-  const paths = { control_dir: ctl, worktree: wt, card: join(cardDir, "agent.md"), mcp_config: join(agents, "mcp_config.json"), hooks: join(agents, "hooks.json"),
-    jail: join(ctl, "jail.json"), run, jail_log: join(run, "jail.log") };
   await copyFile(card, paths.card);
-  const servers = mcp_server ? { [MCP_SERVER]: { command: process.execPath, args: [mcp_server], env: { ...a2a_env } } } : {};
+  const servers = mcp_server ? { [MCP_SERVER]: { command: node, args: [mcp_server], env: { ...a2a_env }, tools: { [MCP_TOOL]: { eager: true } } } } : {};
   await writeFile(paths.mcp_config, JSON.stringify({ mcpServers: servers }, null, 2) + "\n");
-  const policy = { schema: "pantheon.agy-jail/v1", unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
+  const policy = { schema: "pantheon.agy-jail/v2", unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
     owned_paths: [...owned_paths], verify_cmd: typeof verify_cmd === "string" && verify_cmd.trim() ? verify_cmd.trim() : null,
-    roles: [...roles], mcp: { server: MCP_SERVER, tool: MCP_TOOL, accepted_names: [...MCP_NAMES], enabled: Boolean(mcp_server) } };
+    roles: [...roles], mcp: { server: MCP_SERVER, tool: MCP_TOOL, wrapper: MCP_WRAPPER, accepted_names: [...MCP_NAMES], enabled: Boolean(mcp_server), eager: Boolean(mcp_server) },
+    hard_deny: [...HARD_DENY], write_tools: [...WRITE_TOOLS], read_tools: [...READ_TOOLS] };
   await writeFile(paths.jail, JSON.stringify(policy, null, 2) + "\n");
-  await writeFile(paths.hooks, JSON.stringify(hooksConfig({ policy: paths.jail, hook }), null, 2) + "\n");
+  await writeFile(paths.hook_command, hookWrapper({ node, hook, policy: paths.jail }));
+  await chmod(paths.hook_command, 0o755);
+  // JSON.stringify never emits a BOM; the file is written as plain UTF-8 bytes.
+  await writeFile(paths.hooks, JSON.stringify(hooksConfig({ command: paths.hook_command }), null, 2) + "\n");
   await writeFile(paths.jail_log, "", { flag: "a" });
   return paths;
 }

@@ -4,11 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { bwrapArgs, sandboxAvailable, repoGitDirs } from "../src/agy/sandbox.mjs";
+import { bwrapArgs, sandboxAvailable, repoGitDirs, geminiState, dropGeminiState, defaultAgyStateDirs } from "../src/agy/sandbox.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
 import { sh } from "./fixtures/pipeline-stages.mjs";
 
@@ -92,6 +92,83 @@ console.log(JSON.stringify(out));
   const commit = await run([...argv, "sh", "-c", `cd ${wt} && git -c user.name=t -c user.email=t@t.invalid add -A && git -c user.name=t -c user.email=t@t.invalid commit -qm evil`]);
   assert.notEqual(commit.code, 0);
   assert.equal((await sh("git log --oneline unit-a", repo)).trim().split("\n").length, 1);
+});
+
+/** A recursive listing {relative path: content} of a host directory (missing: null). */
+const snapshot = dir => {
+  if (!existsSync(dir)) return null;
+  const out = {};
+  const walk = (d, pre) => { for (const e of readdirSync(d, { withFileTypes: true })) { const r = pre ? `${pre}/${e.name}` : e.name; if (e.isDirectory()) walk(join(d, e.name), r); else out[r] = readFileSync(join(d, e.name), "utf8"); } };
+  walk(dir, "");
+  return out;
+};
+
+test("~/.gemini (a FAKE home): read-only inside, so the login stays readable and settings.json cannot be written; conversations/ and mcp/ are per-run scratch, writable inside, and the host dirs are unchanged; the --log-file target is writable", { skip: have.ok ? false : `bwrap unavailable: ${have.why}` }, async t => {
+  const { root, wt, ctl } = await layout(t);
+  const home = join(root, "home"), g = join(home, ".gemini");
+  mkdirSync(join(g, "antigravity", "conversations"), { recursive: true });   // mcp/ is missing on the host: created as an empty mount point
+  mkdirSync(join(g, "config"), { recursive: true });
+  writeFileSync(join(g, "oauth_creds.json"), '{"refresh_token":"fake"}');
+  writeFileSync(join(g, "settings.json"), "{}");
+  writeFileSync(join(g, "antigravity", "conversations", "old.pb"), "old");
+  const before = { gemini: snapshot(g), conv: snapshot(join(g, "antigravity", "conversations")) };
+  const st = await geminiState({ home, run_dir: join(ctl, "run") });
+  assert.equal(st.enabled, true);
+  assert.deepEqual(st.created_mountpoints, [join(g, "antigravity", "mcp")], "the missing mount point is created empty, and recorded");
+  assert.deepEqual(st.mounts.map(m => m.dest), [join(g, "antigravity", "conversations"), join(g, "antigravity", "mcp")]);
+  for (const m of st.mounts) assert.ok(m.src.startsWith(join(ctl, "run", "agy-state") + "/"), m.src);
+  mkdirSync(join(root, "probe"));
+  const { argv, binds } = bwrapArgs({ worktree: wt, control_dir: ctl, gemini_state: st, extra_ro: [join(root, "probe"), home] });
+  // Parent-first: ~/.gemini read-only before the deeper scratch binds over it; the main .git read-only bind last.
+  const at = p => binds.findIndex(b => b.path === p);
+  assert.ok(at(g) >= 0 && at(g) < at(join(g, "antigravity", "conversations")) && at(g) < at(join(g, "antigravity", "mcp")));
+  assert.deepEqual(binds.find(b => b.path === g), { mode: "ro", path: g });
+  assert.deepEqual(binds.find(b => b.path === join(g, "antigravity", "mcp")), { mode: "rw", path: join(g, "antigravity", "mcp"), src: st.mounts[1].src });
+  assert.equal(binds.at(-1).mode, "ro");
+  const i = argv.indexOf(join(g, "antigravity", "mcp"));
+  assert.deepEqual(argv.slice(i - 2, i + 1), ["--bind", st.mounts[1].src, join(g, "antigravity", "mcp")]);
+  const probe = join(root, "probe", "gemini-probe.mjs");
+  writeFileSync(probe, `
+import { readFileSync, writeFileSync, appendFileSync, readdirSync } from "node:fs";
+const [g, log] = process.argv.slice(2);
+const out = {};
+const tryIt = (k, f) => { try { out[k] = f() ?? "ok"; } catch (e) { out[k] = e.code; } };
+tryIt("read_oauth", () => readFileSync(g + "/oauth_creds.json", "utf8"));
+tryIt("write_oauth", () => writeFileSync(g + "/oauth_creds.json", "refreshed"));
+tryIt("write_settings", () => writeFileSync(g + "/settings.json", "{1}"));
+tryIt("mkdir_config", () => writeFileSync(g + "/config/x", "x"));
+tryIt("write_conv", () => writeFileSync(g + "/antigravity/conversations/x", "conv"));
+tryIt("list_conv", () => readdirSync(g + "/antigravity/conversations").join(","));
+tryIt("write_mcp", () => writeFileSync(g + "/antigravity/mcp/x", "schema"));
+tryIt("write_antigravity", () => writeFileSync(g + "/antigravity/other", "x"));
+tryIt("log", () => appendFileSync(log, "agy log line\\n"));
+console.log(JSON.stringify(out));
+`);
+  const r = await run([...argv, process.execPath, probe, g, join(ctl, "run", "agy.log")], { env: { ...process.env, HOME: home } });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(r.out), { read_oauth: '{"refresh_token":"fake"}', write_oauth: "EROFS", write_settings: "EROFS", mkdir_config: "EROFS", write_conv: "ok",
+    list_conv: "x", write_mcp: "ok", write_antigravity: "EROFS", log: "ok" }, "inside: the per-run scratch starts empty; the rest of ~/.gemini is read-only");
+  assert.equal(readFileSync(join(ctl, "run", "agy.log"), "utf8"), "agy log line\n");
+  // What the CLI wrote is listed, then the scratch is removed; the HOST state is exactly as before.
+  const listing = await dropGeminiState(st);
+  assert.deepEqual(listing, { [join(g, "antigravity", "conversations")]: ["x"], [join(g, "antigravity", "mcp")]: ["x"] });
+  assert.equal(existsSync(st.scratch_root), false);
+  assert.deepEqual(snapshot(join(g, "antigravity", "conversations")), before.conv);
+  assert.deepEqual(snapshot(join(g, "antigravity", "mcp")), {});
+  assert.deepEqual(snapshot(g), before.gemini);
+});
+
+test("the ~/.gemini layout: off without a ~/.gemini, \"rw\" binds it writable (the explicit override), and no writable state dir is defaulted any more", async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pantheon-gemini-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.deepEqual([(await geminiState({ home: root, run_dir: root })).enabled, (await geminiState({ home: root, run_dir: root })).why], [false, `${join(root, ".gemini")} is not a directory`]);
+  mkdirSync(join(root, ".gemini"));
+  const rw = await geminiState({ home: root, run_dir: root, mode: "rw" });
+  assert.deepEqual([rw.enabled, rw.mounts, rw.created_mountpoints], [true, [], []]);
+  assert.equal(existsSync(join(root, ".gemini", "antigravity")), false, "rw creates nothing");
+  assert.equal((await geminiState({ home: root, run_dir: root, mode: "off" })).enabled, false);
+  assert.deepEqual(defaultAgyStateDirs({ HOME: root }), [], "~/.gemini is no longer a default writable state dir");
+  assert.deepEqual(defaultAgyStateDirs({ HOME: root, PANTHEON_AGY_STATE_DIRS: `${root}:/nonexistent` }), [root]);
 });
 
 test("sandboxAvailable reports a missing bwrap instead of throwing", async () => {

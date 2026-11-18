@@ -1,7 +1,7 @@
 ---
 name: pantheon-unit-worker
 description: Pantheon pipeline specialist that owns ONE work unit in its own git worktree. Edits the unit's owned files directly with its file tools, may ask an allowed specialist subagent one narrow question at a time through the pantheon-subagents MCP server, runs the unit's verify command, and ends with a strict JSON summary. The per-unit facts (unit id, owned paths, verify command, subagent roles, invariants, rubric) are in the prompt.
-tools: [view_file, grep_search, write_to_file, replace_file_content, multi_replace_file_content, run_command]
+tools: [view_file, grep_search, list_dir, write_to_file, replace_file_content, multi_replace_file_content, run_command, call_mcp_tool]
 mainAgent: true
 subagent: false
 model: inherit
@@ -11,6 +11,9 @@ commandExecutionPolicy: auto
 # unit's verify_cmd and nothing else. Antigravity's own `sandbox` policy would nest a second namespace sandbox inside
 # bwrap; whether that works (nested user namespaces, its own mounts) is undocumented and environment-dependent, and a
 # failure there would make the verify command unrunnable rather than safer. The outer jail is the containment.
+# call_mcp_tool: OWNER-STATED (2026-11-18) built-in that calls lazily loaded MCP tools ({ServerName, ToolName, Arguments});
+# listed so the subagent tool stays reachable if this list is an allowlist. invoke_subagent/define_subagent are NOT
+# listed, and the jail hook hard-denies them.
 ---
 
 # System Prompt
@@ -43,6 +46,10 @@ may consult. Nobody else edits your unit; you edit nothing else.
   with `{"role": "<one of the listed roles>", "question": "<one narrow question>"}`. Ask one narrow, self-contained
   question at a time: the subagent has no tools, no files and no memory of earlier questions. Its answer is advice;
   what you write is yours. Calls and bytes are bounded. Never ask a role that is not listed.
+- If `ask_subagent` is not offered to you as a tool of its own, call it through the built-in `call_mcp_tool` with
+  `{"ServerName": "pantheon-subagents", "ToolName": "ask_subagent", "Arguments": {"role": "<role>", "question": "<question>"}}`.
+- Native subagents (`invoke_subagent`, `define_subagent`) are NOT available in this seat: they are refused. Use
+  `ask_subagent` only.
 
 # How you finish
 

@@ -57,6 +57,7 @@ test("the implementer runs as the unit worker through the agy CLI in the bwrap j
     assert.deepEqual(ctx.map(c => [c.agent, c.model, c.mode, c.cleanup]).sort(), Array(2).fill(["pantheon-unit-worker", "gemini-4-hydrogen-medium", "accept-edits", "all"]));
     assert.deepEqual(ctx.map(c => c.dir).sort(), ["a", "b"].map(id => join(env.dir, "worktrees", id)));
     for (const c of ctx) assert.deepEqual([c.a2a_socket, c.a2a_token, c.google_key, c.dangerous], [true, true, false, false], "the A2A socket in the environment; no Google API key");
+    for (const c of ctx) assert.deepEqual([c.sandbox, c.log_file], [false, join(env.dir, "control", c.dir.split("/").at(-1), "run", "agy.log")], "no --sandbox inside bwrap; the CLI log in the unit's writable run dir");
     // From the controller's control dir, in the jail; the hook approved each write before it happened.
     for (const s of spans) {
       assert.equal(s.control_dir, join(env.dir, "control", s.worktree.split("/").at(-1)));

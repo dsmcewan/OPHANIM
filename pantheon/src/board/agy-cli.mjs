@@ -96,11 +96,17 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
 
 // ---- THE PIPELINE'S UNIT WORKER: a headless, multi-turn, tool-enabled agy run inside the bwrap jail ----------------
 //
-//   agy --agent pantheon-unit-worker --model <lane> --mode=accept-edits --add-dir <worktree>
-//       --output-format stream-json --print-timeout <n>s --print <prompt>
+//   agy --agent pantheon-unit-worker --model <lane> --mode=accept-edits --add-dir <abs worktree>
+//       --disable-slash-commands --output-format stream-json --print-timeout <n>s
+//       --log-file <control_dir>/run/agy.log --print <prompt>
 //
 // cwd = the unit's control dir (src/agy/workspace.mjs wrote the role card, hooks.json, mcp_config.json and jail.json
-// there); the worktree is added to the workspace with --add-dir. `--mode=accept-edits` (documented: "Automatically
+// there); the worktree is added to the workspace with --add-dir. OWNER-STATED (2026-11-18; scripts/agy-worker-probe.mjs
+// confirms or refutes): a headless `agy -p` run must always pass `--add-dir <absolute worktree>` alongside the process
+// cwd so every version adopts the workspace and loads `.agents/hooks.json` and `.agents/mcp_config.json`;
+// `--dangerously-skip-permissions` skips PreToolUse hooks entirely; `--sandbox` must not be passed inside bwrap.
+// workerArgv asserts the --add-dir is absolute and assertWorkerArgv throws if either forbidden flag ever appears.
+// `--log-file` (owner-stated) puts the CLI's own log in the writable run dir. `--mode=accept-edits` (documented: "Automatically
 // approves file creations and edits inside your workspace, but still asks before running terminal commands"); in
 // headless -p an approval the CLI cannot obtain is soft-denied, so a command runs only when the PreToolUse jail hook
 // auto-approves it (the unit's verify_cmd). NEVER --dangerously-skip-permissions. NOT --sandbox: the outer bwrap jail
@@ -118,18 +124,35 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
 //   SANDBOX_UNAVAILABLE  bwrap is missing or fails its probe and `sandbox.allowUnsandboxed` is not true
 //   ABORTED          the signal fired
 import { readFile } from "node:fs/promises";
-import { dirname as dirOf, relative as relOf, resolve as resolveOf } from "node:path";
-import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf } from "../agy/sandbox.mjs";
+import { homedir as homeOf } from "node:os";
+import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
+import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
 
 export const WORKER_AGENT = "pantheon-unit-worker";
 export const AGY_CLEANUP = Object.freeze({ name: "ANTIGRAVITY_AGY_CLEANUP", value: "all", documented: false,
   note: "owner-specified (2026-11-18); not documented in Antigravity's CLI docs" });
 
-export function workerArgv({ model, worktree, prompt, timeoutS }) {
+// Never in a worker's argv: --dangerously-skip-permissions skips the PreToolUse jail hook (owner-stated); --sandbox
+// would nest the CLI's own sandbox inside bwrap (owner-stated: never inside bwrap).
+export const FORBIDDEN_WORKER_FLAGS = Object.freeze(["--dangerously-skip-permissions", "--sandbox"]);
+/** Throw if a forbidden flag appears in `argv` (exactly, or as --flag=value). */
+export function assertWorkerArgv(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--print" || a === "-p") { i++; continue; }   // the prompt is text, not a flag
+    const flag = typeof a === "string" ? a.split("=")[0] : "";
+    if (FORBIDDEN_WORKER_FLAGS.includes(flag)) throw Object.assign(new Error(`agy worker argv carries ${flag}: refused (it would bypass the jail)`), { code: "FORBIDDEN_FLAG" });
+  }
+  return argv;
+}
+export function workerArgv({ model, worktree, prompt, timeoutS, log_file = null, control_dir = null }) {
+  if (typeof worktree !== "string" || !isAbsolute(worktree)) throw Object.assign(new Error(`agy worker: --add-dir must be an absolute worktree path, not ${JSON.stringify(worktree)}`), { code: "BAD_INPUT" });
+  const log = log_file ?? (control_dir ? join(control_dir, "run", "agy.log") : null);
+  if (log !== null && !isAbsolute(log)) throw Object.assign(new Error(`agy worker: --log-file must be absolute, not ${JSON.stringify(log)}`), { code: "BAD_INPUT" });
   // --disable-slash-commands ("Disable slash command and skill expansion in print mode", agy 1.5.10 --help): the prompt
   // carries plan and repository text, which must never expand into a slash command or a skill.
-  return ["--agent", WORKER_AGENT, "--model", model, "--mode=accept-edits", "--add-dir", worktree,
-    "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`, "--print", prompt];
+  return assertWorkerArgv(["--agent", WORKER_AGENT, "--model", model, "--mode=accept-edits", "--add-dir", worktree,
+    "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`, ...(log ? ["--log-file", log] : []), "--print", prompt]);
 }
 export function workerEnv(extra = {}) {
   // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
@@ -138,6 +161,8 @@ export function workerEnv(extra = {}) {
   delete env.GOOGLE_API_KEY;
   return env;
 }
+// An env variable whose value a record never carries (the A2A token, any key or secret).
+export const SECRETISH = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i;
 const laneFailure = (kind, message, more = {}) => Object.assign(new Error(message), { code: "lane_failure", kind, transport: "agy-cli", ...more });
 const TIMEOUT_TEXT = /print[ _-]?timeout|timed out|DEADLINE_EXCEEDED/i;
 const BAD_STATUS = new Set(["ERROR", "CANCELED", "CANCELLED", "INTERRUPTED", "INVALID"]);
@@ -152,11 +177,20 @@ function summaryOf(text) {
   try { const v = JSON.parse(text); return v && typeof v === "object" && !Array.isArray(v) ? v : null; } catch { return null; }
 }
 
+/** A stream-json tool step as recorded: {tool_name, state, tool_info} (tool_info: whatever the CLI attached, if any). */
+const toolStepOf = step => ({ tool_name: step.tool_name ?? null, state: step.state ?? null, tool_info: step.tool_info ?? step.toolInfo ?? null });
+const isSubagentStep = s => s.tool_name === "invoke_subagent" || /ask_subagent$/.test(s.tool_name ?? "")
+  || (s.tool_name === "call_mcp_tool" && /ask_subagent/.test(JSON.stringify(s.tool_info ?? "")));
+
 /**
  * One headless worker turn. `sandbox` {enabled = true, agy_state_dirs, allowUnsandboxed = false, bwrap = "bwrap",
- * extra_ro = []}; `a2a_socket` (optional) the unit's A2A socket path, whose directory is bound read-only when it is
- * not under the control dir; the process is killed after timeoutS + graceS seconds. Returns {text, structured_output, summary, response_id, usage, tool_calls, subagent_calls,
- * tools, served_model, served_model_source: "input", jail_log, launch, cleanup_env, sandbox}.
+ * extra_ro = [], gemini_state = "scratch" | "rw" | "off", home (default: the child env's HOME), keep_gemini_scratch};
+ * `a2a_socket` (optional) the unit's A2A socket path, whose directory is bound read-only when it is not under the
+ * control dir; the process is killed after timeoutS + graceS seconds. Returns {text, structured_output, summary,
+ * response_id, usage, num_turns, status, tool_calls, subagent_calls, tools, tool_steps, served_model,
+ * served_model_source: "input", jail_log, launch, cleanup_env, sandbox, gemini_scratch, exit_code, stderr_tail}.
+ * `tool_steps` is EVERY stream-json step_update with step_type "tool" ({tool_name, state, tool_info}), whatever its
+ * state; a thrown failure carries the same evidence fields.
  */
 export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prompt, timeoutS = 1800, graceS = 15, env: extraEnv = {}, signal = undefined,
   sandbox = {}, onEvent = () => {}, a2a_socket = null }) {
@@ -167,7 +201,8 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
 
   // THE JAIL: bwrap, or a refusal. Never a silent unjailed run.
   const wantSandbox = sandbox.enabled !== false;
-  let prefix = [], sandboxRec;
+  const env = workerEnv(extraEnv);
+  let prefix = [], sandboxRec, gstate = null;
   if (wantSandbox) {
     const probe = await sandboxAvailable(sandbox.bwrap ?? "bwrap");
     if (probe.ok) {
@@ -177,9 +212,11 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
       // write access to the mount); one elsewhere (e.g. a short fallback under /tmp, which is a fresh tmpfs inside)
       // gets its directory bound read-only.
       if (a2a_socket) { const d = dirOf(resolveOf(a2a_socket)); const r = relOf(resolveOf(control_dir), d); if (r.startsWith("..") || resolveOf(r) === r) extra_ro.push(d); }
-      const b = bwrapArgs({ worktree, control_dir, agy_state_dirs: sandbox.agy_state_dirs ?? defaultAgyStateDirs(), extra_ro: extra_ro.filter(p => existsSync(p)), bwrap: sandbox.bwrap ?? "bwrap" });
+      gstate = await geminiState({ home: sandbox.home ?? env.HOME ?? homeOf(), run_dir: join(control_dir, "run"), mode: sandbox.gemini_state ?? "scratch" });
+      const b = bwrapArgs({ worktree, control_dir, agy_state_dirs: sandbox.agy_state_dirs ?? defaultAgyStateDirs(), extra_ro: extra_ro.filter(p => existsSync(p)), gemini_state: gstate, bwrap: sandbox.bwrap ?? "bwrap" });
       prefix = b.argv;
-      sandboxRec = { enabled: true, kind: "bwrap", binds: b.binds, git: b.git };
+      sandboxRec = { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
+        gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, mounts: gstate.mounts, created_mountpoints: gstate.created_mountpoints, ...(gstate.why ? { why: gstate.why } : {}) } };
     } else if (sandbox.allowUnsandboxed === true) {
       sandboxRec = { enabled: false, reason: probe.why, allowUnsandboxed: true };
     } else {
@@ -191,15 +228,18 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
     throw Object.assign(new Error("agy worker: sandbox.enabled is false and allowUnsandboxed is not true; refusing to run the worker unjailed"), { code: "SANDBOX_UNAVAILABLE" });
   }
 
-  const args = workerArgv({ model, worktree, prompt, timeoutS });
+  const log_file = join(control_dir, "run", "agy.log");
+  const args = workerArgv({ model, worktree, prompt, timeoutS, log_file });
   const cmd = prefix.length ? prefix[0] : cli;
-  const argv = prefix.length ? [...prefix.slice(1), cli, ...args] : args;
-  const env = workerEnv(extraEnv);
-  const launch = { cmd, args: argv.map(a => (a === prompt ? "<prompt>" : a)), cwd: control_dir, env_added: { [AGY_CLEANUP.name]: AGY_CLEANUP.value },
+  const argv = assertWorkerArgv(prefix.length ? [...prefix.slice(1), cli, ...args] : args);
+  const launch = { cmd, args: argv.map(a => (a === prompt ? "<prompt>" : a)), cwd: control_dir, log_file,
+    env_added: { ...(extraEnv ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" },
     env_stripped: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
+  for (const k of launch.env_stripped) delete launch.env_added[k];
+  for (const k of Object.keys(launch.env_added)) if (SECRETISH.test(k)) launch.env_added[k] = "<redacted>";
 
   let init = null, result = null, sawResult = false, unparseable = 0, toolCalls = 0, subagentCalls = 0, answerChars = 0;
-  const tools = [];
+  const tools = [], tool_steps = [];
   const report = ev => { try { onEvent(ev); } catch { /* telemetry is not the turn's authority */ } };
   const onStdoutLine = line => {
     if (!line.trim()) return;
@@ -210,10 +250,11 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
       report({ event: "seat.start", detail: `OAuth CLI worker ${init?.agent ?? "unknown"}, model ${init?.model ?? "unknown"}` });
     } else if (event.event === "step_update") {
       const step = event.step_update;
+      if (step?.step_type === "tool") tool_steps.push(toolStepOf(step));
       if (step?.step_type === "tool" && step.state === "DONE") {
         toolCalls++;
         tools.push(step.tool_name ?? "unknown");
-        if (step.tool_name === "invoke_subagent" || /ask_subagent$/.test(step.tool_name ?? "")) subagentCalls++;
+        if (isSubagentStep(toolStepOf(step))) subagentCalls++;
         report({ event: "seat.tool", detail: step.tool_name ?? "unknown" });
       }
       if (step?.text_delta) {
@@ -229,12 +270,15 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   try {
     run = await spawnPromise(cmd, argv, { cwd: control_dir, env, timeout: (timeoutS + graceS) * 1000, onStdoutLine, ...(signal ? { signal } : {}) });
   } catch (e) {
+    await dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null);
     if (e?.name === "AbortError" || signal?.aborted) throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED" });
-    throw laneFailure("spawn", `agy worker could not be started (${e?.code ?? e?.message ?? e})`, { launch, sandbox: sandboxRec });
+    throw laneFailure("spawn", `agy worker could not be started (${e?.code ?? e?.message ?? e})`, { launch, sandbox: sandboxRec, tool_steps });
   }
   const jail_log = await readJailLog(control_dir);
-  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP };
+  const gemini_scratch = await dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null);
   const stderr = String(run.stderr ?? "");
+  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps, gemini_scratch, exit_code: run.status, stderr_tail: stderr.slice(-4000),
+    result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null };
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED", ...more });
   if (run.killedFor === "timeout") throw laneFailure("timeout", `agy CLI timed out after ${timeoutS}s (process killed)`, more);
   if (run.killedFor) throw laneFailure("stream", `agy CLI stopped: ${run.killedFor}`, more);
@@ -243,10 +287,10 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   if (failed) {
     const q = quotaEvidence({ result, stderr });
     if (q) throw Object.assign(new Error(`agy CLI exited ${run.status}; status ${result?.status ?? "missing"}: Antigravity refused for quota ("${q.matched}")`),
-      { status: 429, code: "quota_exhausted", quota: q, transport: "agy-cli", stderr_tail: stderr.slice(-500), result_error: typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? null, ...more });
+      { status: 429, code: "quota_exhausted", quota: q, transport: "agy-cli", result_error: typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? null, ...more });
     const errText = `${stderr}\n${typeof result?.error === "string" ? result.error : result?.error?.message ?? ""}\n${result?.status ?? ""}`;
     if (TIMEOUT_TEXT.test(errText)) throw laneFailure("timeout", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"}: print timeout`, more);
-    if (run.status !== 0) throw laneFailure("exit", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"} (inspect local CLI diagnostics)`, { exit_code: run.status, ...more });
+    if (run.status !== 0) throw laneFailure("exit", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"} (inspect local CLI diagnostics)`, { ...more, result_error: typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? null });
   }
   if (!sawResult) throw laneFailure("stream", `agy CLI stream ended without a result event${unparseable ? ` (${unparseable} unparseable line(s))` : ""}`, more);
   if (init?.agent !== WORKER_AGENT || init?.model !== model) {
@@ -258,6 +302,6 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   if (!Number.isInteger(result.num_turns) || result.num_turns < 1 || (!text && !structured)) {
     throw laneFailure("exit", "agy CLI returned no completed model turn (empty response)", more);
   }
-  return { text, structured_output: structured ?? null, summary: summaryOf(text), response_id: result.conversation_id ?? null, usage: result.usage ?? null,
+  return { text, structured_output: structured ?? null, summary: summaryOf(text), response_id: result.conversation_id ?? null, status: result.status,
     tool_calls: toolCalls, subagent_calls: subagentCalls, tools, served_model: model, served_model_source: "input", ...more };
 }
