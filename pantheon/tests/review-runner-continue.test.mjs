@@ -1,17 +1,17 @@
-// --continue <transcript>: resuming an incomplete review, with a fake fetch (API mode) and fake CLIs (subscription
-// mode). What may be carried over is the reviewer's own earlier run of the same assignment and nothing else.
+// --continue <transcript>: resuming an incomplete review, with a fake fetch (API mode) and fake CLIs / the fake Codex
+// SDK (subscription mode). What may be carried over is the reviewer's own earlier run of the same assignment and nothing else.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main, EXIT } from "../src/review-runner/index.mjs";
-import { APPENDIX_BEGIN, APPENDIX_END, CONTINUE_NOTE } from "../src/review-runner/continue.mjs";
+import { APPENDIX_BEGIN, APPENDIX_END, CLI_CONTINUE_NOTE, CONTINUE_NOTE } from "../src/review-runner/continue.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { fixtureRepo, fakeFetch, capture, deps, LIMITS, FAKE_KEY, sh, mkdtemp, cleanup } from "./review-runner-helper.mjs";
-import { fakeReviewClis } from "./fixtures/review-clis.mjs";
+import { fakeCodexSdk, fakeReviewClis } from "./fixtures/review-clis.mjs";
 import { fakeAgy } from "./fixtures/dispatch.mjs";
 
 after(cleanup);
@@ -147,27 +147,60 @@ async function subSetup() {
   const base = await mkdtemp(join(tmpdir(), "rr-cont-sub-"));
   const bin = join(base, "bin"), home = join(base, "home"), outDir = join(base, "out");
   await mkdir(bin); await mkdir(home); await mkdir(outDir);
-  fakeReviewClis(bin);
-  return { repo, base, bin, home, outDir };
+  const clis = fakeReviewClis(bin);
+  return { repo, base, bin, home, outDir, clis };
 }
 async function sub(f, { n, args = [], env = {} }) {
   const out = capture(), fetch = fakeFetch([]);
   const d = await deps({ root: f.repo.root, out, fetch, env: { PATH: `${f.bin}:${process.env.PATH}`, HOME: f.home, OPENAI_API_KEY: FAKE_KEY, ...env } });
-  const code = await main(["--via", "subscription", "--assignment", String(n), "--commit", f.repo.commit, "--out", f.outDir, "--max-wall-s", "60", ...args], d);
-  return { code, out, fetch, plan: (() => { try { return JSON.parse(out.out); } catch { return null; } })() };
+  const codex = n === 2 || n === 4;
+  if (codex) d.CodexSDK = fakeCodexSdk();
+  const code = await main(["--via", "subscription", "--assignment", String(n), "--commit", f.repo.commit, "--out", f.outDir, "--max-wall-s", "60", ...(codex ? ["--codex-cli", f.clis.codex] : []), ...args], d);
+  return { code, out, fetch, sdk: d.CodexSDK?.calls ?? null, plan: (() => { try { return JSON.parse(out.out); } catch { return null; } })() };
 }
 
-test("codex (no usable headless resume): a new session whose prompt appends ONLY the reviewer's own earlier messages and tool results; .review-tests restored", async () => {
+test("codex: a failed run is continued by resuming its own thread (the SDK's resumeThread) with the NEW worktree and the same sandbox; .review-tests restored", async () => {
   const f = await subSetup();
   const r1 = await sub(f, { n: 2, env: { FAKE_CLI_MODE: "partial", FAKE_CLI_WRITE: ".review-tests/mine.test.mjs" } });
   assert.equal(r1.code, EXIT.incomplete);
   const tpath = join(f.outDir, "findings-2-openai.transcript.json");
   const t1bytes = await readFile(tpath);
+  const t1 = JSON.parse(t1bytes);
+  assert.deepEqual([t1.status, t1.stop_reason], ["failed", "codex reported turn.failed: usage limit reached"]);
+  const promptFile = join(f.base, "prompt.txt");
+  const r2 = await sub(f, { n: 2, args: ["--continue", tpath], env: { FAKE_CLI_PROMPT_FILE: promptFile, FAKE_CLI_CHECK: ".review-tests/mine.test.mjs" } });
+  assert.equal(r2.code, EXIT.complete, r2.out.err);
+  assert.equal(r2.plan.continue.method, "codex-sdk-resume");
+  assert.equal(r2.plan.continue.thread_id, t1.cli.thread_id);
+  assert.deepEqual(r2.plan.argv.slice(-3, -1), ["resume", t1.cli.thread_id], "the SDK puts resume after the exec-level --cd/--sandbox");
+  const ran = r2.sdk.find(c => c.kind === "run");
+  assert.equal(ran.resume_id, t1.cli.thread_id);
+  assert.deepEqual([ran.thread_options.workingDirectory, ran.thread_options.sandboxMode, ran.thread_options.approvalPolicy], [r2.plan.worktree.path, "workspace-write", "never"]);
+  assert.notEqual(t1.argv[t1.argv.indexOf("--cd") + 1], r2.plan.worktree.path, "the earlier worktree is gone; the resumed thread works in the rebuilt one");
+  const prompt = await readFile(promptFile, "utf8");
+  assert.ok(prompt.startsWith(CLI_CONTINUE_NOTE), "a resumed thread gets the continuation note, then the same prompt");
+  assert.ok(!prompt.includes(APPENDIX_BEGIN), "no replayed appendix: the thread has its own history");
+  const md = await readFile(join(f.outDir, "findings-2-openai.md"), "utf8");
+  assert.match(md, /CHECK \.review-tests\/mine\.test\.mjs present/);
+  const h = header(md);
+  assert.ok(h.includes(`- continued_from: \`${sha(t1bytes)}\``));
+  assert.ok(h.includes(`- continuation_method: codex-sdk-resume (thread \`${t1.cli.thread_id}\` resumed with this run's worktree and sandbox)`));
+  assert.match(h, /- runs: 2\n/);
+});
+
+test("codex without the earlier thread on this machine: a new session whose prompt appends ONLY the reviewer's own earlier messages and tool results; .review-tests restored", async () => {
+  const f = await subSetup();
+  const r1 = await sub(f, { n: 2, env: { FAKE_CLI_MODE: "partial", FAKE_CLI_WRITE: ".review-tests/mine.test.mjs" } });
+  assert.equal(r1.code, EXIT.incomplete);
+  const tpath = join(f.outDir, "findings-2-openai.transcript.json");
+  const t1bytes = await readFile(tpath);
+  await rm(join(f.home, ".codex", "sessions"), { recursive: true, force: true });   // the thread's rollout is gone
   const promptFile = join(f.base, "prompt.txt");
   const r2 = await sub(f, { n: 2, args: ["--continue", tpath], env: { FAKE_CLI_PROMPT_FILE: promptFile, FAKE_CLI_CHECK: ".review-tests/mine.test.mjs" } });
   assert.equal(r2.code, EXIT.complete, r2.out.err);
   assert.equal(r2.plan.continue.method, "replayed-own-transcript");
-  assert.match(r2.plan.continue.resume_support.source, /codex exec resume/);
+  assert.match(r2.plan.continue.resume_support.source, /resumeThread/);
+  assert.equal(r2.sdk.find(c => c.kind === "run").resume_id, null);
   const prompt = await readFile(promptFile, "utf8");
   const a = prompt.slice(prompt.indexOf(APPENDIX_BEGIN));
   assert.ok(prompt.indexOf(APPENDIX_BEGIN) > 0 && a.includes(APPENDIX_END));

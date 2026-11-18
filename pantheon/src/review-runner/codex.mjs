@@ -1,25 +1,63 @@
-// Assignments 2 and 4 in subscription mode: the OpenAI Codex CLI, signed in with ChatGPT.
+// Assignments 2 and 4 in subscription mode: Codex through the official TypeScript SDK (`@openai/codex-sdk`, pinned
+// exactly in pantheon/package.json), signed in with ChatGPT. The owner's direction (2026-11-18): the SDK reports a
+// failure explicitly (a `turn.failed` / `error` event, or a thrown error) where the bare CLI had to be checked.
 //
-// DOCUMENTED (OpenAI's Codex docs, read 2026-11-18): "Sign in with ChatGPT for subscription access" vs "Sign in with an
-// API key for usage-based access ... billed at standard API rates"; `codex login status` shows the active auth method;
-// headless `codex exec "<prompt>"` with -m/--model, -C/--cd, --sandbox read-only|workspace-write|danger-full-access
-// (exec's default: read-only), --ask-for-approval/-a on-request|never, --json (JSONL events: thread.started,
-// turn.started, turn.completed {usage}, turn.failed, item.* -- agent_message, command_execution, file_change,
-// reasoning --, error), -o/--output-last-message <file>, --skip-git-repo-check; `--full-auto` is no longer supported;
-// the Linux sandbox is bubblewrap (bwrap on PATH) + seccomp; `codex debug models` prints the model catalog;
-// CODEX_API_KEY in the environment forces API-key usage for one invocation. NO event names the served model.
+// WHAT THE SDK DOES (read in the installed @openai/codex-sdk 0.170.0, dist/index.js; re-read on any version bump --
+// the real-package test pins the parts this runner depends on):
+// - It does not talk to OpenAI itself. It spawns the Codex CLI binary and reads JSONL from its stdout (index.js:267):
+//   `<binary> exec --experimental-json [--config k=v ...] [--model M] [--sandbox S] [--cd DIR] [--skip-git-repo-check]
+//   [--config approval_policy="..."] [resume <thread id>]` (index.js:178-247), the prompt written to its STDIN
+//   (index.js:277), never in argv.
+// - The binary: `codexPathOverride` when given, else its own resolution (index.js:397-485): @openai/codex (an npm
+//   dependency of the SDK) -> the platform package @openai/codex-<os>-<arch> -> vendor/<target triple>/bin/codex, a
+//   ~285 MB native binary (the platform package unpacks to ~408 MB), plus vendor/<triple>/codex-path (ripgrep)
+//   prepended to PATH. The owner's `codex` on PATH is NOT used. This runner mirrors that resolution
+//   (resolveSdkCodexBinary), runs the zero-spend preflight against that binary, and passes the same path as
+//   `codexPathOverride`, so the preflight and the run are one binary by construction (the real-package test checks the
+//   mirror against the SDK's own field).
+// - The environment: `env` given -> the child gets exactly that, process.env is NOT inherited (index.js:248-257); the
+//   SDK adds CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_sdk_ts when absent (index.js:258-260) and sets CODEX_API_KEY
+//   ONLY when an `apiKey` option was passed (index.js:261-263, from `this._options.apiKey`, index.js:61). The README's
+//   "the SDK still injects its required variables (such as CODEX_API_KEY)" is that conditional; the source decides.
+//   This runner never passes `apiKey` or `baseUrl`, passes the scrubbed environment (no key, token or secret; HOME kept,
+//   so the CLI finds ~/.codex/auth.json), and REFUSES when the installed SDK's source assigns CODEX_API_KEY anywhere
+//   other than under `if (args.apiKey)` (sdkKeyInjection): a version that injected a key unconditionally would bill the
+//   API, and that is not worked around.
+// - Auth is the CLI's own: $CODEX_HOME (default ~/.codex)/auth.json, written by `codex login`. Observed with this binary
+//   (0.170.0, scratch HOME, no credentials -> no spend): `codex login status` prints "Not logged in" (exit 1) with no
+//   login, "API key configured - sk-…" with an API-key auth.json, and IGNORES a CODEX_API_KEY in the environment (it
+//   still says "Not logged in") -- so the env scrub, not the status line, is what keeps an env key out. With
+//   `--config forced_login_method="chatgpt"` the CLI refuses an API key before any request ("ChatGPT login is required,
+//   but an API key is currently being used. Logging out.") AND deletes that API-key auth.json; this runner passes that
+//   config (a second guard behind the preflight) unless --allow-api-key-in-cli.
+// - The wall clock: TurnOptions.signal goes to child_process.spawn (index.js:269), so an abort SIGTERMs the codex
+//   process. The SDK exposes no pid and does not spawn detached, so the runner cannot kill a process GROUP: codex's
+//   own children (sandboxed commands) are left to codex's own teardown. If the stream has not ended ABORT_GRACE_MS
+//   after the abort, the runner stops waiting and records it.
+// - Resume: `resumeThread(id, threadOptions)` appends `resume <id>` AFTER the exec-level --model/--sandbox/--cd and the
+//   approval config (index.js:195-242). Observed with this binary (no credentials): `exec --sandbox workspace-write --cd
+//   <new dir> ... resume <id>` of a session recorded in a since-deleted directory reports `workdir: <new dir>`,
+//   `sandbox: workspace-write`, `approval: never` -- the working directory and sandbox ARE set on resume (placed after
+//   `resume`, as `codex exec resume --help` shows, they are not accepted). Sessions live in $CODEX_HOME/sessions.
 //
-// NOT VERIFIED HERE (no codex on this machine; every test uses a fake): the exact text of `codex login status` and
-// the format of `codex debug models` -- both are parsed conservatively (an API-key mention wins; an unparseable
-// catalog is `unknown`, refused unless --skip-model-check), and the raw text is recorded redacted.
+// NOT VERIFIED HERE (no ChatGPT login on this machine; every run test uses a fake SDK or a fake binary): a real model
+// turn, the text of `codex login status` for a ChatGPT login (parsed conservatively: an API-key mention wins; anything
+// that does not say ChatGPT is refused), and that a ChatGPT sign-in bills the subscription (OpenAI's docs: "Sign in
+// with ChatGPT for subscription access"). NO event names the served model (served_model_source: input).
 //
-// Codex runs its OWN bubblewrap sandbox; this runner does NOT wrap it in ours (nested user namespaces are unverified).
-// Containment is codex's --sandbox mode (read-only for assignment 4, workspace-write for 1-3) plus -a never, and the
-// runner's post-run git check of the worktree (subscription.mjs), which records any write outside .review-tests/.
+// Codex runs its OWN bubblewrap sandbox; this runner does NOT wrap it in ours. Containment is codex's sandbox mode
+// (read-only for assignment 4, workspace-write for 1-3) with approval_policy never, plus the runner's post-run git
+// check of the worktree (subscription.mjs), which records any write outside .review-tests/.
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { redactStrong } from "../board/agy-cli.mjs";
 import { runCli, tail } from "./cli-common.mjs";
 
-export const CODEX_FORBIDDEN = Object.freeze(["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto", "danger-full-access"]);
+export const CODEX_SDK_PACKAGE = "@openai/codex-sdk";
+export const FORBIDDEN_SANDBOX = Object.freeze(["danger-full-access"]);
+export const ABORT_GRACE_MS = 15_000;
 
 /** `codex login status` -> {method: "chatgpt" | "api-key" | "none" | "unknown", raw (redacted)}. */
 export function parseLoginStatus(text, exitCode, env = {}) {
@@ -34,9 +72,9 @@ export function parseLoginStatus(text, exitCode, env = {}) {
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 /**
  * Does `codex debug models` list `model`? {status: "listed" | "missing" | "unknown", format: "json" | "lines" | null,
- * count}. JSON: model ids are the string values of slug/id/model/name keys (or a string array). Text: a line names the
- * model when it holds it as a whole word; "missing" only when some line starts with an id-shaped token containing a
- * digit; otherwise "unknown".
+ * count}. JSON (0.170.0 prints {"models":[{"slug":...}]}): model ids are the string values of slug/id/model/name keys
+ * (or a string array). Text: a line names the model when it holds it as a whole word; "missing" only when some line
+ * starts with an id-shaped token containing a digit; otherwise "unknown".
  */
 export function parseModelList(stdout, model) {
   const text = String(stdout ?? "").trim();
@@ -64,18 +102,115 @@ export function parseModelList(stdout, model) {
 
 export function codexSandboxFor(write_allowed) { return write_allowed ? "workspace-write" : "read-only"; }
 
-/** The exact argv after `codex`. Refuses any flag that would lift the sandbox or the approval policy. */
-export function codexArgv({ model, worktree, write_allowed, lastMessage, prompt }) {
-  const argv = ["exec", "--json", "-m", model, "-C", worktree, "--skip-git-repo-check", "-a", "never", "--sandbox", codexSandboxFor(write_allowed), "-o", lastMessage, prompt];
-  for (const a of argv.slice(0, -1)) if (CODEX_FORBIDDEN.includes(a)) throw new Error(`codex argv carries ${a}: refused`);
-  return argv;
+// ---- the installed SDK -----------------------------------------------------------------------------------------------
+
+// The SDK's own table (index.js:149-156, 397-440): platform/arch -> target triple -> platform package.
+const TRIPLE = { "linux-x64": "x86_64-unknown-linux-musl", "android-x64": "x86_64-unknown-linux-musl", "linux-arm64": "aarch64-unknown-linux-musl", "android-arm64": "aarch64-unknown-linux-musl",
+  "darwin-x64": "x86_64-apple-darwin", "darwin-arm64": "aarch64-apple-darwin", "win32-x64": "x86_64-pc-windows-msvc", "win32-arm64": "aarch64-pc-windows-msvc" };
+const PLATFORM_PACKAGE = { "x86_64-unknown-linux-musl": "@openai/codex-linux-x64", "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64", "x86_64-apple-darwin": "@openai/codex-darwin-x64",
+  "aarch64-apple-darwin": "@openai/codex-darwin-arm64", "x86_64-pc-windows-msvc": "@openai/codex-win32-x64", "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64" };
+const isFile = p => { try { return statSync(p).isFile(); } catch { return false; } };
+const isDir = p => { try { return statSync(p).isDirectory(); } catch { return false; } };
+
+/**
+ * The installed SDK: {ok, version, entry (dist/index.js), why?}. The package exports only an `import` condition, so it
+ * is located with import.meta.resolve, not require.resolve.
+ */
+export function codexSdkInfo() {
+  let entry;
+  try { entry = fileURLToPath(import.meta.resolve(CODEX_SDK_PACKAGE)); } catch { return { ok: false, why: `${CODEX_SDK_PACKAGE} is not installed (run \`npm --prefix pantheon install\`)` }; }
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8"));
+    return { ok: true, version: pkg.version ?? null, entry };
+  } catch (e) { return { ok: false, why: `${CODEX_SDK_PACKAGE}'s package.json could not be read (${e.code ?? e.message})`, entry }; }
 }
 
-/** Zero-spend preflight: version, login status (must be ChatGPT), model catalog. Returns {ok, failed: [why], checks}. */
-export async function codexPreflight({ cli, env, model, opts, timeoutMs = 60_000 }) {
+/**
+ * The binary the SDK would spawn without `codexPathOverride`: the same steps as its findCodexPath (index.js:397-485).
+ * {ok, path, path_dirs, triple, platform_package} | {ok: false, why}.
+ */
+export function resolveSdkCodexBinary({ entry, platform = process.platform, arch = process.arch } = {}) {
+  const triple = TRIPLE[`${platform}-${arch}`];
+  if (!triple) return { ok: false, why: `the Codex SDK has no binary for ${platform} (${arch})` };
+  const platformPackage = PLATFORM_PACKAGE[triple];
+  let root;
+  try {
+    const codexPkg = createRequire(entry).resolve("@openai/codex/package.json");
+    root = join(dirname(createRequire(codexPkg).resolve(`${platformPackage}/package.json`)), "vendor", triple);
+  } catch { return { ok: false, why: `the Codex CLI binaries were not found (@openai/codex and its optional dependency ${platformPackage}; reinstall without --omit=optional)` }; }
+  const name = platform === "win32" ? "codex.exe" : "codex";
+  const bin = join(root, "bin", name);
+  if (isFile(bin) && isFile(join(root, "codex-package.json"))) return { ok: true, path: bin, path_dirs: [join(root, "codex-path")].filter(isDir), triple, platform_package: platformPackage };
+  const legacy = join(root, "codex", name);
+  if (isFile(legacy)) return { ok: true, path: legacy, path_dirs: [join(root, "path")].filter(isDir), triple, platform_package: platformPackage };
+  return { ok: false, why: `the Codex CLI binary for ${triple} is missing under ${root}` };
+}
+
+/**
+ * Where the SDK's source sets CODEX_API_KEY. {conditional: true} when every assignment is `env.CODEX_API_KEY =
+ * args.apiKey;` directly under `if (args.apiKey) {` (so a run that passes no apiKey gets no key); otherwise false,
+ * with the offending lines. A source that names CODEX_API_KEY in any other way is not conditional either.
+ */
+export function sdkKeyInjection(source) {
+  const lines = String(source ?? "").split("\n"), sites = [], bad = [];
+  lines.forEach((l, i) => {
+    if (!l.includes("CODEX_API_KEY")) return;
+    sites.push(i + 1);
+    const prev = (lines.slice(0, i).reverse().find(x => x.trim()) ?? "").trim();
+    if (!(l.trim() === "env.CODEX_API_KEY = args.apiKey;" && prev === "if (args.apiKey) {")) bad.push({ line: i + 1, text: l.trim().slice(0, 200) });
+  });
+  return { conditional: sites.length > 0 && bad.length === 0, sites, bad, ...(sites.length ? {} : { note: "no CODEX_API_KEY in the source: the SDK changed shape; re-read it" }) };
+}
+
+/** Everything the plan records about the installed SDK: {ok, version, entry, key_injection, binary} | {ok: false, why}. */
+export function inspectCodexSdk() {
+  const info = codexSdkInfo();
+  if (!info.ok) return info;
+  let source = null;
+  try { source = readFileSync(info.entry, "utf8"); } catch (e) { return { ...info, ok: false, why: `${info.entry} could not be read (${e.code ?? e.message})` }; }
+  return { ...info, key_injection: sdkKeyInjection(source), binary: resolveSdkCodexBinary({ entry: info.entry }) };
+}
+
+/** The Codex constructor options. Never an apiKey or a baseUrl: the scrubbed env and the pinned binary only. */
+export function codexSdkOptions({ env, binary, allowApiKeyLogin = false }) {
+  const o = { env: { ...env }, codexPathOverride: binary };
+  if (!allowApiKeyLogin) o.config = { forced_login_method: "chatgpt" };
+  for (const k of ["apiKey", "baseUrl"]) if (k in o) throw new Error(`codex SDK options carry ${k}: refused`);
+  for (const k of Object.keys(o.env)) if (/^(CODEX_API_KEY|OPENAI_API_KEY|CODEX_ACCESS_TOKEN)$/.test(k)) throw new Error(`codex SDK env carries ${k}: refused`);
+  return o;
+}
+
+/** The ThreadOptions (names from the SDK's index.d.ts:252-265). Refuses danger-full-access. */
+export function codexThreadOptions({ model, worktree, write_allowed }) {
+  const o = { model, sandboxMode: codexSandboxFor(write_allowed), workingDirectory: worktree, skipGitRepoCheck: true, approvalPolicy: "never" };
+  if (FORBIDDEN_SANDBOX.includes(o.sandboxMode)) throw new Error(`codex sandbox ${o.sandboxMode}: refused`);
+  return o;
+}
+
+/** The argv the SDK builds from these options (index.js:178-247), for the plan and the transcript. The prompt goes to stdin. */
+export function sdkSpawnArgv({ binary, sdkOptions, threadOptions, resumeId = null }) {
+  const a = [binary, "exec", "--experimental-json"];
+  for (const [k, v] of Object.entries(sdkOptions.config ?? {})) a.push("--config", `${k}=${JSON.stringify(v)}`);
+  const t = threadOptions;
+  if (t.model) a.push("--model", t.model);
+  if (t.sandboxMode) a.push("--sandbox", t.sandboxMode);
+  if (t.workingDirectory) a.push("--cd", t.workingDirectory);
+  if (t.skipGitRepoCheck) a.push("--skip-git-repo-check");
+  if (t.approvalPolicy) a.push("--config", `approval_policy="${t.approvalPolicy}"`);
+  if (resumeId) a.push("resume", resumeId);
+  return a;
+}
+
+/** Zero-spend preflight on the binary the SDK will spawn: version, login status (must be ChatGPT), model catalog. */
+export async function codexPreflight({ cli, env, model, opts, sdk, timeoutMs = 60_000 }) {
   const checks = {}, failed = [];
+  if (sdk) {
+    checks.sdk = sdk;
+    if (sdk.ok === false) failed.push(`the Codex SDK is not usable: ${sdk.why}`);
+    else if (sdk.key_injection && !sdk.key_injection.conditional) failed.push(`the installed ${CODEX_SDK_PACKAGE} ${sdk.version} sets CODEX_API_KEY other than only when an apiKey option is passed (${JSON.stringify(sdk.key_injection.bad ?? sdk.key_injection.note)}): that would bill the API, so subscription mode refuses to run it`);
+  }
   const v = await runCli({ cmd: cli, args: ["--version"], env, timeoutMs });
-  checks.version = { argv: [cli, "--version"], exit_code: v.exit_code, text: redactStrong(`${v.stdout}${v.stderr}`, env).trim().slice(0, 200) || null, ...(v.spawn_error ? { spawn_error: v.spawn_error } : {}) };
+  checks.version = { argv: [cli, "--version"], exit_code: v.exit_code, text: redactStrong(v.stdout.trim() || v.stderr, env).trim().slice(0, 200) || null, ...(v.spawn_error ? { spawn_error: v.spawn_error } : {}) };
   if (v.exit_code !== 0) failed.push(`\`codex --version\` failed (exit ${v.exit_code ?? v.killed_for ?? v.spawn_error})`);
   const l = await runCli({ cmd: cli, args: ["login", "status"], env, timeoutMs });
   const login = parseLoginStatus(`${l.stdout}\n${l.stderr}`, l.exit_code, env);
@@ -91,39 +226,106 @@ export async function codexPreflight({ cli, env, model, opts, timeoutMs = 60_000
   return { ok: failed.length === 0, failed, checks, cli_version: checks.version.text, auth_method_observed: login.method, model_check: list.status };
 }
 
+// ---- resume -----------------------------------------------------------------------------------------------------------
+
+const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/;
 /**
- * Read codex's --json JSONL. Returns {thread_id, usage (summed over turn.completed), final_text (last agent_message),
- * commands: [{command, exit_code, status}], file_changes: [...], errors: [msg], turn_failed, unparsed, events}.
+ * Is the earlier thread on this machine? The CLI keeps sessions as $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<id>
+ * .jsonl (observed, 0.170.0). Returns the rollout path or null (then the runner falls back to the replayed appendix).
  */
-export function parseCodexEvents(lines) {
-  // own: the reviewer's own messages and tool results, in order (for a --continue that replays them, capped there).
-  const out = { thread_id: null, usage: {}, final_text: null, commands: [], file_changes: [], errors: [], turn_failed: null, unparsed: 0, events: 0, turns_completed: 0, own: [] };
-  const cap = (x, n = 16 * 1024) => { x = String(x ?? ""); return x.length > n ? `${x.slice(0, n)}… (${x.length} chars, truncated)` : x; };
-  const add = (t, u) => { for (const [k, v] of Object.entries(u ?? {})) if (typeof v === "number") t[k] = (t[k] ?? 0) + v; return t; };
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    let e;
-    try { e = JSON.parse(line); } catch { out.unparsed++; continue; }
-    if (!e || typeof e !== "object") { out.unparsed++; continue; }
-    out.events++;
-    const type = e.type ?? e.event ?? null;
-    if (type === "thread.started") out.thread_id = e.thread_id ?? null;
-    else if (type === "turn.completed") { out.turns_completed++; add(out.usage, e.usage); }
-    else if (type === "turn.failed") out.turn_failed = String(e.error?.message ?? e.error ?? "turn failed").slice(0, 1000);
-    else if (type === "error") out.errors.push(String(e.message ?? e.error?.message ?? e.error ?? "error").slice(0, 1000));
-    else if (typeof type === "string" && type.startsWith("item.")) {
-      const it = e.item ?? {};
-      const kind = it.type ?? it.item_type ?? null;
-      if (type !== "item.completed") continue;
-      if (kind === "agent_message" && typeof it.text === "string") { out.final_text = it.text; out.own.push({ kind: "your message", text: cap(it.text) }); }
-      else if (kind === "command_execution") {
-        out.commands.push({ command: String(it.command ?? "").slice(0, 2000), exit_code: it.exit_code ?? null, status: it.status ?? null });
-        out.own.push({ kind: "command and its output", text: cap(`$ ${it.command ?? ""}\n(exit ${it.exit_code ?? "?"})\n${it.aggregated_output ?? ""}`) });
-      } else if (kind === "file_change") {
-        out.file_changes.push({ changes: (it.changes ?? []).map(c => ({ path: c.path ?? null, kind: c.kind ?? null })), status: it.status ?? null });
-        out.own.push({ kind: "file change", text: (it.changes ?? []).map(c => `${c.kind ?? "?"} ${c.path ?? "?"}`).join("\n") });
-      }
+export function findCodexSession(threadId, env) {
+  if (!THREAD_ID.test(String(threadId ?? ""))) return null;
+  const home = env?.CODEX_HOME || (env?.HOME ? join(env.HOME, ".codex") : null);
+  if (!home) return null;
+  const want = `-${threadId}.jsonl`;
+  const walk = (dir, depth) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isFile() && e.name.startsWith("rollout-") && e.name.endsWith(want)) return p;
+      if (e.isDirectory() && depth < 4) { const r = walk(p, depth + 1); if (r) return r; }
     }
+    return null;
+  };
+  return walk(join(home, "sessions"), 0);
+}
+
+// ---- the run ----------------------------------------------------------------------------------------------------------
+
+const cap = (x, n = 16 * 1024) => { x = String(x ?? ""); return x.length > n ? `${x.slice(0, n)}… (${x.length} chars, truncated)` : x; };
+const addUsage = (t, u) => { for (const [k, v] of Object.entries(u ?? {})) if (typeof v === "number") t[k] = (t[k] ?? 0) + v; return t; };
+
+/** A fresh event log: what the transcript keeps of the SDK's ThreadEvents (index.d.ts:106-167). */
+export function newCodexLog() {
+  // own: the reviewer's own messages and tool results, in order (for a --continue that replays them).
+  return { thread_id: null, usage: {}, final_text: null, commands: [], file_changes: [], other_items: {}, item_errors: [], errors: [], turn_failed: null, events: 0, turns_completed: 0, own: [] };
+}
+
+/** Fold one ThreadEvent into the log. */
+export function applyCodexEvent(out, e) {
+  if (!e || typeof e !== "object") return out;
+  out.events++;
+  if (e.type === "thread.started") out.thread_id = e.thread_id ?? null;
+  else if (e.type === "turn.completed") { out.turns_completed++; addUsage(out.usage, e.usage); }
+  else if (e.type === "turn.failed") out.turn_failed = String(e.error?.message ?? "turn failed").slice(0, 1000);
+  else if (e.type === "error") out.errors.push(String(e.message ?? "error").slice(0, 1000));
+  else if (e.type === "item.completed") {
+    const it = e.item ?? {};
+    if (it.type === "agent_message" && typeof it.text === "string") { out.final_text = it.text; out.own.push({ kind: "your message", text: cap(it.text) }); }
+    else if (it.type === "command_execution") {
+      out.commands.push({ command: String(it.command ?? "").slice(0, 2000), exit_code: it.exit_code ?? null, status: it.status ?? null });
+      out.own.push({ kind: "command and its output", text: cap(`$ ${it.command ?? ""}\n(exit ${it.exit_code ?? "?"})\n${it.aggregated_output ?? ""}`) });
+    } else if (it.type === "file_change") {
+      out.file_changes.push({ changes: (it.changes ?? []).map(c => ({ path: c.path ?? null, kind: c.kind ?? null })), status: it.status ?? null });
+      out.own.push({ kind: "file change", text: (it.changes ?? []).map(c => `${c.kind ?? "?"} ${c.path ?? "?"}`).join("\n") });
+    } else if (it.type === "error") out.item_errors.push(String(it.message ?? "").slice(0, 1000));   // non-fatal (index.d.ts:83)
+    else if (typeof it.type === "string") out.other_items[it.type] = (out.other_items[it.type] ?? 0) + 1;
   }
   return out;
+}
+
+/** Fold a list of ThreadEvents (a test helper and the replay of a recorded stream). */
+export function parseCodexEvents(events) { const out = newCodexLog(); for (const e of events) applyCodexEvent(out, e); return out; }
+
+const wallStop = (wall, stalled, graceMs) => `wall clock reached (${wall} s): the SDK's abort signal stopped codex${stalled ? `; its event stream had not ended ${graceMs / 1000} s later, so the runner stopped waiting` : ""}`;
+
+// Top-level `error` events are NOT failures by themselves: index.d.ts calls them "unrecoverable", but the 0.170.0 CLI
+// emits one per transport retry ({"type":"error","message":"Reconnecting... 2/5 (...)"}, observed) before it either
+// recovers or ends with `turn.failed` and exit 1. They are recorded; the failure is the turn.failed / the thrown error.
+/**
+ * One SDK turn. `Codex` is the SDK constructor (the real one, or a test's fake). Returns {status: "complete" |
+ * "failed" | "incomplete", stop_reason, usage, final_text, record}. A failure the SDK reports -- a `turn.failed`
+ * event, or a thrown error (a non-zero CLI exit, a spawn error, an unparseable line) -- is `failed`, with its
+ * message (error events alone only when no final message came); the wall clock is `incomplete`; a turn that ends
+ * without a final message and without an error is `incomplete`.
+ */
+export async function runCodexSdk({ Codex, sdkOptions, threadOptions, prompt, wall, resumeId = null, redactEnv = {}, graceMs = ABORT_GRACE_MS }) {
+  const log = newCodexLog();
+  const ac = new AbortController();
+  let timedOut = false, stalled = false, thrown = null, thread = null, graceTimer = null;
+  const wallTimer = setTimeout(() => { timedOut = true; ac.abort(new Error(`wall clock (${wall} s)`)); }, wall * 1000);
+  try {
+    const codex = new Codex(sdkOptions);
+    thread = resumeId ? codex.resumeThread(resumeId, threadOptions) : codex.startThread(threadOptions);
+    const { events } = await thread.runStreamed(prompt, { signal: ac.signal });
+    const consume = (async () => { for await (const e of events) applyCodexEvent(log, e); return "done"; })();
+    const backstop = new Promise(res => ac.signal.addEventListener("abort", () => { graceTimer = setTimeout(() => res("stalled"), graceMs); }, { once: true }));
+    if (await Promise.race([consume, backstop]) === "stalled") { stalled = true; consume.catch(() => {}); }
+  } catch (e) { thrown = e; }
+  finally { clearTimeout(wallTimer); clearTimeout(graceTimer); }
+  const red = s => redactStrong(String(s ?? ""), redactEnv);
+  const record = { thread_id: log.thread_id ?? thread?.id ?? null, ...(resumeId ? { resumed_thread_id: resumeId } : {}), events: log.events, turns_completed: log.turns_completed,
+    commands: log.commands, file_changes: log.file_changes, other_items: log.other_items, item_errors: log.item_errors.map(red), errors: log.errors.map(red),
+    turn_failed: log.turn_failed && red(log.turn_failed), sdk_error: thrown ? red(tail(thrown.message ?? thrown, 2000)) : null,
+    aborted_by_wall_clock: timedOut, abort_stalled: stalled, own: log.own };
+  const base = { usage: log.usage, final_text: log.final_text, record };
+  if (timedOut) return { ...base, status: "incomplete", killed_for: "timeout", stop_reason: wallStop(wall, stalled, graceMs) };
+  if (log.turn_failed) return { ...base, status: "failed", stop_reason: `codex reported turn.failed: ${record.turn_failed}` };
+  if (thrown) return { ...base, status: "failed", stop_reason: `the Codex SDK reported a failure: ${tail(record.sdk_error, 1000)}` };
+  if (!log.final_text || !log.final_text.trim()) {
+    if (log.errors.length) return { ...base, status: "failed", stop_reason: `codex reported an error and no final message: ${record.errors.at(-1)}` };
+    return { ...base, status: "incomplete", stop_reason: "codex ended the turn without a final message" };
+  }
+  return { ...base, status: "complete", stop_reason: "final answer" };
 }

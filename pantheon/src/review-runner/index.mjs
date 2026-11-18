@@ -20,9 +20,9 @@ const USAGE = `usage: node pantheon/scripts/run-review.mjs --via api|subscriptio
   --via api            the metered API, the owner's key:
                        --max-turns N --max-tool-calls N --max-output-tokens N --timeout-s N
   --via subscription   one CLI agent per vendor, signed in to the owner's subscription
-                       (1: agy, 2 and 4: codex, 3: grok): --max-wall-s N [--timeout-s N]
+                       (1: agy, 2 and 4: codex via @openai/codex-sdk, 3: grok): --max-wall-s N [--timeout-s N]
                        [--allow-api-key-in-cli] [--skip-model-check] [--grok-state-dir DIR]
-                       [--codex-cli PATH] [--grok-cli PATH] [--agy-cli PATH]
+                       [--codex-cli PATH (default: the SDK's own codex binary)] [--grok-cli PATH] [--agy-cli PATH]
   [--continue <findings-<n>-<lab>.transcript.json>]   resume an incomplete review of the same assignment
   [--out DIR] [--dry-run] [--keep] [--force] [--telos-root DIR]`;
 

@@ -1,5 +1,5 @@
 // Subscription mode, the pieces without a run: the agy review hook policy (the jail hook with run_command_policy), the
-// codex preflight parsers and argv, the grok stream parser and jail argv, the scrubbed env and the worktree check.
+// codex preflight parsers, SDK options and event log, the grok stream parser and jail argv, the scrubbed env and the worktree check.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { decide, loadPolicy } from "../src/agy/jail-hook.mjs";
 import { prepareReviewWorkspace, reviewCardText, reviewLane, REVIEW_CARD, REVIEW_AGENT } from "../src/review-runner/agy.mjs";
 import { allowedCommands, compareWorktree, scrubEnv, writeRule } from "../src/review-runner/cli-common.mjs";
-import { codexArgv, parseLoginStatus, parseModelList, parseCodexEvents } from "../src/review-runner/codex.mjs";
+import { codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, parseCodexEvents, parseLoginStatus, parseModelList, sdkKeyInjection, sdkSpawnArgv } from "../src/review-runner/codex.mjs";
+import { Codex as RealCodex } from "@openai/codex-sdk";
 import { grokBwrapArgs, parseGrokStream } from "../src/review-runner/grok.mjs";
 import { permissionsFor } from "../src/review-runner/tools.mjs";
 import { cardTools } from "../src/agy/workspace.mjs";
@@ -130,15 +131,79 @@ test("codex preflight parsers: ChatGPT vs API-key login (an API-key mention wins
   assert.equal(parseModelList("", "gpt-6-astra").status, "unknown");
 });
 
-test("codex argv: read-only for a no-write assignment, workspace-write otherwise; -a never; the prompt is the last argument; no sandbox bypass", () => {
-  const a4 = codexArgv({ model: "gpt-6.1-sol", worktree: "/w", write_allowed: false, lastMessage: "/o/last-message.md", prompt: "P" });
-  assert.deepEqual(a4, ["exec", "--json", "-m", "gpt-6.1-sol", "-C", "/w", "--skip-git-repo-check", "-a", "never", "--sandbox", "read-only", "-o", "/o/last-message.md", "P"]);
-  const a2 = codexArgv({ model: "gpt-6-astra", worktree: "/w", write_allowed: true, lastMessage: "/o/l.md", prompt: "P" });
-  assert.equal(a2[a2.indexOf("--sandbox") + 1], "workspace-write");
-  for (const a of [a2, a4]) assert.ok(!a.some(x => /danger|bypass|full-auto|yolo/.test(x)));
-  const ev = parseCodexEvents(['{"type":"thread.started","thread_id":"t"}', "garbage", '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":1}}',
-    '{"type":"item.completed","item":{"type":"agent_message","text":"A"}}', '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":1}}']);
-  assert.deepEqual([ev.thread_id, ev.usage, ev.final_text, ev.unparsed, ev.turns_completed], ["t", { input_tokens: 5, output_tokens: 2 }, "A", 1, 2]);
+test("codex SDK options: the scrubbed env and the pinned binary, never an apiKey or baseUrl; forced ChatGPT login unless allowed; no key in env", () => {
+  const o = codexSdkOptions({ env: { HOME: "/h", PATH: "/bin" }, binary: "/b/codex" });
+  assert.deepEqual(o, { env: { HOME: "/h", PATH: "/bin" }, codexPathOverride: "/b/codex", config: { forced_login_method: "chatgpt" } });
+  assert.ok(!("apiKey" in o) && !("baseUrl" in o));
+  assert.equal(codexSdkOptions({ env: {}, binary: "/b", allowApiKeyLogin: true }).config, undefined);
+  // A key that slipped past the scrub is refused here too (defence in depth: the SDK passes env through verbatim).
+  for (const k of ["CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"]) assert.throws(() => codexSdkOptions({ env: { [k]: "x" }, binary: "/b" }), /refused/);
+});
+
+test("codex thread options and the argv the SDK builds: read-only for a no-write assignment, workspace-write otherwise; approval never; resume after the exec-level flags; no bypass", () => {
+  const t4 = codexThreadOptions({ model: "gpt-6.1-sol", worktree: "/w", write_allowed: false });
+  assert.deepEqual(t4, { model: "gpt-6.1-sol", sandboxMode: "read-only", workingDirectory: "/w", skipGitRepoCheck: true, approvalPolicy: "never" });
+  assert.equal(codexThreadOptions({ model: "m", worktree: "/w", write_allowed: true }).sandboxMode, "workspace-write");
+  const sdkOptions = codexSdkOptions({ env: {}, binary: "/b/codex" });
+  const a = sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4 });
+  assert.deepEqual(a, ["/b/codex", "exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', "--model", "gpt-6.1-sol", "--sandbox", "read-only", "--cd", "/w", "--skip-git-repo-check", "--config", 'approval_policy="never"']);
+  assert.deepEqual(sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4, resumeId: "01a1f0fe-d28f" }).slice(-2), ["resume", "01a1f0fe-d28f"]);
+  assert.ok(!a.some(x => /danger|bypass|full-auto|yolo/.test(x)));
+});
+
+test("codex event log: usage summed over turns, the last agent message is final, commands/file changes/non-fatal item errors kept, retries recorded as errors", () => {
+  const ev = parseCodexEvents([{ type: "thread.started", thread_id: "t" }, { type: "turn.started" }, { type: "error", message: "Reconnecting... 1/5 (x)" },
+    { type: "item.completed", item: { id: "1", type: "error", message: "model mismatch warning" } },
+    { type: "item.completed", item: { id: "2", type: "command_execution", command: "node --test a", aggregated_output: "ok", exit_code: 0, status: "completed" } },
+    { type: "item.completed", item: { id: "3", type: "file_change", changes: [{ path: ".review-tests/a.test.mjs", kind: "add" }], status: "completed" } },
+    { type: "item.started", item: { id: "4", type: "agent_message", text: "draft" } },
+    { type: "item.completed", item: { id: "4", type: "agent_message", text: "A" } }, { type: "item.completed", item: { id: "5", type: "reasoning", text: "r" } },
+    { type: "turn.completed", usage: { input_tokens: 3, output_tokens: 1 } }, { type: "turn.completed", usage: { input_tokens: 2, output_tokens: 1 } }]);
+  assert.deepEqual([ev.thread_id, ev.usage, ev.final_text, ev.turns_completed, ev.errors.length, ev.item_errors, ev.other_items], ["t", { input_tokens: 5, output_tokens: 2 }, "A", 2, 1, ["model mismatch warning"], { reasoning: 1 }]);
+  assert.deepEqual(ev.commands, [{ command: "node --test a", exit_code: 0, status: "completed" }]);
+  assert.deepEqual(ev.own.map(o => o.kind), ["command and its output", "file change", "your message"]);
+  assert.equal(parseCodexEvents([{ type: "turn.failed", error: { message: "usage limit reached" } }]).turn_failed, "usage limit reached");
+});
+
+test("the SDK's CODEX_API_KEY check: only `env.CODEX_API_KEY = args.apiKey;` under `if (args.apiKey) {` passes", () => {
+  const ok = "    if (args.apiKey) {\n      env.CODEX_API_KEY = args.apiKey;\n    }\n";
+  assert.deepEqual([sdkKeyInjection(ok).conditional, sdkKeyInjection(ok).sites], [true, [2]]);
+  assert.equal(sdkKeyInjection("    env.CODEX_API_KEY = args.apiKey ?? process.env.OPENAI_API_KEY;\n").conditional, false, "unconditional");
+  assert.equal(sdkKeyInjection(ok + "    env.CODEX_API_KEY ??= defaultKey;\n").conditional, false, "a second site");
+  assert.equal(sdkKeyInjection("no key here").conditional, false, "the shape changed: not assumed safe");
+});
+
+test("the REAL installed @openai/codex-sdk (no run): the pinned version, the API this runner calls, CODEX_API_KEY only under an apiKey option, and the binary the runner preflights is the one the SDK resolves", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const sdk = inspectCodexSdk();
+  assert.equal(sdk.ok, true, sdk.why);
+  assert.equal(sdk.version, pkg.dependencies["@openai/codex-sdk"], "package.json pins the installed version exactly");
+  assert.equal(typeof RealCodex, "function");
+  for (const m of ["startThread", "resumeThread"]) assert.equal(typeof RealCodex.prototype[m], "function", m);
+  const codex = new RealCodex({ env: { PATH: "/usr/bin:/bin" }, ...(sdk.binary.ok ? {} : { codexPathOverride: "/nonexistent/codex" }) });
+  const thread = codex.startThread({ workingDirectory: "/tmp", skipGitRepoCheck: true, sandboxMode: "read-only", approvalPolicy: "never" });
+  assert.equal(typeof thread.runStreamed, "function");
+  assert.equal(thread.id, null, "no id before a turn: nothing was spawned");
+  assert.equal(codex.resumeThread("01a1f0fe-d28f-7f51-8780-eb527ce4afc2").id, "01a1f0fe-d28f-7f51-8780-eb527ce4afc2");
+  assert.deepEqual([sdk.key_injection.conditional, sdk.key_injection.bad], [true, []], "an SDK that sets CODEX_API_KEY without an apiKey option is refused at preflight");
+  // The runner's mirror of the SDK's binary resolution names the binary the SDK itself would spawn (a private field,
+  // read here only to check the mirror; the runner never reads it).
+  if (sdk.binary.ok) {
+    assert.equal(new RealCodex({ env: {} }).exec.executablePath, sdk.binary.path);
+    assert.deepEqual(new RealCodex({ env: {} }).exec.pathDirs, sdk.binary.path_dirs);
+  }
+});
+
+test("findCodexSession: a rollout file for the thread under $CODEX_HOME (or ~/.codex)/sessions, else null", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rr-codex-home-"));
+  const id = "01a1f0fe-d28f-7f51-8780-eb527ce4afc2";
+  assert.equal(findCodexSession(id, { HOME: home }), null);
+  await mkdir(join(home, ".codex", "sessions", "2026", "11", "18"), { recursive: true });
+  await writeFile(join(home, ".codex", "sessions", "2026", "11", "18", `rollout-2026-11-18T23-29-54-${id}.jsonl`), "{}\n");
+  assert.match(findCodexSession(id, { HOME: home }), /rollout-.*\.jsonl$/);
+  assert.equal(findCodexSession(id, { HOME: "/nonexistent", CODEX_HOME: join(home, ".codex") }) !== null, true);
+  assert.equal(findCodexSession("../../etc", { HOME: home }), null);
+  assert.equal(findCodexSession(null, { HOME: home }), null);
 });
 
 test("grok: the stream is parsed tolerantly; the jail mounts the worktree read-only with .review-tests read-write only when writing is allowed", () => {

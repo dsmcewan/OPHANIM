@@ -1,5 +1,6 @@
 // `--via subscription`: one command-line agent per vendor, signed in to the owner's SUBSCRIPTION, instead of the metered
-// API (index.mjs, `--via api`). Assignment 1 (Google) -> agy-cli, 2 and 4 (OpenAI) -> codex-cli, 3 (xAI) -> grok-cli.
+// API (index.mjs, `--via api`). Assignment 1 (Google) -> agy-cli, 2 and 4 (OpenAI) -> codex-sdk (the Codex TypeScript SDK,
+// which drives the Codex CLI binary it ships; codex.mjs), 3 (xAI) -> grok-cli.
 //
 // The reviewer is shown HARNESS-cli.md (values filled in) + "\n\n---\n\n" + the README and its assignment file verbatim +
 // one commit line; the sha256 of each part and of the whole prompt is recorded. A subscription run that cannot start
@@ -8,12 +9,14 @@
 // /usage) and prints the plan; no model turn.
 //
 // Limits: `--max-wall-s` (required) is the whole run's wall clock (with `--timeout-s` also given, the smaller one); the
-// CLI's process group is killed when it is reached. The API caps (--max-turns, --max-tool-calls, --max-output-tokens)
+// CLI's process group is killed when it is reached (Codex: the SDK's abort signal stops the codex process; codex.mjs). The API caps (--max-turns, --max-tool-calls, --max-output-tokens)
 // have no CLI equivalent and are ignored with a printed note. Usage is what the CLI reports.
 //
 // After the run the worktree is compared with its state before (git status, cli-common.mjs compareWorktree): any changed
 // path outside .review-tests/ (any change at all for assignment 4) or a moved HEAD is a policy violation, recorded in
-// the findings header, and the run's status becomes `policy_violation`.
+// the findings header, and the run's status becomes `policy_violation`. A failure the transport itself reports (Codex:
+// `turn.failed` or an error the SDK throws) is status `failed`, with that message as the stop reason; it can be
+// continued like an incomplete run.
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile, access } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,7 +24,7 @@ import { REVIEW_DIR, SEPARATOR, renderHarness, sha256 } from "./brief.mjs";
 import { WITHHELD } from "./sandbox.mjs";
 import { redact } from "./vendors.mjs";
 import { allowedCommands, compareWorktree, findCli, runCli, scrubEnv, secretValues, tail, worktreeState, writeRule, REVIEW_TESTS_DIR } from "./cli-common.mjs";
-import { codexArgv, codexPreflight, codexSandboxFor, parseCodexEvents } from "./codex.mjs";
+import { CODEX_SDK_PACKAGE, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv } from "./codex.mjs";
 import { dropGrokScratch, grokArgv, grokBwrapArgs, grokPreflight, grokStateScratch, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
 import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane } from "./agy.mjs";
 import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
@@ -32,8 +35,8 @@ import { CLI_CONTINUE_NOTE, ContinueRefusal, captureReviewTests, cumulative, loa
 export const RESUME_SUPPORT = Object.freeze({
   "agy-cli": { documented: true, source: "agy 1.5.10 --help: `--conversation <id>` \"Resume a previous conversation by ID\", `--continue` \"Continue the most recent conversation\"",
     used: "--conversation <the earlier run's conversation_id>, with the earlier run's conversations/ and brain/ state (saved beside the transcript when it ended incomplete) restored into the new per-run scratch; without both, the replayed-own-transcript fallback" },
-  "codex-cli": { documented: true, source: "learn.chatgpt.com/docs/developer-commands (read 2026-11-18): `codex exec resume [SESSION_ID]` \"Resume an exec session by ID or add --last to continue the most recent session from the current working directory ... Accepts an optional follow-up prompt\"; the resume subcommand's documented options are --all, --image, --last, PROMPT, SESSION_ID",
-    used: "NOT used: the docs list no --sandbox, -C, -m, --json or -o for `exec resume`, so the resumed session's sandbox and workspace root (the earlier, deleted worktree) cannot be set; the replayed-own-transcript fallback instead" },
+  "codex-sdk": { documented: true, source: "@openai/codex-sdk 0.170.0: `codex.resumeThread(id, threadOptions)` (index.d.ts:288, README \"Resuming an existing thread\": threads persist in ~/.codex/sessions); the SDK puts --model/--sandbox/--cd and approval_policy on `exec` BEFORE `resume <id>` (dist/index.js:195-242), and the 0.170.0 binary then reports the NEW workdir and sandbox for a session recorded in a since-deleted directory (observed, no credentials)",
+    used: "resumeThread(<the earlier run's thread_id>, the same thread options with this run's worktree) when that thread's rollout file is in $CODEX_HOME/sessions on this machine (codex-sdk-resume); otherwise the replayed-own-transcript fallback" },
   "grok-cli": { documented: false, source: "docs.x.ai/build/overview (read 2026-11-18) documents no resume", used: "the replayed-own-transcript fallback" },
 });
 const AGY_SAVED = ["conversations", "brain"];
@@ -41,22 +44,27 @@ const CLI_OWN_CAP = 256 * 1024;
 const capOwn = own => { const out = []; let n = 0; for (const x of [...own].reverse()) { n += Buffer.byteLength(x.text); if (n > CLI_OWN_CAP) break; out.unshift(x); } return out; };
 
 export const SUB_PLAN_SCHEMA = "ophanim.review-run-plan/v2-subscription";
-export const TRANSPORT_FOR = Object.freeze({ gemini: "agy-cli", openai: "codex-cli", xai: "grok-cli" });
-export const COVERAGE = Object.freeze({ "agy-cli": "documented", "codex-cli": "documented", "grok-cli": "undocumented" });
-const DROP = { "codex-cli": ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"], "grok-cli": ["XAI_API_KEY", "GROK_API_KEY"], "agy-cli": ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
+export const TRANSPORT_FOR = Object.freeze({ gemini: "agy-cli", openai: "codex-sdk", xai: "grok-cli" });
+export const COVERAGE = Object.freeze({ "agy-cli": "documented", "codex-sdk": "documented", "grok-cli": "undocumented" });
+const DROP = { "codex-sdk": ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"], "grok-cli": ["XAI_API_KEY", "GROK_API_KEY"], "agy-cli": ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
 const LANES = new URL("../config/lanes.json", import.meta.url);
 const exists = p => access(p).then(() => true, () => false);
 
 // What each transport's plan says is verified by the preflight, assumed, and enforced by the runner itself.
 const KNOWLEDGE = {
-  "codex-cli": {
-    verified_by_preflight: ["`codex --version` runs", "`codex login status` reports a ChatGPT sign-in (refused when it reports an API key, unless --allow-api-key-in-cli)", "`codex debug models` lists the requested model (unless --skip-model-check and the catalog could not be read)"],
-    assumed: ["the `codex exec` flags and JSONL events as documented by OpenAI (read 2026-11-18); no codex is installed where this runner was written, every test uses a fake",
+  "codex-sdk": {
+    verified_by_preflight: [`the installed ${CODEX_SDK_PACKAGE} sets CODEX_API_KEY only when an apiKey option is passed (its source is read; any other assignment is a refusal)`,
+      "the binary the SDK spawns is found (its own resolution, or --codex-cli) and the preflight runs THAT binary",
+      "`codex --version` runs", "`codex login status` reports a ChatGPT sign-in (refused when it reports an API key, unless --allow-api-key-in-cli)", "`codex debug models` lists the requested model (unless --skip-model-check and the catalog could not be read)"],
+    assumed: ["no real model turn has been run through this runner (no ChatGPT login where it was written); the SDK's spawn, argv and env handling were read in its source and the CLI's resume/sandbox/login behaviour observed without credentials",
       "a ChatGPT sign-in bills the run to the subscription (documented: \"Sign in with ChatGPT for subscription access\")",
-      "--sandbox read-only blocks every write and workspace-write limits writes to the -C worktree (and codex's own temporary dirs); codex runs its OWN bubblewrap sandbox, NOT nested in the runner's (nested user namespaces are unverified)",
-      "-a never: no command is escalated out of the sandbox; codex has no per-command allowlist, so the listed test commands are asked for, not enforced",
+      "sandbox read-only blocks every write and workspace-write limits writes to the worktree (and codex's own temporary dirs); codex runs its OWN bubblewrap sandbox, NOT nested in the runner's (nested user namespaces are unverified)",
+      "approval_policy never: no command is escalated out of the sandbox; codex has no per-command allowlist, so the listed test commands are asked for, not enforced",
+      "on the wall clock the SDK SIGTERMs the codex process only (it exposes no pid, so no process group); codex's own children are left to codex's teardown",
       "the served model is the requested one: no codex event names the served model (served_model_source: input)"],
-    enforced_by_runner: ["no key, token or secret in the CLI's environment (OPENAI_API_KEY and CODEX_API_KEY included)", "the wall clock: the process group is killed", "the post-run git check of the worktree (writes outside .review-tests/, any write for assignment 4, a moved HEAD)"],
+    enforced_by_runner: ["the SDK is given an explicit env (the scrubbed one: no key, token or secret, OPENAI_API_KEY and CODEX_API_KEY included) and never an apiKey or baseUrl",
+      "forced_login_method=\"chatgpt\" is passed to the CLI (unless --allow-api-key-in-cli): the CLI refuses an API-key login before any request",
+      "the wall clock: the SDK's abort signal", "a failure the SDK reports (turn.failed, a thrown error) is status `failed` with its message", "the post-run git check of the worktree (writes outside .review-tests/, any write for assignment 4, a moved HEAD)"],
   },
   "grok-cli": {
     verified_by_preflight: ["`grok --version` runs", "the state dir (--grok-state-dir) exists and is not empty", "bwrap runs"],
@@ -106,10 +114,16 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     if (!l.ok) { err(`run-review: refused: ${l.why}\n`); return EXIT.refused; }
     lane = l.id;
   }
-  const cliName = { "codex-cli": "codex", "grok-cli": "grok", "agy-cli": "agy" }[transport];
-  const explicit = { "codex-cli": opts.codexCli, "grok-cli": opts.grokCli, "agy-cli": opts.agyCli ?? env.PANTHEON_AGY_CLI }[transport];
-  let cli = await findCli(cliName, explicit, env);
+  const cliName = { "codex-sdk": "codex", "grok-cli": "grok", "agy-cli": "agy" }[transport];
+  const explicit = { "codex-sdk": opts.codexCli, "grok-cli": opts.grokCli, "agy-cli": opts.agyCli ?? env.PANTHEON_AGY_CLI }[transport];
+  // Codex: the binary the SDK itself would spawn (codex.mjs resolveSdkCodexBinary), not a `codex` on PATH; --codex-cli
+  // overrides it, and the same path goes to the SDK as codexPathOverride, so the preflight and the run are one binary.
+  const sdk = transport === "codex-sdk" ? (deps.inspectCodexSdk ?? inspectCodexSdk)() : null;
+  let cli = transport === "codex-sdk" && !explicit ? (sdk.ok && sdk.binary?.ok ? sdk.binary.path : null) : await findCli(cliName, explicit, env);
   if (!cli && transport === "agy-cli" && !explicit && env.HOME) cli = await findCli(cliName, join(env.HOME, ".local", "bin", "agy"), env).catch(() => null);
+  // The SDK prepends its codex-path dir (ripgrep) to PATH when it resolves the binary itself (dist/index.js:264-266);
+  // passing codexPathOverride turns that off, so the runner does it for the SDK-resolved binary.
+  if (transport === "codex-sdk" && cli && !explicit && sdk.binary.path_dirs?.length) childEnv.PATH = [...sdk.binary.path_dirs, childEnv.PATH ?? ""].filter(Boolean).join(":");
   const grokStateDir = transport === "grok-cli" ? resolve(opts.grokStateDir ?? join(env.HOME ?? homedir(), ".grok")) : null;
 
   let resume = null, method = null;
@@ -117,12 +131,13 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     try { resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: row.lab.toLowerCase(), vendor: row.vendor, model: row.model, commit: opts.commit, via: "subscription", transport, brief_sha256: sha256(b.brief) }); }
     catch (e) { if (e instanceof ContinueRefusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; } throw e; }
     const saved = resume.t.agy_state?.dir ? join(resolve(resume.path, ".."), resume.t.agy_state.dir) : null;
-    method = transport === "agy-cli" && resume.t.cli?.conversation_id && saved && await exists(join(saved, "conversations")) ? "agy --conversation" : "replayed-own-transcript";
+    method = transport === "agy-cli" && resume.t.cli?.conversation_id && saved && await exists(join(saved, "conversations")) ? "agy --conversation"
+      : transport === "codex-sdk" && findCodexSession(resume.t.cli?.thread_id, childEnv) ? "codex-sdk-resume" : "replayed-own-transcript";
     resume.agy_saved = method === "agy --conversation" ? saved : null;
   }
   const tmp = await realpath(await mkdtemp(join(deps.tmpBase ?? tmpdir(), "ophanim-review-")));
-  const wtPath = join(tmp, "worktree"), control = join(tmp, "control"), runDir = join(tmp, "run"), outTmp = join(tmp, "out");
-  await mkdir(runDir, { recursive: true, mode: 0o700 }); await mkdir(outTmp);
+  const wtPath = join(tmp, "worktree"), control = join(tmp, "control"), runDir = join(tmp, "run");
+  await mkdir(runDir, { recursive: true, mode: 0o700 });
   let worktreeAdded = false, agyJail = null, grokScratch = null, code = EXIT.refused;
   const cleanup = async () => {
     if (agyJail) await dropGeminiState(agyJail.gstate).catch(() => null);   // the scratch holds the OAuth token: always dropped
@@ -151,10 +166,10 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
 
     const cmds = allowedCommands({ permissions, worktree: wt, prefixWithCd: transport === "agy-cli", telosRoot: opts.telosRoot });
     const harness = renderHarness(harnessTemplate, { COMMIT: opts.commit, WORKTREE: wt, ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed, worktree: wt }), MAX_WALL_S: wall });
-    // A continuation: agy resumes its own conversation (a note, then the same prompt); every other CLI gets the same
+    // A continuation: agy and codex resume their own conversation (a note, then the same prompt); otherwise the same
     // prompt PLUS the delimited appendix of the reviewer's own earlier messages and tool results (that transcript only).
     const appendix = resume && method === "replayed-own-transcript" ? ownTranscriptAppendix(resume.t) : null;
-    const prompt = resume && method === "agy --conversation" ? CLI_CONTINUE_NOTE + SEPARATOR + harness + SEPARATOR + b.brief
+    const prompt = resume && method !== "replayed-own-transcript" ? CLI_CONTINUE_NOTE + SEPARATOR + harness + SEPARATOR + b.brief
       : harness + SEPARATOR + b.brief + (appendix ? "\n\n" + appendix + "\n" : "");
     const promptRef = `<prompt sha256:${sha256(prompt)}>`;
 
@@ -173,7 +188,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       cli: { name: cliName, path: cli, found: Boolean(cli) },
       allowed_commands: cmds.lines, write_rule: write_allowed ? `only under ${REVIEW_TESTS_DIR}/` : "none",
       limits: { max_wall_s: opts.limits.max_wall_s, ...(opts.limits.timeout_s ? { timeout_s: opts.limits.timeout_s } : {}), wall_clock_s: wall,
-        ignored: opts.ignoredCaps, note: "the CLIs expose no turn, tool-call or output-token caps; the wall clock kills the process group" },
+        ignored: opts.ignoredCaps, note: transport === "codex-sdk" ? "Codex exposes no turn, tool-call or output-token caps; the wall clock aborts the SDK turn (its signal SIGTERMs the codex process)" : "the CLIs expose no turn, tool-call or output-token caps; the wall clock kills the process group" },
       env: { passed: Object.keys(childEnv).sort(), removed: scrub.removed, note: "names only; every key, token and secret is removed so the CLI cannot switch to metered billing" },
       ...KNOWLEDGE[transport],
       ...(transport === "grok-cli" ? { unknowns: UNKNOWNS_GROK } : {}),
@@ -182,19 +197,28 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       model_turns: 0,
       ...(resume ? { continue: { from: resume.path, transcript_sha256: resume.sha256, method, resume_support: RESUME_SUPPORT[transport], prior: resume.prior,
         review_tests_to_restore: (resume.t.review_tests.files ?? []).map(f => f.path), ...(appendix ? { appendix_sha256: sha256(appendix), appendix_bytes: Buffer.byteLength(appendix) } : {}),
-        ...(method === "agy --conversation" ? { conversation_id: resume.t.cli.conversation_id } : {}) } } : {}),
+        ...(method === "agy --conversation" ? { conversation_id: resume.t.cli.conversation_id } : {}), ...(method === "codex-sdk-resume" ? { thread_id: resume.t.cli.thread_id } : {}) } } : {}),
     };
     let pre, runner;
+    if (transport === "codex-sdk") plan.sdk = codexSdkRecord(sdk, explicit, cli);
     if (!cli) {
-      pre = { ok: false, failed: [`${cliName} not found (${explicit ? `at ${explicit}` : "on PATH"}); subscription mode never falls back to the API`], checks: {}, cli_version: null, auth_method_observed: null };
-    } else if (transport === "codex-cli") {
-      const lastMessage = join(outTmp, "last-message.md");
-      const argv = codexArgv({ model: row.model, worktree: wt, write_allowed, lastMessage, prompt });
-      Object.assign(plan, { argv: [cli, ...argv.slice(0, -1), promptRef], cwd: wt,
-        sandbox: { kind: "codex's own sandbox (bubblewrap + seccomp on Linux)", mode: codexSandboxFor(write_allowed), approvals: "never", nested_in_runner_bwrap: false },
+      const why = transport === "codex-sdk" && !explicit ? `the codex binary the SDK would spawn was not found (${sdk.ok ? sdk.binary?.why : sdk.why})` : `${cliName} not found (${explicit ? `at ${explicit}` : "on PATH"})`;
+      pre = { ok: false, failed: [`${why}; subscription mode never falls back to the API`], checks: {}, cli_version: null, auth_method_observed: null };
+    } else if (transport === "codex-sdk") {
+      const sdkOptions = codexSdkOptions({ env: childEnv, binary: cli, allowApiKeyLogin: Boolean(opts.allowApiKeyInCli) });
+      const threadOptions = codexThreadOptions({ model: row.model, worktree: wt, write_allowed });
+      const resumeId = method === "codex-sdk-resume" ? resume.t.cli.thread_id : null;
+      Object.assign(plan, { argv: [...sdkSpawnArgv({ binary: cli, sdkOptions, threadOptions, resumeId }), `(stdin: ${promptRef})`], cwd: null,
+        argv_note: `the argv ${CODEX_SDK_PACKAGE} builds from these options (dist/index.js:178-247) and spawns itself; the prompt is written to the CLI's stdin`,
+        sdk_options: { env: "the scrubbed environment (names under env.passed); the SDK adds CODEX_INTERNAL_ORIGINATOR_OVERRIDE", codexPathOverride: cli, ...(sdkOptions.config ? { config: sdkOptions.config } : {}), apiKey: "never passed", baseUrl: "never passed" },
+        thread_options: threadOptions, ...(resumeId ? { resume_thread_id: resumeId } : {}),
+        sandbox: { kind: "codex's own sandbox (bubblewrap + seccomp on Linux)", mode: threadOptions.sandboxMode, approvals: threadOptions.approvalPolicy, nested_in_runner_bwrap: false },
         writable_paths: write_allowed ? [`${wt} (codex workspace-write: the whole worktree; the post-run check allows only ${REVIEW_TESTS_DIR}/)`, "codex's own temporary dirs (its sandbox's choice)"] : ["none (codex read-only)"] });
-      pre = await codexPreflight({ cli, env: childEnv, model: row.model, opts });
-      runner = () => runCodex({ cli, argv, wt, childEnv, wall, lastMessage });
+      pre = await codexPreflight({ cli, env: childEnv, model: row.model, opts, sdk: plan.sdk });
+      runner = async () => {
+        const Codex = deps.CodexSDK ?? (await import(CODEX_SDK_PACKAGE)).Codex;
+        return runCodexSdk({ Codex, sdkOptions, threadOptions, prompt, wall, resumeId, redactEnv: childEnv, ...(deps.codexAbortGraceMs ? { graceMs: deps.codexAbortGraceMs } : {}) });
+      };
     } else if (transport === "grok-cli") {
       const bw = deps.bwrap ?? "bwrap";
       const box = await sandboxAvailable(bw);
@@ -318,7 +342,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       `- prompt_sha256: \`${plan.prompt.sha256}\``,
       ...(resume ? [
         `- continued_from: \`${resume.sha256}\` (\`${resume.name}\`)`,
-        `- continuation_method: ${method}${method === "agy --conversation" ? ` (conversation \`${resume.t.cli.conversation_id}\`, state restored)` : " (a new session; the prompt carries a delimited appendix of the reviewer's own earlier messages and tool results)"}`,
+        `- continuation_method: ${method}${method === "agy --conversation" ? ` (conversation \`${resume.t.cli.conversation_id}\`, state restored)` : method === "codex-sdk-resume" ? ` (thread \`${resume.t.cli.thread_id}\` resumed with this run's worktree and sandbox)` : " (a new session; the prompt carries a delimited appendix of the reviewer's own earlier messages and tool results)"}`,
         `- runs: ${transcript.cumulative.runs}`,
         `- usage_totals_cumulative: \`${JSON.stringify(transcript.cumulative.usage)}\``,
         `- wall_clock_cumulative_s: ${transcript.cumulative.wall_s}`,
@@ -338,28 +362,21 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
 }
 
 function sandboxLine(transport, plan) {
-  if (transport === "codex-cli") return `codex ${plan.sandbox.mode} (codex's own bubblewrap sandbox, not nested in the runner's), approvals never`;
+  if (transport === "codex-sdk") return `codex ${plan.sandbox.mode} (codex's own bubblewrap sandbox, not nested in the runner's), approvals ${plan.sandbox.approvals}`;
   if (transport === "grok-cli") return "the runner's bwrap jail (host read-only; worktree read-only" + (plan.writable_paths.some(p => p.endsWith(REVIEW_TESTS_DIR)) ? ` except ${REVIEW_TESTS_DIR}/` : "") + "; state dir a per-run scratch copy; network not cut)";
   return "the unit worker's bwrap jail + PreToolUse jail hook (review policy)";
 }
 
 const timeoutStop = wall => `wall clock reached (${wall} s): process group killed`;
 
-async function runCodex({ cli, argv, wt, childEnv, wall, lastMessage }) {
-  const lines = [];
-  const r = await runCli({ cmd: cli, args: argv, cwd: wt, env: childEnv, timeoutMs: wall * 1000, onLine: l => lines.push(l) });
-  const ev = parseCodexEvents(lines);
-  const last = await readFile(lastMessage, "utf8").catch(() => "");
-  const final_text = last.trim() ? last : ev.final_text;
-  const record = { own: capOwn(ev.own), thread_id: ev.thread_id, events: ev.events, unparsed_lines: ev.unparsed, turns_completed: ev.turns_completed, commands: ev.commands, file_changes: ev.file_changes, errors: ev.errors.map(e => redactStrong(e, childEnv)),
-    turn_failed: ev.turn_failed && redactStrong(ev.turn_failed, childEnv), last_message_file: last.trim() ? "present" : "absent", stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
-  const base = { exit_code: r.exit_code, killed_for: r.killed_for, usage: ev.usage, record, final_text };
-  if (r.killed_for === "timeout") return { ...base, status: "incomplete", stop_reason: timeoutStop(wall) };
-  if (r.killed_for || r.spawn_error) return { ...base, status: "incomplete", stop_reason: `codex stopped (${r.killed_for ?? r.spawn_error})` };
-  if (r.exit_code !== 0) return { ...base, status: "incomplete", stop_reason: `codex exited ${r.exit_code}${ev.turn_failed ? `: ${record.turn_failed}` : ev.errors.length ? `: ${record.errors.at(-1)}` : ""}` };
-  if (ev.turn_failed) return { ...base, status: "incomplete", stop_reason: `turn failed: ${record.turn_failed}` };
-  if (!final_text || !final_text.trim()) return { ...base, status: "incomplete", stop_reason: "codex returned no final message" };
-  return { ...base, status: "complete", stop_reason: "final answer" };
+/** What the plan and transcript record about the SDK: package, version, which binary runs and why, the key check. */
+function codexSdkRecord(sdk, explicit, cli) {
+  return { package: CODEX_SDK_PACKAGE, version: sdk.version ?? null, ok: sdk.ok, ...(sdk.ok ? {} : { why: sdk.why }),
+    binary: { path: cli, source: explicit ? "--codex-cli (passed to the SDK as codexPathOverride)" : "the SDK's own resolution (@openai/codex -> its platform package's vendor/<triple>/bin/codex), passed as codexPathOverride so the preflight runs the same binary",
+      ...(explicit ? {} : { triple: sdk.binary?.triple ?? null, platform_package: sdk.binary?.platform_package ?? null, path_dirs: sdk.binary?.path_dirs ?? [] }) },
+    spawns: "`<binary> exec --experimental-json ...`, JSONL over stdout, the prompt on stdin (dist/index.js:178-277)",
+    auth: "the CLI's own login under $CODEX_HOME (default ~/.codex/auth.json); the SDK sets CODEX_API_KEY only when an apiKey option is passed, and none is",
+    key_injection: sdk.key_injection ?? null };
 }
 
 async function runGrok({ argv, wt, childEnv, wall }) {

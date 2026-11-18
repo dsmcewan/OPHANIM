@@ -34,7 +34,7 @@ Name your lab and model and the commit you reviewed. Return the findings as `fin
 
 The owner runs each assignment on their own machine with `node pantheon/scripts/run-review.mjs`. `--via` is required and has no default: it chooses between the metered API and the owner's subscriptions every time. The reviewer works on a disposable worktree of the commit and is given this README and its assignment file verbatim, plus a fixed preamble. The runner writes `findings-<n>-<lab>.md` and its transcript to this directory. `--dry-run` prints the plan and starts no model turn.
 
-**Subscription mode (`--via subscription`).** One command-line agent per vendor, signed in to the owner's subscription: assignment 1 runs on Antigravity (`agy`, lane `gemini-4-carbon-high`), assignments 2 and 4 on the OpenAI Codex CLI signed in with ChatGPT, and assignment 3 on xAI's Grok Build CLI. The preamble is [HARNESS-cli.md](HARNESS-cli.md).
+**Subscription mode (`--via subscription`).** One command-line agent per vendor, signed in to the owner's subscription: assignment 1 runs on Antigravity (`agy`, lane `gemini-4-carbon-high`), assignments 2 and 4 on OpenAI Codex signed in with ChatGPT, driven through the official Codex TypeScript SDK (`@openai/codex-sdk`, pinned in `pantheon/package.json`, which runs the Codex CLI binary it ships), and assignment 3 on xAI's Grok Build CLI. The preamble is [HARNESS-cli.md](HARNESS-cli.md).
 
 ```
 node pantheon/scripts/run-review.mjs --via subscription --assignment 1 --commit <40-hex> --max-wall-s 3600 --dry-run
@@ -44,14 +44,15 @@ node pantheon/scripts/run-review.mjs --via subscription --assignment 3 --commit 
 node pantheon/scripts/run-review.mjs --via subscription --assignment 4 --commit <40-hex> --max-wall-s 3600
 ```
 
-- `--max-wall-s` is required. It is the whole run's wall clock; with `--timeout-s` also given, the smaller one applies. The CLI's process group is killed when it is reached. The CLIs have no turn, tool-call or output-token caps, so `--max-turns`, `--max-tool-calls` and `--max-output-tokens` are ignored, with a note.
-- A dry run executes only the zero-spend preflights: `codex --version`, `codex login status` (it must report a ChatGPT sign-in) and `codex debug models` (it must list the model); `grok --version` and a non-empty Grok state directory; and the jailed `agy` preflight (an in-jail `/usage` for the login and the lane's quota, the card and `agy agents`). It then prints the plan: the exact argv (the prompt as its sha256), the environment names passed and removed, the sandbox, the writable paths, and what is verified and what is assumed.
-- A run that cannot start refuses (exit 1). It never falls back to the API. Every key, token and secret is removed from the CLI's environment, including `OPENAI_API_KEY`, `CODEX_API_KEY` and `XAI_API_KEY`, so a CLI cannot switch to metered billing. `--allow-api-key-in-cli` accepts a Codex CLI that reports an API-key login. `--skip-model-check` accepts a model catalog that cannot be read.
+- `--max-wall-s` is required. It is the whole run's wall clock; with `--timeout-s` also given, the smaller one applies. The CLI's process group is killed when it is reached; for Codex, the SDK's abort signal stops the codex process. The CLIs have no turn, tool-call or output-token caps, so `--max-turns`, `--max-tool-calls` and `--max-output-tokens` are ignored, with a note.
+- A dry run executes only the zero-spend preflights: for Codex, a check of the installed SDK's source (it must set `CODEX_API_KEY` only when it is given an API key, which the runner never does), then `codex --version`, `codex login status` (it must report a ChatGPT sign-in) and `codex debug models` (it must list the model), run against the codex binary the SDK will start (its own, or `--codex-cli PATH`); `grok --version` and a non-empty Grok state directory; and the jailed `agy` preflight (an in-jail `/usage` for the login and the lane's quota, the card and `agy agents`). It then prints the plan: the exact argv (the prompt as its sha256; Codex receives it on stdin from the SDK), the SDK version and options, the environment names passed and removed, the sandbox, the writable paths, and what is verified and what is assumed.
+- A run that cannot start refuses (exit 1). It never falls back to the API. Every key, token and secret is removed from the CLI's environment, including `OPENAI_API_KEY`, `CODEX_API_KEY` and `XAI_API_KEY`, so a CLI cannot switch to metered billing. The Codex SDK is given that environment explicitly and never an API key or a base URL, and the CLI is told `forced_login_method="chatgpt"`, so it refuses an API-key login. `--allow-api-key-in-cli` accepts a Codex CLI that reports an API-key login. `--skip-model-check` accepts a model catalog that cannot be read.
 - Sandboxes:
   - Antigravity runs in the unit worker's bwrap jail, with the PreToolUse hook enforcing a review policy. It may write only under `.review-tests/` (nothing for assignment 4), it may run only the exact test commands the preamble lists, and it has no MCP server.
-  - Codex runs in its own sandbox: `read-only` for assignment 4, `workspace-write` otherwise, with `-a never`.
+  - Codex runs in its own sandbox: `read-only` for assignment 4, `workspace-write` otherwise, with approval policy `never`.
   - Grok runs in the runner's bwrap jail: the worktree is read-only except `.review-tests/` (assignments 1 to 3), and the CLI sees a per-run copy of its state directory.
 - After every run the runner compares `git status` of the worktree with its state before the run. A changed path outside `.review-tests/` (any change for assignment 4), or a moved HEAD, is recorded under `policy_violations`, and the status becomes `policy_violation`.
+- A failure Codex reports (a `turn.failed` event, or an error raised by the SDK) makes the status `failed`, with Codex's message as the `stop_reason`.
 - The findings header records `via`, `transport`, `cli_version`, `auth_method_observed`, `served_model_source: input` (no CLI names the model that served), `subscription_coverage` and `sandbox`. `subscription_coverage` is `documented` for Codex and Antigravity. It is `undocumented` for Grok: xAI does not say whether a SuperGrok or X Premium subscription covers CLI usage.
 
 **API mode (`--via api`).** The metered API, with the owner's key in `OPENAI_API_KEY`, `XAI_API_KEY` or `GEMINI_API_KEY`. The preamble is [HARNESS.md](HARNESS.md).
@@ -67,7 +68,7 @@ node pantheon/scripts/run-review.mjs --via api --assignment 2 --commit <40-hex> 
 node pantheon/scripts/run-review.mjs --via subscription --assignment 1 --commit <40-hex> --max-wall-s 3600 --continue docs/reviews/2026-11-18-independent-review/findings-<n>-google.transcript.json
 ```
 
-- The transcript must be for the same assignment, lab, model, `--via` (and transport) and commit. Its findings file must say `status: incomplete` and name the transcript's sha256, and the README and the assignment file must be unchanged since that run. Otherwise the run is refused. Transcripts written before this feature are refused too: they lack the reviewer's `.review-tests/` files and the full tool results.
+- The transcript must be for the same assignment, lab, model, `--via` (and transport) and commit. Its findings file must say `status: incomplete` (or `status: failed`, in subscription mode) and name the transcript's sha256, and the README and the assignment file must be unchanged since that run. Otherwise the run is refused. Transcripts written before this feature are refused too: they lack the reviewer's `.review-tests/` files and the full tool results.
 - The new limits are the ones passed now, and they may be higher. The findings header adds `continued_from` (the earlier transcript's sha256), `continuation_method`, `runs` and the cumulative usage and calls. The earlier pair is kept as `findings-<n>-<lab>.prev-<sha12>.md` and `.transcript.prev-<sha12>.json`.
 - The worktree is rebuilt at the same commit, and the files the reviewer wrote under `.review-tests/` are restored.
 - How each transport continues:
@@ -75,7 +76,8 @@ node pantheon/scripts/run-review.mjs --via subscription --assignment 1 --commit 
   - Gemini and xAI over the API replay the recorded conversation.
   - A reply that was cut off is kept, and the model is asked for the complete document.
   - Antigravity resumes its own conversation (`--conversation <id>`), with the conversation state an incomplete run saved beside its transcript (`findings-<n>-google.agy-state/`).
-  - Codex (whose documented `exec resume` takes no sandbox or workspace options) and Grok (no documented resume) start a new session. Its prompt is the same preamble, README and assignment, plus a delimited appendix of the reviewer's own earlier messages and tool results from that transcript, and nothing else.
+  - Codex resumes its own thread (the SDK's `resumeThread`, with the thread id from the transcript), working in the rebuilt worktree with the same sandbox. This needs the thread's session file in `~/.codex/sessions` on the same machine.
+  - Grok (no documented resume), and Codex when that session file is missing, start a new session. Its prompt is the same preamble, README and assignment, plus a delimited appendix of the reviewer's own earlier messages and tool results from that transcript, and nothing else.
 
 ## Running the existing suites
 

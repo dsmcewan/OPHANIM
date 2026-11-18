@@ -1,16 +1,18 @@
-// `--via subscription` end to end with FAKE CLIs only (tests/fixtures/review-clis.mjs for codex and grok, the fake agy
-// of tests/fixtures/dispatch.mjs under the real bwrap). No network, no real CLI, no key: the API keys put in the parent
-// environment here exist only to prove they never reach a child.
+// `--via subscription` end to end with FAKES only (tests/fixtures/review-clis.mjs: the fake codex binary for the preflight,
+// the fake Codex SDK for the run, the fake grok; the fake agy of tests/fixtures/dispatch.mjs under the real bwrap). No
+// network, no real CLI, no key: the API keys put in the parent environment here exist only to prove they never reach a
+// child. One test drives the REAL @openai/codex-sdk against the fake codex binary.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main, EXIT } from "../src/review-runner/index.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { fixtureRepo, fakeFetch, capture, deps, FAKE_KEY, sh, mkdtemp, cleanup } from "./review-runner-helper.mjs";
-import { fakeReviewClis } from "./fixtures/review-clis.mjs";
+import { fakeCodexSdk, fakeReviewClis } from "./fixtures/review-clis.mjs";
 import { fakeAgy } from "./fixtures/dispatch.mjs";
 
 after(cleanup);
@@ -30,14 +32,20 @@ async function setup() {
 }
 const calls = async log => (existsSync(log) ? (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : []);
 
-async function run(f, { n, args = [], env = {} }) {
+// Codex (2 and 4): the preflight runs the fake binary (--codex-cli, also the SDK's codexPathOverride) and the run the
+// fake SDK, unless `realSdk` (the installed @openai/codex-sdk spawning the fake binary) or `extra` deps say otherwise.
+async function run(f, { n, args = [], env = {}, realSdk = false, extra = {} }) {
   const out = capture(), fetch = fakeFetch([]);
   const d = await deps({ root: f.repo.root, out, fetch, env: { PATH: `${f.bin}:${process.env.PATH}`, HOME: f.home, FAKE_CLI_LOG: f.log, ...KEYS, ...env } });
-  const code = await main(["--via", "subscription", "--assignment", String(n), "--commit", f.repo.commit, "--out", f.outDir, ...args], d);
+  const codex = n === 2 || n === 4;
+  if (codex && !realSdk) d.CodexSDK = fakeCodexSdk();
+  Object.assign(d, extra);
+  const cliArg = codex && !args.includes("--codex-cli") && !extra.inspectCodexSdk ? ["--codex-cli", f.clis.codex] : [];
+  const code = await main(["--via", "subscription", "--assignment", String(n), "--commit", f.repo.commit, "--out", f.outDir, ...cliArg, ...args], d);
   const plan = (() => { try { return JSON.parse(out.out); } catch { return null; } })();
   const files = await readdir(f.outDir);
   const read = name => readFile(join(f.outDir, name), "utf8");
-  return { code, out, fetch, plan, files, read, d };
+  return { code, out, fetch, plan, files, read, d, sdk: d.CodexSDK?.calls ?? null };
 }
 const headerOf = md => md.split("<!-- reviewer's final message, verbatim, follows -->\n\n")[0];
 const bodyOf = md => md.split("<!-- reviewer's final message, verbatim, follows -->\n\n")[1];
@@ -56,51 +64,99 @@ test("usage: --via is required, subscription requires --max-wall-s, the API caps
   assert.deepEqual(r.plan.limits.ignored, ["--max-turns"]);
 });
 
-test("codex dry run: only the zero-spend preflights (version, login status, model list), the plan with the redacted argv, no model turn, no API call", async () => {
+const SDK_ARGV = wt => ["exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', "--model", "gpt-6-astra", "--sandbox", "workspace-write", "--cd", wt, "--skip-git-repo-check", "--config", 'approval_policy="never"'];
+
+test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's binary (version, login status, model list), the SDK's argv with the prompt on stdin, no model turn", async () => {
   const f = await setup();
   const r = await run(f, { n: 2, args: ["--max-wall-s", "600", "--dry-run"] });
   assert.equal(r.code, EXIT.complete, r.out.err);
   assert.equal(r.fetch.calls.length, 0);
+  assert.deepEqual(r.sdk, [], "no SDK object was constructed: no model turn");
   const c = await calls(f.log);
   assert.deepEqual(c.map(x => x.argv.slice(0, 2).join(" ")), ["--version", "login status", "debug models"]);
   const p = r.plan;
-  assert.deepEqual([p.via, p.transport, p.requested_model, p.subscription_coverage, p.model_turns, p.preflight.ok], ["subscription", "codex-cli", "gpt-6-astra", "documented", 0, true]);
-  assert.equal(p.argv[0], f.clis.codex);
-  assert.deepEqual(p.argv.slice(1, -3), ["exec", "--json", "-m", "gpt-6-astra", "-C", p.worktree.path, "--skip-git-repo-check", "-a", "never", "--sandbox", "workspace-write"]);
-  assert.match(p.argv.at(-1), /^<prompt sha256:[0-9a-f]{64}>$/);
-  assert.equal(p.argv.at(-1), `<prompt sha256:${p.prompt.sha256}>`);
+  assert.deepEqual([p.via, p.transport, p.requested_model, p.subscription_coverage, p.model_turns, p.preflight.ok], ["subscription", "codex-sdk", "gpt-6-astra", "documented", 0, true]);
+  assert.deepEqual([p.sdk.package, p.sdk.version, p.sdk.ok, p.sdk.binary.path, p.sdk.key_injection.conditional], ["@openai/codex-sdk", "0.170.0", true, f.clis.codex, true]);
+  assert.deepEqual(p.argv.slice(0, -1), [f.clis.codex, ...SDK_ARGV(p.worktree.path)]);
+  assert.equal(p.argv.at(-1), `(stdin: <prompt sha256:${p.prompt.sha256}>)`);
+  assert.deepEqual(p.thread_options, { model: "gpt-6-astra", sandboxMode: "workspace-write", workingDirectory: p.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
+  assert.deepEqual([p.sdk_options.apiKey, p.sdk_options.baseUrl, p.sdk_options.codexPathOverride, p.sdk_options.config], ["never passed", "never passed", f.clis.codex, { forced_login_method: "chatgpt" }]);
   assert.equal(p.preflight.checks.login_status.auth_method_observed, "chatgpt");
   assert.equal(p.preflight.checks.model_list.status, "listed");
   for (const k of ["OPENAI_API_KEY", "CODEX_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY"]) { assert.ok(p.env.removed.includes(k), k); assert.ok(!p.env.passed.includes(k), k); }
+  assert.ok(p.env.passed.includes("HOME"), "HOME is kept: the CLI's ChatGPT login lives under it");
   assert.ok(p.verified_by_preflight.length && p.assumed.length && p.enforced_by_runner.length);
   assert.ok(!JSON.stringify(p).includes(FAKE_KEY));
   assert.deepEqual(await readdir(f.outDir), []);
   assert.deepEqual(await readdir(r.d.tmpBase), [], "the stand-in worktree is removed");
 });
 
-test("codex run, assignment 4: read-only sandbox, scrubbed env, findings header fields, the final message verbatim", async () => {
+test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary, no apiKey/baseUrl, read-only thread options; the events become the transcript; the final message verbatim", async () => {
   const f = await setup();
   const r = await run(f, { n: 4, args: ["--max-wall-s", "60"] });
   assert.equal(r.code, EXIT.complete, r.out.err);
-  const exec = (await calls(f.log)).find(x => x.argv[0] === "exec");
-  assert.equal(exec.argv[exec.argv.indexOf("--sandbox") + 1], "read-only");
-  assert.equal(exec.argv[exec.argv.indexOf("-m") + 1], "gpt-6.1-sol");
-  assert.deepEqual((await calls(f.log)).map(x => x.keys), [[], [], [], []], "no OPENAI_API_KEY, CODEX_API_KEY or XAI_API_KEY reaches any codex invocation");
+  const [made, ran] = r.sdk;
+  assert.deepEqual(made.option_names, ["codexPathOverride", "config", "env"], "never apiKey or baseUrl");
+  assert.deepEqual([made.codexPathOverride, made.config, made.env_keylike, made.home], [f.clis.codex, { forced_login_method: "chatgpt" }, [], f.home]);
+  assert.deepEqual((await calls(f.log)).map(x => x.keys), [[], [], []], "no key reaches the preflight either");
+  const t = JSON.parse(await r.read("findings-4-openai.transcript.json"));
+  assert.deepEqual(ran.thread_options, { model: "gpt-6.1-sol", sandboxMode: "read-only", workingDirectory: r.plan.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
+  assert.equal(ran.resume_id, null);
+  assert.equal(ran.has_signal, true, "the wall clock goes to the SDK as an AbortSignal");
+  assert.equal(createHash("sha256").update(ran.input).digest("hex"), t.prompt.sha256, "the prompt given to the SDK is the recorded one");
   const md = await r.read("findings-4-openai.md");
   const h = headerOf(md);
-  for (const line of ["- status: complete", "- via: subscription", "- transport: codex-cli", "- cli_version: `codex-cli 9.9.9-fake`", "- auth_method_observed: chatgpt",
+  for (const line of ["- status: complete", "- via: subscription", "- transport: codex-sdk", "- cli_version: `codex-cli 9.9.9-fake`", "- auth_method_observed: chatgpt",
     "- subscription_coverage: documented", "- requested_model: `gpt-6.1-sol`", "- served_model: `gpt-6.1-sol`", "- policy_violations: none"]) assert.ok(h.includes(line + "\n"), line);
   assert.match(h, /- served_model_source: input/);
-  assert.match(h, /- sandbox: codex read-only/);
+  assert.match(h, /- sandbox: codex read-only .*approvals never/);
   assert.match(h, /- usage_totals: `\{"input_tokens":100,"cached_input_tokens":10,"output_tokens":20\}`/);
-  assert.match(h, /- prompt_sha256: `[0-9a-f]{64}`/);
   assert.equal(bodyOf(md), "# Findings (fake codex)\n\n1. holds\n\nModel: gpt-6.1-sol\n");
-  const t = JSON.parse(await r.read("findings-4-openai.transcript.json"));
-  assert.deepEqual([t.via, t.transport, t.worktree_check.violations], ["subscription", "codex-cli", []]);
+  assert.deepEqual([t.via, t.transport, t.status, t.worktree_check.violations], ["subscription", "codex-sdk", "complete", []]);
+  assert.match(t.cli.thread_id, /^01a1f0fe-/, "the thread id is recorded (for --continue)");
+  assert.deepEqual([t.cli.commands.length, t.cli.turns_completed, t.cli.errors], [1, 1, ["Reconnecting... 1/5 (stream disconnected)"]], "a retry error event is recorded, not a failure");
+  assert.ok(t.cli.own.some(o => o.kind === "your message"));
   for (const s of [md, JSON.stringify(t), r.out.out, r.out.err]) for (const v of Object.values(KEYS)) assert.ok(!s.includes(v));
   assert.equal(r.fetch.calls.length, 0);
   assert.deepEqual(await readdir(r.d.tmpBase), []);
   assert.equal((await sh("git", ["-C", f.repo.root, "worktree", "list"])).trim().split("\n").length, 1);
+});
+
+test("codex through the REAL @openai/codex-sdk spawning the fake binary: the argv it builds is the plan's, the prompt goes to stdin, no key in its env", async () => {
+  const f = await setup();
+  const r = await run(f, { n: 2, args: ["--max-wall-s", "60"], realSdk: true });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  const log = await calls(f.log);
+  const exec = log.find(x => x.argv?.[0] === "exec");
+  assert.deepEqual([f.clis.codex, ...exec.argv], r.plan.argv.slice(0, -1), "the SDK spawned exactly the argv the plan records");
+  assert.deepEqual(exec.keys, [], "no CODEX_API_KEY (or any key) in the env the SDK gave the CLI");
+  const t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
+  const stdin = log.find(x => x.stdin_bytes !== undefined);
+  assert.deepEqual([stdin.stdin_bytes, stdin.originator], [t.prompt.bytes, "codex_sdk_ts"]);
+  assert.equal(t.cli.thread_id, "01a1f0fe-0000-7000-8000-0000000000b1");
+  assert.match(bodyOf(await r.read("findings-2-openai.md")), /^# Findings \(fake codex binary\)\n\nModel: gpt-6-astra in \//);
+  // A failure the CLI reports reaches the findings as `failed` with its message.
+  const r2 = await run(f, { n: 2, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "fail" }, realSdk: true });
+  assert.equal(r2.code, EXIT.incomplete);
+  assert.match(headerOf(await r2.read("findings-2-openai.md")), /- status: failed\n- stop_reason: codex reported turn\.failed: usage limit reached\n/);
+  assert.match(JSON.parse(await r2.read("findings-2-openai.transcript.json")).cli.sdk_error, /Codex Exec exited with code 1: fatal: usage limit reached/);
+});
+
+test("codex failure is explicit: turn.failed and a thrown SDK error are status `failed` with the message; no findings body", async () => {
+  const f = await setup();
+  let r = await run(f, { n: 2, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "fail" } });
+  assert.equal(r.code, EXIT.incomplete);
+  let md = await r.read("findings-2-openai.md");
+  assert.match(headerOf(md), /- status: failed\n- stop_reason: codex reported turn\.failed: usage limit reached\n/);
+  assert.equal(bodyOf(md), "");
+  let t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
+  assert.deepEqual([t.status, t.cli.turn_failed, t.cli.commands.length], ["failed", "usage limit reached", 1]);
+  r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "throw" } });
+  assert.equal(r.code, EXIT.incomplete);
+  md = await r.read("findings-2-openai.md");
+  assert.match(headerOf(md), /- status: failed\n- stop_reason: the Codex SDK reported a failure: Codex Exec exited with code 1: ChatGPT login is required/);
+  t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
+  assert.deepEqual([t.cli.events, t.cli.thread_id], [0, null]);
 });
 
 test("the post-run git check: a change outside .review-tests/ is a policy violation; inside it is allowed for 1-3 and a violation for 4", async () => {
@@ -120,9 +176,8 @@ test("the post-run git check: a change outside .review-tests/ is a policy violat
   assert.match(h, /- policy_violations: `\.review-tests\/x\.test\.mjs`/);
 });
 
-test("codex refusals, never a fallback: API-key login, no login, model missing, unreadable catalog, CLI absent", async () => {
+test("codex refusals, never a fallback: API-key login, no login, model missing, unreadable catalog, binary absent, an SDK that would inject CODEX_API_KEY", async () => {
   const f = await setup();
-  const execs = async () => (await calls(f.log)).filter(x => x.argv[0] === "exec").length;
   let r = await run(f, { n: 2, args: ["--max-wall-s", "60"], env: { FAKE_CODEX_LOGIN: "apikey" } });
   assert.equal(r.code, EXIT.refused);
   assert.match(r.out.err, /reports an API key/);
@@ -130,6 +185,7 @@ test("codex refusals, never a fallback: API-key login, no login, model missing, 
   assert.doesNotMatch(r.out.out, /ABCDEFGHIJKLMNOPQRSTUVWX/, "the login status text is recorded redacted");
   r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--allow-api-key-in-cli", "--dry-run"], env: { FAKE_CODEX_LOGIN: "apikey" } });
   assert.equal(r.code, EXIT.complete, "explicitly allowed");
+  assert.equal(r.plan.sdk_options.config, undefined, "and then no forced ChatGPT login");
   r = await run(f, { n: 2, args: ["--max-wall-s", "60"], env: { FAKE_CODEX_LOGIN: "none" } });
   assert.equal(r.code, EXIT.refused);
   r = await run(f, { n: 2, args: ["--max-wall-s", "60"], env: { FAKE_CODEX_MODELS: "missing" } });
@@ -142,23 +198,36 @@ test("codex refusals, never a fallback: API-key login, no login, model missing, 
   r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--codex-cli", join(f.base, "absent")] });
   assert.equal(r.code, EXIT.refused);
   assert.match(r.out.err, /never falls back to the API/);
-  assert.equal(await execs(), 0, "no model run was started");
+  // Without --codex-cli the binary is the SDK's own; when its platform package is missing, that is a refusal.
+  const noBinary = () => ({ ok: true, version: "0.170.0", entry: "/x", key_injection: { conditional: true, sites: [262], bad: [] }, binary: { ok: false, why: "the Codex CLI binaries were not found" } });
+  r = await run(f, { n: 2, args: ["--max-wall-s", "60"], extra: { inspectCodexSdk: noBinary } });
+  assert.equal(r.code, EXIT.refused);
+  assert.match(r.out.err, /the codex binary the SDK would spawn was not found \(the Codex CLI binaries were not found\)/);
+  // An SDK whose source sets CODEX_API_KEY without an apiKey option would bill the API: refused, not worked around.
+  const keyed = () => ({ ok: true, version: "9.9.9", entry: "/x", key_injection: { conditional: false, sites: [10], bad: [{ line: 10, text: "env.CODEX_API_KEY = process.env.OPENAI_API_KEY;" }] }, binary: { ok: true, path: f.clis.codex, path_dirs: [] } });
+  r = await run(f, { n: 2, args: ["--max-wall-s", "60"], extra: { inspectCodexSdk: keyed } });
+  assert.equal(r.code, EXIT.refused);
+  assert.match(r.out.err, /sets CODEX_API_KEY other than only when an apiKey option is passed .*refuses/);
+  assert.deepEqual(r.sdk, [], "no SDK object was constructed");
   assert.equal(r.fetch.calls.length, 0);
   assert.ok(!r.files.some(x => x.startsWith("findings-2")));
 });
 
-test("the wall clock kills the CLI's process group (its child too) and the run is incomplete", async () => {
+test("the wall clock aborts the SDK turn (its AbortSignal) and the run is incomplete; a stream that ignores the abort is abandoned after the grace", async () => {
   const f = await setup();
-  const pidfile = join(f.base, "child.pid");
   const t0 = Date.now();
-  const r = await run(f, { n: 2, args: ["--max-wall-s", "2"], env: { FAKE_CLI_MODE: "hang", FAKE_CLI_PIDFILE: pidfile } });
+  let r = await run(f, { n: 2, args: ["--max-wall-s", "1"], env: { FAKE_CLI_MODE: "hang" } });
   assert.equal(r.code, EXIT.incomplete);
   assert.ok(Date.now() - t0 < 20_000);
-  assert.match(headerOf(await r.read("findings-2-openai.md")), /- stop_reason: wall clock reached \(2 s\): process group killed/);
-  const pid = Number(await readFile(pidfile, "utf8"));
-  let alive = true;
-  for (let i = 0; i < 40 && alive; i++) { try { process.kill(pid, 0); await new Promise(res => setTimeout(res, 100)); } catch { alive = false; } }
-  assert.equal(alive, false, "the CLI's child process was killed with its group");
+  let h = headerOf(await r.read("findings-2-openai.md"));
+  assert.match(h, /- status: incomplete\n- stop_reason: wall clock reached \(1 s\): the SDK's abort signal stopped codex\n/);
+  let t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
+  assert.deepEqual([t.killed_for, t.cli.aborted_by_wall_clock, t.cli.abort_stalled], ["timeout", true, false]);
+  assert.match(t.cli.thread_id, /^01a1f0fe-/, "the thread id from before the abort is kept");
+  r = await run(f, { n: 2, args: ["--max-wall-s", "1", "--force"], env: { FAKE_CLI_MODE: "deaf" }, extra: { codexAbortGraceMs: 200 } });
+  assert.equal(r.code, EXIT.incomplete);
+  h = headerOf(await r.read("findings-2-openai.md"));
+  assert.match(h, /- stop_reason: wall clock reached \(1 s\): the SDK's abort signal stopped codex; its event stream had not ended 0\.2 s later, so the runner stopped waiting/);
 });
 
 test("grok, assignment 3: inside bwrap -- worktree read-only, .review-tests writable, state dir a scratch copy; XAI_API_KEY scrubbed; coverage undocumented; unknowns printed", needBwrap, async () => {

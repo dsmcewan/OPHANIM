@@ -10,7 +10,8 @@
 // API mode continues the conversation (index.mjs: OpenAI from the last response id with previous_response_id and the
 // pending function_call_output items; Gemini and xAI by replaying the recorded responses and FULL tool results, which
 // transcripts now store, capped at RESULT_CAP). Subscription mode resumes where the CLI documents a headless resume
-// and the runner can supply its state (agy: --conversation <id> with the earlier run's conversation state restored);
+// and the runner can supply its state (agy: --conversation <id> with the earlier run's conversation state restored;
+// codex: the SDK's resumeThread(<thread id>) with this run's worktree and sandbox, when the thread is on this machine);
 // otherwise it starts a new session whose prompt carries a delimited appendix of the reviewer's own earlier messages
 // and tool results (`replayed-own-transcript`).
 import { copyFile, lstat, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
@@ -102,11 +103,12 @@ export async function loadContinuation(path, expect) {
   if (via !== expect.via) mism.push(`via ${via} vs ${expect.via}`);
   if (expect.transport && t.transport !== expect.transport) mism.push(`transport ${t.transport} vs ${expect.transport}`);
   if (mism.length) refuse(`--continue ${name} is not this review: ${mism.join("; ")}`);
-  if (t.status !== "incomplete") refuse(`--continue ${name}: its status is ${JSON.stringify(t.status)}; only an incomplete review is continued`);
+  // `failed` is a subscription run whose transport reported the failure itself (Codex: turn.failed, an SDK error).
+  if (t.status !== "incomplete" && !(via === "subscription" && t.status === "failed")) refuse(`--continue ${name}: its status is ${JSON.stringify(t.status)}; only an incomplete review is continued (in subscription mode, a failed one too)`);
   const findings = join(dirname(path), name.replace(/\.transcript\.json$/, ".md"));
   let md;
   try { md = await readFile(findings, "utf8"); } catch { refuse(`--continue ${name}: its findings file ${basename(findings)} is missing`); }
-  if (!/^- status: incomplete$/m.test(md)) refuse(`--continue ${name}: ${basename(findings)} does not say \`status: incomplete\``);
+  if (!new RegExp(`^- status: ${t.status}$`, "m").test(md)) refuse(`--continue ${name}: ${basename(findings)} does not say \`status: ${t.status}\``);
   const named = /^- transcript: `[^`]+` sha256 `([0-9a-f]{64})`$/m.exec(md)?.[1];
   if (named !== tsha) refuse(`--continue ${name}: ${basename(findings)} names transcript sha256 ${named ?? "none"}, the file is ${tsha}`);
   const briefSha = via === "api" ? t.hashes?.brief : t.prompt?.brief_sha256;
