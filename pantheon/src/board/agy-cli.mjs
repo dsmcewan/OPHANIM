@@ -126,11 +126,14 @@ export const AGY_CLEANUP = Object.freeze({ name: "ANTIGRAVITY_AGY_CLEANUP", valu
   note: "owner-specified (2026-11-18); not documented in Antigravity's CLI docs" });
 
 export function workerArgv({ model, worktree, prompt, timeoutS }) {
+  // --disable-slash-commands ("Disable slash command and skill expansion in print mode", agy 1.5.10 --help): the prompt
+  // carries plan and repository text, which must never expand into a slash command or a skill.
   return ["--agent", WORKER_AGENT, "--model", model, "--mode=accept-edits", "--add-dir", worktree,
-    "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`, "--print", prompt];
+    "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`, "--print", prompt];
 }
 export function workerEnv(extra = {}) {
-  const env = { ...process.env, ...(extra ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value };
+  // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
+  const env = { ...process.env, ...(extra ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
   delete env.GEMINI_API_KEY;
   delete env.GOOGLE_API_KEY;
   return env;

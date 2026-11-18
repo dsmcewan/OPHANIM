@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { spawnPromise } from "../src/board/spawn.mjs";
 import { probeQuota, parseQuotaReport, minimalEnv } from "../src/agy/quota.mjs";
 
-const WANTED = ["--mode", "--add-dir", "--agent", "--output-format", "--print-timeout"];
+const WANTED = ["--disable-slash-commands", "--mode", "--add-dir", "--agent", "--output-format", "--print-timeout"];
 
 async function onPath(name) {
   for (const d of String(process.env.PATH ?? "").split(":").filter(Boolean)) if (existsSync(join(d, name))) return join(d, name);
@@ -31,6 +31,7 @@ const version = await run(["--version"]);
 const text = `${help.out}\n${help.err}`;
 const flags = Object.fromEntries(WANTED.map(f => [f, new RegExp(`(^|[\\s,\\[])${f.replace(/-/g, "\\-")}(?![\\w-])`, "m").test(text)]));
 const quota = await probeQuota({ cli });
+const lane = await probeQuota({ cli, model: "gemini-4-carbon-high" });   // narrowed to the group that serves the lane
 const quotaRaw = await run(["-p", "/quota"]);
 console.log(JSON.stringify({
   agy: cli,
@@ -38,7 +39,8 @@ console.log(JSON.stringify({
   help: { exit: help.exit, bytes: text.length },
   flags_in_help: flags,
   dangerous_flag_in_help: /--dangerously-skip-permissions/.test(text),
-  quota: { state: quota.state, buckets: quota.buckets, exit_code: quota.exit_code, raw_digest: quota.raw_digest, error: quota.error ?? null },
+  quota: { state: quota.state, format: quota.format ?? null, spent: quota.spent ?? null, buckets: quota.buckets, exit_code: quota.exit_code, raw_digest: quota.raw_digest, error: quota.error ?? null },
+  quota_for_carbon_lane: { state: lane.state, scope: lane.scope ?? null },
   quota_raw_head: `${quotaRaw.out}`.slice(0, 2000),
   reparsed_state: parseQuotaReport(quotaRaw.out ?? "").state,
 }, null, 2));

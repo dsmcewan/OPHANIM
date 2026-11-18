@@ -5,10 +5,13 @@
 //     "produce[s] a text report rather than a standard event stream" (`agy -p /quota`).
 //   - model groups "share a weekly limit and a five-hour limit"; release 1.5.10: "spend-cap, prepaid-balance, and
 //     weekly quota errors now stop the turn right away"; a failing run "exits non-zero and writes the reason to stderr".
-// NOT documented: the report's format, its field names, whether it spends tokens. The parser below is therefore
-// TOLERANT and CONSERVATIVE: it recognises bucket names and a few phrasings, and it never answers `exhausted` unless a
-// recognised bucket says so unambiguously. Anything it cannot read is `unknown`. The samples in
-// tests/agy-quota.test.mjs are INVENTED fixtures, not observed output.
+// OBSERVED on the owner's machine (agy 1.5.10, 2026-11-18): `agy --print /usage --output-format json` exits 0 with
+// num_turns 0 and every token counter 0 (it spends nothing), and returns a JSON envelope whose `command.data.groups[]`
+// each carry a `description` naming their models ("Models within this group: Gemini 4 Carbon, ...") and `buckets[]`
+// `{id, name, window: "weekly" | "5h", remaining_fraction, reset_time}`. The text form is one tab-separated line per
+// bucket: `<group>\t<bucket name>\t<N>%\t<reset time>`. That observed output is the primary format here
+// (parseUsageEnvelope); the tolerant text parser stays as the fallback, and still never answers `exhausted` on
+// ambiguity. Quota is per MODEL GROUP: a lane's failover is decided on its own group only (scopeQuota).
 //
 // Exports:
 //   isQuotaFailure({status, stderr, result})  -> boolean   (any quota evidence: explicit or soft)
@@ -150,11 +153,60 @@ export function parseQuotaReport(text) {
       line += " | " + lines[j];
     }
     const d = decide(name, facts, line);
+    // The observed text form leads each line with its model group, tab-separated.
+    if (line.includes("\t")) d.bucket.group = line.split("\t")[0].trim();
     buckets.push(d.bucket);
     if (d.known) known++;
   }
   const state = buckets.some(b => b.exhausted) ? "exhausted" : known > 0 ? "available" : "unknown";
   return { state, buckets };
+}
+
+// ---- the structured report (observed, agy 1.5.10) ------------------------------------------------------------------
+
+const modelsOf = description => {
+  const m = /models within this group:\s*(.+)$/i.exec(String(description ?? ""));
+  return m ? m[1].split(",").map(x => x.trim()).filter(Boolean) : [];
+};
+/**
+ * Read the `--output-format json` envelope of `/usage`. Returns null when `obj` is not that envelope. A bucket is
+ * exhausted when its `remaining_fraction` is a number <= 0; a bucket without a number is not a reading.
+ */
+export function parseUsageEnvelope(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  const groups = obj.command?.data?.groups;
+  const spent = { num_turns: obj.num_turns ?? null, total_tokens: obj.usage?.total_tokens ?? null };
+  if (Array.isArray(groups)) {
+    const buckets = groups.flatMap(g => (Array.isArray(g?.buckets) ? g.buckets : []).map(b => {
+      const f = typeof b?.remaining_fraction === "number" && Number.isFinite(b.remaining_fraction) ? b.remaining_fraction : null;
+      return { group: String(g.name ?? ""), models: modelsOf(g.description), id: b?.id ?? null, name: b?.name ?? null, window: b?.window ?? null,
+        remaining_fraction: f, remaining: f === null ? undefined : Math.round(f * 100), remaining_unit: f === null ? undefined : "%",
+        resets_at: b?.reset_time ?? null, exhausted: f !== null && f <= 0 };
+    }));
+    const state = buckets.some(b => b.exhausted) ? "exhausted" : buckets.some(b => b.remaining_fraction !== null) ? "available" : "unknown";
+    return { state, buckets, format: "json", spent };
+  }
+  if (typeof obj.response === "string") return { ...parseQuotaReport(obj.response), format: "json-text", spent };
+  return null;
+}
+/** A model's display name as the report lists it: `gemini-4-carbon` -> "Gemini 4 Carbon". */
+export const displayNameOf = base => String(base).split("-").map(w => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
+/**
+ * The report narrowed to the group that serves `base` (a base model id, no thinking suffix). A group that lists its
+ * models must list this one; a text-only group (no model list) matches by its name naming the model's family. No
+ * matching group: `unknown` (another group's spent quota says nothing about this lane).
+ */
+export function scopeQuota(report, base) {
+  if (!base || !report) return report;
+  const name = displayNameOf(base), family = String(base).split("-")[0].toLowerCase();
+  // A report whose buckets name no group at all (a format other than the observed one) cannot be narrowed: it is
+  // read as a whole, and the record says it was not scoped.
+  if (!(report.buckets ?? []).some(b => b.group || b.models?.length)) return { ...report, scope: { model: base, display_name: name, groups: [], unscoped: true, all_state: report.state } };
+  const hit = b => (b.models?.length ? b.models.includes(name) : typeof b.group === "string" && b.group.toLowerCase().includes(family));
+  const buckets = (report.buckets ?? []).filter(hit);
+  const groups = [...new Set(buckets.map(b => b.group))];
+  const state = !buckets.length ? "unknown" : buckets.some(b => b.exhausted) ? "exhausted" : buckets.some(b => b.remaining_fraction != null || b.remaining != null || b.used_pct != null) ? "available" : "unknown";
+  return { ...report, state, buckets, scope: { model: base, display_name: name, groups, all_state: report.state } };
 }
 
 // ---- the probe ------------------------------------------------------------------------------------------------------
@@ -170,19 +222,29 @@ export function minimalEnv(extra = {}) {
 }
 
 /**
- * Run `agy -p /quota` once (no model, no workspace: an empty temporary cwd) and read its report.
- * Returns {state, buckets, raw_digest, exit_code, command, error?}. A probe that cannot run is `unknown`, never
- * `exhausted`. Whether the command spends tokens is undocumented; it names no model.
+ * Run `agy --print /usage --output-format json` once (no model, no workspace: an empty temporary cwd; observed to
+ * spend no tokens on agy 1.5.10) and read its report, narrowed to the group serving `model` when one is given.
+ * Returns {state, buckets, raw_digest, exit_code, format, spent, scope?, command?, error?}. A probe that cannot run
+ * is `unknown`, never `exhausted`. Output that is not the JSON envelope is read with the text parser.
  */
-export async function probeQuota({ cli, env = {}, timeoutS = 30, signal = undefined } = {}) {
-  const command = [cli, "-p", "/quota"];
+export const PROBE_ARGS = Object.freeze(["--print", "/usage", "--output-format", "json"]);
+export async function probeQuota({ cli, env = {}, timeoutS = 30, signal = undefined, model = null } = {}) {
+  const command = [cli, ...PROBE_ARGS];
+  const base = model ? String(model).replace(/-(low|medium|high|xhigh|max)$/, "") : null;
   const cwd = await mkdtemp(join(tmpdir(), "pantheon-agy-quota-"));
   try {
-    const run = await spawnPromise(cli, ["-p", "/quota"], { cwd, env: minimalEnv(env), timeout: timeoutS * 1000, maxBuffer: 1024 * 1024, ...(signal ? { signal } : {}) });
+    const run = await spawnPromise(cli, [...PROBE_ARGS], { cwd, env: minimalEnv({ AGY_CLI_DISABLE_AUTO_UPDATE: "true", ...env }), timeout: timeoutS * 1000, maxBuffer: 1024 * 1024, ...(signal ? { signal } : {}) });
     const text = `${run.stdout ?? ""}\n${run.stderr ?? ""}`;
     const raw_digest = "sha256:" + createHash("sha256").update(text).digest("hex");
     if (run.killedFor) return { state: "unknown", buckets: [], raw_digest, exit_code: null, command, error: `the probe was stopped (${run.killedFor})` };
-    const parsed = parseQuotaReport(run.stdout ?? "");
+    let envelope = null;
+    try { envelope = parseUsageEnvelope(JSON.parse(run.stdout ?? "")); } catch { /* not the JSON envelope: read it as text */ }
+    if (envelope) {
+      const scoped = base ? scopeQuota(envelope, base) : envelope;
+      return { state: scoped.state, buckets: scoped.buckets, raw_digest, exit_code: run.status, format: envelope.format, spent: envelope.spent, ...(scoped.scope ? { scope: scoped.scope } : {}) };
+    }
+    const parsedAll = parseQuotaReport(run.stdout ?? "");
+    const parsed = base ? scopeQuota(parsedAll, base) : parsedAll;
     // stdout is the report; a probe that failed may still say why on stderr — read it too, but only to add evidence.
     const errParsed = run.status !== 0 ? parseQuotaReport(run.stderr ?? "") : { state: "unknown", buckets: [] };
     const buckets = [...parsed.buckets, ...errParsed.buckets];

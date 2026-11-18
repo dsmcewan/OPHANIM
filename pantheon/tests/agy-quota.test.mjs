@@ -65,7 +65,7 @@ test("isQuotaFailure / quotaEvidence: explicit (429, RESOURCE_EXHAUSTED) vs soft
   assert.deepEqual(agyQuotaRefusal({ stderr: "weekly quota reached" }), { status: 429, code: "quota_exhausted", matched: "weekly quota", explicit: false });
 });
 
-test("probeQuota runs `agy -p /quota` (no model, minimal env, an empty cwd) and parses it; a failing or missing CLI is unknown", async t => {
+test("probeQuota runs `agy --print /usage --output-format json` (no model, minimal env, an empty cwd) and parses it; a failing or missing CLI is unknown", async t => {
   const dir = mkdtempSync(join(tmpdir(), "pantheon-quota-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cli = fakeAgy(dir);
@@ -87,7 +87,9 @@ test("probeQuota runs `agy -p /quota` (no model, minimal env, an empty cwd) and 
   assert.equal(r.state, "unknown");
   const { readFileSync } = await import("node:fs");
   const got = readFileSync(seen, "utf8");
-  assert.match(got, /^args=-p \/quota$/m, "no --model, no workspace flags");
+  // The structured form observed on agy 1.5.10 (it spent no tokens there): no --model, no workspace flags.
+  assert.match(got, /^args=--print \/usage --output-format json$/m, "no --model, no workspace flags");
+  assert.match(got, /^AGY_CLI_DISABLE_AUTO_UPDATE=true$/m);
   assert.doesNotMatch(got, /GEMINI_API_KEY|GOOGLE_API_KEY/);
   assert.match(got, /^EXTRA_FOR_PROBE=1$/m);
   assert.match(got, /^cwd=.*pantheon-agy-quota-/m, "an empty temporary cwd, not a workspace");

@@ -240,7 +240,7 @@ test("(f) argv has --mode=accept-edits and no --dangerously-skip-permissions or 
   await withFakeAgy(f.fx, async agy => {
     const r = await runAgyWorkerTurn({ ...(await prepared(f, "a")), env: { GEMINI_API_KEY: "nor-via-env" } });
     const inner = r.launch.args.slice(r.launch.args.indexOf("--") + 1);
-    assert.deepEqual(inner.slice(1), ["--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--output-format", "stream-json", "--print-timeout", "60s", "--print", "<prompt>"]);
+    assert.deepEqual(inner.slice(1), ["--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", "60s", "--print", "<prompt>"]);
     assert.equal(r.launch.cmd, "bwrap");
     assert.equal(r.launch.cwd, f.units.a.ctl);
     assert.deepEqual(r.cleanup_env, AGY_CLEANUP);

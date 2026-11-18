@@ -23,9 +23,14 @@ const FAKE_AGY = `#!/bin/sh
 here=$(cd "$(dirname "$0")" && pwd)
 # The quota probe (\`agy -p /quota\`): prints the scripted report next to this script (agyQuotaReport) and exits with
 # the scripted code. It is run with a minimal environment, so it reads files, not FAKE_AGY_* variables.
-if [ "$1" = "-p" ] && [ "$2" = "/quota" ]; then
+# Also the structured form the probe uses (\`agy --print /usage --output-format json\`, as observed on agy 1.5.10): a
+# scripted report that is itself the JSON envelope is printed as is; a text report is wrapped in one.
+if { [ "$1" = "-p" ] || [ "$1" = "--print" ]; } && { [ "$2" = "/quota" ] || [ "$2" = "/usage" ]; }; then
   printf 'quota %s\\n' "$#" >> "$here/agy.quota.log"
-  [ -f "$here/quota-report.txt" ] && cat "$here/quota-report.txt"
+  if [ "$3" = "--output-format" ] && [ "$4" = "json" ] && [ -f "$here/quota-report.txt" ]; then
+    if head -c 1 "$here/quota-report.txt" | grep -q '{'; then cat "$here/quota-report.txt"
+    else node -e 'const t=require("fs").readFileSync(process.argv[1],"utf8");process.stdout.write(JSON.stringify({conversation_id:"",status:"SUCCESS",response:t,num_turns:0,usage:{total_tokens:0},command:{name:"usage"}}))' "$here/quota-report.txt"; fi
+  else [ -f "$here/quota-report.txt" ] && cat "$here/quota-report.txt"; fi
   exit "$(cat "$here/quota-exit" 2>/dev/null || echo 0)"
 fi
 agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"

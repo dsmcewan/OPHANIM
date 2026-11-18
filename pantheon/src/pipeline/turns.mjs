@@ -212,7 +212,7 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       if (e?.code !== "quota_exhausted") throw e;   // lane_failure, SANDBOX_UNAVAILABLE, ABORTED, ...: as they are
       // QUOTA EVIDENCE. Probe once; then decide (see the header).
       const explicit = e.quota?.explicit === true || e.status === 429 && e.quota === undefined;
-      const seen = await probe({ cli, env: agy.probeEnv ?? {}, timeoutS: agy.probeTimeoutS ?? 30, ...(signal ? { signal } : {}) })
+      const seen = await probe({ cli, model, env: agy.probeEnv ?? {}, timeoutS: agy.probeTimeoutS ?? 30, ...(signal ? { signal } : {}) })
         .catch(err => ({ state: "unknown", buckets: [], raw_digest: null, exit_code: null, error: String(err?.message ?? err) }));
       const after = [{ lane: model, outcome: "quota", source: "attempt", status: e?.status ?? null, code: e?.code ?? null, explicit, matched: e.quota?.matched ?? null, why: String(e?.message ?? e).slice(0, 200) }];
       if (!explicit && seen.state !== "exhausted") {

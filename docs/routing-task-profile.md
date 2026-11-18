@@ -453,9 +453,15 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 
 **Resume.** Each approved unit is checkpointed: its key, the Stage 5 verdict, the rubric hash, the commit and the tree. A retried implement stage re-verifies each checkpoint by patch digest and resulting tree, skips units that pass with no provider calls, and runs the rest. A tampered or stale checkpoint is rejected and the unit re-runs.
 
-**Not verified against the real `agy`.** It is not installed in the build environment, and `scripts/agy-smoke.mjs` reported it absent. Unverified:
+**Observed on the owner's machine (agy 1.5.10, 2026-11-18).**
+
+- The help lists every flag the worker uses (`--mode`, `--add-dir`, `--agent`, `--output-format`, `--print-timeout`), plus `--disable-slash-commands`, `--settings`, `--effort` and `--sandbox`.
+- `agy --print /usage --output-format json` spends nothing: `num_turns` 0 and every token counter 0. It returns the quota as `command.data.groups[]`. Each group lists its models and carries two buckets (`window` `weekly` and `5h`), each with `remaining_fraction` and `reset_time`. Gemini models share one group; Claude, Sonnet and GPT-OSS share the other. No separate Argon bucket was reported.
+- The probe now uses that JSON form and decides on the lane's own group only: a spent Claude/GPT bucket does not move a Gemini lane to the metered API. The text form is the fallback. Both observed outputs are test fixtures (`pantheon/tests/agy-quota-observed.test.mjs`).
+- Workers now also pass `--disable-slash-commands`, so prompt text can't expand into a slash command or skill, and set `AGY_CLI_DISABLE_AUTO_UPDATE=true`.
+
+**Not yet exercised against the real `agy`** (the probe ran no model turn):
 
 - whether hooks run in headless mode, and how MCP tools are named in hook input;
 - the hook exit-code semantics;
-- the `/quota` output format, and whether the probe spends tokens;
 - where the CLI keeps its state, and whether its own sandbox works inside `bwrap`.
