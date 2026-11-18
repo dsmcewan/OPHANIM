@@ -7,11 +7,11 @@
 | # | Assignment | Reviewer lab (owner, 2026-11-18) | Scope | Testing |
 |---|---|---|---|---|
 | 1 | [Lifecycle and evidence](1-lifecycle-evidence.md) | Google (Gemini) | Planning, handoffs, evidence freshness, scheduling, recovery | Local deterministic fixtures |
-| 2 | [Review independence](2-review-independence.md) | OpenAI (GPT) | Model identity, contribution lineage, review quorum, validation | Synthetic identity and ledger tests |
+| 2 | [Review independence](2-review-independence.md) | OpenAI, `gpt-6-astra` | Model identity, contribution lineage, review quorum, validation | Synthetic identity and ledger tests |
 | 3 | [Execution reliability](3-execution-reliability.md) | xAI (Grok) | Provider-call limits, concurrency, leases, retries, checkpoints | Mock providers and isolated processes |
-| 4 | [Sandbox security](4-sandbox-security.md) | OpenAI (a second GPT model, not the one on assignment 2) | Antigravity jail, filesystem permissions, credential isolation, network boundaries | Source inspection and existing authorized tests only |
+| 4 | [Sandbox security](4-sandbox-security.md) | OpenAI, `gpt-6.1-sol` | Antigravity jail, filesystem permissions, credential isolation, network boundaries | Source inspection and existing authorized tests only |
 
-The owner chooses the specific model for each assignment; record it in your findings. Assignments 2 and 4 go to two different OpenAI models; each review is done independently, without seeing the other's findings until both are returned.
+The owner chooses the specific model for each assignment; record the model that actually served your review in your findings. Note for assignment 2: `gpt-6-astra` and `gpt-6.1-sol` are also the hard and medium Stage 2 dispatchers (and pinned Stage 5 reviewers) in the `fit` matrix, so OpenAI's models benefit from the arbiter rule under review; the reviewer should state that interest. Assignments 2 and 4 go to two different OpenAI models; each review is done independently, without seeing the other's findings until both are returned.
 
 ## Ground rules (all assignments)
 
