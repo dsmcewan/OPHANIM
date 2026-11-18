@@ -1,6 +1,8 @@
 // The real stage executors (stages.mjs) through the real scheduler (`tick`), over Pantheon's scripted providers:
 // withDispatch's makeClientFor for the work seats (runOpenItem), and a scripted single-turn `turn` for the planner,
 // the plan and change reviewers and the validator. No network and no live model: every result here is synthetic.
+// These tests pin the LAB rule: they assert its capacity behaviour (fit defaults to the model rule, owner 2026-11-18).
+const LAB = 'lab';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -21,7 +23,7 @@ test('the four configured labs: a Ready item with no ticket gets a reviewed plan
   await withDispatch(async ({dir: repo, makeClientFor, calls}) => {
     const f = fixture(repo, [{item: 'four-labs'}]);
     const turn = scriptedTurn();
-    const executors = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const executors = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:pending'], JSON.stringify(r.dispatched));
     const [plan, impl] = openWorkLedger({root: f.workRoot}).stages('four-labs');
@@ -43,7 +45,7 @@ test('with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes thro
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'alpha-item'}]);
     const turn = scriptedTurn();
-    const executors = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...FIVE});
+    const executors = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...FIVE});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], JSON.stringify(r.dispatched));
     const w = openWorkLedger({root: f.workRoot});
@@ -108,7 +110,7 @@ test('an existing ticket enters at planning (revalidate): still valid, it is kep
       ? planFor(prompt, {ticket_assessment: {still_valid: false, reasons: ['the acceptance command does not check that alpha.mjs parses on its own']},
         acceptance: [{id: 'a1', criterion: 'alpha.mjs exports ok === true', test: {cmd: 'node verify.mjs'}}, {id: 'a2', criterion: 'alpha.mjs parses', test: {cmd: 'node --check alpha.mjs'}}]})
       : planFor(prompt))});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'plan:passed']);
     const w = openWorkLedger({root: f.workRoot});
@@ -140,7 +142,7 @@ test('plan review findings cause a revision and a re-review of the new version; 
       },
     });
     // A SYNTHETIC fifth lab: the revision answers xai's finding, so xai may not review it, and four labs leave too few.
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan, implement: ex.implement}, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:pending']);
     const [plan, impl] = openWorkLedger({root: f.workRoot}).stages('rev-item');
@@ -174,7 +176,7 @@ test('plan review findings cause a revision and a re-review of the new version; 
     const fg = fixture(g, [{item: 'rev-four'}]);
     const t4 = scriptedTurn({'plan-review': ({vendor}) => (vendor === 'xai'
       ? json({verdict: 'request_changes', findings: [{severity: 'major', file: null, line: null, claim: 'no regression check', reproduction: null}]}) : APPROVE)});
-    const r4 = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: {plan: makeExecutors({repo: g, makeClientFor, turn: t4, stateDir: fg.stateDir}).plan}, limits: LIMITS});
+    const r4 = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: {plan: makeExecutors({independence: LAB, repo: g, makeClientFor, turn: t4, stateDir: fg.stateDir}).plan}, limits: LIMITS});
     assert.deepEqual(stagesOf(r4), ['plan:pending']);
     const p4 = openWorkLedger({root: fg.workRoot}).stages('rev-four')[0];
     assert.match(p4.blocker.what, /^REVIEW_CAPACITY_PENDING: the revised plan would answer findings from xai/);
@@ -194,7 +196,7 @@ test('validation returns an implementation defect to implement and an inadequate
         ? json({verdict: 'implementation_defect', reasons: ['alpha.mjs also drops a trailing newline the requirement keeps'], criteria: [{id: 'a1', met: false, why: 'see reasons'}]})
         : json({verdict: 'plan_defect', reasons: ['criterion a1 does not test that alpha.mjs keeps its other exports'], criteria: [{id: 'a1', met: true, why: 'passes, but is inadequate'}]});
     }});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     const seq = item => w.stages(item).map(s => `${s.stage}:${s.status}`);
@@ -225,7 +227,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const f = fixture(repo, [{item: 'flaky-review'}]);
     let down = true;
     const turn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai' && down) throw Object.assign(new Error('503 service unavailable'), {status: 503}); return APPROVE; }});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:pending']);
     const w = openWorkLedger({root: f.workRoot});
@@ -259,7 +261,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     fs.mkdirSync(d);
     const fd = fixture(d, [{item: 'always-down'}]);
     const deadTurn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai') throw Object.assign(new Error('503'), {status: 503}); return APPROVE; }});
-    const dx = makeExecutors({repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...FIVE});
+    const dx = makeExecutors({independence: LAB, repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...FIVE});
     let t0 = Date.parse('2026-11-17T00:00:00Z');
     const seen = [];
     for (let i = 0; i < 5; i++, t0 += 60 * 60_000) {
@@ -280,7 +282,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const fg = fixture(g, [{item: 'short-pool'}]);
     const shortTurn = scriptedTurn();
     const short = {reviewer: SEATING.reviewer.filter(c => c.vendor !== 'anthropic')};
-    const sx = makeExecutors({repo: g, makeClientFor, turn: shortTurn, stateDir: fg.stateDir, seating: short});
+    const sx = makeExecutors({independence: LAB, repo: g, makeClientFor, turn: shortTurn, stateDir: fg.stateDir, seating: short});
     // No iteration cap here: a structural pending is recorded once and is not re-dispatched on the same inputs.
     const rs = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: sx, limits: LIMITS});
     assert.deepEqual(stagesOf(rs), ['plan:pending']);
@@ -297,7 +299,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const fh = fixture(h, [{item: 'tight'}]);
     const tight = scriptedTurn({'plan-review': ({vendor}) => (vendor === 'xai'
       ? json({verdict: 'request_changes', findings: [{severity: 'block', file: null, line: null, claim: 'no rollback for importers', reproduction: null}]}) : APPROVE)});
-    const hx = makeExecutors({repo: h, makeClientFor, turn: tight, stateDir: fh.stateDir, ...FIVE});
+    const hx = makeExecutors({independence: LAB, repo: h, makeClientFor, turn: tight, stateDir: fh.stateDir, ...FIVE});
     const rh = await tick({repo: h, statusRoot: fh.statusRoot, workRoot: fh.workRoot, executors: hx, limits: {total_provider_calls: 100, stage_provider_calls: 5}});
     assert.deepEqual(stagesOf(rh), ['plan:failed']);
     const ph = openWorkLedger({root: fh.workRoot}).stages('tight')[0];
@@ -312,7 +314,7 @@ test('a one-line-title "plan" is refused, never reviewed, and writes no ticket; 
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'title-only'}]);
     const turn = scriptedTurn({planner: () => 'TITLE: alpha.mjs exports ok = true'});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:failed']);
     const p = openWorkLedger({root: f.workRoot}).stages('title-only')[0];
@@ -323,6 +325,6 @@ test('a one-line-title "plan" is refused, never reviewed, and writes no ticket; 
     assert.equal(fs.existsSync(path.join(repo, 'tickets', 'title-only.json')), false);
     // A thin JSON "plan" is refused as well: a title in a JSON object is still a title.
     assert.ok(planRefusal({title: 'alpha.mjs exports ok = true'}).length > 5);
-    assert.throws(() => makeExecutors({repo, makeClientFor, turn, n: 2}), /needs 3 labs/);
+    assert.throws(() => makeExecutors({independence: LAB, repo, makeClientFor, turn, n: 2}), /needs 3 labs/);
   });
 });

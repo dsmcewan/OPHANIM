@@ -57,6 +57,14 @@ function overlap(a, b) {
   if (b[0] === "**") return overlap(a, b.slice(1)) || overlap(a.slice(1), b);
   return segOverlap(a[0], b[0]) && overlap(a.slice(1), b.slice(1));
 }
+/**
+ * patternsOverlap without the grammar check on `b`: used against the RESERVED names (work-units.mjs), one of which
+ * (`.git`) is itself refused as an owned path. `a` must be a valid pattern (else: true).
+ */
+export function overlapsReserved(a, reserved) {
+  if (pathRefusal(a)) return true;
+  return overlap(a.split("/"), reserved.split("/"));
+}
 /** Could two owned-path patterns name a common path (or one contain the other)? Conservative: unsure means true. */
 export function pathsOverlap(a, b) {
   if (pathRefusal(a) || pathRefusal(b)) return true;

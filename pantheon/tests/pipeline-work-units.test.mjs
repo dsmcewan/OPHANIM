@@ -80,3 +80,15 @@ test("the planner prompt is a read-only specialist prompt that keeps coupled fil
   assert.equal(WORK_UNITS_SCHEMA.properties.work_units.items.additionalProperties, false);
   assert.deepEqual(WORK_UNITS_SCHEMA.properties.work_units.items.required, [...UNIT_KEYS]);
 });
+
+test("RESERVED_PATH: an owned path that could match .agents, .gemini or .git (where transport configuration lives) is refused", () => {
+  for (const p of [".agents", ".agents/**", ".agents/mcp_config.json", ".gemini/**", ".gemini/settings.json", "*", "**", "**/x.mjs", "*/mcp_config.json", ".*", ".a*/**", "pkg/.agents/x", "src/.git/config", "lib/.Gemini/**"]) {
+    const r = validateWorkUnits(one({ owned_paths: ["src/a/**", p] }));
+    assert.equal(r.ok, false, p);
+    assert.deepEqual(r.refusals.map(x => x.code), ["RESERVED_PATH"], p);
+    assert.match(r.refusals[0].message, /reserved for transport configuration/);
+  }
+  // .git itself stays an OWNED_PATH refusal (it is outside the grammar), not a second, duplicate refusal.
+  assert.deepEqual(codes(one({ owned_paths: [".git/**"] })), ["OWNED_PATH"]);
+  for (const p of ["src/**", "src/*.mjs", ".github/workflows/ci.yml", ".agentsx/y", "*.md", "README.md", "docs/**/*.md"]) assert.deepEqual(codes(one({ owned_paths: [p] })), [], p);
+});

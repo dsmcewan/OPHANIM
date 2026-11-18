@@ -1,13 +1,15 @@
 // The pipeline's LIVE TURN ADAPTER (src/pipeline/turns.mjs) with scripted transports: the single-turn seats go
-// through an injected `turn`; the implementer goes through the fixture's fake `agy` CLI (a real child process that
-// writes files in the unit's worktree); the metered Gemini API is a scripted client. No network, no live model.
+// through an injected `turn`; the implementer goes through the fixture's fake `agy` CLI as the pantheon-unit-worker
+// card (a real child process, inside the REAL bwrap jail, that writes files in the unit's worktree through the
+// PreToolUse jail hook and asks its subagent through the stdio MCP relay over the unit's Unix socket); the metered
+// Gemini API is a scripted client. No network, no live model.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { runPipeline } from "../src/pipeline/index.mjs";
 import { pipelineTurns, apiFilesRefusal, writeApiFiles } from "../src/pipeline/turns.mjs";
-import { runAgyCliTurn } from "../src/board/agy-cli.mjs";
+import { runAgyWorkerTurn } from "../src/board/agy-cli.mjs";
 import { withFakeAgy, scriptedClients } from "./fixtures/dispatch.mjs";
 import { tempRepo, seats, unit, sh, approve, RUBRIC, PLANNER } from "./fixtures/pipeline-stages.mjs";
 
@@ -25,7 +27,8 @@ function scriptedSingle(log = []) {
   }, { log });
 }
 // The default worker of these tests: a slow multi-step write of the unit's implementation.
-const WORKER = 'sleep 0.4; mkdir -p "$dir/src/$unit"; printf \'export const id = "%s";\\n\' "$unit" > "$dir/src/$unit/impl.mjs"\n';
+// (Written through agy_write: the fake CLI asks the PreToolUse jail hook first, as the real CLI does.)
+const WORKER = 'sleep 0.4; agy_write "src/$unit/impl.mjs" "export const id = \\"$unit\\";\n" || exit 9\n';
 
 async function fixture(t) {
   const env = await tempRepo();
@@ -34,26 +37,32 @@ async function fixture(t) {
 }
 const go = (env, plan, turns, limits = {}) => runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats(), turns, limits, dir: env.dir, planner: PLANNER });
 
-test("the implementer runs through the agy CLI in its unit's worktree with the A2A endpoint in its environment; two units' turns overlap; the other seats go through the injected turn", async t => {
+test("the implementer runs as the unit worker through the agy CLI in the bwrap jail, from its control dir, with its worktree added; its subagent call goes over MCP and the unit's socket; two units' turns overlap", async t => {
   const env = await fixture(t);
   const before = process.env.GEMINI_API_KEY;
   process.env.GEMINI_API_KEY = "must-not-reach-the-cli";
   t.after(() => { if (before === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = before; });
   await withFakeAgy(env.root, async agy => {
-    // Unit b also asks its subagent one question over A2A, from inside the CLI process, and writes the answer down.
-    agy.agyWorker(WORKER + 'if [ "$unit" = b ]; then node -e \'fetch(process.env.PANTHEON_A2A_URL,{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+process.env.PANTHEON_A2A_TOKEN},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{role:"user",parts:[{kind:"text",text:"what is six times seven?"}],metadata:{subagent_role:"math",unit_id:"b"}}}})}).then(r=>r.json()).then(j=>require("fs").writeFileSync(process.argv[1],"// "+j.result.parts[0].data.answer+"\\n"))\' "$dir/src/b/answer.mjs"; fi\n');
+    // Unit b also asks its subagent one question (ask_subagent over the MCP relay) and writes the answer down.
+    agy.agyWorker(WORKER + 'if [ "$unit" = b ]; then ans=$(agy_ask math "what is six times seven?") || exit 7; agy_write src/b/answer.mjs "// $ans\n" || exit 9; fi\n');
     const single = scriptedSingle(), spans = [];
-    const turns = pipelineTurns({ turn: single, agy: { run: async a => { const s = { model: a.model, worktree: a.worktree, t0: Date.now(), t1: null }; spans.push(s); try { return await runAgyCliTurn(a); } finally { s.t1 = Date.now(); } } } });
+    const turns = pipelineTurns({ turn: single, agy: { run: async a => { const s = { model: a.model, worktree: a.worktree, control_dir: a.control_dir, t0: Date.now(), t1: null, r: null }; spans.push(s); try { return (s.r = await runAgyWorkerTurn(a)); } finally { s.t1 = Date.now(); } } } });
     const plan = [unit("a"), unit("b", { allowed_subagents: ["math"], verify_cmd: "grep -q 42 src/b/answer.mjs && test -f src/b/impl.mjs" })];
     const ticks = []; const timer = setInterval(() => ticks.push(Date.now()), 10);
     const out = await go(env, plan, turns);
     clearInterval(timer);
     assert.equal(out.status, "completed", JSON.stringify(Object.values(out.units).map(u => [u.unit_id, u.status, u.reason])));
-    // The CLI was launched once per unit, as the implementer role card, on the lane, with the worktree as its --add-dir.
+    // The CLI was launched once per unit, as the unit-worker card, on the lane, with the worktree as its --add-dir.
     const ctx = agy.agyContext();
-    assert.deepEqual(ctx.map(c => [c.agent, c.model]).sort(), Array(2).fill(["pantheon-implementer", "gemini-4-hydrogen-medium"]));
+    assert.deepEqual(ctx.map(c => [c.agent, c.model, c.mode, c.cleanup]).sort(), Array(2).fill(["pantheon-unit-worker", "gemini-4-hydrogen-medium", "accept-edits", "all"]));
     assert.deepEqual(ctx.map(c => c.dir).sort(), ["a", "b"].map(id => join(env.dir, "worktrees", id)));
-    for (const c of ctx) assert.deepEqual([c.a2a_url, c.a2a_token, c.google_key], [true, true, false], "A2A in the environment; no Google API key");
+    for (const c of ctx) assert.deepEqual([c.a2a_socket, c.a2a_token, c.google_key, c.dangerous], [true, true, false, false], "the A2A socket in the environment; no Google API key");
+    // From the controller's control dir, in the jail; the hook approved each write before it happened.
+    for (const s of spans) {
+      assert.equal(s.control_dir, join(env.dir, "control", s.worktree.split("/").at(-1)));
+      assert.equal(s.r.sandbox.kind, "bwrap");
+      assert.ok(s.r.jail_log.some(l => l.event === "PreToolUse" && l.decision === "auto_approve" && /impl\.mjs$/.test(l.args.TargetFile ?? "")));
+    }
     // Non-blocking: the two CLI processes overlapped, and the event loop kept ticking while they ran.
     const [a, b] = ["a", "b"].map(id => spans.find(s => s.worktree.endsWith(`/${id}`)));
     assert.ok(a.t0 < b.t1 && b.t0 < a.t1, `a [${a.t0},${a.t1}] and b [${b.t0},${b.t1}] did not overlap`);
@@ -75,21 +84,39 @@ test("the implementer runs through the agy CLI in its unit's worktree with the A
   });
 });
 
+test("a worker write outside the unit's owned paths is denied by the jail hook BEFORE it happens; the pipeline's post-turn jail then sees nothing to discard", async t => {
+  const env = await fixture(t);
+  await withFakeAgy(env.root, async agy => {
+    agy.agyWorker(WORKER + 'agy_write README.md "hijacked\n" && exit 9\n');
+    const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle() }));
+    assert.equal(out.status, "completed", out.units.a.reason);
+    const at = out.units.a.attempts[0];
+    assert.deepEqual([at.status, at.violations], ["written", []]);
+    assert.deepEqual(at.changed, [{ path: "src/a/impl.mjs", state: "added" }]);
+    const log = readFileSync(join(env.dir, "control", "a", "run", "jail.log"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+    assert.ok(log.some(l => l.args?.TargetFile?.endsWith("/README.md") && l.decision === "deny"));
+    assert.doesNotMatch(await sh(`git show ${out.integration.branch}:README.md`, env.repo), /hijacked/);
+  });
+});
+
 test("a QUOTA refusal of the lane falls over to the metered API of the same base model; the adapter writes the API's files; the failover is recorded", async t => {
   const env = await fixture(t);
   await withFakeAgy(env.root, async agy => {
     agy.agyQuota(["gemini-4-hydrogen-medium"]);
+    agy.agyQuotaReport("Five-hour: 3% used\nWeekly: 9% used\n");
     const calls = [];
     const makeClientFor = scriptedClients(calls, () => JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), () => null, () => null, (_v, model) => model);
     const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor }));
     assert.equal(out.status, "completed", out.units.a.reason);
-    assert.deepEqual(agy.agy(), [{ agent: "pantheon-implementer", model: "gemini-4-hydrogen-medium" }], "the lane was tried first, once");
+    assert.deepEqual(agy.agy(), [{ agent: "pantheon-unit-worker", model: "gemini-4-hydrogen-medium" }], "the lane was tried first, once");
+    assert.equal(agy.agyQuotaProbes(), 1, "the quota was probed once");
     assert.deepEqual(calls.map(c => [c.vendor, c.model]), [["agy_google", "gemini-4-hydrogen"]], "then the metered API of the lane's base model");
     assert.match(calls[0].prompt, /you have NO tools and NO file access/);
     const at = out.units.a.attempts[0];
     assert.deepEqual([at.status, at.requested_model, at.served_model, at.served_model_source], ["written", "gemini-4-hydrogen-medium", "gemini-4-hydrogen", "provider"]);
     assert.equal(at.quota_failover.used, true);
-    assert.deepEqual([at.quota_failover.base, at.quota_failover.lanes, at.quota_failover.after[0].outcome, at.quota_failover.after[0].status], ["gemini-4-hydrogen", ["gemini-4-hydrogen-medium"], "quota", 429]);
+    assert.deepEqual([at.quota_failover.base, at.quota_failover.lanes, at.quota_failover.after[0].outcome, at.quota_failover.after[0].status, at.quota_failover.after[0].explicit], ["gemini-4-hydrogen", ["gemini-4-hydrogen-medium"], "quota", 429, true]);
+    assert.equal(typeof at.quota_failover.probe.state, "string", "the probe's reading is on the record");
     assert.deepEqual(at.changed, [{ path: "src/a/impl.mjs", state: "added" }]);
     assert.match(await sh(`git show ${out.integration.branch}:src/a/impl.mjs`, env.repo), /via = 'api'/);
     assert.deepEqual(JSON.parse(readFileSync(join(env.dir, "pipeline.json"), "utf8")).units.a.attempts[0].quota_failover, at.quota_failover, "and it is on the record on disk");
@@ -115,18 +142,42 @@ test("the API fallback's answer must be the strict files object: prose, or a pat
   });
 });
 
-test("a lane failure that is NOT a quota refusal never reaches the metered API", async t => {
+test("a lane failure that is NOT a quota refusal never reaches the metered API: it is thrown as lane_failure and the pipeline retries once, then steps down its ladder", async t => {
   const env = await fixture(t);
   await withFakeAgy(env.root, async agy => {
     agy.agyFail(["gemini-4-hydrogen-medium"]);
+    agy.agyWorker(WORKER);
     const calls = [];
     const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls) }), { max_revisions: 0 });
-    assert.equal(out.status, "incomplete");
+    assert.equal(out.status, "completed", out.units.a.reason);
     const at = out.units.a.attempts[0];
-    assert.deepEqual([at.status, at.code, at.quota_failover], ["failed", "TURN_FAILED", undefined]);
-    assert.match(at.why, /agy CLI exited 1/);
+    assert.deepEqual(at.lane_failures.map(f => [f.model, f.kind, f.cause, f.next]), [["gemini-4-hydrogen-medium", "exit", "lane", "same_lane"], ["gemini-4-hydrogen-medium", "exit", "lane", "next_rung"]]);
+    assert.match(at.lane_failures[0].why, /agy CLI exited 1/);
+    assert.deepEqual([at.status, at.model, at.quota_failover], ["written", "gemini-4-hydrogen-high", undefined]);
     assert.equal(calls.length, 0, "the metered Gemini API was not called");
-    assert.equal(agy.agy().length, 1);
+    assert.equal(agy.agyQuotaProbes(), 0, "an ordinary failure is not probed");
+    assert.deepEqual(agy.agy().map(x => x.model), ["gemini-4-hydrogen-medium", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-high"]);
+  });
+});
+
+test("a SOFT quota phrase with a probe that does not read exhausted is a lane failure (no metered call); a probe that reads exhausted makes it a quota refusal", async t => {
+  const env = await fixture(t);
+  await withFakeAgy(env.root, async agy => {
+    agy.agyQuotaSoft(["gemini-4-hydrogen-medium"]);
+    agy.agyQuotaReport("Weekly: 40% used\n");
+    const calls = [];
+    let out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: seats(), limits: { max_revisions: 0 }, dir: join(env.dir, "soft-available"), planner: PLANNER,
+      turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls) }) });
+    let at = out.units.a.attempts[0];
+    assert.deepEqual(at.lane_failures.map(f => [f.kind, f.cause]), [["exit", "lane"], ["exit", "lane"]]);
+    assert.match(at.lane_failures[0].why, /not a proven quota refusal/);
+    assert.equal(calls.length, 0);
+    agy.agyQuotaReport("Weekly: 100% used, limit reached\n");
+    out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: seats(), limits: { max_revisions: 0 }, dir: join(env.dir, "soft-exhausted"), planner: PLANNER,
+      turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls, () => JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), () => null, () => null, (_v, m) => m) }) });
+    at = out.units.a.attempts[0];
+    assert.deepEqual([at.status, at.quota_failover?.used, at.quota_failover?.probe?.state, at.quota_failover?.after?.[0]?.explicit], ["written", true, "exhausted", false]);
+    assert.deepEqual(calls.map(c => c.model), ["gemini-4-hydrogen"]);
   });
 });
 

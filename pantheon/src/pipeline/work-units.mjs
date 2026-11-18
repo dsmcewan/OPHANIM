@@ -6,10 +6,29 @@
 // A work unit is a COHESIVE multi-file change with one owner: coupled types, implementation and tests stay in ONE
 // unit, so that no unit can pass its verify_cmd only because another unit will later make it true.
 //
-// Must never: accept a plan with an unknown key, a dangling or cyclic dependency, or a path that leaves the
-// repository; reorder, default or repair a field. A broken plan is refused whole, with each reason named.
+// RESERVED PATHS. The agent transport is configured inside the worktree under names a unit may never own:
+// `.agents` (Antigravity workspace config, e.g. .agents/mcp_config.json), `.gemini` and `.git`. An owned path that
+// COULD match one of them at the repository root (`.agents`, `.agents/**`, `*`, `**`, `.*/x`, ...) is refused with
+// code RESERVED_PATH, and so is any pattern with a literal `.agents`, `.gemini` or `.git` segment at any depth. The
+// post-turn write jail (implement.mjs) stays the second line: it still judges every changed path from disk.
+//
+// Must never: accept a plan with an unknown key, a dangling or cyclic dependency, a path that leaves the
+// repository or a reserved path; reorder, default or repair a field. A broken plan is refused whole, with each reason named.
 import { keysRefusal, isObject, str, strictJson } from "./util.mjs";
-import { pathRefusal } from "./paths.mjs";
+import { pathRefusal, overlapsReserved } from "./paths.mjs";
+
+/** Transport configuration lives under these names; no unit may own a path that could match them. */
+export const RESERVED_NAMES = Object.freeze([".agents", ".gemini", ".git"]);
+const RESERVED_PATTERNS = Object.freeze(RESERVED_NAMES.flatMap(n => [n, `${n}/**`]));
+
+/** Why owned-path pattern `p` could match a reserved path, or null. Assumes pathRefusal(p) is null. */
+export function reservedPathRefusal(p) {
+  const hit = RESERVED_PATTERNS.find(r => overlapsReserved(p, r));
+  if (hit) return `"${p}" could match ${hit}, which is reserved for transport configuration`;
+  const seg = p.split("/").find(s => RESERVED_NAMES.includes(s.toLowerCase()));
+  if (seg) return `"${p}" names a ${seg} directory, which is reserved for transport configuration`;
+  return null;
+}
 
 export const DIFFICULTIES = Object.freeze(["easy", "medium", "hard"]);
 export const UNIT_KEYS = Object.freeze(["unit_id", "depends_on", "owned_paths", "difficulty", "specialist_role", "allowed_subagents", "verify_cmd", "invariants"]);
@@ -65,7 +84,12 @@ export function validateWorkUnits(plan) {
     else ids.set(u.unit_id, u);
     if (!Array.isArray(u.owned_paths) || !u.owned_paths.length) no("OWNED_PATHS_EMPTY", at, `unit ${at}: owned_paths is a non-empty array`);
     else {
-      for (const p of u.owned_paths) { const why = pathRefusal(p); if (why) no("OWNED_PATH", at, `unit ${at}: ${why}`); }
+      for (const p of u.owned_paths) {
+        const why = pathRefusal(p);
+        if (why) { no("OWNED_PATH", at, `unit ${at}: ${why}`); continue; }
+        const reserved = reservedPathRefusal(p);
+        if (reserved) no("RESERVED_PATH", at, `unit ${at}: ${reserved}`);
+      }
       if (new Set(u.owned_paths).size !== u.owned_paths.length) no("OWNED_PATH", at, `unit ${at}: owned_paths repeats a path`);
     }
     if (!DIFFICULTIES.includes(u.difficulty)) no("DIFFICULTY", at, `unit ${at}: difficulty is one of ${DIFFICULTIES.join(", ")}`);

@@ -1,6 +1,6 @@
 # Review independence: three labs, and which contributors are excluded
 
-Owner direction, 2026-11-17. **Status: implemented and tested with scripted reviewers; not active.** The lab rule is still in force everywhere. The new rule is switched on only by the owner, after another lab has reviewed this change.
+Owner direction, 2026-11-17. **Status, 2026-11-18: ON by default for `fit` workflows, by the owner's decision; other profiles keep the lab rule.** The independent review requested earlier has not happened yet. Earlier status: implemented and tested with scripted reviewers; not active. The lab rule is still in force everywhere. The new rule is switched on only by the owner, after another lab has reviewed this change.
 
 ## Two rules that were one
 
@@ -279,3 +279,11 @@ Points worth another lab's attention:
 6. **Protocol v2 lets one model revise up to four times** on critiques alone. Is that bound right, and should it apply outside the lifecycle?
 7. **Validator capacity** was not shown reachable in a complete lifecycle; the argument is above and is not a proof.
 8. **After a reassessment** the re-review is automatic for active work. A Resolved item waits for the owner.
+
+## Activation for `fit` (owner direction 2026-11-18)
+
+- `makeExecutors` picks the rule with `independenceFor(profile)`: `model` for `fit`, `REVIEW_INDEPENDENCE` (still `'lab'`) otherwise. A caller can still name either rule explicitly.
+- The reason: the `fit` pipeline seats four labs (planner, dispatcher, implementer, subagents). Under the lab rule the post-pipeline three-lab panel would always be short.
+- Unchanged: Stage 5, the coordinated three-lab change review and the validator. The dispatcher is still a non-authoring arbiter (Decision 5).
+- Tests that assert the lab rule's capacity behaviour now name `independence: 'lab'` explicitly.
+- Not yet done: the independent review of the model rule. It should still happen.

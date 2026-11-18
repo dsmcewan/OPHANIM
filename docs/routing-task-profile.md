@@ -427,3 +427,35 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 - A lane failure that is not a rejection retries the same lane; the pipeline does not step to another lane on it.
 - A pipeline run is not resumed. A stage that is retried starts a new run.
 - The run's ledger holds the review cycle only. The pipeline's own record is `pipeline.json`, bound by digest in `run.json`.
+
+## Live-run hardening (2026-11-18)
+
+**Stage 1 seat.** The planner is seated from the item's own declared difficulty and stakes: an existing ticket's `difficulty`, `stakes`, `ambiguity`. Easy → `claude-sonnet-5`, medium → `claude-opus-5-5`, hard or critical → `claude-fable-5-2`. An item without a ticket declares none and plans at medium; the plan record says which (`selection.tier`).
+
+**The worker.** A new card, `pantheon/.agents/agents/pantheon-unit-worker/agent.md`, edits files directly in the unit's owned paths, calls `ask_subagent` for its allowed subagent roles, and runs `verify_cmd` before finishing. The old `pantheon-implementer` card stays for the `argo`/`legacy` per-file path, which still needs its reply-with-text contract.
+
+- Launch: `agy --agent pantheon-unit-worker --model <lane> --mode=accept-edits --add-dir <worktree> --output-format stream-json --print-timeout <n>s --print <prompt>`, async `spawn`, no `--dangerously-skip-permissions`.
+- Environment: `ANTIGRAVITY_AGY_CLEANUP=all` is set as the owner asked. It is not in Google's documentation; every turn record says so. Google API keys are removed.
+- The process runs in a per-unit control directory outside the worktree. That directory holds the card, `.agents/hooks.json`, `.agents/mcp_config.json` and the jail policy.
+
+**Containment, three layers.**
+
+1. **Before a write:** a `PreToolUse` hook (`pantheon/src/agy/jail-hook.mjs`) denies any write outside the unit's owned paths, into `.git` or `.agents`, or through a symlink that leaves the worktree. It approves `run_command` only for the exact `verify_cmd`, and MCP only for `ask_subagent`.
+2. **The process:** `bwrap` mounts the filesystem read-only, except the worktree, the CLI's state directory and the control directory's `run/`. The main repository's `.git` is read-only, so the worker cannot commit or move refs. The network is not cut, since the CLI must reach Google. Without a working `bwrap` the turn refuses to run unless explicitly allowed.
+3. **After the turn:** the existing git-based jail, unchanged.
+
+**Subagents under the sandbox.** The A2A shim listens on a Unix socket in the controller's per-unit directory. A stdio MCP server (`pantheon/src/pipeline/a2a-mcp-server.mjs`), launched by the CLI from `.agents/mcp_config.json`, relays `ask_subagent` to it. No TCP loopback is used.
+
+**Quota and lane failover.**
+
+- A lane failure that looks like quota triggers one `agy -p /quota` probe (`pantheon/src/agy/quota.mjs`). The metered Gemini API is used only if the failure was an explicit 429 or `RESOURCE_EXHAUSTED`, or the probe reads the quota as exhausted. An unreadable report counts as unknown, never as exhausted.
+- Any other lane failure (timeout, non-zero exit, stream drop, spawn) is retried once on the same lane, then the unit steps down its Antigravity ladder. Lane failures spend no review revision. An exhausted ladder blocks the unit with every failure recorded.
+
+**Resume.** Each approved unit is checkpointed: its key, the Stage 5 verdict, the rubric hash, the commit and the tree. A retried implement stage re-verifies each checkpoint by patch digest and resulting tree, skips units that pass with no provider calls, and runs the rest. A tampered or stale checkpoint is rejected and the unit re-runs.
+
+**Not verified against the real `agy`.** It is not installed in the build environment, and `scripts/agy-smoke.mjs` reported it absent. Unverified:
+
+- whether hooks run in headless mode, and how MCP tools are named in hook input;
+- the hook exit-code semantics;
+- the `/quota` output format, and whether the probe spends tokens;
+- where the CLI keeps its state, and whether its own sandbox works inside `bwrap`.

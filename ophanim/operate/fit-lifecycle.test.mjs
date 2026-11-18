@@ -32,6 +32,9 @@ const named = t => `${t.vendor}/${t.model}`;
 const recordOf = rec => JSON.parse(fs.readFileSync(rec.outputs.run.record, 'utf8'));
 const DONE = ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'];
 const ITEMS = ['fresh', 'ticketed'];
+// Stage 1's tier per item: the fixture ticket declares difficulty `easy`; an item without a ticket declares none.
+const PLAN_TIER = {fresh: 'medium', ticketed: 'easy'};
+const PLANNER = {fresh: 'claude-opus-5-5', ticketed: 'claude-sonnet-5'};
 const lines = file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []);
 const branches = (repo, pattern) => git(repo, 'branch', '--list', pattern).split('\n').map(l => l.replace(/^[* ]+/, '').trim()).filter(Boolean);
 
@@ -48,13 +51,13 @@ const THREE = {work_units: UNITS, slices: [{id: 's1', title: 'alpha.mjs exports 
 // The fake agy CLI's worker for those units (sourced with $dir = the unit's worktree, $unit, $model, $prompt): it
 // writes the unit's files, logs when it started and ended, and unit c asks its subagent one question over A2A.
 const SPAN = 'printf \'%s %s %s %s\\n\' "$dir" "$unit" "$1" "$(date +%s%N)" >> "$FAKE_AGY_LOG.spans"';
-const ASK = 'node -e \'fetch(process.env.PANTHEON_A2A_URL,{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+process.env.PANTHEON_A2A_TOKEN},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{role:"user",parts:[{kind:"text",text:"what should g be?"}],metadata:{subagent_role:"api-designer",unit_id:"c"}}}})}).then(r=>r.json()).then(j=>{if(!j.result)process.exit(1)})\'';
+// Unit c asks its subagent one question through the stdio MCP server over the unit's Unix socket (the fake CLI's agy_ask).
 const WORKER = `span() { ${SPAN}; }
 span start
 case "$unit" in
   a) sleep 0.3; printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;;
   b) printf 'import {ok} from "./alpha.mjs";\\nexport const both = ok === true;\\n' > "$dir/beta.mjs" ;;
-  c) sleep 0.3; ${ASK} || exit 1; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
+  c) sleep 0.3; agy_ask api-designer "what should g be?" >/dev/null || exit 1; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
 esac
 span end
 `;
@@ -75,9 +78,10 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       assert.deepEqual(seq(w, item), DONE, JSON.stringify(r.dispatched.map(d => [d.item, d.stage, d.status, d.next?.why])));
       const [plan, impl, rev, val, out] = w.stages(item);
       assert.equal(plan.outputs.plan.mode, item === 'ticketed' ? 'revalidate' : 'author');
-      // STAGE 1. The planner is the matrix's, seated before any unit (and so any unit difficulty) exists: at medium.
-      assert.equal(named(plan.outputs.planner), named(fitMatrix('planner', 'medium')));
-      assert.equal(plan.outputs.planner.model, 'claude-opus-5-5');
+      // STAGE 1. The planner is seated from the item's own declared difficulty (owner direction 2026-11-18): the fixture
+      // ticket declares `easy`, so the ticketed item plans on the easy planner; the item without a ticket plans at medium.
+      assert.equal(named(plan.outputs.planner), named(fitMatrix('planner', PLAN_TIER[item])));
+      assert.equal(plan.outputs.planner.model, PLANNER[item]);
       assert.deepEqual(plan.outputs.plan.work_units.map(u => [u.unit_id, u.difficulty, u.depends_on]), [['a', 'easy', []], ['b', 'medium', ['a']], ['c', 'hard', []]]);
       // The three plan reviewers were shown the work units with the plan.
       assert.match(git(repo, 'show', `${plan.outputs.plan_commit}:plans/${item}.json`), /"work_units"/);
@@ -119,7 +123,7 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       // dispatcher is recorded as a non-authoring arbiter, and is NOT a contribution.
       assert.deepEqual(impl.outputs.arbiters.map(a => [a.unit_id, a.role, a.standing, a.authored, named(a)]),
         [['a', 'dispatcher', 'arbiter', false, 'openai/gpt-6-luna'], ['b', 'dispatcher', 'arbiter', false, 'openai/gpt-6.1-sol'], ['c', 'dispatcher', 'arbiter', false, 'openai/gpt-6-astra']]);
-      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['plan', 'anthropic/claude-opus-5-5'], ['subtask', 'xai/grok-4.7'],
+      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['plan', `anthropic/${PLANNER[item]}`], ['subtask', 'xai/grok-4.7'],
         ['work', 'agy_google/gemini-4-carbon-high'], ['work', 'agy_google/gemini-4-hydrogen-high'], ['work', 'agy_google/gemini-4-hydrogen-medium']].sort());
       assert.ok(!impl.contributions.some(c => c.vendor === 'openai'), 'no OpenAI model contributed: the dispatchers arbitrated and the pinned reviewers only approved');
       assert.deepEqual(impl.contributions, impl.outputs.contributions);
@@ -128,7 +132,7 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       for (const d of dispatchers) assert.deepEqual([d.standing, d.authored], ['arbiter', false]);
       const keys = contributorKeys(impl.contributions);
       assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'xai']);
-      assert.deepEqual(keys.models, ['anthropic/claude-opus-5-5', 'google/gemini-4-carbon', 'google/gemini-4-hydrogen', 'xai/grok-4.7']);
+      assert.deepEqual(keys.models, [`anthropic/${PLANNER[item]}`, 'google/gemini-4-carbon', 'google/gemini-4-hydrogen', 'xai/grok-4.7']);
 
       // INTEGRATION reaches the review as one commit on pantheon/<item>, parent = the base the run started from.
       assert.equal(git(repo, 'rev-parse', `${impl.outputs.commit}^`).trim(), impl.outputs.base);
@@ -158,7 +162,7 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
     // Every implementer turn was the fake agy CLI on its lane, with the worktree and the A2A endpoint; no metered API.
     const launched = ctx.agyContext();
     assert.deepEqual(launched.map(a => a.model).sort(), ITEMS.flatMap(() => ['gemini-4-carbon-high', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-medium']).sort());
-    for (const a of launched) assert.deepEqual([a.agent, a.a2a_url, a.a2a_token, a.google_key], ['pantheon-implementer', true, true, false]);
+    for (const a of launched) assert.deepEqual([a.agent, a.a2a_socket, a.a2a_token, a.google_key], ['pantheon-unit-worker', true, true, false]);
     assert.equal(calls.length, 0, 'no SDK client was used: the metered Gemini API was never called');
     // The single-turn seats: one dispatcher and one pinned review per unit, one subagent answer per item.
     const kinds = k => turn.log.filter(l => l.kind === k);
@@ -200,7 +204,7 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
       assert.deepEqual(impl.findings.map(x => [x.cause, x.vendor, x.model, x.unit, x.text]).filter(x => x[4] === FINDING), Array(2).fill(['in-run-review', 'openai', 'gpt-6-luna', 'alpha', FINDING]));
       // CONTRIBUTIONS: gpt-6-luna's finding fed a revision, so it IS a critique contributor; gpt-6.1-sol only approved
       // and is not. The dispatcher (gpt-6-luna as an arbiter) is listed apart.
-      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['critique', 'openai/gpt-6-luna'], ['plan', 'anthropic/claude-opus-5-5'],
+      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['critique', 'openai/gpt-6-luna'], ['plan', `anthropic/${PLANNER[item]}`],
         ['work', 'agy_google/gemini-4-hydrogen-high'], ['work', 'agy_google/gemini-4-hydrogen-medium'], ['work', 'agy_google/gemini-4-hydrogen-xhigh']]);
       assert.deepEqual(impl.outputs.arbiters.map(named), ['openai/gpt-6-luna']);
       const keys = contributorKeys(impl.contributions);

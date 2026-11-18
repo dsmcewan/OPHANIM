@@ -348,6 +348,13 @@ export function implementerPath(difficulty) {
 // The service and the CLI take no option for it.
 export const REVIEW_INDEPENDENCE = 'lab';
 /**
+ * The independence rule a lifecycle runs under when the caller names none. Owner direction 2026-11-18: ON (model) for
+ * the `fit` profile, whose four-lab pipeline would otherwise leave the post-pipeline three-lab panel short under the lab
+ * rule. Other profiles keep REVIEW_INDEPENDENCE. Stage 5, the three-lab change review and the validator are unchanged.
+ * The model rule has not yet had the independent review the owner asked for earlier; this is the owner's activation.
+ */
+export const independenceFor = profile => (profile === 'fit' ? 'model' : REVIEW_INDEPENDENCE);
+/**
  * The contributions a run made to the change, as later stages carry them. A turn that asked for one model and was
  * served by another keeps BOTH names (`requested_model`): under model-level independence each is a contributor.
  */
@@ -360,8 +367,9 @@ const withServed = f => (f.served_model && f.served_model !== f.model ? {served_
 // (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
 // selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
-  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = REVIEW_INDEPENDENCE,
+  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
   pipelineLimits = {}} = {}) {
+  independence ??= independenceFor(profile);
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
   if (typeof makeClientFor !== 'function') throw new Error('makeExecutors: pass makeClientFor(vendor) for the work seats');
@@ -421,8 +429,16 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // onto one lab to manufacture reviewer availability); a short pool later is a recorded capacity pending.
     // (Under `fit` this is Stage 1 of the pipeline. It is seated BEFORE any work unit — and so any unit difficulty —
     // exists: the matrix's planner at the default difficulty, not a per-unit seat.)
-    const pick = selectSeat('planner', {profile, needsContext: 1, pools: readPools()}).seat;
-    const planner = {...seatOf(pick), selection: {source: pick.selection?.source ?? null, reason: pick.selection?.reason ?? 'the policy\'s first planner candidate'}};
+    // Stage 1 is seated from the ITEM's own declared difficulty and stakes (owner direction 2026-11-18): an existing
+    // ticket's `difficulty`/`stakes`/`ambiguity`; an item without a ticket declares none, so it plans at medium, and the
+    // record says so. Under `fit` a stakes or ambiguity floor can raise the seat (e.g. critical -> the hard planner),
+    // never lower it. Other profiles ignore the task profile.
+    const declared = Object.fromEntries(['difficulty', 'stakes', 'ambiguity', 'depth'].filter(k => ticket?.spec?.[k] !== undefined).map(k => [k, ticket.spec[k]]));
+    let planTask;
+    try { planTask = taskProfile(declared); } catch { planTask = taskProfile({}); }
+    const pick = selectSeat('planner', {profile, difficulty: declared.difficulty ?? 'medium', task: planTask, needsContext: 1, pools: readPools()}).seat;
+    const plannerTier = {declared, source: ticket ? (Object.keys(declared).length ? 'ticket' : 'ticket declares none: medium') : 'no ticket: medium'};
+    const planner = {...seatOf(pick), selection: {source: pick.selection?.source ?? null, reason: pick.selection?.reason ?? 'the policy\'s first planner candidate', tier: plannerTier}};
     const team = [{role: 'planner', ...seatOf(planner)}];
     // Review capacity BEFORE work: the plan needs n reviewer labs outside the planner's.
     // Independence follows contributions (review/scope.mjs): a revision consumes the plan it revises and the findings

@@ -6,50 +6,60 @@
 //                          seat, extra})` (live: sdk/live.mjs liveTurn). `extra` ({reasoning: {context}}) is passed
 //                          through as given; this module sets no provider option itself.
 //   subagent               a single-turn Grok seat through the same `turn`.
-//   implementer            a MULTI-TURN worker on an Antigravity lane, through the `agy` CLI (board/agy-cli.mjs
-//                          runAgyCliTurn, an async spawn). The CLI agent works in the unit's worktree over its own
-//                          internal turns and WRITES THE FILES ITSELF; the worktree is handed to it as its --add-dir
-//                          and the unit's A2A endpoint is in its environment (PANTHEON_A2A_URL, PANTHEON_A2A_TOKEN).
+//   implementer            a MULTI-TURN, TOOL-ENABLED worker on an Antigravity lane, through the `agy` CLI
+//                          (board/agy-cli.mjs runAgyWorkerTurn, an async spawn) as the pantheon-unit-worker role card.
+//                          The controller's per-unit control dir becomes the CLI's project root (agy/workspace.mjs
+//                          writes the card, hooks.json, mcp_config.json and jail.json there); the unit's worktree is
+//                          added with --add-dir; the CLI runs inside the bwrap jail (agy/sandbox.mjs) and every write
+//                          and command first passes the PRE-MUTATION jail hook (agy/jail-hook.mjs). The worker reaches
+//                          its subagents through the stdio MCP relay (tool ask_subagent) over the unit's A2A socket.
+//                          No bwrap -> the turn is refused (SANDBOX_UNAVAILABLE) unless agy.allowUnsandboxed is true.
 //
 // THE IMPLEMENTER'S SERVED MODEL. Antigravity names no serving model. The lane model is a required input, and
 // runAgyCliTurn fails when the model the CLI reports at start is not the one asked for; the answer therefore carries
 // that input, marked `served_model_source: "input"` (owner decision 2026-11-17): the pinned model, not a statement
 // by the provider about this answer.
 //
-// LANE FIRST; THE METERED API ONLY AFTER A QUOTA REFUSAL. The metered Gemini API id of the lane's base model
-// (route/fit-matrix.mjs quotaFailoverFor) is asked ONLY when the lane attempt was refused for quota (HTTP 429 /
-// quota exhausted, as packages/model-client classifyFailure classifies it). Any other lane failure is thrown as it
-// is and never reaches the metered API. A failover is recorded on the returned object (`quota_failover`).
+// LANE FIRST; THE METERED API ONLY AFTER A PROVEN QUOTA REFUSAL. A lane attempt that fails with quota evidence
+// (agy/quota.mjs isQuotaFailure) is followed by ONE quota probe (`agy -p /quota`, probeQuota). The metered Gemini API
+// id of the lane's base model (route/fit-matrix.mjs quotaFailoverFor) is asked ONLY when the failure itself said 429 /
+// RESOURCE_EXHAUSTED, or the probe reads `exhausted`. A soft quota phrase with a probe that reads `available` or
+// `unknown` is NOT a quota refusal: it is thrown as `lane_failure` (kind `exit`) so the pipeline steps its ladder, and
+// the metered API is not called. If the metered API also cannot answer, the turn throws `quota_exhausted`. A failover
+// is recorded on the returned object: quota_failover {used, base, lanes, rule, after, probe}. This adapter never
+// retries a lane itself (the pipeline retries once and steps the ladder).
 //
 // THE API FALLBACK CANNOT WRITE FILES, so its contract is the minimal honest one: the API is shown the unit prompt
 // and the current contents of the unit's owned files, and its WHOLE reply must be one strict JSON object
 //   {"files": [{"path": "<repo-relative path>", "content": "<the complete new file>"}]}
 // which THIS ADAPTER writes into the worktree. A path that is absolute, contains "..", is a pattern, is outside the
-// unit's owned paths, or would be written through a symlink is refused and nothing is written. Anything else than
+// unit's owned paths, or would be written through a symlink is refused and nothing is written. Before any file is
+// written, every file passes the SAME pre-mutation owned-path check the jail hook applies to the worker (decideWrite). Anything else than
 // that object is a failed attempt (the turn throws; the controller discards the worktree's changes). What was
 // written is then judged by the controller's write jail like any other attempt: this adapter is not the jail.
 //
-// Inputs: the injected `turn` and `makeClientFor(vendor)` (the lifecycle's own), and `agy` options {cli?, repo?,
-// role?, timeoutS?, run?, api?} — `run` replaces runAgyCliTurn and `api` the metered-API call, for tests.
+// Inputs: the injected `turn` and `makeClientFor(vendor)` (the lifecycle's own), and `agy` options {cli?, timeoutS?,
+// sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?} — `run` replaces runAgyWorkerTurn, `api`
+// the metered-API call and `probe` the quota probe, for tests.
 // Outputs: for every role, {text, served_model, served_model_source} (+ transport, quota_failover on the implementer).
 //
-// Must never: block the event loop on a child process (async spawn only); send a Google API key to the CLI; reach
-// the metered API after a lane failure that is not a quota refusal; write a path the API named outside the unit;
+// Must never: block the event loop on a child process (async spawn only); send a Google API key to the CLI; run the
+// worker unjailed unless told to; reach the metered API after a lane failure that is not a proven quota refusal; write a path the API named outside the unit;
 // invent a served model for a judging seat (a missing one is passed on as missing and refused by the controller).
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-import { runAgyCliTurn } from "../board/agy-cli.mjs";
-import { classifyFailure } from "../../../packages/model-client/index.mjs";
+import { runAgyWorkerTurn } from "../board/agy-cli.mjs";
+import { prepareWorkerWorkspace } from "../agy/workspace.mjs";
+import { probeQuota } from "../agy/quota.mjs";
+import { decideWrite } from "../agy/jail-hook.mjs";
 import { quotaFailoverFor, laneParts } from "../route/fit-matrix.mjs";
 import { QUOTA_FAILOVER_RULE } from "../route/frontier.mjs";
 import { keysRefusal, str, strictJson } from "./util.mjs";
 import { matchesOwned, pathRefusal } from "./paths.mjs";
 import { git } from "./git.mjs";
 
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const API_FILES_KEYS = Object.freeze(["files"]);
 const MAX_SHOWN_BYTES = 200000;   // owned files shown to the API fallback, in total
 
@@ -91,12 +101,19 @@ export function apiFilesRefusal(value, owned = null) {
   return null;
 }
 
-/** Write the API's files into `cwd`. Refuses (writing nothing) a path that would land outside `cwd` or through a symlink. */
-export async function writeApiFiles({ cwd, files }) {
+/**
+ * Write the API's files into `cwd`. Refuses (writing nothing) a path that would land outside `cwd` or through a
+ * symlink, and — given `owned` — any file the pre-mutation jail check (agy/jail-hook.mjs decideWrite) denies.
+ */
+export async function writeApiFiles({ cwd, files, owned = null }) {
   const root = await realpath(cwd);
   const plan = [];
   for (const f of files) {
     const abs = join(root, f.path);
+    if (owned) {
+      const d = decideWrite({ worktree: root, owned_paths: owned, unit_id: null }, { TargetFile: abs });
+      if (d.decision !== "auto_approve") throw fail("API_FILES_REFUSED", `"${f.path}" is refused by the pre-mutation jail (${d.reason}); nothing was written`);
+    }
     // The deepest ancestor that exists must resolve inside the worktree: a write through a symlinked directory
     // would land where git — and so the write jail — cannot see it.
     let at = dirname(abs);
@@ -127,17 +144,25 @@ async function ownedFiles(cwd, owned) {
   return { shown, truncated };
 }
 
+const laneFailure = (kind, message, more = {}) => Object.assign(new Error(message), { code: "lane_failure", kind, transport: "agy-cli", ...more });
+
 /**
  * The turns of a pipeline run.
  *   turn           async ({vendor, model, prompt, seat, extra?, signal?}) -> {text, served_model, ...}: every single-turn seat
  *   makeClientFor  (vendor) -> an SDK client: the metered Gemini API, used only as a lane's quota failover
- *   agy            {cli = $PANTHEON_AGY_CLI or ~/.local/bin/agy, repo = Pantheon's root (where the role cards are),
- *                   role = "implementer" (the role card), timeoutS = 1800, run = runAgyCliTurn, api = null}
+ *   agy            {cli = $PANTHEON_AGY_CLI or ~/.local/bin/agy, timeoutS = 1800, sandbox = true (or {enabled, ...}),
+ *                   agy_state_dirs (default agy/sandbox.mjs defaultAgyStateDirs), allowUnsandboxed = false, bwrap,
+ *                   run = runAgyWorkerTurn, api = null, probe = probeQuota, probeTimeoutS = 30}
  */
 export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
   if (typeof turn !== "function") throw new Error("pipelineTurns: pass turn({vendor, model, prompt, seat, extra}) for the single-turn seats");
-  const lane = agy.run ?? runAgyCliTurn;
-  const role = agy.role ?? "implementer", timeoutS = agy.timeoutS ?? 1800, cardRepo = agy.repo ?? REPO;
+  const lane = agy.run ?? runAgyWorkerTurn;
+  const probe = agy.probe ?? probeQuota;
+  const timeoutS = agy.timeoutS ?? 1800;
+  const box = agy.sandbox === false ? {} : (agy.sandbox && typeof agy.sandbox === "object" ? agy.sandbox : {});
+  const sandbox = { enabled: agy.sandbox === false ? false : box.enabled !== false, allowUnsandboxed: agy.allowUnsandboxed ?? box.allowUnsandboxed ?? false,
+    ...(agy.agy_state_dirs ?? box.agy_state_dirs ? { agy_state_dirs: agy.agy_state_dirs ?? box.agy_state_dirs } : {}), ...(agy.bwrap ?? box.bwrap ? { bwrap: agy.bwrap ?? box.bwrap } : {}),
+    ...(box.extra_ro ? { extra_ro: box.extra_ro } : {}) };
 
   const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined }) => {
     const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}) });
@@ -155,31 +180,64 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     return { text: r.text ?? "", served_model: r.served_model ?? null, response_id: r.response_id ?? null };
   });
 
-  const implementer = async ({ vendor, model, prompt, cwd, a2a = null, env = {}, sandbox = null, signal = undefined }) => {
+  /**
+   * The implementer turn. Inputs (from the pipeline): {vendor, model, seat, prompt, cwd (the worktree), control_dir,
+   * a2a {socket, token, roles}, env {PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_A2A_ROLES, PANTHEON_UNIT_ID},
+   * owned_paths, verify_cmd, unit_id, mcp_server, attempt, signal}. An older caller's {sandbox: {owned_paths}} and
+   * {a2a: {url, token}} are still read; without a control_dir a temporary one (outside the worktree) is used and removed.
+   */
+  const implementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
+    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
     if (!laneParts(model)) throw fail("NOT_A_LANE", `the pipeline implementer runs on an Antigravity lane, and ${vendor}/${model} is not one (config/lanes.json)`);
     const cli = agy.cli ?? process.env.PANTHEON_AGY_CLI ?? join(homedir(), ".local", "bin", "agy");
-    if (!agy.run && cli.includes("/") && !existsSync(cli)) throw new Error(`agy seat: CLI absent at ${cli} (set PANTHEON_AGY_CLI)`);
-    const childEnv = { ...env, ...(a2a ? { PANTHEON_A2A_URL: a2a.url, PANTHEON_A2A_TOKEN: a2a.token } : {}) };
+    if (!agy.run && cli.includes("/") && !existsSync(cli)) throw laneFailure("spawn", `agy seat: CLI absent at ${cli} (set PANTHEON_AGY_CLI)`);
+    const owned = Array.isArray(owned_paths) ? owned_paths : Array.isArray(cap?.owned_paths) ? cap.owned_paths : null;
+    const roles = Array.isArray(a2a?.roles) ? a2a.roles : str(env?.PANTHEON_A2A_ROLES) ? env.PANTHEON_A2A_ROLES.split(",").map(x => x.trim()).filter(Boolean) : [];
+    const a2a_env = Object.fromEntries(Object.entries({
+      PANTHEON_A2A_SOCKET: env?.PANTHEON_A2A_SOCKET ?? a2a?.socket, PANTHEON_A2A_TOKEN: env?.PANTHEON_A2A_TOKEN ?? a2a?.token,
+      PANTHEON_A2A_ROLES: env?.PANTHEON_A2A_ROLES ?? (roles.length ? roles.join(",") : undefined), PANTHEON_UNIT_ID: env?.PANTHEON_UNIT_ID ?? unit_id ?? undefined,
+    }).filter(([, v]) => v !== undefined && v !== null));
+    const childEnv = { ...env, ...a2a_env, ...(a2a?.url ? { PANTHEON_A2A_URL: a2a.url, PANTHEON_A2A_TOKEN: a2a.token } : {}) };
+
+    let made = null;
     try {
-      const r = await lane({ cli, repo: cardRepo, worktree: cwd, role, model, prompt, timeoutS, env: childEnv, ...(signal ? { signal } : {}) });
+      const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-agy-control-")));
+      await prepareWorkerWorkspace({ control_dir: ctl, worktree: cwd, unit_id: unit_id ?? a2a_env.PANTHEON_UNIT_ID ?? null, owned_paths: owned ?? [], verify_cmd, roles, mcp_server, a2a_env });
+      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS, env: childEnv, sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
       return { text: r.text ?? "", served_model: model, served_model_source: "input", transport: "agy-cli", requested_model: model,
-        response_id: r.response_id ?? null, tool_calls: r.tool_calls ?? null };
+        response_id: r.response_id ?? null, tool_calls: r.tool_calls ?? null, subagent_calls: r.subagent_calls ?? null, summary: r.summary ?? null,
+        jail_log: r.jail_log ?? [], cleanup_env: r.cleanup_env ?? null, sandbox: r.sandbox ?? null };
     } catch (e) {
+      if (e?.code !== "quota_exhausted") throw e;   // lane_failure, SANDBOX_UNAVAILABLE, ABORTED, ...: as they are
+      // QUOTA EVIDENCE. Probe once; then decide (see the header).
+      const explicit = e.quota?.explicit === true || e.status === 429 && e.quota === undefined;
+      const seen = await probe({ cli, env: agy.probeEnv ?? {}, timeoutS: agy.probeTimeoutS ?? 30, ...(signal ? { signal } : {}) })
+        .catch(err => ({ state: "unknown", buckets: [], raw_digest: null, exit_code: null, error: String(err?.message ?? err) }));
+      const after = [{ lane: model, outcome: "quota", source: "attempt", status: e?.status ?? null, code: e?.code ?? null, explicit, matched: e.quota?.matched ?? null, why: String(e?.message ?? e).slice(0, 200) }];
+      if (!explicit && seen.state !== "exhausted") {
+        throw laneFailure("exit", `${String(e?.message ?? e)}; a soft quota phrase ("${e.quota?.matched ?? "?"}") and the quota probe reads "${seen.state}": not a proven quota refusal, so the metered API is not used`,
+          { quota_probe: seen, quota_failover: { used: false, lanes: [model], after, probe: seen }, jail_log: e.jail_log ?? [] });
+      }
       const spare = quotaFailoverFor(model);
-      if (!spare || !classifyFailure(e).quota) throw e;
-      const after = [{ lane: model, outcome: "quota", source: "attempt", status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200) }];
-      const quota_failover = { used: true, base: spare.model, lanes: [model], rule: QUOTA_FAILOVER_RULE, after };
-      const owned = Array.isArray(sandbox?.owned_paths) ? sandbox.owned_paths : null;
+      if (!spare) throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and has no metered API failover`), { status: 429, quota_probe: seen });
+      const quota_failover = { used: true, base: spare.model, lanes: [model], rule: QUOTA_FAILOVER_RULE, after, probe: seen };
       const { shown, truncated } = owned ? await ownedFiles(cwd, owned) : { shown: [], truncated: false };
-      const r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal });
+      let r;
+      try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal }); }
+      catch (err) {
+        throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and the metered API ${spare.model} could not answer either: ${String(err?.message ?? err).slice(0, 300)}`),
+          { status: 429, quota_failover: { ...quota_failover, api_error: String(err?.message ?? err).slice(0, 300) }, cause: err });
+      }
       const parsed = strictJson(r?.text);
       const why = parsed.ok ? apiFilesRefusal(parsed.value, owned) : parsed.why;
       if (why) throw Object.assign(fail("API_FILES_REFUSED", `the metered API answered the quota failover of ${model}, and its answer is refused: ${why}; nothing was written`), { quota_failover });
       let written;
-      try { written = await writeApiFiles({ cwd, files: parsed.value.files }); } catch (err) { throw Object.assign(err, { quota_failover }); }
+      try { written = await writeApiFiles({ cwd, files: parsed.value.files, owned }); } catch (err) { throw Object.assign(err, { quota_failover }); }
       return { text: `the adapter wrote ${written.length} file(s) from the API answer: ${written.join(", ")}`, served_model: str(r?.served_model) ? r.served_model : null,
         served_model_source: str(r?.served_model) ? "provider" : null, transport: "api", requested_model: model, response_id: r?.response_id ?? null, quota_failover, written };
+    } finally {
+      if (made) await rm(made, { recursive: true, force: true }).catch(() => {});
     }
   };
 

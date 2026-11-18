@@ -185,7 +185,8 @@ test('decisive history beyond the initial excerpt is retrieved and changes the d
       'plan-review': ({vendor, prompt}) => (vendor === 'xai'
         ? json({verdict: 'request_changes', findings: [{severity: 'major', file: null, line: null, claim: `[source: ${histOf(prompt)[2]}] the plan does not say whether a later entry reversed attempt 7's conclusion`, reproduction: null}]}) : APPROVE),
     });
-    const ex = {plan: makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir}).plan};
+    // The LAB rule, pinned: this test's expected plan pending is the lab rule's capacity (fit defaults to the model rule).
+    const ex = {plan: makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'lab'}).plan};
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     // Four configured labs: the revision that would answer xai's finding waits on review capacity (unchanged rule).
     assert.deepEqual(stagesOf(r), ['plan:pending', 'plan:pending']);

@@ -93,7 +93,7 @@ test('an in-run code-review finding is followed by a code revision: the finding 
     // The rejection is answered by a revision inside the run: one implement stage, which ships.
     assert.deepEqual(seq(w(), 'inrun'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
     const [, impl, rev, val] = w().stages('inrun');
-    const built = agy().filter(a => a.agent === 'pantheon-implementer').length;
+    const built = agy().filter(a => a.agent === 'pantheon-unit-worker').length;
     assert.equal(built, 2, 'one first build and one revision: the work was not repeated');
     assert.ok(fs.existsSync(path.join(repo, 'agy.log.told')), 'the finding reached the worker\'s revision prompt');
     const inRun = turn.log.filter(l => ['dispatcher', 'unit-review', 'subagent'].includes(l.kind)).length;

@@ -2,6 +2,7 @@
 // No network, no live model. (fixtures/pipeline.mjs is the older lifecycle fixture and is not touched.)
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -77,9 +78,25 @@ export function scripted({ plan = [], dispatch, implement, review, subagent, rub
     reviewer: wrap("reviewer", review ?? defaults.review), subagent: wrap("subagent", subagent ?? defaults.subagent) } };
 }
 
-/** POST one A2A message/send to a unit's shim. Returns {status, body}. */
+/**
+ * One raw HTTP request to a shim: over its Unix socket (`a2a.socket`), else to `a2a.url`. Resolves {status, body}
+ * with `body` parsed as JSON when it is JSON (else the text). Rejects when the endpoint is gone.
+ */
+export function raw(a2a, { method = "POST", path = "/", headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const target = a2a.socket ? { socketPath: a2a.socket } : (() => { const u = new URL(a2a.url); return { host: u.hostname, port: u.port }; })();
+    const req = httpRequest({ ...target, path, method, headers: { ...(body !== null ? { "content-length": Buffer.byteLength(body) } : {}), ...headers } }, res => {
+      const chunks = [];
+      res.on("data", c => chunks.push(c));
+      res.on("end", () => { const text = Buffer.concat(chunks).toString("utf8"); let parsed = text; try { parsed = JSON.parse(text); } catch { /* text */ } resolve({ status: res.statusCode, body: parsed }); });
+    });
+    req.on("error", reject);
+    req.end(body ?? undefined);
+  });
+}
+
+/** POST one A2A message/send to a unit's shim (over its socket). Returns {status, body}. */
 export async function ask(a2a, { role, unit_id, text = "a question", method = "message/send", token = a2a.token, params } = {}) {
-  const res = await fetch(a2a.url, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+  return raw(a2a, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: params ?? { message: { role: "user", parts: [{ kind: "text", text }], metadata: { subagent_role: role, unit_id } } } }) });
-  return { status: res.status, body: await res.json() };
 }

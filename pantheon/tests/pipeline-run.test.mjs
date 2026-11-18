@@ -2,10 +2,10 @@
 // the multi-file unit, the write jail, skipping, limits, and the non-contributor arbiter pin.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runPipeline, contributionsOf, arbitersOf, PIPELINE_SCHEMA } from "../src/pipeline/index.mjs";
+import { runPipeline, contributionsOf, arbitersOf, PIPELINE_SCHEMA, MCP_SERVER_PATH } from "../src/pipeline/index.mjs";
 import { candidateRefusal, contributorKeys } from "../src/review/identity.mjs";
 import { tempRepo, seats, unit, scripted, sh, sleep, write, ask, reject, RUBRIC, LUNA, PLANNER } from "./fixtures/pipeline-stages.mjs";
 
@@ -223,4 +223,30 @@ test("a run that does not name its planner records an unnamed plan contribution:
   const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: seats(), turns: s.turns, dir: env.dir });
   assert.deepEqual(contributionsOf(out).find(c => c.kind === "plan"), { kind: "plan", unit_id: null, role: "planner", vendor: null, model: null, served_model: null });
   assert.match(candidateRefusal(LUNA, contributorKeys(contributionsOf(out))), /unresolved/);
+});
+
+test("the implementer call contract: control_dir outside the worktree, the shim's Unix socket in it, the relay's env, owned paths and verify_cmd", async t => {
+  const plan = [unit("a", { allowed_subagents: ["math", "api-historian"] })];
+  let seen = null;
+  const r = await run(t, plan, { implement: async args => {
+    seen = { ...args, socket_up: existsSync(args.a2a.socket), control_is_dir: statSync(args.control_dir).isDirectory(), mode: statSync(args.control_dir).mode & 0o777 };
+    const got = await ask(args.a2a, { role: "math", unit_id: "a", text: "six times seven?" });
+    await write(args.cwd, "src/a/impl.mjs", `// ${got.body.result.parts[0].data.answer}\n`);
+    return "done"; } });
+  assert.equal(r.out.status, "completed");
+  assert.deepEqual(Object.keys(seen.a2a).sort(), ["roles", "socket", "token", "url"]);
+  assert.equal(seen.a2a.url, null); assert.deepEqual(seen.a2a.roles, ["api-historian", "math"]);
+  assert.equal(seen.control_dir, join(r.dir, "control", "a")); assert.equal(seen.control_is_dir, true); assert.equal(seen.mode, 0o700);
+  assert.equal(seen.control_dir.startsWith(seen.cwd), false); assert.equal(seen.cwd.startsWith(seen.control_dir), false);
+  assert.equal(seen.a2a.socket, join(seen.control_dir, "a2a.sock")); assert.equal(seen.socket_up, true);
+  assert.deepEqual(seen.env, { PANTHEON_A2A_SOCKET: seen.a2a.socket, PANTHEON_A2A_TOKEN: seen.a2a.token, PANTHEON_A2A_ROLES: "api-historian,math", PANTHEON_UNIT_ID: "a" });
+  assert.deepEqual(seen.owned_paths, ["src/a/**"]); assert.equal(seen.verify_cmd, "test -f src/a/impl.mjs");
+  assert.deepEqual([seen.unit_id, seen.mcp_server, seen.seat.model], ["a", MCP_SERVER_PATH, "gemini-4-hydrogen-medium"]);
+  assert.match(seen.prompt, /MCP tool `ask_subagent` of the server `pantheon-subagents`/);
+  assert.equal(seen.prompt.includes(seen.a2a.token), false, "the token is in the prompt");
+  // The record names the socket used; the socket is gone when the unit ends; the token is not on disk.
+  assert.deepEqual(r.out.units.a.a2a.socket, { file: seen.a2a.socket, fallback: false });
+  assert.equal(existsSync(seen.a2a.socket), false);
+  assert.equal(readFileSync(join(r.dir, "pipeline.json"), "utf8").includes(seen.a2a.token), false);
+  assert.deepEqual(r.out.units.a.a2a.calls.map(c => [c.role, c.status]), [["math", "answered"]]);
 });

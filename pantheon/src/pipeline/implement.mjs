@@ -4,12 +4,24 @@
 // the multi-turn agy CLI transport; tests script it). The model is not trusted to stay inside its unit: after the
 // turn the CONTROLLER reads the worktree from disk and enforces the jail.
 //
-// Inputs:  {unit, worktree, seat, ladder, turn, a2a, attempt, findings} (+ rubric, checkpoint, scratch_paths, signal)
+// Inputs:  {unit, worktree, seat, ladder, turn, a2a, attempt, findings} (+ rubric, checkpoint, scratch_paths, signal,
+//          control_dir, mcp_server)
 // Outputs: an attempt record {status: "written" | "refused" | "failed", changed, violations, checkpoint, ...}.
 //   written  the turn's changes are all inside owned_paths and are committed as the unit's new checkpoint;
 //   refused  the write jail found a violation: the offending paths are listed and EVERYTHING the turn wrote is
 //            discarded (the worktree is reset to the checkpoint it started from);
-//   failed   the turn itself threw; whatever it left behind is discarded the same way.
+//   failed   the turn itself threw; whatever it left behind is discarded the same way. A throw that carries
+//            code "quota_exhausted" (code QUOTA_EXHAUSTED here) or code "lane_failure" with a `kind` in
+//            timeout | exit | stream | spawn (code LANE_FAILURE) is a LANE failure: the record carries
+//            `lane_failure: {kind, cause, why, status}` and the controller (index.mjs) applies the failover ladder
+//            instead of spending a revision.
+//
+// THE CALL CONTRACT of the injected implementer turn (one object):
+//   {vendor, model, seat, prompt, cwd, signal, role: "implementer", unit_id, attempt,
+//    a2a: {socket, token, roles, url: null} | null, env: {PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_A2A_ROLES,
+//    PANTHEON_UNIT_ID}, sandbox: {...CAPABILITIES.implementer, owned_paths}, owned_paths, verify_cmd,
+//    control_dir (controller-owned, outside the worktree, already created), mcp_server (absolute path of
+//    a2a-mcp-server.mjs, the stdio MCP relay to the socket)}
 //
 // THE JAIL. A changed, added or deleted path (tracked, untracked or git-ignored) must match the unit's owned_paths.
 // A symlink the turn created must point inside the worktree, by a relative target. No changed path may resolve,
@@ -20,9 +32,23 @@
 // changed; follow a symlink out of the worktree; run git synchronously.
 import { lstat, readlink, realpath, readdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CAPABILITIES, clone, sha256, str } from "./util.mjs";
 import { matchesOwned } from "./paths.mjs";
 import { git } from "./git.mjs";
+
+/** Absolute path of the stdio MCP relay the implementer's agent launches to reach the unit's subagent shim. */
+export const MCP_SERVER_PATH = fileURLToPath(new URL("./a2a-mcp-server.mjs", import.meta.url));
+/** The kinds of a non-quota lane failure an implementer transport may throw (code "lane_failure"). */
+export const LANE_FAILURE_KINDS = Object.freeze(["timeout", "exit", "stream", "spawn"]);
+
+/** The lane failure a thrown error names, as {kind, cause, why, status}, or null when it is not one. */
+export function laneFailureOf(e) {
+  const why = String(e?.message ?? e).slice(0, 500);
+  if (e?.code === "quota_exhausted") return { kind: "quota", cause: "quota", why, status: e?.status ?? 429 };
+  if (e?.code === "lane_failure") return { kind: LANE_FAILURE_KINDS.includes(e?.kind) ? e.kind : "exit", cause: "lane", why, status: e?.status ?? null, ...(LANE_FAILURE_KINDS.includes(e?.kind) ? {} : { reported_kind: e?.kind ?? null }) };
+  return null;
+}
 
 export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, findings = [] }) {
   const subs = unit.allowed_subagents ?? [];
@@ -47,9 +73,8 @@ export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, find
     "",
     subs.length && a2a
       ? [`SUBAGENTS: you may ask a specialist ONE stateless question at a time (it has no tools, no files and no memory). Allowed roles: ${subs.join(", ")}.`,
-         `  POST ${a2a.url}  with header  Authorization: Bearer ${a2a.token}  (also in $PANTHEON_A2A_URL / $PANTHEON_A2A_TOKEN)`,
-         `  body: {"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"<your question>"}],"metadata":{"subagent_role":"<role>","unit_id":"${unit.unit_id}"}}}}`,
-         "  The answer is result.parts[0].data.answer. Calls and bytes are bounded; an answer is advice, and what you write is yours."].join("\n")
+         "  Use the MCP tool `ask_subagent` of the server `pantheon-subagents` with {\"role\": \"<one of the roles above>\", \"question\": \"<your question>\"}.",
+         "  The answer is the tool result's `answer` field. Calls and bytes are bounded; an answer is advice, and what you write is yours."].join("\n")
       : "SUBAGENTS: none are allowed for this unit.",
     "",
     attempt > 1 || findings.length
@@ -143,13 +168,13 @@ export async function checkpointWrites({ worktree, message }) {
  * One implementer attempt on one unit.
  *   unit      the dispatched unit (specialist_role and difficulty as the dispatcher fixed them)
  *   seat      the seat asked this attempt; `ladder` its escalation ladder (recorded; the controller picks the rung)
- *   turn({vendor, model, prompt, cwd, seat, signal, a2a, env, sandbox, role: "implementer", unit_id, attempt})
- *             -> {text, served_model, served_model_source?}
- *   a2a       {url, token} of the unit's subagent shim, or null
+ *   turn(<THE CALL CONTRACT in the header>) -> {text, served_model, served_model_source?, quota_failover?}
+ *   a2a       {socket, token, roles} of the unit's subagent shim, or null
+ *   control_dir  the unit's controller-owned directory (outside the worktree); mcp_server the relay's path
  *   findings  the findings this attempt must address (empty on the first)
  *   rubric    the frozen rubric (default unit.rubric); checkpoint: the commit the attempt starts from (default HEAD)
  */
-export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null }) {
+export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH }) {
   const start = checkpoint ?? (await git(worktree, ["rev-parse", "HEAD"])).trim();
   const level = ladder.findIndex(s => s.vendor === seat.vendor && s.model === seat.model);
   const rec = { n: attempt, role: "implementer", standing: "author", authored: true, vendor: seat.vendor, model: seat.model, level: level < 0 ? null : level, requested_model: seat.model, served_model: null, served_model_source: null,
@@ -163,10 +188,17 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
     why: `write jail cannot be enforced: the worktree tracks symlink(s) that leave it (${escapes.map(v => v.path).join(", ")}); no turn was asked` });
   let out;
   try {
-    out = await turn({ vendor: seat.vendor, model: seat.model, seat: clone(seat), prompt, cwd: worktree, signal, a2a: a2a ? { url: a2a.url, token: a2a.token } : null,
-      env: a2a ? { PANTHEON_A2A_URL: a2a.url, PANTHEON_A2A_TOKEN: a2a.token } : {}, sandbox: { ...CAPABILITIES.implementer, owned_paths: [...unit.owned_paths] }, role: "implementer", unit_id: unit.unit_id, attempt });
+    const roles = a2a ? [...(a2a.roles ?? unit.allowed_subagents ?? [])] : [];
+    out = await turn({ vendor: seat.vendor, model: seat.model, seat: clone(seat), prompt, cwd: worktree, signal,
+      a2a: a2a ? { socket: a2a.socket, token: a2a.token, roles, url: null } : null,
+      env: a2a ? { PANTHEON_A2A_SOCKET: a2a.socket, PANTHEON_A2A_TOKEN: a2a.token, PANTHEON_A2A_ROLES: roles.join(","), PANTHEON_UNIT_ID: unit.unit_id } : {},
+      sandbox: { ...CAPABILITIES.implementer, owned_paths: [...unit.owned_paths] }, owned_paths: [...unit.owned_paths], verify_cmd: unit.verify_cmd,
+      control_dir, mcp_server, role: "implementer", unit_id: unit.unit_id, attempt });
   } catch (e) {
     await discardWrites({ worktree, checkpoint: start });
+    if (e?.quota_failover) rec.quota_failover = clone(e.quota_failover);
+    const lane = laneFailureOf(e);
+    if (lane) return Object.assign(rec, { code: lane.cause === "quota" ? "QUOTA_EXHAUSTED" : "LANE_FAILURE", lane_failure: lane, why: `the implementer lane ${seat.model} failed (${lane.kind}): ${lane.why}` });
     return Object.assign(rec, { code: e?.code === "PROVIDER_LIMIT" ? "PROVIDER_LIMIT" : "TURN_FAILED", why: `the implementer turn failed: ${String(e?.message ?? e)}` });
   }
   rec.text_digest = typeof out?.text === "string" ? sha256(out.text) : null;

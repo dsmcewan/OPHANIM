@@ -3,25 +3,49 @@
 //   Stage 1  plan          work_units (work-units.mjs) — validated here, authored upstream by the planner
 //   Stage 2  dispatch      dispatcher specialist + frozen rubric; controller locks, waves, worktrees (dispatch.mjs)
 //   Stage 3  implement     one specialist per unit in its own worktree, behind the write jail (implement.mjs)
-//   Stage 4  subagents     the per-unit A2A leaf shim (a2a-shim.mjs)
+//   Stage 4  subagents     the per-unit A2A leaf shim on a Unix socket (a2a-shim.mjs), reached by the agent through
+//                          the stdio MCP relay a2a-mcp-server.mjs
 //   Stage 5  review        pinned to the Stage 2 model; ground truth from verify_cmd; the ladder (review.mjs)
 //
-// Inputs: runPipeline({repo, base, plan, seats, turns, limits, dir, signal, planner?, run_id?, sameModel?}).
+// Inputs: runPipeline({repo, base, plan, seats, turns, limits, dir, signal, planner?, run_id?, sameModel?, checkpoints?}).
 // Seats and turns are INJECTED: this module imports no routing table, no vendor SDK and calls no provider.
 // Outputs: the run record (schema pantheon.pipeline/v1), returned and written INCREMENTALLY to <dir>/pipeline.json
 // after every step, so a crash leaves a truthful record of what had happened.
 //
 // The controller here is code ({vendor: "controller"}): it decides what is dispatched, kept, merged and skipped.
 //
+// PER-UNIT CONTROL DIRECTORY. <dir>/control/<unit_id>/ (mode 0700) is created by the controller for every active
+// unit, OUTSIDE its worktree, and handed to the implementer turn as `control_dir`. The unit's A2A shim listens on
+// <control_dir>/a2a.sock; when that path is over the Unix socket-path bound (SOCKET_PATH_MAX), on a short path in a
+// fresh controller-owned directory under os.tmpdir() instead. The path used is recorded (units[id].a2a.socket) and
+// the socket file (and a fallback directory) removed when the unit ends.
+//
+// THE IMPLEMENTER LANE FAILOVER LADDER. A turn that throws code "lane_failure" (kind timeout | exit | stream | spawn)
+// is retried on THE SAME lane at most once, then the unit steps down to the next rung of its implementer ladder
+// (seats.implementer(unit).ladder); a turn that throws code "quota_exhausted" (the transport's own quota failover
+// already failed) steps down at once. Lane failures spend no revision (max_revisions counts Stage 5 rejections and
+// refused attempts only) but every call is charged to max_provider_calls. Each failover is an `escalations[]` entry
+// of kind "lane_failover"; each failed call is in attempts[].lane_failures [{vendor, model, level, kind, cause, why,
+// retry (true: this call was the same-lane retry), next}]. With no rung left the unit ends blocked, code
+// LANE_LADDER_EXHAUSTED. A later rejection escalates the thinking level from the rung failover left it on.
+//
+// CHECKPOINTS (checkpoint.mjs). With `checkpoints: {dir}` (a directory that persists across runs of one item),
+// every unit approved by Stage 5 is written there; a later run re-verifies a unit's checkpoint (digest, upstream
+// trees, and the patch applied on the freshly bound base yielding the recorded tree) and, if it holds, takes the
+// unit as approved with `resumed: true` and no provider call. A checkpoint that does not hold is recorded as
+// `checkpoint_rejected` and the unit runs normally.
+//
 // Must never: merge a unit that was not approved against a passing verify_cmd; run a unit whose upstream did not
 // merge; exceed an injected limit; let an injected function mutate the frozen unit; block the event loop on git.
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { CAPABILITIES, PIPELINE_SCHEMA, clone, now, sameSeat, seatRefusal, sha256 } from "./util.mjs";
 import { validateWorkUnits } from "./work-units.mjs";
 import { bindWorktree, lockConflicts, releaseWorktree, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
-import { runImplementer } from "./implement.mjs";
+import { runImplementer, MCP_SERVER_PATH } from "./implement.mjs";
+import { checkpointFile, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint } from "./checkpoint.mjs";
 import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
@@ -32,6 +56,24 @@ export { PIPELINE_SCHEMA, CAPABILITIES } from "./util.mjs";
 export { validateWorkUnits, parseWorkUnits, PLANNER_PROMPT, WORK_UNITS_SCHEMA } from "./work-units.mjs";
 export { pathsOverlap, lockConflicts, waves, rubricHash } from "./dispatch.mjs";
 export { escalate } from "./review.mjs";
+export { unitKey, CHECKPOINT_SCHEMA } from "./checkpoint.mjs";
+export { MCP_SERVER_PATH, LANE_FAILURE_KINDS } from "./implement.mjs";
+
+/** The longest Unix socket path this platform's sockaddr_un takes (sun_path less its NUL). */
+export const SOCKET_PATH_MAX = process.platform === "linux" ? 107 : 103;
+
+/**
+ * Where a unit's shim socket goes: <control_dir>/a2a.sock, or — when that is over SOCKET_PATH_MAX bytes — a short
+ * path in a fresh controller-owned directory under os.tmpdir(). Returns {file, fallback, dir, wanted}.
+ */
+export async function a2aSocketFor(control_dir) {
+  const wanted = join(control_dir, "a2a.sock");
+  if (Buffer.byteLength(wanted) <= SOCKET_PATH_MAX) return { file: wanted, fallback: false, dir: control_dir, wanted };
+  const short = await mkdtemp(join(tmpdir(), "pa2a-"));
+  const file = join(short, "a2a.sock");
+  if (Buffer.byteLength(file) > SOCKET_PATH_MAX) { await rm(short, { recursive: true, force: true }); throw Object.assign(new Error(`no Unix socket path fits ${SOCKET_PATH_MAX} bytes (os.tmpdir() is ${tmpdir()})`), { code: "SOCKET_PATH" }); }
+  return { file, fallback: true, dir: short, wanted };
+}
 
 export const DEFAULT_LIMITS = Object.freeze({
   max_provider_calls: 200,          // every injected turn, of every role, in the whole run
@@ -60,18 +102,20 @@ const FINAL = new Set(["approved", "returned", "blocked", "refused", "failed", "
  *             reviewerLadder(dispatcherSeat) -> [seat, ...]}; a seat is {vendor, model, ...}
  *   turns    {dispatcher, implementer, subagent, reviewer}: async (args) -> {text, served_model, served_model_source?}
  *   limits   overrides of DEFAULT_LIMITS
- *   dir      where pipeline.json, the unit patches and the worktrees go
+ *   dir      where pipeline.json, the unit patches, the worktrees and the per-unit control directories go
+ *   checkpoints  {dir}: where approved units' checkpoints persist across runs of the same item (optional)
  *
  * Returns the run record. status: "completed" (every unit approved and merged), "incomplete" (some unit was not),
  * "refused" (the plan or the run's inputs were refused; nothing ran) or "failed".
  */
-export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined }) {
+export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null }) {
   const lim = { ...DEFAULT_LIMITS, ...limits };
   await mkdir(dir, { recursive: true });
   const run = {
     schema: PIPELINE_SCHEMA, run_id: run_id ?? randomBytes(6).toString("hex"), status: "running", reason: null, started_at: now(), ended_at: null,
     controller: { ...CONTROLLER }, repo, base: { ref: base, commit: null }, integration: null, planner: planner ? clone(planner) : null,
     plan: clone(plan ?? null), refusals: [], waves: [], limits: clone(lim), units: {},
+    checkpoints: checkpoints?.dir ? { dir: checkpoints.dir, resumed: [], rejected: [], written: [] } : null,
     contributions: [], arbiters: [], provider_calls: { total: 0, refused_at_limit: 0, by_role: { dispatcher: 0, implementer: 0, subagent: 0, reviewer: 0 } },
   };
 
@@ -103,12 +147,15 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   const waveOf = new Map(run.waves.flatMap((w, i) => w.map(id => [id, i])));
   for (const u of units) run.units[u.unit_id] = {
     unit_id: u.unit_id, status: "pending", reason: null, wave: waveOf.get(u.unit_id), depends_on: [...u.depends_on].sort(), owned_paths: [...u.owned_paths], planned: clone(u),
-    started_at: null, ended_at: null, worktree: null, worktree_removed: null, base_commit: null, dispatch: null, implementer_ladder: null, reviewer_ladder: null,
-    attempts: [], a2a: { calls: [], usage: null }, reviews: [], escalations: [], findings: [], reviewer_fed_revision: false, commit: null, patch_digest: null, merged: false,
+    started_at: null, ended_at: null, worktree: null, worktree_removed: null, control_dir: null, base_commit: null, dispatch: null, implementer_ladder: null, reviewer_ladder: null,
+    attempts: [], a2a: { calls: [], usage: null, socket: null }, reviews: [], escalations: [], findings: [], reviewer_fed_revision: false, commit: null, tree: null, patch_digest: null, merged: false,
+    unit_key: null, resumed: false, checkpoint: null, checkpoint_rejected: null,
   };
   const head = await git(repo, ["rev-parse", "--verify", `${base}^{commit}`], { allowFail: true });
   if (head.code !== 0) return refuse([{ code: "BASE", unit_id: null, message: `base "${base}" is not a commit of ${repo}` }]);
   run.base.commit = head.stdout.trim();
+  // Unit keys (checkpoint.mjs), in wave order so every upstream key exists before its dependants'.
+  for (const id of run.waves.flat()) run.units[id].unit_key = unitKey({ unit: byId.get(id), base_commit: run.base.commit, upstream: [...up.get(id)].map(d => ({ unit_id: d, unit_key: run.units[d].unit_key })) });
 
   // ---- provider-call budget: every injected turn passes through here
   const counted = role => async args => {
@@ -175,6 +222,13 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   async function runUnit(planned) {
     const u = run.units[planned.unit_id];
     Object.assign(u, { status: "dispatching", started_at: now() });
+    const upIds = [...up.get(planned.unit_id)].sort((a, b) => waveOf.get(a) - waveOf.get(b) || (a < b ? -1 : 1));
+    const upstream = upIds.map(id => ({ unit_id: id, patch: patches.get(id) ?? "" }));
+    const upstreamTrees = () => upIds.map(id => ({ unit_id: id, unit_key: run.units[id].unit_key, tree: run.units[id].tree }));
+    const path = join(dir, "worktrees", planned.unit_id);
+
+    // ---- resume: a checkpoint that still holds makes the unit approved with no provider call
+    if (run.checkpoints && await resume(u, upstream, upstreamTrees(), path)) return;
 
     // ---- Stage 2: the dispatcher specialist, then the frozen rubric
     const dSeat = clone(seats.dispatcher(clone(planned)));
@@ -199,16 +253,22 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     if (rWhy) return finish(u, "refused", rWhy);
     u.implementer_ladder = iLadder; u.reviewer_ladder = rLadder;
 
+    // ---- the controller's per-unit control directory, outside the worktree
+    const control = join(dir, "control", unit.unit_id);
+    await mkdir(control, { recursive: true, mode: 0o700 });
+    u.control_dir = control;
+
     // ---- the controller binds ONE worktree: base + the merged results of the unit's upstream, in wave order
-    const upstream = [...up.get(unit.unit_id)].sort((a, b) => waveOf.get(a) - waveOf.get(b) || (a < b ? -1 : 1)).map(id => ({ unit_id: id, patch: patches.get(id) ?? "" }));
-    const path = join(dir, "worktrees", unit.unit_id);
-    let shim = null, bound = false;
+    let shim = null, bound = false, sockAt = null;
     try {
       const wt = await bindWorktree({ repo, base: run.base.commit, path, upstream, lock });
       bound = true;
       Object.assign(u, { status: "active", worktree: path, base_commit: wt.base_commit });
+      sockAt = await a2aSocketFor(control);
+      u.a2a.socket = { file: sockAt.file, fallback: sockAt.fallback, ...(sockAt.fallback ? { wanted: sockAt.wanted } : {}) };
+      const a2aSocket = sockAt.file;
       // ---- Stage 4: the unit's subagent leaf, up for exactly as long as the unit is active. It is never told `path`.
-      shim = await startA2AShim({ unit_id: unit.unit_id, allowed_subagents: unit.allowed_subagents, seatFor: role => seats.subagent(frozen(), role), subagentTurn: T.subagent,
+      shim = await startA2AShim({ unit_id: unit.unit_id, allowed_subagents: unit.allowed_subagents, socket: a2aSocket, seatFor: role => seats.subagent(frozen(), role), subagentTurn: T.subagent,
         limits: { max_calls: lim.a2a_max_calls, max_bytes: lim.a2a_max_bytes }, sandbox: CAPABILITIES.subagent, signal,
         onCall: rec => { u.a2a.calls.push(rec); u.a2a.usage = shim?.usage() ?? null; save(); } });
       await save();
@@ -217,11 +277,34 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const cfg = { max_revisions: lim.max_revisions, reviewer_escalation_after: lim.reviewer_escalation_after, implementer_rungs: iLadder.length, reviewer_rungs: rLadder.length };
       let checkpoint = wt.base_commit, findings = [];
       for (let n = 1; ; n++) {
-        // ---- Stage 3
-        const a = await runImplementer({ unit: frozen(), worktree: path, seat: iLadder[state.implementer_level], ladder: iLadder, turn: T.implementer, a2a: { url: shim.url, token: shim.token },
-          attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal });
+        // ---- Stage 3, behind the lane failover ladder: a lane failure is retried once on the same lane, then the
+        // unit steps down a rung; a quota refusal steps down at once. No revision is spent on either.
+        const lane_failures = [];
+        let a, retried = false;
+        for (;;) {
+          const seat = iLadder[state.implementer_level];
+          a = await runImplementer({ unit: frozen(), worktree: path, seat, ladder: iLadder, turn: T.implementer, a2a: { socket: shim.socket, token: shim.token, roles: [...shim.roles] },
+            attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH });
+          if (!a.lane_failure) break;
+          const quota = a.lane_failure.cause === "quota", again = !quota && !retried, down = state.implementer_level + 1 < iLadder.length;
+          lane_failures.push({ vendor: seat.vendor, model: seat.model, level: state.implementer_level, kind: a.lane_failure.kind, cause: a.lane_failure.cause, why: a.why, retry: retried,
+            next: signal?.aborted ? "aborted" : again ? "same_lane" : down ? "next_rung" : "exhausted" });
+          if (signal?.aborted) break;
+          if (again) { retried = true; continue; }
+          if (!down) break;
+          u.escalations.push({ after_attempt: n, kind: "lane_failover", cause: quota ? "quota" : "lane", from: clone(seat), to: clone(iLadder[state.implementer_level + 1]) });
+          state = { ...state, implementer_level: state.implementer_level + 1 };
+          retried = false;
+          await save();
+        }
+        a.lane_failures = lane_failures;
         u.attempts.push(a);
         await save();
+        if (a.lane_failure) {
+          if (signal?.aborted) return finish(u, "blocked", a.why);
+          u.code = "LANE_LADDER_EXHAUSTED";
+          return finish(u, "blocked", `LANE_LADDER_EXHAUSTED: every rung of the implementer ladder failed (${lane_failures.map(f => `${f.model}: ${f.kind}`).join("; ")})`);
+        }
         let event, review = null;
         if (a.status !== "written") {
           if (a.code === "PROVIDER_LIMIT" || a.code === "TURN_FAILED" && signal?.aborted) return finish(u, "blocked", a.why);
@@ -261,11 +344,61 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const patch = await git(path, ["diff", "--binary", "--no-renames", "--no-color", "--no-ext-diff", wt.base_commit, checkpoint]);
       patches.set(unit.unit_id, patch);
       await writeFile(join(dir, "units", `${unit.unit_id}.patch`), patch);
-      Object.assign(u, { commit: checkpoint, patch_digest: sha256(patch) });
+      const tree = (await git(path, ["rev-parse", `${checkpoint}^{tree}`])).trim();
+      Object.assign(u, { commit: checkpoint, tree, patch_digest: sha256(patch) });
       finish(u, "approved");
+      if (run.checkpoints) await keep(u, { patch, unit_base_commit: wt.base_commit, upstream: upstreamTrees() });
     } finally {
       if (shim) { u.a2a.usage = shim.usage(); await shim.close(); }
+      if (sockAt) { await rm(sockAt.file, { force: true }).catch(() => {}); if (sockAt.fallback) await rm(sockAt.dir, { recursive: true, force: true }).catch(() => {}); }
       if (bound) u.worktree_removed = await releaseWorktree({ repo, path, lock }).catch(() => false);
+    }
+  }
+
+  /** Write an approved unit's checkpoint. A failure to write is recorded; it does not change the unit's verdict. */
+  async function keep(u, { patch, unit_base_commit, upstream }) {
+    const rv = u.reviews.at(-1);
+    try {
+      const rec = await writeCheckpoint({ dir: run.checkpoints.dir, patch, record: {
+        unit_key: u.unit_key, unit_id: u.unit_id, rubric_hash: u.dispatch.rubric_hash, base_commit: run.base.commit, unit_base_commit, upstream,
+        commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model },
+        verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest } } });
+      u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
+      run.checkpoints.written.push(u.unit_id);
+    } catch (e) { u.checkpoint = { written: false, why: String(e?.message ?? e) }; }
+  }
+
+  /**
+   * Resume `u` from its checkpoint if it still holds (see checkpoint.mjs): true when the unit is now approved.
+   * The patch is applied on the unit's freshly bound base (base + upstream patches) and must yield the recorded tree.
+   */
+  async function resume(u, upstream, upstreamNow, path) {
+    const got = await readCheckpoint({ dir: run.checkpoints.dir, unit_key: u.unit_key });
+    if (!got.found) return false;
+    const reject = why => { u.checkpoint_rejected = { unit_key: u.unit_key, why, at: now() }; run.checkpoints.rejected.push(u.unit_id); return false; };
+    if (got.why) return reject(got.why);
+    const why = checkpointRefusal(got, { unit_key: u.unit_key, unit_id: u.unit_id, base_commit: run.base.commit, upstream: upstreamNow });
+    if (why) return reject(why);
+    let bound = false, ok = false;
+    try {
+      const wt = await bindWorktree({ repo, base: run.base.commit, path, upstream, lock });
+      bound = true;
+      if (got.patch) {
+        const r = await git(path, ["apply", "--index", "--whitespace=nowarn", "-"], { input: got.patch, allowFail: true });
+        if (r.code !== 0) return reject(`the checkpoint's patch does not apply on the unit's base: ${r.stderr.trim().slice(0, 500)}`);
+      }
+      const tree = (await git(path, ["write-tree"])).trim();
+      if (tree !== got.record.tree) return reject(`the checkpoint's patch applied on the unit's base yields tree ${tree}, not the recorded ${got.record.tree}`);
+      patches.set(u.unit_id, got.patch);
+      await writeFile(join(dir, "units", `${u.unit_id}.patch`), got.patch);
+      Object.assign(u, { resumed: true, base_commit: wt.base_commit, commit: got.record.commit, tree, patch_digest: got.record.patch_digest,
+        checkpoint: { resumed_from: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, rubric_hash: got.record.rubric_hash, reviewer: clone(got.record.reviewer ?? null), verify: clone(got.record.verify ?? null) } });
+      run.checkpoints.resumed.push(u.unit_id);
+      finish(u, "approved");
+      ok = true;
+      return true;
+    } finally {
+      if (bound) { const removed = await releaseWorktree({ repo, path, lock }).catch(() => false); if (ok) u.worktree_removed = removed; }
     }
   }
 }

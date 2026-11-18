@@ -1,6 +1,13 @@
 // STAGE 4: the controller's A2A LEAF SHIM — the only way a unit's implementer reaches a subagent.
 //
-// A local HTTP endpoint on 127.0.0.1 (ephemeral port), started for one active unit and closed when that unit ends.
+// A local HTTP endpoint on a UNIX DOMAIN SOCKET whose path the CONTROLLER chooses (index.mjs:
+// <dir>/control/<unit_id>/a2a.sock, a controller-owned directory outside the unit's checkout, or a short fallback under
+// os.tmpdir() when that path is over the socket-path bound). A socket, not TCP: the sandboxes the implementer runs
+// in (bwrap/nsjail, agy's own) cut host TCP loopback, and a bind-mounted socket file still reaches the controller.
+// The shim creates no directory and removes no file itself; node unlinks the socket on close, and the controller
+// removes it again in case it did not. Started for one active unit and closed when that unit ends.
+// (A loopback-TCP listener remains for tests only: `tcp: true`. The pipeline path is always the socket.)
+// The implementer's agent reaches it through the stdio MCP relay a2a-mcp-server.mjs (tool `ask_subagent`).
 // It speaks the A2A JSON-RPC binding for exactly one method:
 //   POST /                        {"jsonrpc":"2.0","id":..,"method":"message/send","params":{"message":{"role":"user",
 //                                  "parts":[{"kind":"text","text":"..."}],"metadata":{"subagent_role":"..","unit_id":".."}}}}
@@ -8,7 +15,7 @@
 // and answers with an A2A message whose data part is {role, answer, model, served_model}.
 //
 // Inputs: the unit id, its allowed subagent roles, an INJECTED seatFor(role) and subagentTurn({vendor, model,
-// prompt}), and the per-unit bounds. Outputs: {url, token, calls, close()} and one record per call.
+// prompt}), the per-unit bounds and the socket path. Outputs: {socket, url, token, calls, close()} and one record per call.
 //
 // A LEAF: each call is ONE stateless single turn — no history, no tools, no task, no stream. The subagent answers
 // a question; it cannot act.
@@ -44,9 +51,13 @@ export function SUBAGENT_PROMPT({ role, unit_id, question }) {
  *   subagentTurn({vendor, model, prompt, seat, role, unit_id, sandbox, signal}) -> {text, served_model, served_model_source?}
  *   limits {max_calls, max_bytes}           per unit: admitted calls, and question + answer bytes in total
  *   onCall(record)                          called after every request that named a role (admitted or refused)
- * Returns {url, token, calls, usage(), close()}.
+ *   socket                                  the Unix socket path to listen on (chosen and its directory created by
+ *                                           the controller); required unless `tcp: true` (tests only: 127.0.0.1)
+ * Returns {socket, url, token, roles, calls, usage(), close()}. `url` is null on a socket ("http://localhost/" is
+ * the base of a request sent over it); `roles` the sorted allow-list.
  */
-export async function startA2AShim({ unit_id, allowed_subagents = [], seatFor, subagentTurn, limits = {}, onCall = () => {}, sandbox = null, signal = null }) {
+export async function startA2AShim({ unit_id, allowed_subagents = [], seatFor, subagentTurn, limits = {}, onCall = () => {}, sandbox = null, signal = null, socket = null, tcp = false }) {
+  if (!str(socket) && tcp !== true) throw Object.assign(new Error("startA2AShim: pass the Unix socket path the controller chose (socket)"), { code: "NO_SOCKET" });
   const max_calls = limits.max_calls ?? 8, max_bytes = limits.max_bytes ?? 262144;
   const allowed = [...allowed_subagents].sort();
   const token = randomBytes(24).toString("hex");
@@ -58,7 +69,7 @@ export async function startA2AShim({ unit_id, allowed_subagents = [], seatFor, s
     protocolVersion: "0.3.0",
     name: `pantheon-subagent-leaf/${unit_id}`,
     description: "Controller leaf shim: one stateless single-turn answer from an allowed specialist subagent. No tools, no files, no tasks.",
-    url, preferredTransport: "JSONRPC", version: "1",
+    url: url ?? "http://localhost/", preferredTransport: "JSONRPC", version: "1",
     capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false },
     defaultInputModes: ["text/plain"], defaultOutputModes: ["application/json"],
     securitySchemes: { bearer: { type: "http", scheme: "bearer" } }, security: [{ bearer: [] }],
@@ -124,11 +135,11 @@ export async function startA2AShim({ unit_id, allowed_subagents = [], seatFor, s
   }
 
   const server = createServer((req, res) => { handle(req, res).catch(() => { try { fail(res, 500, null, A2A_ERRORS.INTERNAL, "internal error"); } catch { /* socket gone */ } }); });
-  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
-  url = `http://127.0.0.1:${server.address().port}/`;
+  await new Promise((resolve, reject) => { server.once("error", reject); if (str(socket)) server.listen(socket, resolve); else server.listen(0, "127.0.0.1", resolve); });
+  if (!str(socket)) url = `http://127.0.0.1:${server.address().port}/`;
   let closed = false;
   return {
-    url, token, calls,
+    socket: str(socket) ? socket : null, url, token, roles: [...allowed], calls,
     usage: () => ({ calls: used_calls, bytes: used_bytes, max_calls, max_bytes }),
     close: () => closed ? Promise.resolve() : new Promise(resolve => { closed = true; server.close(() => resolve()); server.closeAllConnections?.(); }),
   };
