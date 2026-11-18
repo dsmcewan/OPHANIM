@@ -12,7 +12,7 @@
 // hooks.json, OWNER-STATED shape (2026-11-18; not in the docs we read — scripts/agy-worker-probe.mjs confirms or
 // refutes it): a TOP-LEVEL HOOK NAME mapping to event groups, written WITHOUT a UTF-8 BOM:
 //   {"pantheon-jail": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/abs/hook", "timeout": 30}]}]}}
-// One PreToolUse group with matcher ".*" covers every tool (writes, commands, reads, MCP via call_mcp_tool, native
+// One PreToolUse group with matcher ".*" covers every tool (writes, commands, reads, MCP, native
 // subagents, unknown tools): the hook itself decides, and denies what it does not know. OWNER-STATED: agy runs hook
 // commands with cwd = the `.agents/` directory, not the worktree; so the command is an ABSOLUTE path to a per-unit
 // wrapper script with no arguments (it works whether or not agy tokenises the command with a shell, and depends on
@@ -43,6 +43,38 @@ const real = p => { try { return realpathSync(p); } catch { return resolve(p); }
 export const shWord = s => (/^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
 // A hook command path that needs no quoting under any tokenisation (agy's is undocumented).
 const SAFE_COMMAND = /^\/[A-Za-z0-9_./@%+=:,-]+$/;
+
+// THE ROLE CARD'S `tools:` LIST. Observed on agy 1.5.10, owner's probe 2026-11-18: the CLI log said
+//   failed to resolve components: unknown component: tool "call_mcp_tool" not found in registry
+//   Tool "grep_search" is deprecated and has no effect        (and the same for list_dir, multi_replace_file_content)
+// and Antigravity's docs warn that an unmapped tool name in an agent card's `tools` "may cause the subagent process to
+// hang" (that probe's turn hung until its print timeout, with zero tool steps). The jail hook still accepts every
+// spelling (harmless: it decides per call); the CARD lists only names that agy resolved.
+export const AGY_1_5_10_UNKNOWN_OR_DEPRECATED = Object.freeze(["call_mcp_tool", "grep_search", "list_dir", "multi_replace_file_content"]);
+export const WORKER_CARD_TOOLS = Object.freeze(["view_file", "write_to_file", "replace_file_content", "run_command"]);
+
+/** The `tools: [a, b]` list of a card's frontmatter (single line, unquoted or quoted names), or null when absent. */
+export function cardTools(text) {
+  const s = String(text ?? "");
+  const end = s.indexOf("\n---", 4);
+  if (!s.startsWith("---\n") || end < 0) return null;
+  const line = s.slice(4, end).split("\n").find(l => /^tools:/.test(l));
+  if (!line) return null;
+  const m = /^tools:\s*\[(.*)\]\s*$/.exec(line);
+  if (!m) return null;
+  return m[1].split(",").map(t => t.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+}
+/**
+ * Is `tools` a card tool list agy 1.5.10 will resolve? {ok, bad: [names in AGY_1_5_10_UNKNOWN_OR_DEPRECATED],
+ * why: null | string}. Not a list, empty, a non-string, a duplicate, or a known-bad name -> ok: false.
+ */
+export function validateCardTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return { ok: false, bad: [], why: "the card lists no tools (a missing or unparseable tools: line)" };
+  if (tools.some(t => typeof t !== "string" || !/^[A-Za-z0-9_./:-]+$/.test(t))) return { ok: false, bad: [], why: "a tool name is not a plain identifier" };
+  if (new Set(tools).size !== tools.length) return { ok: false, bad: [], why: "a tool is listed twice" };
+  const bad = tools.filter(t => AGY_1_5_10_UNKNOWN_OR_DEPRECATED.includes(t));
+  return bad.length ? { ok: false, bad, why: `unknown or deprecated on agy 1.5.10 (owner's probe 2026-11-18): ${bad.join(", ")}` } : { ok: true, bad: [], why: null };
+}
 
 /** The hooks.json object (owner-stated shape) for the absolute hook command `command`. */
 export function hooksConfig({ command, timeout = HOOK_TIMEOUT_S }) {

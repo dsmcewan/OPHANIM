@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fakeAgy } from "./fixtures/dispatch.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
+import { CARD_TEMPLATE } from "../src/agy/workspace.mjs";
 
 const PROBE = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "agy-worker-probe.mjs");
 const have = await sandboxAvailable("bwrap");
@@ -33,17 +34,21 @@ reply=''
 async function setup(t, fraction = 0.8) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pantheon-probe-test-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const fx = join(root, "fx"), home = join(root, "home"), g = join(home, ".gemini");
-  mkdirSync(fx); mkdirSync(join(g, "antigravity", "conversations"), { recursive: true }); mkdirSync(join(g, "antigravity", "mcp")); mkdirSync(join(g, "config"));
+  // A FAKE HOME (never the real one) with the agy 1.5.10 layout observed on the owner's machine (2026-11-18).
+  const fx = join(root, "fx"), home = join(root, "home"), g = join(home, ".gemini"), c = join(g, "antigravity-cli");
+  mkdirSync(fx); mkdirSync(join(c, "conversations"), { recursive: true }); mkdirSync(join(c, "plugins")); mkdirSync(join(g, "config"));
+  for (const f of ["GEMINI.md", "google_accounts.json", "installation_id", "projects.json", "state.json", "trustedFolders.json"]) writeFileSync(join(g, f), `${f}\n`);
   writeFileSync(join(g, "oauth_creds.json"), '{"refresh_token":"fake"}'); writeFileSync(join(g, "settings.json"), "{}");
-  writeFileSync(join(g, "antigravity", "conversations", "earlier.pb"), "earlier");
+  writeFileSync(join(c, "settings.json"), '{"cli":1}'); writeFileSync(join(c, "plugins", "p.json"), "plugin");
+  writeFileSync(join(c, "conversations", "earlier.db"), "earlier");
   const cli = fakeAgy(fx);
   writeFileSync(join(fx, "quota-report.txt"), JSON.stringify(usage(fraction))); writeFileSync(join(fx, "quota-exit"), "0");
   writeFileSync(join(fx, "worker.sh"), WORKER);
-  const host = () => ({ conv: readdirSync(join(g, "antigravity", "conversations")).sort(), mcp: readdirSync(join(g, "antigravity", "mcp")).sort(), oauth: readFileSync(join(g, "oauth_creds.json"), "utf8"), settings: readFileSync(join(g, "settings.json"), "utf8") });
+  const host = () => tree(home);
   const launches = () => existsSync(join(fx, "agy.log")) ? readFileSync(join(fx, "agy.log"), "utf8").split("\n").filter(Boolean) : [];
   const quotaProbes = () => existsSync(join(fx, "agy.quota.log")) ? readFileSync(join(fx, "agy.quota.log"), "utf8").split("\n").filter(Boolean).length : 0;
-  return { root, fx, home, g, cli, host, launches, quotaProbes };
+  const subs = () => existsSync(join(fx, "agy.log.sub")) ? readFileSync(join(fx, "agy.log.sub"), "utf8").split("\n").filter(Boolean) : [];
+  return { root, fx, home, g, c, cli, host, launches, quotaProbes, subs };
 }
 function probe({ cli, fx, home }, extraEnv = {}, args = []) {
   return new Promise((resolve, reject) => {
@@ -56,6 +61,8 @@ function probe({ cli, fx, home }, extraEnv = {}, args = []) {
     c.on("close", code => { try { resolve({ code, out, err, summary: JSON.parse(out) }); } catch { reject(new Error(`probe printed ${JSON.stringify(out.slice(0, 500))} (${err})`)); } });
   });
 }
+/** A recursive {relative path: content} listing of a host directory (directories end with "/"). */
+const tree = dir => { const out = {}; const walk = (d, pre) => { for (const e of readdirSync(d, { withFileTypes: true })) { const r = pre ? `${pre}/${e.name}` : e.name; if (e.isDirectory()) { out[r + "/"] = ""; walk(join(d, e.name), r); } else out[r] = readFileSync(join(d, e.name), "utf8"); } }; walk(dir, ""); return out; };
 const probeDirs = () => readdirSync(tmpdir()).filter(n => n.startsWith("pantheon-agy-probe-"));
 
 for (const form of ["direct", "wrapped"]) {
@@ -64,9 +71,22 @@ for (const form of ["direct", "wrapped"]) {
     const hostBefore = s.host();
     const dirsBefore = probeDirs();
     const r = await probe(s, { FAKE_PROBE_MCP: form, FAKE_AGY_GEMINI_WRITES: form === "direct" ? "1" : "refresh" });
+    assert.deepEqual(r.summary.aborted, null, JSON.stringify(r.summary.aborted));
     const o = r.summary;
     assert.equal(r.code, 0, `${JSON.stringify(o.checks)} ${o.turn?.error?.message ?? ""} ${o.stderr_tail ?? ""}`);
-    assert.deepEqual(Object.keys(o), ["schema", "agy", "lane", "quota_before", "quota_after", "launch", "hook", "checks", "mcp", "tools_run", "turn", "stderr_tail", "log_tail", "owner_stated_mechanics", "gemini_state", "aborted", "kept"], "stable key order");
+    assert.deepEqual(Object.keys(o), ["schema", "agy", "lane", "timeout_s", "quota_before", "quota_after", "launch", "preflight", "hook", "checks", "mcp", "tools_run", "turn",
+      "startup_errors", "deprecations", "stderr_tail", "log_tail", "owner_stated_mechanics", "gemini_state", "aborted", "kept"], "stable key order");
+    // The zero-spend preflight ran first, in the same jail, and passed: the card's four tools, `agy agents` listing the
+    // worker, `agy mcp list` showing the server, a clean --log-file; its raw output is recorded.
+    assert.deepEqual([o.preflight.ok, o.preflight.failed, Object.keys(o.preflight.checks)], [true, [], ["card_tools", "agents", "mcp_list", "log_scan"]]);
+    assert.deepEqual(o.preflight.checks.card_tools.tools, ["view_file", "write_to_file", "replace_file_content", "run_command"]);
+    assert.match(o.preflight.checks.agents.stdout, /^pantheon-unit-worker\b/m);
+    assert.match(o.preflight.checks.mcp_list.stdout, /^pantheon-subagents\b/m);
+    assert.equal(o.preflight.checks.agents.argv[0], s.cli);
+    assert.deepEqual(o.preflight.checks.agents.argv.slice(1), ["agents", "--log-file", o.preflight.log_file]);
+    assert.deepEqual(s.subs().map(l => l.split(" ").slice(0, 2).join(" ")), ["agents --log-file", "mcp list"], "agents and mcp list ran once each, before the turn");
+    assert.deepEqual([o.timeout_s, o.launch.argv[o.launch.argv.indexOf("--print-timeout") + 1]], [180, "180s"], "the default print timeout is 180 s");
+    assert.deepEqual([o.startup_errors.length === 0, o.deprecations], [form === "direct", []], "no deprecated tool; startup errors only from the refresh writes");
     assert.equal(o.schema, "pantheon.agy-worker-probe/v1");
     assert.deepEqual([o.agy.path, o.agy.version, /^sha256:[0-9a-f]{64}$/.test(o.agy.sha256)], [s.cli, "fake-agy 0.0.0-fixture", true]);
     assert.equal(o.lane, "gemini-3.8-flash-low");
@@ -92,23 +112,69 @@ for (const form of ["direct", "wrapped"]) {
     assert.doesNotMatch(r.out, /(?<![0-9a-f])[0-9a-f]{48}(?![0-9a-f])/, "the A2A token (48 hex digits) appears nowhere");
     assert.ok(o.launch.bwrap_binds.some(b => b.path === join(s.g) && b.mode === "ro"));
     assert.match(o.log_tail, /fake-agy start agent=pantheon-unit-worker model=gemini-3\.8-flash-low/);
-    // The gemini state: the host is unchanged; what the CLI wrote went to the per-run scratch, which is gone.
+    // The gemini state: the host is unchanged; what the CLI wrote went to the per-run scratch copy, which is gone.
     assert.deepEqual(s.host(), hostBefore);
-    assert.deepEqual(Object.values(o.gemini_state.scratch_written), [["fake-agy-conversation.pb"], ["pantheon-subagents.json"]]);
+    const w = o.gemini_state.scratch_written;
+    assert.equal(w.dir, s.c);
+    assert.deepEqual(Object.fromEntries(Object.entries(w.subdirs).map(([k, v]) => [k, v.length])), { brain: 1, cache: 1, conversations: 1, crashes: 0, implicit: 1, mcp: 1, presence: 1 });
+    assert.deepEqual(w.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.changed]), [["jetbox_summaries_proto.pb.<rand>.tmp", true], ["settings.json", false]]);
+    assert.ok(o.launch.bwrap_binds.some(b => b.path === s.c && b.mode === "rw") && o.launch.bwrap_binds.some(b => b.path === join(s.c, "plugins") && b.mode === "ro"));
     // The owner-stated mechanics, judged from the evidence.
     const m = o.owner_stated_mechanics;
     assert.deepEqual(Object.keys(m), ["add_dir_workspace", "hooks_json_shape", "mcp_lazy_call_mcp_tool", "hook_decision_semantics", "state_mounts"]);
     assert.deepEqual([m.add_dir_workspace.status, m.hooks_json_shape.status, m.hook_decision_semantics.status], ["confirmed", "confirmed", "confirmed"]);
     assert.equal(m.mcp_lazy_call_mcp_tool.status, form === "wrapped" ? "confirmed" : "not exercised");
     // A refresh that tries to rewrite oauth_creds.json hits EROFS, and the probe shows it.
-    if (form === "wrapped") { assert.equal(m.state_mounts.status, "refuted"); assert.match(m.state_mounts.evidence.erofs_lines.join("\n"), /oauth_creds\.json refresh write failed: EROFS/); assert.match(o.stderr_tail, /EROFS/); }
-    else assert.equal(m.state_mounts.status, "confirmed");
+    if (form === "wrapped") {
+      assert.equal(m.state_mounts.status, "refuted");
+      assert.match(m.state_mounts.evidence.erofs_lines.join("\n"), /oauth_creds\.json refresh write failed: EROFS/); assert.match(o.stderr_tail, /EROFS/);
+      assert.deepEqual(m.state_mounts.evidence.erofs_paths, [join(s.g, "oauth_creds.json"), join(s.g, "settings.json")], "the protected paths are listed");
+      assert.match(m.state_mounts.evidence.note, /EROFS under a protected path/);
+      assert.equal(o.startup_errors.filter(l => /EROFS|read-only/.test(l)).length, 2, "and they are startup errors");
+    } else {
+      assert.equal(m.state_mounts.status, "confirmed");
+      assert.match(m.state_mounts.evidence.note, /writes landed in the scratch copy/);
+      assert.equal(m.state_mounts.evidence.writes_in_scratch.length, 7);
+    }
     // One model invocation; the temp repo is cleaned up.
     assert.equal(s.launches().length, 1);
     assert.equal(s.quotaProbes(), 2, "the free quota probe, before and after");
     assert.deepEqual(probeDirs().filter(n => !dirsBefore.includes(n)), [], "no temp dir left behind");
   });
 }
+
+test("a card listing call_mcp_tool (as on the owner's 2026-11-18 run): the PREFLIGHT aborts before any model turn (exit 2), with the CLI's own unknown-component line recorded", needBwrap, async t => {
+  const s = await setup(t);
+  const hostBefore = s.host();
+  const card = join(s.root, "bad-card.md");
+  writeFileSync(card, readFileSync(CARD_TEMPLATE, "utf8").replace(/^tools: \[.*\]$/m, "tools: [view_file, grep_search, write_to_file, replace_file_content, run_command, call_mcp_tool]"));
+  const r = await probe(s, { FAKE_AGY_GEMINI_WRITES: "1" }, ["--card", card]);
+  const o = r.summary;
+  assert.equal(r.code, 2);
+  assert.equal(o.aborted.spent, "nothing: preflight failed before any model turn");
+  assert.match(o.aborted.reason, /^preflight failed: card_tools \(unknown or deprecated on agy 1\.5\.10.*grep_search, call_mcp_tool\); agents \(pantheon-unit-worker is not listed\); log_scan/);
+  assert.deepEqual(o.preflight.failed, ["card_tools", "agents", "log_scan"]);
+  assert.equal(o.preflight.checks.mcp_list.ok, true);
+  assert.match(o.preflight.checks.agents.stderr, /unknown component: tool "call_mcp_tool" not found in registry/);
+  assert.deepEqual(o.preflight.checks.log_scan.lines.unknown_component.length > 0 && o.preflight.checks.log_scan.lines.deprecated.length > 0, true);
+  assert.match(o.preflight.checks.log_scan.log_text, /Tool "grep_search" is deprecated and has no effect/, "the --log-file was written and scanned");
+  assert.equal(s.launches().length, 0, "ZERO model invocations");
+  assert.deepEqual([o.turn.exit_code, o.launch.argv, o.quota_after], [null, null, null]);
+  assert.deepEqual(s.host(), hostBefore);
+  assert.doesNotMatch(r.out, /(?<![0-9a-f])[0-9a-f]{48}(?![0-9a-f])/, "the A2A token appears nowhere");
+});
+
+test("a ~/.gemini without antigravity-cli: the probe refuses (AGY_STATE_LAYOUT, exit 2, nothing spent) and creates nothing under HOME", needBwrap, async t => {
+  const s = await setup(t);
+  rmSync(s.c, { recursive: true });
+  const hostBefore = s.host();
+  const r = await probe(s);
+  assert.equal(r.code, 2);
+  assert.match(r.summary.aborted.reason, /the jail could not be built \(AGY_STATE_LAYOUT\): .*antigravity-cli does not exist/);
+  assert.equal(r.summary.gemini_state.error.code, "AGY_STATE_LAYOUT");
+  assert.deepEqual([s.launches().length, s.subs().length], [0, 0]);
+  assert.deepEqual(s.host(), hostBefore);
+});
 
 test("the probe aborts with ZERO model invocations when the lane's Gemini quota is depleted (exit 2)", needBwrap, async t => {
   const s = await setup(t, 0);

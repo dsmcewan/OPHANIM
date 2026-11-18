@@ -35,9 +35,15 @@ if { [ "$1" = "-p" ] || [ "$1" = "--print" ]; } && { [ "$2" = "/quota" ] || [ "$
 fi
 # \`agy --version\`: no model, not logged as a launch.
 if [ "$1" = "--version" ]; then echo "fake-agy 0.0.0-fixture"; exit 0; fi
-agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"; logfile=""
+# \`agy agents\` and \`agy mcp list\` (the worker's zero-spend preflight): no model, not logged as a launch; logged to
+# "$FAKE_AGY_LOG.sub" instead. See the tools script ("sub").
+if [ "$1" = agents ] || { [ "$1" = mcp ] && [ "$2" = list ]; }; then
+  { printf '%s\\n' "$*" >> "\${FAKE_AGY_LOG:-/dev/null}.sub"; } 2>/dev/null
+  exec node "$here/fake-agy-tools.mjs" sub "$@"
+fi
+agent="none"; model="none"; prompt=""; dir="none"; mode="none"; dangerous="no"; sbx="no"; logfile=""; ptimeout="none"
 for a in "$@"; do
-  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; --mode) mode="$a" ;; --log-file) logfile="$a" ;; esac
+  case "$prev" in --agent) agent="$a" ;; --model) model="$a" ;; --print) prompt="$a" ;; --add-dir) dir="$a" ;; --mode) mode="$a" ;; --log-file) logfile="$a" ;; --print-timeout) ptimeout="$a" ;; esac
   case "$a" in --mode=*) mode="\${a#--mode=}" ;; --dangerously-skip-permissions) dangerous="yes" ;; --sandbox) sbx="yes" ;; --log-file=*) logfile="\${a#--log-file=}" ;; esac
   prev="$a"
 done
@@ -97,17 +103,40 @@ if [ "$worker" = yes ]; then
   if [ "$agent" = "pantheon-unit-worker" ] && { [ "$dangerous" = yes ] || [ "$sbx" = yes ]; }; then
     echo "fake-agy: refusing a unit worker launched with --dangerously-skip-permissions or --sandbox" >&2; exit 64
   fi
-  # FAKE_AGY_GEMINI_WRITES=1: behave like the CLI with its state under $HOME/.gemini (read the login, write a
-  # conversation and the MCP schema cache); =refresh also tries what an OAuth refresh would do, rewriting
-  # oauth_creds.json and settings.json (read-only inside the jail: the failure goes to stderr).
+  # FAKE_AGY_GEMINI_WRITES=1: behave like the CLI with its state under $HOME/.gemini/antigravity-cli, as OBSERVED on
+  # agy 1.5.10 (owner's probe 2026-11-18): it reads its settings, then writes conversations/<id>.db, brain/<id>/,
+  # presence/<id>.lock, cache/last_conversations.json (via a .tmp), implicit/<uuid>.<uuid>.tmp, mcp/pantheon-subagents/
+  # and a top-level jetbox_summaries_proto.pb.<rand>.tmp. When any of those writes fails (the old layout, which left
+  # antigravity-cli/ read-only) it logs "read-only file system" lines, writes a crash log (which fails too), and ends
+  # as that probe did: no turn, a print-timeout result, exit 3. =refresh also tries what an OAuth refresh would do,
+  # rewriting ~/.gemini/oauth_creds.json and settings.json (read-only inside the jail: the failure goes to stderr).
   if [ "$FAKE_AGY_GEMINI_WRITES" = 1 ] || [ "$FAKE_AGY_GEMINI_WRITES" = refresh ]; then
-    g="$HOME/.gemini"
-    if cat "$g/oauth_creds.json" > /dev/null 2>&1; then echo "fake-agy: read oauth_creds.json" >> "\${logfile:-/dev/null}"; else echo "fake-agy: cannot read $g/oauth_creds.json" >&2; fi
-    printf 'conversation\\n' > "$g/antigravity/conversations/fake-agy-conversation.pb" 2>/dev/null || echo "fake-agy: cannot write a conversation" >&2
-    printf '{}\\n' > "$g/antigravity/mcp/pantheon-subagents.json" 2>/dev/null || echo "fake-agy: cannot write the MCP schema cache" >&2
+    g="$HOME/.gemini"; s="$g/antigravity-cli"; cid="fake-agy-conversation"; rnd="$$"; erofs=0
+    flog() { { printf '%s\\n' "$1" >> "\${logfile:-/dev/null}"; } 2>/dev/null; printf '%s\\n' "$1" >&2; }
+    swrite() {
+      { mkdir -p "$(dirname "$1")" && printf '%s\\n' "$2" > "$1"; } 2>/dev/null && return 0
+      erofs=$((erofs + 1)); flog "E1118 00:00:00.000000 $rnd state.go:1] $3: open $1: read-only file system"; return 1
+    }
+    for f in "$g/oauth_creds.json" "$g/settings.json" "$s/settings.json"; do
+      [ -f "$f" ] && { cat "$f" > /dev/null 2>&1 && echo "fake-agy: read $f" >> "\${logfile:-/dev/null}" || echo "fake-agy: cannot read $f" >&2; }
+    done
+    swrite "$s/conversations/$cid.db" conversation "failed to create persistent trajectory in store 1: pre-create trajectory db file"
+    swrite "$s/brain/$cid/task.md" brain "mkdir brain/$cid"
+    swrite "$s/presence/$cid.lock" "$rnd" "presence lock"
+    swrite "$s/cache/last_conversations.json.$rnd.tmp" '[]' "cache" && mv "$s/cache/last_conversations.json.$rnd.tmp" "$s/cache/last_conversations.json"
+    swrite "$s/implicit/$rnd.$rnd.tmp" '{}' "implicit"
+    swrite "$s/mcp/pantheon-subagents/state.json" '{}' "Failed to write server states, eagerly loading all tools"
+    swrite "$s/jetbox_summaries_proto.pb.$rnd.tmp" 'jetbox' "jetbox summaries"
+    if [ "$erofs" -gt 0 ]; then
+      swrite "$s/crashes/crash_$rnd.log" "crash: $erofs state write(s) failed" "crash log"
+      printf '{"event":"init","conversation_id":"%s","init":{"model":"%s","agent":"%s"}}\\n' "$cid" "$model" "$agent"
+      printf '{"event":"result","result":{"status":"ERROR","num_turns":0,"usage":{"total_tokens":0},"error":"print timeout after %s with the turn still in progress"}}\\n' "$ptimeout"
+      printf 'Error: print timeout after %s with the turn still in progress\\n' "$ptimeout" >&2
+      exit 3
+    fi
     if [ "$FAKE_AGY_GEMINI_WRITES" = refresh ]; then
-      { printf '{}' >> "$g/oauth_creds.json"; } 2>/dev/null || echo "fake-agy: oauth_creds.json refresh write failed: EROFS (read-only file system)" >&2
-      { printf '{}' > "$g/settings.json"; } 2>/dev/null || echo "fake-agy: settings.json write failed: EROFS (read-only file system)" >&2
+      { printf '{}' >> "$g/oauth_creds.json"; } 2>/dev/null || echo "fake-agy: $g/oauth_creds.json refresh write failed: EROFS (read-only file system)" >&2
+      { printf '{}' > "$g/settings.json"; } 2>/dev/null || echo "fake-agy: $g/settings.json write failed: EROFS (read-only file system)" >&2
     fi
   fi
   reply='done'
@@ -170,9 +199,12 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fake-a
 // (run_command, MCP, call_mcp_tool, invoke_subagent) unless a hook said "auto_approve"; a file edit inside the
 // workspace and a read run on "allow" / empty / no hook.
 const FAKE_AGY_TOOLS = String.raw`import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 const [cmd, ...rest] = process.argv.slice(2);
+// Observed on agy 1.5.10 (owner's probe 2026-11-18): call_mcp_tool is not in the tool registry; grep_search, list_dir
+// and multi_replace_file_content are deprecated.
+const BAD_TOOLS = ["call_mcp_tool", "grep_search", "list_dir", "multi_replace_file_content"], DEPRECATED_TOOLS = ["grep_search", "list_dir", "multi_replace_file_content"];
 const cwd = process.cwd(), dir = process.env.FAKE_AGY_DIR, events = process.env.FAKE_AGY_EVENTS, model = process.env.FAKE_AGY_MODEL;
 const stateFile = events + ".state";
 const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { step: 0, changed: [], denied: [], verify: null, asked: [], hooks: [] };
@@ -288,6 +320,35 @@ if (cmd === "write") {
   if (!g.ok) deniedOut("view_file", g, { AbsolutePath: p }, 3, { path: p });
   save(); event("view_file", "DONE", { AbsolutePath: p });
   process.stdout.write(readFileSync(p, "utf8"));
+} else if (cmd === "sub") {
+  // agy agents: the agents of ./.agents/agents/*/agent.md, one per line (name, "workspace", tool count); a card naming a
+  // tool in BAD_TOOLS is not listed and an "unknown component ... not found in registry" line is logged for each.
+  // agy mcp list: the servers of ./.agents/mcp_config.json, one per line (name, command and args; never env).
+  // Log lines go to stderr and to --log-file when given. Exit 0, as an informational command would.
+  const i = rest.indexOf("--log-file"), log = i >= 0 ? rest[i + 1] : null;
+  const say = line => { process.stderr.write(line + "\n"); if (log) { try { appendFileSync(log, line + "\n"); } catch { process.stderr.write("fake-agy: cannot write --log-file " + log + "\n"); } } };
+  if (rest[0] === "agents") {
+    const base = join(cwd, ".agents", "agents"), listed = [];
+    for (const n of existsSync(base) ? readdirSync(base).sort() : []) {
+      const f = join(base, n, "agent.md");
+      if (!existsSync(f)) continue;
+      const text = readFileSync(f, "utf8");
+      const name = /^name:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? n;
+      const tl = /^tools:\s*\[(.*)\]\s*$/m.exec(text);
+      const tools = tl ? tl[1].split(",").map(x => x.trim()).filter(Boolean) : [];
+      for (const t of tools.filter(t => DEPRECATED_TOOLS.includes(t))) say("W1118 00:00:00.000000 1 tools.go:88] Tool \"" + t + "\" is deprecated and has no effect");
+      const unknown = tools.filter(t => BAD_TOOLS.includes(t));
+      if (unknown.length) { for (const t of unknown) say("E1118 00:00:00.000000 1 agents.go:42] failed to resolve components: unknown component: tool \"" + t + "\" not found in registry"); continue; }
+      listed.push(name + "\tworkspace\t" + tools.length + " tools");
+    }
+    process.stdout.write(listed.length ? listed.join("\n") + "\n" : "No agents found.\n");
+  } else {
+    const f = join(cwd, ".agents", "mcp_config.json");
+    const servers = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")).mcpServers ?? {} : {};
+    const names = Object.keys(servers).sort();
+    process.stdout.write(names.length ? names.map(n => n + "\tstdio\t" + [servers[n].command, ...(servers[n].args ?? [])].join(" ")).join("\n") + "\n" : "No MCP servers configured.\n");
+  }
+  process.exit(0);
 } else if (cmd === "finish") {
   const [agent] = rest;
   const reply = process.env.FAKE_AGY_REPLY || JSON.stringify({ unit_id: process.env.FAKE_AGY_UNIT ?? null, status: state.verify?.exit_code === 0 ? "done" : "stuck",
@@ -328,16 +389,19 @@ function workerControls(dir) {
  * Run `fn` with the fake Antigravity CLI installed in `dir` (for a test with its own scripted API clients): a Google
  * seat goes through its lane first, so a run that reaches one needs the CLI. `fn` gets `agy()`, the lane turns so far.
  */
+// HOME is a FAKE (a fresh empty temp dir, NOT under `dir`, which the jail binds writable) while `fn` runs: a unit
+// worker's jail reads ~/.gemini from the child's HOME (src/agy/sandbox.mjs geminiState), and a test must never read,
+// copy or bind the real one.
 export async function withFakeAgy(dir, fn) {
-  const keys = ["PANTHEON_AGY_CLI", "FAKE_AGY_LOG", "PANTHEON_AGY_STATE_DIRS", ...AGY_SWITCHES];
+  const keys = ["PANTHEON_AGY_CLI", "FAKE_AGY_LOG", "PANTHEON_AGY_STATE_DIRS", "HOME", ...AGY_SWITCHES];
   const before = Object.fromEntries(keys.map(k => [k, process.env[k]]));
-  const log = join(dir, "agy.log");
-  Object.assign(process.env, { PANTHEON_AGY_CLI: fakeAgy(dir), FAKE_AGY_LOG: log, PANTHEON_AGY_STATE_DIRS: dir });
+  const log = join(dir, "agy.log"), home = mkdtempSync(join(tmpdir(), "pantheon-fake-home-"));
+  Object.assign(process.env, { PANTHEON_AGY_CLI: fakeAgy(dir), FAKE_AGY_LOG: log, PANTHEON_AGY_STATE_DIRS: dir, HOME: home });
   for (const k of AGY_SWITCHES) delete process.env[k];
   const agy = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
   try { return await fn({ agy, agyContext: () => contextOf(log), agyWorker: sh => setWorker(dir, sh), ...workerControls(dir),
     agyQuota: models => { process.env.FAKE_AGY_QUOTA = models.join(" "); }, agyFail: models => { process.env.FAKE_AGY_FAIL = models.join(" "); } }); }
-  finally { for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  finally { for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } rmSync(home, { recursive: true, force: true }); }
 }
 
 /**

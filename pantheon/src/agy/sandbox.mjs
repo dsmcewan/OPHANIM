@@ -5,24 +5,39 @@
 //   - <control_dir>/run                        (jail.log, the CLI's --log-file agy.log, the per-run agy scratch; the
 //                                               rest of control_dir — the role card, hooks.json, mcp_config.json,
 //                                               jail.json, the hook wrapper — is read-only to the worker)
-//   - the agy state layout (below)
+//   - the agy state layout (below: a per-run scratch copy of ~/.gemini/antigravity-cli)
 //   - each EXPLICIT agy state dir              (an override: `agy_state_dirs`, or $PANTHEON_AGY_STATE_DIRS)
 //   - a fresh tmpfs on /tmp
 // and the main repository's .git (the worktree's `.git` file points into <repo>/.git/worktrees/<name>) is bound
 // READ-ONLY last, so the worker can neither commit nor move a ref even when a writable bind contains it.
 //
-// THE agy STATE LAYOUT (OWNER-STATED 2026-11-18, not in the docs we read; scripts/agy-worker-probe.mjs checks it):
-//   ~/.gemini                                  READ-ONLY (oauth_creds.json, google_accounts.json, config/,
-//                                               antigravity-cli/ stay readable: the CLI logs in with them)
-//   ~/.gemini/antigravity/conversations        a per-run WRITABLE scratch dir bound over it
-//   ~/.gemini/antigravity/mcp                  a per-run WRITABLE scratch dir bound over it (the MCP schema cache)
-// The scratch dirs live under <control_dir>/run/agy-state/<run id>/ and are removed after the run (geminiState /
-// dropGeminiState); what the CLI wrote there is listed first, as evidence. CHOICE: per-run scratch binds, not tmpfs, so
-// what agy wrote is inspectable. A bind needs its mount point to exist, and bwrap cannot create one inside the
-// read-only ~/.gemini bind: when either host dir is missing it is created EMPTY on the host first (mkdir -p) and the
-// creation is recorded (`created_mountpoints`). Nothing else under ~/.gemini is ever written by Pantheon.
-// RISK: an OAuth token refresh that rewrites ~/.gemini/oauth_creds.json hits EROFS inside the jail; the turn then fails
-// (or the CLI keeps the refreshed token in memory only). The probe captures stderr and the --log-file to show it.
+// THE agy STATE LAYOUT (observed on agy 1.5.10, owner's probe 2026-11-18). The CLI keeps its state under
+// ~/.gemini/antigravity-cli/, NOT ~/.gemini/antigravity/: that probe bound scratch dirs over antigravity/conversations and
+// antigravity/mcp, both stayed empty, and every write failed "read-only file system" under antigravity-cli/:
+// conversations/<id>.db (+ .tmp), brain/<id>/, presence/<id>.lock, cache/last_conversations.json.*.tmp,
+// implicit/*.tmp, crashes/crash_*.log, mcp/pantheon-subagents/, and a top-level jetbox_summaries_proto.pb.*.tmp. The
+// turn never started (0 turns, print timeout). The top-level ~/.gemini files (GEMINI.md, gemini-credentials.json,
+// google_accounts.json, installation_id, jetski-standalone-oauth-token, projects.json, settings.json, state.json,
+// trustedFolders.json) were untouched and no OAuth refresh failure was seen. So:
+//   ~/.gemini                         READ-ONLY (the login and the top-level files stay readable)
+//   ~/.gemini/antigravity-cli         a per-run SCRATCH COPY bound read-write over it:
+//                                       <control_dir>/run/agy-state/<run id>/antigravity-cli/
+//     top-level regular files         COPIED from the host (mode kept), so e.g. its settings.json is read; symlinks
+//                                     and other non-regular entries are skipped and recorded
+//     the known state subdirs         EMPTY (GEMINI_STATE_SUBDIRS): host history and caches stay hidden and untouched
+//     every other host subdir         an empty mount point in the scratch with the HOST subdir --ro-bind over it
+//                                     (readable, never writable: plugins/config the CLI may only read)
+// Bind order: --ro-bind ~/.gemini, then --bind <scratch>/antigravity-cli ~/.gemini/antigravity-cli, then the ro-binds
+// of the unknown subdirs (parent-first, by depth). NOTHING is ever created under the real home: every mount point is
+// either an existing host directory or a directory inside the scratch (the earlier layout mkdir'ed an empty
+// ~/.gemini/antigravity/mcp on the host as a mount point; that never happens again).
+// WHEN ~/.gemini/antigravity-cli IS ABSENT: refused with code AGY_STATE_LAYOUT (CHOICE: the simplest correct
+// behaviour). The scratch needs a mount point there; bwrap cannot create one inside the read-only ~/.gemini bind, and
+// creating it on the host is exactly what must never happen. A tmpfs ~/.gemini with per-entry ro-binds would work but
+// changes what the CLI sees in ways nobody has observed. The remedy is in the error: run agy once outside the jail
+// (it creates the directory), or pass gemini_state "rw" / "off" explicitly.
+// After the run, dropGeminiState lists what the CLI wrote into the scratch (top level and each state subdir, names and
+// sizes) as evidence, then removes it unless kept.
 // Override: `gemini_state: "rw"` binds ~/.gemini read-write (the earlier default); "off" adds no layout at all.
 //
 // THE NETWORK IS NOT UNSHARED: the CLI must reach Google. Loopback TCP is therefore NOT the A2A path (it is not
@@ -35,7 +50,7 @@
 // Must never: run the worker unjailed silently (sandboxAvailable is probed and the caller refuses with
 // SANDBOX_UNAVAILABLE unless the caller explicitly allows an unsandboxed run); block the event loop (async spawn).
 import { existsSync, readFileSync, statSync, lstatSync, realpathSync } from "node:fs";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -91,7 +106,7 @@ export function bwrapArgs({ worktree, control_dir, agy_state_dirs = [], extra_ro
   for (const p of agy_state_dirs) add("rw", p);
   if (gemini_state?.enabled) {
     add(gemini_state.mode === "rw" ? "rw" : "ro", gemini_state.gemini_dir);
-    for (const m of gemini_state.mounts ?? []) add("rw", m.dest, false, m.src);
+    for (const m of gemini_state.mounts ?? []) add(m.mode === "ro" ? "ro" : "rw", m.dest, false, m.src);
   }
   add("rw", wt);
   add("ro", ctl);
@@ -130,7 +145,7 @@ export function sandboxAvailable(bwrap = "bwrap") {
 /**
  * EXPLICIT writable agy state dirs, used only when the caller injects none: PANTHEON_AGY_STATE_DIRS (":"-separated)
  * when set, else NONE. (The earlier default bound ~/.gemini read-write; ~/.gemini is now covered by the state layout,
- * see geminiState: read-only, with per-run writable scratch over conversations/ and mcp/.) Only existing directories
+ * see geminiState: read-only, with a per-run writable scratch copy over antigravity-cli/.) Only existing directories
  * are returned (bwrap cannot bind a missing source).
  */
 export function defaultAgyStateDirs(env = process.env) {
@@ -138,42 +153,96 @@ export function defaultAgyStateDirs(env = process.env) {
   return listed.filter(Boolean).filter(p => { try { return statSync(p).isDirectory(); } catch { return false; } });
 }
 
-/** The two ~/.gemini subdirectories the CLI must write (owner-stated), relative to ~/.gemini. */
-export const GEMINI_SCRATCH = Object.freeze(["antigravity/conversations", "antigravity/mcp"]);
+/** The CLI's state directory, relative to ~/.gemini (observed on agy 1.5.10, owner's probe 2026-11-18). */
+export const GEMINI_CLI_DIR = "antigravity-cli";
+/**
+ * The subdirectories of ~/.gemini/antigravity-cli the CLI WRITES (observed on agy 1.5.10, owner's probe 2026-11-18:
+ * each one failed "read-only file system"). They start EMPTY in the scratch; the host's copies stay hidden.
+ */
+export const GEMINI_STATE_SUBDIRS = Object.freeze(["conversations", "brain", "presence", "cache", "implicit", "crashes", "mcp"]);
+const layoutError = (message, more = {}) => Object.assign(new Error(message), { code: "AGY_STATE_LAYOUT", ...more });
 
 /**
  * Prepare the agy state layout for one run (see the header). `mode` "scratch" (default) | "rw" | "off".
- * Returns {enabled, mode, home, gemini_dir, mounts: [{dest, src}], scratch_root, created_mountpoints, why?}. Disabled
- * (enabled: false, with why) when mode is "off" or <home>/.gemini is not a directory (nothing to protect or to read).
+ * Returns {enabled, mode, home, gemini_dir, cli_dir, mounts: [{dest, src, mode}], scratch_root, scratch_cli, copied,
+ * skipped, hidden_state, readonly_subdirs, why?}. Disabled (enabled: false, with why) when mode is "off" or
+ * <home>/.gemini is not a directory (nothing to protect or to read). Throws AGY_STATE_LAYOUT when <home>/.gemini exists
+ * but <home>/.gemini/antigravity-cli does not (see the header) or is not a plain directory. Never writes under `home`.
  */
 export async function geminiState({ home = homedir(), run_dir, mode = "scratch" } = {}) {
-  const gemini_dir = join(real(home), ".gemini");
-  const off = why => ({ enabled: false, mode, home, gemini_dir, mounts: [], scratch_root: null, created_mountpoints: [], why });
-  if (mode === "off") return off("gemini_state is off");
+  const gemini_dir = join(real(home), ".gemini"), cli_dir = join(gemini_dir, GEMINI_CLI_DIR);
+  const base = { mode, home, gemini_dir, cli_dir, mounts: [], scratch_root: null, scratch_cli: null, copied: [], skipped: [], hidden_state: [], readonly_subdirs: [] };
+  if (mode === "off") return { enabled: false, ...base, why: "gemini_state is off" };
+  if (mode !== "scratch" && mode !== "rw") throw layoutError(`geminiState: unknown mode ${JSON.stringify(mode)} (scratch | rw | off)`);
   let isDir = false;
   try { isDir = statSync(gemini_dir).isDirectory(); } catch { /* absent */ }
-  if (!isDir) return off(`${gemini_dir} is not a directory`);
-  if (mode === "rw") return { enabled: true, mode, home, gemini_dir, mounts: [], scratch_root: null, created_mountpoints: [] };
-  if (!run_dir) throw new Error("geminiState: pass run_dir (the control dir's run/) for the per-run scratch dirs");
+  if (!isDir) return { enabled: false, ...base, why: `${gemini_dir} is not a directory` };
+  if (mode === "rw") return { enabled: true, ...base };
+  if (!run_dir) throw new Error("geminiState: pass run_dir (the control dir's run/) for the per-run scratch copy");
+  let st = null;
+  try { st = lstatSync(cli_dir); } catch { /* absent */ }
+  if (!st) throw layoutError(`${cli_dir} does not exist: the per-run scratch copy needs it as a mount point, and Pantheon never creates anything under the real home. Run agy once outside the jail (it creates the directory), or pass gemini_state "rw" or "off" explicitly`, { cli_dir });
+  if (!st.isDirectory()) throw layoutError(`${cli_dir} is not a plain directory (${st.isSymbolicLink() ? "a symlink" : "another file type"}): refusing to guess what to bind over it`, { cli_dir });
   const scratch_root = join(real(run_dir), "agy-state", `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`);
-  const mounts = [], created_mountpoints = [];
-  for (const rel of GEMINI_SCRATCH) {
-    const dest = join(gemini_dir, rel), src = join(scratch_root, rel.split("/").at(-1));
-    if (!existsSync(dest)) { await mkdir(dest, { recursive: true }); created_mountpoints.push(dest); }
-    await mkdir(src, { recursive: true });
-    mounts.push({ dest, src });
+  // The scratch lives in the controller's control dir; inside ~/.gemini it would be hidden by (and write through) the
+  // very binds it backs.
+  if (inside(gemini_dir, scratch_root)) throw layoutError(`the scratch ${scratch_root} would be inside ${gemini_dir}; put the control dir elsewhere`);
+  const scratch_cli = join(scratch_root, GEMINI_CLI_DIR);
+  await mkdir(scratch_cli, { recursive: true, mode: 0o700 });
+  const out = { enabled: true, ...base, scratch_root, scratch_cli, mounts: [{ dest: cli_dir, src: scratch_cli, mode: "rw" }] };
+  for (const e of (await readdir(cli_dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+    const host = join(cli_dir, e.name), dst = join(scratch_cli, e.name);
+    if (e.isSymbolicLink()) { out.skipped.push({ name: e.name, kind: "symlink" }); continue; }
+    if (e.isFile()) {
+      const m = (await stat(host)).mode & 0o7777;
+      await copyFile(host, dst);
+      await chmod(dst, m);
+      out.copied.push(e.name);
+    } else if (e.isDirectory()) {
+      if (GEMINI_STATE_SUBDIRS.includes(e.name)) continue;   // created empty below
+      await mkdir(dst);                                         // the mount point, inside the scratch
+      out.mounts.push({ dest: host, src: host, mode: "ro" });
+      out.readonly_subdirs.push(e.name);
+    } else out.skipped.push({ name: e.name, kind: "other" });
   }
-  return { enabled: true, mode, home, gemini_dir, mounts, scratch_root, created_mountpoints };
+  for (const d of GEMINI_STATE_SUBDIRS) {
+    if (existsSync(join(cli_dir, d))) out.hidden_state.push(d);
+    await mkdir(join(scratch_cli, d), { recursive: true, mode: 0o700 });
+  }
+  return out;
 }
-/** What the CLI wrote into the per-run scratch dirs ({<dest>: [relative file paths]}), then remove them unless `keep`. */
+
+/**
+ * What the CLI wrote into the per-run scratch copy, then remove it unless `keep`. Returns null when there was none, else
+ * {dir, top_level: [{name, size, copied, changed}], subdirs: {<name>: [{path, size}]}} — `top_level` the files directly
+ * in antigravity-cli/ (copied: it came from the host; changed: its bytes differ from the host's now), `subdirs` every
+ * directory of the scratch except the read-only mount points (whose content is the host's, not a write).
+ */
 export async function dropGeminiState(state, { keep = false } = {}) {
   if (!state?.enabled || !state.scratch_root) return null;
-  const listing = {};
-  for (const m of state.mounts) {
-    const files = [];
-    const walk = async (d, pre) => { for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) { const r = pre ? `${pre}/${e.name}` : e.name; if (e.isDirectory()) await walk(join(d, e.name), r); else files.push(r); } };
-    await walk(m.src, "");
-    listing[m.dest] = files.sort();
+  const root = state.scratch_cli, listing = { dir: state.cli_dir, top_level: [], subdirs: {} };
+  const ro = new Set(state.readonly_subdirs ?? []);
+  const walk = async (d, pre, files) => {
+    for (const e of (await readdir(d, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))) {
+      const r = pre ? `${pre}/${e.name}` : e.name, p = join(d, e.name);
+      if (e.isDirectory()) await walk(p, r, files);
+      else files.push({ path: r, size: (await lstat(p).catch(() => null))?.size ?? null });
+    }
+  };
+  for (const e of (await readdir(root, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))) {
+    const p = join(root, e.name);
+    if (e.isDirectory()) {
+      if (ro.has(e.name)) continue;
+      const files = [];
+      await walk(p, "", files);
+      listing.subdirs[e.name] = files;
+    } else {
+      const size = (await lstat(p).catch(() => null))?.size ?? null;
+      const copied = (state.copied ?? []).includes(e.name);
+      let changed = !copied;
+      if (copied) { const [a, b] = await Promise.all([readFile(p).catch(() => null), readFile(join(state.cli_dir, e.name)).catch(() => null)]); changed = !(a && b && a.equals(b)); }
+      listing.top_level.push({ name: e.name, size, copied, changed });
+    }
   }
   if (!keep) await rm(state.scratch_root, { recursive: true, force: true }).catch(() => {});
   return listing;

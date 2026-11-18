@@ -6,10 +6,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runAgyWorkerTurn, AGY_CLEANUP, workerArgv, assertWorkerArgv } from "../src/board/agy-cli.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
-import { sandboxAvailable } from "../src/agy/sandbox.mjs";
+import { bwrapArgs, sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
 import { MCP_SERVER_PATH } from "../src/pipeline/index.mjs";
@@ -300,26 +300,71 @@ reply=''
   });
 });
 
-test("(i) the ~/.gemini layout around a worker turn (fake HOME): the login readable, settings.json not writable, conversations/ and mcp/ written to per-run scratch that is listed and removed; the host state is unchanged", needBwrap, async t => {
-  const f = await fixture(t);
-  const home = join(f.root, "home"), g = join(home, ".gemini");
-  mkdirSync(join(g, "antigravity", "conversations"), { recursive: true }); mkdirSync(join(g, "antigravity", "mcp"));
+/** A fake HOME with the agy 1.5.10 state layout (observed on the owner's machine, 2026-11-18). */
+function fakeGeminiHome(root) {
+  const home = join(root, "home"), g = join(home, ".gemini"), c = join(g, "antigravity-cli");
+  mkdirSync(join(c, "conversations"), { recursive: true }); mkdirSync(join(c, "plugins"));
   writeFileSync(join(g, "oauth_creds.json"), "{}"); writeFileSync(join(g, "settings.json"), "{}");
+  writeFileSync(join(c, "settings.json"), '{"cli":1}'); writeFileSync(join(c, "conversations", "earlier.db"), "earlier");
+  return { home, g, c };
+}
+/** A recursive {relative path: content} listing of a host directory. */
+const tree = dir => { const out = {}; const walk = (d, pre) => { for (const e of readdirSync(d, { withFileTypes: true })) { const r = pre ? `${pre}/${e.name}` : e.name; if (e.isDirectory()) { out[r + "/"] = ""; walk(join(d, e.name), r); } else out[r] = readFileSync(join(d, e.name), "utf8"); } }; walk(dir, ""); return out; };
+
+test("(i) the ~/.gemini layout around a worker turn (fake HOME): ~/.gemini read-only, the CLI's state written into the per-run scratch copy of antigravity-cli/ (listed, then removed); the host state is unchanged", needBwrap, async t => {
+  const f = await fixture(t);
+  const { home, g, c } = fakeGeminiHome(f.root);
+  const before = tree(home);
   await withFakeAgy(f.fx, async agy => {
     process.env.FAKE_AGY_GEMINI_WRITES = "refresh";
     const base = await prepared(f, "a");
     const r = await runAgyWorkerTurn({ ...base, env: { HOME: home }, sandbox: { ...base.sandbox, home } });
-    assert.deepEqual([r.sandbox.gemini_state.enabled, r.sandbox.gemini_state.mode, r.sandbox.gemini_state.created_mountpoints], [true, "scratch", []]);
+    assert.deepEqual([r.sandbox.gemini_state.enabled, r.sandbox.gemini_state.mode, r.sandbox.gemini_state.cli_dir, r.sandbox.gemini_state.copied, r.sandbox.gemini_state.readonly_subdirs],
+      [true, "scratch", c, ["settings.json"], ["plugins"]]);
     assert.ok(r.sandbox.binds.some(b => b.path === g && b.mode === "ro"));
-    assert.deepEqual(r.gemini_scratch, { [join(g, "antigravity", "conversations")]: ["fake-agy-conversation.pb"], [join(g, "antigravity", "mcp")]: ["pantheon-subagents.json"] });
+    assert.ok(r.sandbox.binds.some(b => b.path === c && b.mode === "rw" && b.src.startsWith(join(f.units.a.ctl, "run", "agy-state") + "/")));
+    const s = r.gemini_scratch;
+    assert.equal(s.dir, c);
+    assert.deepEqual(s.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.copied, x.changed]), [["jetbox_summaries_proto.pb.<rand>.tmp", false, true], ["settings.json", true, false]]);
+    assert.deepEqual(Object.fromEntries(Object.entries(s.subdirs).map(([k, v]) => [k, v.map(x => x.path.replace(/\d+/g, "N"))])),
+      { brain: ["fake-agy-conversation/task.md"], cache: ["last_conversations.json"], conversations: ["fake-agy-conversation.db"], crashes: [], implicit: ["N.N.tmp"], mcp: ["pantheon-subagents/state.json"], presence: ["fake-agy-conversation.lock"] },
+      "the observed writes landed in the scratch; the host's earlier.db was hidden");
     assert.match(r.stderr_tail, /settings\.json write failed: EROFS/);
-    assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /read oauth_creds\.json/);
-    assert.deepEqual(readdirSync(join(g, "antigravity", "conversations")), []);
-    assert.deepEqual(readdirSync(join(g, "antigravity", "mcp")), []);
-    assert.equal(readFileSync(join(g, "settings.json"), "utf8"), "{}");
-    assert.equal(readFileSync(join(g, "oauth_creds.json"), "utf8"), "{}", "a refresh cannot rewrite the login (the probe shows the EROFS)");
-    assert.match(r.stderr_tail, /oauth_creds\.json refresh write failed: EROFS/);
+    assert.match(r.stderr_tail, /oauth_creds\.json refresh write failed: EROFS/, "a refresh cannot rewrite the login (the probe shows the EROFS)");
+    assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /read .*antigravity-cli\/settings\.json/);
+    assert.doesNotMatch(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /read-only file system/);
+    assert.deepEqual(tree(home), before, "the host ~/.gemini is unchanged; nothing was created under HOME");
     assert.equal(existsSync(join(f.units.a.ctl, "run", "agy-state")) && readdirSync(join(f.units.a.ctl, "run", "agy-state")).length, 0, "the scratch is removed");
+  });
+});
+
+test("(i') the OLD layout (scratch binds over ~/.gemini/antigravity/{conversations,mcp}) leaves the CLI's real state dir read-only: the fake's state writes fail with read-only file system and it ends as the owner's probe did (print timeout, exit 3); the new layout passes — the layout is what makes it pass", needBwrap, async t => {
+  const f = await fixture(t);
+  const { home, g } = fakeGeminiHome(f.root);
+  mkdirSync(join(g, "antigravity", "conversations"), { recursive: true }); mkdirSync(join(g, "antigravity", "mcp"));
+  const before = tree(home);
+  await withFakeAgy(f.fx, async agy => {
+    process.env.FAKE_AGY_GEMINI_WRITES = "1";
+    const base = await prepared(f, "a");
+    const { ctl, wt } = f.units.a;
+    // The old layout, rebuilt by hand: ~/.gemini ro + two per-run scratch dirs over antigravity/conversations and mcp.
+    const old = join(f.root, "old-scratch");
+    mkdirSync(join(old, "conversations"), { recursive: true }); mkdirSync(join(old, "mcp"));
+    const legacy = { enabled: true, mode: "scratch", gemini_dir: g, mounts: [{ dest: join(g, "antigravity", "conversations"), src: join(old, "conversations") }, { dest: join(g, "antigravity", "mcp"), src: join(old, "mcp") }] };
+    const b = bwrapArgs({ worktree: wt, control_dir: ctl, agy_state_dirs: [f.fx], extra_ro: [dirname(base.cli)], gemini_state: legacy });
+    const jail = { prefix: b.argv, gstate: null, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git, gemini_state: { legacy: true } } };
+    const e = await runAgyWorkerTurn({ ...base, env: { HOME: home }, jail }).then(() => null, err => err);
+    assert.deepEqual([e?.code, e?.kind, e?.exit_code, e?.num_turns], ["lane_failure", "timeout", 3, 0], e?.message);
+    assert.match(e.stderr_tail, /print timeout after 60s with the turn still in progress/);
+    const log = readFileSync(join(ctl, "run", "agy.log"), "utf8");
+    for (const what of ["conversations/fake-agy-conversation.db", "presence/fake-agy-conversation.lock", "mcp/pantheon-subagents/state.json", "jetbox_summaries_proto.pb."]) assert.match(log, new RegExp(`antigravity-cli/${what.replace(/\./g, "\\.")}.*read-only file system`), what);
+    assert.deepEqual(readdirSync(join(old, "conversations")), [], "the old scratch dirs stay empty, as on the owner's machine");
+    assert.deepEqual(e.tool_steps, [], "zero tool steps");
+    // The same turn in the NEW layout succeeds.
+    const r = await runAgyWorkerTurn({ ...base, env: { HOME: home }, sandbox: { ...base.sandbox, home } });
+    assert.equal(r.status, "SUCCESS");
+    assert.deepEqual(r.gemini_scratch.subdirs.conversations.map(x => x.path), ["fake-agy-conversation.db"]);
+    assert.deepEqual(tree(home), before, "neither run changed the host");
   });
 });
 

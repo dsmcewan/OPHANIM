@@ -127,6 +127,8 @@ import { readFile } from "node:fs/promises";
 import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
+import { cardTools, validateCardTools } from "../agy/workspace.mjs";
+import { MCP_SERVER as MCP_SERVER_NAME } from "../agy/jail-hook.mjs";
 
 export const WORKER_AGENT = "pantheon-unit-worker";
 export const AGY_CLEANUP = Object.freeze({ name: "ANTIGRAVITY_AGY_CLEANUP", value: "all", documented: false,
@@ -183,26 +185,12 @@ const isSubagentStep = s => s.tool_name === "invoke_subagent" || /ask_subagent$/
   || (s.tool_name === "call_mcp_tool" && /ask_subagent/.test(JSON.stringify(s.tool_info ?? "")));
 
 /**
- * One headless worker turn. `sandbox` {enabled = true, agy_state_dirs, allowUnsandboxed = false, bwrap = "bwrap",
- * extra_ro = [], gemini_state = "scratch" | "rw" | "off", home (default: the child env's HOME), keep_gemini_scratch};
- * `a2a_socket` (optional) the unit's A2A socket path, whose directory is bound read-only when it is not under the
- * control dir; the process is killed after timeoutS + graceS seconds. Returns {text, structured_output, summary,
- * response_id, usage, num_turns, status, tool_calls, subagent_calls, tools, tool_steps, served_model,
- * served_model_source: "input", jail_log, launch, cleanup_env, sandbox, gemini_scratch, exit_code, stderr_tail}.
- * `tool_steps` is EVERY stream-json step_update with step_type "tool" ({tool_name, state, tool_info}), whatever its
- * state; a thrown failure carries the same evidence fields.
+ * Build the worker's jail once (bwrap argv prefix + the agy state layout), so a preflight and the turn run in the SAME
+ * one. Returns {prefix, sandboxRec, gstate}; throws SANDBOX_UNAVAILABLE (never a silent unjailed run) or
+ * AGY_STATE_LAYOUT (src/agy/sandbox.mjs geminiState). `env` is the child env (workerEnv); its HOME is the default home.
  */
-export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prompt, timeoutS = 1800, graceS = 15, env: extraEnv = {}, signal = undefined,
-  sandbox = {}, onEvent = () => {}, a2a_socket = null }) {
-  if (!cli || !control_dir || !worktree || !model || typeof prompt !== "string") throw Object.assign(new Error("runAgyWorkerTurn: pass cli, control_dir, worktree, model and prompt"), { code: "BAD_INPUT" });
-  const cardPath = join(control_dir, ".agents", "agents", WORKER_AGENT, "agent.md");
-  if (!existsSync(cardPath)) throw Object.assign(new Error(`agy worker: role card ${cardPath} missing (prepareWorkerWorkspace first)`), { code: "NO_WORKSPACE" });
-  if (cli.includes("/") && !existsSync(cli)) throw laneFailure("spawn", `agy CLI absent at ${cli}`);
-
-  // THE JAIL: bwrap, or a refusal. Never a silent unjailed run.
+export async function prepareWorkerJail({ cli, control_dir, worktree, env = workerEnv(), sandbox = {}, a2a_socket = null }) {
   const wantSandbox = sandbox.enabled !== false;
-  const env = workerEnv(extraEnv);
-  let prefix = [], sandboxRec, gstate = null;
   if (wantSandbox) {
     const probe = await sandboxAvailable(sandbox.bwrap ?? "bwrap");
     if (probe.ok) {
@@ -212,21 +200,120 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
       // write access to the mount); one elsewhere (e.g. a short fallback under /tmp, which is a fresh tmpfs inside)
       // gets its directory bound read-only.
       if (a2a_socket) { const d = dirOf(resolveOf(a2a_socket)); const r = relOf(resolveOf(control_dir), d); if (r.startsWith("..") || resolveOf(r) === r) extra_ro.push(d); }
-      gstate = await geminiState({ home: sandbox.home ?? env.HOME ?? homeOf(), run_dir: join(control_dir, "run"), mode: sandbox.gemini_state ?? "scratch" });
+      const gstate = await geminiState({ home: sandbox.home ?? env.HOME ?? homeOf(), run_dir: join(control_dir, "run"), mode: sandbox.gemini_state ?? "scratch" });
       const b = bwrapArgs({ worktree, control_dir, agy_state_dirs: sandbox.agy_state_dirs ?? defaultAgyStateDirs(), extra_ro: extra_ro.filter(p => existsSync(p)), gemini_state: gstate, bwrap: sandbox.bwrap ?? "bwrap" });
-      prefix = b.argv;
-      sandboxRec = { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
-        gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, mounts: gstate.mounts, created_mountpoints: gstate.created_mountpoints, ...(gstate.why ? { why: gstate.why } : {}) } };
-    } else if (sandbox.allowUnsandboxed === true) {
-      sandboxRec = { enabled: false, reason: probe.why, allowUnsandboxed: true };
-    } else {
-      throw Object.assign(new Error(`agy worker: the bwrap sandbox is unavailable (${probe.why}); refusing to run the worker unjailed (pass sandbox.allowUnsandboxed: true to override)`), { code: "SANDBOX_UNAVAILABLE" });
+      return { prefix: b.argv, gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
+        gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, cli_dir: gstate.cli_dir, mounts: gstate.mounts, copied: gstate.copied,
+          skipped: gstate.skipped, hidden_state: gstate.hidden_state, readonly_subdirs: gstate.readonly_subdirs, ...(gstate.why ? { why: gstate.why } : {}) } } };
     }
-  } else if (sandbox.allowUnsandboxed === true) {
-    sandboxRec = { enabled: false, reason: "sandbox.enabled is false", allowUnsandboxed: true };
-  } else {
-    throw Object.assign(new Error("agy worker: sandbox.enabled is false and allowUnsandboxed is not true; refusing to run the worker unjailed"), { code: "SANDBOX_UNAVAILABLE" });
+    if (sandbox.allowUnsandboxed === true) return { prefix: [], gstate: null, sandboxRec: { enabled: false, reason: probe.why, allowUnsandboxed: true } };
+    throw Object.assign(new Error(`agy worker: the bwrap sandbox is unavailable (${probe.why}); refusing to run the worker unjailed (pass sandbox.allowUnsandboxed: true to override)`), { code: "SANDBOX_UNAVAILABLE" });
   }
+  if (sandbox.allowUnsandboxed === true) return { prefix: [], gstate: null, sandboxRec: { enabled: false, reason: "sandbox.enabled is false", allowUnsandboxed: true } };
+  throw Object.assign(new Error("agy worker: sandbox.enabled is false and allowUnsandboxed is not true; refusing to run the worker unjailed"), { code: "SANDBOX_UNAVAILABLE" });
+}
+
+// ---- THE ZERO-SPEND PREFLIGHT: what the CLI itself says about the workspace, before any model turn ------------------
+// `agy agents` and `agy mcp list` start no model turn. Observed on agy 1.5.10 (owner's probe 2026-11-18): a card tool
+// the CLI does not know ("unknown component: tool \"call_mcp_tool\" not found in registry") and state writes that hit a
+// read-only file system were visible only in the --log-file, after a 5-minute hung turn. The preflight runs both
+// commands in the SAME jail, control dir and workspace as the turn, with a --log-file (a global flag in agy's top-level
+// help; if a subcommand refuses it the command is re-run without, and the record says so), and fails on:
+//   card_tools  the control dir's card lists a name in AGY_1_5_10_UNKNOWN_OR_DEPRECATED (validateCardTools)
+//   agents      exit != 0, `pantheon-unit-worker` not present as a word, or an unknown-component / not-in-registry /
+//               error line in its output
+//   mcp_list    exit != 0, `pantheon-subagents` not present, or a line naming it that says it failed
+//   log_scan    a `read-only file system`, `unknown component`, `not found in registry` or `deprecated` line in the
+//               preflight's --log-file or in either command's output
+// The output formats are NOT known: matching is conservative and the raw text (secret-redacted) is recorded so the
+// owner can paste it back as a fixture.
+export const PREFLIGHT_LOG_PATTERNS = Object.freeze({ read_only: /read-only file system|EROFS/i, unknown_component: /unknown component/i,
+  not_in_registry: /not found in registry/i, deprecated: /deprecated/i });
+const ERROR_LINE = /\b(error|fatal|panic)\b|^E\d{4}\s/i;
+const BAD_FLAG = /unknown (flag|shorthand flag)|flag provided but not defined|unrecognized (option|argument)|unexpected argument/i;
+const lines = t => String(t ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
+/** Redact every value of a secret-looking env variable (8+ chars) from `text`. */
+export function redactSecrets(text, env = {}) {
+  let out = String(text ?? "");
+  for (const [k, v] of Object.entries(env ?? {})) if (SECRETISH.test(k) && typeof v === "string" && v.length >= 8) out = out.split(v).join(`<redacted:${k}>`);
+  return out;
+}
+/**
+ * Run the zero-spend preflight (above). Returns {ok, failed: [check names], checks: {card_tools, agents, mcp_list,
+ * log_scan}, log_file}. Each command check: {ok, why, argv, log_file_accepted, exit_code, stdout, stderr} (redacted).
+ * `jail` (optional) a prepareWorkerJail() result; without one a jail is built and its state dropped afterwards.
+ */
+export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME }) {
+  const env = workerEnv(extraEnv);
+  const own = !jail;
+  const j = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
+  const log_file = join(control_dir, "run", "agy-preflight.log");
+  const red = t => redactSecrets(t, env);
+  const checks = {};
+  try {
+    const cardText = await readFile(join(control_dir, ".agents", "agents", agent, "agent.md"), "utf8").catch(() => null);
+    const tools = cardText == null ? null : cardTools(cardText);
+    const v = validateCardTools(tools);
+    checks.card_tools = { ok: v.ok, why: v.why, tools, bad: v.bad };
+    const runSub = async sub => {
+      const withLog = [...sub, "--log-file", log_file];
+      const go = async args => {
+        const argv = j.prefix.length ? [...j.prefix.slice(1), cli, ...args] : args;
+        const r = await spawnPromise(j.prefix.length ? j.prefix[0] : cli, argv, { cwd: control_dir, env, timeout: timeoutS * 1000 }).catch(e => ({ status: null, stdout: "", stderr: `spawn failed: ${e?.code ?? e?.message ?? e}`, killedFor: null }));
+        return { args, r };
+      };
+      let { args, r } = await go(withLog);
+      let accepted = true;
+      if (r.status !== 0 && BAD_FLAG.test(`${r.stdout}\n${r.stderr}`)) { accepted = false; ({ args, r } = await go(sub)); }
+      return { argv: [cli, ...args], log_file_accepted: accepted, exit_code: r.status, killed_for: r.killedFor ?? null, stdout: red(r.stdout), stderr: red(r.stderr) };
+    };
+    const word = name => new RegExp(`(^|[^A-Za-z0-9_-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^A-Za-z0-9_-])`, "m");
+    const a = await runSub(["agents"]);
+    const aText = `${a.stdout}\n${a.stderr}`;
+    const aBad = lines(aText).filter(l => PREFLIGHT_LOG_PATTERNS.unknown_component.test(l) || PREFLIGHT_LOG_PATTERNS.not_in_registry.test(l) || ERROR_LINE.test(l));
+    checks.agents = { ok: a.exit_code === 0 && word(agent).test(a.stdout) && !aBad.length,
+      why: a.exit_code !== 0 ? `agy agents exited ${a.exit_code ?? a.killed_for}` : !word(agent).test(a.stdout) ? `${agent} is not listed` : aBad.length ? `error lines: ${aBad.slice(0, 3).join(" | ")}` : null, ...a };
+    const m = await runSub(["mcp", "list"]);
+    const mText = `${m.stdout}\n${m.stderr}`;
+    const mBad = lines(mText).filter(l => l.includes(server) && /\b(fail(ed|ure)?|error|unavailable|disconnected)\b/i.test(l));
+    checks.mcp_list = { ok: m.exit_code === 0 && word(server).test(m.stdout) && !mBad.length,
+      why: m.exit_code !== 0 ? `agy mcp list exited ${m.exit_code ?? m.killed_for}` : !word(server).test(m.stdout) ? `${server} is not listed` : mBad.length ? `the server reports: ${mBad.slice(0, 3).join(" | ")}` : null, ...m };
+    const logText = red(await readFile(log_file, "utf8").catch(() => ""));
+    const found = {};
+    for (const [k, re] of Object.entries(PREFLIGHT_LOG_PATTERNS)) found[k] = [...new Set(lines(`${logText}\n${aText}\n${mText}`).filter(l => re.test(l)))].slice(0, 30);
+    const hits = Object.entries(found).filter(([, v]) => v.length).map(([k]) => k);
+    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.join(", ")}` : null, lines: found, log_text: logText.slice(-8000) };
+  } finally {
+    if (own) await dropGeminiState(j.gstate).catch(() => null);
+  }
+  const failed = Object.entries(checks).filter(([, c]) => !c.ok).map(([k]) => k);
+  return { ok: !failed.length, failed, checks, log_file };
+}
+
+/**
+ * One headless worker turn. `sandbox` {enabled = true, agy_state_dirs, allowUnsandboxed = false, bwrap = "bwrap",
+ * extra_ro = [], gemini_state = "scratch" | "rw" | "off", home (default: the child env's HOME), keep_gemini_scratch};
+ * `a2a_socket` (optional) the unit's A2A socket path, whose directory is bound read-only when it is not under the
+ * control dir; the process is killed after timeoutS + graceS seconds. Returns {text, structured_output, summary,
+ * response_id, usage, num_turns, status, tool_calls, subagent_calls, tools, tool_steps, served_model,
+ * served_model_source: "input", jail_log, launch, cleanup_env, sandbox, gemini_scratch, exit_code, stderr_tail}.
+ * `tool_steps` is EVERY stream-json step_update with step_type "tool" ({tool_name, state, tool_info}), whatever its
+ * state; a thrown failure carries the same evidence fields. `jail` (optional): a prepareWorkerJail() result to run in
+ * (then `gemini_scratch` is null: the caller owns and drops the state).
+ */
+export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prompt, timeoutS = 1800, graceS = 15, env: extraEnv = {}, signal = undefined,
+  sandbox = {}, onEvent = () => {}, a2a_socket = null, jail = null }) {
+  if (!cli || !control_dir || !worktree || !model || typeof prompt !== "string") throw Object.assign(new Error("runAgyWorkerTurn: pass cli, control_dir, worktree, model and prompt"), { code: "BAD_INPUT" });
+  const cardPath = join(control_dir, ".agents", "agents", WORKER_AGENT, "agent.md");
+  if (!existsSync(cardPath)) throw Object.assign(new Error(`agy worker: role card ${cardPath} missing (prepareWorkerWorkspace first)`), { code: "NO_WORKSPACE" });
+  if (cli.includes("/") && !existsSync(cli)) throw laneFailure("spawn", `agy CLI absent at ${cli}`);
+
+  // THE JAIL: bwrap, or a refusal. Never a silent unjailed run. A caller that already built one (the probe's preflight
+  // ran in it) passes it as `jail` and drops its state itself.
+  const env = workerEnv(extraEnv);
+  const ownJail = !jail;
+  const { prefix, sandboxRec, gstate } = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
+  const dropState = () => (ownJail ? dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null) : Promise.resolve(null));
 
   const log_file = join(control_dir, "run", "agy.log");
   const args = workerArgv({ model, worktree, prompt, timeoutS, log_file });
@@ -270,12 +357,12 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   try {
     run = await spawnPromise(cmd, argv, { cwd: control_dir, env, timeout: (timeoutS + graceS) * 1000, onStdoutLine, ...(signal ? { signal } : {}) });
   } catch (e) {
-    await dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null);
+    await dropState();
     if (e?.name === "AbortError" || signal?.aborted) throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED" });
     throw laneFailure("spawn", `agy worker could not be started (${e?.code ?? e?.message ?? e})`, { launch, sandbox: sandboxRec, tool_steps });
   }
   const jail_log = await readJailLog(control_dir);
-  const gemini_scratch = await dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null);
+  const gemini_scratch = await dropState();
   const stderr = String(run.stderr ?? "");
   const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps, gemini_scratch, exit_code: run.status, stderr_tail: stderr.slice(-4000),
     result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null };
