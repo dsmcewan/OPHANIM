@@ -57,10 +57,10 @@
 // controller, like the gate's lease rows were), checked for presence and consistency only.
 import {createHash} from 'node:crypto';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
-import {labOf} from './lineage-kinds.mjs';
+import {labOf, labRuleLab} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, carriesPractice, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
-import {reviewerRefusal, reviewerIdentity, candidateRefusal, resolveModel, policyRefusal, policyDigest, contributorKeys} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, candidateRefusal, candidateIdentity, resolveModel, policyRefusal, policyDigest, contributorKeys} from '../review/identity.mjs';
 
 export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 
@@ -108,10 +108,37 @@ export function independenceRefusal(c, seat, {answer = false} = {}) {
   const keys = {models: c.author_models, labs: c.excluded_labs};
   return answer ? reviewerRefusal(seat, keys, c.identity_policy.rules) : candidateRefusal(seat, keys, c.identity_policy.rules);
 }
-/** The lab a review of cycle `c` counts for: under v3 the reviewer's resolved lab (recorded policy); else labOf. */
+/**
+ * The lab a review of cycle `c` counts for: under v3 the reviewer's resolved lab (recorded policy); under the lab rule
+ * with a pinned `lab_identity` the lab resolved under it (null when unresolved: it counts for no lab); else labOf.
+ */
 export function reviewLab(c, {vendor, model, served_model = null}) {
-  if (c?.contract !== CYCLE_CONTRACT_V3) return labOf(vendor, served_model ?? model);
+  if (c?.contract !== CYCLE_CONTRACT_V3) return labRuleLab(c, {vendor, model, served_model}).lab ?? null;
   return reviewerIdentity({vendor, model, served_model}, c.identity_policy.rules).lab ?? null;
+}
+/** The lab a SEAT of cycle `c` is asked as (before any answer): resolved under the cycle's pinned rules when it has them. */
+export function seatLab(c, {vendor, model}) {
+  if (c?.contract === CYCLE_CONTRACT_V3) return resolveModel(vendor, model, c.identity_policy.rules)?.lab ?? null;
+  if (c?.lab_identity) { const who = candidateIdentity({vendor, model}, c.lab_identity.rules); return who.lab ?? null; }
+  return labOf(vendor, model);
+}
+/**
+ * Why an ANSWER (asked of `seat`, answered by `answer.served_model`) may not count toward cycle `c`, or null: the same
+ * admission the ledger applies to the review and to each of its retrieval rounds (self-audit round 3, assignment 2
+ * (sealed 449ca42), L-201). The answer counts for the seat's lab only.
+ */
+export function answerRefusal(c, seat, answer) {
+  const a = {vendor: seat.vendor, model: seat.model, served_model: answer?.served_model ?? null};
+  if (c.contract === CYCLE_CONTRACT_V3) {
+    const who = reviewerIdentity(a, c.identity_policy.rules);
+    if (who.why) return who.why;
+    if (who.lab !== seat.lab) return `${seat.vendor}/${seat.model} was asked for the ${seat.lab} lab and the ${who.lab} lab answered`;
+    return independenceRefusal(c, {...a, lab: who.lab}, {answer: true});
+  }
+  const got = labRuleLab(c, a);
+  if (got.why) return got.why;
+  if (got.lab !== seat.lab) return `${seat.vendor}/${seat.model} was asked for the ${seat.lab} lab and the ${got.lab} lab answered`;
+  return c.author_labs.includes(got.lab) ? `the ${got.lab} lab authored the change and answered (${a.served_model ?? a.model})` : null;
 }
 
 export const CYCLE = 'cycle', FINDING = 'finding', RESOLUTION = 'finding.resolution', CLOSE = 'cycle.close', ATTEMPT = 'cycle.attempt';
@@ -123,6 +150,17 @@ const requirementRefusal = p => (p.required_reviewers === undefined ? null
   : !Number.isInteger(p.required_reviewers) || p.required_reviewers < REQUIRED_REVIEW_LABS
     ? `a cycle that records its required reviewers requires at least ${REQUIRED_REVIEW_LABS}; a caller cannot lower it`
     : p.reviewers < p.required_reviewers ? `the cycle requires ${p.required_reviewers} independent reviewers and names ${p.reviewers}` : null);
+/**
+ * A LAB-RULE CYCLE THAT PINS ITS LAB IDENTITY (self-audit round 3, assignment 2 (sealed 449ca42), L-1/L-2/L-204; additive
+ * on pantheon.cycle/v2): `lab_identity: {digest, rules}` is the identity policy every lab of the cycle is resolved under
+ * (reviewer, answer, retrieval round, attempt seat, lineage), so no lab is taken from a route or a vendor. Such a cycle
+ * also records `required_reviewers` (the three-lab floor, enforced here by the kind and not only by the recorder).
+ * A cycle without the field (every lab-rule cycle recorded before it) validates, closes and hashes exactly as before.
+ */
+const labIdentityRefusal = p => (p.lab_identity === undefined ? null
+  : SHA.test(p.lab_identity?.digest ?? '') && policyRefusal(p.lab_identity?.rules) === null && policyDigest(p.lab_identity.rules) === p.lab_identity.digest
+    ? (Number.isInteger(p.required_reviewers) ? null : 'a cycle that pins its lab identity records required_reviewers (the three-lab floor)')
+    : 'a lab-rule cycle\'s lab_identity is {digest, rules}: an identity policy and the digest of those rules');
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;            // a git object id (sha1 or sha256)
 const SHA = /^sha256:[0-9a-f]{64}$/;
 const HEX = /^[0-9a-f]{64}$/;
@@ -180,6 +218,21 @@ export function parseReview(reply) {
 }
 
 const findingOf = p => ({severity: p.severity, file: p.file, line: p.line, claim: p.claim, reproduction: p.reproduction});
+/**
+ * The evidence each finding of a reply cites, by finding index (register L-107): its structured `sources` list, and the
+ * [source: ...] tag inside its claim. Read from the signed reply; not part of the recorded finding (whose shape is fixed).
+ */
+export function citedSources(reply) {
+  const fenced = /```json\s*([\s\S]*?)```/.exec(reply ?? '');
+  const raw = fenced ? fenced[1] : (reply ?? '').slice((reply ?? '').indexOf('{'), (reply ?? '').lastIndexOf('}') + 1);
+  let j = null;
+  try { j = JSON.parse(raw); } catch { j = null; }
+  return (Array.isArray(j?.findings) ? j.findings : []).map(f => {
+    const listed = Array.isArray(f?.sources) ? f.sources.filter(str).map(x => x.trim().slice(0, 512)) : [];
+    const tag = typeof f?.claim === 'string' ? /\[source:\s*([^\]]+?)\s*\]/.exec(f.claim)?.[1] ?? null : null;
+    return [...new Set([...listed, ...(tag ? [tag] : [])])].slice(0, 32);
+  });
+}
 const cites = (view, e, kind) => e.derived_from.filter(h => view.entry(h)?.kind === kind);
 
 /** The cycle a review cites, or null. */
@@ -200,7 +253,8 @@ export function deriveCycle(view, cycle) {
       const p = view.payload(h);
       const answer = view.payload(p.turn);
       out.reviews.push({hash: h, seat: p.seat, lab: reviewLab(c, {vendor: p.seat.vendor, model: p.model, served_model: p.served_model ?? null}), verdict: p.verdict,
-        model: p.model, served_model: p.served_model ?? null, turn: p.turn ?? null, reported: parseReview(answer?.reply ?? '')});
+        model: p.model, served_model: p.served_model ?? null, ...(answer?.served_model_source ? {served_model_source: answer.served_model_source} : {}),
+        turn: p.turn ?? null, reported: parseReview(answer?.reply ?? ''), cited: citedSources(answer?.reply ?? '')});
       reviews.add(h);
     } else if (e.kind === FINDING && e.derived_from.some(x => reviews.has(x))) {
       out.findings.push({hash: h, review: e.derived_from.find(x => reviews.has(x)), payload: view.payload(h)});
@@ -219,6 +273,7 @@ export function closeClaim(state) {
   const {cycle: c, reviews, findings, resolutions} = state;
   if (reviews.length !== c.reviewers) return {why: `${reviews.length} of ${c.reviewers} reviews are recorded`};
   const labs = reviews.map(r => r.lab);
+  if (labs.some(l => !l)) return {why: 'a review of this cycle counts for no resolved lab'};
   if (new Set(labs).size !== labs.length) return {why: 'two reviews of this cycle share a lab'};
   if (c.required_reviewers !== undefined && new Set(labs).size < Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)) {
     return {why: `the cycle requires ${Math.max(c.required_reviewers, REQUIRED_REVIEW_LABS)} independent labs and ${new Set(labs).size} reviewed`};
@@ -271,12 +326,12 @@ export function cycleKinds({authors = () => true} = {}) {
         && Array.isArray(p.author_labs) && p.author_labs.every(str) && ISO(p.opened_at)
         ? requirementRefusal(p) ?? (p.contract === undefined ? null
           : carriesPractice(p.contract) && validPolicy(p.policy) && str(p.practice_scope) && (p.prior === null || SHA.test(p.prior ?? ''))
-            ? (p.contract !== CYCLE_CONTRACT_V3 ? (p.author_models === undefined && p.excluded_labs === undefined && p.independence === undefined ? null
+            ? (p.contract !== CYCLE_CONTRACT_V3 ? (p.author_models === undefined && p.excluded_labs === undefined && p.independence === undefined ? labIdentityRefusal(p)
                 : `only a ${CYCLE_CONTRACT_V3} cycle names author_models, excluded_labs and independence`)
               : p.independence === 'model' && Array.isArray(p.author_models) && p.author_models.every(str) && Array.isArray(p.excluded_labs) && p.excluded_labs.every(str)
                 && Array.isArray(p.contributors) && p.contributors.every(x => x && (x.vendor === null || str(x.vendor)) && (x.model === null || str(x.model)) && (x.lab === undefined || str(x.lab)))
                 && SHA.test(p.identity_policy?.digest ?? '') && policyRefusal(p.identity_policy?.rules) === null && policyDigest(p.identity_policy.rules) === p.identity_policy.digest
-                && Number.isInteger(p.required_reviewers) ? v3LineageRefusal(p)
+                && Number.isInteger(p.required_reviewers) && p.lab_identity === undefined ? v3LineageRefusal(p)
                 : `a ${CYCLE_CONTRACT_V3} cycle names {independence: "model", author_models, excluded_labs, contributors, identity_policy: {digest, rules}} (the digest is of the rules it carries) and records required_reviewers`)
             : `a ${CYCLE_CONTRACT} cycle also names {policy: {version, hash, profile}, practice_scope, prior}; a cycle without a contract field is the old contract`)
         : 'a cycle names {scope, base, head, diff_sha, files, prompt_sha, brief_sha, reviewers, author_labs, opened_at}'),
@@ -297,11 +352,16 @@ export function cycleKinds({authors = () => true} = {}) {
         } else if (prev && carriesPractice(view.payload(prev).contract)) {
           return `the previous cycle of this scope opened under ${CYCLE_CONTRACT}: the scope may not return to the old contract`;
         }
+
         if (!prev) return closes.length ? 'the first cycle of a scope cites no close' : null;
         const close = closedAt(view, prev);
         if (!close) return 'the previous cycle of this scope is not closed';
         if (closes.length !== 1 || closes[0] !== close) return 'a cycle cites the close of the previous cycle of its scope';
         if (view.payload(prev).head !== p.base) return `the base is not where the previous cycle ended (${view.payload(prev).head.slice(0, 12)}): a range would go unreviewed`;
+        // VERSIONED, NEVER BACKWARDS (L-204): once a scope recorded the three-lab floor, or a pinned lab identity, a later
+        // cycle of that scope records it too. A scope recorded entirely before them verifies as recorded.
+        if (view.payload(prev).required_reviewers !== undefined && p.required_reviewers === undefined) return 'the previous cycle of this scope records its required reviewers: a later one may not drop the three-lab floor';
+        if (view.payload(prev).lab_identity !== undefined && p.lab_identity === undefined && p.contract !== CYCLE_CONTRACT_V3) return 'the previous cycle of this scope pins its lab identity: a later lab-rule cycle may not drop it';
         return null;
       },
     },
@@ -363,8 +423,8 @@ export function cycleKinds({authors = () => true} = {}) {
         if (p.outcome === 'reviewed' ? view.entry(review)?.kind !== 'review' : review !== undefined) return 'an attempt cites its cycle, and the review it produced when it reviewed';
         if (closedAt(view, cycle)) return 'the cycle is closed';
         const c = view.payload(cycle);
-        const seatLab = c.contract === CYCLE_CONTRACT_V3 ? resolveModel(p.seat.vendor, p.seat.model, c.identity_policy.rules)?.lab ?? null : labOf(p.seat.vendor, p.seat.model);
-        if (seatLab !== p.seat.lab) return `the seat's lab is ${seatLab ?? 'unresolved'}, not ${p.seat.lab}`;
+        const asked = seatLab(c, p.seat);
+        if (asked !== p.seat.lab) return `the seat's lab is ${asked ?? 'unresolved'}, not ${p.seat.lab}`;
         const refused = independenceRefusal(c, {vendor: p.seat.vendor, model: p.seat.model, lab: p.seat.lab});
         if (refused) return refused;
         let tried = 0;
@@ -433,7 +493,7 @@ export function cycleRecorder({ledger, controller, order, historical = false}) {
      */
     openCycle({scope, base, head, diff, files, prompt, brief = REVIEW_BRIEF, reviewers = 3, author_labs = [], author_turns = [], opened_at = new Date().toISOString(),
       contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE, required_reviewers = undefined, author_models = undefined, excluded_labs = undefined,
-      identity_policy = undefined, contributors = undefined}) {
+      identity_policy = undefined, contributors = undefined, lab_identity = undefined}) {
       if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT}, ${CYCLE_CONTRACT_V3} or ${CYCLE_CONTRACT_V1}`);
       // THE FLOOR, ON EVERY NEWLY OPENED CYCLE (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6),
       // question 5): a v2 or v3 cycle opened without required_reviewers records REQUIRED_REVIEW_LABS, so the ledger
@@ -461,7 +521,9 @@ export function cycleRecorder({ledger, controller, order, historical = false}) {
         })).values()],
         // The identity policy travels WITH the cycle: its rules and their digest.
         ...(identity_policy ? {identity_policy: {digest: policyDigest(identity_policy), rules: identity_policy}} : {})} : {};
-      return append(CYCLE, {...payload, contract, policy: inEffect, practice_scope, prior, ...model},
+      // A lab-rule (v2) cycle may pin the identity its labs are resolved under (L-204).
+      const labPinned = contract === CYCLE_CONTRACT && lab_identity ? {lab_identity: {digest: policyDigest(lab_identity), rules: lab_identity}} : {};
+      return append(CYCLE, {...payload, contract, policy: inEffect, practice_scope, prior, ...model, ...labPinned},
         [...(prev?.close ? [prev.close] : []), ...(prior ? [prior] : []), ...author_turns]);
     },
     recordFinding({review, index, finding}) { return append(FINDING, {index, ...findingOf(normalFinding(finding) ?? finding)}, [review]); },

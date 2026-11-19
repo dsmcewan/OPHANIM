@@ -37,6 +37,46 @@ export const KINDS = Object.freeze(['authoritative-requirement', 'observation', 
 // dossier_bytes bounds the whole initial view (the evidence text of all its entries).
 export const DEFAULT_INVESTIGATION = Object.freeze({rounds: 3, requests_per_round: 6, result_bytes: 16_000, total_bytes: 160_000, dossier_bytes: 80_000});
 export const OPS = Object.freeze(['file', 'list', 'grep', 'log', 'show', 'status', 'work', 'record', 'issue', 'output', 'dossier']);
+/**
+ * A DISPATCHER'S FREE TEXT NEVER REACHES A JUDGE (owner decision L-001, 2026-11-19). Since dispatch v2 a returned unit is
+ * recorded as a validated reason code and moves, and its finding's text is composed by the controller from them. A
+ * record written before that (dispatch v1) carries the dispatcher's unbounded `notes` inside a finding's text, a unit's
+ * reason and a dispatch record: every judging seat's work-ledger evidence (the dossier's work view and the `work` and
+ * `record` retrievals) shows that text WITHHELD, with its length and digest, so it is still accounted for but never
+ * delivered as content. Structured fields are shown as they are.
+ */
+const LEGACY_RETURN = /^((?:unit \S+: )?the dispatcher judged the unit not cohesive; it returns to the planner: )([\s\S]+)$/;
+const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+/**
+ * The ONLY text an advisory finding (a dispatcher's return, `cause: 'dispatcher-return'`) is shown as, to the planner and
+ * to every judge: composed from its validated fields (unit, reason code, moves of the plan's own paths between its own
+ * units), whatever text the record carries.
+ */
+export const advisoryText = f => {
+  const r = isObj(f?.return) ? f.return : {};
+  const moves = Array.isArray(r.moves) ? r.moves.filter(m => isObj(m) && typeof m.path === 'string' && typeof m.to_unit === 'string') : [];
+  return `ADVISORY (untrusted dispatcher data, validated fields only): unit ${String(f?.unit ?? '?').slice(0, 64)} was returned as not cohesive; reason ${String(r.reason ?? 'UNSPECIFIED').slice(0, 40)}`
+    + (moves.length ? `; proposed moves: ${moves.map(m => `${m.path.slice(0, 200)} -> ${m.to_unit.slice(0, 64)}`).join(', ')}` : '; no move proposed');
+};
+export function withheld(value) {
+  if (typeof value === 'string') {
+    const m = LEGACY_RETURN.exec(value);
+    return m ? `${m[1]}[dispatcher free text withheld: ${m[2].length} chars, ${sha(m[2])}]` : value;
+  }
+  if (Array.isArray(value)) return value.map(withheld);
+  if (value && typeof value === 'object') {
+    // An advisory finding is shown as its validated fields compose it, never as the text it carries.
+    const advisory = value.cause === 'dispatcher-return' && typeof value.text === 'string';
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (advisory && k === 'text') { out.text = advisoryText(value); continue; }
+      // A v1 dispatch record's own `notes` (a returned or a cohesive unit's): withheld whatever it says.
+      out[k] = k === 'notes' && typeof v === 'string' && v !== '' && value.role === 'dispatcher' ? `[dispatcher free text withheld: ${v.length} chars, ${sha(v)}]` : withheld(v);
+    }
+    return out;
+  }
+  return value;
+}
 
 const sha = b => 'sha256:' + createHash('sha256').update(b).digest('hex');
 // Every pathspec is LITERAL: git's pathspec magic (":/", ":(top)", globs) would reach outside a repository that is a
@@ -176,7 +216,7 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
     },
     work({item, match = null}) {
       if (!work) return no('UNAVAILABLE', 'there is no work ledger here');
-      const all = work.stages(item).map(s => JSON.stringify({record: s.hash, stage: s.stage, attempt: s.attempt, status: s.status, next: s.next, blocker: s.blocker ?? null, findings: s.findings ?? []}));
+      const all = work.stages(item).map(s => JSON.stringify(withheld({record: s.hash, stage: s.stage, attempt: s.attempt, status: s.status, next: s.next, blocker: s.blocker ?? null, findings: s.findings ?? []})));
       const rows = keep(all, match);
       return {source: `work:${item}#records${sel({match})}`, version: work.stages(item).at(-1)?.hash ?? null, body: rows.join('\n') || '(no stage recorded)', rows: rows.length, of: all.length};
     },
@@ -184,7 +224,7 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       if (!work) return no('UNAVAILABLE', 'there is no work ledger here');
       const s = work.stages().find(x => x.hash === hash);
       if (!s) return no('NOT_FOUND', `${hash} is not a stage record on the work ledger`);
-      return {source: `record:${hash}`, version: hash, body: JSON.stringify({stage: s.stage, status: s.status, identity: s.identity, outputs: s.outputs, findings: s.findings, contributions: s.contributions}, null, 1)};
+      return {source: `record:${hash}`, version: hash, body: JSON.stringify(withheld({stage: s.stage, status: s.status, identity: s.identity, outputs: s.outputs, findings: s.findings, contributions: s.contributions}), null, 1)};
     },
     issue({number}) {
       if (!issues) return no('UNAVAILABLE', 'no issue snapshot was supplied to this run');
@@ -512,25 +552,43 @@ const jsonOf = text => {
 /**
  * Run one seat's judgment with retrieval. `ask(prompt)` makes one provider call and returns {text, ...}. The model
  * either answers, or asks for records ({"requests": [...]}, with no verdict or plan beside it); results are appended
- * and it is asked again. Returns {reply, prompt (the last one), log: {rounds, calls, requests, bytes, limit_reached}}.
+ * and it is asked again. Returns {reply, prompt (the last one), log: {rounds, calls, requests, bytes, limit_reached,
+ * turns}, rounds}.
+ *
+ * EVERY ROUND IS A TURN OF ITS OWN (self-audit round 3, assignment 2 (sealed 449ca42), L-201/L-202). An earlier round's
+ * request text is pasted into the prompt the final answer is given, so who answered it matters as much as who gave
+ * the verdict. `log.turns` names the model that served each call ({call, served_model, served_model_source,
+ * response_id}); `rounds` keeps each earlier round's prompt and reply, for the caller to record. `admit(reply)` (optional)
+ * is the caller's served-identity check, applied to every EARLIER round before anything it asked for is run: a round it
+ * refuses ends the investigation with `refused: {call, served_model, served_model_source, why}` and no reply. The final
+ * answer is admitted by the caller, as before.
  */
-export async function investigate({ask, prompt, retriever, limits = {}, canAsk = () => true}) {
+export async function investigate({ask, prompt, retriever, limits = {}, canAsk = () => true, admit = null}) {
   const L = {...retriever.limits, ...limits};
-  const log = {rounds: 0, calls: 0, requests: [], bytes: 0, limit_reached: null};
+  const log = {rounds: 0, calls: 0, requests: [], bytes: 0, limit_reached: null, turns: []};
+  const rounds = [];
   let current = prompt, reply = null;
   for (;;) {
     reply = await ask(current);
     log.calls++;
+    const who = {call: log.calls, served_model: typeof reply?.served_model === 'string' && reply.served_model.trim() ? reply.served_model : null,
+      ...(reply?.served_model_source ? {served_model_source: reply.served_model_source} : {}), response_id: reply?.response_id ?? null};
+    log.turns.push(who);
     const j = jsonOf(reply?.text);
     const asks = j && Array.isArray(j.requests) && !('verdict' in j) && !('problem' in j) ? j.requests : null;
-    if (!asks) return {reply, prompt: current, log};
+    if (!asks) return {reply, prompt: current, log, rounds};
+    if (typeof admit === 'function') {
+      const why = admit(reply);
+      if (why) return {reply: null, prompt: current, log, rounds, refused: {...who, why}};
+    }
+    rounds.push({prompt: current, text: reply?.text ?? '', served_model: who.served_model, ...(who.served_model_source ? {served_model_source: who.served_model_source} : {}), response_id: who.response_id});
     const round = log.rounds + 1;
     const out = of => `${current}\n\n## Retrieved (round ${round})\n${of}`;
     if (log.rounds >= L.rounds || log.bytes >= L.total_bytes || !canAsk()) {
       // Told once already and it asked again: no judgment was given within the bounds.
-      if (log.limit_reached) return {reply: null, prompt: current, log};
+      if (log.limit_reached) return {reply: null, prompt: current, log, rounds};
       log.limit_reached = log.rounds >= L.rounds ? `the ${L.rounds}-round investigation limit` : log.bytes >= L.total_bytes ? `the ${L.total_bytes}-byte retrieval limit` : 'the stage\'s provider-call budget';
-      if (!canAsk()) return {reply: null, prompt: current, log};
+      if (!canAsk()) return {reply: null, prompt: current, log, rounds};
       for (const req of asks) log.requests.push({round, request: req, ok: false, error: 'NOT_RUN', why: log.limit_reached});
       current = out(`NOTHING WAS RETRIEVED: ${log.limit_reached} is reached. ${asks.length} request(s) were not run: ${JSON.stringify(asks).slice(0, 600)}\n`
         + 'Answer now with what you have. State what you could not see (context.gaps for a plan; a finding or reason otherwise); do not assume its content.');

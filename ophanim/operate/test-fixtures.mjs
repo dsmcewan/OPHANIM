@@ -57,7 +57,9 @@ export function planFor(prompt, extra = {}) {
     // The work units of the five-stage pipeline (required under the `fit` profile; ignored by `argo` and `legacy`).
     work_units: [UNIT('alpha')],
     ...(/Mode: revalidate/.test(prompt) ? {ticket_assessment: {still_valid: true, reasons: ['alpha.mjs still exports false; the ticket\'s command still tests the requirement']}} : {}),
-    ...(ids.length ? {answers: ids.map(id => ({finding: id, response: 'addressed in this version'}))} : {}),
+    // A dispatcher's advisory return (owner decision L-001) is answered with the planner's own justification, on evidence it was given.
+    ...(ids.length ? {answers: ids.map(id => ({finding: id, response: 'addressed in this version',
+      ...(new RegExp(`^- ${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\[[^\\]]*dispatcher-return`, 'm').test(prompt) ? {justification: {why: 'verify.mjs imports alpha.mjs directly, so the units are cut where the evidence shows the coupling', sources: ['verify.mjs']}} : {})}))} : {}),
     ...extra,
   };
 }
@@ -72,13 +74,31 @@ export const dispatchOf = (unit, over = {}) => ({unit_id: unit.unit_id, cohesive
 export const unitApprove = rubric => ({verdict: 'approve', criteria: rubric.map(criterion => ({criterion, met: true, evidence: 'the diff and the verify output'})), findings: []});
 export const unitReject = (rubric, findings = ['the change is wrong: a case fails']) => ({verdict: 'request_changes', criteria: rubric.map((criterion, i) => ({criterion, met: i !== 0, evidence: 'see the finding'})), findings});
 /**
- * The scripted single-turn seats: planner, plan reviewer, change reviewer, validator, and the pipeline's dispatcher
- * (Stage 2), unit reviewer (Stage 5) and subagent (Stage 4). Each call is logged.
+ * SERVED IDENTITY MODES (self-audit round 3, assignment 2 (sealed 449ca42), L-205: the fixture always answered as the
+ * model asked, unmarked, so no lifecycle test carried a served name that differs from the requested one through a
+ * projection). A mode maps a call to the name that "served" it and the marker the transport would attach:
+ *   SERVE.dated    every seat served under a dated snapshot of the model asked (`-20261101`): another NAME, the same
+ *                  identity, named by the provider (no marker). Judging seats still pass the same-model check.
+ *   SERVE.marked   every seat served as the requested name, marked `served_model_source: "input"` (the Antigravity way:
+ *                  the transport names no model and records the required input; the marker vocabulary requires the
+ *                  input name to BE the requested one).
+ *   substitute({kind: {asked: served}}, base)  a named seat served by ANOTHER model (another identity), unmarked; other
+ *                  calls follow `base` (default: as asked).
+ * An override's own {served_model} still wins.
  */
-export function scriptedTurn(over = {}) {
+export const SERVE = Object.freeze({
+  dated: ({model}) => ({served_model: `${model}-20261101`}),
+  marked: ({model}) => ({served_model: model, served_model_source: 'input'}),
+  substitute: (map, base = null) => args => (map[args.kind]?.[args.model] ? {served_model: map[args.kind][args.model]} : base ? base(args) : {served_model: args.model}),
+});
+/**
+ * The scripted single-turn seats: planner, plan reviewer, change reviewer, validator, and the pipeline's dispatcher
+ * (Stage 2), unit reviewer (Stage 5) and subagent (Stage 4). Each call is logged. `serve` is a SERVE mode (above).
+ */
+export function scriptedTurn(over = {}, {serve = null} = {}) {
   const log = [];
   const kindOf = p => p.startsWith('You are the planner') ? 'planner' : p.startsWith('You are an independent reviewer of a PLAN') ? 'plan-review'
-    : p.startsWith('You are the independent validator') ? 'validator' : p.startsWith('ROLE: dispatcher for a supervised build pipeline') ? 'dispatcher'
+    : /^You are the (independent )?validator/.test(p) ? 'validator' : p.startsWith('ROLE: dispatcher for a supervised build pipeline') ? 'dispatcher'
     : p.startsWith('ROLE: acceptance reviewer of work unit') ? 'unit-review' : /^ROLE: .* a consulted specialist subagent/.test(p) ? 'subagent' : 'review';
   const defaults = {planner: ({prompt}) => json(planFor(prompt)), 'plan-review': () => APPROVE, review: () => APPROVE, validator: () => ACCEPT,
     dispatcher: ({unit}) => JSON.stringify(dispatchOf(unit)),
@@ -97,8 +117,12 @@ export function scriptedTurn(over = {}) {
       ...(kind === 'unit-review' ? {rubric: rubricOf(prompt), passed: /\nRESULT: exited 0\n/.test(prompt)} : {})});
     const text = typeof out === 'string' ? out : out.text;
     // An override's served_model_source ("input": the transport recorded the requested model) is passed on as given.
-    return {text, response_id: `t_${kind}_${log.length}`, served_model: typeof out === 'string' ? model : 'served_model' in out ? out.served_model : model,
-      ...(typeof out === 'object' && out.served_model_source ? {served_model_source: out.served_model_source} : {})};
+    if (typeof out === 'object' && 'served_model' in out) {
+      return {text, response_id: `t_${kind}_${log.length}`, served_model: out.served_model, ...(out.served_model_source ? {served_model_source: out.served_model_source} : {})};
+    }
+    const mode = serve ? serve({kind, vendor, model}) : {served_model: model};
+    if (serve) log.at(-1).served = mode.served_model;
+    return {text, response_id: `t_${kind}_${log.length}`, served_model: mode.served_model, ...(mode.served_model_source ? {served_model_source: mode.served_model_source} : {})};
   };
   fn.log = log;
   return fn;

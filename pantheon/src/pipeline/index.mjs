@@ -128,18 +128,22 @@ const FINAL = new Set(["approved", "returned", "blocked", "refused", "failed", "
  *   limits   overrides of DEFAULT_LIMITS
  *   dir      where pipeline.json, the unit patches, the worktrees and the per-unit control directories go
  *   checkpoints  {dir}: where approved units' checkpoints persist across runs of the same item (optional)
+ *   stage5_excluded  [{vendor, model, served_model?, requested_model?}] (optional): identities no unit's Stage 5 rung may be,
+ *            except the unit whose own dispatcher it is -- a dispatcher whose advisory return reached the plan of this run
+ *            keeps Decision 6's pinned review of its OWN unit only (owner decision L-001 follow-up, 2026-11-19)
  *   deadline the stage's hard end (epoch ms; optional): caps every verify_cmd run and every worker turn's --print-timeout
  *            at what is left of it (independent review round 2, assignment 3 (Google gemini-4-carbon, manual), finding 9)
  *
  * Returns the run record. status: "completed" (every unit approved and merged), "incomplete" (some unit was not),
  * "refused" (the plan or the run's inputs were refused; nothing ran) or "failed".
  */
-export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null, onCharge = null, deadline = null }) {
+export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null, onCharge = null, deadline = null, stage5_excluded = [] }) {
   const lim = { ...DEFAULT_LIMITS, ...limits };
   await mkdir(dir, { recursive: true });
   const run = {
     schema: PIPELINE_SCHEMA, run_id: run_id ?? randomBytes(6).toString("hex"), status: "running", reason: null, started_at: now(), ended_at: null,
     controller: { ...CONTROLLER }, repo, base: { ref: base, commit: null }, integration: null, planner: planner ? clone(planner) : null,
+    ...(stage5_excluded?.length ? { stage5_excluded: clone(stage5_excluded) } : {}),
     plan: clone(plan ?? null), refusals: [], waves: [], limits: clone(lim), units: {},
     checkpoints: checkpoints?.dir ? { dir: checkpoints.dir, resumed: [], rejected: [], written: [] } : null,
     contributions: [], arbiters: [], provider_calls: { total: 0, refused_at_limit: 0, by_role: { dispatcher: 0, implementer: 0, subagent: 0, reviewer: 0 } },
@@ -334,6 +338,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     // every LATER judgment (the change review, the validator) as a critique contributor, and from other units below.
     rows.push(...(contributions ?? contributionsOf({ units: { [u.unit_id]: u } })).filter(c => c.kind === "work" || c.kind === "subtask")
       .map(c => ({ vendor: c.vendor, model: c.model, served_model: c.served_model ?? null })));
+    // A returning dispatcher of the plan this run carries out (L-001): excluded from every unit but its own.
+    rows.push(...(stage5_excluded ?? []).map(c => ({ vendor: c.vendor ?? null, model: c.model ?? null, served_model: c.served_model ?? null, requested_model: c.requested_model ?? null })));
     const keys = contributorKeys(rows);
     const mine = new Set([own?.model, own?.served_model].filter(Boolean).map(m => resolveModel(own.vendor, m)).filter(r => r.known).map(r => r.id));
     return { ...keys, models: keys.models.filter(m => !mine.has(m)) };
@@ -532,7 +538,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model },
         verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest }, review_digest: digestOf(clone(rv)),
         // The approval itself, to re-derive on resume (checkpoint.mjs approvalRefusal).
-        review: clone(rv), dispatch: { vendor: d.vendor, model: d.model, served_model: d.served_model ?? null, specialist_role: d.specialist_role, difficulty: d.difficulty, rubric: [...d.rubric], rubric_hash: d.rubric_hash },
+        review: clone(rv), dispatch: { vendor: d.vendor, model: d.model, served_model: d.served_model ?? null, ...(d.served_model_source ? { served_model_source: d.served_model_source } : {}),
+          specialist_role: d.specialist_role, difficulty: d.difficulty, rubric: [...d.rubric], rubric_hash: d.rubric_hash },
         // The unit's authoring lineage: restored on resume so its contributors stay excluded downstream (checkpoint.mjs).
         contributions: contributionsOf({ units: { [u.unit_id]: u } }).filter(c => c.kind !== "plan").map(({ unit_id, ...c }) => c),
         // The unit's subagent call receipts, sealed with the approval: a resumed unit restores them, so a run that
@@ -582,7 +589,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       if (!ladder.some(s => sameSeat(s, got.record.review))) return reject(`the checkpoint's reviewer ${got.record.review.vendor}/${got.record.review.model} is not on the unit's reviewer ladder`);
       // The recorded reviewer must still be one that may judge this unit (Decision 6): not another unit's dispatcher of
       // this run and not a contributor of the unit, by the model asked and by the model that answered.
-      const k5 = stage5Keys(u, got.record.dispatch, (got.record.contributions ?? []).map(c => ({ kind: c.kind, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null })));
+      const k5 = stage5Keys(u, got.record.dispatch, (got.record.contributions ?? []).map(c => ({ kind: c.kind, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, ...(c.served_model_source ? { served_model_source: c.served_model_source } : {}) })));
       const excluded = reviewerRefusal({ vendor: got.record.review.vendor, model: got.record.review.model, served_model: got.record.review.served_model ?? null }, k5);
       if (excluded) return reject(`the checkpoint's reviewer may not judge this unit: ${excluded}`);
       patches.set(u.unit_id, got.patch);
@@ -592,7 +599,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           contributions: clone(got.record.contributions),
           // The sealed dispatch whose rubric governed the reused patch: its dispatcher stays an arbiter of this run
           // (record.mjs arbitersOf), excluded from later independent judgment (owner decision 2026-11-19).
-          dispatch: { vendor: got.record.dispatch.vendor, model: got.record.dispatch.model, served_model: got.record.dispatch.served_model ?? null, rubric_hash: got.record.dispatch.rubric_hash },
+          dispatch: { vendor: got.record.dispatch.vendor, model: got.record.dispatch.model, served_model: got.record.dispatch.served_model ?? null,
+            ...(got.record.dispatch.served_model_source ? { served_model_source: got.record.dispatch.served_model_source } : {}), rubric_hash: got.record.dispatch.rubric_hash },
           // The sealed evidence of the approval, restored (finding 7.3): the Stage 5 review that approved the patch and
           // the subagent calls made for it, each marked as coming from the checkpoint. u.reviews and u.a2a.calls stay
           // this run's own calls (none), so nothing is counted twice as this run's provider calls or contributions.

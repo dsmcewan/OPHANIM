@@ -24,6 +24,8 @@ import {makeExecutors, implementerPath, REVIEW_INDEPENDENCE} from './stages.mjs'
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
 import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer} from '../../pantheon/src/route/frontier.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
+import {reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
+import {SEATING} from '../../pantheon/src/role/seating.mjs';
 import {fixture, scriptedTurn, planFor, json, git, UNIT, unitApprove, unitReject, LIMITS} from './test-fixtures.mjs';
 
 const seq = (w, item) => w.stages(item).map(s => `${s.stage}:${s.status}`);
@@ -47,6 +49,12 @@ const UNITS = [
   UNIT('b', {depends_on: ['a'], owned_paths: ['beta.mjs'], difficulty: 'medium', verify_cmd: 'node -e "import(\'./beta.mjs\').then(m => process.exit(m.both === true ? 0 : 1))"', invariants: ['beta.mjs exports both === true, computed from alpha.mjs']}),
   UNIT('c', {owned_paths: ['gamma/**'], difficulty: 'hard', allowed_subagents: ['api-designer'], verify_cmd: 'node gamma/gamma.test.mjs', invariants: ['gamma/gamma.mjs exports g === 3 and its test proves it']}),
 ];
+// The configured reviewer pool with two OpenAI reviewer candidates appended, a dispatcher (gpt-6-astra) first: the pool in
+// which, WITHOUT Decision 6, a dispatcher is seated on the change panel. With the configured pool alone no dispatcher is
+// ever first in line, and the "no dispatcher judged" assertion passed with Decision 6 removed (self-audit round 3,
+// assignment 2 (sealed 449ca42), section 7: fit-lifecycle.test.mjs:155-158 was vacuous).
+const OPENAI_REVIEWERS = [{vendor: 'openai', model: 'gpt-6-astra', band: 'medium', basis: 'TEST POOL', why: 'a dispatcher first in line'}, {vendor: 'openai', model: 'gpt-6-sol', band: 'medium', basis: 'TEST POOL', why: 'test pool'}];
+const DECISION6_POOL = {...SEATING, reviewer: [...SEATING.reviewer, ...OPENAI_REVIEWERS]};
 const THREE = {work_units: UNITS, slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}, {id: 's2', title: 'beta.mjs', slot: 'beta', path: 'beta.mjs'}, {id: 's3', title: 'gamma.mjs', slot: 'gamma', path: 'gamma/gamma.mjs'}]};
 // The fake agy CLI's worker for those units (sourced with $dir = the unit's worktree, $unit, $model, $prompt): it
 // writes the unit's files, logs when it started and ended, and unit c asks its subagent one question over A2A.
@@ -69,7 +77,7 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
     const f = fixture(repo, ITEMS.map(item => ({item})), {tickets: ['ticketed']});
     ctx.agyWorker(WORKER);
     const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, THREE))});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});   // no profile: the default
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', seating: DECISION6_POOL});   // no profile: the default
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.equal(w.verify().ok, true);
@@ -153,6 +161,9 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       assert.equal(new Set(panel.map(t => t.lab)).size, 3);
       for (const t of panel) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
       // Independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7: before Decision 6 a dispatcher could be seated here.
+      // NOT VACUOUS: on these very contributions without the arbiter rows, this pool seats gpt-6-astra on the panel.
+      const without = reviewSeatsByModel({n: 3, contributions: impl.contributions.filter(c => c.purpose !== 'arbiter'), seating: DECISION6_POOL});
+      assert.ok(without.some(t => idOf(t) === 'openai/gpt-6-astra'), `without Decision 6 no dispatcher would be seated (${without.map(named).join(', ')}): the check below would be vacuous`);
       for (const d of ['openai/gpt-6-astra', 'openai/gpt-6-luna', 'openai/gpt-6.1-sol']) {
         assert.ok(!panel.some(t => idOf(t) === d) && idOf(val.outputs.validator) !== d, `the dispatcher ${d} judged its own rubric's sufficiency`);
       }

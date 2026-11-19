@@ -44,7 +44,8 @@ test('the four configured labs: a Ready item with no ticket gets a reviewed plan
 test('with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes through reviewed planning, ticket creation, implementation, review, validation and an unsigned outcome', async () => {
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'alpha-item'}]);
-    const turn = scriptedTurn();
+    const validatorPrompts = [];
+    const turn = scriptedTurn({validator: ({prompt}) => { validatorPrompts.push(prompt); return ACCEPT; }});
     const executors = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], JSON.stringify(r.dispatched));
@@ -77,10 +78,18 @@ test('with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes thro
     assert.equal(new Set(rev.outputs.labs).size, 3);
     for (const lab of rev.outputs.labs) assert.ok(!rev.outputs.author_labs.includes(lab), `${lab} contributed and may not review`);
     assert.ok(rev.outputs.author_labs.includes(plannerLab));
-    // Validation in a clean checkout, judged by an independent validator.
+    // Validation in a clean checkout, judged by a validator from a lab that did not contribute. Under the LAB rule the
+    // validator's lab is necessarily one of the panel's, and here the seat is one of the approving change reviewers: the
+    // record says so, `independent` is no longer the constant true, and the validator was told it reviewed the change
+    // (owner decision L-002 (2026-11-19): under the lab rule only the record and the prompt are corrected).
     assert.equal(val.outputs.verdict, 'accept');
     assert.deepEqual(val.outputs.tests.filter(x => x.kind === 'acceptance').map(x => [x.cmd, x.exit]), [['node verify.mjs', 0]]);
-    assert.equal(val.outputs.validator.independent, true);
+    const ind = val.outputs.validator.independence;
+    assert.deepEqual([ind.rule, ind.also_change_reviewer, ind.contributor, ind.fourth_lab, val.outputs.validator.independent], ['lab', true, false, false, false]);
+    assert.ok(rev.team.some(t => t.vendor === val.outputs.validator.vendor && t.model === val.outputs.validator.model));
+    assert.equal(validatorPrompts.length, 1);
+    assert.match(validatorPrompts[0], /^You are the validator of one implemented change[^\n]*You were one of the reviewers whose review of it passed/);
+    assert.doesNotMatch(validatorPrompts[0], /You did not plan, write or review it/);
     assert.ok(!rev.outputs.author_labs.includes(val.outputs.validator.lab));
     // The outcome: an unsigned proposal bound to the item, the ticket and the reviewed, validated commit.
     const p = JSON.parse(fs.readFileSync(out.outputs.proposal_path, 'utf8'));

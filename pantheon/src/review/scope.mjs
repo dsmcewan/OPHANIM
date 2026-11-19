@@ -64,6 +64,8 @@ export function reviewScope({ kind, turns, slot = null, projections = PROJECTION
     // a turn excludes the model it asked for and the one that served it (review/identity.mjs).
     const row = { purpose: t.purpose, vendor: t.vendor, model: t.served_model ?? t.model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model ?? null),
       ...(t.served_model && t.model && t.served_model !== t.model ? { requested_model: t.model } : {}),
+      // Where the served name came from (the transport's marker), kept with it (self-audit round 3, assignment 2 (sealed 449ca42), L-203).
+      ...(t.served_model_source ? { served_model_source: t.served_model_source } : {}),
       ...(t.slot ? { slot: t.slot } : {}), ...(t.turn ? { turn: t.turn } : {}) };
     if (!path) { excluded.push({ ...row, why: `a ${t.purpose} turn has no path to the reviewed bytes` }); continue; }
     if (kind === "artifact" && t.purpose === "work" && slot !== null && t.slot !== undefined && t.slot !== slot) {
