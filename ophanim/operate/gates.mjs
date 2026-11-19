@@ -69,9 +69,13 @@ export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => n
 
 /**
  * One cited source against the present: null when it is unchanged (or not a checkable citation), else {why, key, now}.
- * A FILE is compared by the digest of its bytes; any other VIEW is re-read with `versionOf(request, {plan: rec})`
- * (reconcile.mjs). A work-ledger view and a stage's own stored test output are never "changed evidence": recording an
- * attempt, and the outputs the stage itself produced, are consequences, not evidence.
+ * A FILE is compared by its present identity as the retriever's file op would serve it (reconcile.mjs bytesOfRepo: the
+ * digest of its bytes, qualified when the op would now refuse them); any other VIEW is re-read with
+ * `versionOf(request, {plan: rec})` (reconcile.mjs), whose version is the digest of the view's body (context.mjs, THE
+ * VERSION CONTRACT, register L-504 invariant 1). The item's OWN work-ledger view and a stage's own stored test output are
+ * never "changed evidence": recording an attempt, and the outputs the stage itself produced, are consequences, not
+ * evidence. ANOTHER item's work view is evidence like any other view, re-read and compared (L-504: it was exempted too,
+ * so a plan resting on another item's records was reused after those records changed).
  */
 export function evidenceCheck(ev, {bytesOf = () => null, versionOf = null, rec = null}) {
   if (ev.path) {
@@ -80,8 +84,10 @@ export function evidenceCheck(ev, {bytesOf = () => null, versionOf = null, rec =
     return now !== ev.sha256 ? {why: `evidence ${ev.path} changed`, key: `file:${ev.path}`, now} : null;
   }
   if (!ev.request || ev.version === undefined) return null;
-  // A work-ledger view is never "changed evidence": recording an attempt is not new evidence (context.mjs `stable`).
-  if (ev.request.op === 'work' || ev.request.op === 'output') return null;
+  // The item's own work-ledger view is never "changed evidence": recording an attempt is not new evidence (context.mjs
+  // `stable`). Without the citing record the item is unknown, and the view is not judged (as before).
+  if (ev.request.op === 'work' && (rec?.identity?.item === undefined || ev.request.item === rec.identity.item)) return null;
+  if (ev.request.op === 'output') return null;
   // A cited view whose present version cannot be established here (no re-reader, a derived dossier view that cannot
   // be rebuilt, an issue with no snapshot) is NOT presumed unchanged: the record is stale until it can be re-checked
   // (independent review round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, questions 1 and 5).

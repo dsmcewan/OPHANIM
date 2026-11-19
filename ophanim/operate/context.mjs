@@ -23,6 +23,30 @@
 //
 // Must never: write anything; follow a path out of the repository; treat issue text as authority; present a count or
 // a summary as the evidence; or hide an omission.
+//
+// THE VERSION CONTRACT (register L-504, invariant 1: a version equals the delivered bytes). Every op's result is a byte
+// window [from, to) of its view's whole BODY (coverage), and the version it records identifies that body exactly, so a
+// later change of what the same request WOULD deliver is a change of version, and an unchanged body is an unchanged
+// version. Per op:
+//   list grep log show status work record issue output dossier
+//          version = sha256(body): the digest of the exact bytes the window is cut from (for a complete result, of the
+//          bytes delivered; the per-round log's `sha256` is the digest of the window itself). Never a value taken from
+//          the request (a commit id or record hash the caller typed), never a ledger head that a selection or a
+//          projection (`match`, `entry`, withheld text) does not show, never a placeholder's source rows: an empty
+//          result's placeholder ('(no match)', '(no commit)', ...) is the body, and so is what the version digests.
+//   file   version = sha256(the file's RAW bytes). The body is their UTF-8 decoding and a `start`/`lines` range is a
+//          byte range of it: a deterministic, complete function of the raw bytes and the request, so every change of
+//          the body is a change of the raw bytes (a change that only swaps one undecodable byte for another is reported
+//          as a change: the safe direction). The gate re-checks a cited file with reconcile.mjs bytesOfRepo, which
+//          applies this op's own admission (admitFile): the same bytes that the op would now refuse (newly ignored,
+//          reached through a link out of the repository) are a change, never "unchanged".
+// The re-checks that consume these versions: gates.mjs evidenceCheck (a plan's citations, planValidity; a validation's
+// sources, validationEvidence) with reconcile.mjs versionOf (re-runs the op here; re-derives a dossier view by
+// rebuilding the dossier) and bytesOfRepo (files); and reconcile.mjs evidenceStable (the dossier's `stable` digest of
+// its entries' versions, for a plan waiting on evidence). By policy two views are not re-checked against the present:
+// `work` (the item's own records: every later record is a consequence of the stage that cited it, and the records it was
+// given are fixed by the append-only, verified work ledger) and `output` (a validate stage's own test output, bound by
+// its record's output_digest); their versions still identify their bodies.
 import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -100,6 +124,27 @@ export function contained(root, p) {
 }
 
 /**
+ * THE FILE OP'S ADMISSION: may `p` be read into a prompt as evidence? {abs} for a file inside the repository (as written
+ * and as resolved), outside git's own directory and not excluded by .gitignore (tracked, or untracked and not ignored);
+ * else {error, why}. Shared by the `file` op and the gate's re-check of a cited file (reconcile.mjs bytesOfRepo), so the
+ * two cannot disagree about what the op would serve (L-504, invariant 1). Binary content is the bytes, not admission.
+ */
+export function admitFile(repo, p) {
+  if (typeof p === 'string' && p.startsWith(':')) return {error: 'BAD_REQUEST', why: `${p}: git pathspec magic is not accepted`};
+  const c = contained(repo, p);
+  if (c.error) return c;
+  if (!fs.statSync(c.abs).isFile()) return {error: 'NOT_FOUND', why: `${p} is not a file in the working tree`};
+  // Evidence is the project's files: tracked, or untracked and not ignored. Git's own directory and anything
+  // .gitignore excludes (keys, .env, state directories) are never read into a prompt.
+  const rel = path.relative(fs.realpathSync(path.resolve(repo)), c.abs);
+  if (rel.split(path.sep).includes('.git')) return {error: 'REFUSED', why: `${p} is inside git's own directory; it is not evidence and is not read`};
+  let ignored = false;
+  try { gitOf(repo)(['check-ignore', '-q', '--', rel]); ignored = true; } catch (e) { if (e.status !== 1) return {error: 'REFUSED', why: `${p} could not be checked against .gitignore; it is not read`}; }
+  if (ignored) return {error: 'REFUSED', why: `${p} is excluded by .gitignore (it may hold keys or local state); it is not evidence and is not read`};
+  return {abs: c.abs};
+}
+
+/**
  * A window of `text` in BYTES (UTF-8), never splitting a character: [from, to) of total. Every bounded delivery --
  * a dossier excerpt and a retrieval result alike -- is made here, so what was delivered is always a byte range of a
  * known whole.
@@ -142,17 +187,8 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
   // Each op returns the WHOLE body of its view: {source, version, body, rows?}; `finish` windows it.
   const views = {
     file({path: p, start, lines}) {
-      if (typeof p === 'string' && p.startsWith(':')) return no('BAD_REQUEST', `${p}: git pathspec magic is not accepted`);
-      const c = contained(repo, p);
+      const c = admitFile(repo, p);
       if (c.error) return no(c.error, c.why);
-      if (!fs.statSync(c.abs).isFile()) return no('NOT_FOUND', `${p} is not a file in the working tree`);
-      // Evidence is the project's files: tracked, or untracked and not ignored. Git's own directory and anything
-      // .gitignore excludes (keys, .env, state directories) are never read into a prompt.
-      const rel = path.relative(fs.realpathSync(path.resolve(repo)), c.abs);
-      if (rel.split(path.sep).includes('.git')) return no('REFUSED', `${p} is inside git's own directory; it is not evidence and is not read`);
-      let ignored = false;
-      try { G(['check-ignore', '-q', '--', rel]); ignored = true; } catch (e) { if (e.status !== 1) return no('REFUSED', `${p} could not be checked against .gitignore; it is not read`); }
-      if (ignored) return no('REFUSED', `${p} is excluded by .gitignore (it may hold keys or local state); it is not evidence and is not read`);
       const b = fs.readFileSync(c.abs);
       if (b.includes(0)) return no('BINARY', `${p} is binary (${b.length} bytes, ${sha(b)})`);
       const body = b.toString('utf8');
@@ -167,13 +203,15 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
         const at = n => Buffer.byteLength(all.slice(0, n).join('\n'), 'utf8') + (n > 0 && n < all.length ? 1 : 0);
         range = {from: at(from - 1), to: to >= all.length ? b.length : at(to)};
       }
+      // The version is the raw bytes' digest (see THE VERSION CONTRACT): the body is a deterministic function of them.
       return {source: `file:${p}`, version: sha(b), body, range, rows: body.split('\n').length};
     },
     list({prefix = ''}) {
       const bad = prefix ? pathRefusal(prefix, 'prefix') : null;
       if (bad) return no(bad.error, bad.why);
       const files = (tryGit(G, ['ls-files', '--', prefix || '.']) ?? '').split('\n').filter(Boolean);
-      return {source: `list:${prefix || '.'}`, version: sha(files.join('\n')), body: files.join('\n'), rows: files.length};
+      const body = files.join('\n');
+      return {source: `list:${prefix || '.'}`, version: sha(body), body, rows: files.length};
     },
     grep({pattern, path: p = '.'}) {
       if (typeof pattern !== 'string' || !pattern) return no('BAD_REQUEST', 'grep needs {pattern} (a fixed string)');
@@ -182,8 +220,10 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       let out = '';
       try { out = G(['grep', '-n', '-I', '-F', '-e', pattern, '--', p]); } catch (e) { if (e.status !== 1) return no('GREP_FAILED', String(e.stderr ?? e.message).slice(0, 300)); }
       const rows = out.split('\n').filter(Boolean);
-      // The search reads the working tree, so HEAD does not identify what it returned: the version is the body's own digest.
-      return {source: `grep:${pattern}@${p}`, version: sha(rows.join('\n')), body: rows.join('\n') || '(no match)', rows: rows.length};
+      // The search reads the working tree, so HEAD does not identify what it returned: the version is the body's own digest
+      // -- the body delivered, placeholder included (it was the rows' digest, which an empty result did not deliver).
+      const body = rows.join('\n') || '(no match)';
+      return {source: `grep:${pattern}@${p}`, version: sha(body), body, rows: rows.length};
     },
     log({path: p = null, grep: g = null}) {
       const bad = p !== null ? pathRefusal(p, 'path') : null;
@@ -193,7 +233,8 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       const out = tryGit(G, ['log', '--date=short', '--format=%h %ad %s', ...(g ? ['-F', `--grep=${g}`] : []), '--', p ?? '.']);
       if (out === null) return no('LOG_FAILED', 'git log failed for that path or pattern');
       const rows = out.split('\n').filter(Boolean);
-      return {source: `log:${p ?? '*'}${sel({grep: g})}`, version: sha(rows.join('\n')), body: rows.join('\n') || '(no commit)', rows: rows.length};
+      const body = rows.join('\n') || '(no commit)';
+      return {source: `log:${p ?? '*'}${sel({grep: g})}`, version: sha(body), body, rows: rows.length};
     },
     show({commit, path: p = null}) {
       if (!/^[0-9a-f]{7,64}$/.test(commit ?? '')) return no('BAD_REQUEST', 'show needs {commit} (a hex id) and optionally {path}');
@@ -202,7 +243,9 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       // `<commit>:./<path>` is relative to this repository, not to the top of its checkout; the stat is limited to it.
       const out = tryGit(G, p ? ['show', `${commit}:./${path.relative(path.resolve(repo), path.resolve(repo, p)).split(path.sep).join('/')}`] : ['show', '--stat', '--format=%H%n%an %ad%n%B', commit, '--', '.']);
       if (out === null) return no('NOT_FOUND', `${commit}${p ? `:${p}` : ''} is not in this repository`);
-      return {source: `show:${commit}${p ? `:${p}` : ''}`, version: commit, body: out};
+      // The digest of what git rendered, never the id the caller typed: a prefix names whatever it resolves to, and the
+      // rendering (dates, stat) depends on more than the commit.
+      return {source: `show:${commit}${p ? `:${p}` : ''}`, version: sha(out), body: out};
     },
     // The HISTORY view of an item's statuses (oldest first). `match` selects the entries containing a fixed string;
     // `entry` selects one by its hash prefix. A selection is its own view.
@@ -212,19 +255,26 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       const all = h.map(s => JSON.stringify({entry: s.entry, state: s.state, checked: s.checked, basis: s.basis, waiting_on: s.waiting_on ?? null, depends_on: s.depends_on ?? [],
         evidence: s.evidence ? {commit: s.evidence.commit, checked: s.evidence.checked} : null}));
       const rows = keep(entry ? all.filter(r => JSON.parse(r).entry.startsWith(entry) || JSON.parse(r).entry.startsWith(`sha256:${entry}`)) : all, match);
-      return {source: `status:${item}#history${sel({match, entry})}`, version: h.at(-1).entry, body: rows.join('\n') || '(no entry matches)', rows: rows.length, of: all.length};
+      // The digest of the selection shown: the item's latest entry hash identified the whole history, so an entry the
+      // selection does not show changed the version of a view whose bytes did not change.
+      const body = rows.join('\n') || '(no entry matches)';
+      return {source: `status:${item}#history${sel({match, entry})}`, version: sha(body), body, rows: rows.length, of: all.length};
     },
     work({item, match = null}) {
       if (!work) return no('UNAVAILABLE', 'there is no work ledger here');
       const all = work.stages(item).map(s => JSON.stringify(withheld({record: s.hash, stage: s.stage, attempt: s.attempt, status: s.status, next: s.next, blocker: s.blocker ?? null, findings: s.findings ?? []})));
       const rows = keep(all, match);
-      return {source: `work:${item}#records${sel({match})}`, version: work.stages(item).at(-1)?.hash ?? null, body: rows.join('\n') || '(no stage recorded)', rows: rows.length, of: all.length};
+      // The digest of the rows shown (a selection, with dispatcher text withheld), not the latest record's hash.
+      const body = rows.join('\n') || '(no stage recorded)';
+      return {source: `work:${item}#records${sel({match})}`, version: sha(body), body, rows: rows.length, of: all.length};
     },
     record({hash}) {
       if (!work) return no('UNAVAILABLE', 'there is no work ledger here');
       const s = work.stages().find(x => x.hash === hash);
       if (!s) return no('NOT_FOUND', `${hash} is not a stage record on the work ledger`);
-      return {source: `record:${hash}`, version: hash, body: JSON.stringify(withheld({stage: s.stage, status: s.status, identity: s.identity, outputs: s.outputs, findings: s.findings, contributions: s.contributions}), null, 1)};
+      // The digest of the projection shown (withheld text included), not the record hash the caller typed.
+      const body = JSON.stringify(withheld({stage: s.stage, status: s.status, identity: s.identity, outputs: s.outputs, findings: s.findings, contributions: s.contributions}), null, 1);
+      return {source: `record:${hash}`, version: sha(body), body};
     },
     issue({number}) {
       if (!issues) return no('UNAVAILABLE', 'no issue snapshot was supplied to this run');
@@ -239,8 +289,8 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       if (!outputsDir || !/^[\w.-]+$/.test(id ?? '')) return no('NOT_FOUND', `no stored output "${id}"`);
       const c = contained(outputsDir, id);
       if (c.error) return no(c.error === 'REFUSED' ? 'REFUSED' : 'NOT_FOUND', `no stored output "${id}"`);
-      const all = fs.readFileSync(c.abs, 'utf8');
-      return {source: `output:${id}`, version: sha(all), body: all};
+      const body = fs.readFileSync(c.abs, 'utf8');
+      return {source: `output:${id}`, version: sha(body), body};
     },
     // A view the dossier derived (its relations, consumers, guesses, runs, index): the same bytes the dossier was cut
     // from, so a cut entry can be continued (question 6).
@@ -287,13 +337,15 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
   };
   return {limits: L,
     /**
-     * The CURRENT version of the view `req` names, without delivering it: undefined when it cannot be read here (no
-     * work ledger, no issue snapshot, a dossier view, a stored output), null when it is gone. A work-ledger view is
-     * never "changed evidence": recording an attempt is not new evidence (as `stable` in buildDossier). A dossier view is
-     * re-derived by reconcile.mjs, which rebuilds the dossier; an undefined version makes a citing plan stale (gates.mjs).
+     * The CURRENT version of the view `req` names, without delivering it -- the version `run(req)` would record, by THE
+     * VERSION CONTRACT: undefined when it cannot be read here (no work ledger, no issue snapshot, a dossier view, a stored
+     * output), null when it is gone. The item's own work-ledger view is never "changed evidence" (gates.mjs evidenceCheck:
+     * recording an attempt is not new evidence, as `stable` in buildDossier); another item's is, so it is served here. A
+     * dossier view is re-derived by reconcile.mjs, which rebuilds the dossier; an undefined version makes a citing plan
+     * stale (gates.mjs).
      */
     versionOf(req) {
-      if (!req || typeof req !== 'object' || !OPS.includes(req.op) || ['work', 'dossier', 'output'].includes(req.op)) return undefined;
+      if (!req || typeof req !== 'object' || !OPS.includes(req.op) || ['dossier', 'output'].includes(req.op)) return undefined;
       try {
         const v = views[req.op](req);
         if (v.ok === false) return v.error === 'UNAVAILABLE' ? undefined : null;
@@ -341,17 +393,20 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     entries.push({id: `S${entries.length + 1}`, kind, title, source, version, as_of, coverage, text, ...(request ? {request} : {})});
   };
   /**
-   * A small entry made here: a view of its own, versioned by the digest of its bytes unless it is a ledger entry
-   * (question 5: a working-tree view is bound to the bytes shown, not to HEAD). `cap` bounds it; a cut entry carries
-   * the request that continues it (question 6). The requirement is never cut.
+   * A small entry made here: a view of its own, versioned by the digest of its bytes -- ALWAYS, the requirement
+   * included (question 5: a working-tree view is bound to the bytes shown, not to HEAD; L-504, invariant 1: the
+   * requirement was versioned by its status entry's hash, so the owner re-recording the same title and basis changed the
+   * version of bytes that did not change; its entry is named in its title). `cap` bounds it; a cut entry carries the
+   * request that continues it (question 6). The requirement is never cut.
    */
-  const add = (kind, title, source, version, as_of, text, cap = 4000) => {
+  const add = (kind, title, source, as_of, text, cap = 4000) => {
     const room = kind === 'authoritative-requirement' ? Infinity : Math.min(cap, left());
     const request = {op: 'dossier', source};
-    derived.set(source, {version: version ?? sha(text), body: text});
+    const version = sha(text);
+    derived.set(source, {version, body: text});
     if (room < 200) { omissions.push(`"${title.slice(0, 80)}" is NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent; retrieve it with ${JSON.stringify(request)}`); return; }
     const w = windowBytes(text, 0, room);
-    push(kind, title, source, version ?? sha(text), as_of, w.text, {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total,
+    push(kind, title, source, version, as_of, w.text, {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total,
       ...(w.to < w.total ? {note: `the first ${w.to} of ${w.total} bytes of this view; continue with next`, next: {...request, offset: w.to}} : {})}, request);
   };
   /** An entry that IS a retrieval result: same source, version, byte window and continuation. Returns its bytes, or why not. */
@@ -364,7 +419,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     return {bytes: r.bytes};
   };
   // 1. The requirement and the work's state. The requirement and the history are two views of the status ledger.
-  add('authoritative-requirement', 'Original requirement (the latest Ready status of the item; the owner signs the status ledger)', `status:${item}#requirement`, ready.entry, ready.checked,
+  add('authoritative-requirement', `Original requirement (the latest Ready status of the item, entry ${ready.entry}; the owner signs the status ledger)`, `status:${item}#requirement`, ready.checked,
     JSON.stringify({item, title: ready.title, basis: ready.basis}));
   // A long history or work record keeps its MOST RECENT rows in the initial view: the latest decisions and findings
   // are the ones a later cycle most needs. The earlier rows are the gap, retrievable from byte 0.
@@ -388,7 +443,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // 2. Operational relationships.
   const dep = d => { const s = board.items.find(i => i.item === d); return s ? `${d}: ${s.state} [${s.entry.slice(0, 19)}] ${s.basis}` : `${d}: NOT ON THE LEDGER`; };
   const dependents = board.items.filter(i => (i.depends_on ?? []).includes(item)).map(i => i.item);
-  add('observation', 'Dependencies (what this item waits on) and dependents (what waits on it), latest status of each', `status:${item}#relations`, null, now.checked,
+  add('observation', 'Dependencies (what this item waits on) and dependents (what waits on it), latest status of each', `status:${item}#relations`, now.checked,
     `depends on: ${(now.depends_on ?? []).map(dep).join('\n  ') || '(none recorded)'}\ndependents: ${dependents.map(dep).join('\n  ') || '(none recorded)'}`);
   const ticketPath = `tickets/${item}.json`;
   let ticket = null;
@@ -440,7 +495,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     for (const w of words(`${ready.title} ${ready.basis}`).slice(0, 12)) for (const f of (tryGit(G, ['grep', '-l', '-I', '-i', '-F', '-e', w, '--', '.']) ?? '').split('\n').filter(Boolean)) hits.set(f, (hits.get(f) ?? 0) + 1);
     guessed = [...hits].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8);
     add('hypothesis', 'Candidate files, guessed by matching words of the requirement (NOT a finding: no file is named by the requirement or a ticket; verify or replace this selection)',
-      `guess:${item}`, null, null, guessed.map(([f, n]) => `${f} (${n} word(s) matched)`).join('\n') || '(no file matched any word)');
+      `guess:${item}`, null, guessed.map(([f, n]) => `${f} (${n} word(s) matched)`).join('\n') || '(no file matched any word)');
   }
   let used = 0;
   const showFile = (p, why) => {
@@ -451,7 +506,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     if (r.error) omissions.push(`${p} is NOT shown: ${r.why}`); else used += r.bytes;
   };
   for (const p of named) showFile(p, 'named by the requirement or the ticket (current bytes)');
-  if (consumers.size) add('derived', 'Files that mention the files in play by name (textual references: possible consumers or tests, not proven dependencies)', `consumers:${item}`, null, null,
+  if (consumers.size) add('derived', 'Files that mention the files in play by name (textual references: possible consumers or tests, not proven dependencies)', `consumers:${item}`, null,
     [...consumers].map(([f, of]) => `${f} (mentions ${of.join(', ')})`).join('\n'));
   for (const [f] of [...consumers].slice(0, 6)) showFile(f, 'mentions a file in play (current bytes)');
   if (consumers.size > 6) omissions.push(`${consumers.size - 6} more file(s) that mention the files in play are listed but not shown`);
@@ -464,11 +519,11 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   if (!anyLog) omissions.push('no commit touches the files in play or names the item (or the history is not available)');
   // 5. Retained runs, and the index (counts are an index, not evidence).
   const bundles = bundlesOf({item, bundlesDir, work});
-  if (bundles.length) add('observation', 'Retained runs of this item', `runs:${item}`, null, null, bundles.map(b => b.ref).join('\n'));
+  if (bundles.length) add('observation', 'Retained runs of this item', `runs:${item}`, null, bundles.map(b => b.ref).join('\n'));
   else omissions.push(bundlesDir ? 'no retained run of this item was found' : 'no retained-runs directory was given: earlier board runs are not in this view');
   const top = new Map();
   for (const f of tracked) { const d = f.includes('/') ? f.split('/')[0] + '/' : '(root)'; top.set(d, (top.get(d) ?? 0) + 1); }
-  add('derived', `Repository index: ${tracked.length} tracked files at ${head ? head.slice(0, 12) : 'no commit'} (a COUNT, not their contents: use list, grep and file)`, `index:${head ?? 'none'}`, null, null,
+  add('derived', `Repository index: ${tracked.length} tracked files at ${head ? head.slice(0, 12) : 'no commit'} (a COUNT, not their contents: use list, grep and file)`, `index:${head ?? 'none'}`, null,
     [...top].sort((a, b) => b[1] - a[1]).map(([d, n]) => `${d} ${n}`).join('\n'));
   const core = entries.map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, coverage: {complete: e.coverage.complete, from: e.coverage.from, to: e.coverage.to, total: e.coverage.total}}));
   // `stable` leaves out the work ledger's own records, so recording an attempt does not itself look like new evidence.
