@@ -5,7 +5,7 @@ import { access, constants, realpath } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { spawnPromise } from "../board/spawn.mjs";
-import { shQuote } from "../agy/jail-hook.mjs";
+import { REVIEW_SUITE_LAUNCHER, REVIEW_TEST_LAUNCHER, shQuote } from "../agy/jail-hook.mjs";
 
 // A name whose value a CLI child never receives in subscription mode: any key, token or secret. A key in the
 // environment is how each of these CLIs switches to metered billing (OpenAI: CODEX_API_KEY "forces API-key usage for
@@ -69,8 +69,12 @@ export const OPEN_TEST_GLOBS = Object.freeze(["ophanim/**/*.test.mjs", "pantheon
  * (run_command has no working directory) and "" for the CLIs that run in the worktree. Returns {lines (markdown list
  * items), run_command_policy (jail.json), suites, files (listed-only) | null, write_allowed}.
  */
-export function allowedCommands({ permissions, worktree, prefixWithCd, telosRoot = null, envPrefix = "" }) {
+export function allowedCommands({ permissions, worktree, prefixWithCd = false, telosRoot = null, envPrefix = "", launcherDir = null }) {
   // envPrefix: codex's `env NO_PROXY=... ` (codex clears NO_PROXY inside its sandbox; codex.mjs).
+  // launcherDir (agy): the review's control dir. CREDENTIAL ISOLATION: the code under review runs only through the verify
+  // launchers written there (prepareReviewWorkspace; src/agy/verify-jail.mjs): `<dir>/pantheon-test <files>` and
+  // `<dir>/pantheon-suite-<name>`, never as agy's own child (agy holds the OAuth scratch copy).
+  if (launcherDir) return launcherCommands({ permissions, launcherDir, telosRoot });
   const prefix = (prefixWithCd ? `cd ${shQuote(worktree)} && ` : "") + envPrefix;
   const listed = permissions.run_tests.files ?? null;
   const lines = [];
@@ -90,6 +94,27 @@ export function allowedCommands({ permissions, worktree, prefixWithCd, telosRoot
   return {
     prefix, lines, suites, files: listed, write_allowed,
     run_command_policy: { kind: "node-test", files: listed, allowed_files_glob: listed ? [] : [...OPEN_TEST_GLOBS], max_files: 50, suites },
+  };
+}
+/** The agy review's commands: the verify launchers (see allowedCommands). `suite_scripts` is what each suite launcher runs. */
+function launcherCommands({ permissions, launcherDir, telosRoot }) {
+  const test = `${launcherDir}/${REVIEW_TEST_LAUNCHER}`;
+  const listed = permissions.run_tests.files ?? null;
+  const lines = [];
+  if (listed) for (const f of listed) lines.push(`- \`${test} ${f}\``);
+  else lines.push(`- \`${test} <files>\`, where \`<files>\` is one or more worktree-relative paths separated by single spaces, each an existing \`*.test.mjs\` file under \`ophanim/\` or \`pantheon/tests/\`, or a test file you wrote under \`${REVIEW_TESTS_DIR}/\` (for example \`${test} ${REVIEW_TESTS_DIR}/my-check.test.mjs\`); it runs \`node --test <files>\` in the copy`);
+  const suites = {}, suite_scripts = {};
+  if (permissions.run_suite) {
+    suite_scripts.proof = `${telosRoot ? `OPHANIM_TELOS_ROOT=${shQuote(telosRoot)} ` : ""}npm run test:proof`;
+    suite_scripts.pantheon = "npm --prefix pantheon test";
+    suite_scripts.all = "npm test";
+    for (const [n, sc] of Object.entries(suite_scripts)) { suites[n] = `${launcherDir}/${REVIEW_SUITE_LAUNCHER(n)}`; lines.push(`- \`${suites[n]}\` (it runs \`${sc}\` in the copy)`); }
+  }
+  const write_allowed = Boolean(permissions.write_test);
+  return {
+    prefix: "", lines, suites, files: listed, write_allowed,
+    run_command_policy: { kind: "node-test", launcher: test, files: listed, allowed_files_glob: listed ? [] : [...OPEN_TEST_GLOBS], max_files: 50, suites, suite_scripts,
+      extra_ro: telosRoot ? [telosRoot] : [] },
   };
 }
 
@@ -128,7 +153,7 @@ export function sandboxNote({ transport, scratchTmp = null }) {
     return [`Your commands run in Codex's own sandbox under the runner's permission profile: they can read only the copy, the system's runtime files, the node install and the codex binary; they can write only \`$TMPDIR\` (\`${scratchTmp}\`, a per-run scratch directory outside the copy, deleted after the run) and what the Writing section allows; the network is cut (codex's proxy, with no host allowed). Codex clears \`NO_PROXY\` there, which is why the test commands above start with \`env NO_PROXY=...\`: without it a test's request to a server it started on 127.0.0.1 goes to the proxy and fails (403 or \"fetch failed\"). Run them as written.`, "", bwrap].join("\n");
   }
   if (transport === "grok-cli") return `Your commands run in the runner's bubblewrap jail: the host is read-only, \`/tmp\` is a fresh private directory (\`$TMPDIR\` is \`/tmp\`), and the copy is read-only except what the Writing section allows. The jail does not cut the network (the CLI itself must reach xAI); make no network request yourself.\n\n${bwrap}`;
-  return `Your commands run in the runner's bubblewrap jail with its PreToolUse hook: the host is read-only, \`/tmp\` is a fresh private directory, and the hook refuses any write or command this harness does not allow.\n\n${bwrap}`;
+  return `Your test commands run in a separate verify jail, through the launchers listed above: it sees only the copy (writable as the Writing section allows), the system's runtime files and the node install, with a fresh private \`/tmp\` (\`$HOME\` is \`/tmp/home\`), no network at all (its own loopback only) and none of your environment. Your file tools run in the CLI's own bubblewrap jail with its PreToolUse hook, which refuses any write or command this harness does not allow.\n\n${bwrap}`;
 }
 
 /**

@@ -380,7 +380,9 @@ async function agySetup() {
   await writeFile(worker, [
     'agy_write "$dir/.review-tests/mine.test.mjs" \'import test from "node:test"; test("ok", () => {});\' || true',
     'agy_write "$dir/pantheon/evil.mjs" "x" || true',
-    'agy_run "cd \'$dir\' && node --test pantheon/tests/other.test.mjs .review-tests/mine.test.mjs" >/dev/null 2>&1 || true',
+    // The listed test command is the review's verify launcher in its control dir (the CLI's cwd); the jail hook
+    // approves it and it runs the files in a verify jail. A shell command is denied.
+    'agy_run "$(pwd)/pantheon-test pantheon/tests/other.test.mjs .review-tests/mine.test.mjs" > "$(pwd)/run/launcher.out" 2>&1 || { cat "$(pwd)/run/launcher.out" >&2; exit 9; }',
     'agy_run "cd \'$dir\' && rm -rf pantheon" >/dev/null 2>&1 || true',
     'reply="# Findings (fake agy reviewer)"', ""].join("\n"));
   const env = { FAKE_AGY_LOG: join(fx, "agy.log"), PANTHEON_AGY_STATE_DIRS: fx, FAKE_AGY_WORKER: worker };

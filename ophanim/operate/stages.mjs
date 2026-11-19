@@ -54,7 +54,7 @@ import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PRO
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
-import {VERIFY_JAIL_MODULE, VERIFY_JAIL_SCHEMA, verifyEnvOf} from '../../pantheon/src/agy/verify-jail.mjs';
+import {VERIFY_JAIL_MODULE, VERIFY_JAIL_SCHEMA, launcherEnv} from '../../pantheon/src/agy/verify-jail.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
@@ -1375,7 +1375,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         if (ctx.signal?.aborted || leftMs() <= 0) { exit = 1; out = ''; stopped = 'not run: the stage\'s elapsed budget was spent before this command started'; }
         else {
           let r;
-          try { r = await proc(process.execPath, [VERIFY_JAIL_MODULE, '--inline', jail(cmd)], {cwd, env: verifyEnvOf(process.env).env}); } catch (e) { r = {exit: null, stdout: '', stderr: String(e?.message ?? e), killedFor: 'spawn'}; }
+          try { r = await proc(process.execPath, [VERIFY_JAIL_MODULE, '--inline', jail(cmd)], {cwd, env: launcherEnv(process.env)}); } catch (e) { r = {exit: null, stdout: '', stderr: String(e?.message ?? e), killedFor: 'spawn'}; }
           exit = r.exit === null ? 1 : r.exit;
           out = r.exit === 0 ? r.stdout : `${r.stdout ?? ''}${r.stderr ?? ''}`;
           if (r.killedFor) stopped = `stopped (${r.killedFor})`;

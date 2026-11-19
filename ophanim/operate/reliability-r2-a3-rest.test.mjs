@@ -189,16 +189,17 @@ test('findings 3.3 and 9: validate runs its tests without blocking the event loo
   // stage's elapsed budget and its stop signal.
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'slow'}]);
-    // The flag lives under /var/tmp: validate's commands run in the verify jail (credential isolation,
-    // pantheon/src/agy/verify-jail.mjs), whose fresh /tmp and hidden homes would hide a flag in the fixture repo.
-    const flagDir = fs.mkdtempSync('/var/tmp/operate-slow-flag-'), flag = path.join(flagDir, 'slow.flag');
-    const cmd = `[ -f '${flag}' ] && sleep 20; node verify.mjs`;
+    // The switch is an env variable the operator passes into the verify jail (PANTHEON_VERIFY_ENV_PASS): validate's
+    // commands run there (credential isolation, pantheon/src/agy/verify-jail.mjs), where no host file outside its
+    // allowlist -- a flag file in the fixture -- exists.
+    const cmd = `[ -n "$OPERATE_SLOW_FLAG" ] && sleep 20; node verify.mjs`;
     const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, {acceptance: [{id: 'a1', criterion: 'alpha.mjs exports ok === true', test: {cmd}}]}))});
     const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const {validate, ...upToReview} = ex;
     const r1 = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: upToReview, limits: LIMITS});
     assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:passed'], JSON.stringify(r1.dispatched));
-    fs.writeFileSync(flag, '');
+    const passBefore = process.env.PANTHEON_VERIFY_ENV_PASS;
+    Object.assign(process.env, {OPERATE_SLOW_FLAG: '1', PANTHEON_VERIFY_ENV_PASS: 'OPERATE_SLOW_FLAG'});
     let ticks = 0;
     const beat = setInterval(() => { ticks++; }, 50);
     const t0 = Date.now();
@@ -206,13 +207,15 @@ test('findings 3.3 and 9: validate runs its tests without blocking the event loo
     try {
       await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, limits: {...LIMITS, elapsed_ms: 1_500},
         executors: {validate: async ctx => { const before = ticks; const out = await validate(ctx); during = ticks - before; return out; }}});
-    } finally { clearInterval(beat); }
+    } finally {
+      clearInterval(beat); delete process.env.OPERATE_SLOW_FLAG;
+      if (passBefore === undefined) delete process.env.PANTHEON_VERIFY_ENV_PASS; else process.env.PANTHEON_VERIFY_ENV_PASS = passBefore;
+    }
     const took = Date.now() - t0;
     assert.ok(took < 10_000, `validate stopped at the stage's elapsed budget, not after its 20 s test (${took} ms)`);
     assert.ok(during >= 5, `the event loop ran while validate's test ran (${during} beats)`);
     const val = openWorkLedger({root: f.workRoot}).stages('slow').find(s => s.stage === 'validate');
     assert.equal(val.blocker?.code, 'STAGE_ELAPSED', JSON.stringify(val.blocker));
-    fs.rmSync(flagDir, {recursive: true, force: true});
   });
 });
 

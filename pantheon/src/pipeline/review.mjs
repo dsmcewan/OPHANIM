@@ -30,7 +30,7 @@ import { CAPABILITIES, clone, isObject, judgingTurn, keysRefusal, sameSeat, seat
 import { rubricHash } from "./dispatch.mjs";
 import { isAbsolute } from "node:path";
 import { exec, git } from "./git.mjs";
-import { VERIFY_JAIL_MODULE, VERIFY_JAIL_REFUSED, VERIFY_JAIL_SCHEMA, verifyEnvOf } from "../agy/verify-jail.mjs";
+import { VERIFY_JAIL_MODULE, VERIFY_JAIL_REFUSED, VERIFY_JAIL_SCHEMA, launcherEnv } from "../agy/verify-jail.mjs";
 
 export const REVIEW_KEYS = Object.freeze(["verdict", "criteria", "findings"]);
 export const VERDICTS = Object.freeze(["approve", "request_changes"]);
@@ -73,8 +73,7 @@ export async function runVerify({ worktree, verify_cmd, timeout_ms = 120000, max
   }
   const policy = { schema: VERIFY_JAIL_SCHEMA, worktree, cwd: worktree, script: `exec 2>&1\n${verify_cmd}`, hide: [...(jail?.hide ?? [])].filter(p => typeof p === "string" && isAbsolute(p)),
     extra_ro: [...(jail?.extra_ro ?? [])], bwrap: jail?.bwrap ?? "bwrap", ...(jail?.allowUnjailed === true ? { allow_unjailed: true } : {}) };
-  const base = process.env;
-  const env = { ...verifyEnvOf(base).env, ...(base.PANTHEON_VERIFY_ENV_PASS ? { PANTHEON_VERIFY_ENV_PASS: base.PANTHEON_VERIFY_ENV_PASS } : {}) };
+  const env = launcherEnv(process.env);
   // One launcher, its own process group (killed whole on timeout; the jail dies with it), stderr folded into stdout
   // inside the jail so the capture is one stream; the launcher's own diagnostics (stderr) are appended.
   const r = await exec(process.execPath, [VERIFY_JAIL_MODULE, "--inline", JSON.stringify(policy)], { cwd: worktree, env, timeout_ms: Number.isFinite(bound) ? Math.max(1, Math.floor(bound)) : 0, max_bytes: max_output_bytes, group: true, ...(signal ? { signal } : {}) });

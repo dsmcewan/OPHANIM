@@ -301,8 +301,13 @@ export function decideCommand(policy, args) {
   return approve("the unit's worker verify command");
 }
 
-/** The exact prefix of a review's node --test command: `cd '<worktree>' && node --test ` (the real worktree). */
+/** The exact prefix of a review's node --test command before credential isolation (now refused): `cd '<worktree>' && node --test `. */
 export const reviewTestPrefix = worktree => `cd ${shQuote(worktree)} && node --test `;
+/** The review runner's launchers in its control dir: pantheon-test (test files as arguments) and pantheon-suite-<name>. */
+export const REVIEW_TEST_LAUNCHER = "pantheon-test";
+export const REVIEW_SUITE_LAUNCHER = name => `pantheon-suite-${name}`;
+const launcherIn = (cmd, control_dir, name) => typeof cmd === "string" && /^\/[A-Za-z0-9_./@%+=:,-]+$/.test(cmd) && !cmd.split("/").some(s => s === "." || s === "..")
+  && typeof control_dir === "string" && dirname(cmd) === control_dir && cmd.split("/").pop() === name;
 const REVIEW_TEST_FILE = /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/;
 
 /** run_command under a review's run_command_policy (see the decision table). */
@@ -314,11 +319,14 @@ export function decideReviewCommand(policy, rcp, args) {
     if (typeof args.Cwd !== "string" || !isAbsolute(args.Cwd)) return deny(`Cwd ${JSON.stringify(args.Cwd)} is not an absolute path`);
     if (realOr(args.Cwd) !== policy.worktree) return deny(`review commands run in the worktree ${policy.worktree}, not in ${args.Cwd}`);
   }
-  const suites = isObj(rcp.suites) ? Object.entries(rcp.suites).filter(([, c]) => typeof c === "string" && c.trim()) : [];
-  const suite = suites.find(([, c]) => c.trim() === cmd);
-  if (suite) return approve(`the review suite command "${suite[0]}"`);
-  const prefix = reviewTestPrefix(policy.worktree);
-  if (!cmd.startsWith(prefix)) return deny(`only the review's listed commands may run (${prefix}<test files>${suites.length ? ` or a listed suite command` : ""}), not ${JSON.stringify(cmd)}`);
+  // CREDENTIAL ISOLATION: the code under review runs ONLY through the review's verify launchers in its control dir
+  // (src/agy/verify-jail.mjs), never as agy's own child (agy holds the OAuth scratch copy).
+  if (!launcherIn(rcp.launcher, policy.control_dir, REVIEW_TEST_LAUNCHER)) return deny(`this review's policy names no test launcher in its control dir (${JSON.stringify(rcp.launcher ?? null)}): code under review runs only in the verify jail, so no command is allowed`);
+  const suites = isObj(rcp.suites) ? Object.entries(rcp.suites).filter(([n, c]) => typeof c === "string" && launcherIn(c, policy.control_dir, REVIEW_SUITE_LAUNCHER(n))) : [];
+  const suite = suites.find(([, c]) => c === cmd);
+  if (suite) return approve(`the review suite launcher "${suite[0]}"`);
+  const prefix = `${rcp.launcher} `;
+  if (!cmd.startsWith(prefix)) return deny(`only the review's listed commands may run (${prefix}<test files>${suites.length ? ` or a listed suite launcher` : ""}), not ${JSON.stringify(cmd)}`);
   const files = cmd.slice(prefix.length).split(" ");
   const max = Number.isSafeInteger(rcp.max_files) && rcp.max_files > 0 ? rcp.max_files : 50;
   if (files.length > max) return deny(`at most ${max} test files per command`);

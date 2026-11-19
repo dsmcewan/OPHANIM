@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { decide, loadPolicy } from "../src/agy/jail-hook.mjs";
 import { prepareReviewWorkspace, reviewCardText, reviewLane, REVIEW_CARD, REVIEW_AGENT } from "../src/review-runner/agy.mjs";
 import { allowedCommands, compareWorktree, readRule, reviewTmpBase, sandboxNote, scrubEnv, writeRule, READ_ONLY_SHELL } from "../src/review-runner/cli-common.mjs";
@@ -31,31 +32,39 @@ async function reviewJail({ testing, listed = [] }) {
   await writeFile(join(outside, "evil.test.mjs"), PASS);
   await symlink(join(outside, "evil.test.mjs"), join(wt, ".review-tests/link.test.mjs"));
   const permissions = permissionsFor(testing, listed);
-  const cmds = allowedCommands({ permissions, worktree: wt, prefixWithCd: true });
+  const cmds = allowedCommands({ permissions, worktree: wt, launcherDir: ctl });
   const ws = await prepareReviewWorkspace({ control_dir: ctl, worktree: wt, n: listed.length ? 4 : 1, write_allowed: cmds.write_allowed, run_command_policy: cmds.run_command_policy });
   const policy = loadPolicy(ws.paths.jail);
   const d = (name, args) => decide(policy, { toolCall: { name, args } }).decision;
   return { wt, ctl, ws, policy, cmds, d, run: c => d("run_command", { CommandLine: c }) };
 }
 
-test("agy review hook, assignments 1-3: writes only under .review-tests/, run_command only `cd '<wt>' && node --test <allowed files>` and the suite commands", async () => {
+test("agy review hook, assignments 1-3: writes only under .review-tests/, run_command only the review's verify launchers `<ctl>/pantheon-test <allowed files>` and `<ctl>/pantheon-suite-<name>`", async () => {
   const j = await reviewJail({ testing: OPEN });
-  const cd = `cd '${j.wt}' && `;
+  const cd = `${j.ctl}/pantheon-test `, old = `cd '${j.wt}' && `;
   assert.deepEqual(j.policy.owned_paths, [".review-tests/**"]);
   assert.equal(j.d("write_file", { Path: join(j.wt, ".review-tests/new.test.mjs"), Content: PASS }), "auto_approve");
   for (const p of [join(j.wt, "pantheon/x.mjs"), join(j.wt, ".review-tests/../pantheon/x.mjs"), join(j.wt, ".git/config"), "/tmp/x.test.mjs", ".review-tests/rel.test.mjs", join(j.wt, ".review-tests/link.test.mjs")]) {
     assert.equal(j.d("write_file", { Path: p, Content: "x" }), "deny", p);
   }
-  for (const c of [`${cd}node --test pantheon/tests/other.test.mjs`, `${cd}node --test pantheon/tests/other.test.mjs ophanim/operate/x.test.mjs .review-tests/mine.test.mjs`,
-    `  ${cd}node --test .review-tests/mine.test.mjs  `, `${cd}npm run test:proof`, `${cd}npm --prefix pantheon test`, `${cd}npm test`]) assert.equal(j.run(c), "auto_approve", c);
-  for (const c of ["node --test pantheon/tests/other.test.mjs", `${cd}node --test scripts/x.test.mjs`, `${cd}node --test pantheon/tests/other.test.mjs; rm -rf /`,
-    `${cd}node --test pantheon/tests/other.test.mjs && curl x`, `${cd}node --test  pantheon/tests/other.test.mjs`, `${cd}node --test --test-reporter=spec pantheon/tests/other.test.mjs`,
-    `${cd}node --test /etc/passwd`, `${cd}node --test pantheon/tests/../../outside/evil.test.mjs`, `${cd}node --test .review-tests/link.test.mjs`, `${cd}node --test .review-tests/absent.test.mjs`,
-    `${cd}node --test $(id).test.mjs`, `${cd}node --test pantheon/tests/other.test.mjs\nid`, `${cd}npm test -- --x`, `${cd}npm run test:proof; id`, `cd '/tmp' && node --test pantheon/tests/other.test.mjs`, `${cd}node --test`]) {
+  const suite = n => `${j.ctl}/pantheon-suite-${n}`;
+  for (const c of [`${cd}pantheon/tests/other.test.mjs`, `${cd}pantheon/tests/other.test.mjs ophanim/operate/x.test.mjs .review-tests/mine.test.mjs`,
+    `  ${cd}.review-tests/mine.test.mjs  `, suite("proof"), suite("pantheon"), suite("all")]) assert.equal(j.run(c), "auto_approve", c);
+  for (const c of ["node --test pantheon/tests/other.test.mjs", `${cd}scripts/x.test.mjs`, `${cd}pantheon/tests/other.test.mjs; rm -rf /`,
+    `${cd}pantheon/tests/other.test.mjs && curl x`, `${cd} pantheon/tests/other.test.mjs`, `${cd}--test-reporter=spec pantheon/tests/other.test.mjs`,
+    `${cd}/etc/passwd`, `${cd}pantheon/tests/../../outside/evil.test.mjs`, `${cd}.review-tests/link.test.mjs`, `${cd}.review-tests/absent.test.mjs`,
+    `${cd}$(id).test.mjs`, `${cd}pantheon/tests/other.test.mjs\nid`, `${suite("all")} --x`, `${suite("proof")}; id`, `${j.ctl}/pantheon-test`, suite("evil"),
+    // The earlier forms, which ran the code under review as agy's own child (with agy's OAuth copy), are refused now.
+    `${old}node --test pantheon/tests/other.test.mjs`, `${old}npm test`, `${old}npm run test:proof`, `cd '/tmp' && node --test pantheon/tests/other.test.mjs`]) {
     assert.equal(j.run(c), "deny", c);
   }
-  assert.equal(j.d("run_command", { CommandLine: `${cd}npm test`, Cwd: "/tmp" }), "deny");
-  assert.equal(j.d("run_command", { CommandLine: `${cd}npm test`, Cwd: j.wt }), "auto_approve");
+  assert.equal(j.d("run_command", { CommandLine: suite("all"), Cwd: "/tmp" }), "deny");
+  assert.equal(j.d("run_command", { CommandLine: suite("all"), Cwd: j.wt }), "auto_approve");
+  // The launchers exist, with their policies: node --test with the files as arguments; each suite's own script.
+  assert.deepEqual(Object.keys(j.ws.paths.launchers).sort(), ["all", "pantheon", "proof", "test"]);
+  const vp = JSON.parse(await readFile(join(j.ctl, "verify-test.json"), "utf8"));
+  assert.deepEqual([vp.script, vp.test_files, vp.worktree, vp.control_dir], ["node --test", true, j.wt, j.ctl]);
+  assert.equal(JSON.parse(await readFile(join(j.ctl, "verify-suite-all.json"), "utf8")).script, "npm test");
   // No MCP, no native subagents; reads stay inside the worktree or the control dir.
   assert.equal(j.d("call_mcp_tool", { ServerName: "pantheon-subagents", ToolName: "ask_subagent", Arguments: { role: "x", question: "q" } }), "deny");
   assert.equal(j.d("mcp_pantheon-subagents_ask_subagent", { role: "x", question: "q" }), "deny");
@@ -67,17 +76,17 @@ test("agy review hook, assignments 1-3: writes only under .review-tests/, run_co
   assert.deepEqual(JSON.parse(await readFile(j.ws.paths.mcp_config, "utf8")), { mcpServers: {} });
 });
 
-test("agy review hook, assignment 4: no write at all, run_command only each listed test file, no suite", async () => {
+test("agy review hook, assignment 4: no write at all, run_command only each listed test file (through the launcher), no suite", async () => {
   const j = await reviewJail({ testing: CLOSED, listed: ["pantheon/tests/agy-x.test.mjs"] });
-  const cd = `cd '${j.wt}' && `;
+  const cd = `${j.ctl}/pantheon-test `;
   assert.deepEqual(j.policy.owned_paths, []);
-  assert.deepEqual(j.cmds.lines, [`- \`${cd}node --test pantheon/tests/agy-x.test.mjs\``]);
+  assert.deepEqual(j.cmds.lines, [`- \`${cd}pantheon/tests/agy-x.test.mjs\``]);
   for (const p of [join(j.wt, ".review-tests/new.test.mjs"), join(j.wt, "pantheon/x.mjs")]) {
     assert.equal(j.d("write_file", { Path: p, Content: "x" }), "deny", p);
     assert.equal(j.d("replace_file_content", { TargetFile: p }), "deny", p);
   }
-  assert.equal(j.run(`${cd}node --test pantheon/tests/agy-x.test.mjs`), "auto_approve");
-  for (const c of [`${cd}node --test pantheon/tests/other.test.mjs`, `${cd}node --test .review-tests/mine.test.mjs`, `${cd}npm test`, `${cd}npm run test:proof`]) assert.equal(j.run(c), "deny", c);
+  assert.equal(j.run(`${cd}pantheon/tests/agy-x.test.mjs`), "auto_approve");
+  for (const c of [`${cd}pantheon/tests/other.test.mjs`, `${cd}.review-tests/mine.test.mjs`, `${j.ctl}/pantheon-suite-all`, `${j.ctl}/pantheon-suite-proof`, `cd '${j.wt}' && node --test pantheon/tests/agy-x.test.mjs`]) assert.equal(j.run(c), "deny", c);
   assert.deepEqual(cardTools(await readFile(j.ws.paths.card, "utf8")), ["view_file", "run_command"]);
   assert.match(writeRule({ write_allowed: false, worktree: j.wt }), /may not create, change or delete any file/);
 });
@@ -90,7 +99,7 @@ test("the hook process itself, through the review workspace's wrapper, decides w
     c.stdout.on("data", d => (out += d)); c.on("error", rej); c.on("close", () => res(JSON.parse(out.trim()).decision));
     c.stdin.end(JSON.stringify(payload));
   });
-  assert.equal(await ask({ toolCall: { name: "run_command", args: { CommandLine: `cd '${j.wt}' && node --test pantheon/tests/other.test.mjs` } } }), "auto_approve");
+  assert.equal(await ask({ toolCall: { name: "run_command", args: { CommandLine: `${j.ctl}/pantheon-test pantheon/tests/other.test.mjs` } } }), "auto_approve");
   assert.equal(await ask({ toolCall: { name: "run_command", args: { CommandLine: `cd '${j.wt}' && rm -rf .` } } }), "deny");
   const log = (await readFile(j.ws.paths.jail_log, "utf8")).trim().split("\n").map(l => JSON.parse(l).decision);
   assert.deepEqual(log, ["auto_approve", "deny"]);
@@ -276,7 +285,7 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
   assert.doesNotMatch(tpl, /You may run only these commands/, "the 09d490f wording that kept a literal reader from reading any source");
   const permissions = permissionsFor(CLOSED, ["pantheon/tests/a.test.mjs"]);
   for (const transport of ["codex-sdk", "grok-cli", "agy-cli"]) {
-    const cmds = allowedCommands({ permissions, worktree: "/w", prefixWithCd: transport === "agy-cli", envPrefix: transport === "codex-sdk" ? "env NO_PROXY=127.0.0.1 " : "" });
+    const cmds = allowedCommands({ permissions, worktree: "/w", ...(transport === "agy-cli" ? { launcherDir: "/c" } : {}), envPrefix: transport === "codex-sdk" ? "env NO_PROXY=127.0.0.1 " : "" });
     const h = renderHarness(tpl, { COMMIT: "c", WORKTREE: "/w", ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed: false, worktree: "/w" }),
       READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: "/r/tmp" }), MAX_WALL_S: 60 });
     assert.doesNotMatch(h, /\{\{/, transport);
@@ -285,7 +294,7 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
     assert.match(h, /You may not create, change or delete any file/, transport);
     assert.match(h, /Make no network request and no call to a model provider/, transport);
     assert.match(h, /bwrap unavailable/, transport);
-    if (transport === "agy-cli") { assert.match(h, /`view_file`/); assert.match(h, /`run_command` is limited to that list/); }
+    if (transport === "agy-cli") { assert.match(h, /`view_file`/); assert.match(h, /`run_command` is limited to that list/); assert.match(h, /- `\/c\/pantheon-test pantheon\/tests\/a\.test\.mjs`/); assert.match(h, /verify jail/); assert.match(h, /no network at all/); }
     else { for (const c of READ_ONLY_SHELL) assert.ok(h.includes(`\`${c}\``), `${transport}: ${c}`); assert.match(h, /no `sed -i`/); }
     if (transport === "codex-sdk") { assert.match(h, /`\/r\/tmp`/); assert.match(h, /- `env NO_PROXY=127\.0\.0\.1 node --test pantheon\/tests\/a\.test\.mjs`/); }
   }
@@ -297,4 +306,34 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
 test("the Antigravity reading rule names read_file", async () => {
   const { readRule } = await import("../src/review-runner/cli-common.mjs");
   assert.match(readRule({ transport: "agy-cli" }), /`read_file`/);
+});
+
+// CREDENTIAL ISOLATION for the agy reviewer (owner direction 2026-11-19): the code under review runs only through the
+// review's verify launchers, in a verify jail: it cannot read agy's OAuth copy, the control dir, a home's secrets or a
+// host file outside the allowlist, and it has no network. Real bwrap; synthetic secrets.
+test("the review's pantheon-test launcher runs node --test on the files in a verify jail: the code under review cannot reach the OAuth copy, the control dir, the home or the network; a bad file argument is refused by the launcher itself", { skip: (await sandboxAvailable("bwrap")).ok ? false : "bwrap unavailable" }, async () => {
+  const j = await reviewJail({ testing: OPEN });
+  const secret = `OAUTH-${Date.now()}-dummy`, home = join(dirname(j.wt), "home");
+  await mkdir(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+  await writeFile(join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), secret);
+  await writeFile(join(j.ctl, "run", "scratch-oauth"), secret);
+  const probe = [join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), join(j.ctl, "run", "scratch-oauth"), join(j.ctl, "jail.json")];
+  await writeFile(join(j.wt, ".review-tests", "probe.test.mjs"), `import test from "node:test"; import assert from "node:assert"; import { readFileSync, writeFileSync } from "node:fs"; import { connect } from "node:net";
+test("probe", async () => {
+  const seen = ${JSON.stringify(probe)}.map(p => { try { return readFileSync(p, "utf8"); } catch (e) { return e.code; } });
+  const net = await new Promise(r => { const s = connect(80, "169.254.169.254"); s.on("connect", () => { s.destroy(); r("CONNECTED"); }); s.on("error", e => r(e.code)); setTimeout(() => r("timeout"), 2000); });
+  writeFileSync(".review-tests/probe.json", JSON.stringify({ seen, net, env: Object.keys(process.env).sort(), home: process.env.HOME }));
+});
+`);
+  const r = await new Promise(res => { const c = spawn("/bin/sh", ["-c", `exec '${j.ctl}/pantheon-test' .review-tests/probe.test.mjs`], { env: { PATH: process.env.PATH, HOME: home, OPENAI_API_KEY: "sk-dummy" }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = ""; c.stdout.on("data", d => (out += d)); c.stderr.on("data", d => (out += d)); c.on("close", code => res({ code, out })); });
+  assert.equal(r.code, 0, r.out);
+  const rep = JSON.parse(await readFile(join(j.wt, ".review-tests", "probe.json"), "utf8"));
+  assert.ok(rep.seen.every(x => /^E[A-Z]+$/.test(x)), JSON.stringify(rep.seen));
+  assert.notEqual(rep.net, "CONNECTED");
+  assert.ok(!rep.env.includes("OPENAI_API_KEY"));
+  assert.equal(rep.home, "/tmp/home");
+  // The launcher re-checks its arguments (the hook is not its only guard).
+  const bad = await new Promise(res => { const c = spawn(join(j.ctl, "pantheon-test"), ["../outside/evil.test.mjs"], { stdio: ["ignore", "pipe", "pipe"] }); let o = ""; c.stderr.on("data", d => (o += d)); c.on("close", code => res({ code, o })); });
+  assert.deepEqual([bad.code, /not a plain worktree-relative test file/.test(bad.o)], [125, true]);
 });

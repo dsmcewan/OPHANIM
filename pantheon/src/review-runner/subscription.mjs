@@ -218,7 +218,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
         if (!outer.applied) outer.failed = `the WSL outer runtime for codex could not be set up: ${outer.why}`;
       }
     }
-    const cmds = allowedCommands({ permissions, worktree: wt, prefixWithCd: transport === "agy-cli", telosRoot: opts.telosRoot,
+    const cmds = allowedCommands({ permissions, worktree: wt, telosRoot: opts.telosRoot, ...(transport === "agy-cli" ? { launcherDir: control } : {}),
       envPrefix: transport === "codex-sdk" ? `env NO_PROXY=${LOOPBACK_NO_PROXY} no_proxy=${LOOPBACK_NO_PROXY} ` : "" });
     const harness = renderHarness(harnessTemplate, { COMMIT: opts.commit, WORKTREE: wt, ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed, worktree: wt }),
       READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: codexProfile?.scratch_tmp ?? null }), MAX_WALL_S: wall });
