@@ -21,7 +21,7 @@ test('a 400 after a 429 retry is terminal on the actual board path',async()=>{
 test('planner fallback publishes under the actual Google identity, through Antigravity first',async()=>{
  await withPipeline(async({repo,opts})=>{
   const base=opts.makeClientFor;const before={cli:process.env.PANTHEON_AGY_CLI,log:process.env.FAKE_AGY_LOG};
-  process.env.PANTHEON_AGY_CLI=fakeAgy(repo);process.env.FAKE_AGY_LOG=join(repo,'agy.log');
+  process.env.PANTHEON_AGY_CLI=fakeAgy(repo);process.env.FAKE_AGY_LOG=join(repo,'agy.log');const sd=process.env.PANTHEON_AGY_STATE_DIRS;process.env.PANTHEON_AGY_STATE_DIRS=repo;
   let api=0;
   try{
    const result=await runOpenItem(spec(repo),{...opts,seatOverrides:{implementer:opts.seatOverrides.implementer,reviewer:opts.seatOverrides.reviewer},makeClientFor:vendor=>{
@@ -38,7 +38,7 @@ test('planner fallback publishes under the actual Google identity, through Antig
    const b=openBoard(result.board);const plan=checkout(b.store,b.refs.resolve('refs/seat/agy_google-plan/wip'));
    assert.equal(plan.slots.plan.author.vendor,'agy_google');
   }finally{
-   for(const [k,v] of [['PANTHEON_AGY_CLI',before.cli],['FAKE_AGY_LOG',before.log]]){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+   for(const [k,v] of [['PANTHEON_AGY_CLI',before.cli],['FAKE_AGY_LOG',before.log],['PANTHEON_AGY_STATE_DIRS',sd]]){if(v===undefined)delete process.env[k];else process.env[k]=v;}
   }
  });
 });

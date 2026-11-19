@@ -224,6 +224,7 @@ test("the agy path is non-blocking: no synchronous child process on it, and two 
   assert.match(readFileSync(join(HERE, "..", "src/board/spawn.mjs"), "utf8"), /import \{ spawn \} from 'node:child_process'/);
   // 2. Two concurrent turns through a slow fake CLI overlap, and the event loop keeps turning while they run.
   const dir = mkdtempSync(join(tmpdir(), "pantheon-agy-async-"));
+  const sd = process.env.PANTHEON_AGY_STATE_DIRS;
   try {
     const cli = join(dir, "slow-agy");
     writeFileSync(cli, `#!/bin/sh
@@ -239,6 +240,9 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"c","nu
     let ticks = 0;
     const timer = setInterval(() => { ticks++; }, 20);
     const t0 = Date.now();
+    // Wave 1 (agent 4): every agy launch is jailed, so the fake may write only to a declared state dir; it writes its
+    // timestamps into its own dir.
+    process.env.PANTHEON_AGY_STATE_DIRS = dir;
     const turn = model => runAgyCliTurn({ cli, repo: join(HERE, ".."), worktree, role: "implementer", model, prompt: "p", timeoutS: 30 });
     const [a, b] = await Promise.all([turn("gemini-4-hydrogen-medium"), turn("gemini-4-hydrogen-high")]);
     const elapsed = Date.now() - t0;
@@ -250,5 +254,5 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"c","nu
     assert.ok(elapsed < 1100, `two 0.6s turns took ${elapsed}ms: they ran concurrently, not one after the other`);
     assert.ok(ticks >= 10, `the event loop turned ${ticks} times while the CLI ran: the process was not blocked`);
     assert.equal(readdirSync(dir).filter(f => f.startsWith("start-")).length, 2);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { if (sd === undefined) delete process.env.PANTHEON_AGY_STATE_DIRS; else process.env.PANTHEON_AGY_STATE_DIRS = sd; rmSync(dir, { recursive: true, force: true }); }
 });
