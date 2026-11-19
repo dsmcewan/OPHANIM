@@ -41,12 +41,26 @@ Owner constraints (2026-11-19, wave 1 authorization):
 - **L-003.** Keep the no-network verify boundary. Dependencies must be provisioned through an explicitly controlled process, not an unexamined network exception.
 - **L-004.** Keep the current restrictions and explicitly retain the unresolved exposure of trusted Antigravity's host access. Do not broaden access or claim the boundary is resolved.
 
-L-001 and L-002 are being investigated read-only in wave 1, to produce a decision brief.
+L-001 and L-002 were investigated read-only in wave 1. The brief is in `docs/execution/l001-l002/`.
+
+### Owner decisions, 2026-11-19 (from the L-001 and L-002 brief in `docs/execution/l001-l002/`)
+
+- **L-001: A + B.**
+  - Preserve requested and served model identities, and complete contribution lineage. The returning dispatcher is recorded as a contributor to the revised plan.
+  - Treat structured dispatcher feedback as untrusted advisory data. Validate its schema and allowed operations, and require the planner to independently justify any revision.
+  - Do not weaken the three-lab floor or the independence requirements to avoid capacity-pending results.
+  - Record shared-lab participation explicitly.
+  - Follow-up: a returning dispatcher that also dispatches the revised unit keeps Decision 6's pinned Stage 5 review of its own unit only.
+- **L-002.** The validator must be independent of the approving reviewer models, preferably from a lab outside the review panel.
+  - Preserve the three-lab review floor. Do not manufacture independence or capacity.
+  - Record the actual reviewer and validator identities, the shared labs, and the precise scope of independence.
+  - If no eligible validator is available, keep a pending capacity condition rather than reuse an excluded reviewer.
+  - Scope: exclude every requested and served model that approved the passing change-review cycle, plus any model whose earlier findings, recommendations or revisions materially contributed to the accepted candidate. Derive the exclusions from actual review and contribution records, not from cycle membership alone. Do not automatically exclude reviewers of unrelated earlier cycles merely because they took part. Prefer a fourth-lab validator. Record the validator's independence scope and any shared-lab participation.
 
 | ID | Item | Source | Consequence | Routes | Status |
 |---|---|---|---|---|---|
-| L-001 | The dispatcher's "not cohesive" `notes` reach the planner's revision prompt, but the dispatcher is not recorded as a contributor. A finding with no lab excludes nobody. | Self-audit A2, D-B | If the revised units change difficulty, the dispatcher model (for example `gpt-6-astra`) stays eligible for the revised plan's panel, the change panel and the validator. That is a route by which a rubric author judges work its text shaped, and Decision 6 doesn't cover it. | `dispatch.mjs` ~117 → `stages.mjs` ~1188 | pending owner (read-only investigation in wave 1) |
-| L-002 | `docs/review-independence.md:140-142` says the validator excludes the change reviewers. The code does not, and the validator is one of the three approving change reviewers. | Self-audit A2, D-A | The doc's capacity argument rests on a false premise. Either the code excludes the change reviewers from validation, which costs capacity, or the doc is corrected. | validator seat selection in `stages.mjs` | pending owner (read-only investigation in wave 1) |
+| L-001 | The dispatcher's "not cohesive" `notes` reach the planner's revision prompt, but the dispatcher is not recorded as a contributor. A finding with no lab excludes nobody. | Self-audit A2, D-B | If the revised units change difficulty, the dispatcher model (for example `gpt-6-astra`) stays eligible for the revised plan's panel, the change panel and the validator. That is a route by which a rubric author judges work its text shaped, and Decision 6 doesn't cover it. | `dispatch.mjs` ~117 → `stages.mjs` ~1188 | accepted by owner, 2026-11-19 (A + B; see above). Implementation planned for wave 2, agent 2. |
+| L-002 | `docs/review-independence.md:140-142` says the validator excludes the change reviewers. The code does not, and the validator is one of the three approving change reviewers. | Self-audit A2, D-A | The doc's capacity argument rests on a false premise. Either the code excludes the change reviewers from validation, which costs capacity, or the doc is corrected. | validator seat selection in `stages.mjs` | accepted by owner, 2026-11-19 (exclude the approving and contributing models; prefer a fourth lab; capacity pending, never reuse). Implementation planned for wave 2, agent 2. |
 | L-003 | A verify run has no network, so a `verify_cmd` that needs a package registry always fails. | Credential isolation (b411b67); doc "Remaining exposure" 3 | A unit whose verification needs dependencies blocks unless they are in the worktree or the toolchain before the turn. This was deliberate and never put to the owner. | every verify-jail path | pending owner. Owner-directed for now: keep no network. Open requirement: a controlled process for provisioning dependencies. |
 | L-004 | Antigravity's own egress is unrestricted, and agy (trusted) reads the whole host read-only. | Doc "Credential isolation"; self-audit A4 Q5 and Q8 | A compromised or misbehaving agy CLI could read same-user host files and send them anywhere. Untrusted code is in the verify jail, but agy itself is not confined. | agy worker jail (`sandbox.mjs`) | retained (owner-directed 2026-11-19: keep current restrictions; exposure unresolved) |
 
