@@ -35,8 +35,13 @@ test("the planner is seated from the ticket's difficulty and stakes: easy, mediu
       assert.ok(plan, `${item} was planned`);
       const seat = plan.team.find(t => t.role === 'planner');
       assert.equal(`${seat.vendor}/${seat.model}`, `anthropic/${model}`, item);
-      const tier = plan.outputs.planner?.selection?.tier ?? seat.selection?.tier;
-      if (tier) assert.equal(tier.source, item === 'fresh' ? 'no ticket: medium' : 'ticket', item);
+      // The tier is ON the record, always (independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 4:
+      // this assertion used to sit behind `if (tier)`, and `tier` was never recorded, so it never ran).
+      const tier = plan.outputs.planner?.selection?.tier;
+      assert.ok(tier, `${item}: the planner's tier is recorded`);
+      assert.equal(tier.source, item === 'fresh' ? 'no ticket: medium' : 'ticket', item);
+      assert.deepEqual(seat.tier, tier, `${item}: the team row names the same tier`);
+      if (item === 'fresh') assert.deepEqual(tier.declared, {}, 'an item without a ticket declares nothing');
     }
     // The planner turns were made by those models.
     const planners = turn.log.filter(l => l.kind === 'planner').map(l => l.model);

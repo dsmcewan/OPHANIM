@@ -54,28 +54,42 @@ export function bundlesOf({item, bundlesDir = null, work = null}) {
 
 /**
  * The digest of what a recovery searches and re-checks: each bundle's evidence and proposal bytes, the bytes its
- * proposal cites (run.json, the run and cycle ledger chains), and the item's ticket. A change to any of them makes
- * the item due for another search; nothing else does.
+ * proposal cites (run.json, the ticket file it names, the run and cycle ledgers -- their chains AND the entry payloads
+ * under objects/), whether its commit is in this repository, the item's ticket, and the reassessments recorded for the
+ * item. A change to any of them makes the item due for another search; nothing else does. (Independent review,
+ * assignment 1, Google gemini-4-carbon, 09d490f, question 5: the ticket location, the ledger objects and the commit's
+ * presence were left out, so a repaired source was never searched again.)
  */
-export function sourcesDigest({repo, item, bundles}) {
+export function sourcesDigest({repo, item, bundles, work = null}) {
+  const objects = d => {
+    const o = path.join(d, 'objects');
+    if (!fs.existsSync(o)) return null;
+    const files = [];
+    const walk = x => { for (const e of fs.readdirSync(x, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) { const f = path.join(x, e.name); if (e.isDirectory()) walk(f); else files.push([path.relative(o, f), fileSha(f)]); } };
+    walk(o);
+    return 'sha256:' + digest(files);
+  };
+  const ledger = d => (typeof d === 'string' ? {chain: fileSha(path.join(d, 'chain.jsonl')), objects: objects(d)} : null);
   const cited = dir => {
-    const loc = readJson(path.join(dir, 'proposal.json'))?.locations ?? {};
-    const chain = d => (typeof d === 'string' ? fileSha(path.join(d, 'chain.jsonl')) : null);
-    return {run_json: typeof loc.run_json === 'string' ? fileSha(loc.run_json) : null, run_ledger: chain(loc.run_ledger), cycle_ledger: chain(loc.cycle_ledger)};
+    const p = readJson(path.join(dir, 'proposal.json')), loc = p?.locations ?? {};
+    const commit = typeof p?.evidence?.commit === 'string' ? p.evidence.commit : null;
+    return {run_json: typeof loc.run_json === 'string' ? fileSha(loc.run_json) : null, ticket: typeof loc.ticket === 'string' ? fileSha(loc.ticket) : null,
+      run_ledger: ledger(loc.run_ledger), cycle_ledger: ledger(loc.cycle_ledger), commit: commit ? {commit, ...commitIn(repo, commit)} : null};
   };
   return 'sha256:' + digest({ticket: fileSha(path.join(repo, 'tickets', `${item}.json`)),
     bundles: bundles.map(b => ({ref: b.ref, evidence: fileSha(path.join(b.dir, 'evidence.json')), proposal: fileSha(path.join(b.dir, 'proposal.json')), cited: cited(b.dir)}))
-      .sort((a, b) => a.ref.localeCompare(b.ref))});
+      .sort((a, b) => a.ref.localeCompare(b.ref)),
+    reassessments: work?.reassessments ? work.reassessments(item).filter(r => (r.findings ?? []).length).map(r => r.hash).sort() : []});
 }
 
-const commitIn = (repo, commit) => {
+function commitIn(repo, commit) {
   try { execFileSync('git', ['-C', repo, 'cat-file', '-e', `${commit}^{commit}`], {stdio: 'ignore'}); } catch { return {present: false, in_head: false}; }
   try { execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', commit, 'HEAD'], {stdio: 'ignore'}); return {present: true, in_head: true}; }
   catch { return {present: true, in_head: false}; }
-};
+}
 
 /** Whether one bundle is completion evidence for the item's current status; the rebuilt proposal when it is. */
-function examine({repo, board, history, current, bundle, checked}) {
+function examine({repo, board, history, current, bundle, checked, disqualified = new Map()}) {
   const row = (result, why, extra = {}) => ({source: bundle.origin, ref: bundle.ref, result, why, ...extra});
   const old = readJson(path.join(bundle.dir, 'proposal.json'));
   if (!old) {
@@ -86,6 +100,14 @@ function examine({repo, board, history, current, bundle, checked}) {
   if (malformed) return row('refused', `its proposal is malformed: ${malformed}`);
   if (old.item !== current.item) return row('refused', `its proposal is for "${old.item}"`);
   if (old.to.state !== 'Resolved') return row('not-evidence', `its proposal proposes ${old.to.state}, not Resolved`);
+  // Only a VERIFIED close is completion evidence (gates.mjs completionEvidence). An owner's acceptance of an
+  // unverified close is the owner's decision for that status; it is not carried into a recovered one (question 8).
+  if (old.evidence?.review?.outcome !== 'verified') return row('not-evidence', `its review closed ${old.evidence?.review?.outcome ?? 'without an outcome'}, not verified; an accepted unverified close is not recovered`);
+  // A review that a recorded reassessment disqualified -- the change review it cites, or the plan review of the plan
+  // it rests on -- is not completion evidence (question 8).
+  const plan = readJson(path.join(bundle.dir, 'evidence.json'))?.plan ?? null;
+  const voided = disqualified.get(old.evidence.review.cycle) ?? (plan?.cycle ? disqualified.get(plan.cycle) : null) ?? null;
+  if (voided) return row('disqualified', `its ${disqualified.get(old.evidence.review.cycle) ? 'change' : 'plan'} review was disqualified by reassessment ${voided.hash.slice(0, 19)}: ${(voided.findings ?? []).map(x => x.why).join('; ')}`);
   // The requirement it was made against must still be the item's requirement.
   const upTo = history.findIndex(s => s.entry === old.from.entry);
   if (upTo < 0) return row('refused', 'its proposal was made against a status that is not in this item\'s history');
@@ -94,7 +116,7 @@ function examine({repo, board, history, current, bundle, checked}) {
   let p;
   try {
     p = propose(board, {item: current.item, to: {state: 'Resolved', basis: `Completion evidence recovered from a retained run (${bundle.ref}): ${old.to.basis}`.slice(0, 2000), checked},
-      evidence: old.evidence, ...(old.accept_unverified_reason ? {accept_unverified_reason: old.accept_unverified_reason} : {}), locations: old.locations});
+      evidence: old.evidence, locations: old.locations});
   } catch (e) { return row('refused', e.message); }
   let checks;
   try { checks = checkEvidenceLedgers(p); } catch (e) { return row('refused', `the cited evidence does not re-check: ${e.message}`); }
@@ -119,9 +141,10 @@ export function recoverEvidence({repo, statusRoot, item, bundlesDir = null, work
   if (current.state !== 'Resolved') throw new Error(`"${item}" is ${current.state}: evidence recovery is for Resolved items`);
   const history = byItem.get(item) ?? [];
   const bundles = bundlesOf({item, bundlesDir, work});
-  const sources = sourcesDigest({repo, item, bundles});
+  const sources = sourcesDigest({repo, item, bundles, work});
   const checked = new Date(now).toISOString().slice(0, 10);
-  const searched = bundles.map(bundle => examine({repo, board, history, current, bundle, checked}));
+  const disqualified = new Map((work?.reassessments ? work.reassessments(item) : []).filter(r => (r.findings ?? []).length).map(r => [r.cycle, r]));
+  const searched = bundles.map(bundle => examine({repo, board, history, current, bundle, checked, disqualified}));
   if (!bundlesDir) searched.push({source: 'retained', ref: 'retained', result: 'not-searched', why: 'no retained-runs directory was given (--bundles)'});
   else if (!bundles.some(b => b.origin === 'retained')) searched.push({source: 'retained', ref: 'retained', result: 'none', why: 'no evidence bundle of the item in the retained runs'});
   if (!bundles.some(b => b.origin === 'work')) searched.push({source: 'work', ref: 'work', result: 'none', why: 'no outcome of the item on the work ledger'});
