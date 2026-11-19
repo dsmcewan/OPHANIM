@@ -84,10 +84,14 @@ jobs:
             --json "$RUNNER_TEMP/test-gate-logs.json" --report "$RUNNER_TEMP/test-gate-logs.md" || status=$?
           cat "$RUNNER_TEMP/test-gate-logs.md" >> "$GITHUB_STEP_SUMMARY" || true
           exit $status
-      - name: Test lint (report-only; never fails the job)
+      # The test lint (scripts/test-gates/lint-tests.mjs; L-503), ENFORCING: an unsuppressed finding -- a test that may be
+      # unable to fail -- fails this job. A suppression counts only with a specific reason (`-- <at least five words>`);
+      # every finding, the suppressed ones with their reasons, is in the step summary, and the JSON record is kept with
+      # the gate records. The gate's coverage check (suites.mjs lintEnforcement) fails if this step stops enforcing.
+      - name: Test lint (enforcing; an unsuppressed finding fails the job)
         if: always()
         shell: bash
-        run: npm run --silent test:lint -- --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"
+        run: npm run --silent test:lint -- --enforce --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"
       - name: Keep the gate records
         if: always()
         uses: actions/upload-artifact@v4

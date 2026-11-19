@@ -217,7 +217,8 @@ test('every suite CI runs is enumerated from package.json, every test file is in
 test('coverage FAILS a workflow that runs the gate on real-bwrap files only, drops a step bound, or overrides the gate bounds', () => {
   const q = fs.readFileSync(path.join(ROOT, '.github/workflows/qualification.yml'), 'utf8');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-wf-'));
-  const check = yml => { fs.mkdirSync(path.join(dir, '.github/workflows'), {recursive: true}); fs.writeFileSync(path.join(dir, '.github/workflows/qualification.yml'), yml); return suitesModule.qualificationBounds(dir); };
+  const check = yml => { fs.mkdirSync(path.join(dir, '.github/workflows'), {recursive: true}); fs.writeFileSync(path.join(dir, '.github/workflows/qualification.yml'), yml);
+    fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(dir, 'package.json')); return suitesModule.qualificationBounds(dir); };
   try {
     assert.deepEqual(check(q), []);
     assert.match(check(q.replace('npm run test:gates -- \\', 'npm run test:gates -- --only real-bwrap \\')).join('\n'), /does not run over every suite/);
@@ -241,6 +242,65 @@ test('coverage FAILS a workflow that runs the gate on real-bwrap files only, dro
   } finally { fs.rmSync(repo, {recursive: true, force: true}); }
 });
 
+test('L-503: coverage FAILS a workflow whose test-lint step stops enforcing -- report-only, its exit status discarded, disabled, narrowed to some paths, or a test:lint that is not the lint', () => {
+  const q = fs.readFileSync(path.join(ROOT, '.github/workflows/qualification.yml'), 'utf8');
+  const realScripts = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).scripts;
+  const LINT_RUN = 'npm run --silent test:lint -- --enforce --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"';
+  assert.ok(q.includes(`run: ${LINT_RUN}\n`), 'the lint step as this test edits it');
+  assert.equal(realScripts['test:lint'], 'node scripts/test-gates/lint-tests.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-lint-wf-'));
+  const check = (yml, scripts = {}) => {
+    fs.mkdirSync(path.join(dir, '.github/workflows'), {recursive: true});
+    fs.writeFileSync(path.join(dir, '.github/workflows/qualification.yml'), yml);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({scripts: {...realScripts, ...scripts}}));
+    return suitesModule.qualificationBounds(dir).join('\n');
+  };
+  const run = text => q.replace(`run: ${LINT_RUN}\n`, () => text);
+  try {
+    assert.equal(check(q), '');
+    // Back to report-only (the step as it was before L-503 was enforced): FAIL.
+    assert.match(check(q.replace(LINT_RUN, LINT_RUN.replace('-- --enforce ', '-- '))), /:\d+: the test-lint step does not pass --enforce: it is report-only/);
+    assert.match(check(q.replace(LINT_RUN, 'npm run --silent test:lint >> "$GITHUB_STEP_SUMMARY"')), /does not pass --enforce/);
+    // Enforcement carried by the script itself is enforcement; a test:lint that is not the lint is not.
+    assert.equal(check(q.replace(LINT_RUN, LINT_RUN.replace('-- --enforce ', '-- ')), {'test:lint': 'node scripts/test-gates/lint-tests.mjs --enforce'}), '');
+    for (const other of ['node -e 0', 'true', 'echo node scripts/test-gates/lint-tests.mjs']) {
+      assert.match(check(q, {'test:lint': other}), /the "test:lint" script .* is not `node scripts\/test-gates\/lint-tests\.mjs \.\.\.`/, other);
+    }
+    // Enforcing on part of the repository only is not enforcing the lint.
+    assert.match(check(q.replace(LINT_RUN, LINT_RUN.replace('--enforce ', '--enforce scripts '))), /the test-lint step names scripts: the lint must run over the whole repository/);
+    assert.match(check(q, {'test:lint': 'node scripts/test-gates/lint-tests.mjs --enforce ophanim scripts'}), /the "test:lint" script names ophanim scripts/);
+    assert.equal(check(q.replace(LINT_RUN, `${LINT_RUN} 2>&1`), {'test:lint': 'node scripts/test-gates/lint-tests.mjs --json x.json'}), '', 'flags and redirections are not paths');
+    // Its exit status discarded: FAIL, whatever form the discarding takes.
+    for (const after of [' || true', ' || :', ' || echo "lint failed"', ' | tee "$RUNNER_TEMP/lint.txt"', '; exit 0', ' && echo done', ' &']) {
+      assert.match(check(q.replace(LINT_RUN, LINT_RUN + after)), /may discard the lint's exit status/, after);
+    }
+    assert.match(check(run(`run: |\n          set +e\n          ${LINT_RUN}\n`)), /turns off errexit/);
+    assert.match(check(run(`continue-on-error: true\n        run: ${LINT_RUN}\n`)), /has continue-on-error/);
+    assert.match(check(q.replace(/(- name: Test lint[^\n]*\n\s+)if: always\(\)/, '$1if: false')), /never runs \(if: false\)/);
+    assert.match(check(q.replace(/\n\s+- name: Test lint[^\n]*\n(?:\s{8}.*\n)+/, '\n')), /no step runs `npm run test:lint`/);
+    // The forms that keep the status pass: the status captured and re-raised, a continued line, a folded block.
+    assert.equal(check(run(`run: |\n          status=0\n          ${LINT_RUN} || status=$?\n          echo "lint exit $status"\n          exit $status\n`)), '');
+    assert.match(check(run(`run: |\n          status=0\n          ${LINT_RUN} || status=$?\n          exit 0\n`)), /may discard the lint's exit status/);
+    assert.equal(check(run(`run: |\n          npm run --silent test:lint -- \\\n            --enforce --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"\n`)), '');
+    assert.match(check(run(`run: |\n          npm run --silent test:lint -- \\\n            --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"\n`)), /does not pass --enforce/);
+    assert.equal(check(run(`run: >-\n          npm run --silent test:lint -- --enforce\n          --json "$RUNNER_TEMP/test-lint.json"\n`)), '');
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+  // Through the gate's own entry point: the report-only lint step turns the gate's verdict to FAIL (exit 1).
+  const repo = fixtureRepo();
+  try {
+    const json = path.join(repo, 'cov.json');
+    const verdict = yml => {
+      fs.writeFileSync(path.join(repo, '.github/workflows/qualification.yml'), yml);
+      const r = spawnSync(process.execPath, [path.join(repo, 'scripts/test-gates/check.mjs'), 'logs', '--json', json], {cwd: repo, env: CLEAN_ENV, encoding: 'utf8', timeout: 60_000});
+      return {status: r.status, problems: JSON.parse(fs.readFileSync(json, 'utf8')).coverage.problems.join('\n')};
+    };
+    assert.deepEqual(verdict(q), {status: 0, problems: ''});
+    const reportOnly = verdict(q.replace(LINT_RUN, LINT_RUN.replace('-- --enforce ', '-- ')));
+    assert.equal(reportOnly.status, 1);
+    assert.match(reportOnly.problems, /the test-lint step does not pass --enforce/);
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
+});
+
 // ---- L-505 / L-506 falsifiers through the real entry points, as CI runs them ----
 // A disposable repository holds a copy of the gate (scripts/test-gates/*.mjs) and of qualification.yml, and suites of
 // real test files that hang, exit, crash or are killed. The gate finds its root from its own location, so the copy
@@ -248,7 +308,7 @@ test('coverage FAILS a workflow that runs the gate on real-bwrap files only, dro
 // qualification.yml and run as GitHub runs it (bash -eo pipefail, RUNNER_TEMP, GITHUB_STEP_SUMMARY); a step's
 // timeout-minutes is emulated by killing its process group after STEP_LIMIT_MS -- a step without one would run to the
 // job's timeout, which is exactly L-505, so the test refuses to wait for it.
-const GATE_FILES = ['check.mjs', 'events-reporter.mjs', 'parse-log.mjs', 'suites.mjs', 'real-bwrap.mjs'];
+const GATE_FILES = ['check.mjs', 'events-reporter.mjs', 'parse-log.mjs', 'suites.mjs', 'real-bwrap.mjs', 'lint-tests.mjs'];
 const STEP_LIMIT_MS = 15_000;
 const LIVE = path.join(FX, 'live');
 const BOUNDS = {OPHANIM_GATE_FILE_TIMEOUT_S: '5', OPHANIM_GATE_TEST_TIMEOUT_MS: '1500'};
@@ -263,7 +323,7 @@ function fixtureRepo({pkg = ['pass.fixture.mjs'], proof = ['pass.fixture.mjs']} 
     'test:proof': 'node --test --test-timeout=1500 proof/*.fixture.mjs',
     'test:gates': 'node scripts/test-gates/check.mjs run',
     'test:gates:self': 'node --test self/*.fixture.mjs',
-    'test:lint': 'node -e 0',
+    'test:lint': 'node scripts/test-gates/lint-tests.mjs',
   }}, null, 2));
   // Like packages/model-client: the package script names its files, so no per-test timeout reaches it from the root.
   put('pkg/package.json', JSON.stringify({name: 'fx-pkg', version: '0.0.0', private: true, type: 'module', scripts: {test: 'node --test test/*.fixture.mjs'}}));
@@ -437,4 +497,39 @@ test('run mode bounds: the defaults are well below the 25-minute job, and the fi
   assert.ok(gate.DEFAULT_FILE_TIMEOUT_S * 1000 > maxDeclared, `the file bound ${gate.DEFAULT_FILE_TIMEOUT_S}s must exceed the largest declared test timeout ${maxDeclared}ms`);
   assert.deepEqual(['--test-timeout=1', '--test-concurrency=3'].map(f => f.split('=')[0]), ['--test-timeout', '--test-concurrency']);
   assert.equal(gate.concurrencyOf(['--test-concurrency=2']), 2);
+});
+
+test('L-503 the test-lint step as CI runs it: an unsuppressed finding or a reasonless suppression FAILS the job, a reasoned one passes; the report and the JSON record are kept', async () => {
+  const repo = fixtureRepo();
+  try {
+    const lintStep = async () => {
+      const step = await runStep(repo, 'test:lint');
+      const summary = fs.readFileSync(path.join(step.temp, 'step-summary.md'), 'utf8');
+      const rec = JSON.parse(fs.readFileSync(path.join(step.temp, 'test-lint.json'), 'utf8'));
+      fs.rmSync(step.temp, {recursive: true, force: true});
+      return {code: step.code, killed: step.killed, summary, rec};
+    };
+    let s = await lintStep();
+    assert.deepEqual([s.code, s.killed, s.rec.enforce], [0, false, true], s.summary);
+    assert.match(s.summary, /## Test lint \(ENFORCING\) -- 0 finding\(s\)/);
+    // A test that may be unable to fail (its sequence is cut): the step FAILS the job, and says where.
+    fs.mkdirSync(path.join(repo, 'lintme'));
+    const file = path.join(repo, 'lintme', 'seq.test.mjs'), body = 'assert.deepEqual(calls.slice(0, 2), ["a", "b"]);\n';
+    fs.writeFileSync(file, body);
+    s = await lintStep();
+    assert.equal(s.code, 1, s.summary);
+    assert.match(s.summary, /ENFORCING\) -- 1 finding\(s\)[\s\S]*lintme\/seq\.test\.mjs:1 {2}truncated-sequence {2}assert\.deepEqual\(calls\.slice/);
+    assert.deepEqual(s.rec.findings.map(f => [f.file, f.line, f.rule, f.suppressed]), [['lintme/seq.test.mjs', 1, 'truncated-sequence', false]]);
+    // A suppression without a specific reason does not suppress: still FAIL.
+    fs.writeFileSync(file, `// test-lint: allow truncated-sequence -- intended\n${body}`);
+    s = await lintStep();
+    assert.equal(s.code, 1, s.summary);
+    assert.match(s.summary, /lintme\/seq\.test\.mjs:2 {2}truncated-sequence \(suppression REJECTED: the reason "intended" has 1 word/);
+    // A specific reason: the finding is suppressed, the job passes, and the summary keeps the finding with its reason.
+    fs.writeFileSync(file, `// test-lint: allow truncated-sequence -- only the first two calls are the contract of this case\n${body}`);
+    s = await lintStep();
+    assert.equal(s.code, 0, s.summary);
+    assert.match(s.summary, /lintme\/seq\.test\.mjs:2 {2}truncated-sequence \(suppressed: only the first two calls are the contract of this case\)/);
+    assert.deepEqual(s.rec.findings.map(f => [f.suppressed, f.reason]), [[true, 'only the first two calls are the contract of this case']]);
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Test lint (docs/OPEN-LIMITATIONS.md L-503; retrospective failure mode 4, "tests that could not fail").
-// REPORT-ONLY by default: it lists findings and exits 0. Enforcement is a later, separate decision.
+// REPORT-ONLY by default: it lists findings and exits 0. CI ENFORCES it: the qualification workflow's lint step runs it
+// with --enforce, and the gate's coverage check (suites.mjs qualificationBounds) fails if that step stops enforcing.
 //
 //   node scripts/test-gates/lint-tests.mjs [--json FILE] [--enforce] [PATH ...]
 //
@@ -9,14 +10,18 @@
 //                               else branch: when x is absent the assert never runs and the test passes
 //                               (`if (tier) assert(...)` in planner-tier.test.mjs).
 //   truncated-sequence          `.slice(` on a sequence that is then compared with deepEqual/equal/strictEqual --
-//                               inline in the assert, or through a variable assigned from a `.slice(` -- so items
-//                               past the cut are never checked (`.slice(0, 5)` hid re-dispatches).
+//                               inline in the assert, or through a variable assigned from a `.slice(` (each
+//                               declarator of a declaration on its own) -- so items past the cut are never checked
+//                               (`.slice(0, 5)` hid re-dispatches).
 //   scripted-terminal-status    a fixture (a returned object literal) hard-codes a terminal status ('failed',
 //                               'passed', 'completed', ...) that the same file then asserts: the outcome under test
 //                               may be chosen by the fixture (`status: 'failed'` for the elapsed stop).
 //
 // Suppression, for a finding judged sound: a comment `test-lint: allow RULE -- reason` on the finding's line or the
-// line above it. Suppressed findings are still counted and listed as suppressed.
+// line above it, the reason specific to that line (at least MIN_REASON_WORDS words: where the rest is checked, or why
+// the status is an input). Suppressed findings are still counted and listed as suppressed, with their reasons. A
+// suppression with no `-- reason`, or a shorter one, is REJECTED: the finding counts as unsuppressed (and fails
+// --enforce), listed with why.
 // Enforcement switch: `--enforce` or OPHANIM_TEST_LINT=enforce makes any unsuppressed finding exit 1.
 //
 // Inputs:  *.test.mjs under the given paths (default: the repository, without node_modules and docs/).
@@ -91,16 +96,32 @@ const norm = e => e.replace(/\?\./g, '.').replace(/\s+/g, '');
 
 const ASSERT_CALL = /\bassert(?:\.(\w+))?\s*\(/g;
 
+// A suppression must say why the finding is sound, specifically: at least this many words after `--`.
+export const MIN_REASON_WORDS = 5;
+
+/** The suppression of `rule` on one line: null (none), {reason} (accepted), or {rejected} (no specific reason). */
+export function suppressionOn(text, rule) {
+  const m = new RegExp(`test-lint: allow ${rule}\\b(.*)$`).exec(text ?? '');
+  if (!m) return null;
+  const r = /^\s*--\s*(.*?)\s*(?:\*\/.*)?$/.exec(m[1]);
+  if (!r) return {rejected: 'no `-- reason` after the rule'};
+  const words = r[1].split(/\s+/).filter(w => /[A-Za-z]/.test(w)).length;
+  if (words < MIN_REASON_WORDS) return {rejected: `the reason "${r[1]}" has ${words} word(s), fewer than ${MIN_REASON_WORDS}: name where the property is checked or why the status is an input`};
+  return {reason: r[1]};
+}
+
 /** Findings in one file's source. */
 export function lintSource(src, file = '<src>') {
   const b = blank(src);
   const findings = [];
+  const lines = src.split('\n');
   const add = (rule, idx, detail) => {
     const line = lineOf(src, idx);
-    const lines = src.split('\n');
-    const allow = new RegExp(`test-lint: allow ${rule}\\b`);
-    const suppressed = allow.test(lines[line - 1] ?? '') || allow.test(lines[line - 2] ?? '');
-    findings.push({file, line, rule, snippet: snippetAt(src, line), detail, suppressed});
+    // On the finding's line or the line above it. A suppression without a specific reason does not suppress.
+    const seen = [lines[line - 1], lines[line - 2]].map(t => suppressionOn(t, rule)).filter(Boolean);
+    const ok = seen.find(s => s.reason);
+    findings.push({file, line, rule, snippet: snippetAt(src, line), detail, suppressed: Boolean(ok),
+      ...(ok ? {reason: ok.reason} : seen.length ? {suppression_rejected: seen[0].rejected} : {})});
   };
 
   // (a) vacuous conditional assert
@@ -132,13 +153,19 @@ export function lintSource(src, file = '<src>') {
     add('vacuous-conditional-assert', m.index, `asserts on \`${subject}\` only when it is present; nothing fails when it is absent`);
   }
 
-  // (b) truncated sequence: inline, then through a variable.
-  const sliced = new Map(); // name -> index of assignment
-  for (const m of b.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g)) {
+  // (b) truncated sequence: inline, then through a variable. Each declarator of a declaration is read on its own:
+  // `const a = f(), b = x.slice(0, 2)` assigns the slice to b, not to a (and b is a sliced variable too).
+  const sliced = new Map(); // name -> index of its declarator
+  for (const m of b.matchAll(/\b(?:const|let|var)\s+/g)) {
     const start = m.index + m[0].length;
     let end = b.indexOf(';', start); const nl = b.indexOf('\n', start);
     if (end < 0 || (nl >= 0 && nl < end)) end = nl < 0 ? b.length : nl;
-    if (/\.slice\s*\(/.test(b.slice(start, end))) sliced.set(m[1], m.index);
+    let at = start;
+    for (const part of topLevelArgs(b.slice(start, end))) {
+      const d = /^\s*([A-Za-z_$][\w$]*)\s*=(?!=)/.exec(part);
+      if (d && /\.slice\s*\(/.test(part.slice(d[0].length))) sliced.set(d[1], at + d[0].length - d[0].trimStart().length);
+      at += part.length + 1;
+    }
   }
   for (const a of b.matchAll(ASSERT_CALL)) {
     if (!/^(deepEqual|deepStrictEqual|equal|strictEqual)$/.test(a[1] ?? '')) continue;
@@ -195,9 +222,14 @@ export function report(findings, {files, enforce}) {
   const live = findings.filter(f => !f.suppressed);
   const L = [];
   L.push(`## Test lint (${enforce ? 'ENFORCING' : 'report-only'}) -- ${live.length} finding(s) in ${new Set(live.map(f => f.file)).size} of ${files} test file(s)`, '');
-  for (const f of findings) L.push(`${f.file}:${f.line}  ${f.rule}${f.suppressed ? ' (suppressed)' : ''}  ${f.snippet}`);
+  for (const f of findings) {
+    const note = f.suppressed ? ` (suppressed: ${f.reason})` : f.suppression_rejected ? ` (suppression REJECTED: ${f.suppression_rejected})` : '';
+    L.push(`${f.file}:${f.line}  ${f.rule}${note}  ${f.snippet}`);
+  }
   L.push('', '| Rule | Findings | Suppressed |', '|---|---|---|');
   for (const r of RULES) L.push(`| ${r} | ${live.filter(f => f.rule === r).length} | ${findings.filter(f => f.rule === r && f.suppressed).length} |`);
+  const rejected = findings.filter(f => f.suppression_rejected).length;
+  if (rejected) L.push('', `${rejected} suppression(s) REJECTED for want of a specific reason (\`-- <at least ${MIN_REASON_WORDS} words>\`): counted as findings.`);
   const per = {};
   for (const f of live) per[f.file] = (per[f.file] ?? 0) + 1;
   const top = Object.entries(per).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10);
