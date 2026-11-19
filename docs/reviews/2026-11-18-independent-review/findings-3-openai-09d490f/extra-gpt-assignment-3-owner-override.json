@@ -1,0 +1,40 @@
+{
+  "owner_request": "Also run assignment 3 with gpt-6-astra",
+  "extra_review": true,
+  "assignment": 3,
+  "commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "original_row": {
+    "n": 3,
+    "title": "Execution reliability",
+    "file": "3-execution-reliability.md",
+    "lab": "xAI",
+    "vendor": "xai",
+    "model": "grok-4.7",
+    "model_cell": "xAI, `grok-4.7`",
+    "scope": "Provider-call limits, concurrency, leases, retries, checkpoints",
+    "testing": "Mock providers and isolated processes"
+  },
+  "effective_row": {
+    "n": 3,
+    "title": "Execution reliability",
+    "file": "3-execution-reliability.md",
+    "lab": "OpenAI",
+    "vendor": "openai",
+    "model": "gpt-6-astra",
+    "model_cell": "OpenAI, `gpt-6-astra`",
+    "scope": "Provider-call limits, concurrency, leases, retries, checkpoints",
+    "testing": "Mock providers and isolated processes"
+  },
+  "original_brief_sha256": "75bbef1d9f978b8425be039cfa36fae837bcf51f83a06ad7afd9608b9e7e4281",
+  "effective_brief_sha256": "8ad7e9d1a429be0193303230ad438be288e853aed95213e249664325153c03e9",
+  "override_note": "Owner-requested ADDITIONAL independent review: perform assignment 3 using OpenAI gpt-6-astra through the Codex SDK. For this extra run only, the README table's xAI/Grok reviewer seat is replaced by OpenAI/gpt-6-astra. Keep assignment 3's scope, testing permissions, and findings format. The README and assignment text below are otherwise verbatim from the reviewed commit. This is a fresh review: do not read or use any other reviewer's findings, transcripts, reproduction files, or session history, anywhere on this machine. All docs/reviews/*/findings-* files and folders are withheld. DO NOT look at Git history for those paths: no git show, log, diff, restore, checkout, object lookup, or any other means of retrieving their historical content, including c964307 and 7997657. Do not reconstruct or recover deleted findings. Their absence is intentional. Base the review on the code and assignment brief at the specified commit.",
+  "override_note_sha256": "f60a6c3bd1a53a7ef570f94c040bd1decb1ae35c0d36577758aec18e40330079",
+  "readme_sha256": "8c01ab5c508da911a569cd7183c942cacb47237b35b8a337212eb7e205ddb44e",
+  "assignment_sha256": "26b682339e2dc4ef90655c487e91ca8574f92c8d6d0ff1bfa1c596800fec8b45",
+  "wrapper": "file:///mnt/c/users/dsmce/documents/codex/2026-11-16/he/work/extra-gpt-assignment-3-09d490f.mjs",
+  "wrapper_sha256": "543d876ab5cadfbe63e47ac66c2edc479d4cd780f65f976559b56b5ce7ba98a3",
+  "reviewed_source_modified": false,
+  "earlier_review_history_supplied": false,
+  "max_wall_s": 3600,
+  "telos_root": "/home/colchis/Projects/TELOS"
+}
