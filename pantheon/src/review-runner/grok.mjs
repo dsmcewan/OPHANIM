@@ -24,7 +24,7 @@ import { dirname, join } from "node:path";
 import { realpathSync } from "node:fs";
 import { redactStrong } from "../board/agy-cli.mjs";
 import { repoGitDirs } from "../agy/sandbox.mjs";
-import { REVIEW_TESTS_DIR, runCli } from "./cli-common.mjs";
+import { READ_ONLY_SHELL, REVIEW_TESTS_DIR, runCli } from "./cli-common.mjs";
 
 export const grokArgv = ({ model, prompt }) => ["-p", prompt, "--output-format", "streaming-json", "-m", model];
 
@@ -40,7 +40,7 @@ export async function grokStateDir(dir) {
 export const NEEDS_KEY = /XAI_API_KEY|api[ _-]?key|not\s+(logged|signed)\s+in|log\s?in\s+required|please\s+(log|sign)\s?in|unauthori[sz]ed|authenticat/i;
 
 /** Zero-spend preflight: the binary, its version, a non-empty state dir (assumed login), bwrap. */
-export async function grokPreflight({ cli, env, stateDir, bwrapOk, parentEnv, timeoutMs = 60_000 }) {
+export async function grokPreflight({ cli, env, stateDir, bwrapOk, parentEnv, inspect = null, timeoutMs = 60_000 }) {
   const checks = {}, failed = [];
   const v = await runCli({ cmd: cli, args: ["--version"], env, timeoutMs });
   checks.version = { argv: [cli, "--version"], exit_code: v.exit_code, text: redactStrong(`${v.stdout}${v.stderr}`, env).trim().slice(0, 200) || null };
@@ -53,13 +53,22 @@ export async function grokPreflight({ cli, env, stateDir, bwrapOk, parentEnv, ti
   checks.model_list = { status: "not checked", why: "the Grok CLI documents no model-list command" };
   checks.bwrap = { ok: bwrapOk.ok, why: bwrapOk.why ?? null };
   if (!bwrapOk.ok) failed.push(`bwrap is unavailable (${bwrapOk.why}): the Grok CLI never runs unjailed`);
-  // The permission profile the run will see (its scratch copy of the state dir carries config.toml). Recorded, never
-  // blocking: the jail confines writes whatever the profile says; a missing allow rule shows up as stopReason cancelled.
+  // The permission profile the run will see (its scratch copy of the state dir carries config.toml). The jail confines
+  // writes whatever the profile says; but a run whose profile loads no allow rule is cancelled at its first tool call,
+  // so that is a refusal (grokPermissionVerdict). With `inspect` ({argv, run}: the owner's --grok-permissions-inspect,
+  // run in the jail against a scratch copy of the state dir; no model turn) the CLI's own count of loaded rules decides.
   const perm = await grokPermissionConfig(stateDir);
   checks.permissions = { ...perm, rules: perm.rules.map(l => redactStrong(l, env)),
-    note: "the [ui] permission_mode and the [permission] rules of the state dir's config.toml (docs.x.ai/build/features/permissions); the runner records them and writes none" };
-  const warnings = [];
-  if (!perm.allow_rules) warnings.push(`permissions: ${perm.present ? `${perm.path} has no [permission] allow rule` : `no ${perm.path}`}: under the default "ask" profile a headless run cancels the tool calls no rule allows (observed 2026-11-19: an authorized .review-tests edit, stopReason cancelled); see the review README, "Grok permissions"`);
+    note: "the [ui] permission_mode and the [permission] section of the state dir's config.toml (docs.x.ai/build/features/permissions); only the string form (allow = [...]) counts as loaded rules (grok 1.0.44 loaded zero from the structured rules = [...] form, observed 2026-11-19); the runner records them and writes none" };
+  let inspected = null;
+  if (inspect) {
+    const r = await inspect.run();
+    inspected = r.exit_code === 0 ? parseGrokInspect(r.stdout) : { ok: false, why: `exit ${r.exit_code ?? r.killed_for ?? r.spawn_error}: ${redactStrong(String(r.stderr ?? "").trim(), env).slice(0, 300)}` };
+    checks.permissions_inspect = { argv: inspect.argv, exit_code: r.exit_code, ...inspected };
+  }
+  const verdict = grokPermissionVerdict(perm, inspected);
+  failed.push(...verdict.failed);
+  const warnings = verdict.warnings;
   return { ok: failed.length === 0, failed, warnings, checks, cli_version: checks.version.text, auth_method_observed: s.ok ? "state-dir-present (browser login assumed, not verified)" : "none found", model_check: "not checked" };
 }
 
@@ -112,11 +121,36 @@ export const dropGrokScratch = s => (s ? rm(s.scratch, { recursive: true, force:
 // So the runner does NOT write rules itself (the pattern semantics are not documented exactly enough to narrow them to
 // `.review-tests/` and the listed commands); the owner adds them to the state dir's config.toml (the run sees a per-run
 // copy of it), and the runner RECORDS what that file says: the permission mode and the [permission] section's lines.
-/** The Grok state dir's config.toml, as far as permissions go. {path, present, permission_mode, rules: [lines], allow_rules}. Never throws. */
+// OBSERVED (owner, round 2 at 77480d6, grok 1.0.44; findings-runs-77480d6/grok-permission-*.json): the documented
+// structured form `rules = [{ action = "allow", tool = "Read" }, ...]` was NOT loaded (the CLI's native inspection
+// reported zero rules); the STRING form `allow = ["Read", "Grep", "Edit", "Bash(node --test *)", ...]` in the same
+// [permission] section was (six loaded, none skipped). So the runner counts only the string form as rules the CLI will
+// apply, says so when it sees only structured rules, and REFUSES a run with zero loadable allow rules: under the
+// default "ask" profile such a run is cancelled at its first tool call (the first round-2 leg: 16 s, on a `wc`/`find`).
+// It also warns for each recommended allowance missing (grokRecommendedAllow: the harness's read-only commands and the
+// listed test commands), since an uncovered read cancels the turn just as an uncovered test does.
+
+/** The string arrays (`allow`, `deny`, `ask`) of a TOML [permission] section, multi-line arrays included. */
+function stringArrays(body) {
+  const out = {};
+  const re = /^\s*(allow|deny|ask)\s*=\s*\[([\s\S]*?)\]\s*$/gm;
+  let m;
+  while ((m = re.exec(body))) {
+    const items = [...m[2].matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)].map(x => (x[1] !== undefined ? x[1].replace(/\\(.)/g, "$1") : x[2]));
+    out[m[1]] = [...(out[m[1]] ?? []), ...items];
+  }
+  return out;
+}
+
+/**
+ * The Grok state dir's config.toml, as far as permissions go. {path, present, permission_mode, rules: [lines],
+ * allow: [string-form allow rules], deny, structured_rules, structured_allow_rules, allow_rules (= allow.length: what
+ * grok 1.0.44 loads)}. Never throws.
+ */
 export async function grokPermissionConfig(stateDir) {
   const path = join(stateDir, "config.toml");
   let text;
-  try { text = await readFile(path, "utf8"); } catch { return { path, present: false, permission_mode: null, rules: [], allow_rules: 0 }; }
+  try { text = await readFile(path, "utf8"); } catch { return { path, present: false, permission_mode: null, rules: [], allow: [], deny: [], structured_rules: 0, structured_allow_rules: 0, allow_rules: 0 }; }
   let section = null, mode = null;
   const rules = [];
   for (const raw of text.split(/\r?\n/)) {
@@ -127,9 +161,64 @@ export async function grokPermissionConfig(stateDir) {
     if (section === "ui") {
       const m = /^(permission_mode|approval_mode|yolo)\s*=\s*(.+)$/.exec(line);
       if (m && (m[1] === "permission_mode" || mode === null)) mode = `${m[1]}=${m[2].replace(/^"|"$/g, "")}`;
-    } else if (section === "permission") rules.push(line.slice(0, 300));
+    } else if (section === "permission") rules.push(line);
   }
-  return { path, present: true, permission_mode: mode, rules: rules.slice(0, 40), allow_rules: rules.filter(l => /action\s*=\s*"allow"/.test(l)).length };
+  const joined = rules.join("\n");
+  const arrays = stringArrays(joined);
+  const structured = [...joined.matchAll(/\{[^{}]*\baction\s*=\s*"(\w+)"[^{}]*\}/g)];
+  const allow = arrays.allow ?? [], deny = arrays.deny ?? [];
+  return { path, present: true, permission_mode: mode, rules: rules.slice(0, 80).map(l => l.slice(0, 600)), allow, deny,
+    structured_rules: structured.length, structured_allow_rules: structured.filter(x => x[1] === "allow").length, allow_rules: allow.length };
+}
+
+/**
+ * The string-form allowances a Grok review run needs: reading (Read, Grep), editing (the jail still confines writes),
+ * the harness's read-only shell commands (cli-common.mjs READ_ONLY_SHELL, each as `Bash(<cmd> *)`, plus the bare form of
+ * those often run without arguments) and the listed test commands (the proof suite as the harness prints it, with its
+ * OPHANIM_TELOS_ROOT=... prefix, and without).
+ */
+export function grokRecommendedAllow() {
+  const bare = ["ls", "git log", "git status", "git diff", "git show"];
+  return ["Read", "Grep", "Edit",
+    ...READ_ONLY_SHELL.map(c => `Bash(${c} *)`), ...bare.map(c => `Bash(${c})`),
+    "Bash(node --test *)", "Bash(OPHANIM_TELOS_ROOT=* npm run test:proof)", "Bash(npm run test:proof)", "Bash(npm --prefix pantheon test)", "Bash(npm test)"];
+}
+
+/**
+ * The Grok CLI's own report of the permission rules it loaded, in the shape the owner captured
+ * (grok-permission-inspect.json: {"permissions": {"sources": [...], "loaded": N, "skipped": [...], ...}}).
+ * {ok, loaded, skipped, sources} | {ok: false, why}.
+ */
+export function parseGrokInspect(stdout) {
+  let j;
+  try { j = JSON.parse(String(stdout ?? "").trim()); } catch { return { ok: false, why: "the inspection output is not JSON" }; }
+  const p = j?.permissions ?? j;
+  if (!p || typeof p !== "object" || !Number.isInteger(p.loaded)) return { ok: false, why: "the inspection output has no permissions.loaded count" };
+  return { ok: true, loaded: p.loaded, skipped: Array.isArray(p.skipped) ? p.skipped.slice(0, 40) : [], sources: Array.isArray(p.sources) ? p.sources.slice(0, 10) : [] };
+}
+
+/** The preflight's verdict on the permission profile: {failed: [...], warnings: [...]} (pure). */
+export function grokPermissionVerdict(perm, inspect = null) {
+  const failed = [], warnings = [];
+  const fix = "add the string-form allowances of the review README (\"Grok permissions\") to that file's [permission] section";
+  if (!perm.present) failed.push(`permissions: no ${perm.path}: under the default "ask" profile a headless run cancels every tool call no rule allows (observed 2026-11-19); ${fix}`);
+  else if (!perm.allow_rules) failed.push(`permissions: ${perm.path} has no string-form [permission] allow rule${perm.structured_allow_rules ? ` (it has ${perm.structured_allow_rules} structured \`rules = [...]\` allow rule(s), which grok 1.0.44 loaded as zero rules, observed 2026-11-19)` : ""}: the run would be cancelled at its first tool call; ${fix}`);
+  else {
+    if (perm.structured_rules) warnings.push(`permissions: ${perm.path} also has ${perm.structured_rules} structured \`rules = [...]\` rule(s); grok 1.0.44 loaded none of them (observed 2026-11-19), so only the ${perm.allow_rules} string-form allow rule(s) count`);
+    const have = new Set(perm.allow), missing = grokRecommendedAllow().filter(r => !have.has(r));
+    if (missing.length) warnings.push(`permissions: ${missing.length} recommended allowance(s) missing (a tool call they would cover is cancelled under "ask", ending the turn): ${missing.join(", ")}`);
+  }
+  if (perm.permission_mode && /always-approve|auto|yolo=true/i.test(perm.permission_mode)) failed.push(`permissions: ${perm.path} sets ${perm.permission_mode}; a review runs under the default "ask" mode with narrow allow rules only`);
+  if (inspect) {
+    if (!inspect.ok) failed.push(`permissions: the Grok CLI's inspection could not be read (${inspect.why})`);
+    else if (inspect.loaded === 0) failed.push(`permissions: the Grok CLI reports 0 loaded permission rules (its own inspection): the run would be cancelled at its first tool call; ${fix}`);
+    else {
+      if (inspect.skipped.length) warnings.push(`permissions: the Grok CLI skipped ${inspect.skipped.length} rule(s): ${JSON.stringify(inspect.skipped).slice(0, 500)}`);
+      const want = perm.allow_rules + (perm.deny?.length ?? 0);
+      if (perm.present && inspect.loaded < want) warnings.push(`permissions: the Grok CLI loaded ${inspect.loaded} rule(s), fewer than the ${want} string-form rule(s) in ${perm.path}`);
+    }
+  }
+  return { failed, warnings };
 }
 
 // ---- the stream ------------------------------------------------------------------------------------------------------
@@ -254,7 +343,7 @@ export function grokStopFailure(stop, cancelled = [], exit_code = 0) {
   if (/cancel/i.test(stop)) {
     return `${head}; ${cancelled.length ? `${cancelled.length} tool call(s) were cancelled (${tools.join(", ") || "unnamed"}: "${cancelled[0].message}")` : "the CLI cancelled the turn"}. ` +
       "This is most likely the Grok CLI's permission profile: headless runs under the default \"ask\" mode cancel any tool call no allow rule covers. " +
-      "Add narrow [permission] allow rules to the Grok state dir's config.toml (see the review README, \"Grok permissions\"), then --continue";
+      "Add narrow string-form allow rules (`allow = [...]` under [permission]) to the Grok state dir's config.toml (see the review README, \"Grok permissions\"), then --continue";
   }
   return `${head}. Check the Grok CLI's permission profile and the transcript (cli.own) for the last tool calls`;
 }

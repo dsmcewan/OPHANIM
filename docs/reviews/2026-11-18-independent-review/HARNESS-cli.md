@@ -4,8 +4,9 @@ This text comes from the review runner (`pantheon/scripts/run-review.mjs`, subsc
 
 ## Workspace
 
-- You are working in a disposable copy (a detached git worktree) of commit `{{COMMIT}}`, at `{{WORKTREE}}`. It is deleted after the run.
+- You are working in a disposable copy of commit `{{COMMIT}}`, at `{{WORKTREE}}`. It is deleted after the run.
 - Other reviewers' findings files have been removed from it.
+- The copy is a fresh git repository with one commit. That commit holds the files of `{{COMMIT}}` except the removed ones, and its message names `{{COMMIT}}` and that commit's tree. The source repository's history is deliberately absent, so `git log` shows only this one commit and its id differs from `{{COMMIT}}`. Every file's blob id equals the source commit's: the runner checked `git ls-files -s` against the source's `git ls-tree -r` before the run.
 
 ## Reading the source
 
