@@ -30,7 +30,10 @@ export async function liveTurn({ label = "cycle-review", meteredFailover = true 
     const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-${label}`,
       ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}) });
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
-    return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null };
+    // sendTurn's served_model is the model named by the provider's own response: marked "provider" (a pipeline seat
+    // labels a served name with no source "unknown", pipeline/turns.mjs).
+    const named = typeof r.served_model === "string" && r.served_model.trim() !== "";
+    return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null, served_model_source: named ? "provider" : null };
   };
   // A declared Antigravity lane is not an API id: it is served by the agy CLI (agy-turn.mjs). A Gemini seat goes
   // through its lane first; the metered API answers only as that lane's 429/quota failover (laneFirstTurn).

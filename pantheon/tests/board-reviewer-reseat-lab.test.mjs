@@ -79,7 +79,7 @@ function scriptedClients() {
 // A CLI result can have exit 0 while containing no answer (the live OAuth probe did exactly that
 // on print timeout). This fake provides one observed turn and a verdict so publication is reached.
 const FAKE_AGY = `#!/bin/sh
-printf '%s\\n' '{"event":"init","conversation_id":"fixture-conversation","init":{"model":"fixture-model","agent":"pantheon-reviewer"}}' '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fixture-conversation","num_turns":1,"response":"VERDICT: approve","usage":{"input_tokens":1,"output_tokens":1}}}'
+printf '%s\\n' '{"event":"init","conversation_id":"fixture-conversation","init":{"model":"gemini-3.8-flash","agent":"pantheon-reviewer"}}' '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fixture-conversation","num_turns":1,"response":"VERDICT: approve","usage":{"input_tokens":1,"output_tokens":1}}}'
 `;
 
 test("an operator reseat of the reviewer to agy_google ships: the critique publishes under agy_google, never the lab name \"google\"", async () => {
@@ -106,7 +106,9 @@ test("an operator reseat of the reviewer to agy_google ships: the critique publi
         makeClientFor,
         scouts: ["xai"],   // the fake CLI is needed only for the reviewer in this fixture
         seatOverrides: {
-          reviewer: { vendor: "agy_google", model: "fixture-model", rank: 0, pool: "agy_google", band: null, basis: "OPERATOR", why: "test reseat" },
+          // A declared Gemini model: the board refuses an undeclared name on Antigravity before any lane (independent
+          // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
+          reviewer: { vendor: "agy_google", model: "gemini-3.8-flash", rank: 0, pool: "agy_google", band: null, basis: "OPERATOR", why: "test reseat" },
           // Pinned off agy_google explicitly, 2026-09-29: SEATING.planner AND SEATING.implementer's
           // new top rungs (operator instruction) would otherwise also route through
           // PANTHEON_AGY_TRANSPORT=cli above and hit this test's fake CLI, which only knows how to

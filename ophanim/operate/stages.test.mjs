@@ -16,7 +16,7 @@ import {makeExecutors, planRefusal} from './stages.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {SEATING} from '../../pantheon/src/role/seating.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
-import {git, TICKET, fixture, APPROVE, json, planFor, ACCEPT, scriptedTurn, LIMITS, SYNTH, FIVE, stagesOf} from './test-fixtures.mjs';
+import {git, TICKET, fixture, APPROVE, json, planFor, ACCEPT, scriptedTurn, LIMITS, SYNTH, FIVE, SIX, stagesOf} from './test-fixtures.mjs';
 
 
 test('the four configured labs: a Ready item with no ticket gets a reviewed plan and its ticket, then the change review is a recorded capacity pending, nothing narrowed', async () => {
@@ -45,7 +45,7 @@ test('with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes thro
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'alpha-item'}]);
     const turn = scriptedTurn();
-    const executors = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...FIVE});
+    const executors = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], JSON.stringify(r.dispatched));
     const w = openWorkLedger({root: f.workRoot});
@@ -196,7 +196,7 @@ test('validation returns an implementation defect to implement and an inadequate
         ? json({verdict: 'implementation_defect', reasons: ['alpha.mjs also drops a trailing newline the requirement keeps'], criteria: [{id: 'a1', met: false, why: 'see reasons'}]})
         : json({verdict: 'plan_defect', reasons: ['criterion a1 does not test that alpha.mjs keeps its other exports'], criteria: [{id: 'a1', met: true, why: 'passes, but is inadequate'}]});
     }});
-    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     const seq = item => w.stages(item).map(s => `${s.stage}:${s.status}`);
@@ -227,7 +227,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const f = fixture(repo, [{item: 'flaky-review'}]);
     let down = true;
     const turn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai' && down) throw Object.assign(new Error('503 service unavailable'), {status: 503}); return APPROVE; }});
-    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:pending']);
     const w = openWorkLedger({root: f.workRoot});
@@ -261,7 +261,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     fs.mkdirSync(d);
     const fd = fixture(d, [{item: 'always-down'}]);
     const deadTurn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai') throw Object.assign(new Error('503'), {status: 503}); return APPROVE; }});
-    const dx = makeExecutors({independence: LAB, repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...FIVE});
+    const dx = makeExecutors({independence: LAB, repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...SIX});
     let t0 = Date.parse('2026-11-17T00:00:00Z');
     const seen = [];
     for (let i = 0; i < 5; i++, t0 += 60 * 60_000) {

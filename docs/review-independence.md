@@ -236,7 +236,7 @@ Owner governance decision, 2026-11-17. Flagged for independent review. It applie
 **The rule**
 
 - The Stage 2 dispatcher writes a unit's acceptance rubric and none of the work. It is recorded as an arbiter (`outputs.arbiters`, and `team` with `authored: false`). It is not in `contributions`.
-- So, under the model rule, the dispatcher's model is not excluded from reviewing. Stage 5 is pinned to that exact model.
+- So, under the model rule, the dispatcher's model is not excluded from reviewing its own unit at Stage 5, which is pinned to that exact model. Since Decision 6 (owner, 2026-11-19) that is the whole exception: the dispatcher is excluded from the later three-lab review and the validator.
 
 **Why the owner chose it**
 
@@ -263,8 +263,34 @@ Owner governance decision, 2026-11-17. Flagged for independent review. It applie
 
 **Shown by tests** (`ophanim/operate/fit-lifecycle.test.mjs`, scripted seats)
 
-- With approve-only OpenAI seats, no OpenAI model is a contributor and an OpenAI model sits on the three-lab panel.
+- With approve-only OpenAI seats, no OpenAI model authored anything. (Before Decision 6 an OpenAI model, possibly a dispatcher, could then sit on the three-lab panel; now every dispatcher is excluded and a different OpenAI model stays eligible.)
 - After `gpt-6-luna` rejects twice, it is a contributor and is not on the panel; `gpt-6.1-sol`, which only approved, is not a contributor.
+
+## Decision 6: the dispatcher exception is confined to its own unit's Stage 5 review
+
+Owner decision, 2026-11-19, on independent review round 2, assignment 2 (xAI grok-4.7, `77480d6`), question 7. It narrows Decision 5. In force; there is no switch back to the wider exception.
+
+> "Scope the dispatcher exception exclusively to the pinned Stage 5 review of its own work unit, including that unit's bounded revision sequence. The dispatcher remains a non-authoring arbiter. Do not reclassify its rubric as authored implementation. However, its requested and serving model identities must be included in the exclusion set for the subsequent three-lab change review and independent validator whenever its rubric governed any unit in that change. [...] The governing distinction: permission to judge whether one's own rubric was followed does not grant independence to judge whether that rubric was sufficient."
+
+**The rule**
+
+- Stage 5 of a unit is still pinned to that unit's dispatcher model, and still escalates only inside OpenAI. That review, and the unit's revisions, are the whole exception.
+- The dispatcher is still a non-authoring arbiter: `contributionsOf(run)` omits it, `arbitersOf(run)` lists it with `authored: false`. Its rubric is not authored work.
+- Every dispatcher whose rubric governed a unit of the change is EXCLUDED from the coordinated three-lab change review and from the validator, by its requested model and by its serving model (`ophanim/operate/stages.mjs` `arbiterExclusions`: rows with `purpose: 'arbiter'`, the served model as `model`, the asked one as `requested_model` when they differ). This holds when its Stage 5 review only approved.
+- The rows ride with the implement stage's contributions, so they reach the review scope, the v3 cycle's recorded `contributors` and `author_models` (the ledger re-derives the exclusion from them), and the validator's exclusion set. They are checked at seat selection (`candidateRefusal`) and again at answer admission (`reviewerRefusal`, the v3 close, the validator's `servedRefusal`), by canonical identity, never by name string.
+- A different model of the dispatcher's lab stays eligible under model-level independence. Under the lab rule, as for any contributor, the dispatcher's lab is excluded.
+- The capacity check before work predicts each unit's dispatcher as an arbiter. When no eligible capacity is left the stage is pending (`REVIEW_CAPACITY_PENDING`) with the blocker recorded and the work kept; nothing falls back to an excluded model and the three-lab floor is not lowered.
+- The arbiter record is preserved: on the stage record (`outputs.arbiters`, `team`, and the `arbiter` rows), across a resume (a unit resumed from its sealed v3 checkpoint carries the checkpoint's `dispatch` as its arbiter, `from_checkpoint: true`), and on the cycle, which a reassessment reads.
+
+**Not changed**
+
+- The Stage 5 exception does not extend to another unit's later judgment, to the coordinated review, or to validation.
+- The pipeline's in-run Stage 5 ladder (`reviewerLadderRefusal`) and the frozen rubric hash are unchanged.
+
+**Shown by tests**
+
+- `ophanim/operate/fit-lifecycle.test.mjs`: the pinned Stage 5 review approves each unit; the three dispatchers are excluded from the panel and the validator although each only approved; the three-lab panel still qualifies and the item reaches an outcome.
+- `ophanim/operate/independence-r2-a2.test.mjs`: requested and served identities excluded; a different OpenAI model seated; a resumed unit keeps its arbiter; no fallback when capacity is gone; a v3 cycle records the dispatcher and refuses an answer it served.
 
 ## For the independent review
 
@@ -301,3 +327,18 @@ Independent review, assignment 2 (OpenAI `gpt-6-astra`), and assignment 1 questi
 | A1 Q3. Plan-review finders lost on resume | Resuming an open plan cycle restarted the contributions from the planner alone. | Restored from the stage record of the attempt that opened the cycle, and from the cycle's own recorded contributors. | `ophanim/operate/plan-lineage.test.mjs` |
 | Q7. `specialist_role` unconstrained | Any non-empty string, interpolated into the implementer prompt and outside the rubric hash. | A role name (lower-case words joined by `-`, at most six words and 48 characters), for the planner's units and the dispatcher's answer; the role and the difficulty are inside the frozen `rubric_hash`, which Stage 5 re-hashes. Raising difficulty is still allowed. | `pantheon/tests/pipeline-dispatch.test.mjs`, `pipeline-work-units.test.mjs` |
 | Q9. Input marker dropped | The planner's ledger turn kept the served name and dropped `served_model_source: "input"`. | The planner's turn, its served-model contribution, and the pipeline's contribution rows carry the marker. | `ophanim/operate/plan-lineage.test.mjs` |
+
+## Corrections after the review of `77480d6`
+
+Independent review round 2, assignment 2 (xAI grok-4.7). Each regression test below failed on `8e6d5e0` (the reviewed code plus the recorded findings) with the source reverted.
+
+| Finding | On `77480d6` | Now | Test |
+|---|---|---|---|
+| Q6. Projection dropped a requested model | `dedupe` keyed `purpose\|vendor\|model\|lab`: a call asked as `grok-4.6` and served as `grok-4.7`, then a `grok-4.7` call, left only `grok-4.7`; `grok-4.6` was eligible for the panel and the validator. | The key includes `requested_model`: every identity `contributionsOf` kept stays excluded. | `ophanim/operate/independence-r2-a2.test.mjs` |
+| Q6. Board critique row kept the asked seat | A reviewer whose finding reached a revision was recorded as the seat asked; the model that served it stayed eligible. | The pending revision names the served models of the turns whose text it carries, and the critique contributor rows keep `served_model` beside `model`. | `pantheon/tests/independence-r2-a2.test.mjs` |
+| Q6. Unnamed subagent answer | An answered call with no serving model stored `served_model: null` with no marker. | Recorded as `served_model_source: "unnamed"`; the asked model is the contributor that is excluded. | `pantheon/tests/independence-r2-a2.test.mjs` |
+| Q9. Board Antigravity guard | Refused a known non-Google model only; an undeclared name was stamped as served (`input`). | Refused, like `agySingleTurn`, unless the name is a declared Google model, before any lane starts. | `pantheon/tests/independence-r2-a2.test.mjs` (two board fixtures now name a declared Gemini model) |
+| Q9. `"provider"` by default | `pipelineTurns` `single()` labelled any served name without a source `"provider"`. | The transport's own report is passed on; `liveTurn` marks a name read off the provider's response `"provider"`; a name with no source is `"unknown"`. | `pantheon/tests/independence-r2-a2.test.mjs` |
+| Q3. Re-ask not admitted | The board in-run re-ask's verdict came from a second turn whose serving model was never checked, and the review cited the first turn. | The re-ask is admitted on its own serving model (`reviewerRefusal` under the model rule; same lab under the lab rule). A refused re-ask supplies no verdict and no text: the slot fails closed. An admitted re-ask that gives the verdict is the turn the review cites. | `pantheon/tests/independence-r2-a2.test.mjs` |
+| Q5. Raw `openCycle` below the floor | A new v2 cycle opened with `reviewers: 1` and no `required_reviewers` closed `verified` on one lab. | `openCycle` records `required_reviewers: 3` on a new v2/v3 cycle and refuses a new v1 cycle of fewer than three reviewers. Cycles recorded without the field verify as recorded; a recorder made with `historical: true` (tests only; never the system's recorder) writes that shape. | `pantheon/tests/independence-r2-a2.test.mjs`, `pantheon/tests/cycle-review-labs.test.mjs` |
+| Q7. Dispatcher exception width | The omission from `contributionsOf` was global: the dispatcher's model could sit on the three-lab panel or be the validator. | Decision 6 (owner, 2026-11-19), above. Under the lab rule the `fit` lifecycle tests now need a second synthetic lab (`SIX`), since the dispatcher's lab is excluded. | `ophanim/operate/independence-r2-a2.test.mjs`, `ophanim/operate/fit-lifecycle.test.mjs` |

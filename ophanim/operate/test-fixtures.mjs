@@ -110,4 +110,9 @@ export const LIMITS = {total_provider_calls: 1000, stage_provider_calls: 40};
 // planner and an implementer from another lab have both contributed (see the first test).
 export const SYNTH = {vendor: 'synthlab', model: 'synthetic-reviewer-1', band: 'medium', basis: 'SYNTHETIC', why: 'a test-only fifth lab; never configured'};
 export const FIVE = {seating: {...SEATING, reviewer: [...SEATING.reviewer, SYNTH]}, facts: {...SEAT_FACTS, synthlab: {vendor: 'synthlab', quota_pool: 'synthlab', models: {}}}};
+// A SECOND synthetic lab, for the `fit` pipeline under the LAB rule. Decision 6 (owner, 2026-11-19): the Stage 2
+// dispatcher is excluded from later independent judgment, so under the lab rule its lab (OpenAI) is excluded from the
+// change review too, and a fit run under the lab rule needs a second lab outside the configured four to finish.
+export const SYNTH2 = {vendor: 'synthlab2', model: 'synthetic-reviewer-2', band: 'medium', basis: 'SYNTHETIC', why: 'a second test-only lab; never configured'};
+export const SIX = {seating: {...FIVE.seating, reviewer: [...FIVE.seating.reviewer, SYNTH2]}, facts: {...FIVE.facts, synthlab2: {vendor: 'synthlab2', quota_pool: 'synthlab2', models: {}}}};
 export const stagesOf = r => r.dispatched.map(d => `${d.stage}:${d.status}`);

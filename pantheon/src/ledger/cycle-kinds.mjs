@@ -410,8 +410,13 @@ export function ledgerView(ledger) {
   return {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? ledger.payloadOf(byHash.get(h)) : null), entries: () => [...byHash.keys()]};
 }
 
-/** Records a cycle's controller entries: open, findings, resolutions, close. Seat entries go through lineageRecorder. */
-export function cycleRecorder({ledger, controller, order}) {
+/**
+ * Records a cycle's controller entries: open, findings, resolutions, close. Seat entries go through lineageRecorder.
+ * `historical: true` writes a cycle in the shape recorded BEFORE the three-lab floor existed (no required_reviewers,
+ * any reviewer count): only for reproducing such a ledger (tests, migrations). The recorder a ledger system hands out
+ * (system.mjs recorder()) never sets it.
+ */
+export function cycleRecorder({ledger, controller, order, historical = false}) {
   const by = {author: {key_id: controller.key_id}, signer: controller, order};
   const append = (kind, payload, derivedFrom) => ledger.append({kind, payload, derivedFrom, ...by}).hash;
   /** Where the previous cycle of `scope` ended, and its close, if any (the next cycle's base). */
@@ -430,6 +435,18 @@ export function cycleRecorder({ledger, controller, order}) {
       contract = CYCLE_CONTRACT, policy = null, practice_scope = DEFAULT_PRACTICE_SCOPE, required_reviewers = undefined, author_models = undefined, excluded_labs = undefined,
       identity_policy = undefined, contributors = undefined}) {
       if (![CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3].includes(contract)) throw new Error(`openCycle: the contract is ${CYCLE_CONTRACT}, ${CYCLE_CONTRACT_V3} or ${CYCLE_CONTRACT_V1}`);
+      // THE FLOOR, ON EVERY NEWLY OPENED CYCLE (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6),
+      // question 5): a v2 or v3 cycle opened without required_reviewers records REQUIRED_REVIEW_LABS, so the ledger
+      // refuses fewer reviewers at open and fewer labs at close; a v1 cycle keeps its old payload byte for byte, so its
+      // floor is enforced here, before it opens. Cycles already on a ledger (written without the field) still verify
+      // as recorded: the kind's rules are unchanged, only what a new cycle may be opened with.
+      if (!historical) {
+        if (contract === CYCLE_CONTRACT_V1) {
+          if (!(Number.isInteger(reviewers) && reviewers >= REQUIRED_REVIEW_LABS)) {
+            throw Object.assign(new Error(`openCycle: a new cycle requires ${REQUIRED_REVIEW_LABS} independent reviewers and names ${reviewers}`), {code: 'REVIEW_LABS_BELOW_REQUIRED'});
+          }
+        } else required_reviewers ??= REQUIRED_REVIEW_LABS;
+      }
       const prev = lastCycle(scope);
       const payload = {scope, base, head, diff_sha: sha(diff), files: [...files], prompt_sha: promptSha(prompt),
         brief_sha: sha(brief), reviewers, author_labs: [...author_labs], opened_at, ...(required_reviewers !== undefined ? {required_reviewers} : {})};

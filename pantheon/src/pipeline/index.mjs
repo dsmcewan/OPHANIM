@@ -484,7 +484,10 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       await writeFile(join(dir, "units", `${u.unit_id}.patch`), got.patch);
       Object.assign(u, { resumed: true, base_commit: wt.base_commit, commit: got.record.commit, tree, patch_digest: got.record.patch_digest,
         checkpoint: { resumed_from: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, rubric_hash: got.record.rubric_hash, review_digest: got.record.review_digest, reviewer: clone(got.record.reviewer ?? null), verify: clone(got.record.verify ?? null), reverified: clone(u.resume_verify),
-          contributions: clone(got.record.contributions) } });
+          contributions: clone(got.record.contributions),
+          // The sealed dispatch whose rubric governed the reused patch: its dispatcher stays an arbiter of this run
+          // (record.mjs arbitersOf), excluded from later independent judgment (owner decision 2026-11-19).
+          dispatch: { vendor: got.record.dispatch.vendor, model: got.record.dispatch.model, served_model: got.record.dispatch.served_model ?? null, rubric_hash: got.record.dispatch.rubric_hash } } });
       run.checkpoints.resumed.push(u.unit_id);
       finish(u, "approved");
       ok = true;

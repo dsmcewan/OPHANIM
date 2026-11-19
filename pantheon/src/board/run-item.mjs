@@ -593,9 +593,14 @@ export async function runOpenItem(spec, opts = {}) {
     if (lane) {
       // The lane takes no effort or output cap: none is sent, so none is recorded as sent.
       const settings = { model, pool: pool ?? vendor, transport: transport ?? "agy", effort: null, max_output_tokens: null, output_budget_policy: null };
-      // Antigravity serves Gemini models only (owner direction 2026-11-17). Refused before any call or charge.
+      // Antigravity serves Gemini models only (owner direction 2026-11-17). Refused before any call or charge: a known
+      // non-Google model AND an undeclared name, exactly as agySingleTurn refuses them (sdk/agy-turn.mjs). The output
+      // below carries the input model as served; an undeclared name must not be stamped as who answered (independent
+      // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
       const made = resolveModel(vendor, model);
-      if (made?.known && made.lab !== "google") throw Object.assign(new Error(`the Antigravity transport serves Gemini models only: ${model} is a ${made.lab} model`), { code: "AGY_GEMINI_ONLY" });
+      if (!made?.known || made.lab !== "google") {
+        throw Object.assign(new Error(`the Antigravity transport serves Gemini models only: ${model} is ${made?.known ? `a ${made.lab} model` : "not a declared model"}`), { code: "AGY_GEMINI_ONLY" });
+      }
       admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose });
       let r;
       const a0 = Date.now();
@@ -1212,9 +1217,16 @@ export async function runOpenItem(spec, opts = {}) {
             // shaped by them, so the reviewer's lab joins the slot's contributors (purpose `critique`) and neither the
             // slot's next in-run review nor the cycle's change scope may seat it. Kept in run.files, so a resume keeps it.
             if (rev > 1 && c.pendingRevision?.reason === "review") {
+              // Each row keeps the model ASKED and the model that SERVED the turn whose text reached the prompt: under
+              // model-level independence both are contributors (independent review round 2, assignment 2 (xAI
+              // grok-4.7, 77480d6), question 6). A reviewer recorded before served names were kept has its asked model.
               for (const r of c.pendingRevision.reviewers ?? []) {
-                if (!(c.contributors ??= []).some(x => x.purpose === "critique" && x.vendor === r.vendor && x.model === r.model)) {
-                  c.contributors.push({ purpose: "critique", vendor: r.vendor, model: r.model, slot: c.sl.slot, revision_input: true, via: CRITIQUE_VIA });
+                const served = Array.isArray(r.served_models) && r.served_models.length ? r.served_models : [null];
+                for (const sm of served) {
+                  const row = { purpose: "critique", vendor: r.vendor, model: r.model, ...(sm && sm !== r.model ? { served_model: sm } : {}) };
+                  if (!(c.contributors ??= []).some(x => x.purpose === "critique" && x.vendor === row.vendor && x.model === row.model && (x.served_model ?? null) === (row.served_model ?? null))) {
+                    c.contributors.push({ ...row, slot: c.sl.slot, revision_input: true, via: CRITIQUE_VIA });
+                  }
                 }
               }
             }
@@ -1456,15 +1468,43 @@ export async function runOpenItem(spec, opts = {}) {
       reviewText = reviewed.text;
       const reviewFile = (toReview.length === 1 ? "review" : `review-${built.sl.slot}`) + (need > 1 ? `-${reviewed.seat.vendor}` : "");
       writeFileSync(join(outDir, `${reviewFile}.md`), `# ${reviewed.seat.vendor} · ${reviewed.seat.model} reviewing ${built.seat.vendor} on ${built.sl.slot} (rev ${rev})\n\n${reviewText}\n`);
+      // The served model of the turn just made on this seat: the ledger's record of that prompt, else run.turns.
+      const servedOfTurn = (prompt, from) => ledgerTurns.get(prompt)?.served_model
+        ?? run.turns.slice(from).findLast(t => t.purpose === "critique" && t.vendor === reviewed.seat.vendor && t.model === reviewed.seat.model)?.served_model ?? null;
+      // Every serving model whose text is in reviewText (it is what a revision prompt would carry).
+      const servedNames = [servedOfTurn(p.prompt, 0)];
+      // The prompt of the turn whose reply the verdict is parsed from: the review on the ledger cites THAT turn.
+      let verdictPrompt = p.prompt;
       let m = reviewText.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
       if (!m) {
         progress({ event: "reask", seat: seat.vendor, detail: "no VERDICT line; asking once more" });
-        const again = await turn({ ...reviewed.seat, purpose: "critique", extra: capFor(reviewed.seat.vendor, { tokens: 800 }),
-          prompt: NO_TOOLS + "Your previous reply ended without the required verdict. You cannot read anything further; the file and the " +
-            "executed result were in the message before. Reply with ONE line, exactly `VERDICT: approve` or `VERDICT: request_changes`, " +
-            "then at most three sentences naming the strongest specific flaw if you requested changes." });
-        reviewText += `\n\n[re-asked]\n${again}`;
-        m = again.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
+        const reaskPrompt = NO_TOOLS + "Your previous reply ended without the required verdict. You cannot read anything further; the file and the " +
+          "executed result were in the message before. Reply with ONE line, exactly `VERDICT: approve` or `VERDICT: request_changes`, " +
+          "then at most three sentences naming the strongest specific flaw if you requested changes.";
+        const from = run.turns.length;
+        ledgerTurns.delete(reaskPrompt);   // an earlier slot's re-ask (same prompt text) is not this one
+        const again = await turn({ ...reviewed.seat, purpose: "critique", extra: capFor(reviewed.seat.vendor, { tokens: 800 }), prompt: reaskPrompt });
+        // ADMISSION OF THE RE-ASK, on the model that answered IT (independent review round 2, assignment 2 (xAI grok-4.7,
+        // 77480d6), question 3). The first answer was admitted; this is a second turn, possibly served by another model.
+        // Under the model rule it is checked with reviewerRefusal against the slot's contributors; under the lab rule a
+        // named serving model must be of the reviewer's lab. A refused re-ask supplies no verdict and no text: the slot
+        // fails closed (request_changes), recorded under the first, admitted turn.
+        const againServed = servedOfTurn(reaskPrompt, from);
+        const againWhy = IN_RUN_MODEL
+          ? reviewerRefusal({ vendor: reviewed.seat.vendor, model: reviewed.seat.model, served_model: againServed }, contributorKeys(scope.contributions, ID_POLICY), ID_POLICY)
+          : typeof againServed === "string" && againServed.trim() && labOf(reviewed.seat.vendor, againServed) !== reviewedLab
+            ? `the re-ask was asked of ${reviewed.seat.vendor}/${reviewed.seat.model} (${reviewedLab}) and answered by ${againServed} (${labOf(reviewed.seat.vendor, againServed)})` : null;
+        if (againWhy) {
+          (run.review_rejections ??= []).push({ slot: built.sl.slot, rev, vendor: reviewed.seat.vendor, model: reviewed.seat.model, served_model: againServed, why: againWhy, reask: true });
+          progress({ event: "review.rejected", seat: reviewed.seat.vendor, slot: built.sl.slot, detail: `re-ask: ${againWhy}`.slice(0, 200) });
+          reviewText += `\n\n[re-asked; the answer was not admitted: ${againWhy}]`;
+          m = null;
+        } else {
+          reviewText += `\n\n[re-asked]\n${again}`;
+          servedNames.push(againServed);
+          m = again.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
+          if (m) verdictPrompt = reaskPrompt;
+        }
       }
       const memberVerdict = m ? m[1].toLowerCase() : "request_changes";
       if (!m) progress({ event: "verdict", seat: seat.vendor, detail: "unparseable → request_changes" });
@@ -1473,7 +1513,8 @@ export async function runOpenItem(spec, opts = {}) {
       // On the ledger, the review cites the work turn it judged (which cites the plan). Cold review is then
       // re-derivable: no lab, seat or response in that lineage may have made the review.
       const workTurn = built.workPrompt && ledgerTurns.get(built.workPrompt);
-      const critiqueTurn = ledgerTurns.get(p.prompt);
+      // The turn whose reply the verdict was parsed from (the re-ask, when it supplied it), not always the first.
+      const critiqueTurn = ledgerTurns.get(verdictPrompt);
       if (LEDGER?.recordReview && workTurn && critiqueTurn) {
         LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique@${reviewed.seat.model}`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
           model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
@@ -1483,7 +1524,8 @@ export async function runOpenItem(spec, opts = {}) {
       const c = await publish({ ...board, ref: rref, author: seat, msg: "review",
         entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict: memberVerdict, findings: memberFindings } }] });
       if (!c.ok) throw new Error(`critique publish: ${c.why}`);
-      panel.push({ rref, seat: reviewed.seat, lab: reviewedLab, verdict: memberVerdict, findings: memberFindings });
+      panel.push({ rref, seat: reviewed.seat, lab: reviewedLab, verdict: memberVerdict, findings: memberFindings,
+        served_models: [...new Set(servedNames.filter(x => typeof x === "string" && x.trim()))] });
       usedVendors.push(reviewed.seat.vendor); usedLabs.push(reviewedLab);
       }
       for (const member of panel) {
@@ -1510,7 +1552,7 @@ export async function runOpenItem(spec, opts = {}) {
         // The reviewers whose findings these are (members that requested changes): if the findings reach a revision
         // prompt, those reviewers become contributors of the slot (above, where the prompt is built).
         if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000),
-          reviewers: panel.filter(x => x.findings.length).map(x => ({ vendor: x.seat.vendor, model: x.seat.model })) };
+          reviewers: panel.filter(x => x.findings.length).map(x => ({ vendor: x.seat.vendor, model: x.seat.model, served_models: x.served_models ?? [] })) };
         escalated(`slot:${built.sl.slot}`, { slot: built.sl.slot, rev, ...rec });
         const file = run.files.find(f => f.slot === built.sl.slot);
         if (file) file.escalation = escalationState(built);

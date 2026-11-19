@@ -59,20 +59,23 @@ test('four real labs: an item without a ticket and one with an existing ticket c
       // Change review: contributors are an Anthropic planner and a Google implementer (the lifecycle's default profile
       // is `fit` since 2026-11-17: the worker is an Antigravity Gemini lane; under argo it was an OpenAI seat); the
       // panel is still three labs.
+      // The Stage 2 dispatcher (OpenAI) is excluded too, as an arbiter (Decision 6, owner 2026-11-19).
       const keys = contributorKeys(impl.contributions);
-      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google']);
+      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'openai']);
       assert.deepEqual(impl.contributions.filter(c => c.purpose === 'work').map(c => `${c.vendor}/${c.model}`), ['agy_google/gemini-4-hydrogen-medium']);
       const cr = reviewers(rev);
       assert.equal(new Set(cr.map(t => t.lab)).size, 3);
       for (const t of cr) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
       assert.deepEqual(rev.outputs.author_models, keys.models);
-      assert.equal(rev.outputs.shared_labs.length, 1, 'one seat shares a lab with a contributor, and the record says which');
-      assert.ok(['anthropic', 'google'].includes(rev.outputs.shared_labs[0]));
+      // With the dispatcher's lab among the contributing labs, the panel holds two seats of a contributing lab (each a
+      // model that did not contribute), and the record says which.
+      assert.equal(rev.outputs.shared_labs.length, 2, 'two seats share a lab with a contributor, and the record says which');
+      assert.ok(rev.outputs.shared_labs.every(l => keys.contributing_labs.includes(l)));
       // The cycle on the run ledger is v3 and its close names the shared lab.
       const sys = openPantheonLedger({root: impl.outputs.run.ledger, anchor: impl.outputs.run.ledger_anchor, board: openBoard(impl.outputs.run.board)});
       const payload = h => sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === h));
       assert.equal(payload(rev.outputs.cycle).contract, 'pantheon.cycle/v3');
-      assert.deepEqual(payload(rev.outputs.close).shared_labs, rev.outputs.shared_labs);
+      assert.deepEqual(payload(rev.outputs.close).shared_labs, [...rev.outputs.shared_labs].sort());
       assert.equal(sys.recorder().verify().ok, true);
       // The validator is not a contributor either; the owner can apply the outcome (three labs, checked structurally).
       assert.ok(!keys.models.includes(idOf(val.outputs.validator)));
