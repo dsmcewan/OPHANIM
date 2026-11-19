@@ -4,7 +4,9 @@
 // network. It is launched exactly as the real bridge is (`<python> <bridge>` -> `node <this file>`), inside the same
 // jail when the test asks for one.
 //
-// THE SCRIPT is the start message's prompt: "FAKE:" + JSON [{step}, ...], run in order:
+// THE SCRIPT is in the start message's prompt: "FAKE:" + JSON [{step}, ...], to the end of the prompt or to ":ENDFAKE"
+// (a pipeline test puts it in a unit invariant, which the implementer prompt quotes). "{{WT}}" in it is the workspace
+// the session was started in (a unit's worktree is not known when the plan is written). The steps run in order:
 //   {hook: {tool, args, from?}}            ask the controller to decide a tool call; `from` is "root" (default) or a
 //                                          child's trajectory id. The decision is kept in the result's `decisions`.
 //   {write: {path, content}, if?: N}       write a file (when decision N allowed, or always): what the SDK's tool does
@@ -35,7 +37,9 @@ rl.on("line", line => {
 rl.on("close", () => { cancelled ??= "the controller closed the channel"; if (!start) process.exit(2); });
 
 await started;
-const steps = JSON.parse(start.prompt.slice(start.prompt.indexOf("FAKE:") + 5));
+let script = start.prompt.slice(start.prompt.indexOf("FAKE:") + 5);
+if (script.includes(":ENDFAKE")) script = script.slice(0, script.indexOf(":ENDFAKE"));
+const steps = JSON.parse(script.split("{{WT}}").join(start.workspace));
 const version = steps[0]?.identity?.version ?? "0.1.24";
 out({ type: "identity", runtime: { python: "fake", executable: process.execPath, sdk: { module: "google.antigravity", status: "installed", distribution: "google-antigravity", version, path: "/fake" }, harness: null } });
 out({ type: "ready", conversation_id: "conv-fake", capabilities: { trajectory_events: true, define_subagent_disabled: true } });

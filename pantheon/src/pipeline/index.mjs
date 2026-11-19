@@ -3,8 +3,12 @@
 //   Stage 1  plan          work_units (work-units.mjs) — validated here, authored upstream by the planner
 //   Stage 2  dispatch      dispatcher specialist + frozen rubric; controller locks, waves, worktrees (dispatch.mjs)
 //   Stage 3  implement     one specialist per unit in its own worktree, behind the write jail (implement.mjs)
-//   Stage 4  subagents     the per-unit A2A leaf shim on a Unix socket (a2a-shim.mjs), reached by the agent through
-//                          the stdio MCP relay a2a-mcp-server.mjs
+//   Stage 4  subagents     an ANTIGRAVITY SDK implementer's subagents are the SDK's own: gemini-4-hydrogen specialists
+//                          the controller admits within the implementer model's ceiling (antigravity/subagents.mjs),
+//                          recorded on the attempt (attempts[].session.subagents). No shim is opened for such a unit.
+//                          A unit whose implementer ladder holds a LANE (the earlier agy CLI transport) gets the per-unit
+//                          A2A leaf shim on a Unix socket (a2a-shim.mjs), reached by the agent through the stdio MCP
+//                          relay a2a-mcp-server.mjs
 //   Stage 5  review        pinned to the Stage 2 model; ground truth from verify_cmd; the ladder (review.mjs)
 //
 // Inputs: runPipeline({repo, base, plan, seats, turns, limits, dir, signal, planner?, run_id?, sameModel?, checkpoints?, onCharge?}).
@@ -18,7 +22,8 @@
 // with no call left, opens no seat) and then charges NOTHING before it: the turn is handed `admitRequest({kind})`, which
 // it calls before EVERY provider call at its point of spend -- a lane's worker session between its jail build and its
 // spawn, each API request, a metered failover (by_role.metered_failover), a further billed request
-// (by_role.continuation). Each admission is bounded by max_provider_calls, charged by `onCharge()` (the caller's ledger
+// (by_role.continuation), and every request of an SDK implementer's native Hydrogen subagent
+// (by_role.native_subagent; the SDK transport's gateway admits each one before it is forwarded). Each admission is bounded by max_provider_calls, charged by `onCharge()` (the caller's ledger
 // charge; a throw refuses the call) and on disk before the call. A lane turn that fails before its spawn costs nothing.
 // The up-front check RESERVES one call for the turn until its first admission (so concurrent turns cannot all pass it
 // and overrun the bound). A turn that does not take the contract (a scripted seat, an older adapter) and returns a
@@ -42,6 +47,13 @@
 // of kind "lane_failover"; each failed call is in attempts[].lane_failures [{vendor, model, level, kind, cause, why,
 // retry (true: this call was the same-lane retry), next}]. With no rung left the unit ends blocked, code
 // LANE_LADDER_EXHAUSTED. A later rejection escalates the thinking level from the rung failover left it on.
+// A RUNG is a seat on a transport at a thinking level (implement.mjs sameRung): two levels of one SDK model are two
+// rungs, so a rejection raises the level first. A quota refusal, and a model the provider does NOT SERVE (code
+// "model_unavailable"; cause "model_unavailable" on the escalation and on lane_failures[]), take the model's other
+// levels with them: the unit steps at once to the next rung of ANOTHER model, and the skipped rungs are recorded
+// (skipped_same_base). A model is never replaced without that record. A fault of the SDK transport that no rung can
+// cure (implement.mjs TRANSPORT_BLOCKERS: the provider refused the key, no key, no jail, no SDK) blocks the unit at once
+// with that code: the ladder is not walked.
 //
 // CHECKPOINTS (checkpoint.mjs). With `checkpoints: {dir}` (a directory that persists across runs of one item),
 // every unit approved by Stage 5 is written there; a later run re-verifies a unit's checkpoint (digest, upstream
@@ -72,7 +84,8 @@ import { randomBytes } from "node:crypto";
 import { CAPABILITIES, PIPELINE_SCHEMA, clone, digestOf, now, sameModelName, sameSeat, seatRefusal, sha256 } from "./util.mjs";
 import { validateWorkUnits } from "./work-units.mjs";
 import { bindWorktree, lockConflicts, releaseWorktree, rubricHash, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
-import { runImplementer, MCP_SERVER_PATH } from "./implement.mjs";
+import { runImplementer, sameRung, MCP_SERVER_PATH } from "./implement.mjs";
+import { isSdkSeat } from "../antigravity/config.mjs";
 import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint } from "./checkpoint.mjs";
 import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
@@ -87,7 +100,7 @@ export { validateWorkUnits, parseWorkUnits, PLANNER_PROMPT, WORK_UNITS_SCHEMA } 
 export { pathsOverlap, lockConflicts, waves, rubricHash } from "./dispatch.mjs";
 export { escalate } from "./review.mjs";
 export { unitKey, CHECKPOINT_SCHEMA } from "./checkpoint.mjs";
-export { MCP_SERVER_PATH, LANE_FAILURE_KINDS } from "./implement.mjs";
+export { MCP_SERVER_PATH, LANE_FAILURE_KINDS, TRANSPORT_BLOCKERS, sameRung } from "./implement.mjs";
 
 /** The longest Unix socket path this platform's sockaddr_un takes (sun_path less its NUL). */
 export const SOCKET_PATH_MAX = process.platform === "linux" ? 107 : 103;
@@ -252,7 +265,9 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     // independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 1) and a further billed
     // request of the same turn (a Google continuation hop, a compaction; independent review round 2, assignment 3 (Google
     // gemini-4-carbon, manual, 77480d6), finding 1.1).
-    const admitRequest = ({ kind } = {}) => take(kind === "continuation" ? "continuation" : kind === "failover" ? "metered_failover" : role);
+    // A request of an SDK implementer's native subagent (kind "subagent") is its own bucket: Google's Hydrogen
+    // specialists, not the A2A `subagent` seats.
+    const admitRequest = ({ kind } = {}) => take(kind === "continuation" ? "continuation" : kind === "failover" ? "metered_failover" : kind === "subagent" ? "native_subagent" : role);
     // The older contract's `charge(what)` admits a FURTHER call; the turn's own first call, which that contract charged up
     // front, is admitted with it when nothing was admitted yet.
     const charge = what => { if (admitted === 0) take(role); take(what === "continuation" ? "continuation" : "metered_failover"); };
@@ -404,7 +419,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     if (iWhy) return finish(u, "refused", `implementer: ${iWhy}`);
     let iLadder = (impl.ladder?.length ? impl.ladder : [impl.seat]).map(clone);
     if (iLadder.some(s => seatRefusal(s))) return finish(u, "refused", "implementer ladder: every rung is a seat {vendor, model}");
-    if (!iLadder.some(s => sameSeat(s, impl.seat))) iLadder = [clone(impl.seat), ...iLadder];
+    if (!iLadder.some(s => sameRung(s, impl.seat))) iLadder = [clone(impl.seat), ...iLadder];
     const rLadder = (seats.reviewerLadder(clone(dSeat)) ?? []).map(clone);
     const rWhy = reviewerLadderRefusal(rLadder, dSeat);
     if (rWhy) return finish(u, "refused", rWhy);
@@ -421,17 +436,20 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const wt = await bindWorktree({ repo, base: run.base.commit, path, upstream, lock });
       bound = true;
       Object.assign(u, { status: "active", worktree: path, base_commit: wt.base_commit });
-      sockAt = await a2aSocketFor(control);
-      u.a2a.socket = { file: sockAt.file, fallback: sockAt.fallback, ...(sockAt.fallback ? { wanted: sockAt.wanted } : {}) };
-      const a2aSocket = sockAt.file;
-      // ---- Stage 4: the unit's subagent leaf, up for exactly as long as the unit is active. It is never told `path`.
-      shim = await startA2AShim({ unit_id: unit.unit_id, allowed_subagents: unit.allowed_subagents, socket: a2aSocket, seatFor: role => seats.subagent(frozen(), role), subagentTurn: T.subagent,
-        limits: { max_calls: lim.a2a_max_calls, max_bytes: lim.a2a_max_bytes }, sandbox: CAPABILITIES.subagent, signal,
-        // Not awaited here; a failed write is thrown by the next awaited save.
-        onCall: rec => { u.a2a.calls.push(rec); u.a2a.usage = shim?.usage() ?? null; save().catch(() => {}); } });
+      // ---- Stage 4: the unit's subagent leaf (the A2A shim), up for exactly as long as the unit is active. It is never
+      // told `path`. A unit whose every implementer rung is an SDK seat has none: its subagents are the SDK's own
+      // Hydrogen specialists, admitted and recorded by the transport, and no other subagent seat is asked for it.
+      if (iLadder.some(s => !isSdkSeat(s))) {
+        sockAt = await a2aSocketFor(control);
+        u.a2a.socket = { file: sockAt.file, fallback: sockAt.fallback, ...(sockAt.fallback ? { wanted: sockAt.wanted } : {}) };
+        shim = await startA2AShim({ unit_id: unit.unit_id, allowed_subagents: unit.allowed_subagents, socket: sockAt.file, seatFor: role => seats.subagent(frozen(), role), subagentTurn: T.subagent,
+          limits: { max_calls: lim.a2a_max_calls, max_bytes: lim.a2a_max_bytes }, sandbox: CAPABILITIES.subagent, signal,
+          // Not awaited here; a failed write is thrown by the next awaited save.
+          onCall: rec => { u.a2a.calls.push(rec); u.a2a.usage = shim?.usage() ?? null; save().catch(() => {}); } });
+      }
       await save();
 
-      let state = { revisions: 0, implementer_level: iLadder.findIndex(s => sameSeat(s, impl.seat)), reviewer_level: 0, consecutive_rejections: 0 };
+      let state = { revisions: 0, implementer_level: iLadder.findIndex(s => sameRung(s, impl.seat)), reviewer_level: 0, consecutive_rejections: 0 };
       const cfg = { max_revisions: lim.max_revisions, reviewer_escalation_after: lim.reviewer_escalation_after, implementer_rungs: iLadder.length, reviewer_rungs: rLadder.length };
       let checkpoint = wt.base_commit, findings = [];
       for (let n = 1; ; n++) {
@@ -441,7 +459,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         let a, retried = false;
         for (;;) {
           const seat = iLadder[state.implementer_level];
-          a = await runImplementer({ unit: frozen(), worktree: path, seat, ladder: iLadder, turn: T.implementer, a2a: { socket: shim.socket, token: shim.token, roles: [...shim.roles] },
+          a = await runImplementer({ unit: frozen(), worktree: path, seat, ladder: iLadder, turn: T.implementer, a2a: shim ? { socket: shim.socket, token: shim.token, roles: [...shim.roles] } : null,
             attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH, verify_jail: verifyJail, deadline });
           // The lane was refused for quota and its metered failover was USED but its answer refused (API_FILES_REFUSED:
           // prose, malformed JSON, a path outside the unit): that is still the quota-exhausted lane failing, not the
@@ -454,17 +472,21 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           // A QUOTA refusal steps to the next rung on ANOTHER base model: Antigravity's quota is the base model's, shared
           // by its thinking levels, so the same model's next level would be refused again (two doomed launches and two
           // probes) (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.1).
-          const quota = a.lane_failure.cause === "quota", again = !quota && !retried;
+          // So does a model the provider DOES NOT SERVE (cause "model_unavailable"): its other levels are the same
+          // absent model. Neither is retried on the same rung; the step and the rungs it skipped are recorded.
+          const cause = a.lane_failure.cause === "quota" ? "quota" : a.lane_failure.cause === "model_unavailable" ? "model_unavailable" : "lane";
+          const wholeModel = cause !== "lane", again = !wholeModel && !retried;
           const baseOf = s => laneParts(s?.model)?.base ?? s?.model;
           let nextLevel = state.implementer_level + 1;
-          if (quota) while (nextLevel < iLadder.length && baseOf(iLadder[nextLevel]) === baseOf(seat)) nextLevel++;
+          if (wholeModel) while (nextLevel < iLadder.length && baseOf(iLadder[nextLevel]) === baseOf(seat)) nextLevel++;
           const down = nextLevel < iLadder.length;
-          lane_failures.push({ vendor: seat.vendor, model: seat.model, level: state.implementer_level, kind: a.lane_failure.kind, cause: a.lane_failure.cause, why: a.why, retry: retried,
+          lane_failures.push({ vendor: seat.vendor, model: seat.model, ...(seat.effort !== undefined ? { effort: seat.effort } : {}), level: state.implementer_level, kind: a.lane_failure.kind, cause: a.lane_failure.cause, why: a.why, retry: retried,
+            ...(a.lane_failure.served_mismatch ? { served_mismatch: clone(a.lane_failure.served_mismatch) } : {}),
             next: signal?.aborted ? "aborted" : again ? "same_lane" : down ? "next_rung" : "exhausted" });
           if (signal?.aborted) break;
           if (again) { retried = true; continue; }
           if (!down) break;
-          u.escalations.push({ after_attempt: n, kind: "lane_failover", cause: quota ? "quota" : "lane", from: clone(seat), to: clone(iLadder[nextLevel]),
+          u.escalations.push({ after_attempt: n, kind: "lane_failover", cause, from: clone(seat), to: clone(iLadder[nextLevel]),
             ...(nextLevel > state.implementer_level + 1 ? { skipped_same_base: iLadder.slice(state.implementer_level + 1, nextLevel).map(clone) } : {}) });
           state = { ...state, implementer_level: nextLevel };
           retried = false;
@@ -480,6 +502,9 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         }
         let event, review = null;
         if (a.status !== "written") {
+          // A fault of the transport that no rung can cure (implement.mjs TRANSPORT_BLOCKERS): the unit blocks with
+          // that code. No other rung is tried and no revision is spent on it.
+          if (a.transport_blocker) { u.code = a.code; return finish(u, "blocked", a.why); }
           if (a.code === "PROVIDER_LIMIT" || a.code === "TURN_FAILED" && signal?.aborted) return finish(u, "blocked", a.why);
           event = "attempt_refused"; findings = [a.why];
           u.findings.push({ attempt: n, source: "controller", code: a.code, findings: [a.why] });

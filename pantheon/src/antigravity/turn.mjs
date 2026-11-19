@@ -29,7 +29,8 @@
 // usage, gateway (requests by class, sessions, served models, availability), tool_log, runtime, sandbox, launch}.
 // served_model is the PROVIDER's statement (the response's modelVersion, seen by the gateway) when it resolves to the
 // model asked for; a name that does not resolve is kept as provider_model_version and the pinned input model is
-// recorded with served_model_source "input", never as the provider's statement.
+// recorded with served_model_source "input", never as the provider's statement. A request the provider answered under
+// ANOTHER known model -- the implementer's, or a subagent's -- fails the session (lane_failure, SERVED_MISMATCH).
 //
 // FAILURES (thrown; each carries what was recorded up to it: .subagents, .gateway, .tool_log, .usage):
 //   code "quota_exhausted"     the provider refused for quota (HTTP 429): the pipeline steps the ladder
@@ -78,6 +79,20 @@ const laneFailure = (kind, message, more = {}) => fail("lane_failure", message, 
 /** Where the SDK's python is: PANTHEON_ANTIGRAVITY_PYTHON, else PANTHEON_AGY_PYTHON, else the documented venv under the user's home. */
 export function sdkPython(env = process.env) {
   return env.PANTHEON_ANTIGRAVITY_PYTHON ?? env.PANTHEON_AGY_PYTHON ?? join(homedir(), ".local", "share", "pantheon", "venv-antigravity", "bin", "python");
+}
+
+/**
+ * The directories the SDK's python is read from, for the jail: its VENV (the directory holding pyvenv.cfg: bin/python
+ * and the SDK under lib/), else its own directory; and, when it is a link (a venv's python is one), the prefix of the
+ * interpreter it resolves to (<prefix>/bin, <prefix>/lib). [] for a bare command name, which PATH resolves.
+ */
+export function pythonRoots(python) {
+  if (!str(python) || !python.includes("/")) return [];
+  const at = resolve(python), bin = dirname(at), venv = dirname(bin);
+  const roots = [existsSync(join(venv, "pyvenv.cfg")) ? venv : bin];
+  const target = real(at);
+  if (target !== join(real(bin), at.slice(bin.length + 1))) { const prefix = dirname(dirname(target)); roots.push(existsSync(join(prefix, "lib")) ? prefix : dirname(target)); }
+  return [...new Set(roots.map(real))];
 }
 
 /** The bridge's environment: a short allowlist. No key, no token, no proxy, no PANTHEON_ or provider variable. */
@@ -222,12 +237,13 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
       if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", `the implementer session is not started unjailed: bwrap is not usable here (${probe.why})`);
       sandboxRecord = { enabled: false, why: `bwrap is not usable (${probe.why}); the caller allowed an unsandboxed session` };
     } else {
-      const keep = [process.execPath, resolve(HERE, ".."), real(dirname(python)), real(dirname(bridge))];
+      const keep = [process.execPath, resolve(HERE, ".."), ...pythonRoots(python), real(dirname(bridge))];
       const jail = bwrapArgs({ worktree: paths.worktree, control_dir: paths.control_dir, bwrap: box.bwrap, keep_visible: keep });
       // THE USER'S HOME. The bridge needs no credential from it (the key is the gateway's), so every credential-bearing
       // directory of the home (verify-jail.mjs HOME_SECRET_DIRS: .ssh, .gemini, .codex, .config, .local/share, ...) is
       // covered with an empty tmpfs; a path the session itself runs from that lies inside one (the SDK's venv under
-      // ~/.local/share) is bound back read-only, alone. These go BEFORE the jail's own binds, which then override them.
+      // ~/.local/share, whole: pythonRoots) is bound back read-only, alone. These go BEFORE the jail's own binds, which
+      // then override them.
       const home = real(box.home ?? homedir()), hidden = [], kept = [], extra = [];
       const needed = [...new Set([...keep, paths.worktree, paths.control_dir].map(real))];
       for (const d of HOME_SECRET_DIRS) {
@@ -365,6 +381,13 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
     const resolved = servedNames.map(n => ({ name: n, id: resolveModel(SDK_VENDOR, n) }));
     const other = resolved.find(r => r.id?.known && asked?.known && r.id.id !== asked.id);
     if (other) throw laneFailure("exit", `SERVED_MISMATCH: ${model} was asked and the provider answered as ${other.name}: the session's work is not taken as ${model}'s`, { served_mismatch: { asked: model, served: other.name } });
+    // ...AND FOR ITS SUBAGENTS. A child's request the provider answered under another known model was not the pinned
+    // subagent model's work, whatever the request named: the session fails the same way.
+    if (model !== SUBAGENT_MODEL) {
+      const pinned = resolveModel(SDK_VENDOR, SUBAGENT_MODEL);
+      const stray = (g?.served_models?.[SUBAGENT_MODEL] ?? []).map(n => ({ name: n, id: resolveModel(SDK_VENDOR, n) })).find(r => r.id?.known && pinned?.known && r.id.id !== pinned.id);
+      if (stray) throw laneFailure("exit", `SERVED_MISMATCH: a subagent request for ${SUBAGENT_MODEL} was answered as ${stray.name}: the session's work is not taken as ${model}'s with ${SUBAGENT_MODEL} subagents`, { served_mismatch: { asked: SUBAGENT_MODEL, served: stray.name, class: "subagent" } });
+    }
     const same = resolved.find(r => r.id?.known && asked?.known && r.id.id === asked.id);
     const unresolved = resolved.filter(r => !r.id?.known).map(r => r.name);
     record.usage = final.usage ?? null;

@@ -4,11 +4,11 @@
 // real jail says so. Each test names the defect it would catch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, IMPLEMENTER_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
+import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, pythonRoots, IMPLEMENTER_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { startFakeGemini, text, QUOTA } from "./fixtures/fake-gemini.mjs";
@@ -196,6 +196,23 @@ test("the provider's own statement of the model that answered is what the turn r
   assert.deepEqual([rd.served_model, rd.served_model_source], ["gemini-4-carbon", "input"], "no statement from the provider: the pinned input, marked as such");
 });
 
+test("a subagent request the provider answers under another model fails the session: its work is not taken as Hydrogen's", async t => {
+  const ask = "List every caller of the unit's exported function, with file paths.";
+  const steps = [
+    { request: { model: "gemini-4-carbon", as: "root" } },
+    { hook: { tool: "invoke_subagent", args: { Subagents: [{ TypeName: "code-explorer", Role: "caller finder", Prompt: ask }] } } },
+    { request: { model: "gemini-4-hydrogen", as: "code-explorer", session: "s1" } },
+  ];
+  const answeredAs = name => ({ model }) => ({ parts: [text("ok")], ...(model === "gemini-4-hydrogen" ? { modelVersion: name } : {}) });
+  const a = await setup(t, { decide: answeredAs("gemini-4-carbon") });
+  await assert.rejects(a.run(CARBON, steps), e => e.code === "lane_failure" && e.kind === "exit" && /SERVED_MISMATCH: a subagent request for gemini-4-hydrogen was answered as gemini-4-carbon/.test(e.message)
+    && e.served_mismatch.asked === "gemini-4-hydrogen" && e.served_mismatch.served === "gemini-4-carbon" && e.subagents.admitted_total === 1);
+  // A dated snapshot of the pinned model is the pinned model.
+  const b = await setup(t, { decide: answeredAs("gemini-4-hydrogen-20261101") });
+  const rb = await b.run(CARBON, steps);
+  assert.deepEqual(rb.gateway.served_models["gemini-4-hydrogen"], ["gemini-4-hydrogen-20261101"]);
+});
+
 test("a quota refusal by the provider is a quota failure with the record kept; the run's own bound is PROVIDER_LIMIT", async t => {
   const q = await setup(t, { decide: () => QUOTA });
   await assert.rejects(q.run(CARBON, [invoke(2), { request: { model: "gemini-4-carbon", as: "root" } }, { result: { ok: false, message: "model unreachable: Error 429" } }]), e => {
@@ -299,11 +316,32 @@ test("REAL JAIL: the home's credential-bearing directories are empty to the brid
   mkdirSync(bridgeDir, { recursive: true });
   const bridge = join(bridgeDir, "fake-antigravity-bridge.mjs");
   writeFileSync(bridge, readFileSync(FAKE_BRIDGE));
-  const r = await run(CARBON, [{ probe: { read: Object.values(files) } }], { sandbox: { enabled: true, home }, bridge });
+  // The SDK's python is a VENV's (the documented install is ~/.local/share/pantheon/venv-antigravity): bin/python is a
+  // link to the interpreter, and the SDK is under lib/. The whole venv is what the session runs from, not bin/ alone.
+  const venv = join(home, ".local", "share", "pantheon", "venv-antigravity");
+  mkdirSync(join(venv, "bin"), { recursive: true }); mkdirSync(join(venv, "lib", "site-packages"), { recursive: true });
+  writeFileSync(join(venv, "pyvenv.cfg"), "home = /usr/local/bin\n");
+  writeFileSync(join(venv, "lib", "site-packages", "sdk.py"), "# the SDK\n");
+  symlinkSync(process.execPath, join(venv, "bin", "python"));
+  const sdk = join(venv, "lib", "site-packages", "sdk.py");
+  const r = await run(CARBON, [{ probe: { read: [...Object.values(files), sdk] } }], { sandbox: { enabled: true, home }, bridge, python: join(venv, "bin", "python") });
   const p = note(r).probes[0];
-  assert.deepEqual(p.can_read, { [files.ssh]: false, [files.codex]: false, [files.keys]: false, [files.netrc]: false, [files.plain]: true }, "only the home's ordinary files are visible");
+  assert.deepEqual(p.can_read, { [files.ssh]: false, [files.codex]: false, [files.keys]: false, [files.netrc]: false, [files.plain]: true, [sdk]: true }, "only the home's ordinary files and the SDK's venv are visible");
   assert.ok(r.sandbox.home_dirs_hidden.includes(join(home, ".local", "share")) && r.sandbox.home_dirs_hidden.includes(join(home, ".ssh")));
-  assert.deepEqual(r.sandbox.home_paths_kept.map(k => k.path), [bridgeDir], "the bridge's own directory is bound back, alone");
+  assert.deepEqual(r.sandbox.home_paths_kept.map(k => k.path).sort(), [bridgeDir, venv], "the bridge's directory and the SDK's venv are bound back, and nothing else");
+});
+
+test("pythonRoots: a venv's python needs the whole venv and the interpreter it links to", t => {
+  const root = join(tmpdir(), `pantheon-venv-${process.pid}`);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const venv = join(root, "venv"), base = join(root, "cpython");
+  for (const d of [join(venv, "bin"), join(base, "bin"), join(base, "lib")]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(venv, "pyvenv.cfg"), "home = x\n");
+  writeFileSync(join(base, "bin", "python3.12"), "");
+  symlinkSync(join(base, "bin", "python3.12"), join(venv, "bin", "python"));
+  assert.deepEqual(pythonRoots(join(venv, "bin", "python")), [venv, base]);
+  assert.deepEqual(pythonRoots(join(base, "bin", "python3.12")), [join(base, "bin")], "not a venv, not a link: its own directory");
+  assert.deepEqual(pythonRoots("python3"), [], "a bare command name is found on PATH: nothing of the home is bound back for it");
 });
 
 test("REAL JAIL: the bridge runs inside bwrap with the host read-only, its own PID namespace and a fresh /tmp, and still reaches the gateway", async t => {
