@@ -26,7 +26,9 @@
 //
 // Must never: list an arbiter as a contributor, or drop a reviewer whose finding reached a revision.
 
-const key = c => [c.kind, c.unit_id ?? "", c.vendor ?? "", c.model ?? "", c.served_model ?? ""].join("\u0000");
+// The key is every identity field a row carries: two calls of one model served under two markers stay two rows, so no
+// served_model_source is dropped by de-duplication (wave 3, L-504 invariant 2). `model` is the name asked (the seat).
+const key = c => [c.kind, c.unit_id ?? "", c.vendor ?? "", c.model ?? "", c.served_model ?? "", c.served_model_source ?? ""].join("\u0000");
 const sorted = list => [...new Map(list.map(c => [key(c), c])).values()].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 const units = run => Object.values(run?.units ?? {});
 

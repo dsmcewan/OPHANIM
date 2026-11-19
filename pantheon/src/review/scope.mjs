@@ -65,7 +65,11 @@ export function reviewScope({ kind, turns, slot = null, projections = PROJECTION
     const row = { purpose: t.purpose, vendor: t.vendor, model: t.served_model ?? t.model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model ?? null),
       ...(t.served_model && t.model && t.served_model !== t.model ? { requested_model: t.model } : {}),
       // Where the served name came from (the transport's marker), kept with it (self-audit round 3, assignment 2 (sealed 449ca42), L-203).
-      ...(t.served_model_source ? { served_model_source: t.served_model_source } : {}),
+      // A turn that RECORDS that it named no serving model (served_model: null) keeps `model` as the name asked and SAYS so
+      // ("unnamed"): the served model is unknown, never taken from the request (wave 3, L-504 invariant 2; review/identity.mjs
+      // identityOf). A row without the field (a critique row, which omits the served name when it is the name asked) is
+      // read as it states.
+      ...(t.served_model || !Object.hasOwn(t, "served_model") ? (t.served_model_source ? { served_model_source: t.served_model_source } : {}) : { served_model_source: "unnamed" }),
       ...(t.slot ? { slot: t.slot } : {}), ...(t.turn ? { turn: t.turn } : {}) };
     if (!path) { excluded.push({ ...row, why: `a ${t.purpose} turn has no path to the reviewed bytes` }); continue; }
     if (kind === "artifact" && t.purpose === "work" && slot !== null && t.slot !== undefined && t.slot !== slot) {
