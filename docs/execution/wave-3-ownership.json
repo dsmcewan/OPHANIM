@@ -19,7 +19,8 @@
     "3B's final qualification claims rest on the 3A gate (hung and cut-off files detected): 3B is verified on the integrated 3A gate",
     "3B is split: 3B-1 runs three agents concurrently (evidence+wake, identity, agy guard+spend) from the integrated 3A commit; 3B-2 (lint review and enforcement, L-503) runs after 3B-1 is integrated, because lint fixes touch test files every 3B-1 agent owns and enforcement must cover their new tests",
     "shared hot files have ONE owner each in 3B-1: stages.mjs and live-run.mjs -> identity; context/gates/reconcile/scheduler -> evidence+wake; agy-cli/run-item/sdk/turns/util -> agy+spend. A needed change in another owner's file is written as a patch under the agent's report, not made; the coordinator routes it",
-    "L-123 (writable verification boundary) is unresolved: no 3B claim may assert artifact integrity after verification"
+    "L-123 (writable verification boundary) is unresolved: no 3B claim may assert artifact integrity after verification",
+    "3B-2 runs two agents from the 3B-1 integration commit, split by tree: 3b-lint-ophanim (ophanim findings + the lint rules and their CI enforcement) and 3b-lint-pantheon (pantheon and packages findings). Rule changes only for a demonstrated false positive/negative with a self-test; the integrated tree must pass `lint-tests.mjs --enforce`"
   ],
   "subwaves": {
     "3A": {
@@ -185,6 +186,52 @@
         "region_limits": {
           "pantheon/src/review-runner/subscription.mjs": "the agy worker call path only; review-runner index/copy/continue belong to 3A (integrated first)"
         }
+      }
+    },
+    "3B-2": {
+      "agent-3b-lint-ophanim": {
+        "branch": "wave3/lint-ophanim",
+        "base_commit": "3B-1 integration commit",
+        "findings": [
+          "L-503 (ophanim findings, then enforcement)"
+        ],
+        "files": [
+          "ophanim/governance/governance.test.mjs",
+          "ophanim/ledger/efficiency-kinds.test.mjs",
+          "ophanim/operate/{context-bounds,context,exec-reliability-a3,exec-reliability,fit-lifecycle,lifecycle-evidence-review,lifecycle-identity-r3,plan-lineage,reliability-r2-a3,revision-reassessment,scheduler,stages}.test.mjs",
+          "ophanim/public/public-record.test.mjs",
+          "ophanim/tests/{fixtures,runtime-boundaries}.test.mjs",
+          "ophanim/operate/test-fixtures.mjs",
+          "scripts/test-gates/lint-tests.mjs",
+          "scripts/test-gates/lint-tests.test.mjs",
+          "scripts/test-gates/suites.mjs",
+          "scripts/test-gates/check.test.mjs",
+          ".github/workflows/qualification.yml"
+        ],
+        "new_files": [],
+        "allowed_extra": [
+          "package.json"
+        ],
+        "region_limits": {
+          "package.json": "the test:lint entry only",
+          ".github/workflows/qualification.yml": "the Test lint step only",
+          "scripts/test-gates/suites.mjs": "the coverage check that the workflow's lint step enforces"
+        }
+      },
+      "agent-3b-lint-pantheon": {
+        "branch": "wave3/lint-pantheon",
+        "base_commit": "3B-1 integration commit",
+        "findings": [
+          "L-503 (pantheon and packages findings)"
+        ],
+        "files": [
+          "packages/ledger/tests/{append,status-proposal}.test.mjs",
+          "packages/model-client/tests/request.test.mjs",
+          "pantheon/tests/{acceptance-tool-links,agy-jail-hook,agy-observed-pass-1.5.10,agy-sandbox-r2a4,agy-sandbox,agy-seat-identity,agy-tool-drift,agy-worker-probe,agy-worker,context-chain,fit-matrix,frontier-adapter,practice-paired,review-model-independence,review-runner-cli-units,review-runner-continue,review-runner-round2,review-runner-run,review-runner-subscription,role-seating,route-dispatch-selection,route-protocol,route-task-profile,seat-argv,view-bus}.test.mjs",
+          "pantheon/tests/fixtures/**",
+          "pantheon/tests/review-runner-helper.mjs"
+        ],
+        "new_files": []
       }
     }
   }
