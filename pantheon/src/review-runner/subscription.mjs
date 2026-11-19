@@ -17,15 +17,17 @@
 // the findings header, and the run's status becomes `policy_violation`. A failure the transport itself reports (Codex:
 // `turn.failed` or an error the SDK throws) is status `failed`, with that message as the stop reason; it can be
 // continued like an incomplete run.
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile, access } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile, access } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { REVIEW_DIR, SEPARATOR, renderHarness, reviewerHeaderLines, sha256 } from "./brief.mjs";
 import { WITHHELD } from "./sandbox.mjs";
 import { redact } from "./vendors.mjs";
 import { allowedCommands, compareWorktree, findCli, readRule, reviewTmpBase, runCli, sandboxNote, scrubEnv, secretValues, tail, worktreeState, writeRule, REVIEW_TESTS_DIR } from "./cli-common.mjs";
-import { CODEX_SDK_PACKAGE, LOOPBACK_NO_PROXY, codexPermissionProfile, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv } from "./codex.mjs";
+import { CODEX_SDK_PACKAGE, LOOPBACK_NO_PROXY, codexPermissionProfile, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv,
+  SCRATCH_TMP_MAX, UNIX_SOCKET_PATH_MAX, codexOuterLauncher, detectWsl, readOsRelease, scratchCandidates, scratchFits } from "./codex.mjs";
 import { dropGrokScratch, grokArgv, grokBwrapArgs, grokPreflight, grokStateScratch, grokStopFailure, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
+import { exportReviewCopy, REVIEW_COPY_KIND } from "./review-copy.mjs";
 import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane } from "./agy.mjs";
 import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
 import { prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
@@ -59,7 +61,7 @@ const KNOWLEDGE = {
       "`codex debug prompt-input`, with the run's overrides and working directory, reports exactly the runner's permission profile (file-system entries, restricted file system, network on behind the proxy); anything else is a refusal"],
     assumed: ["no real model turn has been run through this runner (no ChatGPT login where it was written); the SDK's spawn, argv and env handling were read in its source and the CLI's resume/sandbox/login behaviour observed without credentials",
       "a ChatGPT sign-in bills the run to the subscription (documented: \"Sign in with ChatGPT for subscription access\")",
-      "codex applies the runner's permission profile in exec as `codex debug prompt-input` reports it and as `codex sandbox -P` enforced it (observed with the 0.170.0 binary, no model turn); codex runs its OWN bubblewrap sandbox, NOT nested in the runner's",
+      "codex applies the runner's permission profile in exec as `codex debug prompt-input` reports it and as `codex sandbox -P` enforced it (observed with the 0.170.0 binary, no model turn); codex runs its OWN bubblewrap sandbox, NOT nested in the runner's (on WSL it runs inside the runner's outer namespace: codex_outer_runtime)",
       "the commands inherit TMPDIR (the scratch dir) from the codex process (codex's default shell_environment_policy; observed through `codex sandbox`, not through a model turn)",
       "approval_policy never: no command is escalated out of the sandbox; codex has no per-command allowlist, so the listed test commands are asked for, not enforced",
       "on the wall clock the SDK SIGTERMs the codex process only (it exposes no pid, so no process group); codex's own children are left to codex's teardown",
@@ -69,7 +71,8 @@ const KNOWLEDGE = {
       "the wall clock: the SDK's abort signal", "a failure the SDK reports (turn.failed, a thrown error) is status `failed` with its message", "the post-run git check of the worktree (writes outside .review-tests/, any write for assignment 4, a moved HEAD)"],
   },
   "grok-cli": {
-    verified_by_preflight: ["`grok --version` runs", "the state dir (--grok-state-dir) exists and is not empty", "bwrap runs"],
+    verified_by_preflight: ["`grok --version` runs", "the state dir (--grok-state-dir) exists and is not empty", "bwrap runs",
+      "the state dir's config.toml has at least one string-form [permission] allow rule (grok 1.0.44 loaded zero from the structured rules = [...] form) and no approve-everything mode; with --grok-permissions-inspect, the CLI's own inspection reports more than zero loaded rules"],
     assumed: ["the browser login lives in the state dir (nothing was discovered; no documented login-status command)",
       "UNDOCUMENTED: whether a SuperGrok / X Premium subscription covers Grok Build CLI usage (subscription_coverage: undocumented)",
       "`-p`, `--output-format streaming-json`, `-m` as documented (docs.x.ai/build/overview, read 2026-11-18); the event schema is undocumented: the observed grok 1.0.44 shapes (text/thought/tool_call/end) are read, others tolerantly",
@@ -144,21 +147,23 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
   const tmp = await realpath(await mkdtemp(join(tmpBase, "ophanim-review-")));
   const wtPath = join(tmp, "worktree"), control = join(tmp, "control"), runDir = join(tmp, "run");
   await mkdir(runDir, { recursive: true, mode: 0o700 });
-  let worktreeAdded = false, agyJail = null, grokScratch = null, code = EXIT.refused;
+  let agyJail = null, grokScratch = null, code = EXIT.refused, outsideScratch = null, reviewCopy = null;
   const cleanup = async () => {
     if (agyJail) await dropGeminiState(agyJail.gstate).catch(() => null);   // the scratch holds the OAuth token: always dropped
     await dropGrokScratch(grokScratch);                                     // the copy of the Grok login: always dropped
-    if (worktreeAdded && !opts.keep) { await git(repoRoot, ["worktree", "remove", "--force", wtPath]); await git(repoRoot, ["worktree", "prune"]); }
+    if (outsideScratch && !opts.keep) await rm(outsideScratch, { recursive: true, force: true });
     if (!opts.keep) await rm(tmp, { recursive: true, force: true });
   };
   try {
-    // THE WORKTREE: a real detached worktree for a run; an empty stand-in for a dry run (only the preflights run).
+    // THE REVIEW COPY: a fresh single-commit repository exporting the commit minus the withheld paths (review-copy.mjs:
+    // git then works inside every CLI's sandbox, and no withheld findings file is recoverable from its history; a
+    // `git worktree` needed the owner's .git/worktrees/<id> readable and exposed the whole history). An empty stand-in
+    // for a dry run (only the preflights run).
     if (opts.dryRun) await mkdir(wtPath);
     else {
-      const add = await git(repoRoot, ["worktree", "add", "--detach", wtPath, opts.commit]);
-      if (add.code !== 0) { err(`run-review: refused: git worktree add failed: ${add.stderr.trim()}\n`); return EXIT.refused; }
-      worktreeAdded = true;
-      for (const f of a.withheld) await rm(join(wtPath, f), { force: true });
+      try { reviewCopy = await exportReviewCopy({ repoRoot, commit: opts.commit, dest: wtPath, withheld: a.withheld, scratch: join(runDir, "export") }); }
+      catch (e) { err(`run-review: refused: the review copy could not be made: ${e.message}\n`); return EXIT.refused; }
+      finally { await rm(join(runDir, "export"), { recursive: true, force: true }); }
       if (deps.copyDependencies !== false) {
         for (const d of ["node_modules", "pantheon/node_modules", "packages/model-client/node_modules", "packages/ledger/node_modules"]) {
           if (await exists(join(repoRoot, d))) await cp(join(repoRoot, d), join(wtPath, d), { recursive: true, verbatimSymlinks: true });
@@ -172,12 +177,46 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
 
     // Codex: the permission profile its sandbox applies (codex.mjs codexPermissionProfile), with a per-run scratch
     // TMPDIR outside the copy (the tests' temp files; deleted with the run dir).
-    let codexProfile = null;
+    let codexProfile = null, scratchRec = null, outer = null, launcher = cli;
+    const runWarnings = [];
     if (transport === "codex-sdk") {
-      const scratchTmp = join(runDir, "tmp");
-      await mkdir(scratchTmp, { recursive: true, mode: 0o700 });
+      // A SHORT scratch TMPDIR (codex.mjs SCRATCH_TMP_MAX): the tests put Unix sockets under it.
+      const cand = (deps.scratchCandidates ?? scratchCandidates)(tmpBase);
+      let scratchTmp = null;
+      for (const c of cand) {
+        if (!scratchFits(c)) continue;
+        try { await mkdir(c.parent, { recursive: true, mode: 0o700 }); scratchTmp = await realpath(await mkdtemp(join(c.parent, c.prefix))); await chmod(scratchTmp, 0o700); break; } catch { scratchTmp = null; }
+      }
+      if (scratchTmp && !scratchTmp.startsWith(tmp + "/")) outsideScratch = scratchTmp;
+      if (!scratchTmp) {
+        scratchTmp = join(runDir, "tmp");
+        await mkdir(scratchTmp, { recursive: true, mode: 0o700 });
+        runWarnings.push(`scratch TMPDIR: no candidate (${cand.map(c => join(c.parent, `${c.prefix}XXXXXX`)).join(", ")}) is at most ${SCRATCH_TMP_MAX} bytes and writable, so TMPDIR is ${scratchTmp} (${Buffer.byteLength(scratchTmp)} bytes): a test that puts a Unix socket under it may fail with listen EINVAL (the limit is ${UNIX_SOCKET_PATH_MAX} bytes)`);
+      }
+      scratchRec = { path: scratchTmp, bytes: Buffer.byteLength(scratchTmp), max_bytes: SCRATCH_TMP_MAX, unix_socket_path_max: UNIX_SOCKET_PATH_MAX, removed_after_run: !opts.keep };
       childEnv.TMPDIR = scratchTmp;
       codexProfile = codexPermissionProfile({ worktree: wt, write_allowed, scratchTmp, readRoots: await codexReadRoots({ cli, childEnv, telosRoot: opts.telosRoot }) });
+      // WSL: the outer runtime namespace (codex.mjs codexOuterLauncher), unless --codex-outer-runtime off.
+      const det = detectWsl({ env, osrelease: deps.osRelease !== undefined ? deps.osRelease : readOsRelease() });
+      const mode = opts.codexOuterRuntime ?? "auto";
+      outer = { applied: false, mode, wsl: det.wsl, evidence: det.evidence };
+      if ((mode === "on" || (mode === "auto" && det.wsl)) && cli) {
+        const bw = await findCli("bwrap", deps.bwrap?.startsWith("/") ? deps.bwrap : null, env);
+        const codexHome = resolve(childEnv.CODEX_HOME || join(childEnv.HOME ?? homedir(), ".codex"));
+        if (!bw) outer.why = "bwrap was not found on PATH";
+        else if (!(await exists(codexHome))) outer.why = `${codexHome} (CODEX_HOME) does not exist: sign in with \`codex login\` first`;
+        else {
+          const realCli = await realpath(cli);
+          const l = codexOuterLauncher({ bwrap: bw, codex: realCli, writable: [tmp, scratchTmp, await realpath(codexHome)], readOnly: [dirname(realCli)] });
+          launcher = join(runDir, "codex-outer");
+          await writeFile(launcher, l.script, { mode: 0o700 });
+          delete childEnv.WSL_INTEROP;   // as the operator did; the private /run hides /run/WSL anyway
+          Object.assign(outer, { applied: true, launcher, argv: [...l.argv, "<codex arguments>"], writable: l.writable, read_only: l.read_only,
+            reason: "WSL: codex's own bwrap cannot mkdir /run/WSL under the profile's denied /run (observed at 77480d6); a private /run in an outer namespace removes the host interop mount before codex starts; the inner permission profile is unchanged",
+            cost: "one more namespace level: codex's own bwrap runs nested inside the outer one" });
+        }
+        if (!outer.applied) outer.failed = `the WSL outer runtime for codex could not be set up: ${outer.why}`;
+      }
     }
     const cmds = allowedCommands({ permissions, worktree: wt, prefixWithCd: transport === "agy-cli", telosRoot: opts.telosRoot,
       envPrefix: transport === "codex-sdk" ? `env NO_PROXY=${LOOPBACK_NO_PROXY} no_proxy=${LOOPBACK_NO_PROXY} ` : "" });
@@ -210,7 +249,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       env: { passed: Object.keys(childEnv).sort(), removed: scrub.removed, note: "names only; every key, token and secret is removed so the CLI cannot switch to metered billing" },
       ...KNOWLEDGE[transport],
       ...(transport === "grok-cli" ? { unknowns: UNKNOWNS_GROK } : {}),
-      worktree: { path: wt, kind: opts.dryRun ? "empty stand-in (dry run: no worktree is created)" : "detached git worktree in a new temp dir", removed_after_run: !opts.keep },
+      worktree: { path: wt, kind: opts.dryRun ? "empty stand-in (dry run: no copy is created)" : REVIEW_COPY_KIND, removed_after_run: !opts.keep },
       out: outPaths,
       model_turns: 0,
       ...(resume ? { continue: { from: resume.path, transcript_sha256: resume.sha256, method, resume_support: RESUME_SUPPORT[transport], prior: resume.prior,
@@ -223,17 +262,22 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       const why = transport === "codex-sdk" && !explicit ? `the codex binary the SDK would spawn was not found (${sdk.ok ? sdk.binary?.why : sdk.why})` : `${cliName} not found (${explicit ? `at ${explicit}` : "on PATH"})`;
       pre = { ok: false, failed: [`${why}; subscription mode never falls back to the API`], checks: {}, cli_version: null, auth_method_observed: null };
     } else if (transport === "codex-sdk") {
-      const sdkOptions = codexSdkOptions({ env: childEnv, binary: cli, allowApiKeyLogin: Boolean(opts.allowApiKeyInCli), configOverrides: codexProfile.overrides });
+      // On WSL the SDK and every preflight command run the outer launcher, which execs the same codex binary.
+      const sdkOptions = codexSdkOptions({ env: childEnv, binary: launcher, allowApiKeyLogin: Boolean(opts.allowApiKeyInCli), configOverrides: codexProfile.overrides });
       const threadOptions = codexThreadOptions({ model: row.model, worktree: wt });
       const resumeId = method === "codex-sdk-resume" ? resume.t.cli.thread_id : null;
-      Object.assign(plan, { argv: [...sdkSpawnArgv({ binary: cli, sdkOptions, threadOptions, resumeId }), `(stdin: ${promptRef})`], cwd: null,
+      plan.codex_outer_runtime = outer;
+      plan.scratch_tmp = scratchRec;
+      Object.assign(plan, { argv: [...(outer.applied ? outer.argv.slice(0, -1) : []), ...sdkSpawnArgv({ binary: cli, sdkOptions, threadOptions, resumeId }), `(stdin: ${promptRef})`], cwd: null,
         argv_note: `the argv ${CODEX_SDK_PACKAGE} builds from these options (dist/index.js:178-247) and spawns itself; the prompt is written to the CLI's stdin`,
-        sdk_options: { env: "the scrubbed environment (names under env.passed); the SDK adds CODEX_INTERNAL_ORIGINATOR_OVERRIDE", codexPathOverride: cli, ...(sdkOptions.config ? { config: sdkOptions.config } : {}), configOverrides: sdkOptions.configOverrides, apiKey: "never passed", baseUrl: "never passed" },
+        sdk_options: { env: "the scrubbed environment (names under env.passed); the SDK adds CODEX_INTERNAL_ORIGINATOR_OVERRIDE", codexPathOverride: launcher, ...(sdkOptions.config ? { config: sdkOptions.config } : {}), configOverrides: sdkOptions.configOverrides, apiKey: "never passed", baseUrl: "never passed" },
         thread_options: threadOptions, ...(resumeId ? { resume_thread_id: resumeId } : {}),
         sandbox: { kind: "codex's own sandbox (bubblewrap + seccomp on Linux) under the runner's permission profile", profile: codexProfile.name, filesystem: codexProfile.filesystem, network: codexProfile.network,
-          network_note: "on only behind codex's managed proxy (features.network_proxy) with no allowed domain: the commands get their own network namespace", approvals: threadOptions.approvalPolicy, nested_in_runner_bwrap: false },
+          network_note: "on only behind codex's managed proxy (features.network_proxy) with no allowed domain: the commands get their own network namespace", approvals: threadOptions.approvalPolicy, nested_in_runner_bwrap: false, outer_runtime: outer.applied ? "an outer bwrap namespace (WSL; codex_outer_runtime): host read-only, private /run and /tmp" : null },
         writable_paths: [`${codexProfile.scratch_tmp} (the commands' TMPDIR, outside the worktree, removed with the run)`, ...(write_allowed ? [`${wt}/${REVIEW_TESTS_DIR}`] : [])] });
-      pre = await codexPreflight({ cli, env: childEnv, model: row.model, opts, sdk: plan.sdk, permissions: { overrides: codexProfile.overrides, expected_entries: codexProfile.expected_entries, cwd: wt } });
+      pre = await codexPreflight({ cli: launcher, env: childEnv, model: row.model, opts, sdk: plan.sdk, permissions: { overrides: codexProfile.overrides, expected_entries: codexProfile.expected_entries, cwd: wt } });
+      if (outer.failed) { pre.ok = false; pre.failed.unshift(outer.failed); }
+      if (outer.applied) pre.checks.outer_runtime = { applied: true, evidence: outer.evidence, note: "every preflight command above ran through the outer launcher, as the run will" };
       runner = async () => {
         const Codex = deps.CodexSDK ?? (await import(CODEX_SDK_PACKAGE)).Codex;
         return runCodexSdk({ Codex, sdkOptions, threadOptions, prompt, wall, resumeId, redactEnv: childEnv, ...(deps.codexAbortGraceMs ? { graceMs: deps.codexAbortGraceMs } : {}) });
@@ -248,7 +292,14 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       Object.assign(plan, { argv: [...jailPlan.argv, cli, ...gargv.map(x => (x === prompt ? promptRef : x))], cwd: wt,
         sandbox: { kind: "the runner's bwrap jail (the containment; the Grok CLI's permission profile only decides what it attempts)", binds: jailPlan.binds, network: "not cut (the CLI must reach xAI)", state_dir: grokStateDir, state_dir_exists: stateOk },
         writable_paths: jailPlan.writable });
-      pre = await grokPreflight({ cli, env: childEnv, stateDir: grokStateDir, bwrapOk: box, parentEnv: env });
+      // --grok-permissions-inspect: the CLI's own report of the rules it loads, run in the same jail against a scratch
+      // copy of the state dir (no model turn); 0 loaded rules is a refusal (grok.mjs grokPermissionVerdict).
+      const inspect = opts.grokPermissionsInspect && box.ok && stateOk ? { argv: [cli, ...opts.grokPermissionsInspect], run: async () => {
+        const s = await grokStateScratch(grokStateDir, join(runDir, "inspect"));
+        try { const j = grokBwrapArgs({ worktree: wt, write_allowed: false, state: s, cliDir, bwrap: bw }); return await runCli({ cmd: j.argv[0], args: [...j.argv.slice(1), cli, ...opts.grokPermissionsInspect], cwd: wt, env: childEnv, timeoutMs: 60_000 }); }
+        finally { await dropGrokScratch(s); }
+      } } : null;
+      pre = await grokPreflight({ cli, env: childEnv, stateDir: grokStateDir, bwrapOk: box, parentEnv: env, inspect });
       runner = async () => {
         grokScratch = await grokStateScratch(grokStateDir, runDir);
         const j = grokBwrapArgs({ worktree: wt, write_allowed, state: grokScratch, cliDir, bwrap: bw });
@@ -285,7 +336,9 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
         return runAgy({ cli, ws, wt, lane, prompt, timeoutS, graceS, childEnv, sandbox, jail: agyJail, conversation });
       };
     }
-    plan.preflight = { ok: pre.ok, failed: pre.failed, ...(pre.warnings?.length ? { warnings: pre.warnings } : {}), checks: pre.checks };
+    const warnings = [...(pre.warnings ?? []), ...runWarnings];
+    plan.preflight = { ok: pre.ok, failed: pre.failed, ...(warnings.length ? { warnings } : {}), checks: pre.checks };
+    plan.review_copy = reviewCopy ?? { kind: "empty stand-in (dry run: no copy is made)", would_be: REVIEW_COPY_KIND };
     out(JSON.stringify(plan, null, 2) + "\n");
     for (const n of opts.notes) err(`run-review: note: ${n}\n`);
     if (opts.dryRun) {
@@ -322,7 +375,8 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       schema: "ophanim.review-transcript/v2-subscription", via: "subscription", transport, assignment: opts.n, lab: row.lab, vendor: row.vendor,
       requested_model: row.model, ...(lane ? { lane } : {}), commit: opts.commit,
       default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}), argv: plan.argv, cwd: plan.cwd, env_names: plan.env.passed, env_removed: scrub.removed,
-      prompt: plan.prompt, sandbox: plan.sandbox, preflight: plan.preflight, limits: plan.limits, started_at: started.toISOString(), ended_at: ended.toISOString(),
+      prompt: plan.prompt, sandbox: plan.sandbox, review_copy: plan.review_copy, ...(plan.codex_outer_runtime ? { codex_outer_runtime: plan.codex_outer_runtime, scratch_tmp: plan.scratch_tmp } : {}),
+      preflight: plan.preflight, limits: plan.limits, started_at: started.toISOString(), ended_at: ended.toISOString(),
       status, stop_reason: r.stop_reason, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
       worktree_check: { changed: check.changed, violations: check.violations, limits: check.limits }, worktree_kept: opts.keep ? wt : null,
       review_tests: reviewTests, ...(agyState ? { agy_state: agyState } : {}),
@@ -350,7 +404,9 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       `- served_model: \`${lane ?? row.model}\``,
       `- served_model_source: input (the CLI names no served model; this is the ${lane ? "lane" : "model"} the runner asked for)`,
       `- sandbox: ${sandboxLine(transport, plan)}`,
-      ...(transport === "grok-cli" ? [`- grok_permissions: ${grokPermissionsLine(pre.checks?.permissions)}`] : []),
+      ...(transport === "codex-sdk" ? [`- codex_outer_runtime: ${outerLine(plan.codex_outer_runtime)}`, `- scratch_tmpdir: \`${plan.scratch_tmp.path}\` (${plan.scratch_tmp.bytes} bytes; at most ${plan.scratch_tmp.max_bytes} so the tests' Unix sockets fit ${plan.scratch_tmp.unix_socket_path_max} bytes)`] : []),
+      ...(transport === "grok-cli" ? [`- grok_permissions: ${grokPermissionsLine(pre.checks?.permissions, pre.checks?.permissions_inspect)}`] : []),
+      `- review_copy: ${reviewCopyLine(plan.review_copy)}`,
       `- policy_violations: ${check.violations.length ? check.violations.map(v => `\`${v}\``).join(", ") : "none"}`,
       `- commit: \`${opts.commit}\``,
       `- started_at: ${started.toISOString()}`,
@@ -384,15 +440,30 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
 }
 
 /** The findings header's record of the Grok permission profile the run saw (from the preflight's read of config.toml). */
-function grokPermissionsLine(p) {
+function grokPermissionsLine(p, inspect = null) {
   if (!p) return "not read";
   if (!p.present) return "no config.toml in the state dir (the CLI's default profile, \"ask\")";
   const tick = x => `\`${String(x).replace(/`/g, "'")}\``;
-  return `config.toml ${p.permission_mode ? tick(p.permission_mode) : "permission_mode unset (default \"ask\")"}; [permission] ${p.rules.length ? p.rules.map(tick).join(" ") : "none"} (${p.allow_rules} allow rule(s))`;
+  const structured = p.structured_rules ? `; ${p.structured_rules} structured \`rules = [...]\` rule(s), not counted (grok 1.0.44 loaded none)` : "";
+  const native = inspect ? `; the CLI's own inspection: ${inspect.ok ? `${inspect.loaded} loaded, ${inspect.skipped.length} skipped` : `unreadable (${inspect.why})`}` : "";
+  return `config.toml ${p.permission_mode ? tick(p.permission_mode) : "permission_mode unset (default \"ask\")"}; ${p.allow_rules} string-form allow rule(s): ${p.allow.length ? p.allow.map(tick).join(" ") : "none"}${p.deny?.length ? `; deny ${p.deny.map(tick).join(" ")}` : ""}${structured}${native}`;
+}
+
+/** The findings header's record of the codex outer runtime (WSL). */
+function outerLine(o) {
+  if (!o) return "not applicable";
+  if (!o.applied) return `none (${o.mode === "off" ? "--codex-outer-runtime off" : o.wsl ? `WSL detected, but: ${o.why}` : "not WSL"}; codex runs directly under its own sandbox)`;
+  return `an outer bwrap namespace around codex (${o.mode === "on" ? "--codex-outer-runtime on" : `WSL: ${o.evidence.join("; ")}`}): host read-only, private /run and /tmp, writable only ${o.writable.map(p => `\`${p}\``).join(", ")}; codex then applies the unchanged inner permission profile (its exact-profile preflight ran through the same launcher). Reason: codex's bwrap cannot mkdir /run/WSL under the profile's denied /run. Cost: one more namespace level`;
+}
+
+/** The findings header's record of the review copy. */
+function reviewCopyLine(c) {
+  if (!c?.head) return c?.kind ?? "unknown";
+  return `${c.kind}: HEAD \`${c.head}\` (tree \`${c.tree}\`), ${c.files} file(s) whose modes and blob ids equal \`${c.source_commit}\`'s (tree \`${c.source_tree}\`), ${c.withheld_count} withheld path(s) never written into it${c.submodules_skipped ? `, ${c.submodules_skipped} submodule(s) not exported` : ""}`;
 }
 
 function sandboxLine(transport, plan) {
-  if (transport === "codex-sdk") return `codex permission profile ${plan.sandbox.profile} (codex's own bubblewrap sandbox, not nested in the runner's: reads the worktree and the runtime only; writes ${plan.writable_paths.length > 1 ? `${REVIEW_TESTS_DIR}/ and ` : ""}a scratch TMPDIR outside the worktree; network cut by codex's proxy), approvals ${plan.sandbox.approvals}`;
+  if (transport === "codex-sdk") return `codex permission profile ${plan.sandbox.profile} (codex's own bubblewrap sandbox${plan.sandbox.outer_runtime ? ", inside the runner's outer WSL namespace (see codex_outer_runtime)" : ", not nested in the runner's"}: reads the review copy and the runtime only; writes ${plan.writable_paths.length > 1 ? `${REVIEW_TESTS_DIR}/ and ` : ""}a scratch TMPDIR outside the worktree; network cut by codex's proxy), approvals ${plan.sandbox.approvals}`;
   if (transport === "grok-cli") return "the runner's bwrap jail (host read-only; worktree read-only" + (plan.writable_paths.some(p => p.endsWith(REVIEW_TESTS_DIR)) ? ` except ${REVIEW_TESTS_DIR}/` : "") + "; state dir a per-run scratch copy; network not cut)";
   return "the unit worker's bwrap jail + PreToolUse jail hook (review policy)";
 }

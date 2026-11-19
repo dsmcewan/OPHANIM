@@ -45,7 +45,8 @@
 // that does not say ChatGPT is refused), and that a ChatGPT sign-in bills the subscription (OpenAI's docs: "Sign in
 // with ChatGPT for subscription access"). NO event names the served model (served_model_source: input).
 //
-// Codex runs its OWN bubblewrap sandbox; this runner does NOT wrap it in ours. Containment is a codex PERMISSION
+// Codex runs its OWN bubblewrap sandbox; this runner does NOT wrap it in ours (except on WSL: an outer namespace, see
+// "WSL: the outer runtime namespace" below, leaves the inner profile unchanged). Containment is a codex PERMISSION
 // PROFILE the runner defines (codexPermissionProfile, below) with approval_policy never, checked before the run by
 // `codex debug prompt-input` (the profile codex will actually apply, no model turn), plus the runner's post-run git
 // check of the worktree (subscription.mjs), which records any write outside .review-tests/ (any write, assignment 4).
@@ -188,6 +189,66 @@ export function checkPromptPermissions(observed, expected) {
   if (observed.network !== "enabled") why.push(`network is ${observed.network} (the profile turns it on behind codex's proxy; anything else means another profile is in force)`);
   return { ok: why.length === 0, missing, unexpected, why: why.join("; ") || null };
 }
+
+// ---- WSL: the outer runtime namespace -------------------------------------------------------------------------------
+// OBSERVED (owner, round 2 at 77480d6, WSL host, codex 0.170.0; findings-runs-77480d6/codex-runtime-mitigation.json):
+// with the profile above, codex fails before any turn in its AGENTS helper -- its bwrap "cannot mkdir /run/WSL under
+// denied /run": WSL mounts its interop socket dir at /run/WSL, and codex's sandbox setup re-creates host mounts under a
+// path the profile denies. Removing WSL_INTEROP from the environment did not help; other codex binaries failed the same
+// zero-turn check. What worked (both exact-profile preflights passed, both reviews ran): an OUTER bubblewrap namespace
+// around codex -- the host read-only, a private tmpfs on /run (so /run/WSL is gone before codex starts) and on /tmp,
+// only the task base writable -- with codex then applying the UNCHANGED inner profile. The runner adopts exactly that
+// on WSL: the SDK's codexPathOverride (and every preflight command) is a launcher that execs
+//   bwrap --die-with-parent --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /tmp
+//         [--ro-bind <codex vendor dir>]  --bind <run dir> --bind <scratch TMPDIR> --bind <CODEX_HOME>  -- <codex> "$@"
+// so the inner permission profile, and its exact-profile preflight, stay as they are. Writable inside the outer
+// namespace: the run's temp dir (the review copy and the run dir), the scratch TMPDIR and $CODEX_HOME (codex's login,
+// sessions and its per-process helper under tmp/arg0-linux); the inner profile narrows what the reviewer's commands
+// may write to the scratch TMPDIR and .review-tests/. Cost, said in the plan and header: one more namespace level
+// (codex's own bwrap runs nested inside the outer one; the reviewer's commands were already unable to nest bwrap).
+
+/** Is this Linux running under WSL? {wsl, evidence}: /proc/sys/kernel/osrelease naming Microsoft/WSL, or WSL_DISTRO_NAME. */
+export function detectWsl({ env = {}, osrelease = null } = {}) {
+  const evidence = [];
+  if (osrelease && /microsoft|wsl/i.test(osrelease)) evidence.push(`/proc/sys/kernel/osrelease is ${JSON.stringify(String(osrelease).trim())}`);
+  if (env.WSL_DISTRO_NAME) evidence.push(`WSL_DISTRO_NAME is set (${JSON.stringify(env.WSL_DISTRO_NAME)})`);
+  return { wsl: evidence.length > 0, evidence };
+}
+export function readOsRelease() { try { return readFileSync("/proc/sys/kernel/osrelease", "utf8").trim(); } catch { return null; } }
+
+const shq = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
+/**
+ * The outer launcher: {argv (the bwrap prefix, ending with the codex binary), script (a /bin/sh file that execs it with
+ * "$@"), writable, read_only}. `writable`: absolute real paths bound read-write (each must exist); `readOnly`: paths
+ * re-bound read-only after the /tmp tmpfs (the codex binary's dir may sit under /tmp).
+ */
+export function codexOuterLauncher({ bwrap, codex, writable, readOnly = [] }) {
+  for (const p of [bwrap, codex, ...writable, ...readOnly]) if (!String(p ?? "").startsWith("/")) throw new Error(`codex outer runtime: ${p} is not an absolute path`);
+  const argv = [bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp"];
+  const depth = p => p.split("/").filter(Boolean).length;
+  const binds = [...new Set(readOnly)].map(p => ({ mode: "ro", path: p })).concat([...new Set(writable)].map(p => ({ mode: "rw", path: p }))).sort((a, b) => depth(a.path) - depth(b.path));
+  for (const b of binds) argv.push(b.mode === "rw" ? "--bind" : "--ro-bind", b.path, b.path);
+  argv.push("--", codex);
+  const script = `#!/bin/sh\n# The review runner's outer runtime for codex on WSL (codex.mjs codexOuterLauncher).\nexec ${argv.map(shq).join(" ")} "$@"\n`;
+  return { argv, script, writable: binds.filter(b => b.mode === "rw").map(b => b.path), read_only: binds.filter(b => b.mode === "ro").map(b => b.path) };
+}
+
+// ---- the scratch TMPDIR: short enough for Unix sockets ---------------------------------------------------------------
+// OBSERVED (round 2, assignment 4): with TMPDIR <HOME>/.cache/ophanim-review/ophanim-review-XXXXXX/run/tmp (107 bytes
+// on the owner's host), pantheon/tests/pipeline-a2a.test.mjs failed 8/10 with `listen EINVAL` on
+// $TMPDIR/pa2a-test-XXXXXX/a2a.sock, and a2aSocketFor's own short fallback under os.tmpdir() could not fit either
+// ("no Unix socket path fits 107 bytes"). A Unix socket path holds at most 107 bytes on Linux (108 with the NUL); the
+// repository's tests put nested dirs and a socket under $TMPDIR (measured here, 2026-11-19: pipeline-run.test.mjs's implementer
+// contract test fails with a TMPDIR over 59 bytes, pipeline-a2a/-mcp pass at 59), so 48 leaves a margin. So the scratch
+// TMPDIR must be at most SCRATCH_TMP_MAX bytes: a short dir directly under the review temp base when that fits, else a
+// fresh 0700 dir under /var/tmp (never /tmp: the repository's jail fixtures mount a fresh tmpfs there, hiding the tests'
+// own temp files from the code they jail; cli-common.mjs reviewTmpBase).
+export const UNIX_SOCKET_PATH_MAX = 107;
+export const SCRATCH_TMP_MAX = 48;
+/** The candidate parents of the scratch TMPDIR, in order, with the mkdtemp prefix each would get. */
+export const scratchCandidates = tmpBase => [{ parent: tmpBase, prefix: "t-" }, { parent: "/var/tmp", prefix: "ophanim-rt-" }];
+/** Would mkdtemp under `parent` with `prefix` give a path of at most SCRATCH_TMP_MAX bytes? (mkdtemp adds 6 characters.) */
+export const scratchFits = ({ parent, prefix }) => Buffer.byteLength(join(parent, prefix)) + 6 <= SCRATCH_TMP_MAX;
 
 // ---- the installed SDK -----------------------------------------------------------------------------------------------
 

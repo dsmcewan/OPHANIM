@@ -24,6 +24,8 @@ const USAGE = `usage: node pantheon/scripts/run-review.mjs --via api|subscriptio
                        (1: agy, 2 and 4: codex via @openai/codex-sdk, 3: grok): --max-wall-s N [--timeout-s N]
                        [--allow-api-key-in-cli] [--skip-model-check] [--grok-state-dir DIR]
                        [--codex-cli PATH (default: the SDK's own codex binary)] [--grok-cli PATH] [--agy-cli PATH]
+                       [--codex-outer-runtime auto|on|off (default auto: on under WSL)]
+                       [--grok-permissions-inspect "<grok args>" (the CLI's own permission inspection; it must load > 0 rules)]
   [--reviewer <lab>:<model>]   run the assignment on another reviewer than its README default (lab: google, openai
                        or xai); the same brief, withheld files, tools, write rules and worktree checks, and that lab's
                        transport and model check; the findings are named by the actual lab (findings-<n>-<lab>.md)
@@ -60,7 +62,7 @@ function parseCli(argv) {
       force: { type: "boolean" }, "telos-root": { type: "string" }, help: { type: "boolean" },
       via: { type: "string" }, "max-wall-s": { type: "string" }, "allow-api-key-in-cli": { type: "boolean" }, "skip-model-check": { type: "boolean" },
       "grok-state-dir": { type: "string" }, continue: { type: "string" }, "codex-cli": { type: "string" }, "grok-cli": { type: "string" }, "agy-cli": { type: "string" },
-      reviewer: { type: "string" },
+      reviewer: { type: "string" }, "codex-outer-runtime": { type: "string" }, "grok-permissions-inspect": { type: "string" },
     } }).values;
   } catch (e) { throw new UsageError(e.message); }
   if (v.help) throw new UsageError("help");
@@ -71,7 +73,9 @@ function parseCli(argv) {
   if (v.via !== "api" && v.via !== "subscription") throw new UsageError("--via is required: api (the metered API, the owner's key) or subscription (the vendors' CLIs, signed in to the owner's subscriptions)");
   const limits = {}, notes = [], ignoredCaps = [];
   const int = k => { if (!/^[1-9]\d*$/.test(v[k])) throw new UsageError(`--${k} must be a positive integer`); return Number(v[k]); };
-  const subOnly = ["max-wall-s", "allow-api-key-in-cli", "skip-model-check", "grok-state-dir", "codex-cli", "grok-cli", "agy-cli"];
+  const subOnly = ["max-wall-s", "allow-api-key-in-cli", "skip-model-check", "grok-state-dir", "codex-cli", "grok-cli", "agy-cli", "codex-outer-runtime", "grok-permissions-inspect"];
+  if (v["codex-outer-runtime"] !== undefined && !["auto", "on", "off"].includes(v["codex-outer-runtime"])) throw new UsageError("--codex-outer-runtime must be auto, on or off");
+  if (v["grok-permissions-inspect"] !== undefined && !/^[A-Za-z0-9][A-Za-z0-9 ._=-]*$/.test(v["grok-permissions-inspect"])) throw new UsageError("--grok-permissions-inspect takes the Grok CLI arguments of its permission inspection, space-separated (letters, digits, . _ = -)");
   if (v.via === "api") {
     for (const k of ["max-turns", "max-tool-calls", "max-output-tokens", "timeout-s"]) {
       if (v[k] === undefined) throw new UsageError(`--${k} is required (there are no defaults; the owner chooses the spend)`);
@@ -91,7 +95,8 @@ function parseCli(argv) {
   }
   return { via: v.via, n: Number(v.assignment), commit: v.commit, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
     allowApiKeyInCli: !!v["allow-api-key-in-cli"], skipModelCheck: !!v["skip-model-check"], grokStateDir: v["grok-state-dir"] ?? null,
-    codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null, reviewer };
+    codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null, reviewer,
+    codexOuterRuntime: v["codex-outer-runtime"] ?? "auto", grokPermissionsInspect: v["grok-permissions-inspect"] ? v["grok-permissions-inspect"].trim().split(/ +/) : null };
 }
 
 // --reviewer <lab>:<model>: the lab names the vendor exactly as the README table's labs do (brief.mjs LAB_TO_VENDOR).
