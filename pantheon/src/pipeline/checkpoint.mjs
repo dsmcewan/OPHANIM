@@ -3,7 +3,7 @@
 //
 // THE UNIT KEY (stable before dispatch, so it can be looked up before any provider is asked):
 //   unit_key = "sha256:" + hex sha256 of canonical JSON (packages/ledger/canonical.mjs) of
-//     {schema: "pantheon.unit-key/v1", unit: <the VALIDATED unit definition, every key of UNIT_KEYS, as planned>,
+//     {schema: "pantheon.unit-key/v2", unit: <the VALIDATED unit definition, every key of UNIT_KEYS, as planned>,
 //      base_commit: <the run's resolved base commit>, upstream: [<unit_key of each TRANSITIVE upstream unit, in
 //      unit_id order>]}
 //   It holds the inputs of the frozen rubric hash (unit_id, owned_paths, verify_cmd, invariants) but not the
@@ -62,14 +62,21 @@ import { UNIT_KEYS } from "./work-units.mjs";
 
 export const CHECKPOINT_SCHEMA = "pantheon.unit-checkpoint/v3";
 export const CHECKPOINT_CONTRIBUTION_KINDS = Object.freeze(["work", "subtask", "critique"]);
-export const UNIT_KEY_SCHEMA = "pantheon.unit-key/v1";
+export const UNIT_KEY_SCHEMA = "pantheon.unit-key/v2";
 const hexOf = key => String(key).replace(/^sha256:/, "");
 
 /** The unit key: see the header. `upstream_keys` are the transitive upstream units' keys (sorted here by unit_id). */
-export function unitKey({ unit, base_commit, upstream = [] }) {
+// v2 adds THE SIBLINGS: the dispatcher judges a unit's cohesion against THE OTHER UNITS OF THE PLAN (dispatch.mjs
+// DISPATCHER_PROMPT shows each one's unit_id, owned_paths and depends_on), so a plan that adds or changes a sibling is a
+// different input to that judgment and the unit is dispatched again (independent review round 2, assignment 3 (Google
+// gemini-4-carbon, manual, 77480d6), finding 7.1). `plan` is every unit of the run; the unit itself is left out.
+export const siblingsOf = (unit, plan = []) => [...plan].filter(u => u.unit_id !== unit.unit_id)
+  .map(u => ({ unit_id: u.unit_id, owned_paths: [...(u.owned_paths ?? [])], depends_on: [...(u.depends_on ?? [])] }))
+  .sort((a, b) => (a.unit_id < b.unit_id ? -1 : a.unit_id > b.unit_id ? 1 : 0));
+export function unitKey({ unit, base_commit, upstream = [], plan = [] }) {
   const def = Object.fromEntries(UNIT_KEYS.map(k => [k, unit[k]]));
   const up = [...upstream].sort((a, b) => (a.unit_id < b.unit_id ? -1 : a.unit_id > b.unit_id ? 1 : 0)).map(u => ({ unit_id: u.unit_id, unit_key: u.unit_key }));
-  return digestOf({ schema: UNIT_KEY_SCHEMA, unit: def, base_commit, upstream: up });
+  return digestOf({ schema: UNIT_KEY_SCHEMA, unit: def, base_commit, upstream: up, siblings: siblingsOf(unit, plan) });
 }
 
 export const checkpointFile = (dir, unit_key) => join(dir, `${hexOf(unit_key)}.json`);
@@ -163,7 +170,7 @@ export function checkpointRefusal({ record, patch }, expect) {
  * Why the APPROVAL a checkpoint records may not be trusted, or null (see the header). `expect` is {key, unit (the
  * CURRENT planned unit), rubricHash (dispatch.mjs rubricHash)}.
  */
-export function approvalRefusal({ record }, { key, unit, rubricHash }) {
+export function approvalRefusal({ record }, { key, unit, rubricHash, sameModel = null, max_diff_bytes = null }) {
   if (!isObject(record)) return "the checkpoint is not an object";
   let want;
   try { want = sealOf(record, key); } catch (e) { return `the checkpoint cannot be sealed for checking: ${String(e?.message ?? e).slice(0, 200)}`; }
@@ -180,5 +187,16 @@ export function approvalRefusal({ record }, { key, unit, rubricHash }) {
   const now = rubricHash({ unit_id: unit.unit_id, owned_paths: unit.owned_paths, verify_cmd: unit.verify_cmd, invariants: unit.invariants, rubric: d.rubric,
     specialist_role: d.specialist_role, difficulty: d.difficulty });
   if (now !== record.rubric_hash) return `the rubric hash recomputed from the current unit and the recorded rubric is ${now}, not the recorded ${record.rubric_hash}`;
+  // THIS RUN'S POLICY, re-applied to the recorded judgments (independent review round 2, assignment 3 (Google
+  // gemini-4-carbon, manual, 77480d6), finding 7.2): the identity rule (`sameModel`: was the judging seat served by the
+  // model asked for) and the review's diff bound. A resumed approval is admitted only as a fresh one would be.
+  if (typeof sameModel === "function") {
+    if (str(d.served_model) && !sameModel(d.model, d.served_model)) return `the checkpoint's dispatcher was asked as ${d.model} and served by ${d.served_model}: this run's identity rule refuses it`;
+    if (str(rv.served_model) && !sameModel(rv.model, rv.served_model)) return `the checkpoint's reviewer was asked as ${rv.model} and served by ${rv.served_model}: this run's identity rule refuses it`;
+  }
+  if (Number.isFinite(max_diff_bytes) && Number.isFinite(rv.diff_bytes) && rv.diff_bytes > max_diff_bytes) return `the checkpoint's reviewed diff is ${rv.diff_bytes} bytes, over this run's review bound of ${max_diff_bytes}`;
+  // A unit that may consult subagents carries its subagent call receipts (finding 7.3): a checkpoint without them would
+  // resume a unit whose required consultation is no longer on any record.
+  if ((unit.allowed_subagents ?? []).length && !Array.isArray(record.a2a_calls)) return "the checkpoint does not carry the unit's subagent call receipts (written before they were kept): the unit runs again";
   return null;
 }

@@ -322,6 +322,14 @@ function fullScope(base, contributions) {
 }
 const pendingCapacity = (why, extra = {}) => ({what: `REVIEW_CAPACITY_PENDING: ${why}`, role: 'check@review', resume_when: 'a reviewer lab outside the contributors becomes available', ...extra});
 const result = (status, rest) => ({status, outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, ...rest});
+/**
+ * THE LEASE FENCE, BEFORE A SHARED SIDE EFFECT (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+ * 77480d6), finding 4). The work ledger refuses a stale holder's stage record, but a stale plan holder had already
+ * closed its cycle on the shared plan ledger and overwritten tickets/<item>.json, invalidating the plan its successor
+ * approved; a stale implement or review holder wrote branches and closed the run ledger's cycle. `ctx.fence()` (the
+ * scheduler's) throws LEASE_FENCED once the claim is released or past its lease; it is called before each such write.
+ */
+const fenceOf = ctx => { if (typeof ctx?.fence === 'function') ctx.fence(); };
 
 /** Record the practice assessment a v2 cycle needs (explicit, unmeasured), then close it; {close, outcome} or {why}. */
 function closeWith(rec, cycle, question) {
@@ -692,7 +700,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const version = {n: doc.version.n, digest: planDigest, commit: head, cycle: r.cycle, reviews: state.reviews.map(x => ({lab: x.lab, verdict: x.verdict}))};
       versions.push(version);
       if (state.reviews.length < n) {
-        return result('pending', {outputs: {mode, plan: doc, plan_digest: planDigest, refused, versions, cycle: r.cycle, plan_ledger_anchor: sys.anchor, context: ctxOut()},
+        return result('pending', {outputs: {mode, plan: doc, plan_digest: planDigest, refused, versions, cycle: r.cycle, plan_ledger: sys.root ?? planLedger, plan_ledger_anchor: sys.anchor, context: ctxOut()},
           team: [...team, ...planSeats.map(s => reviewerRow('plan-reviewer', s))], contributions, usage: usage(),
           blocker: {what: `REVIEW_PENDING: ${r.failed.length} plan reviewer seat(s) failed (${r.failed.map(f => `${f.lab}: ${f.why}`).join('; ')}); the plan and its open cycle are kept`,
             role: 'check@review', resume_when: 'the reviewer is available; the open plan cycle is resumed, never reopened', transient: true},
@@ -705,6 +713,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const changes = state.reviews.some(x => x.verdict === 'request_changes');
       if (!blocking.length && !changes) {
         // Approved: non-blocking findings are deferred on the record and carried as unresolved.
+        fenceOf(ctx);   // the lease still holds before the shared ledger and the ticket are written (finding 4)
         for (const f of state.findings) rec.deferFinding({finding: f.hash, reason: 'non-blocking plan finding: carried as unresolved with the approved plan version'});
         const closed = closeWith(rec, r.cycle, `plan review of ${item}`);
         if (closed.why) return stop(`the plan cycle cannot close: ${closed.why}`);
@@ -734,6 +743,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           next: {stage: 'implement', why: `plan v${doc.version.n} approved by ${closed.labs.join(', ')}`}});
       }
       // 4. Findings: the version is not approved. Its findings are answered by a revision, re-reviewed in its own cycle.
+      fenceOf(ctx);   // finding 4
       for (const f of state.findings) rec.deferFinding({finding: f.hash, reason: `answered by a revision of plan ${planDigest.slice(0, 19)}; the revision is re-reviewed in its own cycle`});
       const closed = closeWith(rec, r.cycle, `plan review of ${item}`);
       if (closed.why) return stop(`the plan cycle cannot close: ${closed.why}`);
@@ -799,7 +809,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const boardDir = resumable ?? dirOf(ctx, `implement-${ctx.attempt}-${Date.now()}`);
     let res;
     try {
-      res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: callsBefore + ctx.budget.provider_calls, scouts, profile,
+      // The bound is THIS ATTEMPT'S stage budget: on a resume runOpenItem counts an operator-given bound from the resume
+      // (basis "operator", counted_from = the attempts already recorded), so callsBefore + budget let one attempt make
+      // callsBefore + budget NEW calls; and every call is charged on the work ledger before it is made (independent review
+      // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.3).
+      res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: ctx.budget.provider_calls, scouts, profile,
+        ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}),
         // A checker's rejection at the top of the worker's dial is a revision by the same seat, not a stop (protocol v2).
         escalation: 'pantheon.escalation/v2',
         // The in-run checker follows the same independence rule as the rest of the lifecycle.
@@ -857,6 +872,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     let branch = `pantheon/${item}`;
     for (let k = 2; (() => { try { G(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]); return true; } catch { return false; } })(); k++) branch = `pantheon/${item}-r${k}`;
+    fenceOf(ctx);   // the lease still holds before the shipped branch is written (finding 4)
     const commit = commitShipped({repo: top, base, files, branch, message: [`${item}: ${t.spec.title}`, '', `Slice: ${t.ticket.slice}`, '',
       'Produced by an Ophanim operate implement stage (Pantheon runOpenItem); shipped after acceptance and in-run review.', '',
       `Pantheon-Ticket: ${t.digest}`, `Ophanim-Plan: ${planRec.outputs.plan_digest}`, ''].join('\n')});
@@ -980,6 +996,20 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       carriedRuns.push({dir: d, run_id: rec.run_id ?? null, attempt: marker.attempt, status: rec.status ?? null, findings: rows.length});
       carriedFindings.push(...rows);
     }
+    // ...and the findings an EARLIER attempt on this plan carried from such a run stay carried. That attempt's record
+    // names the killed run in carried_runs (so the scan above skips it); when that attempt did not pass, its carried
+    // findings were dropped by the next one (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+    // 77480d6), finding 8.2). They are taken from the record, once each.
+    {
+      const keyOf = f => JSON.stringify([f.carried_from?.record ?? null, f.unit ?? null, f.attempt ?? null, f.code ?? null, f.text]);
+      const have = new Set(carriedFindings.map(keyOf));
+      for (const x of ctx.work.stages(item).filter(s => s.stage === 'implement' && s.status !== 'passed' && (s.handoff?.from ?? null) === planRec.hash)) {
+        for (const {id, ...f} of x.findings ?? []) {
+          if (!f.carried_from || have.has(keyOf(f))) continue;
+          have.add(keyOf(f)); carriedFindings.push(f);
+        }
+      }
+    }
     const seats = {
       dispatcher: u => fitMatrix('dispatcher', u.difficulty),
       // Called with the unit AS DISPATCHED: a difficulty the dispatcher raised moves the implementer and its ladder.
@@ -992,7 +1022,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // "The model asked for answered": the same model identity under the identity policy (a dated snapshot of the
     // model is that model; another model of the same lab is not).
     const sameModel = (asked, served) => { const a = resolveModel(null, asked), b = resolveModel(null, served); return Boolean(a?.known && b?.known && a.id === b.id); };
-    let run;
+    // A run that THROWS (a record it cannot write, a git failure outside its own handling) is charged the calls it
+    // admitted, not the whole stage budget: a throw after 0 calls charged every stage_provider_calls (independent review
+    // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.2).
+    let run, admitted = 0;
     try {
       run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}}), dir, sameModel,
         // Checkpoints are sealed under a key held beside the work ledger (outside the item's state directory), and a
@@ -1001,14 +1034,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         checkpoints: {dir: checkpointDir, ...(ctx.work?.root ? {keyFile: path.join(ctx.work.root, 'checkpoint-seal.key')} : {})},
         // Every pipeline call is charged on the work ledger before it is made; the stage's elapsed budget stops the run
         // admitting calls (the scheduler's cooperative stop).
-        ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}), ...(ctx.signal ? {signal: ctx.signal} : {}),
+        // Every admitted call is counted here too, so a run that throws is charged what it made (finding 1.2, below).
+        onCharge: () => { if (typeof ctx.charge === 'function') ctx.charge(1); admitted += 1; }, ...(ctx.signal ? {signal: ctx.signal} : {}),
         planner: {vendor: planRec.outputs.planner.vendor, model: planRec.outputs.planner.model},
         // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here
         // (a lower pipelineLimits.max_provider_calls is kept: the stricter bound wins).
         limits: {...pipelineLimits, max_provider_calls: Math.min(ctx.budget.provider_calls, pipelineLimits.max_provider_calls ?? Infinity)}});
     } catch (e) {
       return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile}, error: String(e?.message ?? e).slice(0, 300), ...(carriedRuns.length ? {carried_runs: carriedRuns} : {})},
-        contributions, findings: carriedFindings.map((f, i) => ({id: `unit-${i + 1}`, ...f})), usage: usage(ctx.budget.provider_calls),
+        contributions, findings: carriedFindings.map((f, i) => ({id: `unit-${i + 1}`, ...f})), usage: usage(admitted),
         next: {stage: 'implement', why: `the pipeline run failed: ${String(e?.message ?? e).slice(0, 200)}`}});
     }
     const calls = run.provider_calls.total;
@@ -1066,9 +1100,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           next: {stage: 'plan', why: `the controller refused the plan's work units: ${String(run.reason).slice(0, 300)}`}});
       }
       // The stage's provider-call budget ran out: the existing "did not ship" failure, with the bound named.
+      // The bound named is the one that stopped the run (a lower pipeline max_provider_calls wins), with the calls made:
+      // it read "the stage's 20 provider call(s) were used" after 1 call (independent review round 2, assignment 3
+      // (Google gemini-4-carbon, manual, 77480d6), finding 2.2).
       if (run.provider_calls.refused_at_limit > 0) {
         return result('failed', {outputs: kept, team, contributions: all, findings, usage: usage(calls),
-          next: {stage: 'implement', why: `the run did not ship: PROVIDER_CALL_LIMIT: the stage's ${ctx.budget.provider_calls} provider call(s) were used (${run.provider_calls.refused_at_limit} more refused)`}});
+          next: {stage: 'implement', why: `the run did not ship: PROVIDER_CALL_LIMIT: the run's bound of ${run.limits?.max_provider_calls ?? ctx.budget.provider_calls} provider call(s) was reached (${calls} made, ${run.provider_calls.refused_at_limit} more refused; the stage budget is ${ctx.budget.provider_calls})`}});
       }
       // A unit the dispatcher judged not cohesive goes back to the planner.
       const back = unitsOut.filter(u => u.status === 'returned');
@@ -1105,6 +1142,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const commit = (await gitAsync(top, ['commit-tree', tree, '-p', base, '-F', '-'], {input: [`${item}: ${t.spec.title}`, '', `Slice: ${t.ticket.slice}`, '',
       `Produced by an Ophanim operate implement stage (Pantheon five-stage pipeline, run ${run.run_id}); every work unit was approved against its verify command and merged.`, '',
       `Pantheon-Ticket: ${t.digest}`, `Ophanim-Plan: ${planRec.outputs.plan_digest}`, `Pantheon-Pipeline-Integration: ${head}`, ''].join('\n')})).trim();
+    fenceOf(ctx);   // the lease still holds before the shipped branch is written (finding 4)
     await gitAsync(top, ['update-ref', `refs/heads/${branch}`, commit, '0'.repeat(commit.length)]);
     await gitAsync(top, ['update-ref', '-d', `refs/heads/${branchOf}`, head]);
     // The evidence the later stages bind to. The run record is pipeline.json (by digest). The run's ledger is opened
@@ -1210,6 +1248,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     if (open.length) {
       return result('returned', {outputs, team, findings: open, usage: usage(), next: {stage: 'implement', why: `${open.length} review finding(s) to fix`}});
     }
+    fenceOf(ctx);   // the lease still holds before the shared run ledger's cycle is closed (finding 4)
     const closed = closeWith(rec, cycle, `coordinated review of ${item}`);
     if (closed.why) return result('pending', {outputs, team, usage: usage(), blocker: {what: closed.why, role: 'check@review', resume_when: 'the cycle can close'}, next: {stage: 'review', why: closed.why}});
     if (closed.outcome !== 'verified') {

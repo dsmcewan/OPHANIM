@@ -63,7 +63,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync
 import { join, resolve, sep } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { CAPABILITIES, PIPELINE_SCHEMA, clone, digestOf, now, sameSeat, seatRefusal, sha256 } from "./util.mjs";
+import { CAPABILITIES, PIPELINE_SCHEMA, clone, digestOf, now, sameModelName, sameSeat, seatRefusal, sha256 } from "./util.mjs";
 import { validateWorkUnits } from "./work-units.mjs";
 import { bindWorktree, lockConflicts, releaseWorktree, rubricHash, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
 import { runImplementer, MCP_SERVER_PATH } from "./implement.mjs";
@@ -73,6 +73,7 @@ import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./revie
 import { arbitersOf, contributionsOf } from "./record.mjs";
 import { candidateRefusal, contributorKeys, resolveModel, reviewerRefusal } from "../review/identity.mjs";
 import { git, mutex } from "./git.mjs";
+import { laneParts } from "../route/fit-matrix.mjs";
 
 export { contributionsOf, arbitersOf } from "./record.mjs";
 export { PIPELINE_SCHEMA, CAPABILITIES } from "./util.mjs";
@@ -194,7 +195,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   if (head.code !== 0) return refuse([{ code: "BASE", unit_id: null, message: `base "${base}" is not a commit of ${repo}` }]);
   run.base.commit = head.stdout.trim();
   // Unit keys (checkpoint.mjs), in wave order so every upstream key exists before its dependants'.
-  for (const id of run.waves.flat()) run.units[id].unit_key = unitKey({ unit: byId.get(id), base_commit: run.base.commit, upstream: [...up.get(id)].map(d => ({ unit_id: d, unit_key: run.units[d].unit_key })) });
+  for (const id of run.waves.flat()) run.units[id].unit_key = unitKey({ unit: byId.get(id), base_commit: run.base.commit, upstream: [...up.get(id)].map(d => ({ unit_id: d, unit_key: run.units[d].unit_key })), plan: units });
 
   // ---- provider-call budget: every injected turn passes through here
   const admit = role => {
@@ -215,7 +216,10 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     // `charge`: a second provider call made inside this turn (the metered API failover) is admitted here first. EVERY
     // role gets it: a single-turn seat (dispatcher, reviewer, subagent) on a Gemini lane fails over too (sdk/agy-turn.mjs
     // laneFirstTurn) (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 1).
-    return turns[role]({ ...args, charge: () => admit("metered_failover") });
+    // `charge("continuation")`: a further billed request of the same turn (a Google continuation hop, a compaction),
+    // admitted and counted the same way (by_role.continuation) (independent review round 2, assignment 3 (Google
+    // gemini-4-carbon, manual, 77480d6), finding 1.1).
+    return turns[role]({ ...args, charge: what => admit(what === "continuation" ? "continuation" : "metered_failover") });
   };
   const T = { dispatcher: counted("dispatcher"), implementer: counted("implementer"), subagent: counted("subagent"), reviewer: counted("reviewer") };
 
@@ -235,6 +239,19 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   writeFileSync(join(dir, OWNER_FILE), JSON.stringify({ pid: process.pid, host: hostname(), run_id: run.run_id, at: now() }) + "\n");
   ACTIVE_DIRS.add(resolve(dir)); owned = true;
   run.recovered_worktrees = await recoverOrphanWorktrees({ repo, root: join(dir, "worktrees"), lock });
+  // ...and the integration BRANCH a dead run of this run_id left: `worktree add -b` refuses a branch that exists, so a
+  // restart with the same directory and run_id failed (independent review round 2, assignment 3 (Google gemini-4-carbon,
+  // manual, 77480d6), finding 8.1). git itself refuses to delete a branch checked out in any live worktree, so a run of
+  // the same id elsewhere keeps its branch; the stale one (its worktree was just removed) is deleted. Only a DEAD run's:
+  // the record still in this directory is that run's (this run has not written yet), and it never ended; a finished
+  // run's branch is its result and is kept (the restart is refused on it, as before).
+  let prior = null;
+  try { prior = JSON.parse(readFileSync(file, "utf8")); } catch { prior = null; }
+  const deadRun = prior?.run_id === run.run_id && prior?.status === "running" && (prior?.integration?.branch ?? branch) === branch;
+  if (deadRun && (await git(repo, ["rev-parse", "--verify", "-q", `refs/heads/${branch}`], { allowFail: true })).code === 0) {
+    const del = await lock(() => git(repo, ["branch", "-D", branch], { allowFail: true }));
+    if (del.code === 0) run.recovered_branch = branch;
+  }
   // The dead run's per-unit control directories (a stale a2a.sock there would refuse this run's shim).
   await rm(join(dir, "control"), { recursive: true, force: true });
   await mkdir(join(dir, "worktrees"), { recursive: true });
@@ -383,15 +400,30 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           const seat = iLadder[state.implementer_level];
           a = await runImplementer({ unit: frozen(), worktree: path, seat, ladder: iLadder, turn: T.implementer, a2a: { socket: shim.socket, token: shim.token, roles: [...shim.roles] },
             attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH });
+          // The lane was refused for quota and its metered failover was USED but its answer refused (API_FILES_REFUSED:
+          // prose, malformed JSON, a path outside the unit): that is still the quota-exhausted lane failing, not the
+          // implementer's work being refused. It steps the ladder like a quota refusal and spends no review revision
+          // (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.3).
+          if (!a.lane_failure && a.status !== "written" && a.code === "TURN_FAILED" && a.quota_failover?.used === true && !signal?.aborted) {
+            a.lane_failure = { kind: "exit", cause: "quota", why: a.why, status: 429, via: "metered_failover_refused" };
+          }
           if (!a.lane_failure) break;
-          const quota = a.lane_failure.cause === "quota", again = !quota && !retried, down = state.implementer_level + 1 < iLadder.length;
+          // A QUOTA refusal steps to the next rung on ANOTHER base model: Antigravity's quota is the base model's, shared
+          // by its thinking levels, so the same model's next level would be refused again (two doomed launches and two
+          // probes) (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.1).
+          const quota = a.lane_failure.cause === "quota", again = !quota && !retried;
+          const baseOf = s => laneParts(s?.model)?.base ?? s?.model;
+          let nextLevel = state.implementer_level + 1;
+          if (quota) while (nextLevel < iLadder.length && baseOf(iLadder[nextLevel]) === baseOf(seat)) nextLevel++;
+          const down = nextLevel < iLadder.length;
           lane_failures.push({ vendor: seat.vendor, model: seat.model, level: state.implementer_level, kind: a.lane_failure.kind, cause: a.lane_failure.cause, why: a.why, retry: retried,
             next: signal?.aborted ? "aborted" : again ? "same_lane" : down ? "next_rung" : "exhausted" });
           if (signal?.aborted) break;
           if (again) { retried = true; continue; }
           if (!down) break;
-          u.escalations.push({ after_attempt: n, kind: "lane_failover", cause: quota ? "quota" : "lane", from: clone(seat), to: clone(iLadder[state.implementer_level + 1]) });
-          state = { ...state, implementer_level: state.implementer_level + 1 };
+          u.escalations.push({ after_attempt: n, kind: "lane_failover", cause: quota ? "quota" : "lane", from: clone(seat), to: clone(iLadder[nextLevel]),
+            ...(nextLevel > state.implementer_level + 1 ? { skipped_same_base: iLadder.slice(state.implementer_level + 1, nextLevel).map(clone) } : {}) });
+          state = { ...state, implementer_level: nextLevel };
           retried = false;
           await save();
         }
@@ -496,7 +528,11 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         // The approval itself, to re-derive on resume (checkpoint.mjs approvalRefusal).
         review: clone(rv), dispatch: { vendor: d.vendor, model: d.model, served_model: d.served_model ?? null, specialist_role: d.specialist_role, difficulty: d.difficulty, rubric: [...d.rubric], rubric_hash: d.rubric_hash },
         // The unit's authoring lineage: restored on resume so its contributors stay excluded downstream (checkpoint.mjs).
-        contributions: contributionsOf({ units: { [u.unit_id]: u } }).filter(c => c.kind !== "plan").map(({ unit_id, ...c }) => c) } });
+        contributions: contributionsOf({ units: { [u.unit_id]: u } }).filter(c => c.kind !== "plan").map(({ unit_id, ...c }) => c),
+        // The unit's subagent call receipts, sealed with the approval: a resumed unit restores them, so a run that
+        // requires a subagent consultation still finds it on the record (independent review round 2, assignment 3
+        // (Google gemini-4-carbon, manual, 77480d6), finding 7.3).
+        a2a_calls: clone(u.a2a.calls ?? []) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
       run.checkpoints.written.push(u.unit_id);
     } catch (e) { u.checkpoint = { written: false, why: String(e?.message ?? e) }; }
@@ -531,7 +567,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       // The approval, authenticated: the seal under this controller's key, the review re-hashed and bound to this patch,
       // the rubric hash recomputed from the CURRENT unit, and the dispatcher and reviewer the seats this run would use
       // (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 7).
-      const approval = approvalRefusal(got, { key: ckKey, unit: planned, rubricHash });
+      // This run's identity rule and diff bound are re-applied to the recorded judgments (finding 7.2).
+      const approval = approvalRefusal(got, { key: ckKey, unit: planned, rubricHash, sameModel: sameModel ?? sameModelName, max_diff_bytes: lim.max_diff_bytes ?? 400000 });
       if (approval) return reject(approval);
       const dSeat = seats.dispatcher(clone(planned));
       if (!dSeat || !sameSeat(dSeat, got.record.dispatch)) return reject(`the checkpoint's dispatcher ${got.record.dispatch.vendor}/${got.record.dispatch.model} is not the seat this run dispatches the unit to`);
@@ -549,7 +586,12 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           contributions: clone(got.record.contributions),
           // The sealed dispatch whose rubric governed the reused patch: its dispatcher stays an arbiter of this run
           // (record.mjs arbitersOf), excluded from later independent judgment (owner decision 2026-11-19).
-          dispatch: { vendor: got.record.dispatch.vendor, model: got.record.dispatch.model, served_model: got.record.dispatch.served_model ?? null, rubric_hash: got.record.dispatch.rubric_hash } } });
+          dispatch: { vendor: got.record.dispatch.vendor, model: got.record.dispatch.model, served_model: got.record.dispatch.served_model ?? null, rubric_hash: got.record.dispatch.rubric_hash },
+          // The sealed evidence of the approval, restored (finding 7.3): the Stage 5 review that approved the patch and
+          // the subagent calls made for it, each marked as coming from the checkpoint. u.reviews and u.a2a.calls stay
+          // this run's own calls (none), so nothing is counted twice as this run's provider calls or contributions.
+          review: clone(got.record.review),
+          a2a_calls: (got.record.a2a_calls ?? []).map(c => ({ ...clone(c), from_checkpoint: true })) } });
       run.checkpoints.resumed.push(u.unit_id);
       finish(u, "approved");
       ok = true;

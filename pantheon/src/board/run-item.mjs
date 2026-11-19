@@ -442,6 +442,20 @@ export async function runOpenItem(spec, opts = {}) {
       record();
       throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT" });
     }
+    // `onCharge` (optional): the caller's charge (a lifecycle stage's work-ledger spend), made BEFORE the call, so a
+    // call that leaves the process is counted even if the process dies before the stage record; a refused charge
+    // refuses the call (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.3).
+    if (typeof opts.onCharge === "function") {
+      try { opts.onCharge({ vendor, model, purpose }); }
+      catch (e) {
+        const why = `PROVIDER_CALL_LIMIT: the caller refused to charge ${vendor}/${model} (${purpose}): ${String(e?.message ?? e).slice(0, 300)}`;
+        run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls,
+          refused: { code: "PROVIDER_CALL_LIMIT", at: new Date().toISOString(), vendor, model, pool: pool ?? vendor, transport, purpose, why } };
+        progress({ event: "turn.refused", seat: vendor, model, detail: why });
+        record();
+        throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT", cause: e });
+      }
+    }
     providerCalls++;
     run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
   }

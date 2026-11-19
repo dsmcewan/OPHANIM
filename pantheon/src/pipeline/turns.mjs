@@ -182,11 +182,11 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
   };
 
   /** The metered Gemini API of a lane's base model: one unary answer, by default through makeClientFor + sendTurn. */
-  const api = agy.api ?? (async ({ vendor, model, prompt, effort, signal }) => {
+  const api = agy.api ?? (async ({ vendor, model, prompt, effort, signal, charge = null }) => {
     if (typeof makeClientFor !== "function") throw fail("NO_API_CLIENT", "the metered Gemini API was needed as a quota failover, and no makeClientFor was given");
     const { sendTurn } = await import("../sdk/adapter.mjs");
     const r = await sendTurn({ client: makeClientFor(vendor), vendor, model, prompt, label: "pipeline-implementer-quota-failover", onEvent: () => {},   // streamed: whole files can be long
-      ...(effort ? { effort } : {}), ...(signal ? { signal } : {}) });
+      ...(effort ? { effort } : {}), ...(signal ? { signal } : {}), ...(typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });   // every further billed request (finding 1.1)
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     // sendTurn's served_model is the model the provider's response named.
     return { text: r.text ?? "", served_model: r.served_model ?? null, served_model_source: str(r.served_model) ? "provider" : null, response_id: r.response_id ?? null };
@@ -243,8 +243,9 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       // (and the caller's ledger charge) BEFORE it is made; a refusal (PROVIDER_LIMIT) means it is not made.
       if (typeof charge === "function") charge();
       let r;
-      try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal }); }
+      try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal, charge }); }
       catch (err) {
+        if (err?.code === "PROVIDER_LIMIT") throw Object.assign(err, { quota_failover });   // a further request refused at the bound (finding 1.1)
         throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and the metered API ${spare.model} could not answer either: ${String(err?.message ?? err).slice(0, 300)}`),
           { status: 429, quota_failover: { ...quota_failover, api_error: String(err?.message ?? err).slice(0, 300) }, cause: err });
       }

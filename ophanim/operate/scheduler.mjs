@@ -221,7 +221,10 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         return charged;
       };
       let result;
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, signal: ac.signal, claim}); }
+      // fence(): throws LEASE_FENCED once this claim is released or past its lease; an executor calls it before a shared
+      // side effect (a ticket, a shared ledger's close, a branch), so a stale holder writes none (finding 4, stages.mjs).
+      const fence = () => { const why = work.leaseRefusal(claim, new Date(clock()).toISOString()); if (why) fail(why, 'LEASE_FENCED'); };
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, claim}); }
       catch (e) {
         result = {status: 'failed', outputs: {error: String(e.message).slice(0, 300)}, team: [], contributions: [], findings: [], usage: {provider_calls: e.provider_calls ?? (charged || null)},
           next: {stage: gate.gate, why: `the ${gate.gate} executor failed: ${String(e.message).slice(0, 200)}`}};
@@ -237,11 +240,17 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       // aborted is recorded with the stop; one that would hand the work on (passed, or returned to an earlier stage) is
       // recorded PENDING on a transient STAGE_ELAPSED blocker instead, with the status it reported: reconciliation never
       // reuses it, it is retried within the stage's attempt bound, and no further stage of the item starts in this tick.
+      // A stopped stage of ANY other status is the same transient stop: a `blocked` or `failed` that the abort itself
+      // caused (a fit pipeline aborted mid-wave finishes its units blocked, PIPELINE_UNITS_UNRESOLVED) was recorded as a
+      // structural block and wedged the item (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+      // 77480d6), finding 2.1). Its outputs (the work kept so far) stay on the record; only a result over its stage
+      // budget stays failed, since that is a violation and not a stop.
       const stopped = ac.signal.aborted;
       if (stopped) {
-        const late = result.status === 'passed' || result.status === 'returned';
+        const late = !result.outputs?.over_budget;
         const why = `STAGE_ELAPSED: the ${gate.gate} stage's elapsed budget of ${budget.elapsed_ms} ms was spent before it returned${late ? ` (it reported ${result.status}); the late result is not a handoff` : ''}`;
-        result = {...result, outputs: {...(result.outputs ?? {}), stopped: {code: 'STAGE_ELAPSED', elapsed_ms: budget.elapsed_ms, charged, refused_charges: refusedCharges, ...(late ? {status_reported: result.status} : {})}}};
+        result = {...result, outputs: {...(result.outputs ?? {}), stopped: {code: 'STAGE_ELAPSED', elapsed_ms: budget.elapsed_ms, charged, refused_charges: refusedCharges, ...(late ? {status_reported: result.status} : {}),
+          ...(late && result.blocker ? {blocker_reported: result.blocker} : {})}}};
         if (late) {
           result = {...result, status: 'pending', next: {stage: gate.gate, why},
             blocker: {code: 'STAGE_ELAPSED', transient: true, what: why, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, by a tick with elapsed budget left'}};

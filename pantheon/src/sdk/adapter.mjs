@@ -236,8 +236,15 @@ const sentSettings = req => !req || typeof req !== "object" ? null : {
   max_output_tokens: req.max_output_tokens ?? req.max_tokens ?? req.config?.maxOutputTokens ?? null,
   effort: req.reasoning?.effort ?? req.output_config?.effort ?? req.config?.thinkingConfig?.thinkingLevel?.toLowerCase() ?? null,
 };
+// EVERY BILLED REQUEST IS ADMITTED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+// finding 1.1). One turn can make several generation requests: Google's long-decode continuation hops (up to 16, each
+// billed), and an Anthropic compaction before the turn. The caller charged the turn's FIRST request; every further one
+// is passed to `seen.onRequest` BEFORE it is sent, and a throw there refuses it (it is not sent). Token counts
+// (countTokens / inputTokens.count) are not generation requests and are not billed by the providers: they are not
+// charged here.
 function observe(fn, seen) {
   return async (...args) => {
+    if ((seen.requests ?? 0) >= 1 && typeof seen.onRequest === "function") seen.onRequest({ request: (seen.requests ?? 0) + 1 });
     seen.requests = (seen.requests ?? 0) + 1;
     seen.sent = sentSettings(args[0]);
     const out = await fn(...args);
@@ -262,9 +269,10 @@ function observedClient(client, seen) {
 }
 
 export async function sendTurn(args) {
-  const seen = { model: null, sent: null, requests: 0 };
+  // `onRequest` (optional): called before every generation request after the first (observe, above); a throw refuses it.
+  const seen = { model: null, sent: null, requests: 0, onRequest: typeof args.onRequest === "function" ? args.onRequest : null };
   let result;
-  try { result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client }); }
+  try { const { onRequest, ...rest } = args; result = await sendTurnOn({ ...rest, client: args.client ? observedClient(args.client, seen) : args.client }); }
   catch (e) {
     // A failed request's evidence: what it carried and how many requests reached the SDK. Attached to
     // the error the caller already receives, never in place of it.

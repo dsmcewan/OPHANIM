@@ -405,5 +405,10 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     /** Claims left open past their lease: interrupted work, to release as expired before a bounded resume. */
     expiredClaims: (now = Date.now()) => of('work.claim', c => !released(c.hash) && Date.parse(c.leased_at) + c.lease_ms <= now),
     released,
+    /** Why claim `claimHash` may no longer act at `at` (released, or past its lease), or null (fenceRefusal). */
+    leaseRefusal: (claimHash, at = new Date().toISOString()) => {
+      const c = of('work.claim', x => x.hash === claimHash)[0];
+      return c ? fenceRefusal(c, {released: released(claimHash), at: Date.parse(at)}) : 'no such claim: LEASE_FENCED';
+    },
   };
 }

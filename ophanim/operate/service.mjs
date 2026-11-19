@@ -110,7 +110,10 @@ export async function runService({config, executors = null, signal = null, maxTi
   const paths = {repo: c.repo, statusRoot: c.statusRoot, workRoot: c.workRoot, bundlesDir: c.bundlesDir};
 
   let lock;
-  try { lock = acquireLock(path.join(c.stateDir, 'service.lock'), {now: clock()}); }
+  // The lock lives in the WORK LEDGER's root, not the state directory: two configs with different state_dirs on one work
+  // ledger each took their own lock and ran at once (independent review round 2, assignment 3 (Google gemini-4-carbon,
+  // manual, 77480d6), finding 3.2a). One instance per work ledger, as docs/operate-service.md states.
+  try { lock = acquireLock(path.join(c.workRoot, 'service.lock'), {now: clock()}); }
   catch (e) { event({event: 'refused', code: e.code, why: e.message}); return {code: 1, refused: e.message, ticks: []}; }
   if (lock.takeover) event({event: 'lock-takeover', ...lock.takeover});
   const ticks = [];

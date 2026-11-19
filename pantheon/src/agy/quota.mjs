@@ -27,8 +27,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnPromise } from "../board/spawn.mjs";
 
-// EXPLICIT: the Gemini API's own wording for a spent quota (HTTP 429 / RESOURCE_EXHAUSTED).
-const EXPLICIT = /\b429\b|RESOURCE_EXHAUSTED/i;
+// EXPLICIT: the Gemini API's own wording for a spent quota (HTTP 429 / RESOURCE_EXHAUSTED). A bare "429" in free text is
+// NOT evidence: a stack frame (`src/parser.mjs:429:15`), a byte count or an id carries it as well, and an explicit match
+// overrides the quota probe (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+// finding 5.2). So 429 counts only as a STATUS: a structured field (status / error.status / error.code), or in text as
+// "HTTP 429", "status 429", "code: 429", "error 429", or "429 Too Many Requests" / "429 RESOURCE_EXHAUSTED".
+const EXPLICIT = /RESOURCE_EXHAUSTED|\b(?:HTTP(?:\/\d(?:\.\d)?)?|status(?:[ _]?code)?|code|error)["']?\s*[:=]?\s*["']?429(?![\w:.])|(?<![\w:./-])429\s+(?:Too\s+Many\s+Requests|RESOURCE_EXHAUSTED)/i;
+const statusField = v => v === 429 || v === "429";
 // SOFT: words a quota refusal is likely to use, which alone do not prove the quota is spent (a probe decides).
 // Builds on the earlier agy-cli.mjs pattern (quota exceeded/exhausted/limit, "exceeded your quota", rate limit).
 const SOFT = /\bquotas?\b|rate[ _-]?limit(ed)?|spend[ _-]?cap|prepaid[ _-]?balance|weekly[ _-]?quota|too many requests/i;
@@ -41,7 +46,7 @@ const said = ({ status, stderr, result } = {}) => {
 
 /** The quota evidence in what the CLI reported: {matched, explicit} or null. `status` 429 (an HTTP status) is explicit. */
 export function quotaEvidence({ status = null, stderr = "", result = null } = {}) {
-  if (status === 429 || status === "429") return { matched: "429", explicit: true };
+  if (statusField(status) || [result?.status, result?.error?.status, result?.error?.code, result?.code].some(statusField)) return { matched: "429", explicit: true };
   const text = said({ stderr, result });
   const e = text.match(EXPLICIT);
   if (e) return { matched: e[0], explicit: true };

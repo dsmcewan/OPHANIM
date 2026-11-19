@@ -67,7 +67,8 @@ import {reconcile} from './reconcile.mjs';
 import {openWorkReadOnly} from './cli.mjs';
 import {makeExecutors, implementerPath} from './stages.mjs';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
-import {openLedger, defineKinds} from '../../packages/ledger/chain.mjs';
+import {openLedger} from '../../packages/ledger/chain.mjs';
+import {systemKinds, systemDomains} from '../ledger/system.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {selectSeat, readPools, selectionPolicy} from '../../pantheon/src/route/frontier.mjs';
@@ -423,6 +424,12 @@ export function servedIdentities(stages) {
       for (const a of u.attempts ?? []) out.push({...row('implementer', a), ...(a.quota_failover ? {quota_failover: a.quota_failover} : {})});
       for (const v of u.reviews ?? []) out.push(row('unit-reviewer', v));
       for (const c of u.a2a?.calls ?? []) out.push({...row('subagent', c), subagent_role: c.role});
+      // A resumed unit's seats, from its sealed checkpoint (finding 7.3, above).
+      if (u.resumed && u.checkpoint) {
+        if (u.checkpoint.dispatch) out.push({...row('dispatcher', u.checkpoint.dispatch), from_checkpoint: true});
+        if (u.checkpoint.review) out.push({...row('unit-reviewer', u.checkpoint.review), from_checkpoint: true});
+        for (const c of u.checkpoint.a2a_calls ?? []) out.push({...row('subagent', c), subagent_role: c.role, from_checkpoint: true});
+      }
     }
   }
   return out;
@@ -435,7 +442,11 @@ export function subagentReceipt(stages, req) {
   const accepted = impls.at(-1) ?? null;
   const callsOf = s => {
     const r = s?.outputs?.run?.record ? readJson(s.outputs.run.record) : null;
-    return Object.values(r?.units ?? {}).flatMap(u => (u.a2a?.calls ?? []).map(c => ({unit: u.unit_id, role: c.role, status: c.status, model: c.model, served_model: c.served_model ?? null, answer_digest: c.answer_digest ?? null})));
+    // A unit RESUMED from a checkpoint made its calls in the run that approved it: they are restored from the sealed
+    // checkpoint (u.checkpoint.a2a_calls, from_checkpoint) and count here (independent review round 2, assignment 3
+    // (Google gemini-4-carbon, manual, 77480d6), finding 7.3).
+    const callsOfUnit = u => [...(u.a2a?.calls ?? []), ...(u.resumed ? u.checkpoint?.a2a_calls ?? [] : [])];
+    return Object.values(r?.units ?? {}).flatMap(u => callsOfUnit(u).map(c => ({unit: u.unit_id, role: c.role, status: c.status, model: c.model, served_model: c.served_model ?? null, answer_digest: c.answer_digest ?? null, ...(c.from_checkpoint ? {from_checkpoint: true} : {})})));
   };
   const all = pipelinesOf(stages).flatMap(p => callsOf(stages.find(s => s.hash === p.stage_record)));
   const counted = callsOf(accepted).filter(c => c.status === 'answered' && c.role === req.role && c.model === req.model && c.served_model && sameModel(c.served_model, req.model));
@@ -454,6 +465,10 @@ function budgetStops(ticks, stages, launcher) {
   for (const [n, t] of ticks.entries()) if (t.stopped) out.push({source: 'tick', tick: n, why: t.stopped});
   for (const s of stages) {
     if (/PROVIDER_CALL_LIMIT|provider-call budget|budget/i.test(s.next?.why ?? '')) out.push({source: 'stage', stage: s.stage, attempt: s.attempt, record: s.hash, why: s.next.why});
+    // A stop recorded only on the BLOCKER: a plan or review whose reviewer seat hit the stage's provider-call budget
+    // ends pending with next.why 'plan review incomplete' (independent review round 2, assignment 3 (Google
+    // gemini-4-carbon, manual, 77480d6), finding 10.2).
+    else if (/PROVIDER_CALL_LIMIT|provider-call budget/i.test(s.blocker?.what ?? '')) out.push({source: 'stage', stage: s.stage, attempt: s.attempt, record: s.hash, why: s.blocker.what});
     if (s.outputs?.run?.provider_calls?.refused_at_limit > 0) out.push({source: 'pipeline', stage: s.stage, record: s.hash, why: `${s.outputs.run.provider_calls.refused_at_limit} pipeline turn(s) refused at the provider-call limit`});
   }
   return out;
@@ -467,13 +482,22 @@ export function freshVerification({workRoot, stages, statusRoot, statusBefore}) 
   const cite = (stage, role, dir, anchor) => { if (!dir || !anchor || seen.has(dir)) return; seen.add(dir); out.run_ledgers.push({stage, role, dir, anchor}); };
   for (const s of stages) {
     const o = s.outputs ?? {};
-    cite(s.stage, 'plan review ledger', o.plan_ledger, o.plan_review?.ledger_anchor);
+    // A plan stage that ended PENDING (its cycle open) names its ledger and anchor too: it is verified like a closed one
+    // (finding 10.1; it was skipped, run_ledgers [] for an open plan cycle).
+    cite(s.stage, 'plan review ledger', o.plan_ledger, o.plan_review?.ledger_anchor ?? o.plan_ledger_anchor);
     cite(s.stage, 'run ledger', o.run?.ledger, o.run_ledger_anchor ?? o.run?.ledger_anchor);
     cite(s.stage, 'review cycle ledger', o.cycle_ledger, o.cycle_ledger_anchor);
   }
   out.run_ledgers = out.run_ledgers.map(r => {
     if (!fs.existsSync(path.join(r.dir, 'chain.jsonl'))) return {...r, ok: false, why: 'no chain.jsonl'};
-    try { const v = openLedger({dir: r.dir, kinds: defineKinds({}), anchor: r.anchor}).verify(); return {...r, ok: v.ok, check: 'structural (genesis, signatures, links, payloads)', head: v.head ?? null, entries: v.entries ?? null, ...(v.ok ? {} : {why: v.why})}; }
+    // DOMAIN-CHECKED, not only structural (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+    // 77480d6), finding 10.1): the ledger is re-opened with the system's own kinds (Pantheon's cycle, lineage, board and
+    // gate rules, and OPHANIM's), so every entry is validated and re-derived, not just signed and linked. Board-bound
+    // kinds re-derive what needs no board (no board is opened here), as the ledger's verify reports.
+    try {
+      const v = openLedger({dir: r.dir, kinds: systemKinds({board: null}), anchor: r.anchor, domains: Object.keys(systemDomains())}).verify();
+      return {...r, ok: v.ok, check: 'domain (genesis, signatures, links, payloads, and each kind\'s validate and re-derivation rules)', head: v.head ?? null, entries: v.entries ?? null, ...(v.ok ? {} : {why: v.why})};
+    }
     catch (e) { return {...r, ok: false, why: e.message}; }
   });
   try {
@@ -561,7 +585,9 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const proposal = outcome ? {path: outcome.outputs.proposal_path, digest: outcome.outputs.proposal_digest, file_sha256: outcome.outputs.proposal_file_sha256, to: outcome.outputs.to, signed: false,
     apply_command: `OPHANIM_STATUS_LEDGER='${m.ledgers.status_root}' node packages/ledger/status.mjs apply '${outcome.outputs.proposal_path}' --keys "$OPHANIM_STATUS_KEYS"`,
     note: 'UNSIGNED. The launcher never applies it: the owner runs the command above, with the owner\'s status keys, after checking the record.'} : null;
-  const blockers = [...ticks.flatMap(t => t.blocked.filter(b => b.item === m.item).map(b => ({source: 'tick', ...b}))), ...stages.filter(x => x.blocker).map(x => ({source: 'stage', stage: x.stage, attempt: x.attempt, record: x.hash, blocker: x.blocker}))];
+  const blockers = [...ticks.flatMap(t => t.blocked.filter(b => b.item === m.item).map(b => ({source: 'tick', ...b}))), ...stages.filter(x => x.blocker).map(x => ({source: 'stage', stage: x.stage, attempt: x.attempt, record: x.hash, blocker: x.blocker})),
+    // The gate the run ended on, when it is blocked: a loop that exits without ticking on it left it out (finding 10.3).
+    ...(gate.blocker ? [{source: 'final_gate', gate: gate.gate, blocker: gate.blocker}] : [])];
   const record = {schema: RECORD_SCHEMA, at: new Date().toISOString(), started_at: new Date(started).toISOString(), elapsed_ms: Date.now() - started,
     manifest: {file, digest: manifestDigest}, item: m.item, candidate_commit: m.candidate_commit, plan,
     work_ledger: {root: m.ledgers.work_root, anchor: work.anchor, created: workInfo.state !== 'resumable', marker: path.join(m.ledgers.work_root, WORK_MARKER)},
