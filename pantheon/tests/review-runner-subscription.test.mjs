@@ -83,18 +83,21 @@ test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's b
   assert.equal(r.fetch.calls.length, 0);
   assert.deepEqual(r.sdk, [], "no SDK object was constructed: no model turn");
   const c = await calls(f.log);
-  assert.deepEqual(c.map(x => x.argv.slice(0, 2).join(" ")), ["--version", "login status", "debug models", "debug prompt-input"]);
   const p = r.plan;
+  // Each preflight call's whole argv: the permission profile is rendered with exactly the overrides the SDK will be given.
+  const promptInput = ["debug", "prompt-input", ...p.sdk_options.configOverrides.flatMap(o => ["--config", o]), "permission check"];
+  assert.deepEqual(c.map(x => x.argv), [["--version"], ["login", "status"], ["debug", "models"], promptInput]);
   assert.deepEqual([p.via, p.transport, p.requested_model, p.subscription_coverage, p.model_turns, p.preflight.ok], ["subscription", "codex-sdk", "gpt-6-astra", "documented", 0, true]);
   assert.deepEqual([p.sdk.package, p.sdk.version, p.sdk.ok, p.sdk.binary.path, p.sdk.key_injection.conditional], ["@openai/codex-sdk", "0.170.0", true, f.clis.codex, true]);
-  assert.deepEqual(p.argv.slice(0, -1), [f.clis.codex, ...SDK_ARGV(p.worktree.path, p.sdk_options.configOverrides)]);
+  // The whole argv: the SDK's, then the stdin marker naming the digest of the prompt this plan records.
+  assert.deepEqual(p.argv, [f.clis.codex, ...SDK_ARGV(p.worktree.path, p.sdk_options.configOverrides), `(stdin: <prompt sha256:${p.prompt.sha256}>)`]);
   // The permission profile: no --sandbox; codex's own rendering of what it will apply was checked before any turn.
   assert.ok(!p.argv.includes("--sandbox"));
   assert.equal(p.sandbox.profile, "ophanim-review");
   assert.deepEqual(p.sandbox.filesystem[":workspace_roots"], { ".": "read", ".review-tests": "write" });
   assert.equal(p.sandbox.network.enabled, true);
   const pp = p.preflight.checks.permission_profile;
-  assert.deepEqual([pp.ok, pp.cwd, pp.observed.network, pp.argv.slice(1, 3)], [true, p.worktree.path, "enabled", ["debug", "prompt-input"]]);
+  assert.deepEqual([pp.ok, pp.cwd, pp.observed.network, pp.argv], [true, p.worktree.path, "enabled", [f.clis.codex, ...promptInput]]);
   assert.ok(pp.expected_entries.includes(`write ${p.worktree.path}/.review-tests`) && pp.expected_entries.includes("read :minimal"));
   const tmpEntry = pp.expected_entries.find(e => e.startsWith("write ") && !e.endsWith(".review-tests"));
   assert.ok(tmpEntry && !tmpEntry.slice(6).startsWith(p.worktree.path + "/"), "the scratch TMPDIR is outside the worktree");
@@ -164,9 +167,10 @@ test("codex through the REAL @openai/codex-sdk spawning the fake binary: the arg
   assert.match(r.out.err, /run-review: incomplete \(coverage gate: no source file was read; no test ran/);
   const log = await calls(f.log);
   const exec = log.find(x => x.argv?.[0] === "exec");
-  assert.deepEqual([f.clis.codex, ...exec.argv], r.plan.argv.slice(0, -1), "the SDK spawned exactly the argv the plan records");
-  assert.deepEqual(exec.keys, [], "no CODEX_API_KEY (or any key) in the env the SDK gave the CLI");
   const t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
+  // The plan's whole argv: exactly the argv the SDK spawned, then the stdin marker naming the digest of the prompt sent.
+  assert.deepEqual(r.plan.argv, [f.clis.codex, ...exec.argv, `(stdin: <prompt sha256:${t.prompt.sha256}>)`], "the SDK spawned exactly the argv the plan records");
+  assert.deepEqual(exec.keys, [], "no CODEX_API_KEY (or any key) in the env the SDK gave the CLI");
   const stdin = log.find(x => x.stdin_bytes !== undefined);
   assert.deepEqual([stdin.stdin_bytes, stdin.originator], [t.prompt.bytes, "codex_sdk_ts"]);
   assert.equal(t.cli.thread_id, "01a1f0fe-0000-7000-8000-0000000000b1");
@@ -289,7 +293,10 @@ test("grok, assignment 3: inside bwrap -- worktree read-only, .review-tests writ
   assert.deepEqual(probe.keys, [], "no XAI_API_KEY (nor any other key) inside the jail");
   // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): the only test commands grok is allowed are the review's
   // verify launchers (per invocation, --allow); the fake ran one, and it ran the test in a verify jail NESTED in grok's.
-  assert.deepEqual(probe.argv.slice(0, 5), ["-p", "--output-format", "streaming-json", "-m", "grok-4.7"]);
+  // The whole argv grok received: the print flags, then one --allow per launcher of THIS run's control dir, nothing else.
+  const ctl = join(r.plan.worktree.path, "..", "control");
+  assert.deepEqual(probe.argv, ["-p", "--output-format", "streaming-json", "-m", "grok-4.7",
+    ...["pantheon-test *", "pantheon-suite-proof", "pantheon-suite-pantheon", "pantheon-suite-all"].flatMap(l => ["--allow", `Bash(${join(ctl, l)})`])]);
   const allow = probe.argv.slice(5);
   assert.ok(allow.length >= 2 && allow.every((a, i) => (i % 2 === 0 ? a === "--allow" : /^Bash\(\/\S+\/control\/pantheon-(test \*|suite-[a-z]+)\)$/.test(a))), allow.join(" "));
   assert.deepEqual(r.plan.allowed_commands.every(l => /\/control\/pantheon-(test|suite-[a-z]+)\b/.test(l)), true, "every listed test command is a launcher");
@@ -378,7 +385,7 @@ test("grok permission refusals (round 2, 77480d6): no config.toml, or only the s
   r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--dry-run", "--grok-permissions-inspect", "inspect --json"] });
   assert.equal(r.code, EXIT.complete, r.out.err);
   const pi = r.plan.preflight.checks.permissions_inspect;
-  assert.deepEqual([pi.argv.slice(1), pi.ok, pi.loaded, pi.sources.length], [["inspect", "--json"], true, 6, 1]);
+  assert.deepEqual([pi.argv, pi.ok, pi.loaded, pi.sources.length], [[f.clis.grok, "inspect", "--json"], true, 6, 1], "the pinned grok binary ran the inspection");
   assert.match(r.plan.preflight.warnings.join(""), /loaded 6 rule\(s\), fewer than the 30 string-form rule\(s\)/);
   r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--dry-run", "--grok-permissions-inspect", "inspect --json"], env: { FAKE_GROK_INSPECT_LOADED: "0" } });
   assert.equal(r.code, EXIT.refused);

@@ -50,9 +50,10 @@ test('the real inventory: a plan and an implementation from two labs leave a thr
   // The lab rule (v1, v2), for contrast: two contributing labs leave two labs.
   assert.throws(() => reviewSeats({n: 3, avoidLabs: ['anthropic', 'openai']}), e => e.code === 'NO_SEATS');
   const seats = reviewSeatsByModel({n: 3, contributions: [PLAN, WORK]});
+  assert.equal(seats.length, 3, 'a panel of exactly three');
   assert.equal(new Set(labs(seats)).size, 3, 'three distinct labs');
-  assert.deepEqual(labs(seats).slice(0, 2).sort(), ['google', 'xai'], 'the labs that did not contribute are seated first');
-  const third = seats[2];
+  const [first, second, third] = seats;
+  assert.deepEqual([first.lab, second.lab].sort(), ['google', 'xai'], 'the labs that did not contribute are seated first');
   assert.ok(['anthropic', 'openai'].includes(third.lab));
   assert.equal(third.shared_lab, true);
   assert.deepEqual(third.shared_with, [third.lab === 'anthropic' ? 'anthropic/claude-fable-5-2' : 'openai/gpt-6-astra'], 'which contributor it shares a lab with');

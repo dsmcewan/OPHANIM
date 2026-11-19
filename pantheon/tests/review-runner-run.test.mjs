@@ -87,7 +87,14 @@ for (const vendor of ["openai", "xai", "gemini"]) {
       assert.equal(c1.body.model, "grok-4.7");
       assert.equal(c1.body.messages[0].role, "system");
       assert.equal(c2.body.messages.at(-1).role, "tool");
-      assert.deepEqual(c2.body.messages.slice(-2).map(m => m.tool_call_id), ["tc_1", "tc_2"]);
+      // The whole conversation sent back: system, the same brief, the assistant's tool calls replayed unchanged (a tool
+      // message must follow the assistant message that called it), then one result per call, in call order.
+      const m2 = c2.body.messages;
+      assert.deepEqual(m2.map(m => [m.role, m.tool_call_id]), [["system", undefined], ["user", undefined], ["assistant", undefined], ["tool", "tc_1"], ["tool", "tc_2"]]);
+      assert.deepEqual([m2[0], m2[1]], c1.body.messages, "the system prompt and the brief are resent unchanged");
+      assert.deepEqual(m2[2], { role: "assistant", content: null, tool_calls: SCRIPTS.xai()[0]().json.choices[0].message.tool_calls });
+      assert.match(m2[3].content, /^1\tline one\n2\tline two\n/, "tc_1: the read_file result");
+      assert.match(m2[4].content, /^exit_code: 0\n/, "tc_2: the run_tests result");
     }
     const md = r.files.find(f => f.endsWith(".md")), tj = r.files.find(f => f.endsWith(".transcript.json"));
     const lab = { openai: "openai", xai: "xai", gemini: "google" }[vendor];

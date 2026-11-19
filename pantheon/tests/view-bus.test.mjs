@@ -44,7 +44,9 @@ test("a subscriber that missed evicted history is TOLD, not silently short-chang
   bus.subscribe(e => seen.push(e), { from: 0 });
   assert.equal(seen[0].type, "gap", "the first thing a short-changed subscriber gets is the gap notice");
   assert.equal(seen[0].dropped, 3);
-  assert.deepEqual(seen.slice(1).map(e => e.text), ["3", "4", "5"]);
+  // The whole replay: the gap notice, then every event the buffer still holds, in order, with its own numbering.
+  assert.deepEqual(seen.map(e => [e.type, e.seq, e.text]),
+    [["gap", 0, "history truncated: 3 earlier event(s) dropped"], ["delta", 4, "3"], ["delta", 5, "4"], ["delta", 6, "5"]]);
 });
 
 test("the buffer is bounded and reports what it dropped", () => {
