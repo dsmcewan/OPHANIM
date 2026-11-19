@@ -79,13 +79,30 @@ export function verifyHandoff(work, gate) {
   return gate.from ? work.stages(gate.item).find(s => s.hash === gate.from) : null;
 }
 
-/** The signature of everything that can make new work ready or wake a waiting item. */
-export function inputSignature({repo, statusRoot, workRoot, issues = null}) {
+/**
+ * The signature of everything that can make new work ready or wake a waiting item: the ledger heads, the tickets, the
+ * published issues, AND the routing reconciliation derives from the evidence -- each item's gate, which already
+ * re-reads exactly what can wake it: the dossier of a plan waiting for evidence, the cited evidence of an approved plan
+ * (files and views), and the sources of an evidence recovery. Ordinary evidence files and retained runs were left out,
+ * so a plan blocked on missing evidence was never woken when it appeared (independent review round 2, assignment 1,
+ * OpenAI gpt-6.1-sol, 77480d6, question 5). Bounded as a tick's own reconciliation is: nothing is read that a tick would
+ * not read, and nothing is dispatched or recorded.
+ */
+export function inputSignature({repo, statusRoot, workRoot, issues = null, bundlesDir = null, now = Date.now()}) {
   const head = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').at(-1) ?? '' : '');
   const tdir = path.join(repo, 'tickets');
   const tickets = fs.existsSync(tdir) ? fs.readdirSync(tdir).filter(f => f.endsWith('.json')).sort().map(f => [f, fs.readFileSync(path.join(tdir, f), 'utf8')]) : [];
+  let routing = null;
+  try {
+    const work = openWorkLedger({root: workRoot, create: false});
+    const rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now});
+    routing = rec.items.map(i => ({item: i.item, gate: i.gate.gate, mode: i.gate.mode ?? null, from: i.gate.from ?? null, retry_of: i.gate.retry_of ?? null,
+      claim: i.gate.claim ?? null, recovery: i.gate.recovery ?? null, stale: (i.gate.stale ?? []).map(x => [x.record, x.why]),
+      // An item with an evidence gap is searched again when its recovery sources change (tick, below): the same digest.
+      ...(i.gate.gate === 'evidence-gap' ? {sources: sourcesDigest({repo, item: i.item, bundles: bundlesOf({item: i.item, bundlesDir, work}), work})} : {})}));
+  } catch { routing = null; }   // no work ledger yet (the first tick makes it) or an unreadable status ledger: the heads decide
   return 'sha256:' + digest({status: head(path.join(statusRoot, 'chain.jsonl')), work: head(path.join(workRoot, 'chain.jsonl')), tickets,
-    issues: (issues ?? []).map(i => [i.number, i.state, i.body ?? '']).sort((a, b) => a[0] - b[0])});
+    issues: (issues ?? []).map(i => [i.number, i.state, i.title ?? '', i.body ?? '']).sort((a, b) => a[0] - b[0]), routing});
 }
 
 /**
@@ -289,13 +306,14 @@ export async function watch({repo, statusRoot, workRoot, fetchIssues = async () 
   const ticks = [];
   for (;;) {
     const issues = await fetchIssues();
-    const sig = inputSignature({repo, statusRoot, workRoot, issues});
+    const sigOf = () => inputSignature({repo, statusRoot, workRoot, issues, bundlesDir: rest.bundlesDir ?? null, now: (rest.clock ?? Date.now)()});
+    const sig = sigOf();
     // A tick runs when an input changed, or when a transient pending's retry is due (time is not an input).
     const now = (rest.clock ?? Date.now)();
     if (sig !== state.last || (state.due !== null && state.due !== undefined && now >= state.due)) {
       const t = await tick({repo, statusRoot, workRoot, issues, ...rest});
       ticks.push(t);
-      state.last = inputSignature({repo, statusRoot, workRoot, issues});
+      state.last = sigOf();
       const dues = t.blocked.map(b => Date.parse(b.blocker?.retry_at ?? '')).filter(Number.isFinite);
       state.due = dues.length ? Math.min(...dues) : null;
     }

@@ -78,7 +78,34 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
   // The current version of a non-file view a plan cited (an issue, a status history, a grep): re-read with the same
   // read-only retriever the seats use, made once and only when a plan needs it (gates.mjs planValidity).
   let R = null;
-  const versionOf = request => (R ??= makeRetriever({repo, statusRoot, work: workLedger, issues})).versionOf(request);
+  const views = new Map();
+  // A view the dossier DERIVED (its relations, consumers, guess, runs, index) is re-derived: the dossier is rebuilt for
+  // the plan's item against the work ledger as it stood when the plan was made (the records before it: the plan's own
+  // consequences, such as an outcome bundle, are not new evidence), and the cited view's version read from it. A view
+  // the rebuild no longer derives is gone (null); a rebuild that fails is undefined, and the plan is stale
+  // (independent review round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, questions 1 and 5).
+  const dossierViews = plan => {
+    if (!plan?.hash) return null;
+    if (!views.has(plan.hash)) {
+      let v = null;
+      try {
+        const item = plan.identity?.item;
+        const before = [];
+        for (const x of workLedger ? workLedger.stages(item) : []) { if (x.hash === plan.hash) break; before.push(x); }
+        const work = workLedger ? {root: workLedger.root, stages: i => (i === undefined ? workLedger.stages() : i === item ? before : workLedger.stages(i))} : null;
+        v = buildDossier({repo, statusRoot, item, work, issues, bundlesDir}).views;
+      } catch { v = null; }
+      views.set(plan.hash, v);
+    }
+    return views.get(plan.hash);
+  };
+  const versionOf = (request, {plan = null} = {}) => {
+    if (request?.op === 'dossier') {
+      const v = dossierViews(plan);
+      return v ? (v.get(request.source)?.version ?? null) : undefined;
+    }
+    return (R ??= makeRetriever({repo, statusRoot, work: workLedger, issues})).versionOf(request);
+  };
   const items = board.items.map(s => {
     const ticketFile = path.join(ticketsDir, `${s.item}.json`);
     const ticket = fs.existsSync(ticketFile) ? readTicket({repo, item: s.item}) : null;
