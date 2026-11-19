@@ -1,0 +1,114 @@
+{
+  "schema": "ophanim.self-audit-seal/v1",
+  "assignment": 1,
+  "candidate_commit": "af0dc3012688703ccac0f6de31836822a3279eae",
+  "assessment": {
+    "path": "self-audit/round3/assignment-1/assessment.md",
+    "sha256": "11b4281f3f9e6977480f85815abf89cfb42b8af8526e207478ade3a8a2640801",
+    "bytes": 23074
+  },
+  "reproductions": [
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-capacity-pending-wedge.test.mjs",
+      "sha256": "d2c90d3f3d4cdf97423292ad4badfd78c25429125fc3a9c10b0bb180b4b81c54"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-dossier-continuation-unreachable.test.mjs",
+      "sha256": "cb0f531867c6b412a1322601b62c1c60538419043ca81642910526a79cefda1b"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-fit-resume-no-units.test.mjs",
+      "sha256": "0dc05f4d75d3b63125f9bcd0f5cb6307efa5096e64b4dca4a53221d076462393"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-handoff-ticket-identity.test.mjs",
+      "sha256": "67c385311ce2c8469032e7e6b5002c7a84c8ede055ea45451f49c7d55b4a6498"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-outcome-status-moved-wedge.test.mjs",
+      "sha256": "5e8bb20903fc6c6ee249cc303c45db57bd4a31de541dfc24f02892ef50c6f63a"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-own-ticket-stales-plan.test.mjs",
+      "sha256": "d325e891285574c3d71d0fde521f3e4f443d746d55085d05cb90f5e4e2d584c1"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-stable-leaks-work-ledger.test.mjs",
+      "sha256": "e92ffa36491f893b63529b67eeef8a0634cb5776e880d6ac7fb5ec7c6de9cb7c"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-stale-plan-never-replanned.test.mjs",
+      "sha256": "ee55d36bc59be757d3a28243fcd040edc79e8bb3d99b685e24d75ddd3309237f"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-ticket-stakes-erased.test.mjs",
+      "sha256": "5740720af738199e4630445a82d73f9aa3e36d17992594c6bb56eab030e1c34d"
+    },
+    {
+      "path": "self-audit/round3/assignment-1/reproductions/sa1-validator-evidence-unbound.test.mjs",
+      "sha256": "38cea3120a69423675076eb84d0587dc91f509375540feb89332b78d3bcfbff7"
+    }
+  ],
+  "assessor": {
+    "lab": "Anthropic",
+    "role": "self-audit by the coordinating lab (a subagent of the coordinating session); NOT independent",
+    "model_identity": "withheld from repository artifacts by session policy; recorded in the session reply to the owner"
+  },
+  "assessment_completed_at": "2026-11-19T08:00:17Z",
+  "assessment_completed_at_source": "file modification time of the delivered assessment (UTC)",
+  "sealed_at": "2026-11-19T08:04:53Z",
+  "findings": [
+    {
+      "question": 1,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## Q1. Earliest gate — **does not hold**"
+    },
+    {
+      "question": 2,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## Q2. Handoffs — **holds** (with a doc overclaim)"
+    },
+    {
+      "question": 3,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## Q3. Plan — **does not hold** (one bypass); the review and revision loop holds"
+    },
+    {
+      "question": 4,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## Q4. Planner seat — **does not hold** after re-derivation"
+    },
+    {
+      "question": 5,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## Q5. Evidence freshness — **does not hold**"
+    },
+    {
+      "question": 6,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## Q6. Evidence bounds — **does not hold**"
+    },
+    {
+      "question": 7,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## Q7. Scheduling — **holds** (caveats)"
+    },
+    {
+      "question": 8,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## Q8. Recovery — **holds**"
+    },
+    {
+      "question": 9,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## Q9. Reassessment — **holds**"
+    },
+    {
+      "question": 10,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## Q10. Outcome — **holds** (caveats)"
+    }
+  ],
+  "blind_status": "verified: no round-3 independent findings, transcripts or intermediate outputs had been received by, uploaded to, or committed in reach of the coordinating session at sealing time",
+  "immutability": "This assessment is sealed as written. Corrections or later discoveries must be separate, later-timestamped records; the prospective comparison uses only this sealed text."
+}
