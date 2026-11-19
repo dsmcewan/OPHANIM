@@ -384,3 +384,50 @@ test(`${L504}: the per-file (argo) implement stage's contributions and team keep
     });
   });
 });
+
+// S7, THE FINDINGS OF A KILLED IMPLEMENT ATTEMPT (stages.mjs implementUnits: a pipeline directory no implement record names,
+// on the same plan, has its findings carried into the next attempt's record). The first implement attempt is killed
+// after its run recorded the pinned Stage 5 reviewer's rejection (served under the mode's name, with its marker) and then
+// approved the unit; its process never writes a stage record. The lease expires, the next tick runs implement again, and
+// the carried rows must keep the reviewer's requested and served name, the marker and the lab.
+for (const M of MODES) {
+  test(`${L504}, source "${M.source}": S7 the findings of a KILLED implement attempt, carried into the next attempt, keep the reviewer's requested and served name, marker and lab`, {timeout: 300_000}, async t => {
+    await withDispatch(async ctx => {
+      const {dir: repo, makeClientFor} = ctx;
+      const item = `killed-${M.source}`;
+      const f = fixture(repo, [{item}]);
+      const FINDING = 'the first attempt is not good enough';
+      const serve = ({kind, model}) => (kind === 'unit-review' ? {served_model: M.judge(model), served_model_source: M.source} : {served_model: model});
+      const turn = scriptedTurn({'unit-review': ({k, rubric, passed}) => JSON.stringify(k === 1 || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))}, {serve});
+      const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+      const limits = {...LIMITS, iterations: 2};   // plan, then implement
+      let kills = 1, finished;
+      const done = new Promise(r => { finished = r; });
+      // THE KILL: the first implement attempt finishes its run, and its process never returns the stage record.
+      const implement = Object.assign(async c => { const out = await ex.implement(c); if (kills-- > 0) { finished(out); await new Promise(() => {}); } return out; }, {capacity: ex.implement.capacity});
+      tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {...ex, implement}, limits});
+      const killed = await done;
+      const killedRun = JSON.parse(fs.readFileSync(killed.outputs.run.record, 'utf8'));
+      const rv = killedRun.units.alpha.reviews.find(x => x.status === 'request_changes');
+      assert.ok(rv, 'the killed run recorded the rejection');
+      const want = id(rv.model, M.judge(rv.model), M.source);
+      // The lease expires; the next tick releases the claim and runs implement again.
+      const later = Date.now() + 31 * 60_000;
+      const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: {...limits, iterations: 1}, clock: () => later});
+      assert.deepEqual(r.released_expired.map(x => x.stage), ['implement']);
+      const impl = openWorkLedger({root: f.workRoot}).stages(item).find(s => s.stage === 'implement');
+      assert.equal(impl.status, 'passed', JSON.stringify([impl.next, impl.outputs.error]));
+      const carried = impl.findings.filter(x => x.carried_from?.record === killed.outputs.run.record && x.cause === 'in-run-review');
+      await t.test('the producer: the killed run\'s Stage 5 rejection names its reviewer by requested and served model, with the marker', () => {
+        assert.deepEqual(who(rv), want);
+      });
+      await t.test('S7 every carried reviewer finding keeps the requested and served name, the marker and the lab', () => {
+        assert.ok(carried.some(x => x.text === FINDING), JSON.stringify(impl.findings));
+        for (const x of carried) {
+          assert.deepEqual(who(x), want, 'a carried finding lost its reviewer\'s served identity or marker');
+          assert.equal(x.lab, resolveModel(rv.vendor, rv.served_model).lab);
+        }
+      });
+    });
+  });
+}
