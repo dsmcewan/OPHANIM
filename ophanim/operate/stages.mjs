@@ -50,7 +50,7 @@ import {REVIEW_BRIEF, deriveCycle, ledgerView} from '../../pantheon/src/ledger/c
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {selectSeat, readPools} from '../../pantheon/src/route/frontier.mjs';
 import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, implementerEscalation} from '../../pantheon/src/route/fit-matrix.mjs';
-import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT, liveOwner, recoverOrphanWorktrees} from '../../pantheon/src/pipeline/index.mjs';
+import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT, liveOwner, recoverOrphanWorktrees, recoverDeadRunBranch} from '../../pantheon/src/pipeline/index.mjs';
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
@@ -120,19 +120,55 @@ export const PLAN_BRIEF = [
 // refusal -- which is admitted, bounded and charged like any other call before it is made, or refused (it throws) and
 // not made (independent review, assignment 3 (xAI grok-4.7, 09d490f), question 9; (OpenAI gpt-6-astra extra review,
 // 09d490f), questions 1 and 9).
+// PER REQUEST (L-301, self-audit round 3, assignment 3 (sealed bb1287a); the second charge contract of sdk/live.mjs).
+// Nothing is charged before the turn: it is handed `admitRequest({kind})`, called before EVERY provider call at its
+// point of spend (the API's each request, a lane's CLI between its jail build and its spawn, a failover), so a lane
+// turn that fails before its spawn costs nothing. The refusals are still checked up front (an aborted stage or a spent
+// budget opens no seat), and that check RESERVES one call for the turn until its first admission, so concurrent seats
+// cannot all pass it and overrun the budget: made + reserved never exceeds the limit. A turn that does not take the
+// contract (a scripted seat, a --turn module) and returns a reply having admitted nothing is charged that call on
+// return (`late`), never dropped; the older `charge()` is still passed and admits a further call (with the turn's own
+// first one, when that was not admitted yet). Each retrieval round is its own m.turn, so it is charged here once.
+// THE BUDGET STOP BY CODE (L-308): every refusal is recorded against the seat it refused ({vendor, model} -> its code),
+// and so is an investigation that `canAsk` stopped on the budget; budgetStopOf reads these codes, never the words.
 function meter(turn, limit, ctx = {}) {
-  const m = {made: 0, refused: 0, limit};
-  const admit = () => {
-    if (ctx.signal?.aborted) { m.refused++; throw Object.assign(new Error(`STAGE_ELAPSED: ${ctx.signal.reason?.message ?? 'the stage was stopped'}`), {code: 'STAGE_ELAPSED'}); }
-    if (m.made >= m.limit) { m.refused++; throw Object.assign(new Error(`PROVIDER_CALL_LIMIT: ${m.made} of ${m.limit} stage provider call(s) used`), {code: 'PROVIDER_CALL_LIMIT'}); }
-    if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch (e) { m.refused++; throw e; } }
+  const m = {made: 0, refused: 0, limit, late: 0, stops: new Map()};
+  let reserved = 0;
+  const seatKey = who => `${who?.vendor ?? ''}|${who?.model ?? ''}`;
+  const stop = (who, code) => { if (who && code) m.stops.set(seatKey(who), code); };
+  const closed = who => {
+    if (ctx.signal?.aborted) { m.refused++; stop(who, 'STAGE_ELAPSED'); throw Object.assign(new Error(`STAGE_ELAPSED: ${ctx.signal.reason?.message ?? 'the stage was stopped'}`), {code: 'STAGE_ELAPSED'}); }
+    if (m.made + reserved >= m.limit) { m.refused++; stop(who, 'PROVIDER_CALL_LIMIT'); throw Object.assign(new Error(`PROVIDER_CALL_LIMIT: ${m.made} of ${m.limit} stage provider call(s) used${reserved ? `, ${reserved} held by turns in flight` : ''}`), {code: 'PROVIDER_CALL_LIMIT'}); }
+  };
+  const admit = who => {
+    closed(who);
+    if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch (e) { m.refused++; stop(who, e?.code ?? 'CHARGE_REFUSED'); throw e; } }
     m.made++;
+    m.stops.delete(seatKey(who));   // a seat that is admitted again is no longer stopped: its LAST refusal is what counts
   };
   m.turn = args => {
-    try { admit(); } catch (e) { return Promise.reject(e); }
-    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), charge: admit}));
+    const who = {vendor: args?.vendor ?? null, model: args?.model ?? null};
+    try { closed(who); } catch (e) { return Promise.reject(e); }
+    reserved++;
+    let held = true, admitted = 0;
+    const release = () => { if (held) { held = false; reserved--; } };
+    const take = () => { release(); admit(who); admitted++; };
+    const charge = () => { if (admitted === 0) take(); take(); };
+    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), admitRequest: () => take(), charge}))
+      .then(r => {
+        release();
+        if (admitted === 0) {
+          // The reply proves a call was made: counted, and charged on the ledger (a refused late charge is still counted).
+          m.made++; m.late++; m.stops.delete(seatKey(who));
+          if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch { m.late_uncharged = (m.late_uncharged ?? 0) + 1; } }
+        }
+        return r;
+      }, e => { release(); throw e; });
   };
-  m.left = () => m.limit - m.made;
+  m.left = () => m.limit - m.made - reserved;
+  // The investigation's "may it ask again": false records a budget stop for that seat (it ended on the budget).
+  m.canAsk = (reserve, who) => { const ok = m.left() > reserve; if (!ok) stop(who, 'PROVIDER_CALL_LIMIT'); return ok; };
+  m.stopOf = who => m.stops.get(seatKey(who)) ?? null;
   return m;
 }
 const jsonOf = text => {
@@ -367,12 +403,17 @@ const result = (status, rest) => ({status, outputs: {}, team: [], contributions:
  * A REVIEW LEFT INCOMPLETE BY THE STAGE'S OWN PROVIDER-CALL BUDGET is a budget stop, recorded with its own code
  * (STAGE_PROVIDER_CALLS), not REVIEW_PENDING: a reviewer seat refused at the meter (PROVIDER_CALL_LIMIT), or one whose
  * investigation ended on the stage's provider-call budget, read as a transient reviewer failure (independent review
- * round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 2.3). `whys` are the failed seats' reasons.
+ * round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 2.3).
+ * BY CODE (L-308, self-audit round 3, assignment 3 (sealed bb1287a)): `rows` are the failed seats as {code, why}, the
+ * code being what this attempt's meter recorded against that seat (m.stopOf: a refusal at the meter or the ledger
+ * charge, or an investigation `canAsk` ended on the budget). A reason's WORDS are never read: a seat that merely said
+ * "PROVIDER_CALL_LIMIT" (a provider error text, a reviewer's own words) is not a budget stop.
  */
-const BUDGET_STOP = /PROVIDER_CALL_LIMIT|the stage's provider-call budget/;
-const budgetStopOf = (m, whys, {stage, kept}) => {
+const BUDGET_STOP = new Set(['PROVIDER_CALL_LIMIT']);
+const stopRows = (m, failed) => failed.map(f => ({code: m.stopOf(f.seat ?? f), why: f.why}));
+const budgetStopOf = (m, rows, {stage, kept}) => {
   // Only when THIS attempt's budget is what ran out: its meter refused a call, or it has (almost) nothing left.
-  const hit = whys.filter(w => BUDGET_STOP.test(w ?? ''));
+  const hit = rows.filter(w => BUDGET_STOP.has(w?.code)).map(w => w.why);
   if (!hit.length || !(m.refused > 0 || m.left() <= 1)) return null;
   const what = `STAGE_PROVIDER_CALLS: the ${stage} stage's provider-call budget of ${m.limit} was spent (${m.made} made, ${m.refused} refused) before every review was recorded (${hit.join('; ')}); ${kept}`;
   return {blocker: {code: 'STAGE_PROVIDER_CALLS', what, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, with a fresh stage budget; the open cycle is resumed, never reopened', transient: true},
@@ -553,7 +594,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   // asked for is run. A refused round fails the seat's attempt with the reason; the rounds that were admitted go back
   // with the answer, and the cycle records each, with the model that served it, before the review.
   const investigatingTurn = (m, retriever, logs, role, reserve = 0) => async ({vendor, model, prompt, seat, admit = null}) => {
-    const r = await investigate({prompt, retriever, canAsk: () => m.left() > reserve, ask: p => m.turn({vendor, model, prompt: p, seat}), admit});
+    const r = await investigate({prompt, retriever, canAsk: () => m.canAsk(reserve, {vendor, model}), ask: p => m.turn({vendor, model, prompt: p, seat}), admit});
     logs.push({role, vendor, model, lab: seat?.lab ?? labOf(vendor, model), ...r.log, ...(r.refused ? {refused_round: r.refused} : {}), unresolved: gapsOf(deliveryOf(logs.dossier, r.log))});
     if (r.refused) throw new Error(`a retrieval round of ${vendor}/${model} (call ${r.refused.call}, served by ${r.refused.served_model ?? 'an unnamed model'}) is not admitted: ${r.refused.why}`);
     if (!r.reply) throw new Error(`no review within the investigation bounds (${r.log.limit_reached})`);
@@ -898,7 +939,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const version = {n: doc.version.n, digest: planDigest, commit: head, cycle: r.cycle, reviews: state.reviews.map(x => ({lab: x.lab, verdict: x.verdict}))};
       versions.push(version);
       if (state.reviews.length < n) {
-        const stopped = budgetStopOf(m, r.failed.map(f => f.why), {stage: 'plan', kept: 'the plan and its open cycle are kept'});
+        const stopped = budgetStopOf(m, stopRows(m, r.failed), {stage: 'plan', kept: 'the plan and its open cycle are kept'});
         return result('pending', {outputs: {mode, plan: doc, plan_digest: planDigest, refused, versions, cycle: r.cycle, plan_ledger: sys.root ?? planLedger, plan_ledger_anchor: sys.anchor, context: ctxOut()},
           team: [...team, ...planSeats.map(s => reviewerRow('plan-reviewer', s))], contributions, usage: usage(),
           blocker: stopped?.blocker ?? {what: `REVIEW_PENDING: ${r.failed.length} plan reviewer seat(s) failed (${r.failed.map(f => `${f.lab}: ${f.why}`).join('; ')}); the plan and its open cycle are kept`,
@@ -1195,14 +1236,21 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const checkpointDir = dirOf(ctx, 'checkpoints');
     fs.writeFileSync(path.join(dir, 'attempt.json'), JSON.stringify({item, attempt: ctx.attempt, plan_record: planRec.hash, claim: ctx.claim ?? null}) + '\n');
     const recordedRuns = new Set(ctx.work.stages(item).filter(x => x.stage === 'implement').flatMap(x => [x.outputs?.run?.dir, ...(x.outputs?.carried_runs ?? []).map(r => r.dir)]).filter(Boolean));
-    const itemDir = path.dirname(dir), carriedRuns = [], carriedFindings = [], recovered = [];
+    const itemDir = path.dirname(dir), carriedRuns = [], carriedFindings = [], recovered = [], recoveredBranches = [];
     for (const name of fs.readdirSync(itemDir).filter(x => /^pipeline-/.test(x)).sort()) {
       const d = path.join(itemDir, name);
       if (d === dir) continue;
       // An earlier attempt's run that no live process holds: the worktrees its process left registered (it was
       // killed before its `finally`) are removed, so they neither pile up nor interfere (independent review,
       // assignment 3 (xAI grok-4.7, 09d490f), question 8).
-      if (!liveOwner(d)) recovered.push(...await recoverOrphanWorktrees({repo: top, root: path.join(d, 'worktrees')}));
+      // ...and its integration branch, refs/heads/pantheon/pipeline/<run_id>, when that run died before it ended: each
+      // attempt runs under a new directory and run_id, so nothing else ever deleted it (L-304, self-audit round 3,
+      // assignment 3 (sealed bb1287a)). recoverDeadRunBranch keeps a live run's and a finished run's branch.
+      if (!liveOwner(d)) {
+        recovered.push(...await recoverOrphanWorktrees({repo: top, root: path.join(d, 'worktrees')}));
+        const b = await recoverDeadRunBranch({repo: top, dir: d});
+        if (b.deleted) recoveredBranches.push(b.branch);
+      }
       if (recordedRuns.has(d)) continue;
       let marker, rec;
       try { marker = JSON.parse(fs.readFileSync(path.join(d, 'attempt.json'), 'utf8')); rec = JSON.parse(fs.readFileSync(path.join(d, 'pipeline.json'), 'utf8')); } catch { continue; }
@@ -1314,7 +1362,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, record_digest: recordDigestOf(), status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
       units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length}]))};
     const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'},
-      ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}), ...(recovered.length ? {recovered_worktrees: recovered} : {})};
+      ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}), ...(recovered.length ? {recovered_worktrees: recovered} : {}), ...(recoveredBranches.length ? {recovered_branches: recoveredBranches} : {})};
     // Every finding the run kept (the Stage 5 reviewers' and the controller's own: write jail, ground truth), by unit.
     const findings = [...carriedFindings, ...unitsOut.flatMap(u => (u.findings ?? []).flatMap(f => f.findings.map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller', unit: u.unit_id, attempt: f.attempt, code: f.code ?? null,
       text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null,
@@ -1420,7 +1468,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         run: {...runOut, board: boardDir, ledger: path.join(dir, 'ledger'), ledger_anchor: sys.anchor, ledger_head: lv.head, run_json: runFile, gate_entry: null, tests},
         integration: {branch: branchOf, head, tree, merged: run.integration.merged, deleted: true}, arbiters,
         ticket: {path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key},
-        made_against: board.items.find(i => i.item === item)?.entry ?? null, contributions: all, carried: common.carried, ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}),
+        made_against: board.items.find(i => i.item === item)?.entry ?? null, contributions: all, carried: common.carried, ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}), ...(recoveredBranches.length ? {recovered_branches: recoveredBranches} : {}),
         ...(critiques.length ? {answers: critiques.map(f => f.id)} : {})},
       team, contributions: all, findings, usage: usage(calls), next: {stage: 'review', why: `integrated ${run.integration.merged.length} unit(s) as ${commit.slice(0, 12)} on ${branch}`}});
   }
@@ -1496,7 +1544,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       ...(cited.length ? {citations: cited} : {})});
     if (state.reviews.length < state.cycle.reviewers) {
       const failed = state.attempts.filter(a => a.outcome === 'failed').map(a => `${a.seat.lab}: ${a.why}`);
-      const stopped = budgetStopOf(m, failed, {stage: 'review', kept: 'the commit and the open cycle are kept'});
+      const stopped = budgetStopOf(m, stopRows(m, state.attempts.filter(a => a.outcome === 'failed').map(a => ({seat: a.seat, why: `${a.seat.lab}: ${a.why}`}))), {stage: 'review', kept: 'the commit and the open cycle are kept'});
       return result('pending', {outputs, team, usage: usage(),
         blocker: stopped?.blocker ?? {what: `REVIEW_PENDING: ${state.reviews.length} of ${state.cycle.reviewers} reviews recorded (${failed.join('; ') || 'reviewer unavailable'}); the commit and the open cycle are kept`,
           role: 'check@review', resume_when: 'the reviewer is available; the open cycle is resumed with its recorded reviews kept', transient: true},
@@ -1689,6 +1737,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       'stated cause is wrong or unsupported. missing_evidence: you cannot judge because evidence is missing or unretrievable (say which). Keep these apart.'].join('\n');
     let judged = null;
     const refusedJ = [], rejected = [], meteredOff = [];
+    // L-308: the tries that ended on the stage's provider-call budget, BY CODE (the meter's record for the seat).
+    const budgetRows = [];
     let exhausted = false;
     // An answer (or a retrieval round) not admitted: kept on the record, the seat barred, the next eligible seat asked.
     const reject = (x, j) => {
@@ -1702,18 +1752,19 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       return true;
     };
     for (let k = 0; k < 3 && !judged; k++) {
-      if (m.left() < 1) break;
+      if (m.left() < 1) { budgetRows.push({code: 'PROVIDER_CALL_LIMIT', why: `no provider call of the ${m.limit} was left to ask ${seat.vendor}/${seat.model}`}); break; }
       let reply, tryLog = null;
       try {
         // Every retrieval round is admitted on the model that served it, by the same check as the answer (L-201).
-        const r = await investigate({prompt: promptFor(seat), retriever, canAsk: () => m.left() > 1, ask: p => m.turn({vendor: seat.vendor, model: seat.model, prompt: p, seat: {...seat, role: 'validator'}}),
+        const r = await investigate({prompt: promptFor(seat), retriever, canAsk: () => m.canAsk(1, seat), ask: p => m.turn({vendor: seat.vendor, model: seat.model, prompt: p, seat: {...seat, role: 'validator'}}),
           admit: x => servedRefusal(seat, x?.served_model ?? null)});
         investigations.push({role: 'validator', ...seatOf(seat), try: k + 1, ...r.log, ...(r.refused ? {refused_round: r.refused} : {}), unresolved: gapsOf(deliveryOf(dossier, r.log))});
         reply = r.reply; tryLog = r.log;
         if (r.refused) { if (!reject({...r.refused, round: r.refused.call}, null)) break; continue; }
-        if (!reply) { refusedJ.push(`no judgment within the investigation bounds (${r.log.limit_reached})`); continue; }
+        if (!reply) { refusedJ.push(`no judgment within the investigation bounds (${r.log.limit_reached})`); budgetRows.push({code: m.stopOf(seat), why: refusedJ.at(-1)}); continue; }
       } catch (e) {
         refusedJ.push(`the validator call failed: ${e.message}`);
+        budgetRows.push({code: m.stopOf(seat), why: refusedJ.at(-1)});
         // A refusal BY THE RUN'S OWN SWITCH: the lane was refused for quota (or the seat has no lane) and the metered
         // Gemini failover is off. It is a wait on capacity, not a defect of the validation (finding 6, below).
         if (e?.quota_failover?.disabled === true || e?.code === 'AGY_NO_LANE') meteredOff.push({vendor: seat.vendor, model: seat.model, code: e.code ?? null, why: String(e.message ?? e).slice(0, 300)});
@@ -1767,6 +1818,16 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       return result('pending', {outputs: {...outputs, cause: 'metered-failover-disabled', metered_failover_refusals: meteredOff}, team, usage: usage(),
         blocker: {code: 'METERED_FAILOVER_DISABLED', what, role: 'lead@orch', resume_when: 'the lane\'s quota resets, or the owner allows the metered Gemini failover', transient: true},
         next: {stage: 'validate', why: 'the validator was refused for quota with the metered failover off'}});
+    }
+    // A validator that ran out of the stage's provider-call budget is a transient budget stop, like plan and review, not a
+    // defect of the validation (L-308, self-audit round 3, assignment 3 (sealed bb1287a)): by the meter's CODE, and only
+    // when this attempt's budget is what ran out.
+    const vHit = budgetRows.filter(w => BUDGET_STOP.has(w.code)).map(w => w.why);
+    if (!judged && vHit.length && (m.refused > 0 || m.left() <= 1)) {
+      const what = `STAGE_PROVIDER_CALLS: the validate stage's provider-call budget of ${m.limit} was spent (${m.made} made, ${m.refused} refused) before a judgment was recorded (${vHit.join('; ')}); the validated commit and its tests are kept`;
+      return result('pending', {outputs: {...outputs, cause: 'stage-provider-calls'}, team, usage: usage(),
+        blocker: {code: 'STAGE_PROVIDER_CALLS', what, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, with a fresh stage budget', transient: true},
+        next: {stage: 'validate', why: 'the validate stage\'s provider-call budget was spent before a judgment'}});
     }
     if (!judged) return result('failed', {outputs: {...outputs, cause: 'validation-defect'}, team, usage: usage(), next: {stage: 'validate', why: `no well-formed validator judgment (${refusedJ.join('; ')})`}});
     // A red test cannot be accepted, and a green test alone cannot pass: the judgment is required.

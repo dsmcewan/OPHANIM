@@ -23,6 +23,12 @@
   - A second service is refused.
   - A dead process's lock on this host is taken over, and the takeover is logged.
   - A lock held from another host is refused.
+- **One repository, several processes** (the service and an `operate tick`, or two ticks, on one checkout; self-audit round 3, assignment 3, L-303). Every change to the repository's worktree list goes through one lock that spans processes: `git worktree add`, `remove` and `prune`, and creating or deleting a run's integration branch. It covers a unit's worktree, the integration worktree, and orphan recovery. The lock is the file `<git common dir>/pantheon-worktrees.lock` (`pantheon/src/pipeline/git.mjs` `repoMutex`), so every linked worktree of the repository shares it.
+  - The lock file names its holder: pid, host, process start time and boot id. A waiter polls until the lock is free. After 5 minutes it fails with `REPO_LOCK_TIMEOUT`, naming the holder.
+  - A lock whose holder is dead is removed. Dead means a pid on this host that is not running, a pid now used by another process (its start time differs), or a holder from before the last boot. The waiter checks the lock again under a short "breaker" file before removing it, so it never removes a lock another process has taken in the meantime.
+  - Residual risk: a waiter killed while it holds the breaker, followed by two waiters clearing that breaker at the same moment. That window is microseconds long.
+  - A lock held from another host is never judged dead from here. It is waited for until the timeout.
+  - The review runner (`pantheon/src/review-runner/index.mjs`) also adds and removes worktrees on its own repository. It does not take this lock yet.
 - **No controller key** (`status/work/keys`): the service stops with exit 3 (`NO_AUTHORITY`) and records nothing.
 - **Tick errors** are retried after the interval. After `max_consecutive_errors` in a row, the service stops.
 
@@ -46,11 +52,19 @@ Ledgers written before version 2 keep verifying. A key is compared, never re-der
 
 ## Stopping
 
-SIGTERM or SIGINT stops the service between ticks; a stage in flight finishes first.
+SIGTERM or SIGINT stops the service, and also `cli.mjs tick` and `watch` (self-audit round 3, assignment 3, L-121). The stage in flight is stopped too, not only the loop: the signal is passed to `tick` as its `interrupt`.
+
+- The stage gets the stop on its signal. A live seat aborts its request or its CLI process.
+- Its claim is released as `interrupted`, with no stage record. The late result is not a handoff, and the calls charged under the claim stay counted.
+- The next start resumes the item at once.
+- A watch that is waiting between polls ends at once.
+- If the command has not returned 10 seconds after the signal, or a second signal arrives, every claim it still holds is released as `interrupted` on the work ledger, and the process exits with 128 + the signal number.
+
+The lease fence is unchanged: a released claim can record and charge nothing. `tick`'s `interrupt` is described in `ophanim/operate/scheduler.mjs` (L-305). The live-run launcher works the same way on SIGINT, SIGTERM and SIGHUP.
 
 If the process is **killed** during a stage (SIGKILL, a power loss), that stage's claim stays held **until its lease ends**: `lease_ms`, 30 minutes by default. Nothing can claim the item before then; the lease is the fence that keeps two holders from running one stage. The item shows gate `claimed`. Once the lease has ended, the next tick releases the claim as `expired` and resumes from the last recorded stage. No completed stage is repeated. A restart does not shorten the wait.
 
-`tick` takes an optional `interrupt` signal (self-audit round 3, assignment 3, L-305). When it fires, the stage in flight is stopped and its claim is released as `interrupted`, with no stage record: the late result is not a handoff, and the calls charged under it stay counted. The next tick resumes at once. The live-run launcher uses it on SIGINT, SIGTERM and SIGHUP (see `ophanim/operate/live-run.mjs`). The service does not pass one yet, so its stop still waits for the stage.
+The killed attempt's run is cleaned when the item's next implement attempt starts (L-304). That attempt removes the run's worktrees and its integration branch, `pantheon/pipeline/<run_id>`. A run that is still live is left alone. So is a run that ended: its branch is either handed on or kept as evidence.
 
 ## Evidence recovery for Resolved items
 

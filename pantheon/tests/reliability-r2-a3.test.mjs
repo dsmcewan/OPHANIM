@@ -160,7 +160,8 @@ test("finding 1.1: every Google continuation hop is a charged provider call, and
     })();
   } } });
   const turns = () => pipelineTurns({ turn: single, makeClientFor, agy: { probe: async () => ({ state: "exhausted", buckets: [] }),
-    run: async () => { throw Object.assign(new Error("429 RESOURCE_EXHAUSTED"), { status: 429, code: "quota_exhausted", quota: { matched: "RESOURCE_EXHAUSTED", explicit: true } }); } } });
+    // The lane admits its session before its spawn, as runAgyWorkerTurn does (L-301), then is refused for quota.
+    run: async ({ charge }) => { charge(); throw Object.assign(new Error("429 RESOURCE_EXHAUSTED"), { status: 429, code: "quota_exhausted", quota: { matched: "RESOURCE_EXHAUSTED", explicit: true } }); } } });
   const one = seats({ implementer: () => ({ seat: { ...EASY[2] }, ladder: [{ ...EASY[2] }] }) });
   const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: one, turns: turns(), dir: join(env.root, "ok"), planner: PLANNER });
   assert.equal(out.status, "completed", JSON.stringify(out.units.a.attempts.map(a => [a.code, a.why])) + out.units.a.reason);

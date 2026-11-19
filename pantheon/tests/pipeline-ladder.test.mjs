@@ -15,7 +15,9 @@ const writeImpl = async args => { await write(args.cwd, `src/${args.unit_id}/imp
 const run = async (t, implement, { limits = {}, review } = {}) => {
   const env = await tempRepo(); t.after(env.cleanup);
   const plan = [unit("a", { difficulty: "hard" })];
-  const s = scripted({ plan, implement, ...(review ? { review } : {}) });
+  // Every implementer call here is a lane that SPAWNED: the transport admits it at that point (L-301, the per-request
+  // contract: sdk/live.mjs, pipeline/turns.mjs), then it fails or answers.
+  const s = scripted({ plan, implement: async (args, n) => { args.admitRequest({ kind: "lane" }); return implement(args, n); }, ...(review ? { review } : {}) });
   const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, dir: env.dir, planner: PLANNER, turns: s.turns, limits,
     seats: seats({ implementer: () => ({ seat: { ...LADDER[0] }, ladder: LADDER.map(x => ({ ...x })) }) }) });
   const impl = s.calls.filter(c => c.role === "implementer");
