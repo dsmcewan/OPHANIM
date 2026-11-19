@@ -1,0 +1,2642 @@
+[
+ {
+  "plannerD": "easy",
+  "units": "easy",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.6",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.6",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.6",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.6",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": "PANEL_PENDING"
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "medium+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol"
+   ]
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-fable-5-2",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "easy",
+  "units": "easy+medium+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": "PANEL_PENDING"
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.6",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.6",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.6",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.6",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": "PANEL_PENDING"
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "medium+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": [
+    "openai/gpt-6-sol"
+   ]
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-fable-5-2",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-fable-5-2"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "medium",
+  "units": "easy+medium+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": "PANEL_PENDING"
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 3
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.6",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.6",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.6",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.6",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 2,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon",
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-carbon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-astra"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": "PANEL_PENDING"
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 2
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "medium+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-luna"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium+hard",
+  "sub": false,
+  "ladder": "first",
+  "panel": [
+   "xai/grok-4.7",
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 1
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": [
+    "openai/gpt-6-sol"
+   ]
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium+hard",
+  "sub": false,
+  "ladder": "all",
+  "panel": [
+   "xai/grok-4.7",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "xai/grok-4.7",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "xai/grok-4.6",
+  "eligibleAfterExcl": {
+   "xai": 1,
+   "google": 0,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [
+    "xai/grok-4.6"
+   ],
+   "google": [],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium+hard",
+  "sub": true,
+  "ladder": "first",
+  "panel": [
+   "google/gemini-3.8-flash",
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6-sol"
+  ],
+  "validator": "google/gemini-3.8-flash",
+  "coincides": true,
+  "validatorIfReviewersExcluded": "anthropic/claude-opus-5-5",
+  "eligibleAfterExcl": {
+   "xai": 0,
+   "google": 1,
+   "anthropic": 1,
+   "openai": 0
+  },
+  "eligibleList": {
+   "xai": [],
+   "google": [
+    "google/gemini-4-argon"
+   ],
+   "anthropic": [
+    "anthropic/claude-opus-5-5"
+   ],
+   "openai": []
+  }
+ },
+ {
+  "plannerD": "hard",
+  "units": "easy+medium+hard",
+  "sub": true,
+  "ladder": "all",
+  "panel": "PANEL_PENDING"
+ }
+]
