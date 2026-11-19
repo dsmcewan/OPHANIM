@@ -7,8 +7,14 @@
 // those; skips carry only name and reason here, and check.mjs attributes them by source search or, exactly, by
 // re-running with events-reporter.mjs.
 //
+// A failure node:test does not count -- a describe() that throws while registering, or a failing before() hook,
+// reports `fail 0` (Node 24.22.1) -- still appears in spec's "failing tests" list and as a TAP `not ok`; every
+// listed failure that is not a cancellation (and not a TODO) is kept in `failed` so check.mjs can compare it with the
+// summary's `fail` count (L-506).
+//
 // Inputs:  log text.
-// Outputs: [{header: {pkg, script}|null, format, counts|null, cancelled: [...], skipped: [...], interrupted: [...]}].
+// Outputs: [{header: {pkg, script}|null, format, counts|null, cancelled: [...], failed: [...], skipped: [...],
+//            interrupted: [...]}].
 // Must never: read a summary line from one segment into another, or report a segment without a summary as clean.
 const HEADER = /^> (\S+)@\S+ (\S+)/;
 const COUNT = /^(?:ℹ|#) (tests|suites|pass|fail|cancelled|skipped|todo) (\d+)\s*$/;
@@ -24,7 +30,7 @@ const isCancelMessage = s => CANCEL_MESSAGES.some(r => r.test(s));
 const unquote = s => s.trim().replace(/^'(.*)'$/, '$1');
 
 function newSegment(header) {
-  return {header, format: null, counts: null, cancelled: [], skipped: [], interrupted: [], failingList: []};
+  return {header, format: null, counts: null, cancelled: [], failed: [], skipped: [], interrupted: [], failingList: []};
 }
 
 /** Parse one log into segments. */
@@ -38,10 +44,10 @@ export function parseLog(text) {
   const closeTap = () => {
     if (!tapBlock) return;
     const y = tapBlock.yaml;
-    if (/^(cancelledByParent|testTimeoutFailure)$/.test(y.failureType ?? '') || isCancelMessage(y.error ?? '')) {
-      seg.cancelled.push({name: tapBlock.name, file: y.location ? y.location.replace(/:\d+:\d+$/, '') : null,
-        location: y.location ?? null, why: y.failureType ?? y.error ?? null});
-    }
+    const entry = {name: tapBlock.name, file: y.location ? y.location.replace(/:\d+:\d+$/, '') : null,
+      location: y.location ?? null, why: y.failureType ?? y.error ?? null};
+    if (/^(cancelledByParent|testTimeoutFailure)$/.test(y.failureType ?? '') || isCancelMessage(y.error ?? '')) seg.cancelled.push(entry);
+    else if (!tapBlock.todo) seg.failed.push(entry);
     tapBlock = null;
   };
   for (const raw of lines) {
@@ -56,7 +62,7 @@ export function parseLog(text) {
       closeTap();
       if (!seg.format) seg.format = 'tap';
       if (m[3] === 'SKIP') seg.skipped.push({name: m[2], reason: m[4] ?? ''});
-      else if (m[1] === 'not ok') tapBlock = {name: m[2], yaml: {}};
+      else if (m[1] === 'not ok') tapBlock = {name: m[2], yaml: {}, todo: m[3] === 'TODO'};
       continue;
     }
     if (tapBlock && (m = /^(location|failureType|error):\s*(.*)$/.exec(t))) { tapBlock.yaml[m[1]] = unquote(m[2]); continue; }
@@ -95,9 +101,10 @@ export function parseLog(text) {
   }
   closeTap();
   for (const s of segments) {
-    for (const f of s.failingList) if (f.why && isCancelMessage(f.why)) s.cancelled.push(f);
+    // An entry without a `✖ name` line is a TODO (spec prints those with ⚠): not a failure.
+    for (const f of s.failingList) if (f.why && isCancelMessage(f.why)) s.cancelled.push(f); else if (f.name) s.failed.push(f);
     delete s.failingList; delete s.interruptedHeading;
   }
   // Drop an empty leading segment (text before the first header with nothing in it).
-  return segments.filter(s => s.counts || s.cancelled.length || s.skipped.length || s.interrupted.length || s.header);
+  return segments.filter(s => s.counts || s.cancelled.length || s.failed.length || s.skipped.length || s.interrupted.length || s.header);
 }
