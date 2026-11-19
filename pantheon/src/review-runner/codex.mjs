@@ -137,12 +137,18 @@ const inlineToml = o => `{${Object.entries(o).map(([k, v]) => `${tq(k)}=${v && t
  * so codex sees exactly these strings), plus the file-system entries `codex debug prompt-input` must then report.
  * All paths absolute and real. `readRoots`: the codex vendor dir, the node install, the telos root.
  */
-export function codexPermissionProfile({ worktree, write_allowed, scratchTmp, readRoots = [] }) {
+// L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): reviewed tests ran here, in codex's own sandbox, as the
+// codex CLI's children. Codex's sandbox cannot start the verify jail (nested namespaces are refused), so the code under
+// review must not run here at all: `denyPaths` (the node and npm binaries the runner finds: codex.mjs callers pass them)
+// are DENIED, and the node install is no longer a read root. The listed commands name no test (cli-common.mjs
+// allowedCommands testsRefused).
+export function codexPermissionProfile({ worktree, write_allowed, scratchTmp, readRoots = [], denyPaths = [] }) {
   const name = REVIEW_PERMISSION_PROFILE;
-  for (const p of [worktree, scratchTmp, ...readRoots]) if (!String(p ?? "").startsWith("/")) throw new Error(`codex permission profile: ${p} is not an absolute path`);
+  for (const p of [worktree, scratchTmp, ...readRoots, ...denyPaths]) if (!String(p ?? "").startsWith("/")) throw new Error(`codex permission profile: ${p} is not an absolute path`);
   if (scratchTmp === worktree || scratchTmp.startsWith(worktree + "/")) throw new Error("codex permission profile: the scratch TMPDIR must be outside the worktree");
   const fs = { ":minimal": "read" };
   for (const r of [...new Set(readRoots)]) fs[r] = "read";
+  for (const d of [...new Set(denyPaths)]) fs[d] = "deny";
   Object.assign(fs, { "/run": "deny", "/var/run": "deny", [scratchTmp]: "write" });
   const roots = { ".": "read", ...(write_allowed ? { [REVIEW_TESTS_DIR]: "write" } : {}) };
   const network = { enabled: true, dangerously_allow_all_unix_sockets: true };
@@ -447,7 +453,9 @@ export function applyCodexEvent(out, e) {
     const it = e.item ?? {};
     if (it.type === "agent_message" && typeof it.text === "string") { out.final_text = it.text; out.own.push({ kind: "your message", text: cap(it.text) }); }
     else if (it.type === "command_execution") {
-      out.commands.push({ command: String(it.command ?? "").slice(0, 2000), exit_code: it.exit_code ?? null, status: it.status ?? null });
+      // `denied` (the coverage gate, coverage.mjs; L-501): the sandbox refused the command a path (its own output says so).
+      out.commands.push({ command: String(it.command ?? "").slice(0, 2000), exit_code: it.exit_code ?? null, status: it.status ?? null,
+        denied: /Permission denied|Operation not permitted|\bEACCES\b|\bEPERM\b|declined|rejected/i.test(`${it.aggregated_output ?? ""} ${it.status ?? ""}`) });
       out.own.push({ kind: "command and its output", text: cap(`$ ${it.command ?? ""}\n(exit ${it.exit_code ?? "?"})\n${it.aggregated_output ?? ""}`) });
     } else if (it.type === "file_change") {
       out.file_changes.push({ changes: (it.changes ?? []).map(c => ({ path: c.path ?? null, kind: c.kind ?? null })), status: it.status ?? null });

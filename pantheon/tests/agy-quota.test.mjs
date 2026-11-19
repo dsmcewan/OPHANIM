@@ -79,19 +79,28 @@ test("probeQuota runs `agy --print /usage --output-format json` (no model, minim
   writeFileSync(join(dir, "quota-report.txt"), SAMPLES.noise);
   assert.equal((await probeQuota({ cli })).state, "unknown");
   assert.equal((await probeQuota({ cli: join(dir, "missing-agy") })).state, "unknown");
-  // The probe's environment: a minimal one, without a Google API key (a CLI that prints its env).
+  // The probe's environment and jail (a CLI that prints its env). Since L-401 (self-audit round 3, assignment 4 (sealed
+  // fe2a612)) the probe runs in the WORKER's jail profile: the worker's env allowlist, bwrap (a fresh /tmp, its own PID
+  // namespace), a fresh control dir as cwd. The fake writes its record into an explicit agy state dir (writable inside).
   const envCli = join(dir, "env-agy");
-  const seen = join(dir, "seen.txt");
-  writeFileSync(envCli, `#!/bin/sh\n{ printf 'args=%s\\n' "$*"; printf 'cwd=%s\\n' "$PWD"; env; } > ${seen}\n`, { mode: 0o755 });
-  const r = await probeQuota({ cli: envCli, env: { EXTRA_FOR_PROBE: "1" } });
+  const out = mkdtempSync(join(tmpdir(), "pantheon-quota-seen-"));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const seen = join(out, "seen.txt"), marker = join(tmpdir(), `pantheon-quota-host-marker-${process.pid}`);
+  writeFileSync(marker, "host /tmp is visible"); t.after(() => rmSync(marker, { force: true }));
+  writeFileSync(envCli, `#!/bin/sh\n{ printf 'args=%s\\n' "$*"; printf 'cwd=%s\\n' "$PWD"; [ -e '${marker}' ] && echo host_tmp=visible; env; } > ${seen}\n`, { mode: 0o755 });
+  const keep = { OPENAI_API_KEY: process.env.OPENAI_API_KEY, UNRELATED_FOR_PROBE: process.env.UNRELATED_FOR_PROBE };
+  Object.assign(process.env, { OPENAI_API_KEY: "sk-synthetic-never-to-the-probe", UNRELATED_FOR_PROBE: "1" });
+  t.after(() => { for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  const r = await probeQuota({ cli: envCli, env: { EXTRA_FOR_PROBE: "1", ANTHROPIC_API_KEY: "sk-ant-synthetic-extra" }, sandbox: { agy_state_dirs: [out] } });
   assert.equal(r.state, "unknown");
   const { readFileSync } = await import("node:fs");
   const got = readFileSync(seen, "utf8");
   // The structured form observed on agy 1.5.10 (it spent no tokens there): no --model, no workspace flags.
-  assert.match(got, /^args=--print \/usage --output-format json$/m, "no --model, no workspace flags");
+  assert.match(got, /^args=--print \/usage --output-format json$/m, "no --model, no workspace flags, no --sandbox");
   assert.match(got, /^AGY_CLI_DISABLE_AUTO_UPDATE=true$/m);
-  assert.doesNotMatch(got, /GEMINI_API_KEY|GOOGLE_API_KEY/);
+  assert.doesNotMatch(got, /GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|sk-synthetic|sk-ant-synthetic/, "no provider key, from the env or as an extra");
   assert.match(got, /^EXTRA_FOR_PROBE=1$/m);
-  assert.match(got, /^cwd=.*pantheon-agy-quota-/m, "an empty temporary cwd, not a workspace");
-  assert.ok(!/^FAKE_AGY_LOG=/m.test(got), "a minimal environment: unrelated variables are not passed");
+  assert.match(got, /^cwd=.*pantheon-agy-quota-[^/]+\/control$/m, "a fresh control dir as cwd, not a workspace");
+  assert.ok(!/^UNRELATED_FOR_PROBE=/m.test(got), "the worker's allowlist: unrelated variables are not passed");
+  assert.doesNotMatch(got, /host_tmp=visible/, "inside the worker's bwrap: the host's /tmp is not visible");
 });

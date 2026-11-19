@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseUsageEnvelope, parseQuotaReport, scopeQuota, probeQuota, displayNameOf, PROBE_ARGS } from "../src/agy/quota.mjs";
+import { parseUsageEnvelope, parseQuotaReport, scopeQuota, probeQuota as probeQuotaOf, displayNameOf, PROBE_ARGS } from "../src/agy/quota.mjs";
 
 const OBSERVED_JSON = {"conversation_id":"","status":"SUCCESS","response":"Gemini Models\tWeekly Limit Remaining\t100%\t2026-11-25T01:58:17Z\nGemini Models\tFive Hour Limit Remaining\t100%\t2026-11-18T06:58:17Z\nClaude and GPT models\tWeekly Limit Remaining\t100%\t2026-11-25T01:58:17Z\nClaude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-18T06:58:17Z\n","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"command":{"name":"usage","data":{"description":"Within each group, models share a weekly limit and a 5-hour limit. Quota is consumed proportionally to the cost of the tokens. Thus, limits will last longer with shorter tasks or using more cost-effective models. The 5-hour limit smooths out aggregate demand to fairly distribute global capacity across all users, while your weekly limit is tied directly to your individual tier.","groups":[{"name":"Gemini Models","description":"Models within this group: Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Orchestrator (Carbon), Orchestrator (Argon), Gemini 3.8 Flash","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-25T01:58:17Z"},{"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":1,"reset_time":"2026-11-18T06:58:17Z"}]},{"name":"Claude and GPT models","description":"Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-25T01:58:17Z"},{"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":1,"reset_time":"2026-11-18T06:58:17Z"}]}]}}};
 const OBSERVED_TEXT = "Gemini Models\tWeekly Limit Remaining\t100%\t2026-11-25T01:58:51Z\nGemini Models\tFive Hour Limit Remaining\t100%\t2026-11-18T06:58:51Z\nClaude and GPT models\tWeekly Limit Remaining\t100%\t2026-11-25T01:58:51Z\nClaude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-18T06:58:51Z\n";
@@ -53,6 +53,8 @@ test("probeQuota runs the observed structured command and scopes it to the lane'
   writeFileSync(join(dir, "report.json"), JSON.stringify(withThirdParty(0)));
   writeFileSync(cli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${seen}"\nprintf 'AUTO=%s\\n' "$AGY_CLI_DISABLE_AUTO_UPDATE" >> "${seen}"\ncat "${join(dir, "report.json")}"\n`);
   chmodSync(cli, 0o755);
+  // The probe runs in the worker's jail (L-401 sibling): the fake records into an explicit agy state dir (writable inside).
+  const probeQuota = args => probeQuotaOf({ ...args, sandbox: { agy_state_dirs: [dir] } });
   const p = await probeQuota({ cli, model: "gemini-4-carbon-high" });
   assert.deepEqual(readFileSync(seen, "utf8").trim().split("\n"), [...PROBE_ARGS, "AUTO=true"]);
   assert.equal(p.format, "json");

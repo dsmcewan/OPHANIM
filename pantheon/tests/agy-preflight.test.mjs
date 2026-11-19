@@ -82,7 +82,7 @@ test("parseHooksLoaded reads the observed hooks_manager line (the last one wins)
 });
 
 test("the preflight's blocking and advisory checks", () => {
-  assert.deepEqual([PREFLIGHT_BLOCKING, PREFLIGHT_ADVISORY], [["card_tools", "auth", "lane_quota", "agents", "log_scan"], ["mcp_list", "discovery", "hooks_discovery"]]);
+  assert.deepEqual([PREFLIGHT_BLOCKING, PREFLIGHT_ADVISORY], [["card_tools", "auth", "lane_quota", "agents", "log_scan", "tool_drift"], ["mcp_list", "discovery", "hooks_discovery"]]);
 });
 
 // ---- the CLI's log FILES (observed on agy 1.5.10: with log/ writable the diagnostics go there, not to stderr) --------

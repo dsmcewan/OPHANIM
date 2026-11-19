@@ -48,7 +48,7 @@ test("OpenAI: continue from the last response id with previous_response_id, the 
   assert.ok(t1.events.filter(e => e.type === "tool_call").every(e => e.result_full === true));
   // Run 2: higher limits; the first request resumes, the model reads the restored probe, then answers.
   const r2 = await api({ repo, outDir, vendor: "openai", n: 2, args: ["--max-turns", "5", "--continue", tpath],
-    script: [oa("resp_2", [fc("c4", "read_file", { path: ".review-tests/probe.test.mjs" })]), oa("resp_3", [msg(FINAL)])] });
+    script: [oa("resp_2", [fc("c4", "read_file", { path: ".review-tests/probe.test.mjs" }), fc("c5", "run_tests", { files: [".review-tests/probe.test.mjs"] })]), oa("resp_3", [msg(FINAL)])] });
   assert.equal(r2.code, EXIT.complete, r2.out.err);
   const [q1, q2] = r2.fetch.calls;
   assert.equal(q1.body.previous_response_id, "resp_1");
@@ -60,7 +60,9 @@ test("OpenAI: continue from the last response id with previous_response_id, the 
   const h = header(md);
   assert.ok(h.includes(`- continued_from: \`${sha(t1bytes)}\``));
   assert.match(h, /- continuation_method: previous_response_id/);
-  assert.match(h, /- runs: 2\n- provider_calls_cumulative: 3\n- tool_calls_cumulative: 4\n/);
+  assert.match(h, /- runs: 2\n- provider_calls_cumulative: 3\n- tool_calls_cumulative: 5\n/);
+  // THE COVERAGE GATE (L-501) counts the whole review across its runs: run 1's source reads, run 2's jailed test.
+  assert.match(h, /- coverage: `\{"source_reads":1,"denied_reads":0,"tests_run":1,"tests_allowed":true\}`, gate passed/);
   assert.match(h, /- usage_totals_cumulative: `\{"input_tokens":30,"output_tokens":3\}`/);
   assert.ok(md.endsWith(FINAL));
   const files = await readdir(outDir);
@@ -75,7 +77,7 @@ test("OpenAI: continue from the last response id with previous_response_id, the 
 test("Gemini: the recorded model turn and full tool results are replayed as the conversation so far", async () => {
   const repo = await fixtureRepo(), outDir = await mkdtemp(join(tmpdir(), "rr-cont-"));
   const g = (parts, fr = "STOP") => () => ({ json: { modelVersion: "gemini-4-carbon-001", usageMetadata: { totalTokenCount: 5 }, candidates: [{ finishReason: fr, content: { role: "model", parts } }] } });
-  const r1 = await api({ repo, outDir, vendor: "gemini", n: 1, args: ["--max-turns", "1"], script: [g([{ functionCall: { name: "read_file", args: { path: "hello.txt" } }, thoughtSignature: "sig" }])] });
+  const r1 = await api({ repo, outDir, vendor: "gemini", n: 1, args: ["--max-turns", "1"], script: [g([{ functionCall: { name: "read_file", args: { path: "hello.txt" } }, thoughtSignature: "sig" }, { functionCall: { name: "run_tests", args: { files: ["pantheon/tests/other.test.mjs"] } } }])] });
   assert.equal(r1.code, EXIT.incomplete);
   const r2 = await api({ repo, outDir, vendor: "gemini", n: 1, args: ["--continue", join(outDir, "findings-1-google.transcript.json")], script: [g([{ text: FINAL }])] });
   assert.equal(r2.code, EXIT.complete, r2.out.err);
@@ -92,7 +94,10 @@ test("xAI: a cut-off reply is kept as context and the model is asked for the com
   const r1 = await api({ repo, outDir, vendor: "xai", n: 3, script: [x({ content: "# Findings\n\n1. PARTIAL-CUT" }, "length")] });
   assert.equal(r1.code, EXIT.incomplete);
   const tpath = join(outDir, "findings-3-xai.transcript.json");
-  const r2 = await api({ repo, outDir, vendor: "xai", n: 3, args: ["--continue", tpath], script: [x({ content: FINAL }, "stop")] });
+  // The resumed review reads and tests (the coverage gate, L-501), then answers.
+  const tools = { content: null, tool_calls: [{ id: "t1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "hello.txt" }) } },
+    { id: "t2", type: "function", function: { name: "run_tests", arguments: JSON.stringify({ files: ["pantheon/tests/other.test.mjs"] }) } }] };
+  const r2 = await api({ repo, outDir, vendor: "xai", n: 3, args: ["--continue", tpath], script: [x(tools, "tool_calls"), x({ content: FINAL }, "stop")] });
   assert.equal(r2.code, EXIT.complete, r2.out.err);
   const m = r2.fetch.calls[0].body.messages;
   assert.deepEqual(m.map(y => y.role), ["system", "user", "assistant", "user"]);
@@ -169,7 +174,8 @@ test("codex: a failed run is continued by resuming its own thread (the SDK's res
   assert.deepEqual([t1.status, t1.stop_reason], ["failed", "codex reported turn.failed: usage limit reached"]);
   const promptFile = join(f.base, "prompt.txt");
   const r2 = await sub(f, { n: 2, args: ["--continue", tpath], env: { FAKE_CLI_PROMPT_FILE: promptFile, FAKE_CLI_CHECK: ".review-tests/mine.test.mjs" } });
-  assert.equal(r2.code, EXIT.complete, r2.out.err);
+  assert.equal(r2.code, EXIT.incomplete, r2.out.err);   // finished, but codex runs no test (L-404): the coverage gate (L-501)
+  assert.match(r2.out.err, /coverage gate: no test ran although the testing limit allows tests: the codex transport runs no test/);
   assert.equal(r2.plan.continue.method, "codex-sdk-resume");
   assert.equal(r2.plan.continue.thread_id, t1.cli.thread_id);
   assert.deepEqual(r2.plan.argv.slice(-3, -1), ["resume", t1.cli.thread_id], "the SDK puts resume after the exec-level --cd/--sandbox");
@@ -201,7 +207,7 @@ test("codex without the earlier thread on this machine: a new session whose prom
   await rm(join(f.home, ".codex", "sessions"), { recursive: true, force: true });   // the thread's rollout is gone
   const promptFile = join(f.base, "prompt.txt");
   const r2 = await sub(f, { n: 2, args: ["--continue", tpath], env: { FAKE_CLI_PROMPT_FILE: promptFile, FAKE_CLI_CHECK: ".review-tests/mine.test.mjs" } });
-  assert.equal(r2.code, EXIT.complete, r2.out.err);
+  assert.equal(r2.code, EXIT.incomplete, r2.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
   assert.equal(r2.plan.continue.method, "replayed-own-transcript");
   assert.match(r2.plan.continue.resume_support.source, /resumeThread/);
   assert.equal(r2.sdk.find(c => c.kind === "run").resume_id, null);
@@ -238,7 +244,8 @@ test("agy: an incomplete run keeps its conversation state; --continue passes --c
   await writeFile(first, ['agy_write "$dir/.review-tests/mine.test.mjs" \'import test from "node:test"; test("ok", () => {});\' || true',
     'mkdir -p "$HOME/.gemini/antigravity-cli/conversations" && echo db > "$HOME/.gemini/antigravity-cli/conversations/conv-1.db"',
     'printf \'{"event":"init","conversation_id":"conv-1","init":{"model":"%s","agent":"%s"}}\\n\' "$model" "$agent"', "exit 0", ""].join("\n"));
-  await writeFile(second, ['printf \'%s %s %s\\n\' "$conv" "$([ -f "$HOME/.gemini/antigravity-cli/conversations/$conv.db" ] && echo state-restored || echo no-state)" "$([ -f "$dir/.review-tests/mine.test.mjs" ] && echo tests-restored || echo no-tests)" >> "$FAKE_AGY_LOG.resume"',
+  await writeFile(second, ['agy_read "$dir/hello.txt" >/dev/null || true', 'agy_run "$(pwd)/pantheon-test pantheon/tests/other.test.mjs" >/dev/null 2>&1 || true',
+    'printf \'%s %s %s\\n\' "$conv" "$([ -f "$HOME/.gemini/antigravity-cli/conversations/$conv.db" ] && echo state-restored || echo no-state)" "$([ -f "$dir/.review-tests/mine.test.mjs" ] && echo tests-restored || echo no-tests)" >> "$FAKE_AGY_LOG.resume"',
     'reply="# Findings (resumed)"', ""].join("\n"));
   const env = { FAKE_AGY_LOG: join(fx, "agy.log"), PANTHEON_AGY_STATE_DIRS: fx };
   const r1 = await sub(f, { n: 1, args: ["--agy-cli", cli], env: { ...env, FAKE_AGY_WORKER: first } });

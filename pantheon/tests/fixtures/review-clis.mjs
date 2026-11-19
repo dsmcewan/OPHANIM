@@ -126,6 +126,25 @@ if (pi >= 0) {
   if (process.env.FAKE_CLI_WRITE) probe.extra = tryWrite(path.join(wt, process.env.FAKE_CLI_WRITE));
   const ev = o => process.stdout.write(JSON.stringify(o) + "\n");
   ev({ type: "start", model: argv[argv.indexOf("-m") + 1] });
+  // A REVIEWER'S WORK, in grok 1.0.44's observed tool shapes (the coverage gate counts it, coverage.mjs: L-501): it reads
+  // a source file, then runs one test through the review's verify launcher -- the path the runner allowed with --allow
+  // (L-404) -- for real: the launcher starts the verify jail nested in this jail. FAKE_GROK_NO_WORK=1 skips both.
+  if (process.env.FAKE_GROK_NO_WORK !== "1") {
+    const allow = argv.flatMap((a, i) => (a === "--allow" ? [argv[i + 1]] : []));
+    const launcher = (allow.map(a => /^Bash\((\S+\/pantheon-test) \*\)$/.exec(a)).find(Boolean) ?? [])[1] ?? null;
+    probe.allow = allow;
+    ev({ type: "tool_call", toolCallId: "call-read", title: "read_file", kind: "read", status: "pending", toolName: "read_file", rawInput: { file_path: path.join(wt, "hello.txt") }, content: [], locations: [] });
+    ev({ type: "tool_call_update", toolCallId: "call-read", status: fs.existsSync(path.join(wt, "hello.txt")) ? "completed" : "failed", content: [], rawOutput: null, locations: [] });
+    if (launcher) {
+      const prompt = argv[pi + 1] || "";
+      const listed = [...prompt.matchAll(/pantheon-test ([A-Za-z0-9_.\/-]+\.test\.mjs)/g)].map(m => m[1]).find(f => fs.existsSync(path.join(wt, f))) ?? "pantheon/tests/other.test.mjs";
+      const command = launcher + " " + listed;
+      const r = cp.spawnSync(launcher, [listed], { cwd: wt, encoding: "utf8", timeout: 120000 });
+      probe.launcher = { command, exit: r.status, out: String((r.stdout || "") + (r.stderr || "")).slice(-300) };
+      ev({ type: "tool_call", toolCallId: "call-test", title: "run_terminal_command", kind: "execute", status: "pending", toolName: "run_terminal_command", rawInput: { command }, content: [], locations: [] });
+      ev({ type: "tool_call_update", toolCallId: "call-test", status: r.status === 0 ? "completed" : "failed", content: [], rawOutput: null, locations: [] });
+    }
+  }
   if (mode === "chunks" || mode === "nofinal") {
     // An incremental stream (ASSUMED shapes: the Grok CLI's schema is undocumented): tool activity, reasoning chunks,
     // then (chunks) the answer in pieces; nofinal ends on tool activity with no assistant text at all.
@@ -207,6 +226,9 @@ export function fakeCodexSdk() {
       if (mode === "deaf") { await new Promise(() => {}); return; }
       if (env.FAKE_CLI_WRITE) { const p = join(dir, env.FAKE_CLI_WRITE); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, "x\n"); }
       if (mode === "ok") yield { type: "error", message: "Reconnecting... 1/5 (stream disconnected)" };
+      // A reviewer reads the source (the coverage gate, coverage.mjs: L-501). The node command is what a codex model may
+      // still TRY; it counts as no test (codex runs none, L-404: the profile denies node).
+      yield { type: "item.completed", item: { id: "i0", type: "command_execution", command: "/bin/bash -lc \"sed -n '1,20p' hello.txt\"", aggregated_output: "line one", exit_code: 0, status: "completed" } };
       yield { type: "item.completed", item: { id: "i1", type: "command_execution", command: "node --test pantheon/tests/other.test.mjs", aggregated_output: "ok 1", exit_code: 0, status: "completed" } };
       if (mode === "partial") {
         yield { type: "item.completed", item: { id: "i3", type: "agent_message", text: "EARLIER-OWN-MESSAGE: question 1 holds so far" } };

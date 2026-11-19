@@ -8,6 +8,10 @@ import { join } from "node:path";
 import { runAgyCliTurn } from "../src/board/agy-cli.mjs";
 import { LANES } from "../src/config/models.mjs";
 
+// The single-turn seat's env is the worker's ALLOWLIST since L-401 (self-audit round 3, assignment 4 (sealed fe2a612)):
+// the fake's switch passes only because the operator's pass list names it, exactly as the worker fixtures do.
+process.env.PANTHEON_AGY_ENV_PASS ??= "FAKE_*";
+
 const FAKE = `#!/usr/bin/env node
 const args = process.argv.slice(2), at = k => args[args.indexOf(k) + 1];
 const status = process.env.FAKE_AGY_STATUS;

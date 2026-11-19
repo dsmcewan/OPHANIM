@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { REVIEW_DIR, BriefError, loadBrief, reviewerHeaderLines, sha256, inScopePaths, listedTests, testingLine } from "./brief.mjs";
 import { CAPS, permissionsFor, toolDefinitions, createToolbox } from "./tools.mjs";
+import { coverageGate, coverageHeaderLine, coverageOfApi, gatedStatus, testsAllowedBy } from "./coverage.mjs";
 import { buildChildEnv, WITHHELD } from "./sandbox.mjs";
 import { VENDORS, authHeaders, createConversation, addUsage, redact } from "./vendors.mjs";
 import { subscriptionMain, TRANSPORT_FOR } from "./subscription.mjs";
@@ -296,7 +297,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
       }
     }
     const childEnv = buildChildEnv({ parentEnv: env, home, tmpdir: childTmp, telosRoot: opts.telosRoot, secrets });
-    const toolbox = createToolbox({ root: wt, permissions: plan.tool_permissions, env: childEnv, timeoutMs });
+    const toolbox = createToolbox({ root: wt, permissions: plan.tool_permissions, env: childEnv, timeoutMs, telosRoot: opts.telosRoot ?? null, ...(deps.bwrap ? { bwrap: deps.bwrap } : {}) });
     const conv = createConversation(plan.vendor, { model: plan.model, system: b.system, brief: b.brief, tools: toolbox.definitions, maxOutputTokens: opts.limits.max_output_tokens });
 
     let turn = 0;
@@ -376,11 +377,18 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   }
 
   const ended = now();
-  const status = state.final !== null ? "complete" : "incomplete";
+  // THE COVERAGE GATE (L-501, self-audit round 3, assignment 4 (sealed fe2a612); coverage.mjs): a final answer is not a
+  // finished review when no source file was read, a read was denied, or no test ran where the testing limit allows tests.
+  // On a continuation the events of the earlier runs count too (the review is one review across its runs).
+  const coverage = coverageOfApi(transcript.events, { tests_allowed: testsAllowedBy(plan.tool_permissions) });
+  const gate = coverageGate(coverage);
+  const gated = gatedStatus(state.final !== null ? "complete" : "incomplete", state.stop, gate);
+  const status = gated.status;
+  state.stop = gated.stop_reason;
   const servedFinal = state.served.at(-1) ?? null;
   const distinctServed = [...new Set(state.served.map(s => s ?? null))];
   Object.assign(transcript, {
-    ended_at: ended.toISOString(), status, stop_reason: state.stop, provider_calls: state.providerCalls, tool_calls: state.toolCalls,
+    ended_at: ended.toISOString(), status, stop_reason: state.stop, coverage, coverage_gate: gate, provider_calls: state.providerCalls, tool_calls: state.toolCalls,
     served_models: distinctServed, usage_totals: state.usage, worktree_kept: opts.keep ? wt : null,
     review_tests: state.review_tests ?? { captured: false, why: "no worktree was created" },
   });
@@ -400,6 +408,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     "",
     `- status: ${status}`,
     `- stop_reason: ${state.stop}`,
+    `- coverage: ${coverageHeaderLine(coverage, gate)}`,
     `- lab: ${plan.lab}`,
     `- requested_model: \`${plan.model}\``,
     ...reviewerHeaderLines(plan),
@@ -431,7 +440,8 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     "",
     "",
   ].join("\n");
-  await writeFile(plan.out.findings, header + (status === "complete" ? finalText : ""));
+  // A final message the coverage gate did not accept is kept after the header (status incomplete says what it is).
+  await writeFile(plan.out.findings, header + (status === "complete" || (state.final !== null && !gate.ok) ? finalText : ""));
   return { status, stop_reason: state.stop };
 }
 

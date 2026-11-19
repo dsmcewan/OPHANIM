@@ -26,7 +26,26 @@ import { redactStrong } from "../board/agy-cli.mjs";
 import { repoGitDirs } from "../agy/sandbox.mjs";
 import { READ_ONLY_SHELL, REVIEW_TESTS_DIR, runCli } from "./cli-common.mjs";
 
-export const grokArgv = ({ model, prompt }) => ["-p", prompt, "--output-format", "streaming-json", "-m", model];
+// `allow`: per-invocation allow rules (DOCUMENTED: "`--allow` / `--deny` take the same patterns per invocation",
+// docs.x.ai/build/features/permissions, read 2026-11-19; NOT observed on a real grok here): the review's verify launchers
+// (grokLauncherAllow), the ONLY way a test runs in this transport (L-404).
+export const grokArgv = ({ model, prompt, allow = [] }) => ["-p", prompt, "--output-format", "streaming-json", "-m", model, ...allow.flatMap(a => ["--allow", a])];
+
+/**
+ * L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): the review's test commands are its VERIFY LAUNCHERS
+ * (cli-common.mjs allowedCommands launcherDir; agy.mjs writeReviewLaunchers): `Bash(<ctl>/pantheon-test *)` and one
+ * `Bash(<ctl>/pantheon-suite-<name>)` per suite. They run the code under review in a verify jail (no credential, no
+ * network, no home, none of grok's state), never as grok's own child next to its login. [] when nothing is listed.
+ */
+export function grokLauncherAllow(cmds) {
+  const rcp = cmds?.run_command_policy;
+  if (!rcp?.launcher) return [];
+  return [`Bash(${rcp.launcher} *)`, ...Object.values(rcp.suites ?? {}).map(c => `Bash(${c})`)];
+}
+/** The Bash allow rules a config.toml may carry: the harness's read-only commands only (grokRecommendedAllow). */
+const READ_ONLY_BASH = new Set([...READ_ONLY_SHELL.map(c => `Bash(${c} *)`), ...["ls", "git log", "git status", "git diff", "git show"].map(c => `Bash(${c})`)]);
+/** Would this string-form allow rule let grok run something other than the read-only commands (the code under review)? */
+export const grokRuleRunsCode = rule => /^\s*(Bash|Shell|Exec|Terminal|run_terminal_command)\b/i.test(String(rule)) && !READ_ONLY_BASH.has(String(rule).trim());
 
 /** Does the state dir hold something (the browser login is assumed to live there)? {ok, why, entries}. */
 export async function grokStateDir(dir) {
@@ -80,10 +99,12 @@ const real = p => { try { return realpathSync(p); } catch { return p; } };
  *   state         {dir, scratch}: the scratch bound read-write at the state dir's path
  *   cliDir        the CLI's directory, read-only (visible even under /tmp)
  */
-export function grokBwrapArgs({ worktree, write_allowed, state, cliDir, bwrap = "bwrap" }) {
+export function grokBwrapArgs({ worktree, write_allowed, state, cliDir, bwrap = "bwrap", controlDir = null }) {
   const wt = real(worktree);
   const binds = [];
   if (cliDir) binds.push({ mode: "ro", path: real(cliDir) });
+  // The review's control dir with its verify launchers (L-404), read-only: visible even when it sits under /tmp.
+  if (controlDir) binds.push({ mode: "ro", path: real(controlDir) });
   binds.push({ mode: "ro", path: wt });
   const git = repoGitDirs(wt);
   if (git) { binds.push({ mode: "ro", path: git.common_dir }); if (git.git_dir !== git.common_dir && !git.git_dir.startsWith(git.common_dir + "/")) binds.push({ mode: "ro", path: git.git_dir }); }
@@ -179,9 +200,10 @@ export async function grokPermissionConfig(stateDir) {
  */
 export function grokRecommendedAllow() {
   const bare = ["ls", "git log", "git status", "git diff", "git show"];
+  // No test rule (L-404): the runner allows the review's verify launchers per invocation (grokLauncherAllow); a
+  // `Bash(node --test *)` or `Bash(npm ...)` rule here would let grok run the code under review as its own child.
   return ["Read", "Grep", "Edit",
-    ...READ_ONLY_SHELL.map(c => `Bash(${c} *)`), ...bare.map(c => `Bash(${c})`),
-    "Bash(node --test *)", "Bash(OPHANIM_TELOS_ROOT=* npm run test:proof)", "Bash(npm run test:proof)", "Bash(npm --prefix pantheon test)", "Bash(npm test)"];
+    ...READ_ONLY_SHELL.map(c => `Bash(${c} *)`), ...bare.map(c => `Bash(${c})`)];
 }
 
 /**
@@ -208,6 +230,10 @@ export function grokPermissionVerdict(perm, inspect = null) {
     const have = new Set(perm.allow), missing = grokRecommendedAllow().filter(r => !have.has(r));
     if (missing.length) warnings.push(`permissions: ${missing.length} recommended allowance(s) missing (a tool call they would cover is cancelled under "ask", ending the turn): ${missing.join(", ")}`);
   }
+  // L-404: a rule that would let grok run anything but the read-only commands (a `node --test`, `npm`, `sh`, a bare
+  // `Bash`) runs the code under review outside the verify jail, next to grok's login and with the network: refused.
+  const runsCode = (perm.allow ?? []).filter(grokRuleRunsCode);
+  if (runsCode.length) failed.push(`permissions: ${perm.path} allows ${runsCode.map(r => JSON.stringify(r)).join(", ")}: a command that can run the code under review outside the verify jail (L-404); tests run only through the review's launchers, which the runner allows per invocation (--allow). Remove ${runsCode.length === 1 ? "that rule" : "those rules"}`);
   if (perm.permission_mode && /always-approve|auto|yolo=true/i.test(perm.permission_mode)) failed.push(`permissions: ${perm.path} sets ${perm.permission_mode}; a review runs under the default "ask" mode with narrow allow rules only`);
   if (inspect) {
     if (!inspect.ok) failed.push(`permissions: the Grok CLI's inspection could not be read (${inspect.why})`);
@@ -281,6 +307,24 @@ export function parseGrokStream(lines) {
   }
   let final = null, final_source = null, usage = null, error = null, buffer = "", chunks = 0, messages = 0, stop_reason = null, num_turns = null;
   const cancelled_tools = [], toolNames = new Map();
+  // THE TOOL CALLS AND THE ADVERTISED TOOLS (the coverage gate, coverage.mjs: L-501; the tool-drift record: L-502):
+  // {id, name, kind, path, command, status, message} per tool call, in order; `advertised_tools`: the last
+  // available_commands event's `tools` (observed on grok 1.0.44: run_terminal_command, read_file, search_replace, ...).
+  const tool_calls = new Map();
+  let advertised_tools = null;
+  for (const e of events) {
+    if (eventName(e) === "available_commands" && Array.isArray(e.tools)) advertised_tools = e.tools.filter(t => typeof t === "string" && !t.startsWith("…"));
+    if (!e.toolCallId) continue;
+    const t = tool_calls.get(e.toolCallId) ?? { id: e.toolCallId, name: null, kind: null, path: null, command: null, status: null, message: null };
+    if (e.toolName || e.title) t.name = e.toolName ?? e.title;
+    if (e.kind) t.kind = e.kind;
+    const raw = e.rawInput && typeof e.rawInput === "object" ? e.rawInput : null;
+    if (raw) { t.path = raw.file_path ?? raw.path ?? raw.target_file ?? t.path; t.command = raw.command ?? raw.cmd ?? t.command; }
+    if (e.status) t.status = e.status;
+    const m = textOf(e.content);
+    if (m && /fail|cancel|denied|not allowed|permission/i.test(`${e.status ?? ""} ${m}`)) t.message = m.slice(0, 300);
+    tool_calls.set(e.toolCallId, t);
+  }
   // own: every event the CLI printed except a bare start (its own messages and tool activity), each capped.
   const own = events.filter(e => !/^(start|init)$/i.test(eventName(e))).map(e => {
     const t = JSON.stringify(e);
@@ -330,7 +374,8 @@ export function parseGrokStream(lines) {
     type_counts: Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 20)),
     last_event_keys: events.length ? Object.keys(events.at(-1)).slice(0, 20) : [],
   } : null;
-  return { final_text: final, final_source, usage, error, events: events.length, unparsed, chunks, messages, own, diagnosis, stop_reason, num_turns, cancelled_tools };
+  return { final_text: final, final_source, usage, error, events: events.length, unparsed, chunks, messages, own, diagnosis, stop_reason, num_turns, cancelled_tools,
+    tool_calls: [...tool_calls.values()], advertised_tools };
 }
 
 /**

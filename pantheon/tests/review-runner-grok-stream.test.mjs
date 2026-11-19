@@ -12,7 +12,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { grokPermissionConfig, grokPermissionVerdict, grokRecommendedAllow, grokStopFailure, parseGrokInspect, parseGrokStream } from "../src/review-runner/grok.mjs";
+import { grokPermissionConfig, grokPermissionVerdict, grokRecommendedAllow, grokRuleRunsCode, grokStopFailure, parseGrokInspect, parseGrokStream } from "../src/review-runner/grok.mjs";
 import { READ_ONLY_SHELL } from "../src/review-runner/cli-common.mjs";
 import { mkdtemp, cleanup } from "./review-runner-helper.mjs";
 
@@ -106,13 +106,21 @@ test("the owner's round-2 Grok profile (77480d6): the six string-form rules coun
   assert.deepEqual(p.allow, compat.equivalent_allow_rules);
   assert.deepEqual([p.allow_rules, p.structured_rules], [6, 6]);
   const v = grokPermissionVerdict(p);
-  assert.deepEqual(v.failed, []);
+  // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): that profile let grok run `node --test` and `npm` as its
+  // OWN child -- the code under review next to grok's login, with the network. It is now refused, naming the rules.
+  assert.deepEqual(v.failed.length, 1);
+  assert.match(v.failed[0], /allows "Bash\(node --test \*\)", "Bash\(npm run test:proof\)", "Bash\(npm test\)": a command that can run the code under review outside the verify jail \(L-404\)/);
   assert.match(v.warnings[0], /also has 6 structured `rules = \[\.\.\.\]` rule\(s\); grok 1.0.44 loaded none/);
-  for (const r of ["Bash(wc *)", "Bash(find *)", "Bash(sed -n *)", "Bash(git log *)", "Bash(OPHANIM_TELOS_ROOT=* npm run test:proof)", "Bash(npm --prefix pantheon test)"]) assert.ok(v.warnings[1].includes(r), r);
-  // The CLI's own inspection, as the owner captured it: 6 loaded, none skipped -> no refusal; 0 loaded -> refusal.
+  for (const r of ["Bash(wc *)", "Bash(find *)", "Bash(sed -n *)", "Bash(git log *)"]) assert.ok(v.warnings[1].includes(r), r);
+  assert.ok(!/npm|node --test/.test(v.warnings[1]), "no test rule is recommended any more");
+  // The CLI's own inspection, as the owner captured it: 6 loaded, none skipped -> no refusal of its own; 0 loaded -> refusal.
   const inspected = parseGrokInspect(readFileSync(join(REVIEW, "findings-runs-77480d6", "grok-permission-inspect.json"), "utf8"));
   assert.deepEqual([inspected.ok, inspected.loaded, inspected.skipped], [true, 6, []]);
-  assert.deepEqual(grokPermissionVerdict(p, inspected).failed, []);
+  assert.deepEqual(grokPermissionVerdict(p, inspected).failed, v.failed, "only the L-404 refusal");
+  // Without its test rules the same profile passes (the runner allows the launchers itself, per invocation).
+  const d2 = await mkdtemp(join(tmpdir(), "rr-grok-perm-"));
+  await writeFile(join(d2, "config.toml"), `[permission]\nallow = [${p.allow.filter(r => !grokRuleRunsCode(r)).map(r => JSON.stringify(r)).join(", ")}]\n`);
+  assert.deepEqual(grokPermissionVerdict(await grokPermissionConfig(d2)).failed, []);
   assert.match(grokPermissionVerdict(p, { ...inspected, loaded: 0 }).failed.join(""), /reports 0 loaded permission rules/);
   assert.match(grokPermissionVerdict(p, parseGrokInspect("not json")).failed.join(""), /inspection could not be read \(the inspection output is not JSON\)/);
 });

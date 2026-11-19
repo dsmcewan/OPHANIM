@@ -69,11 +69,16 @@ export const OPEN_TEST_GLOBS = Object.freeze(["ophanim/**/*.test.mjs", "pantheon
  * (run_command has no working directory) and "" for the CLIs that run in the worktree. Returns {lines (markdown list
  * items), run_command_policy (jail.json), suites, files (listed-only) | null, write_allowed}.
  */
-export function allowedCommands({ permissions, worktree, prefixWithCd = false, telosRoot = null, envPrefix = "", launcherDir = null }) {
+export function allowedCommands({ permissions, worktree, prefixWithCd = false, telosRoot = null, envPrefix = "", launcherDir = null, testsRefused = null }) {
   // envPrefix: codex's `env NO_PROXY=... ` (codex clears NO_PROXY inside its sandbox; codex.mjs).
-  // launcherDir (agy): the review's control dir. CREDENTIAL ISOLATION: the code under review runs only through the verify
-  // launchers written there (prepareReviewWorkspace; src/agy/verify-jail.mjs): `<dir>/pantheon-test <files>` and
-  // `<dir>/pantheon-suite-<name>`, never as agy's own child (agy holds the OAuth scratch copy).
+  // launcherDir (agy, grok): the review's control dir. CREDENTIAL ISOLATION: the code under review runs only through the
+  // verify launchers written there (agy.mjs writeReviewLaunchers; src/agy/verify-jail.mjs): `<dir>/pantheon-test
+  // <files>` and `<dir>/pantheon-suite-<name>`, never as the reviewer CLI's own child (it holds its login).
+  // testsRefused (codex; L-404, self-audit round 3, assignment 4 (sealed fe2a612)): a transport whose own sandbox cannot
+  // start the verify jail (nested namespaces are refused inside codex's bwrap) runs NO test: no command is listed, the
+  // harness says why, and the coverage gate (coverage.mjs) marks a run of an assignment that allows tests incomplete.
+  if (testsRefused) return { prefix: "", lines: [`- none: ${testsRefused}`], suites: {}, files: null, write_allowed: Boolean(permissions.write_test), tests_refused: testsRefused,
+    run_command_policy: { kind: "none", why: testsRefused } };
   if (launcherDir) return launcherCommands({ permissions, launcherDir, telosRoot });
   const prefix = (prefixWithCd ? `cd ${shQuote(worktree)} && ` : "") + envPrefix;
   const listed = permissions.run_tests.files ?? null;
@@ -150,9 +155,12 @@ export function readRule({ transport }) {
 export function sandboxNote({ transport, scratchTmp = null }) {
   const bwrap = "Tests that start a bwrap jail of their own cannot do so in this sandbox (nested namespaces are refused): they skip with \"bwrap unavailable\" or fail with \"Creating new namespace failed\" / \"Failed to create NETLINK_ROUTE socket\". Report what such a test would have shown as `cannot tell` (a limit of this environment), not as a defect, and say so.";
   if (transport === "codex-sdk") {
-    return [`Your commands run in Codex's own sandbox under the runner's permission profile: they can read only the copy, the system's runtime files, the node install and the codex binary; they can write only \`$TMPDIR\` (\`${scratchTmp}\`, a per-run scratch directory outside the copy, deleted after the run) and what the Writing section allows; the network is cut (codex's proxy, with no host allowed). Codex clears \`NO_PROXY\` there, which is why the test commands above start with \`env NO_PROXY=...\`: without it a test's request to a server it started on 127.0.0.1 goes to the proxy and fails (403 or \"fetch failed\"). Run them as written.`, "", bwrap].join("\n");
+    // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): no test runs in codex's sandbox (it cannot start the
+    // verify jail), and node is denied by the profile; the reviewer is told so, and the coverage gate records it.
+    return [`Your commands run in Codex's own sandbox under the runner's permission profile: they can read only the copy, the system's runtime files and the codex binary; node and npm are denied there; they can write only \`$TMPDIR\` (\`${scratchTmp}\`, a per-run scratch directory outside the copy, deleted after the run) and what the Writing section allows; the network is cut (codex's proxy, with no host allowed).`, "",
+      "No test runs in this transport: the code under review runs only in the runner's verify jail (no credential, no network, no home), and codex's sandbox cannot start that jail (nested namespaces are refused there). Do not try to run tests or node; review by reading the source, and say which claims a test would have settled (`cannot tell` in this environment). The runner records the review as incomplete for its tests."].join("\n");
   }
-  if (transport === "grok-cli") return `Your commands run in the runner's bubblewrap jail: the host is read-only, \`/tmp\` is a fresh private directory (\`$TMPDIR\` is \`/tmp\`), and the copy is read-only except what the Writing section allows. The jail does not cut the network (the CLI itself must reach xAI); make no network request yourself.\n\n${bwrap}`;
+  if (transport === "grok-cli") return `Your read-only commands run in the runner's bubblewrap jail: the host is read-only, \`/tmp\` is a fresh private directory (\`$TMPDIR\` is \`/tmp\`), and the copy is read-only except what the Writing section allows. The jail does not cut the network (the CLI itself must reach xAI); make no network request yourself. Your test commands run in a separate verify jail, through the launchers listed above (run them exactly as written; never \`node\` or \`npm\` directly): it sees only the copy, the system's runtime files and the node install, with a fresh private \`/tmp\`, no network at all and none of your environment.\n\n${bwrap}`;
   return `Your test commands run in a separate verify jail, through the launchers listed above: it sees only the copy (writable as the Writing section allows), the system's runtime files and the node install, with a fresh private \`/tmp\` (\`$HOME\` is \`/tmp/home\`), no network at all (its own loopback only) and none of your environment. Your file tools run in the CLI's own bubblewrap jail with its PreToolUse hook, which refuses any write or command this harness does not allow.\n\n${bwrap}`;
 }
 

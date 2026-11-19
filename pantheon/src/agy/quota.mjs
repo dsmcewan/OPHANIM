@@ -22,7 +22,7 @@
 // Must never: block the event loop (async spawn only); send a Google API key or a model to the probe; report
 // `exhausted` on ambiguity.
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnPromise } from "../board/spawn.mjs";
@@ -231,7 +231,8 @@ export function scopeQuota(report, base) {
 const PASS = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z]+|TERM|TZ|TMPDIR|XDG_[A-Z_]+|HTTPS?_PROXY|NO_PROXY|https?_proxy|no_proxy|ALL_PROXY|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE)$/;
 export function minimalEnv(extra = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => PASS.test(k)));
-  Object.assign(env, extra ?? {});
+  // An extra never carries a key or a secret-named variable (as the worker's allowlist: L-401 sibling).
+  for (const [k, v] of Object.entries(extra ?? {})) if (!/KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE/i.test(k)) env[k] = v;
   delete env.GEMINI_API_KEY; delete env.GOOGLE_API_KEY;
   return env;
 }
@@ -243,12 +244,30 @@ export function minimalEnv(extra = {}) {
  * is `unknown`, never `exhausted`. Output that is not the JSON envelope is read with the text parser.
  */
 export const PROBE_ARGS = Object.freeze(["--print", "/usage", "--output-format", "json"]);
-export async function probeQuota({ cli, env = {}, timeoutS = 30, signal = undefined, model = null } = {}) {
+// EVERY agy LAUNCH IN THE WORKER'S JAIL PROFILE (self-audit round 3, assignment 4 (sealed fe2a612), L-401 sibling): the
+// probe used to run the real CLI unjailed (with an allowlisted env). Its argv is fixed and carries no worker text, but
+// it is the same credential-bearing CLI, so it now runs exactly like the preflight's in-jail /usage: the worker's env
+// allowlist (board/agy-cli.mjs workerEnvOf: `env` adds non-secret names only), prepareWorkerJail's bwrap (a fresh
+// control dir as cwd, an empty worktree, the Gemini state as a per-run scratch copy, dropped afterwards) and no
+// --sandbox. No bwrap: the probe does not run (state `unknown`, never `exhausted`), and says why. `sandbox` is
+// prepareWorkerJail's.
+export async function probeQuota({ cli, env = {}, timeoutS = 30, signal = undefined, model = null, sandbox = {} } = {}) {
   const command = [cli, ...PROBE_ARGS];
   const base = model ? String(model).replace(/-(low|medium|high|xhigh|max)$/, "") : null;
   const cwd = await mkdtemp(join(tmpdir(), "pantheon-agy-quota-"));
+  let gstate = null;
   try {
-    const run = await spawnPromise(cli, [...PROBE_ARGS], { cwd, env: minimalEnv({ AGY_CLI_DISABLE_AUTO_UPDATE: "true", ...env }), timeout: timeoutS * 1000, maxBuffer: 1024 * 1024, ...(signal ? { signal } : {}) });
+    const { prepareWorkerJail, workerEnvOf, assertWorkerArgv } = await import("../board/agy-cli.mjs");
+    const ctl = join(cwd, "control"), wt = join(cwd, "worktree");
+    await mkdir(join(ctl, "run"), { recursive: true }); await mkdir(wt);
+    // The allowlist over the MINIMAL env (as before: the probe reads files, not the operator's pass-through variables).
+    const penv = workerEnvOf({ ...env }, minimalEnv()).env;
+    let jail;
+    try { jail = await prepareWorkerJail({ cli, control_dir: ctl, worktree: wt, env: penv, sandbox }); }
+    catch (e) { return { state: "unknown", buckets: [], raw_digest: null, exit_code: null, command, error: `the probe was not run: ${e?.code ?? "error"}: ${String(e?.message ?? e).slice(0, 300)}` }; }
+    gstate = jail.gstate;
+    const argv = assertWorkerArgv(jail.prefix.length ? [...jail.prefix.slice(1), cli, ...PROBE_ARGS] : [...PROBE_ARGS]);
+    const run = await spawnPromise(jail.prefix.length ? jail.prefix[0] : cli, argv, { cwd: ctl, env: penv, timeout: timeoutS * 1000, maxBuffer: 1024 * 1024, ...(signal ? { signal } : {}) });
     const text = `${run.stdout ?? ""}\n${run.stderr ?? ""}`;
     const raw_digest = "sha256:" + createHash("sha256").update(text).digest("hex");
     if (run.killedFor) return { state: "unknown", buckets: [], raw_digest, exit_code: null, command, error: `the probe was stopped (${run.killedFor})` };
@@ -270,6 +289,7 @@ export async function probeQuota({ cli, env = {}, timeoutS = 30, signal = undefi
   } catch (e) {
     return { state: "unknown", buckets: [], raw_digest: null, exit_code: null, command, error: String(e?.code ?? e?.message ?? e) };
   } finally {
+    if (gstate) { const { dropGeminiState } = await import("./sandbox.mjs"); await dropGeminiState(gstate).catch(() => null); }
     await rm(cwd, { recursive: true, force: true }).catch(() => {});
   }
 }

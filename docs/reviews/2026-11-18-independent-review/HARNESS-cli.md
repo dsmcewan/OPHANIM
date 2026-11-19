@@ -20,6 +20,8 @@ Apart from reading, you may run only these test commands, exactly as written:
 
 Run no other command that executes code, builds, installs or changes anything. Where your assignment allows killing and restarting processes, do it only within tests you write. Make no network request and no call to a model provider, from a command or from a test.
 
+The test commands above run the code under review in a separate verify jail, never as your own child; when the list says `none`, no test can run in this transport, and it says why. The runner records which source files you read and which tests ran: a review that read no source file, had a read refused, or ran no test where your assignment allows tests is recorded as incomplete, whatever its final message says.
+
 ## Writing
 
 {{WRITE_RULE}}

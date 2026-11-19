@@ -28,7 +28,7 @@
 //
 // Must never: write inside the worktree; put a secret anywhere but the token file (not the MCP config, whose content
 // agy's `mcp list` was observed to print, and not any environment: CREDENTIAL ISOLATION, src/agy/verify-jail.mjs).
-import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -216,4 +216,55 @@ export async function prepareWorkerWorkspace({ control_dir, worktree, unit_id, o
   await writeFile(paths.hooks, JSON.stringify(hooksConfig({ command: paths.hook_command }), null, 2) + "\n");
   await writeFile(paths.jail_log, "", { flag: "a" });
   return paths;
+}
+
+// ---- THE SINGLE-TURN WORKSPACE (self-audit round 3, assignment 4 (sealed fe2a612), L-401) ----------------------------
+// The planner / plan and change reviewers / validator / A2A subagent seats over Antigravity (sdk/agy-turn.mjs) and the
+// board's agy seat (board/run-item.mjs) ran the real CLI UNJAILED with the controller's whole environment (every
+// provider key but the two Google ones) and `--sandbox`, on text that is partly worker-controlled (an A2A subagent's
+// question, a change reviewer's diff). They now run in the WORKER's jail profile (board/agy-cli.mjs runAgyCliTurn:
+// prepareWorkerJail's bwrap, workerEnvOf's allowlist, workerArgv + assertWorkerArgv: no --sandbox, no
+// --dangerously-skip-permissions) with this workspace, in a fresh control dir, as the CLI's cwd:
+//   <control_dir>/.agents/agents/pantheon-<role>/agent.md   the role card (copied from pantheon/.agents/agents/), and the
+//                                                           cards it lists under `agents:` (copied; never reachable:
+//                                                           invoke_subagent / define_subagent are hard-denied)
+//   <control_dir>/.agents/mcp_config.json                   no server
+//   <control_dir>/.agents/hooks.json, pantheon-jail-hook     the SAME PreToolUse jail hook as the worker
+//   <control_dir>/jail.json                                  a READ-ONLY policy: reads inside the worktree only, no write
+//                                                           (owned_paths []), no command (no verify launcher), no MCP
+//                                                           (roles [], mcp disabled), native subagents hard-denied
+//   <control_dir>/run/                                       jail.log, agy.log (the only writable part of the dir)
+// A seat that used to run commands in the CLI's own --sandbox (the board reviewer and scout cards list run_command) now
+// has every command denied: worker-controlled code runs only in a verify jail, and a single-turn seat has none.
+export const SINGLE_TURN_POLICY_SCHEMA = "pantheon.agy-single-turn-jail/v1";
+const LISTED_AGENT = /^\s*-\s*\.agents\/agents\/(pantheon-[a-z][a-z-]*)\s*$/gm;
+export async function prepareSingleTurnWorkspace({ control_dir, worktree, agent, card, agents_dir = null, hook = JAIL_HOOK, node = process.execPath }) {
+  if (!control_dir || !worktree || !card) throw Object.assign(new Error("prepareSingleTurnWorkspace: pass control_dir, worktree and card"), { code: "NO_WORKSPACE" });
+  if (typeof agent !== "string" || !/^pantheon-[a-z][a-z-]*$/.test(agent)) throw Object.assign(new Error(`prepareSingleTurnWorkspace: the agent must be a pantheon-<role> card name, not ${JSON.stringify(agent)}`), { code: "BAD_INPUT" });
+  await mkdir(control_dir, { recursive: true });
+  const ctl = real(control_dir), wt = real(worktree);
+  if (inside(wt, ctl) || inside(ctl, wt)) throw Object.assign(new Error(`the control dir ${ctl} and the worktree ${wt} must be disjoint`), { code: "CONTROL_IN_WORKTREE" });
+  const agents = join(ctl, ".agents"), run = join(ctl, "run");
+  const paths = { control_dir: ctl, worktree: wt, card: join(agents, "agents", agent, "agent.md"), mcp_config: join(agents, "mcp_config.json"), hooks: join(agents, "hooks.json"),
+    hook_command: join(ctl, HOOK_WRAPPER), jail: join(ctl, "jail.json"), run, jail_log: join(run, "jail.log"), agy_log: join(run, "agy.log") };
+  if (!SAFE_COMMAND.test(paths.hook_command)) throw Object.assign(new Error(`the hook command path ${paths.hook_command} needs quoting; put the control dir on a plain path`), { code: "HOOK_PATH_UNSAFE" });
+  await mkdir(dirname(paths.card), { recursive: true });
+  await mkdir(run, { recursive: true });
+  await copyFile(card, paths.card);
+  for (const m of String(await readFile(card, "utf8")).matchAll(LISTED_AGENT)) {
+    if (!agents_dir) continue;
+    await mkdir(join(agents, "agents", m[1]), { recursive: true });
+    await copyFile(join(agents_dir, m[1], "agent.md"), join(agents, "agents", m[1], "agent.md")).catch(() => {});
+  }
+  await writeFile(paths.mcp_config, JSON.stringify({ mcpServers: {} }, null, 2) + "\n");
+  const policy = { schema: SINGLE_TURN_POLICY_SCHEMA, unit_id: `single-turn-${agent}`, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
+    owned_paths: [], verify_cmd: null, worker_verify_cmd: null, worker_verify_script: null, write_path_keys: [...WRITE_PATH_KEYS],
+    roles: [], mcp: { server: MCP_SERVER, tool: MCP_TOOL, wrapper: MCP_WRAPPER, accepted_names: [...MCP_NAMES], enabled: false, eager: false },
+    hard_deny: [...HARD_DENY], write_tools: [...WRITE_TOOLS], read_tools: [...READ_TOOLS] };
+  await writeFile(paths.jail, JSON.stringify(policy, null, 2) + "\n");
+  await writeFile(paths.hook_command, hookWrapper({ node, hook, policy: paths.jail }));
+  await chmod(paths.hook_command, 0o755);
+  await writeFile(paths.hooks, JSON.stringify(hooksConfig({ command: paths.hook_command }), null, 2) + "\n");
+  await writeFile(paths.jail_log, "", { flag: "a" });
+  return { paths, policy };
 }
