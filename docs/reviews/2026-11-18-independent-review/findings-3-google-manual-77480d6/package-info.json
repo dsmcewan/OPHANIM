@@ -1,0 +1,22 @@
+{
+  "assignment": 3,
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "lab": "Google",
+  "requested_model": "gemini-4-carbon",
+  "default_reviewer": {
+    "lab": "xAI",
+    "vendor": "xai",
+    "model": "grok-4.7"
+  },
+  "reviewer_override": true,
+  "manual": "Antigravity CLI, run by the owner outside the runner",
+  "write_allowed": true,
+  "brief_sha256": "b25b1043212f00e1ace05fc5def9dac220bb86e5116b7408acdffdc3e8f9e042",
+  "harness_cli_template_sha256": "69402fb55cdb7246281546ce42d82ea28d3c5dbe68f646c64cd93e55d172ac36",
+  "prompt_template_sha256": "5e8fd1ca30c7b88ece7c00876c71b0a02875bdfff93feafb380d569846e8626d",
+  "placeholders": [
+    "@@WORKTREE@@",
+    "@@TELOS_ROOT@@"
+  ],
+  "wall_clock_s": 3600
+}
