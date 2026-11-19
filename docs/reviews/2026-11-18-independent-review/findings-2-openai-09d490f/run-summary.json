@@ -1,0 +1,59 @@
+{
+  "assignment": 2,
+  "lab": "OpenAI",
+  "requested_model": "gpt-6-astra",
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "status": "complete",
+  "stop_reason": "final answer",
+  "via": "subscription",
+  "transport": "codex-sdk",
+  "started_at": "2026-11-19T00:22:18.415Z",
+  "ended_at": "2026-11-19T00:30:14.812Z",
+  "worktree_check": {
+    "changed": [
+      ".review-tests/existing-diagnostics.test.mjs",
+      ".review-tests/independence.test.mjs",
+      ".review-tests/inspect.test.mjs",
+      ".review-tests/output.test.mjs"
+    ],
+    "violations": [],
+    "limits": [
+      "a change inside a directory git already listed as ignored before the run (e.g. node_modules/) is not seen",
+      "only the worktree is checked: a CLI's own sandbox decides what it could write elsewhere"
+    ]
+  },
+  "original_transcript_sha256": "a8bbaca3d870df3c57877417504a161c193d86683393fe4509dd347ecfa49af2",
+  "original_report_transcript_hash_verified": true,
+  "delivered_transcript_sha256": "a8bbaca3d870df3c57877417504a161c193d86683393fe4509dd347ecfa49af2",
+  "credential_prefix_redactions": 0,
+  "reproductions": [
+    {
+      "path": "reproductions/.review-tests/existing-diagnostics.test.mjs",
+      "original_path": ".review-tests/existing-diagnostics.test.mjs",
+      "truncated": false,
+      "sha256": "32ae797af16d918e3f032907882ee3ec9228f952e8f9f1b79321c04fe8f26dad"
+    },
+    {
+      "path": "reproductions/.review-tests/independence.test.mjs",
+      "original_path": ".review-tests/independence.test.mjs",
+      "truncated": false,
+      "sha256": "ab121e3d9189fe0b8a86e839b1cf47732ad9d6165951488565a2b9dd267f3d27"
+    },
+    {
+      "path": "reproductions/.review-tests/inspect.test.mjs",
+      "original_path": ".review-tests/inspect.test.mjs",
+      "truncated": false,
+      "sha256": "98889fa2029db9af527e954bd0b4f26f8cd46e78f20fd8bc0db6a841acb9db54"
+    },
+    {
+      "path": "reproductions/.review-tests/output.test.mjs",
+      "original_path": ".review-tests/output.test.mjs",
+      "truncated": false,
+      "sha256": "ec7c3bc0de965b319514d815a94ba673f199385a1bda45b5725441bedbed17b3"
+    }
+  ],
+  "source_report": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-2/docs/reviews/2026-11-18-independent-review/findings-2-openai.md",
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-2/docs/reviews/2026-11-18-independent-review/findings-2-openai.transcript.json",
+  "served_model_note": "CLI identity is input, not an observed provider model",
+  "provider_served_models": null
+}
