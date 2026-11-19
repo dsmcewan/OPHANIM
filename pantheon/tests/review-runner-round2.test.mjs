@@ -177,11 +177,17 @@ test("on WSL (detected, or --codex-outer-runtime on) codex and every preflight r
   const runDir = join(r.plan.worktree.path, ".."), codexHome = join(f.home, ".codex");
   assert.deepEqual(o.argv, [o.argv[0], "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp",
     "--ro-bind", f.bin, f.bin, "--bind", runDir, runDir, "--bind", r.plan.scratch_tmp.path, r.plan.scratch_tmp.path, "--bind", codexHome, codexHome, "--", f.clis.codex, "<codex arguments>"]);
-  assert.deepEqual(r.plan.argv.slice(0, 13), [o.argv[0], "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp"]);
   assert.ok(o.writable.includes(r.plan.scratch_tmp.path) && o.writable.some(p => p.endsWith("/.codex")));
   const h = headerOf(await r.read("findings-2-openai.md"));
   assert.match(h, /^- codex_outer_runtime: an outer bwrap namespace around codex \(WSL: \/proc\/sys\/kernel\/osrelease is "5\.15\.167\.4-microsoft-standard-WSL2"\): host read-only, private \/run and \/tmp, writable only .*unchanged inner permission profile.*Cost: one more namespace level$/m);
   assert.match(h, /- sandbox: codex permission profile ophanim-review \(codex's own bubblewrap sandbox, inside the runner's outer WSL namespace/);
+  // The plan's whole argv records the command that runs: the outer launcher's argv with its placeholder replaced by the
+  // arguments the SDK passes (the launcher execs `bwrap ... -- codex "$@"`: codex ONCE, then exec ...), then the stdin
+  // marker. Fails while subscription.mjs appends sdkSpawnArgv's binary after an outer argv that already ends with codex.
+  const codexArgs = ["exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', ...r.sdk[0].config_overrides.flatMap(c => ["--config", c]),
+    "--model", "gpt-6-astra", "--cd", r.plan.worktree.path, "--skip-git-repo-check", "--config", 'approval_policy="never"'];
+  assert.deepEqual(r.plan.argv, [...o.argv.flatMap(a => (a === "<codex arguments>" ? codexArgs : [a])), `(stdin: <prompt sha256:${r.plan.prompt.sha256}>)`],
+    "the plan records the command the outer launcher runs, codex named once");
   // Forced off on WSL: recorded; forced on elsewhere: applied.
   r = await run(f, { n: 2, args: ["--dry-run", "--codex-outer-runtime", "off"], extra: { osRelease: "5.15.167.4-microsoft-standard-WSL2" } });
   assert.deepEqual([r.code, r.plan.codex_outer_runtime.applied, r.plan.codex_outer_runtime.wsl], [EXIT.complete, false, true]);
