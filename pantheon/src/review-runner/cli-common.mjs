@@ -109,7 +109,7 @@ export const READ_ONLY_SHELL = Object.freeze(["cat", "head", "tail", "sed -n", "
 /** How the reviewer reads the source: agy has file-reading tools and a jail-limited run_command; codex and grok read with the shell. */
 export function readRule({ transport }) {
   if (transport === "agy-cli") {
-    return "Reading the source is the review. Read any file in the copy with your file-reading tools (`view_file`, `view_file_outline`, `view_code_item`, `list_dir`, `find_by_name`, `grep_search`, `codebase_search`): they are permitted for this and are not limited by the list under Commands. `run_command` is limited to that list (the jail refuses any other command, `cat` and `ls` included), so read files with those tools, not with the shell. Cite what you read as `file:line`.";
+    return "Reading the source is the review. Read any file in the copy with your file-reading tools (`read_file`, `view_file`, `view_file_outline`, `view_code_item`, `list_dir`, `find_by_name`, `grep_search`, `codebase_search`): they are permitted for this and are not limited by the list under Commands. `run_command` is limited to that list (the jail refuses any other command, `cat` and `ls` included), so read files with those tools, not with the shell. Cite what you read as `file:line`.";
   }
   const cmds = READ_ONLY_SHELL.map(c => `\`${c}\``).join(", ");
   return [

@@ -286,3 +286,10 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
   }
   assert.equal(reviewTmpBase({ HOME: "/home/fixture" }), "/home/fixture/.cache/ophanim-review", "review worktrees are not put under /tmp");
 });
+
+// Independent review round 2, assignment 3 (the runner's Antigravity run at 77480d6): the installed agy reads with
+// `read_file`, which the hook denied; the hook now admits it, and the reading rule must name it.
+test("the Antigravity reading rule names read_file", async () => {
+  const { readRule } = await import("../src/review-runner/cli-common.mjs");
+  assert.match(readRule({ transport: "agy-cli" }), /`read_file`/);
+});
