@@ -199,8 +199,10 @@ test("(d) quota: explicit 429 -> metered API, recorded with the probe; soft phra
     e = await x.go().then(() => null, err => err);
     assert.deepEqual([e?.code, e?.quota_probe?.state, x.calls.length], ["lane_failure", "unknown", 0]);
 
-    // 3. soft phrase, probe exhausted: metered.
-    agy.agyQuotaReport("Weekly: 100% used (limit reached), resets in 2 days\n");
+    // 3. soft phrase, probe exhausted: metered. The report names the lane's group (the observed text form leads each
+    // line with it): an exhaustion of no named group is not this lane's, so it is `unknown` (independent review round 2,
+    // assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.2).
+    agy.agyQuotaReport("Gemini 4 Hydrogen\tWeekly: 100% used (limit reached), resets in 2 days\n");
     x = await implementerTurn(f);
     r = await x.go();
     assert.deepEqual([r.transport, x.calls.length, r.quota_failover.probe.state, r.quota_failover.after[0].explicit], ["api", 1, "exhausted", false]);

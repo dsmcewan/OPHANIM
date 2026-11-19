@@ -32,6 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+import {spawnPromise} from '../../pantheon/src/board/spawn.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {boardScopeOf, checkEvidenceLedgers} from '../../packages/ledger/status.mjs';
 import {handoffRefusal} from './work-ledger.mjs';
@@ -323,6 +324,21 @@ function fullScope(base, contributions) {
 const pendingCapacity = (why, extra = {}) => ({what: `REVIEW_CAPACITY_PENDING: ${why}`, role: 'check@review', resume_when: 'a reviewer lab outside the contributors becomes available', ...extra});
 const result = (status, rest) => ({status, outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, ...rest});
 /**
+ * A REVIEW LEFT INCOMPLETE BY THE STAGE'S OWN PROVIDER-CALL BUDGET is a budget stop, recorded with its own code
+ * (STAGE_PROVIDER_CALLS), not REVIEW_PENDING: a reviewer seat refused at the meter (PROVIDER_CALL_LIMIT), or one whose
+ * investigation ended on the stage's provider-call budget, read as a transient reviewer failure (independent review
+ * round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 2.3). `whys` are the failed seats' reasons.
+ */
+const BUDGET_STOP = /PROVIDER_CALL_LIMIT|the stage's provider-call budget/;
+const budgetStopOf = (m, whys, {stage, kept}) => {
+  // Only when THIS attempt's budget is what ran out: its meter refused a call, or it has (almost) nothing left.
+  const hit = whys.filter(w => BUDGET_STOP.test(w ?? ''));
+  if (!hit.length || !(m.refused > 0 || m.left() <= 1)) return null;
+  const what = `STAGE_PROVIDER_CALLS: the ${stage} stage's provider-call budget of ${m.limit} was spent (${m.made} made, ${m.refused} refused) before every review was recorded (${hit.join('; ')}); ${kept}`;
+  return {blocker: {code: 'STAGE_PROVIDER_CALLS', what, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, with a fresh stage budget; the open cycle is resumed, never reopened', transient: true},
+    why: `the ${stage} stage's provider-call budget was spent before its review was complete`};
+};
+/**
  * THE LEASE FENCE, BEFORE A SHARED SIDE EFFECT (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
  * 77480d6), finding 4). The work ledger refuses a stale holder's stage record, but a stale plan holder had already
  * closed its cycle on the shared plan ledger and overwritten tickets/<item>.json, invalidating the plan its successor
@@ -330,6 +346,20 @@ const result = (status, rest) => ({status, outputs: {}, team: [], contributions:
  * scheduler's) throws LEASE_FENCED once the claim is released or past its lease; it is called before each such write.
  */
 const fenceOf = ctx => { if (typeof ctx?.fence === 'function') ctx.fence(); };
+
+/**
+ * The dirty-copy check: uncommitted changes under the ticket's copy paths, EXCEPT the lifecycle's own ticket files
+ * (tickets/<item>.json). The plan stage writes an item's ticket into the checkout uncommitted, by design, and an
+ * implement stage checks its own ticket by digest; so with a copy path covering tickets/ (or `.`) ANY item's ticket --
+ * another item's plan running concurrently, or this item's own -- failed the check as "uncommitted changes"
+ * (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 3.3). Untracked files
+ * are listed one by one (-uall), so an untracked tickets/ directory is not one opaque entry that hides other files.
+ */
+const dirtyArgs = (top, t, repo) => {
+  const tickets = path.relative(top, path.join(repo, 'tickets'));
+  return ['status', '--porcelain', '--untracked-files=all', '--', ...t.spec.copy.map(c => path.relative(top, path.join(t.spec.repo_root, c)) || '.'),
+    `:(exclude,glob)${tickets}/*.json`];
+};
 
 /** Record the practice assessment a v2 cycle needs (explicit, unmeasured), then close it; {close, outcome} or {why}. */
 function closeWith(rec, cycle, question) {
@@ -466,6 +496,18 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     if (!fs.existsSync(f)) fs.writeFileSync(f, JSON.stringify({...dossier, entries: dossier.entries.map(({text: _t, ...e}) => e)}) + '\n');
     try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return dossier; }
   };
+  /**
+   * THE AUTHOR STATE of a plan version under review, bound beside its brief when its cycle opens: the accepted planner's
+   * investigation (author_log), the contributions, and the refused tries and earlier versions of the attempt. A stage
+   * record carries the same, but an attempt killed mid-cycle leaves none, and its resume lost them (author delivery
+   * unknown, earlier contributors and versions dropped) (independent review round 2, assignment 3 (Google
+   * gemini-4-carbon, manual, 77480d6), finding 8.3). Written once; read only for the same plan version (by digest).
+   */
+  const authorFile = (ctx, key) => path.join(dirOf(ctx, 'briefs'), `${createHash('sha256').update(key).digest('hex').slice(0, 24)}.author.json`);
+  const bindAuthor = (ctx, key, state) => { const f = authorFile(ctx, key); if (!fs.existsSync(f)) fs.writeFileSync(f, JSON.stringify(state) + '\n'); };
+  const readBoundAuthor = (ctx, key, planDigest) => {
+    try { const a = JSON.parse(fs.readFileSync(authorFile(ctx, key), 'utf8')); return a?.plan_digest === planDigest ? a : null; } catch { return null; }
+  };
   /** The dossier bound beside a brief, or null when none was bound (a resume never binds a rebuilt one). */
   const readBoundDossier = (ctx, key) => {
     const f = path.join(dirOf(ctx, 'briefs'), `${createHash('sha256').update(key).digest('hex').slice(0, 24)}.dossier.json`);
@@ -592,6 +634,16 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const recorded = sameDoc ? opened.outputs.context ?? {} : {};
       const lastPlanner = (recorded.investigations ?? []).filter(x => x.role === 'planner').at(-1);
       authorLog = recorded.author_log ?? (lastPlanner ? {requests: lastPlanner.requests ?? []} : null);
+      // No record of the opening attempt (it was killed before its stage record): the author state bound when the cycle
+      // opened restores what that record would have carried (finding 8.3, above).
+      const bound = sameDoc ? null : readBoundAuthor(ctx, `plan|${resume.base}|${resume.head}`, 'sha256:' + digest(resume.doc));
+      if (bound) {
+        authorLog = bound.author_log ?? authorLog;
+        contributions.push(...(bound.contributions ?? []));
+        contributions.splice(0, contributions.length, ...dedupe(contributions));
+        refused.push(...(bound.refused ?? []));
+        versions.push(...(bound.versions ?? []));
+      }
       if (!authorLog) authorUnknown = !opened ? `no stage record of the attempt that opened plan cycle ${open.hash.slice(0, 19)}`
         : !sameDoc ? `the record of the attempt that opened plan cycle ${open.hash.slice(0, 19)} is of another plan version`
         : `the record of the attempt that opened plan cycle ${open.hash.slice(0, 19)} does not carry the planner's investigation`;
@@ -687,7 +739,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       }
       const diff = G(['diff', '--no-color', base, head]);
       // The dossier the brief is made with is bound beside it, so a resumed cycle records what its seats were shown.
-      if (!resume) boundDossier(ctx, `plan|${base}|${head}`, built);
+      if (!resume) {
+        boundDossier(ctx, `plan|${base}|${head}`, built);
+        bindAuthor(ctx, `plan|${base}|${head}`, {plan_digest: planDigest, author_log: authorLog, contributions: dedupe(contributions), refused, versions});
+      }
       const r = await reviewCycle({ledger: rec, resume: Boolean(resume), change: {scope, base, head, diff, files: [file], author_labs: resume?.author_labs ?? labsOfContribs(contributions),
         author_turns: resume?.author_turns ?? [turnHash], ...(resume ? {} : independenceOf(dedupe(contributions), corrected))}, seats: planSeats, n,
         // The reviewers get the evidence itself, not only the planner's account of it, and may retrieve more.
@@ -700,11 +755,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const version = {n: doc.version.n, digest: planDigest, commit: head, cycle: r.cycle, reviews: state.reviews.map(x => ({lab: x.lab, verdict: x.verdict}))};
       versions.push(version);
       if (state.reviews.length < n) {
+        const stopped = budgetStopOf(m, r.failed.map(f => f.why), {stage: 'plan', kept: 'the plan and its open cycle are kept'});
         return result('pending', {outputs: {mode, plan: doc, plan_digest: planDigest, refused, versions, cycle: r.cycle, plan_ledger: sys.root ?? planLedger, plan_ledger_anchor: sys.anchor, context: ctxOut()},
           team: [...team, ...planSeats.map(s => reviewerRow('plan-reviewer', s))], contributions, usage: usage(),
-          blocker: {what: `REVIEW_PENDING: ${r.failed.length} plan reviewer seat(s) failed (${r.failed.map(f => `${f.lab}: ${f.why}`).join('; ')}); the plan and its open cycle are kept`,
+          blocker: stopped?.blocker ?? {what: `REVIEW_PENDING: ${r.failed.length} plan reviewer seat(s) failed (${r.failed.map(f => `${f.lab}: ${f.why}`).join('; ')}); the plan and its open cycle are kept`,
             role: 'check@review', resume_when: 'the reviewer is available; the open plan cycle is resumed, never reopened', transient: true},
-          next: {stage: 'plan', why: 'plan review incomplete'}});
+          next: {stage: 'plan', why: stopped?.why ?? 'plan review incomplete'}});
       }
       // Each finding with what the record shows about its cause: did the source it is about ever reach the planner?
       const authorGot = plannerGot();
@@ -788,7 +844,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         usage: usage(0), blocker: pendingCapacity(cap.pending.why, {stage: 'implement'}), next: {stage: 'implement', why: 'review capacity is short; no work was launched'}});
     }
     const top = git(repo)(['rev-parse', '--show-toplevel']).trim(), G = git(top);
-    const dirty = G(['status', '--porcelain', '--', ...t.spec.copy.map(c => path.relative(top, path.join(t.spec.repo_root, c)) || '.')]).trim();
+    const dirty = G(dirtyArgs(top, t, repo)).trim();
     if (dirty) return result('failed', {outputs: {dirty}, next: {stage: 'implement', why: 'the ticket\'s copy paths have uncommitted changes'}});
     const base = G(['rev-parse', '--verify', 'HEAD^{commit}']).trim();
     // What the worker is actually GIVEN is the goal (run-item.mjs promptFor implementer: `ticket: goal`); a ticket's
@@ -815,6 +871,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.3).
       res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: ctx.budget.provider_calls, scouts, profile,
         ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}),
+        // The run's metered-failover switch reaches runOpenItem's walks too (finding 6).
+        meteredFailover,
         // A checker's rejection at the top of the worker's dial is a revision by the same seat, not a stop (protocol v2).
         escalation: 'pantheon.escalation/v2',
         // The in-run checker follows the same independence rule as the rest of the lifecycle.
@@ -952,7 +1010,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const top = (await gitAsync(repo, ['rev-parse', '--show-toplevel'])).trim();
     // A unit's owned paths and verify_cmd are relative to the root of the git repository the worktrees are made from.
     if (fs.realpathSync(repo) !== fs.realpathSync(top)) return result('failed', {outputs: {repo, top}, contributions, next: {stage: 'implement', why: `work units are relative to the repository root (${top}); the lifecycle's repository is a subdirectory of it`}});
-    const dirty = (await gitAsync(top, ['status', '--porcelain', '--', ...t.spec.copy.map(c => path.relative(top, path.join(t.spec.repo_root, c)) || '.')])).trim();
+    const dirty = (await gitAsync(top, dirtyArgs(top, t, repo))).trim();
     if (dirty) return result('failed', {outputs: {dirty}, next: {stage: 'implement', why: 'the ticket\'s copy paths have uncommitted changes'}});
     const base = (await gitAsync(top, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
     // What the reviewed plan excludes, and the findings a revision must answer, reach every stage of the pipeline the
@@ -1041,7 +1099,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         // (a lower pipelineLimits.max_provider_calls is kept: the stricter bound wins).
         limits: {...pipelineLimits, max_provider_calls: Math.min(ctx.budget.provider_calls, pipelineLimits.max_provider_calls ?? Infinity)}});
     } catch (e) {
-      return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile}, error: String(e?.message ?? e).slice(0, 300), ...(carriedRuns.length ? {carried_runs: carriedRuns} : {})},
+      return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile, record_digest: fs.existsSync(recordFile) && fs.statSync(recordFile).isFile() ? sha256(fs.readFileSync(recordFile)) : null}, error: String(e?.message ?? e).slice(0, 300), ...(carriedRuns.length ? {carried_runs: carriedRuns} : {})},
         contributions, findings: carriedFindings.map((f, i) => ({id: `unit-${i + 1}`, ...f})), usage: usage(admitted),
         next: {stage: 'implement', why: `the pipeline run failed: ${String(e?.message ?? e).slice(0, 200)}`}});
     }
@@ -1079,7 +1137,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       ]),
     ].map(r => [`${r.role}|${r.vendor}|${r.model}|${r.authored}|${r.fed_revision ?? ''}`, r])).values()];
     const branchOf = run.integration?.branch ?? null;
-    const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
+    // The pipeline record is named BY DIGEST on every stage record that cites it, so a fresh verifier can check that what
+    // run.json's served identities and subagent receipt are read from is the record this stage saw (finding 10.1).
+    const recordDigestOf = () => (fs.existsSync(recordFile) ? sha256(fs.readFileSync(recordFile)) : null);
+    const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, record_digest: recordDigestOf(), status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
       units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length}]))};
     const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'},
       ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}), ...(recovered.length ? {recovered_worktrees: recovered} : {})};
@@ -1104,7 +1165,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // it read "the stage's 20 provider call(s) were used" after 1 call (independent review round 2, assignment 3
       // (Google gemini-4-carbon, manual, 77480d6), finding 2.2).
       if (run.provider_calls.refused_at_limit > 0) {
-        return result('failed', {outputs: kept, team, contributions: all, findings, usage: usage(calls),
+        // DETERMINISTIC when the run's bound is the pipeline's own lower max_provider_calls (not this attempt's stage
+        // budget) and the attempt approved no unit of its own: a retry starts from the same checkpoints under the same
+        // bound and stops at the same place. A launcher does not retry it (live-run.mjs runConfirmed; independent review
+        // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 2.2).
+        const bound = run.limits?.max_provider_calls ?? ctx.budget.provider_calls;
+        const progressed = unitsOut.filter(u => u.status === 'approved' && !u.resumed).length;
+        const budgetStop = {code: 'PIPELINE_PROVIDER_CALLS', bound, stage_budget: ctx.budget.provider_calls, made: calls, refused: run.provider_calls.refused_at_limit,
+          units_approved_now: progressed, deterministic: bound < ctx.budget.provider_calls && progressed === 0};
+        return result('failed', {outputs: {...kept, budget_stop: budgetStop}, team, contributions: all, findings, usage: usage(calls),
           next: {stage: 'implement', why: `the run did not ship: PROVIDER_CALL_LIMIT: the run's bound of ${run.limits?.max_provider_calls ?? ctx.budget.provider_calls} provider call(s) was reached (${calls} made, ${run.provider_calls.refused_at_limit} more refused; the stage budget is ${ctx.budget.provider_calls})`}});
       }
       // A unit the dispatcher judged not cohesive goes back to the planner.
@@ -1238,10 +1307,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     Object.assign(outputs, {cycle, cycle_ledger: cycleLedger, cycle_ledger_anchor: sys.anchor, scope: cscope, labs: state.reviews.map(x => x.lab).sort(), context: {dossier: dossierRecord(dossier), investigations: [...investigations]}});
     if (state.reviews.length < state.cycle.reviewers) {
       const failed = state.attempts.filter(a => a.outcome === 'failed').map(a => `${a.seat.lab}: ${a.why}`);
+      const stopped = budgetStopOf(m, failed, {stage: 'review', kept: 'the commit and the open cycle are kept'});
       return result('pending', {outputs, team, usage: usage(),
-        blocker: {what: `REVIEW_PENDING: ${state.reviews.length} of ${state.cycle.reviewers} reviews recorded (${failed.join('; ') || 'reviewer unavailable'}); the commit and the open cycle are kept`,
+        blocker: stopped?.blocker ?? {what: `REVIEW_PENDING: ${state.reviews.length} of ${state.cycle.reviewers} reviews recorded (${failed.join('; ') || 'reviewer unavailable'}); the commit and the open cycle are kept`,
           role: 'check@review', resume_when: 'the reviewer is available; the open cycle is resumed with its recorded reviews kept', transient: true},
-        next: {stage: 'review', why: 'a reviewer seat failed'}});
+        next: {stage: 'review', why: stopped?.why ?? 'a reviewer seat failed'}});
     }
     // Findings with no resolution (fixed, or deferred under the existing review-cycle rules) return the change.
     const open = findingRows(state, {only: f => !state.resolutions.get(f.hash)});
@@ -1275,24 +1345,44 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'operate-validate-'));
     const tests = [];
     const outputsDir = dirOf(ctx, `validate-${ctx.attempt}-outputs`);
+    // ASYNCHRONOUS AND BOUNDED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+    // findings 3.3 and 9): the checkout and every test run in child processes the event loop waits on (execFileSync held
+    // the whole process, every sibling item's timers and leases included, for up to 10 minutes per command), each bounded
+    // by what is left of the stage's elapsed budget (and at most 10 minutes) and stopped by the stage's signal.
+    const leftMs = () => Math.max(0, Math.min(10 * 60_000, (ctx.budget?.elapsed_ms ?? Infinity) - (Date.now() - t0)));
+    const proc = async (cmd, args, opts = {}) => {
+      const r = await spawnPromise(cmd, args, {timeout: leftMs(), maxBuffer: 64 << 20, ...(ctx.signal ? {signal: ctx.signal} : {}), ...opts});
+      return {...r, exit: r.killedFor ? null : r.status};
+    };
     try {
-      execFileSync('tar', ['-x', '-C', clean], {input: execFileSync('git', ['-C', top, 'archive', '--format=tar', commit], {maxBuffer: 512 << 20})});
+      const tarFile = path.join(clean, '.archive.tar');
+      const arc = await proc('git', ['-C', top, 'archive', '--format=tar', '-o', tarFile, commit]);
+      if (arc.exit !== 0) throw new Error(`git archive of ${commit} failed${arc.killedFor ? ` (${arc.killedFor})` : ''}: ${String(arc.stderr).slice(0, 300)}`);
+      const ext = await proc('tar', ['-x', '-C', clean, '-f', tarFile]);
+      fs.rmSync(tarFile, {force: true});
+      if (ext.exit !== 0) throw new Error(`the checkout of ${commit} could not be extracted${ext.killedFor ? ` (${ext.killedFor})` : ''}: ${String(ext.stderr).slice(0, 300)}`);
       const cwd = path.join(clean, path.relative(top, repo));
-      const run = (kind, id, cmd) => {
-        let exit = 0, out;
-        try { out = execFileSync('sh', ['-c', cmd], {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10 * 60_000, maxBuffer: 64 << 20}); }
-        catch (e) { exit = Number.isInteger(e.status) ? e.status : 1; out = `${e.stdout ?? ''}${e.stderr ?? ''}`; }
+      const run = async (kind, id, cmd) => {
+        let exit = 0, out, stopped = null;
+        if (ctx.signal?.aborted || leftMs() <= 0) { exit = 1; out = ''; stopped = 'not run: the stage\'s elapsed budget was spent before this command started'; }
+        else {
+          let r;
+          try { r = await proc('sh', ['-c', cmd], {cwd}); } catch (e) { r = {exit: null, stdout: '', stderr: String(e?.message ?? e), killedFor: 'spawn'}; }
+          exit = r.exit === null ? 1 : r.exit;
+          out = r.exit === 0 ? r.stdout : `${r.stdout ?? ''}${r.stderr ?? ''}`;
+          if (r.killedFor) stopped = `stopped (${r.killedFor})`;
+        }
         // The whole output is kept and retrievable ({"op":"output","id":...}); the prompt shows its tail and says so.
         const full = String(out ?? ''), oid = `${kind}-${String(id).replace(/[^\w.-]/g, '_')}.txt`;
         fs.writeFileSync(path.join(outputsDir, oid), full);
         const tail = full.slice(-2000), total = Buffer.byteLength(full, 'utf8');
         tests.push({kind, id, cmd, exit, output_digest: sha256(full), output: {id: oid, chars: full.length, shown: Math.min(2000, full.length), complete: full.length <= 2000,
-          bytes: {from: total - Buffer.byteLength(tail, 'utf8'), to: total, total}}, tail});
+          bytes: {from: total - Buffer.byteLength(tail, 'utf8'), to: total, total}}, tail, ...(stopped ? {stopped} : {})});
       };
-      for (const a of planDoc.acceptance) run('acceptance', a.id, a.test.cmd);
+      for (const a of planDoc.acceptance) await run('acceptance', a.id, a.test.cmd);
       const pkg = fs.existsSync(path.join(cwd, 'package.json')) ? JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) : null;
       const regression = planDoc.regression?.cmd ?? (pkg?.scripts?.test ? 'npm test' : null);
-      if (regression) run('regression', 'regression', regression);
+      if (regression) await run('regression', 'regression', regression);
       else tests.push({kind: 'regression', id: 'regression', cmd: null, exit: null, output_digest: null, tail: 'no regression command: neither the plan nor the repository names one'});
     } finally { fs.rmSync(clean, {recursive: true, force: true}); }
     const green = tests.every(x => x.exit === 0 || x.cmd === null);
@@ -1353,7 +1443,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       'implementation_defect: the code is wrong for a sound plan. plan_defect: a criterion or the scope does not cover the requirement or a consequence. diagnosis_defect: the plan\'s',
       'stated cause is wrong or unsupported. missing_evidence: you cannot judge because evidence is missing or unretrievable (say which). Keep these apart.'].join('\n');
     let judged = null;
-    const refusedJ = [], rejected = [];
+    const refusedJ = [], rejected = [], meteredOff = [];
     let exhausted = false;
     for (let k = 0; k < 3 && !judged; k++) {
       if (m.left() < 1) break;
@@ -1363,7 +1453,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         investigations.push({role: 'validator', ...seatOf(seat), try: k + 1, ...r.log, unresolved: gapsOf(deliveryOf(dossier, r.log))});
         reply = r.reply; tryLog = r.log;
         if (!reply) { refusedJ.push(`no judgment within the investigation bounds (${r.log.limit_reached})`); continue; }
-      } catch (e) { refusedJ.push(`the validator call failed: ${e.message}`); continue; }
+      } catch (e) {
+        refusedJ.push(`the validator call failed: ${e.message}`);
+        // A refusal BY THE RUN'S OWN SWITCH: the lane was refused for quota (or the seat has no lane) and the metered
+        // Gemini failover is off. It is a wait on capacity, not a defect of the validation (finding 6, below).
+        if (e?.quota_failover?.disabled === true || e?.code === 'AGY_NO_LANE') meteredOff.push({vendor: seat.vendor, model: seat.model, code: e.code ?? null, why: String(e.message ?? e).slice(0, 300)});
+        continue;
+      }
       const j = jsonOf(reply?.text);
       // WHO ANSWERED is checked before the judgment is read as one. The seat was chosen by the model asked for; the
       // model that served the turn must be eligible too: resolved, and not a contributor. An answer that fails this
@@ -1397,6 +1493,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // No judgment is a defect of the validation itself, kept apart from a defect of the change.
     // Every eligible seat was asked and none gave an admissible answer: a capacity block, with the answers kept.
     if (!judged && exhausted) return noValidator('no seat is left whose answer could be admitted', {rejected_answers: rejected, refused: refusedJ, context: outputs.context});
+    // With the metered failover OFF, a validator refused for quota (or with no lane) is recorded as that block, with its
+    // own code, pending until the lane's quota resets: it was recorded failed with no blocker (independent review round
+    // 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6).
+    if (!judged && meteredOff.length) {
+      const what = `METERED_FAILOVER_DISABLED: the validator seat was refused for quota (or has no Antigravity lane) and the metered Gemini API failover is off for this run (${meteredOff.map(x => `${x.vendor}/${x.model}: ${x.why}`).join('; ')}); the validated commit and its tests are kept`;
+      return result('pending', {outputs: {...outputs, cause: 'metered-failover-disabled', metered_failover_refusals: meteredOff}, team, usage: usage(),
+        blocker: {code: 'METERED_FAILOVER_DISABLED', what, role: 'lead@orch', resume_when: 'the lane\'s quota resets, or the owner allows the metered Gemini failover', transient: true},
+        next: {stage: 'validate', why: 'the validator was refused for quota with the metered failover off'}});
+    }
     if (!judged) return result('failed', {outputs: {...outputs, cause: 'validation-defect'}, team, usage: usage(), next: {stage: 'validate', why: `no well-formed validator judgment (${refusedJ.join('; ')})`}});
     // A red test cannot be accepted, and a green test alone cannot pass: the judgment is required.
     let verdict = judged.verdict;

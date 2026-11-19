@@ -223,7 +223,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   };
   const T = { dispatcher: counted("dispatcher"), implementer: counted("implementer"), subagent: counted("subagent"), reviewer: counted("reviewer") };
 
-  const lock = mutex();
+  const lock = repoMutex(repo);
   const patches = new Map();   // unit_id -> the approved unit's patch against its own base
   const integrationPath = join(dir, "worktrees", "_integration"), branch = `pantheon/pipeline/${run.run_id}`;
   // THE RUN DIRECTORY IS OWNED by one live run at a time (<dir>/owner.json). A run that died there (SIGKILL: its
@@ -616,11 +616,26 @@ export function liveOwner(dir) {
 }
 
 /**
+ * ONE MUTEX PER REPOSITORY in this process, for every operation on its shared worktree list and branches (worktree
+ * add/remove/prune, the integration branch). Each run had its own (`mutex()` per runPipeline), and a lifecycle's
+ * orphan recovery none, so with concurrency > 1 two items' runs (and a recovery's `worktree prune`) mutated one
+ * repository's .git/worktrees at once (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+ * 77480d6), finding 3.3). Keyed by the repository's real path.
+ */
+const REPO_LOCKS = new Map();
+export function repoMutex(repo) {
+  let key;
+  try { key = realpathSync(repo); } catch { key = resolve(repo); }
+  if (!REPO_LOCKS.has(key)) REPO_LOCKS.set(key, mutex());
+  return REPO_LOCKS.get(key);
+}
+
+/**
  * Remove the worktrees a dead run left under `root` (registered or not): `git worktree prune`, then every worktree of
  * `repo` whose path is inside `root` is removed (force), and whatever is left in `root` is deleted. Returns the paths
  * removed. The caller holds the run directory (liveOwner): nothing a live run uses is under `root`.
  */
-export async function recoverOrphanWorktrees({ repo, root, lock = fn => fn() }) {
+export async function recoverOrphanWorktrees({ repo, root, lock = repoMutex(repo) }) {
   if (!existsSync(root)) return [];
   const roots = [resolve(root)];
   try { roots.push(realpathSync(root)); } catch { /* gone */ }

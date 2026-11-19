@@ -432,6 +432,11 @@ export async function runOpenItem(spec, opts = {}) {
     profile, ...(ASSIGNMENT ? { assignment: ASSIGNMENT } : {}) };
   // Admitted at the generation boundary, before the call: past the bound, nothing is sent and the refusal
   // is named (PROVIDER_CALL_LIMIT). The routers treat it as non-retryable, so it ends the role's routing.
+  // `opts.meteredFailover: false`: no walk of this run reaches a metered Gemini API quota-failover candidate
+  // (route/quota-failover.mjs routeSeats; independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+  // 77480d6), finding 6). Default true, as before.
+  const METERED_FAILOVER = opts.meteredFailover ?? true;
+  if (typeof METERED_FAILOVER !== "boolean") throw new Error("runOpenItem: meteredFailover is true or false");
   function admitProviderCall({ vendor, model, pool, transport, purpose }) {
     if (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS) {
       const why = `PROVIDER_CALL_LIMIT: this run has made ${providerCalls} of its ${MAX_PROVIDER_CALLS} permitted provider call(s); ` +
@@ -738,7 +743,7 @@ export async function runOpenItem(spec, opts = {}) {
     // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
     // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
     const effortFor = candidate => effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null;
-    const routed = await routeSeats({ onSkip: skippedFailover, candidates, cooldown, signal: opts.signal,
+    const routed = await routeSeats({ onSkip: skippedFailover, meteredFailover: METERED_FAILOVER, candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
       invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
         effort: effortFor(candidate) }) });
@@ -810,7 +815,7 @@ export async function runOpenItem(spec, opts = {}) {
       let choice;
       try { choice = choose("scout", { avoid, avoidLabs, chars: p.prompt.length, ...(k ? { roleOverride: null } : {}) }); }
       catch (e) { throw refuse(`scout ${k + 1} has no candidate after avoiding labs ${avoidLabs.join(", ")}: ${e.message}`); }
-      const routed = await routeSeats({ onSkip: skippedFailover, candidates: choice.candidates, cooldown, signal: opts.signal,
+      const routed = await routeSeats({ onSkip: skippedFailover, meteredFailover: METERED_FAILOVER, candidates: choice.candidates, cooldown, signal: opts.signal,
         invoke: (candidate, { signal }) => {
           const cap = tokenCapFor("scout", candidate.model);
           return turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
@@ -991,7 +996,7 @@ export async function runOpenItem(spec, opts = {}) {
         const scoutChoice = profile === "argo" ? choose("scout", { chars: p.prompt.length })
           : choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake",
             reason: `intake fan-out vendor ${vendor}: the INTAKE table's ${vendor} seat` } });
-        const routed = await routeSeats({ onSkip: skippedFailover, candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
+        const routed = await routeSeats({ onSkip: skippedFailover, meteredFailover: METERED_FAILOVER, candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;

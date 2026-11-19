@@ -8,7 +8,8 @@
 // Inputs/outputs: strings in, booleans or refusal strings out. Pure; reads nothing.
 //
 // Must never: answer "disjoint" when unsure (pathsOverlap is conservative: a pattern that is a path prefix of the
-// other overlaps it, because it may name a directory); let a pattern reach outside the repository or into `.git`.
+// other overlaps it, because it may name a directory, and two that differ only in case overlap, because a
+// case-insensitive filesystem makes them one path); let a pattern reach outside the repository or into `.git`.
 
 const GLOB = /[*?]/;
 const reEscape = s => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -63,10 +64,15 @@ function overlap(a, b) {
  */
 export function overlapsReserved(a, reserved) {
   if (pathRefusal(a)) return true;
-  return overlap(a.split("/"), reserved.split("/"));
+  return overlap(fold(a).split("/"), fold(reserved).split("/"));
 }
+// CASE-FOLDED. Two paths that differ only in case are one file on a case-insensitive filesystem (macOS by default,
+// Windows), so they overlap: `src/Foo.mjs` and `src/foo.mjs` were put in one wave and collided at the merge
+// (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 3.1). Folding only ever
+// adds overlaps, never removes one, so the answer stays conservative on a case-sensitive filesystem.
+const fold = p => p.normalize("NFC").toLowerCase();
 /** Could two owned-path patterns name a common path (or one contain the other)? Conservative: unsure means true. */
 export function pathsOverlap(a, b) {
   if (pathRefusal(a) || pathRefusal(b)) return true;
-  return overlap(a.split("/"), b.split("/"));
+  return overlap(fold(a).split("/"), fold(b).split("/"));
 }

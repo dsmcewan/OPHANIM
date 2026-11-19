@@ -219,7 +219,8 @@ test("a SOFT quota phrase with a probe that does not read exhausted is a lane fa
     assert.deepEqual(at.lane_failures.map(f => [f.kind, f.cause]), [["exit", "lane"], ["exit", "lane"]]);
     assert.match(at.lane_failures[0].why, /not a proven quota refusal/);
     assert.equal(calls.length, 0);
-    agy.agyQuotaReport("Weekly: 100% used, limit reached\n");
+    // The lane's own group is named: an unscoped exhaustion is not proof (finding 5.2 of independent review round 2, assignment 3).
+    agy.agyQuotaReport("Gemini 4 Hydrogen\tWeekly: 100% used, limit reached\n");
     out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: seats(), limits: { max_revisions: 0 }, dir: join(env.dir, "soft-exhausted"), planner: PLANNER,
       turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls, () => JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), () => null, () => null, (_v, m) => m) }) });
     at = out.units.a.attempts[0];

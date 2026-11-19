@@ -96,7 +96,7 @@ export interface CooldownStore extends Cooldown {
 export function openCooldownStore(directory:string):CooldownStore;
 export interface FailureClassification {retryable:boolean;retryMs:number|null;quota:boolean}
 export function classifyFailure(error:unknown,now?:number):FailureClassification;
-export function routeCall<T,S extends Candidate=Candidate>(options:{candidates:S[];invoke:(seat:S,options:{signal:AbortSignal;attempt:number})=>Promise<T>;signal?:AbortSignal;deadline?:number;cooldown?:Cooldown;maxAttempts?:number}):Promise<{value:T;seat:S;attempts:OpaqueItem[]}>;
+export function routeCall<T,S extends Candidate=Candidate>(options:{candidates:S[];invoke:(seat:S,options:{signal:AbortSignal;attempt:number})=>Promise<T>;signal?:AbortSignal;deadline?:number;cooldown?:Cooldown;maxAttempts?:number;admit?:(attempt:{vendor:string;model:string;pool:string;attempt:number})=>void|Promise<void>}):Promise<{value:T;seat:S;attempts:OpaqueItem[]}>;
 export function boundedCall<T>(fn:(signal:AbortSignal)=>Promise<T>,options?:{signal?:AbortSignal;deadline?:number}):Promise<T>;
 
 export function modelId(vendor:string,name:string):string;

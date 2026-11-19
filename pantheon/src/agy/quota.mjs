@@ -206,11 +206,21 @@ export function scopeQuota(report, base) {
   const name = displayNameOf(base), family = String(base).split("-")[0].toLowerCase();
   // A report whose buckets name no group at all (a format other than the observed one) cannot be narrowed: it is
   // read as a whole, and the record says it was not scoped.
-  if (!(report.buckets ?? []).some(b => b.group || b.models?.length)) return { ...report, scope: { model: base, display_name: name, groups: [], unscoped: true, all_state: report.state } };
-  const hit = b => (b.models?.length ? b.models.includes(name) : typeof b.group === "string" && b.group.toLowerCase().includes(family));
+  // Its EXHAUSTION is not attributed to this lane's group: a spent bucket of some unnamed group is not proof that this
+  // lane's quota is spent, so it reads `unknown` (a probe decides nothing). Its availability stands: no bucket is spent.
+  // (Independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.2.)
+  if (!(report.buckets ?? []).some(b => b.group || b.models?.length)) {
+    return { ...report, state: report.state === "exhausted" ? "unknown" : report.state, scope: { model: base, display_name: name, groups: [], unscoped: true, all_state: report.state } };
+  }
+  // A group that LISTS its models, or whose name names this model, is this lane's group. A text-only group matched only
+  // by the model FAMILY ("Gemini ...") may be another Gemini group: its exhaustion is not proof either (finding 5.2).
+  const proven = b => (b.models?.length ? b.models.includes(name) : typeof b.group === "string" && b.group.toLowerCase().includes(name.toLowerCase()));
+  const hit = b => proven(b) || (!b.models?.length && typeof b.group === "string" && b.group.toLowerCase().includes(family));
   const buckets = (report.buckets ?? []).filter(hit);
   const groups = [...new Set(buckets.map(b => b.group))];
-  const state = !buckets.length ? "unknown" : buckets.some(b => b.exhausted) ? "exhausted" : buckets.some(b => b.remaining_fraction != null || b.remaining != null || b.used_pct != null) ? "available" : "unknown";
+  const read = b => b.remaining_fraction != null || b.remaining != null || b.used_pct != null;
+  const state = !buckets.length ? "unknown" : buckets.some(b => b.exhausted && proven(b)) ? "exhausted" : buckets.some(b => b.exhausted) ? "unknown"
+    : buckets.some(read) ? "available" : "unknown";
   return { ...report, state, buckets, scope: { model: base, display_name: name, groups, all_state: report.state } };
 }
 
@@ -251,7 +261,9 @@ export async function probeQuota({ cli, env = {}, timeoutS = 30, signal = undefi
     const parsedAll = parseQuotaReport(run.stdout ?? "");
     const parsed = base ? scopeQuota(parsedAll, base) : parsedAll;
     // stdout is the report; a probe that failed may still say why on stderr — read it too, but only to add evidence.
-    const errParsed = run.status !== 0 ? parseQuotaReport(run.stderr ?? "") : { state: "unknown", buckets: [] };
+    // It is narrowed to this lane's group like stdout: an unscoped exhaustion on stderr is not this lane's (finding 5.2).
+    const errAll = run.status !== 0 ? parseQuotaReport(run.stderr ?? "") : { state: "unknown", buckets: [] };
+    const errParsed = base ? scopeQuota(errAll, base) : errAll;
     const buckets = [...parsed.buckets, ...errParsed.buckets];
     const state = parsed.state === "exhausted" || errParsed.state === "exhausted" ? "exhausted" : parsed.state === "available" ? "available" : errParsed.state;
     return { state, buckets, raw_digest, exit_code: run.status };

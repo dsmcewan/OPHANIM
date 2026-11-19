@@ -31,9 +31,15 @@ export async function boundedCall(fn,{signal,deadline=Date.now()+900000}={}){
   finally{clearTimeout(timer);signal?.removeEventListener('abort',aborted);}
 }
 
-export async function routeCall({candidates,invoke,signal,deadline=Date.now()+900000,cooldown,maxAttempts=2}){
+// `admit` (optional): called before EVERY attempt -- the first and each retry of a transient failure -- with
+// {vendor,model,pool,attempt}. Each attempt is its own provider request, so a caller with a call bound charges it here;
+// a throw refuses the attempt (nothing is sent) and ends the routing with that error. Without it a 5xx retry inside one
+// routed call was a second request no bound saw (independent review round 2, assignment 3 (Google gemini-4-carbon,
+// manual, 77480d6), finding 1.1).
+export async function routeCall({candidates,invoke,signal,deadline=Date.now()+900000,cooldown,maxAttempts=2,admit}){
   if(!Array.isArray(candidates)||!candidates.length||typeof invoke!=='function')throw new Error('Routing needs candidates and invoke');
   if(!Number.isSafeInteger(maxAttempts)||maxAttempts<1||maxAttempts>3)throw new Error('Invalid bounded attempt policy');
+  if(admit!==undefined&&typeof admit!=='function')throw new Error('admit is a function');
   const closed=new Set();
   const attempts=[];
   for(const seat of candidates){
@@ -44,6 +50,7 @@ export async function routeCall({candidates,invoke,signal,deadline=Date.now()+90
     for(let attempt=0;attempt<maxAttempts;attempt++){
       // Another process can extend this pool's refusal while this request is waiting.
       if((await cooldown?.get(seat.pool))?.until>Date.now()){closed.add(seat.pool);break;}
+      if(admit)await admit({vendor:seat.vendor,model:seat.model,pool:seat.pool,attempt});
       try{
         const value=await boundedCall(s=>invoke(seat,{signal:s,attempt}),{signal,deadline});
         await cooldown?.success(seat.pool);

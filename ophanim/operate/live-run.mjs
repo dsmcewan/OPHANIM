@@ -40,14 +40,17 @@
 // CONFIRMED (--confirm-spend exactly "<item>@<first 7 of candidate_commit>"): tick with `only: item` (scheduler.mjs),
 // repeatedly, on the isolated work ledger, with live seats (pantheon/src/sdk/live.mjs) and the manifest's limits,
 // until the item reaches its outcome or a stop or blocker; bounded by total_provider_calls (the work ledger's own
-// spend, which counts a resumed run's earlier stages too) and elapsed_ms. NOTE: the provider-call counters bound
+// spend, which counts a resumed run's earlier stages too) and elapsed_ms (counted from before the preflight; it bounds
+// the preflight's probes, every stage and the verifier). NOTE: the provider-call counters bound
 // CALLS, not dollars; inside the native agy CLI a call is a whole multi-turn worker session on the subscription.
 // It writes <out_dir>/run.json (ophanim.live-run-record/v1): the manifest digest, the plan, every tick's dispatch log,
 // every stage record (hash, inputs, outputs digest, findings, evidence, usage, next, blocker), budget stops, served
 // identities (stage teams and the pipeline records), the subagent receipt check, the pipeline.json paths, the final
 // gate, and a FRESH verification: the work ledger and the run ledgers re-opened read-only and verified, the status
 // ledger re-verified and its files compared -- by a CHILD node process (verify-run.mjs), whose verdict is the one
-// recorded (the in-process check is kept beside it as `in_process`). The outcome proposal stays UNSIGNED; the launcher prints the exact
+// recorded (the in-process check is kept beside it as `in_process`). run.json is written FIRST and that child verifies
+// it too (its body, against the ledgers, by digest) and every pipeline.json against its stage's recorded digest; the
+// verification and the acceptance are then added to it. The outcome proposal stays UNSIGNED; the launcher prints the exact
 // `packages/ledger/status.mjs apply` command the owner would run and never runs it.
 //
 // Exit codes: 0 plan ok, or the run reached its outcome with every acceptance criterion met; 1 refused (manifest,
@@ -289,7 +292,12 @@ export const matrixLanes = () => FIT_DIFFICULTIES.map(d => ({difficulty: d, lane
  * runAgyPreflight (card tools, in-jail /usage auth, agents, the lane quota, the log scan) in a disposable control dir
  * and worktree, then probeQuota for the matrix implementer lane of every difficulty. No model turn.
  */
-export async function agyPreflight({env, home = env.HOME ?? os.homedir()}) {
+// `deadline` (ms, optional): the run's elapsed bound. Every probe is given what is left of it (at most its own timeout),
+// and a preflight with nothing left is a refusal, not an overrun (independent review round 2, assignment 3 (Google
+// gemini-4-carbon, manual, 77480d6), finding 9).
+export async function agyPreflight({env, home = env.HOME ?? os.homedir(), deadline = Infinity}) {
+  const secondsLeft = cap => Math.min(cap, Math.floor((deadline - Date.now()) / 1000));
+  const spentOut = (lanes, cli, step) => ({ok: false, cli, failed: ['elapsed'], why: `the run's elapsed limit was spent during the preflight (before ${step})`, lanes});
   const cli = env.PANTHEON_AGY_CLI ?? onPath('agy', env.PATH) ?? (fs.existsSync(path.join(home, '.local', 'bin', 'agy')) ? path.join(home, '.local', 'bin', 'agy') : null);
   const lanes = matrixLanes();
   if (!cli || !fs.existsSync(cli)) return {ok: false, cli: cli ?? null, failed: ['cli'], why: 'the agy CLI was not found ($PANTHEON_AGY_CLI, $PATH, ~/.local/bin/agy)', lanes};
@@ -301,11 +309,13 @@ export async function agyPreflight({env, home = env.HOME ?? os.homedir()}) {
     fs.mkdirSync(wt);
     await prepareWorkerWorkspace({control_dir: ctl, worktree: wt, unit_id: 'live-run-preflight', owned_paths: ['preflight/**'], verify_cmd: 'node -e "process.exit(0)"'});
     let pf;
-    try { pf = await runAgyPreflight({cli, control_dir: ctl, worktree: wt, model: lanes.find(l => l.difficulty === 'medium').lane, env: {HOME: home}, sandbox: {home}}); }
+    if (secondsLeft(60) < 1) return spentOut(lanes, cli, 'the in-jail preflight');
+    try { pf = await runAgyPreflight({cli, control_dir: ctl, worktree: wt, model: lanes.find(l => l.difficulty === 'medium').lane, env: {HOME: home}, sandbox: {home}, timeoutS: secondsLeft(60)}); }
     catch (e) { return {ok: false, cli, failed: ['preflight'], why: `the preflight could not run: ${e.code ?? ''} ${String(e.message ?? e).slice(0, 300)}`, lanes}; }
     const quota = [];
     for (const l of lanes) {
-      const q = await probeQuota({cli, model: l.lane, env: {HOME: home}});
+      if (secondsLeft(30) < 1) return spentOut(lanes, cli, `the quota probe of ${l.lane}`);
+      const q = await probeQuota({cli, model: l.lane, env: {HOME: home}, timeoutS: secondsLeft(30)});
       quota.push({...l, state: q.state, groups: [...new Set((q.buckets ?? []).map(b => b.group ?? null).filter(Boolean))], exit_code: q.exit_code ?? null, spent: q.spent ?? null, ...(q.error ? {error: q.error} : {})});
     }
     const exhausted = quota.filter(q => q.state === 'exhausted');
@@ -355,7 +365,7 @@ export function policyHashes() {
  * Everything the launcher checks before spending, as one plan. Never creates the work ledger or out_dir and never
  * calls a provider. Returns {plan, refusals, status, work}.
  */
-export async function buildPlan({manifest: m, digest: manifestDigest, file}, {repo, env, mode}) {
+export async function buildPlan({manifest: m, digest: manifestDigest, file}, {repo, env, mode, deadline = Infinity}) {
   const refusals = [...pathRefusals(m, repo)];
   const add = (why, more = []) => { if (why) refusals.push(why); refusals.push(...more); };
   let status = null, work = null, gate = null, seats = null;
@@ -366,7 +376,7 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
   const creds = credentialPresence(m, env);
   for (const c of creds.rows) if (!c.present) add(`credential ${c.name} is not present (${c.source}); load it locally and run again`);
   if (creds.gemini.required && !creds.gemini.present) add('credential GEMINI_API_KEY is not present, and the manifest requires it (metered_gemini_failover: true)');
-  const preflight = await agyPreflight({env});
+  const preflight = await agyPreflight({env, deadline});
   if (!preflight.ok) add(`agy preflight: ${preflight.why}`);
   const agyLogin = {name: 'agy-login', present: preflight.checks?.auth?.ok === true, source: 'the preflight\'s in-jail agy --print /usage (zero spend)'};
   if (status) {
@@ -474,8 +484,11 @@ function budgetStops(ticks, stages, launcher) {
   return out;
 }
 /** Re-open every ledger read-only, as a fresh reader, and verify it. */
-export function freshVerification({workRoot, stages, statusRoot, statusBefore}) {
-  const out = {work: null, run_ledgers: [], status: null};
+// `runFile` (optional): the run.json this verification is of. Its BODY (everything but `verification`) is checked against
+// the ledgers re-opened here, and named by digest; and every pipeline.json a stage cites is checked against the digest
+// that stage recorded (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 10.1).
+export function freshVerification({workRoot, stages, statusRoot, statusBefore, runFile = null}) {
+  const out = {work: null, run_ledgers: [], pipelines: [], status: null};
   try { const w = openWorkLedger({root: workRoot, create: false}); const v = w.verify(); out.work = {root: workRoot, anchor: w.anchor, ok: v.ok, head: v.head ?? null, entries: v.entries ?? null, ...(v.ok ? {} : {why: v.why})}; }
   catch (e) { out.work = {root: workRoot, ok: false, why: e.message}; }
   const seen = new Set();
@@ -500,12 +513,48 @@ export function freshVerification({workRoot, stages, statusRoot, statusBefore}) 
     }
     catch (e) { return {...r, ok: false, why: e.message}; }
   });
+  // Every pipeline record by the digest its stage recorded. A record that exists with no recorded digest is not verified
+  // (servedIdentities and subagentReceipt read it): that is a failure, not a pass. No record and no digest: nothing to check.
+  for (const s of stages.filter(x => x.stage === 'implement' && x.outputs?.run?.kind === 'pipeline')) {
+    const r = s.outputs.run, file = r.record ?? null, recorded = r.record_digest ?? null;
+    const row = {stage_record: s.hash, record: file, recorded_digest: recorded};
+    const exists = Boolean(file && fs.existsSync(file));
+    if (!exists && !recorded) { out.pipelines.push({...row, ok: true, checked: false, why: 'no pipeline record was written and none is cited by digest'}); continue; }
+    if (!exists) { out.pipelines.push({...row, ok: false, why: 'the pipeline record its stage cites by digest is missing'}); continue; }
+    const actual = sha256(fs.readFileSync(file));
+    out.pipelines.push({...row, digest: actual, ok: recorded !== null && actual === recorded,
+      ...(recorded === null ? {why: 'the stage recorded no digest of its pipeline record'} : actual !== recorded ? {why: 'the pipeline record changed since its stage recorded it'} : {})});
+  }
+  if (runFile) out.run_record = runRecordCheck({runFile, workRoot, stages, work: out.work});
   try {
     const st = statusLedgerState(statusRoot);
     out.status = {root: statusRoot, ok: true, head: st.head, entries: st.entries, files_digest: st.files.digest, unchanged: st.files.digest === statusBefore.files.digest && st.head === statusBefore.head};
   } catch (e) { out.status = {root: statusRoot, ok: false, why: e.message, unchanged: false}; }
-  out.ok = Boolean(out.work?.ok && out.run_ledgers.every(r => r.ok) && out.status?.ok && out.status.unchanged);
+  out.ok = Boolean(out.work?.ok && out.run_ledgers.every(r => r.ok) && out.pipelines.every(p => p.ok) && out.status?.ok && out.status.unchanged && (!runFile || out.run_record?.ok));
   return out;
+}
+/**
+ * The body of a run record: everything but its `verification` and the `acceptance` that depends on it (both are added
+ * after the body is verified, naming its digest). `verify-run.mjs` with `runFile` re-verifies a finished run.json.
+ */
+export const runRecordBody = record => { const {verification: _v, acceptance: _a, ...body} = record ?? {}; return body; };
+/** run.json against the ledgers: its item, work ledger anchor, stage list (hash, stage, attempt, status, outputs digest) and spend. */
+function runRecordCheck({runFile, workRoot, stages, work}) {
+  let rec;
+  try { rec = JSON.parse(fs.readFileSync(runFile, 'utf8')); } catch (e) { return {file: runFile, ok: false, why: `run.json cannot be read: ${e.message}`}; }
+  const body = runRecordBody(rec), why = [];
+  const ledgerItem = stages[0]?.identity?.item ?? null;
+  if (ledgerItem !== null && body.item !== ledgerItem) why.push(`run.json names item "${body.item}", the ledger's stages are of "${ledgerItem}"`);
+  if (body.work_ledger?.root !== workRoot) why.push('run.json names another work ledger root');
+  if (work?.anchor && body.work_ledger?.anchor !== work.anchor) why.push('run.json names another work ledger anchor');
+  const want = stages.map(x => [x.hash, x.stage, x.attempt, x.status, outputsDigest(x.outputs)].join('|'));
+  const got = (body.stages ?? []).map(x => [x.hash, x.stage, x.attempt, x.status, x.outputs_digest].join('|'));
+  if (JSON.stringify(want) !== JSON.stringify(got)) why.push(`run.json's stages (${got.length}) are not the work ledger's (${want.length}) by hash, status and outputs digest`);
+  try {
+    const sp = spent(openWorkLedger({root: workRoot, create: false}));
+    if (body.spent?.calls !== sp.calls) why.push(`run.json says ${body.spent?.calls} provider call(s) spent, the work ledger ${sp.calls}`);
+  } catch (e) { why.push(`the work ledger's spend cannot be read: ${e.message}`); }
+  return {file: runFile, body_digest: 'sha256:' + digest(body), ok: !why.length, ...(why.length ? {why: why.join('; ')} : {})};
 }
 
 /**
@@ -517,12 +566,12 @@ export function freshVerification({workRoot, stages, statusRoot, statusBefore}) 
 // The child writes its verdict to a file this process names (fsync'd before it exits) and prints it; the file is read
 // first, stdout is the fallback, and no verdict from either is a failed verification, whatever the exit code
 // (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 10).
-export async function verifyInChild({workRoot, item, statusRoot, statusBefore, inProcess = null, timeout = 120_000}) {
+export async function verifyInChild({workRoot, item, statusRoot, statusBefore, inProcess = null, timeout = 120_000, runFile = null}) {
   const entry = path.join(HERE, 'verify-run.mjs');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-verdict-'));
   const verdictFile = path.join(tmp, 'verdict.json');
   try {
-    const arg = JSON.stringify({workRoot, item, statusRoot, statusBefore: {head: statusBefore.head, files: {digest: statusBefore.files.digest}}, verdictFile});
+    const arg = JSON.stringify({workRoot, item, statusRoot, statusBefore: {head: statusBefore.head, files: {digest: statusBefore.files.digest}}, verdictFile, ...(runFile ? {runFile} : {})});
     let r;
     try { r = await spawnPromise(process.execPath, [entry, arg], {cwd: REPO_ROOT, env: process.env, timeout}); }
     catch (e) { return {ok: false, why: `the verifier process could not be run: ${e.message}`, process: {entry, exit_code: null}, in_process: inProcess}; }
@@ -535,6 +584,14 @@ export async function verifyInChild({workRoot, item, statusRoot, statusBefore, i
   } finally { fs.rmSync(tmp, {recursive: true, force: true}); }
 }
 
+/**
+ * The verifier's time: what is left of the run's elapsed bound, at most 120 s (finding 9: it was a fixed 120 s past the
+ * bound). A run that spent its bound in the loop still gets VERIFY_FLOOR_MS, so its record is verified rather than left
+ * unverified: the overrun is bounded by that floor and the record shows it (elapsed_ms).
+ */
+export const VERIFY_FLOOR_MS = 5_000;
+export const verifyTimeout = (deadline, now = Date.now()) => Math.max(VERIFY_FLOOR_MS, Math.min(120_000, deadline - now));
+
 // ---- the confirmed run ------------------------------------------------------------------------------------------
 async function liveSeats({meteredFailover}) {
   const live = await import(pathToFileURL(path.join(REPO_ROOT, 'pantheon/src/sdk/live.mjs')).href);
@@ -543,8 +600,11 @@ async function liveSeats({meteredFailover}) {
 const tickRow = t => ({dispatched: t.dispatched, skipped: t.skipped, blocked: t.blocked, intake: t.intake.length, recovery: t.recovery, released_expired: t.released_expired,
   stopped: t.stopped, spent: t.spent, scope: t.scope ?? null});
 
-export async function runConfirmed({manifest: m, digest: manifestDigest, file}, plan, status, workInfo, {repo, seats = null, progress = () => {}, makeExecutorsImpl = makeExecutors}) {
-  const L = m.limits, started = Date.now(), deadline = started + L.elapsed_ms;
+// `startedAt` (ms): when the run's elapsed bound started counting. main() passes the time before the preflight, so the
+// preflight's probes come out of the same elapsed_ms (independent review round 2, assignment 3 (Google gemini-4-carbon,
+// manual, 77480d6), finding 9: buildPlan ran before `started`). Default now.
+export async function runConfirmed({manifest: m, digest: manifestDigest, file}, plan, status, workInfo, {repo, seats = null, progress = () => {}, makeExecutorsImpl = makeExecutors, startedAt = Date.now()}) {
+  const L = m.limits, started = startedAt, deadline = started + L.elapsed_ms;
   fs.mkdirSync(m.out_dir, {recursive: true});
   const work = workInfo.state === 'resumable' ? openWorkLedger({root: m.ledgers.work_root, create: false}) : createWorkRoot(m.ledgers.work_root, {item: m.item, manifestDigest});
   const progressFile = path.join(m.out_dir, 'progress.jsonl');
@@ -553,7 +613,11 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const s = seats ?? await liveSeats({meteredFailover: m.billing.metered_gemini_failover});
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
     profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, meteredFailover: m.billing.metered_gemini_failover, progress: note});
-  const limits = {total_provider_calls: L.total_provider_calls, stage_provider_calls: L.stage_provider_calls, stage_attempts: L.stage_attempts, concurrency: 1, lease_ms: L.elapsed_ms};
+  // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
+  // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
+  // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).
+  const limits = {total_provider_calls: L.total_provider_calls, stage_provider_calls: L.stage_provider_calls, stage_attempts: L.stage_attempts, concurrency: 1,
+    lease_ms: L.elapsed_ms + Math.min(60_000, Math.ceil(L.elapsed_ms / 9))};
   const ticks = [], launcherStops = [];
   const maxTicks = STAGES.length * L.stage_attempts * 2;
   const gateOf = () => reconcile({repo, statusRoot: m.ledgers.status_root, workLedger: work, issues: null}).items.find(i => i.item === m.item).gate;
@@ -571,17 +635,25 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
     ticks.push(tickRow(t));
     gate = gateOf();
     if (!t.dispatched.length) break;
+    // A stage stopped at a DETERMINISTIC bound (the pipeline's own max_provider_calls, with no unit approved in the
+    // attempt) is not retried: the next attempt would stop at the same place (independent review round 2, assignment 3
+    // (Google gemini-4-carbon, manual, 77480d6), finding 2.2).
+    const last = t.dispatched.filter(d => d.item === m.item).at(-1);
+    const lastRec = last ? work.stages(m.item).find(x => x.hash === last.record) : null;
+    if (lastRec?.outputs?.budget_stop?.deterministic) {
+      const b = lastRec.outputs.budget_stop;
+      launcherStops.push({source: 'launcher', stage: lastRec.stage, record: lastRec.hash, code: b.code,
+        why: `${lastRec.stage} stopped at the pipeline's own bound of ${b.bound} provider call(s) (${b.made} made, ${b.refused} refused; the stage budget is ${b.stage_budget}) with no unit approved: a retry would stop at the same bound, so it is not retried`});
+      break;
+    }
   }
   if (STAGES.includes(gate.gate) && ticks.length >= maxTicks) launcherStops.push({source: 'launcher', why: `tick limit ${maxTicks} reached`});
   const stages = work.stages(m.item);
   const outcome = [...stages].reverse().find(x => x.stage === 'outcome' && x.status === 'passed') ?? null;
   const receipt = subagentReceipt(stages, m.require_subagent);
-  const verification = await verifyInChild({workRoot: m.ledgers.work_root, item: m.item, statusRoot: m.ledgers.status_root, statusBefore: status,
-    inProcess: freshVerification({workRoot: m.ledgers.work_root, stages, statusRoot: m.ledgers.status_root, statusBefore: status})});
   const reasons = [];
   if (gate.gate !== 'awaiting-owner' || !outcome) reasons.push(`the item did not reach its outcome: gate "${gate.gate}"${gate.reason ? ` (${gate.reason})` : ''}`);
   if (!receipt.met) reasons.push(`require_subagent not met: ${receipt.why}`);
-  if (!verification.ok) reasons.push('the fresh verification did not pass (see verification)');
   const proposal = outcome ? {path: outcome.outputs.proposal_path, digest: outcome.outputs.proposal_digest, file_sha256: outcome.outputs.proposal_file_sha256, to: outcome.outputs.to, signed: false,
     apply_command: `OPHANIM_STATUS_LEDGER='${m.ledgers.status_root}' node packages/ledger/status.mjs apply '${outcome.outputs.proposal_path}' --keys "$OPHANIM_STATUS_KEYS"`,
     note: 'UNSIGNED. The launcher never applies it: the owner runs the command above, with the owner\'s status keys, after checking the record.'} : null;
@@ -593,12 +665,22 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
     work_ledger: {root: m.ledgers.work_root, anchor: work.anchor, created: workInfo.state !== 'resumable', marker: path.join(m.ledgers.work_root, WORK_MARKER)},
     limits: L, billing: m.billing, spent: spent(work), ticks, stages: stages.map(stageRow), budget_stops: budgetStops(ticks, stages, launcherStops), blockers,
     served_identities: servedIdentities(stages), subagent_receipt: receipt, pipelines: pipelinesOf(stages),
-    final_gate: {gate: gate.gate, reason: gate.reason ?? null, blocker: gate.blocker ?? null}, verification, proposal,
+    final_gate: {gate: gate.gate, reason: gate.reason ?? null, blocker: gate.blocker ?? null}, verification: null, proposal,
     acceptance: {met: !reasons.length, reasons}, progress: progressFile};
+  // THE RECORD IS WRITTEN FIRST, THEN VERIFIED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+  // 77480d6), finding 10.1): the child verifies run.json itself (its body, everything but `verification`, against the
+  // ledgers and by digest) and every pipeline.json against the digest its stage recorded; it ran before run.json existed.
+  // The verification is then added, with the digest of the body it verified, and the acceptance updated by it.
   const runFile = path.join(m.out_dir, 'run.json');
   if (fs.existsSync(runFile)) fs.renameSync(runFile, path.join(m.out_dir, `run.${fs.statSync(runFile).mtimeMs.toFixed(0)}.json`));
   fs.writeFileSync(runFile, JSON.stringify(record, null, 2) + '\n');
-  return {record, file: runFile, code: reasons.length ? 3 : 0};
+  const verification = await verifyInChild({workRoot: m.ledgers.work_root, item: m.item, statusRoot: m.ledgers.status_root, statusBefore: status, runFile,
+    timeout: verifyTimeout(deadline),
+    inProcess: freshVerification({workRoot: m.ledgers.work_root, stages, statusRoot: m.ledgers.status_root, statusBefore: status, runFile})});
+  if (!verification.ok) reasons.push('the fresh verification did not pass (see verification)');
+  const final = {...record, verification, acceptance: {met: !reasons.length, reasons}};
+  fs.writeFileSync(runFile, JSON.stringify(final, null, 2) + '\n');
+  return {record: final, file: runFile, code: reasons.length ? 3 : 0};
 }
 
 // ---- the command line ------------------------------------------------------------------------------------------
@@ -631,11 +713,13 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
     log(JSON.stringify({schema: PLAN_SCHEMA, ok: false, refused: 'confirm-spend', refusals: [`--confirm-spend must be exactly "${confirmString(loaded.manifest)}" (<item>@<first 7 of candidate_commit>); nothing was run`], provider_calls: 0}, null, 2));
     return 1;
   }
+  // A confirmed run's elapsed bound starts HERE, before the preflight (finding 9).
+  const startedAt = Date.now();
   let built;
-  try { built = await buildPlan(loaded, {repo, env, mode}); }
+  try { built = await buildPlan(loaded, {repo, env, mode, ...(mode === 'confirmed' ? {deadline: startedAt + loaded.manifest.limits.elapsed_ms} : {})}); }
   catch (e) { log(JSON.stringify({schema: PLAN_SCHEMA, ok: false, refused: 'plan', refusals: [e.message], provider_calls: 0}, null, 2)); return 1; }
   if (mode === 'dry-run' || built.refusals.length) { log(JSON.stringify(built.plan, null, 2)); return built.refusals.length ? 1 : 0; }
-  const r = await runConfirmed(loaded, built.plan, built.status, built.work, {repo, seats, makeExecutorsImpl, progress: e => err(JSON.stringify(e))});
+  const r = await runConfirmed(loaded, built.plan, built.status, built.work, {repo, seats, makeExecutorsImpl, startedAt, progress: e => err(JSON.stringify(e))});
   log(JSON.stringify({schema: RECORD_SCHEMA, run: r.file, code: r.code, acceptance: r.record.acceptance, final_gate: r.record.final_gate, spent: r.record.spent,
     budget_stops: r.record.budget_stops, verification_ok: r.record.verification.ok,
     proposal: r.record.proposal ? {path: r.record.proposal.path, signed: false, apply_command: r.record.proposal.apply_command} : null}, null, 2));

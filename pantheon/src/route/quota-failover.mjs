@@ -16,13 +16,24 @@ import { laneParts } from "./fit-matrix.mjs";
 
 export const cooldownKeyOf = c => (c.transport === "agy-cli" ? `agy_cli_oauth:${laneParts(c.model)?.base ?? c.model}` : c.pool);
 
-export async function routeSeats({ candidates, invoke, cooldown = null, signal, deadline, maxAttempts, onSkip = () => {} }) {
+//
+// `meteredFailover: false` (the caller's budget allows no metered Gemini spend): a `quota_failover` candidate is never
+// reached, even after its lane's quota refusal; it is skipped (onSkip says why) and the walk goes on past it. The
+// switch existed for the pipeline and the single-turn seats but not here, so runOpenItem's walk could still call the
+// metered API (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6).
+// `admit` is routeCall's: called before every attempt, retries included (finding 1.1).
+export async function routeSeats({ candidates, invoke, cooldown = null, signal, deadline, maxAttempts, onSkip = () => {}, meteredFailover = true, admit = undefined }) {
   if (!Array.isArray(candidates) || !candidates.length || typeof invoke !== "function") throw new Error("Routing needs candidates and invoke");
+  if (typeof meteredFailover !== "boolean") throw new Error("meteredFailover is true or false");
   const quota = new Map();      // lane model -> the quota refusal observed for it
   const closed = new Set(), attempts = [];
   for (const c of candidates) {
     const key = cooldownKeyOf(c);
     let seat = c;
+    if (c.quota_failover && !meteredFailover) {
+      onSkip({ seat: c, why: `quota failover of ${c.quota_failover.lanes.join(", ")} not used: the metered Gemini API failover is disabled for this run` });
+      continue;
+    }
     if (c.quota_failover) {
       const evidence = c.quota_failover.lanes.map(m => quota.get(m)).filter(Boolean);
       if (!evidence.length) {
@@ -41,6 +52,7 @@ export async function routeSeats({ candidates, invoke, cooldown = null, signal, 
     }
     try {
       const routed = await routeCall({ candidates: [seat], cooldown: view, signal, ...(deadline === undefined ? {} : { deadline }), ...(maxAttempts === undefined ? {} : { maxAttempts }),
+        ...(admit === undefined ? {} : { admit }),
         invoke: async (s, ctx) => {
           try { return await invoke(s, ctx); }
           catch (e) {

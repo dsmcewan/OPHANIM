@@ -120,16 +120,30 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const work = openWorkLedger({root: workRoot});
   const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null};
   // Interrupted work: a claim past its lease is released as expired; its item resumes from its last valid stage.
+  // BOOKKEEPING UNDER A RACE (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+  // finding 3.2b). Each of these entries is unique on the work ledger, checked under its append lock (one release per
+  // claim, one intake per source, one recovery per item, status entry and sources). Another scheduler process can record
+  // the same entry between this tick's read and its append; the ledger then refuses this one, and that refusal means
+  // the work is already recorded, not that the tick failed (it crashed tick() with LEDGER_REFUSED). Only that refusal is
+  // absorbed: any other error is thrown as before.
+  const raced = (fn, already) => {
+    try { return {done: true, value: fn()}; }
+    catch (e) { if (e?.code === 'LEDGER_REFUSED' && already.test(String(e.message))) return {done: false, why: String(e.message).slice(0, 300)}; throw e; }
+  };
   for (const c of work.expiredClaims(clock())) {
-    work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted', at: new Date(clock()).toISOString()});
-    log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt});
+    const r = raced(() => work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted', at: new Date(clock()).toISOString()}), /that claim is already released/);
+    log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt, ...(r.done ? {} : {by_another: true})});
   }
   let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
   // Intake: every source of work is recorded once (by source and ref): status items, published issues (linked to an
   // item by its marker, or candidates), and tickets (an item's, or an orphan). Candidates and orphans are recorded and
   // never executed. (Independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 7.)
   const known = new Set(work.intakes().map(i => `${i.source}|${i.ref}`));
-  const intake = x => { if (known.has(`${x.source}|${x.ref}`)) return; known.add(`${x.source}|${x.ref}`); work.intake(x); log.intake.push(x.ref); };
+  const intake = x => {
+    if (known.has(`${x.source}|${x.ref}`)) return;
+    known.add(`${x.source}|${x.ref}`);
+    if (raced(() => work.intake(x), /intake is recorded once per source/).done) log.intake.push(x.ref);
+  };
   for (const i of rec.items) {
     intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item'});
     if (i.ticket) intake({source: 'ticket', ref: `ticket:${i.item}`, item: i.item, classification: 'item', why: i.ticket.invalid ? `the ticket of a status ledger item (invalid: ${String(i.ticket.invalid).slice(0, 200)})` : 'the ticket of a status ledger item'});
@@ -147,9 +161,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     if (work.recoveries(i.item).some(r => r.status_entry === i.entry && r.sources === sources)) continue;
     searches++;
     const r = recoverEvidence({repo, statusRoot, item: i.item, bundlesDir, work, outDir: path.join(path.dirname(workRoot), 'operate', 'recovery'), now: clock()});
-    work.recordRecovery({item: r.item, status_entry: r.status_entry, sources: r.sources, outcome: r.outcome, searched: r.searched,
-      ...(r.proposal ? {proposal: {digest: r.proposal.digest, commit: r.proposal.commit, in_head: r.proposal.in_head}} : {}), at: new Date(clock()).toISOString()});
-    log.recovery.push({item: r.item, outcome: r.outcome, ...(r.proposal ? {proposal: r.proposal.file, digest: r.proposal.digest} : {}), searched: r.searched.length});
+    const recorded = raced(() => work.recordRecovery({item: r.item, status_entry: r.status_entry, sources: r.sources, outcome: r.outcome, searched: r.searched,
+      ...(r.proposal ? {proposal: {digest: r.proposal.digest, commit: r.proposal.commit, in_head: r.proposal.in_head}} : {}), at: new Date(clock()).toISOString()}), /against these sources and this status is already recorded/);
+    log.recovery.push({item: r.item, outcome: r.outcome, ...(r.proposal ? {proposal: r.proposal.file, digest: r.proposal.digest} : {}), searched: r.searched.length, ...(recorded.done ? {} : {by_another: true})});
   }
   if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
   const order = dependencyOrder(rec.items);
@@ -272,13 +286,14 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         if (e.code !== 'LEASE_FENCED') throw e;
         // The lease fence refused the result: this holder outlived its claim. Nothing it produced becomes the handoff;
         // the charges it made stay counted. The claim is released as expired if nobody has done so yet.
-        if (!work.released(claim)) work.release({claim, item, stage: gate.gate, outcome: 'expired', why: `the result arrived after the lease: ${e.message}`.slice(0, 300), at: stageAt});
+        if (!work.released(claim)) raced(() => work.release({claim, item, stage: gate.gate, outcome: 'expired', why: `the result arrived after the lease: ${e.message}`.slice(0, 300), at: stageAt}), /that claim is already released/);
         log.skipped.push({item, gate: gate.gate, why: e.message});
         progress({event: 'fenced', item, stage: gate.gate, why: e.message});
         return;
       }
       const outcome = {passed: 'completed', returned: 'returned', failed: 'failed', pending: 'blocked', blocked: 'blocked'}[result.status];
-      work.release({claim, item, stage: gate.gate, outcome, why: result.next?.why ?? result.status, at: stageAt});
+      // Another process may have released the claim as expired between the record and this release (finding 3.2b).
+      raced(() => work.release({claim, item, stage: gate.gate, outcome, why: result.next?.why ?? result.status, at: stageAt}), /that claim is already released/);
       log.dispatched.push({item, stage: gate.gate, attempt, status: result.status, record: stageHash, next: result.next?.stage ?? null,
         provider_calls: result.usage?.provider_calls ?? null});
       progress({event: 'stage', item, stage: gate.gate, status: result.status});
