@@ -278,7 +278,9 @@ const words = s => [...new Set(String(s ?? '').match(/[A-Za-z0-9_][A-Za-z0-9_.\/
  * get by asking), so an excerpt carries its continuation and adds up with what is retrieved later. `budget` bounds
  * file contents (bytes); everything cut is an entry's coverage or an omission.
  */
-export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}}) {
+// `ticketText` (optional): the bytes of tickets/<item>.json to build from INSTEAD of the file (null: no ticket). Used to
+// re-derive a plan's dossier views as it was given them, without the ticket it wrote (reconcile.mjs ticketGiven).
+export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}, ticketText = undefined}) {
   const G = gitOf(repo);
   // The full bytes of every view derived here, so a cut entry is continued from the same bytes ({"op":"dossier"}).
   const derived = new Map();
@@ -328,8 +330,21 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // are the ones a later cycle most needs. The earlier rows are the gap, retrievable from byte 0.
   fetch('observation', `Status history of ${item}, oldest first (${history.length} entries; earlier decisions and attempts)`, {op: 'status', item}, 8000, {as_of: now.checked, tail: true});
   const stages = work ? work.stages(item) : [];
-  if (stages.length) fetch('observation', `Work ledger: ${stages.length} stage record(s) of ${item} (previous attempts, findings, blockers)`, {op: 'work', item}, 8000, {tail: true});
-  else omissions.push(work ? 'the work ledger holds no stage record of this item (no previous attempt is recorded there)' : 'no work ledger was available: previous attempts are unknown, not absent');
+  // THE WORK LEDGER'S SHARE OF THE BUDGET IS RESERVED whether or not it has records, and whatever it uses: so recording
+  // an attempt never changes how the evidence after it is cut or omitted, and `stable` (which leaves the work ledger
+  // out) moves only when the evidence does. It spent the shared budget, and a plan blocked on evidence was re-planned
+  // on unchanged evidence by its own record (self-audit round 3, assignment 1 (sealed 323361a), question 5).
+  const WORK_SHARE = 8000;
+  const reserve = Math.max(0, Math.min(WORK_SHARE, left()));
+  const spentBefore = spent;
+  if (stages.length) {
+    if (reserve < 200) omissions.push(`the work ledger's ${stages.length} stage record(s) of ${item} are NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent; retrieve them with ${JSON.stringify({op: 'work', item})}`);
+    else {
+      const r = R.run({op: 'work', item}, {cap: reserve, tail: true});
+      if (r.ok) push('observation', `Work ledger: ${stages.length} stage record(s) of ${item} (previous attempts, findings, blockers)`, r.source, r.version, null, r.text, r.coverage, {op: 'work', item});
+    }
+  } else omissions.push(work ? 'the work ledger holds no stage record of this item (no previous attempt is recorded there)' : 'no work ledger was available: previous attempts are unknown, not absent');
+  spent = spentBefore + reserve;
   // 2. Operational relationships.
   const dep = d => { const s = board.items.find(i => i.item === d); return s ? `${d}: ${s.state} [${s.entry.slice(0, 19)}] ${s.basis}` : `${d}: NOT ON THE LEDGER`; };
   const dependents = board.items.filter(i => (i.depends_on ?? []).includes(item)).map(i => i.item);
@@ -338,7 +353,18 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   const ticketPath = `tickets/${item}.json`;
   let ticket = null;
   const tc = contained(repo, ticketPath);
-  if (tc.abs) {
+  if (typeof ticketText === 'string') {
+    // The ticket as given (not the file now): the same view a file retrieval of those bytes is.
+    try { ticket = JSON.parse(ticketText); } catch { ticket = null; }
+    const room = Math.min(6000, left());
+    if (room < 200) omissions.push(`"Existing ticket" is NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent; retrieve it with ${JSON.stringify({op: 'file', path: ticketPath})}`);
+    else {
+      const w = windowBytes(ticketText, 0, room), req = {op: 'file', path: ticketPath};
+      push('observation', 'Existing ticket (written earlier: its assumptions may be stale)', `file:${ticketPath}`, sha(Buffer.from(ticketText, 'utf8')), null, w.text,
+        {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total, rows: ticketText.split('\n').length,
+          ...(w.to < w.total ? {note: `bytes 0-${w.to} of ${w.total}; continue with next`, next: {...req, offset: w.to}} : {})}, req);
+    }
+  } else if (ticketText !== null && tc.abs) {
     try { ticket = JSON.parse(fs.readFileSync(tc.abs, 'utf8')); } catch { ticket = null; }
     fetch('observation', 'Existing ticket (written earlier: its assumptions may be stale)', {op: 'file', path: ticketPath}, 6000);
   } else omissions.push(tc.error === 'REFUSED' ? `${ticketPath} is NOT read: ${tc.why}` : 'there is no ticket for this item');
@@ -351,9 +377,14 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // The project's files are what the retriever reads: tracked, AND untracked but not ignored (question 5: a file that
   // appeared in the working tree was readable yet invisible to the dossier and to `stable`). The ledgers' own files are
   // not project files: the status and work ledgers are their own views.
-  const own = [statusRoot, work?.root].filter(Boolean).map(r => path.relative(fs.realpathSync(path.resolve(repo)), path.resolve(r))).filter(r => r && !r.startsWith('..'));
-  const tracked = [...new Set((tryGit(G, ['ls-files', '--cached', '--others', '--exclude-standard']) ?? '').split('\n').filter(Boolean))]
-    .filter(f => !own.some(r => f === r || f.startsWith(r + '/'))).sort(), trackedSet = new Set(tracked);
+  // The stage executors' default state directory (<work root>/../operate: briefs, plan ledgers, outputs) is the
+  // lifecycle's own consequence too: a plan's own files there must not change the views it cites (self-audit round 3,
+  // assignment 1 (sealed 323361a): a self-staling plan, wedged before, would now be planned again and again).
+  const own = [statusRoot, work?.root, work?.root ? path.join(path.dirname(work.root), 'operate') : null].filter(Boolean).map(r => path.relative(fs.realpathSync(path.resolve(repo)), path.resolve(r))).filter(r => r && !r.startsWith('..'));
+  const listed = new Set((tryGit(G, ['ls-files', '--cached', '--others', '--exclude-standard']) ?? '').split('\n').filter(Boolean));
+  // With the ticket given as bytes (or as absent), the file list holds the ticket exactly when it was given.
+  if (ticketText === null) listed.delete(ticketPath); else if (typeof ticketText === 'string') listed.add(ticketPath);
+  const tracked = [...listed].filter(f => !own.some(r => f === r || f.startsWith(r + '/'))).sort(), trackedSet = new Set(tracked);
   const named = new Set();
   if (ticket) for (const p of [ticket.path, ...(ticket.copy ?? []), ...(ticket.slots ?? []).map(s => s.path)]) if (p && trackedSet.has(p)) named.add(p);
   for (const w of words(`${ready.title} ${ready.basis} ${mine.map(i => i.body).join(' ')}`)) if (trackedSet.has(w)) named.add(w);
@@ -403,7 +434,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // `stable` leaves out the work ledger's own records, so recording an attempt does not itself look like new evidence.
   const outside = core.filter(e => !e.source.startsWith('work:')).map(({id, ...e}) => e);
   const d = {schema: DOSSIER_SCHEMA, item, head, entries, omissions, digest: 'sha256:' + digest({item, head, core, omissions}),
-    stable: 'sha256:' + digest({item, head, core: outside, omissions: omissions.filter(o => !o.includes('work ledger'))})};
+    stable: 'sha256:' + digest({item, head, core: outside, omissions: omissions.filter(o => !/work ledger/i.test(o))})};
   // The derived views' full bytes travel with the dossier (not enumerable: never recorded or rendered), for the
   // retriever given to the seats that are shown it.
   Object.defineProperty(d, 'views', {value: derived, enumerable: false});

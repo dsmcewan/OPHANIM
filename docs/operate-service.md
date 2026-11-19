@@ -25,6 +25,24 @@
 - **No controller key** (`status/work/keys`): the service stops with exit 3 (`NO_AUTHORITY`) and records nothing.
 - **Tick errors** are retried after the interval. After `max_consecutive_errors` in a row, the service stops.
 
+## When an item is dispatched again
+
+Each stage attempt is claimed under an **attempt identity** (`gates.mjs` `attemptInputs`, version 2): what the stage received, the requirement, the status entry, and the **routing basis**, which is what made the gate route the stage. The routing basis is the present state the gate read: the ticket, the dependencies' entries, the evidence that made an earlier record stale and what it reads now, or a wake condition. It is never a record hash. So:
+
+- **Something the gate reads changed** (a cited file, the ticket, a dependency, the status entry, the evidence a validator relied on): the stage is new work and is dispatched, bounded by `stage_attempts` on that identity.
+- **Nothing changed**, yet the gate routes the stage again: the work is already done. Reconciliation reports the item **blocked** with `ATTEMPT_IDENTITY_COLLISION` and the reason. This shows in `tick`, `watch`, the service log and the CLI, not as a silent skip.
+- **A transient retry** (a reviewer seat that failed) keeps the identity of the attempt it retries, so retries stay bounded.
+
+A **structural block** waits for something it can observe:
+
+- **Review capacity** (`REVIEW_CAPACITY_PENDING`): the block records the reviewer pool's signature (seating, seat facts, configured pools, n, independence, profile). The stage is dispatched again when the executors' pool signature differs. A reader with no executors, such as a status view, cannot see the pool and shows the item blocked.
+- **Any structural block:** the owner records a new status entry of the item. That is the owner's signed "resume", dispatched once per new entry.
+- **An outcome after a new status entry:** the proposal is made against the entry the gate routed on, and the record names both entries. Before this, it was refused ("re-dispatch it") and blocked for good.
+
+A **passed outcome** awaits the owner only while its proposal file is the one recorded and its evidence still re-checks as `status.mjs apply` would. Otherwise the outcome is produced again.
+
+Ledgers written before version 2 keep verifying. A key is compared, never re-derived from inputs. Their structural blocks do not record the status entry they ran against, so a new status entry does not wake them; a capacity block from before version 2 is re-asked once, at no provider cost.
+
 ## Stopping
 
 SIGTERM or SIGINT stops the service between ticks. If the process is killed during a stage, that stage's claim lease expires. The next start then releases it as `expired` and resumes from the last recorded stage. No completed stage is repeated.

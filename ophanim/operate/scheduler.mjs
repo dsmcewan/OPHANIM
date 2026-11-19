@@ -15,8 +15,8 @@
 // A stage executor receives the VERIFIED handoff and returns its record. Executors are injected (stages.mjs builds
 // the real ones over Pantheon; tests pass scripted ones). Missing authority (no controller key) or a missing
 // executor produces a recorded block or a refusal, never a skipped verification.
-import {openWorkLedger, outputsDigest, handoffRefusal, STAGES} from './work-ledger.mjs';
-import {requirementDigest} from './gates.mjs';
+import {openWorkLedger, handoffRefusal, STAGES} from './work-ledger.mjs';
+import {requirementDigest, attemptInputs, sameAttempt} from './gates.mjs';
 import {reconcile} from './reconcile.mjs';
 import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
@@ -88,16 +88,20 @@ export function verifyHandoff(work, gate) {
  * OpenAI gpt-6.1-sol, 77480d6, question 5). Bounded as a tick's own reconciliation is: nothing is read that a tick would
  * not read, and nothing is dispatched or recorded.
  */
-export function inputSignature({repo, statusRoot, workRoot, issues = null, bundlesDir = null, now = Date.now()}) {
+// `capacity` (optional): the stage executors' reviewer-pool signature (capacityOf below), so a change of the pool wakes a
+// capacity-pending item as it wakes a tick.
+export function inputSignature({repo, statusRoot, workRoot, issues = null, bundlesDir = null, now = Date.now(), capacity = null}) {
   const head = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').at(-1) ?? '' : '');
   const tdir = path.join(repo, 'tickets');
   const tickets = fs.existsSync(tdir) ? fs.readdirSync(tdir).filter(f => f.endsWith('.json')).sort().map(f => [f, fs.readFileSync(path.join(tdir, f), 'utf8')]) : [];
   let routing = null;
   try {
     const work = openWorkLedger({root: workRoot, create: false});
-    const rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now});
+    const rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now, capacity});
     routing = rec.items.map(i => ({item: i.item, gate: i.gate.gate, mode: i.gate.mode ?? null, from: i.gate.from ?? null, retry_of: i.gate.retry_of ?? null,
       claim: i.gate.claim ?? null, recovery: i.gate.recovery ?? null, stale: (i.gate.stale ?? []).map(x => [x.record, x.why]),
+      // The routing basis (gates.mjs attemptInputs) and a block's code: a re-route on new state, or a collision, is a change.
+      route: i.gate.route ?? null, code: i.gate.blocker?.code ?? null,
       // An item with an evidence gap is searched again when its recovery sources change (tick, below): the same digest.
       ...(i.gate.gate === 'evidence-gap' ? {sources: sourcesDigest({repo, item: i.item, bundles: bundlesOf({item: i.item, bundlesDir, work}), work})} : {})}));
   } catch { routing = null; }   // no work ledger yet (the first tick makes it) or an unreadable status ledger: the heads decide
@@ -118,6 +122,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const L = {...DEFAULT_LIMITS, ...limits};
   const started = clock();
   const work = openWorkLedger({root: workRoot});
+  const capacity = capacityOf(executors);
   const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null};
   // Interrupted work: a claim past its lease is released as expired; its item resumes from its last valid stage.
   // BOOKKEEPING UNDER A RACE (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
@@ -134,7 +139,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     const r = raced(() => work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted', at: new Date(clock()).toISOString()}), /that claim is already released/);
     log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt, ...(r.done ? {} : {by_another: true})});
   }
-  let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
+  let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
   // Intake: every source of work is recorded once (by source and ref): status items, published issues (linked to an
   // item by its marker, or candidates), and tickets (an item's, or an orphan). Candidates and orphans are recorded and
   // never executed. (Independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 7.)
@@ -165,28 +170,25 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       ...(r.proposal ? {proposal: {digest: r.proposal.digest, commit: r.proposal.commit, in_head: r.proposal.in_head}} : {}), at: new Date(clock()).toISOString()}), /against these sources and this status is already recorded/);
     log.recovery.push({item: r.item, outcome: r.outcome, ...(r.proposal ? {proposal: r.proposal.file, digest: r.proposal.digest} : {}), searched: r.searched.length, ...(recorded.done ? {} : {by_another: true})});
   }
-  if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
+  if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
   const order = dependencyOrder(rec.items);
   let iterations = 0;
   // Recorded and charged calls, and the in-flight reservation of every live claim (spent() above).
   const budgetLeft = () => { const sp = spent(work, {now: clock()}); return L.total_provider_calls - sp.calls - sp.reserved; };
   const runItem = async item => {
+    let collided = null;
     for (;;) {
       if (iterations >= L.iterations) { log.stopped ??= `iterations limit ${L.iterations} reached`; return; }
       if (clock() - started > L.elapsed_ms) { log.stopped ??= `elapsed limit ${L.elapsed_ms} ms reached`; return; }
-      rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
+      rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
       const gate = rec.items.find(i => i.item === item).gate;
       if (!STAGES.includes(gate.gate)) { if (gate.blocker) log.blocked.push({item, gate: gate.gate, blocker: gate.blocker}); return; }
-      // The inputs of this attempt: what it received, the requirement, and -- for a revision -- the stage that returned
-      // the work (so a revision is new work, while a re-run on identical inputs is refused as already done).
-      const upstreamRec = gate.from ? work.stages(item).find(x => x.hash === gate.from) : null;
-      const inputs = {upstream: upstreamRec ? outputsDigest(upstreamRec.outputs) : null, requirement: gate.requirement ? 'sha256:' + digest(gate.requirement) : null,
-        ...(gate.returned_by ? {returned_by: gate.returned_by} : {}),
-        // A re-review after a reassessment is new work on the same inputs: it is named by the reassessment it answers.
-        ...(gate.rereview ? {rereview: gate.rereview.reassessment} : {})};
-      const attempts = work.stages(item).filter(s => s.stage === gate.gate && (s.inputs?.upstream ?? null) === inputs.upstream
-        && (s.inputs?.requirement ?? null) === inputs.requirement && (s.inputs?.returned_by ?? null) === (inputs.returned_by ?? null)
-        && (s.inputs?.rereview ?? null) === (inputs.rereview ?? null)).length;
+      // The inputs of this attempt, its ATTEMPT IDENTITY (gates.mjs attemptInputs): what it received, the requirement, the
+      // stage that returned the work, the reassessment it answers, the status entry, and the routing basis -- what made
+      // the gate route it (the present ticket, dependencies, the evidence that staled a record, a wake). So a re-route on
+      // changed state is new work, while a re-run on an identical routing basis is refused as already done.
+      const inputs = attemptInputs(gate, work.stages(item));
+      const attempts = work.stages(item).filter(s => s.stage === gate.gate && sameAttempt(s.inputs, inputs)).length;
       if (attempts >= L.stage_attempts) {
         log.blocked.push({item, gate: gate.gate, blocker: {what: `${attempts} attempts of ${gate.gate} on the same inputs`, role: 'lead@orch', resume_when: 'an input changes, or the owner raises the retry limit'}});
         return;
@@ -211,6 +213,17 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       catch (e) {
         if (e.code === 'NO_AUTHORITY') throw e;
         if (/PROVIDER_CALL_BUDGET/.test(e.message)) { log.stopped ??= `provider-call budget: ${e.message.slice(0, 300)}`; return; }
+        // "Already completed for these exact inputs": another holder completed this very attempt between this tick's read
+        // and its claim (reconciliation reports a standing collision as a block before any claim). Read again once; the
+        // same refusal twice is reported as a block with its reason, never a silent skip (self-audit round 3,
+        // assignment 1 (sealed 323361a), question 1).
+        if (/already completed for these exact inputs/.test(e.message)) {
+          const key = JSON.stringify(inputs) + gate.gate;
+          if (collided !== key) { collided = key; continue; }
+          log.blocked.push({item, gate: gate.gate, blocker: {code: 'ATTEMPT_IDENTITY_COLLISION', what: `ATTEMPT_IDENTITY_COLLISION: ${e.message}`.slice(0, 600), role: 'lead@orch',
+            resume_when: 'something the gate reads changes, or the owner records a new status entry of the item'}});
+          return;
+        }
         log.skipped.push({item, gate: gate.gate, why: e.message}); return;
       }
       iterations++;
@@ -314,6 +327,14 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   return {...log, spent: spent(work, {now: clock()}), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}};
 }
 
+/**
+ * The reviewer-pool signature of the stage executors, by stage (stages.mjs attaches `capacity()` to each executor it
+ * makes), or null when the executors carry none (scripted executors): the gate then cannot observe a capacity change.
+ */
+export function capacityOf(executors) {
+  return stage => { try { const f = executors?.[stage]?.capacity; return typeof f === 'function' ? f() ?? null : null; } catch { return null; } };
+}
+
 /** Items in dependency order (a dependency before its dependents), then by id. */
 export function dependencyOrder(items) {
   const by = new Map(items.map(i => [i.item, i])), out = [], seen = new Set();
@@ -330,7 +351,7 @@ export async function watch({repo, statusRoot, workRoot, fetchIssues = async () 
   const ticks = [];
   for (;;) {
     const issues = await fetchIssues();
-    const sigOf = () => inputSignature({repo, statusRoot, workRoot, issues, bundlesDir: rest.bundlesDir ?? null, now: (rest.clock ?? Date.now)()});
+    const sigOf = () => inputSignature({repo, statusRoot, workRoot, issues, bundlesDir: rest.bundlesDir ?? null, now: (rest.clock ?? Date.now)(), capacity: capacityOf(rest.executors)});
     const sig = sigOf();
     // A tick runs when an input changed, or when a transient pending's retry is due (time is not an input).
     const now = (rest.clock ?? Date.now)();

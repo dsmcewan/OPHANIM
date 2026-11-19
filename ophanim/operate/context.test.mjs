@@ -246,7 +246,12 @@ test('reviewers and validators use their own evidence: incomplete criteria are c
     assert.equal(val1.next.stage, 'plan');
     assert.ok(val1.outputs.green, 'the tests were green: green alone did not pass');
     // A source it says it checked but was never given is marked so (a citation is not a check).
-    assert.deepEqual(val1.outputs.sources, [{ref: 'file:legacy-user.mjs', delivered: true, complete: true}, {ref: 'file:secret.md', delivered: false}]);
+    // A delivered source is bound to the view and version the validator was given, and the request that re-reads it
+    // (self-audit round 3, assignment 1 (sealed 323361a), question 5: the gate re-checks it before reusing the validation).
+    const given = val1.outputs.context.dossier.entries.find(e => e.source === 'file:legacy-user.mjs').version;
+    assert.match(given, /^sha256:[0-9a-f]{64}$/);
+    assert.deepEqual(val1.outputs.sources, [{ref: 'file:legacy-user.mjs', delivered: true, complete: true, source: 'file:legacy-user.mjs', version: given, request: {op: 'file', path: 'legacy-user.mjs'}},
+      {ref: 'file:secret.md', delivered: false}]);
     assert.deepEqual(plan2.outputs.plan.acceptance.map(a => a.id), ['a1', 'a2', 'a3']);
     assert.ok(plan2.contributions.some(c => c.lab === 'xai') && plan2.contributions.some(c => c.lab === val1.outputs.validator.lab), 'the revised plan keeps the lineage of what it revises');
     // Validation 2 (a later cycle): green again, and the defect the revision introduced is caught -> IMPLEMENTATION.

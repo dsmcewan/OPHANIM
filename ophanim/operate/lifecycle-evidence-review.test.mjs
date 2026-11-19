@@ -178,12 +178,19 @@ test(`${REF}, questions 1 and 5: citations are bound to the bytes the planner wa
     const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, profile: 'argo', independence: 'model'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
-    const race = w.stages('race-ev')[0];
+    const [race, again] = w.stages('race-ev');
     assert.equal(race.outputs.plan.evidence.find(e => e.path === 'alpha.mjs').sha256, shown, 'bound to the bytes shown, not the disk after the turn');
     assert.equal(race.outputs.evidence.find(e => e.path === 'alpha.mjs').sha256, shown);
+    // The bytes on disk are not the bytes the planner saw: the plan is stale, and it is PLANNED AGAIN on the present
+    // bytes in the same tick -- not refused as "already completed" and skipped for good (self-audit round 3,
+    // assignment 1 (sealed 323361a), question 1; this test asserted the stale gate only, and the wedge hid behind it).
+    assert.equal(again?.stage, 'plan');
+    assert.equal(again.status, 'passed');
+    assert.equal(again.outputs.evidence.find(e => e.path === 'alpha.mjs').sha256, sha(fs.readFileSync(path.join(repo, 'alpha.mjs'))), 'the re-plan rests on the present bytes');
+    assert.notEqual(again.inputs.route, race.inputs.route, 'a re-plan on changed evidence is a new attempt identity');
     const gates = () => Object.fromEntries(reconcile({repo, statusRoot: f.statusRoot, workLedger: w}).items.map(i => [i.item, i.gate]));
-    assert.equal(gates()['race-ev'].gate, 'plan', 'the bytes on disk are not the bytes the planner saw: the plan is stale');
-    fs.writeFileSync(path.join(repo, 'alpha.mjs'), 'export const ok = false;\n');   // back to the bytes shown
+    assert.equal(gates()['race-ev'].gate, 'implement', 'the re-plan is valid on the present bytes');
+    fs.writeFileSync(path.join(repo, 'alpha.mjs'), 'export const ok = false;\n');   // back to the bytes shown: the first plan is valid again
     assert.deepEqual(Object.values(gates()).map(g => g.gate), ['implement', 'implement', 'implement']);
     fs.writeFileSync(path.join(repo, 'verify.mjs'), 'throw new Error("completely changed acceptance check");\n');
     const g = gates();
