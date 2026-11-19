@@ -306,6 +306,33 @@ test("grok stream: an answer sent as incremental text chunks is the final text (
   assert.deepEqual(t2.cli.no_final_text.last_event_keys, ["type", "usage"]);
 });
 
+test("grok, the observed grok 1.0.44 shapes: text chunks after the last tool call are the answer (end_turn); stopReason cancelled with exit 0 is a failed run naming the permission profile; grok_permissions recorded", needBwrap, async () => {
+  const f = await setup();
+  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  let r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "native" } });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.deepEqual(r.plan.preflight.warnings, [`permissions: no ${join(f.home, ".grok", "config.toml")}: under the default "ask" profile a headless run cancels the tool calls no rule allows (observed 2026-11-19: an authorized .review-tests edit, stopReason cancelled); see the review README, "Grok permissions"`]);
+  let md = await r.read("findings-3-xai.md");
+  assert.match(bodyOf(md), /^# Findings \(fake grok, native\)\n\nPROBE \{/);
+  assert.doesNotMatch(bodyOf(md), /Next I will write a test|NOT THE ANSWER/);
+  assert.ok(headerOf(md).includes('- grok_permissions: no config.toml in the state dir (the CLI\'s default profile, "ask")\n'));
+  let t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
+  assert.deepEqual([t.cli.final_source, t.cli.cli_stop_reason, t.cli.num_turns], ["chunks", "end_turn", 3]);
+  // The owner's narrow rules are recorded (the runner writes none).
+  await writeFile(join(f.home, ".grok", "config.toml"), '[permission]\nrules = [\n  { action = "allow", tool = "Edit" },\n]\n');
+  r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "cancelled" } });
+  assert.equal(r.code, EXIT.incomplete, r.out.err);
+  assert.equal(r.plan.preflight.warnings, undefined);
+  md = await r.read("findings-3-xai.md");
+  const h = headerOf(md);
+  assert.match(h, /- status: failed\n/);
+  assert.match(h, /- stop_reason: grok ended its turn with stopReason "cancelled", not "end_turn" \(exit 0\): the review did not finish; 1 tool call\(s\) were cancelled \(search_replace: "User cancelled the execution for tool `search_replace`"\)\. This is most likely the Grok CLI's permission profile/);
+  assert.ok(h.includes('- grok_permissions: config.toml permission_mode unset (default "ask"); [permission] `rules = [` `{ action = "allow", tool = "Edit" },` `]` (1 allow rule(s))\n'), h);
+  assert.equal(bodyOf(md), "", "no final message is written for a failed run");
+  t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
+  assert.deepEqual([t.status, t.exit_code, t.cli.cli_stop_reason, t.cli.cancelled_tools.map(c => c.tool)], ["failed", 0, "cancelled", ["search_replace"]]);
+});
+
 // ---- agy (assignment 1) with the fake agy under the real bwrap -------------------------------------------------
 const usage = fraction => JSON.stringify({ conversation_id: "", status: "SUCCESS", response: "", num_turns: 0, usage: { total_tokens: 0 }, command: { name: "usage", data: { groups: [
   { name: "Gemini Models", description: "Models within this group: Gemini 4 Carbon, Gemini 3.8 Flash", buckets: [{ id: "gemini-weekly", name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: fraction }] }] } } });

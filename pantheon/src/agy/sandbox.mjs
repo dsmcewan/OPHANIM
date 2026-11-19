@@ -36,6 +36,11 @@
 //                                     owner's machine, first real worker turn, 2026-11-18: with bin/ ro-bound,
 //                                     run_command failed "failed to build agentapi shell injection: failed to write
 //                                     agentapi script: open ~/.gemini/antigravity-cli/bin/agentapi: read-only file system".)
+//     the writable plugin tree        a per-run WRITABLE DEEP COPY (GEMINI_WRITABLE_TREE_COPIES = ["builtin"]): the
+//                                     whole tree copied (files with their mode, subdirs, symlinks recreated), nothing
+//                                     bound from the host; the host builtin/ stays untouched. (INFERRED from the owner's
+//                                     report of 09d490f, 2026-11-19: the preflight refused "a write to a builtin plugin
+//                                     asset under a read-only mount"; the exact line was not kept. See the constant.)
 //     every other host subdir         an empty mount point in the scratch with the HOST subdir --ro-bind over it
 //                                     (readable, never writable: plugins/config the CLI may only read; observed host
 //                                     subdirs: annotations, builtin, knowledge, persistent_terminals, plugin_data,
@@ -202,6 +207,18 @@ export const GEMINI_WRITABLE_COPIES = Object.freeze(["config/projects"]);
  * "open ~/.gemini/antigravity-cli/bin/agentapi: read-only file system" while bin/ was ro-bound from the host.
  */
 export const GEMINI_WRITABLE_SUBDIR_COPIES = Object.freeze(["bin"]);
+/**
+ * Subdirectories of ~/.gemini/antigravity-cli that get a per-run WRITABLE DEEP COPY inside the scratch: the whole tree
+ * (regular files with their mode, subdirectories, symlinks recreated with the same target; other entries skipped and
+ * recorded), so the CLI may rewrite any file in it, at any depth. The host tree stays untouched (never bound).
+ * INFERRED, not observed: the owner's run of assignment 1 at 09d490f (2026-11-19) reported that the zero-model-turn
+ * preflight "refused a write to a builtin plugin asset under a read-only mount"; the exact line was not kept. The
+ * observed host subdirs are annotations, builtin, knowledge, persistent_terminals, plugin_data, scratch and updater,
+ * and builtin/ was ro-bound; so the CLI is taken to (re)write its builtin plugin assets under builtin/ at startup, as it
+ * writes bin/agentapi. Only builtin/ is copied: plugin_data/ may hold a plugin's own data and stays read-only until a
+ * run shows a write there (the preflight's log_scan now names the refused path).
+ */
+export const GEMINI_WRITABLE_TREE_COPIES = Object.freeze(["builtin"]);
 const layoutError = (message, more = {}) => Object.assign(new Error(message), { code: "AGY_STATE_LAYOUT", ...more });
 const byName = (a, b) => a.name.localeCompare(b.name);
 
@@ -213,10 +230,16 @@ const byName = (a, b) => a.name.localeCompare(b.name);
  * size}], skipped: [{name, kind}], readonly: [names], mounts, symlinks: [{name, target}], writable_subdirs: [{name, src,
  * dest, copied, symlinks, skipped, readonly_subdirs}]}.
  */
-export async function copyLevel(from, to, { want = () => true, emptySubdirs = [], copySubdirs = [], symlinks = "skip" } = {}) {
+export async function copyLevel(from, to, { want = () => true, emptySubdirs = [], copySubdirs = [], treeSubdirs = [], symlinks = "skip" } = {}) {
   const out = { copied: [], withheld: [], skipped: [], readonly: [], mounts: [], symlinks: [], writable_subdirs: [] };
   for (const e of (await readdir(from, { withFileTypes: true })).sort(byName)) {
     const host = join(from, e.name), dst = join(to, e.name);
+    if (e.isDirectory() && treeSubdirs.includes(e.name)) {
+      // A per-run writable DEEP copy of this subdir (GEMINI_WRITABLE_TREE_COPIES): nothing in it is bound from the host.
+      const tree = await copyTree(host, dst);
+      out.writable_subdirs.push({ name: e.name, src: host, dest: dst, deep: true, ...tree, readonly_subdirs: [] });
+      continue;
+    }
     if (e.isSymbolicLink()) {
       if (symlinks !== "recreate") { out.skipped.push({ name: e.name, kind: "symlink" }); continue; }
       const target = await readlink(host);
@@ -246,6 +269,28 @@ export async function copyLevel(from, to, { want = () => true, emptySubdirs = []
       out.readonly.push(e.name);
     } else out.skipped.push({ name: e.name, kind: "other" });
   }
+  return out;
+}
+
+/**
+ * Copy the host tree `from` into `to` (created; each directory gets the host's mode after it is filled): regular files
+ * (mode kept), subdirectories recursively, symlinks recreated with the same target; anything else skipped. Returns
+ * {copied: [relative paths], symlinks: [{name: relative path, target}], skipped: [{name, kind}], bytes}.
+ */
+async function copyTree(from, to) {
+  const out = { copied: [], symlinks: [], skipped: [], bytes: 0 };
+  const walk = async (src, dst, pre) => {
+    await mkdir(dst, { mode: 0o700 });
+    for (const e of (await readdir(src, { withFileTypes: true })).sort(byName)) {
+      const s = join(src, e.name), d = join(dst, e.name), rel = pre ? `${pre}/${e.name}` : e.name;
+      if (e.isSymbolicLink()) { const target = await readlink(s); await symlink(target, d); out.symlinks.push({ name: rel, target }); }
+      else if (e.isDirectory()) await walk(s, d, rel);
+      else if (e.isFile()) { const st = await stat(s); await copyFile(s, d); await chmod(d, st.mode & 0o7777); out.copied.push(rel); out.bytes += st.size; }
+      else out.skipped.push({ name: rel, kind: "other" });
+    }
+    await chmod(dst, (await stat(src)).mode & 0o7777);
+  };
+  await walk(from, to, "");
   return out;
 }
 
@@ -282,7 +327,7 @@ export async function geminiState({ home = homedir(), run_dir, mode = "scratch" 
     await mkdir(scratch_cli, { recursive: true, mode: 0o700 });
     await chmod(scratch_root, 0o700);   // it holds a copy of the OAuth token (whatever the umask)
     const out = { enabled: true, ...base, scratch_root, scratch_cli, mounts: [{ dest: cli_dir, src: scratch_cli, mode: "rw" }] };
-    const top = await copyLevel(cli_dir, scratch_cli, { want: n => GEMINI_CLI_COPY.includes(n), emptySubdirs: GEMINI_STATE_SUBDIRS, copySubdirs: GEMINI_WRITABLE_SUBDIR_COPIES });
+    const top = await copyLevel(cli_dir, scratch_cli, { want: n => GEMINI_CLI_COPY.includes(n), emptySubdirs: GEMINI_STATE_SUBDIRS, copySubdirs: GEMINI_WRITABLE_SUBDIR_COPIES, treeSubdirs: GEMINI_WRITABLE_TREE_COPIES });
     Object.assign(out, { copied: top.copied, withheld: top.withheld, skipped: top.skipped, readonly_subdirs: top.readonly, writable_subdirs: top.writable_subdirs });
     out.mounts.push(...top.mounts);
     for (const d of GEMINI_STATE_SUBDIRS) {
@@ -320,7 +365,16 @@ const listFiles = async (d, skipTop = new Set()) => {
   await walk(d, "");
   return files;
 };
-const sameBytes = async (a, b) => { const [x, y] = await Promise.all([readFile(a).catch(() => null), readFile(b).catch(() => null)]); return Boolean(x && y && x.equals(y)); };
+const sameBytes = async (a, b) => {
+  // A symlink is the same when its target is (a recreated link whose target file changed is not itself a write).
+  const [la, lb] = await Promise.all([lstat(a).catch(() => null), lstat(b).catch(() => null)]);
+  if (la?.isSymbolicLink() || lb?.isSymbolicLink()) {
+    if (!la?.isSymbolicLink() || !lb?.isSymbolicLink()) return false;
+    const [ta, tb] = await Promise.all([readlink(a).catch(() => null), readlink(b).catch(() => null)]);
+    return ta !== null && ta === tb;
+  }
+  const [x, y] = await Promise.all([readFile(a).catch(() => null), readFile(b).catch(() => null)]); return Boolean(x && y && x.equals(y));
+};
 
 /**
  * What the CLI wrote into the per-run scratch copy, then remove it unless `keep`. Returns null when there was none, else
@@ -341,7 +395,7 @@ export async function dropGeminiState(state, { keep = false } = {}) {
       const w = wsub.get(e.name), given = new Set([...(w.copied ?? []), ...(w.symlinks ?? []).map(x => x.name)]);
       listing.writable_subdirs[e.name] = [];
       for (const f of await listFiles(p, new Set(w.readonly_subdirs ?? []))) {
-        const copied = !f.path.includes("/") && given.has(f.path);
+        const copied = (w.deep || !f.path.includes("/")) && given.has(f.path);
         listing.writable_subdirs[e.name].push({ ...f, copied, changed: copied ? !(await sameBytes(join(p, f.path), join(w.src, f.path))) : true });
       }
       continue;

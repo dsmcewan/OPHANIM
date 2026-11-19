@@ -425,6 +425,14 @@ if (cmd === "write") {
     if (tryWrite(lp, "I1118 00:00:00.000000 " + rnd + " main.go:1] fake-agy " + rest.join(" ") + "\n", "Failed to redirect output for CLI: creating log file: opening log file")) cliLog = lp;
     const tmp = join(g, "config", "projects", "default-cli-project.json." + rnd + ".tmp");
     if (tryWrite(tmp, "{}", "failed to resolve project: project: write project config")) renameSync(tmp, join(g, "config", "projects", "default-cli-project.json"));
+    // INFERRED (owner's report of 09d490f, 2026-11-19: the preflight "refused a write to a builtin plugin asset under a
+    // read-only mount"; the exact line was not kept): when antigravity-cli/builtin/plugins/<p>/ exists, the CLI rewrites
+    // that plugin's asset (a .tmp, then renamed) at startup.
+    const plugins = join(g, "antigravity-cli", "builtin", "plugins");
+    for (const p of existsSync(plugins) ? readdirSync(plugins).sort() : []) {
+      const asset = join(plugins, p, "asset.js"), atmp = asset + "." + rnd + ".tmp";
+      if (tryWrite(atmp, "// fake-agy builtin asset " + rnd + "\n", "failed to install builtin plugin asset")) renameSync(atmp, asset);
+    }
   }
   const globalOnly = process.env.FAKE_AGY_GLOBAL_ONLY === "1";
   const marker = process.env.FAKE_AGY_AUTH_MARKER;

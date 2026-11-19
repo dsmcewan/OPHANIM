@@ -25,7 +25,7 @@ import { WITHHELD } from "./sandbox.mjs";
 import { redact } from "./vendors.mjs";
 import { allowedCommands, compareWorktree, findCli, readRule, reviewTmpBase, runCli, sandboxNote, scrubEnv, secretValues, tail, worktreeState, writeRule, REVIEW_TESTS_DIR } from "./cli-common.mjs";
 import { CODEX_SDK_PACKAGE, LOOPBACK_NO_PROXY, codexPermissionProfile, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv } from "./codex.mjs";
-import { dropGrokScratch, grokArgv, grokBwrapArgs, grokPreflight, grokStateScratch, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
+import { dropGrokScratch, grokArgv, grokBwrapArgs, grokPreflight, grokStateScratch, grokStopFailure, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
 import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane } from "./agy.mjs";
 import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
 import { prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
@@ -72,10 +72,11 @@ const KNOWLEDGE = {
     verified_by_preflight: ["`grok --version` runs", "the state dir (--grok-state-dir) exists and is not empty", "bwrap runs"],
     assumed: ["the browser login lives in the state dir (nothing was discovered; no documented login-status command)",
       "UNDOCUMENTED: whether a SuperGrok / X Premium subscription covers Grok Build CLI usage (subscription_coverage: undocumented)",
-      "`-p`, `--output-format streaming-json`, `-m` as documented (docs.x.ai/build/overview, read 2026-11-18); the event schema is undocumented and parsed tolerantly",
-      "the CLI needs to write only its state dir, /tmp and (assignments 1-3) .review-tests/; its own tool permissions are undocumented, so the runner's bwrap jail is the containment",
+      "`-p`, `--output-format streaming-json`, `-m` as documented (docs.x.ai/build/overview, read 2026-11-18); the event schema is undocumented: the observed grok 1.0.44 shapes (text/thought/tool_call/end) are read, others tolerantly",
+      "the CLI needs to write only its state dir, /tmp and (assignments 1-3) .review-tests/; the runner's bwrap jail is the containment, whatever the CLI's permission profile allows",
+      "the permission profile in the state dir's config.toml (recorded as grok_permissions; the runner writes no rule): under the default \"ask\" a headless run cancels what no allow rule covers (observed 2026-11-19)",
       "the served model is the requested one (served_model_source: input)"],
-    enforced_by_runner: ["XAI_API_KEY and every other key, token or secret scrubbed (a CLI that then asks for a key is a refusal)", "the bwrap jail: the host read-only, the worktree read-only except .review-tests/ (1-3), a per-run scratch copy of the state dir", "the wall clock", "the post-run git check of the worktree"],
+    enforced_by_runner: ["XAI_API_KEY and every other key, token or secret scrubbed (a CLI that then asks for a key is a refusal)", "the bwrap jail: the host read-only, the worktree read-only except .review-tests/ (1-3), a per-run scratch copy of the state dir", "the wall clock", "a turn ended with any stopReason but end_turn (e.g. cancelled) is status `failed`, whatever the exit code", "the post-run git check of the worktree"],
   },
   "agy-cli": {
     verified_by_preflight: ["the review card's tool list", "the login and the lane's quota by an in-jail `agy --print /usage --output-format json` (no model turn)", "`agy agents` runs in the jail", "no read-only-file-system / unknown-component lines in the CLI's output and log"],
@@ -87,7 +88,7 @@ const KNOWLEDGE = {
 
 const UNKNOWNS_GROK = ["Does the owner's subscription cover Grok Build CLI usage? (undocumented)", "Where does the CLI keep its browser login? (assumed: --grok-state-dir, default ~/.grok)",
   "Does the CLI write outside its state dir and /tmp? (a write elsewhere fails inside the jail)", "What does its streaming-json look like? (parsed tolerantly; unparsed lines are counted)",
-  "Can the CLI run tools without its own approval prompt headless? (undocumented; with none, it may only read)"];
+  "Which tool calls does a headless run allow? (the default \"ask\" profile cancelled an authorized edit on 2026-11-19; the [permission] rules in the state dir's config.toml decide: see grok_permissions)"];
 
 function git(repoRoot, args) {
   return runCli({ cmd: "git", args: ["-C", repoRoot, ...args], env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: tmpdir(), LANG: "C.UTF-8" }, timeoutMs: 120_000 })
@@ -245,7 +246,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       const jailPlan = grokBwrapArgs({ worktree: wt, write_allowed, state: { dir: grokStateDir, scratch: join(runDir, "grok-state") }, cliDir, bwrap: bw });
       const gargv = grokArgv({ model: row.model, prompt });
       Object.assign(plan, { argv: [...jailPlan.argv, cli, ...gargv.map(x => (x === prompt ? promptRef : x))], cwd: wt,
-        sandbox: { kind: "the runner's bwrap jail (the Grok CLI's own permissions are undocumented)", binds: jailPlan.binds, network: "not cut (the CLI must reach xAI)", state_dir: grokStateDir, state_dir_exists: stateOk },
+        sandbox: { kind: "the runner's bwrap jail (the containment; the Grok CLI's permission profile only decides what it attempts)", binds: jailPlan.binds, network: "not cut (the CLI must reach xAI)", state_dir: grokStateDir, state_dir_exists: stateOk },
         writable_paths: jailPlan.writable });
       pre = await grokPreflight({ cli, env: childEnv, stateDir: grokStateDir, bwrapOk: box, parentEnv: env });
       runner = async () => {
@@ -349,6 +350,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       `- served_model: \`${lane ?? row.model}\``,
       `- served_model_source: input (the CLI names no served model; this is the ${lane ? "lane" : "model"} the runner asked for)`,
       `- sandbox: ${sandboxLine(transport, plan)}`,
+      ...(transport === "grok-cli" ? [`- grok_permissions: ${grokPermissionsLine(pre.checks?.permissions)}`] : []),
       `- policy_violations: ${check.violations.length ? check.violations.map(v => `\`${v}\``).join(", ") : "none"}`,
       `- commit: \`${opts.commit}\``,
       `- started_at: ${started.toISOString()}`,
@@ -379,6 +381,14 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
   } finally {
     await cleanup();
   }
+}
+
+/** The findings header's record of the Grok permission profile the run saw (from the preflight's read of config.toml). */
+function grokPermissionsLine(p) {
+  if (!p) return "not read";
+  if (!p.present) return "no config.toml in the state dir (the CLI's default profile, \"ask\")";
+  const tick = x => `\`${String(x).replace(/`/g, "'")}\``;
+  return `config.toml ${p.permission_mode ? tick(p.permission_mode) : "permission_mode unset (default \"ask\")"}; [permission] ${p.rules.length ? p.rules.map(tick).join(" ") : "none"} (${p.allow_rules} allow rule(s))`;
 }
 
 function sandboxLine(transport, plan) {
@@ -417,7 +427,8 @@ async function runGrok({ argv, wt, childEnv, wall }) {
   const lines = [];
   const r = await runCli({ cmd: argv[0], args: argv.slice(1), cwd: wt, env: childEnv, timeoutMs: wall * 1000, onLine: l => lines.push(l) });
   const ev = parseGrokStream(lines);
-  const record = { own: capOwn(ev.own), events: ev.events, unparsed_lines: ev.unparsed, text_chunks: ev.chunks, complete_messages: ev.messages, final_source: ev.final_source, ...(ev.diagnosis ? { no_final_text: ev.diagnosis } : {}), error: ev.error && redactStrong(ev.error, childEnv), stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
+  const record = { own: capOwn(ev.own), events: ev.events, unparsed_lines: ev.unparsed, text_chunks: ev.chunks, complete_messages: ev.messages, final_source: ev.final_source,
+    cli_stop_reason: ev.stop_reason, num_turns: ev.num_turns, ...(ev.cancelled_tools.length ? { cancelled_tools: ev.cancelled_tools } : {}), ...(ev.diagnosis ? { no_final_text: ev.diagnosis } : {}), error: ev.error && redactStrong(ev.error, childEnv), stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
   const base = { exit_code: r.exit_code, killed_for: r.killed_for, usage: ev.usage, record, final_text: ev.final_text };
   if (r.killed_for === "timeout") return { ...base, status: "incomplete", stop_reason: timeoutStop(wall) };
   if (r.killed_for || r.spawn_error) return { ...base, status: "incomplete", stop_reason: `grok stopped (${r.killed_for ?? r.spawn_error})` };
@@ -426,6 +437,9 @@ async function runGrok({ argv, wt, childEnv, wall }) {
     return { ...base, final_text: null, status: "refused", stop_reason: "the Grok CLI asked for an API key or a login: subscription mode never supplies XAI_API_KEY (that would be metered); sign in once with the browser (`grok`), then run again" };
   }
   if (r.exit_code !== 0) return { ...base, status: "incomplete", stop_reason: `grok exited ${r.exit_code}${ev.error ? `: ${record.error}` : ""}` };
+  // A turn the CLI ended with any stopReason but end_turn did not finish, whatever its exit code (observed 2026-11-19:
+  // exit 0 with stopReason "cancelled" after the default permission profile cancelled an authorized edit).
+  if (ev.stop_reason && ev.stop_reason !== "end_turn") return { ...base, final_text: null, status: "failed", stop_reason: redactStrong(grokStopFailure(ev.stop_reason, ev.cancelled_tools, r.exit_code), childEnv) };
   if (!ev.final_text || !ev.final_text.trim()) return { ...base, status: "incomplete", stop_reason: `grok returned no final text (${ev.events} event(s), ${ev.unparsed} unparsed line(s); no assistant message, result event or text chunk was recognised; last event types: ${ev.diagnosis.last_event_types.join(", ") || "none"}; most frequent: ${Object.entries(ev.diagnosis.type_counts).slice(0, 6).map(([k, n]) => `${k} x${n}`).join(", ") || "none"}; the transcript keeps the events (record.own) and record.no_final_text)` };
   return { ...base, status: "complete", stop_reason: "final answer" };
 }
