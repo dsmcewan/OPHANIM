@@ -14,6 +14,7 @@ import { buildChildEnv, WITHHELD } from "./sandbox.mjs";
 import { VENDORS, authHeaders, createConversation, addUsage, redact } from "./vendors.mjs";
 import { subscriptionMain, TRANSPORT_FOR } from "./subscription.mjs";
 import { CONTINUE_NOTE, ContinueRefusal, preserveFiles, RESULT_CAP, captureReviewTests, cumulative, loadContinuation, replayApi, restoreReviewTests } from "./continue.mjs";
+import { repoMutex } from "../pipeline/git.mjs";
 
 export const EXIT = { complete: 0, refused: 1, usage: 2, incomplete: 3 };
 export const PLAN_SCHEMA = "ophanim.review-run-plan/v1";
@@ -286,8 +287,16 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   };
   const state = { providerCalls: 0, toolCalls: 0, usage: {}, served: [], stop: null, final: null };
   let worktreeAdded = false;
+  // THE REPOSITORY LOCK (register L-126). `git worktree add` creates <common>/worktrees/<name>/ and only then writes its
+  // `gitdir`; a `git worktree prune` run by another process in between deletes that half-made entry (and a prune here
+  // could delete a pipeline's). The pipeline holds git.mjs repoMutex -- one lock per repository, across processes, the
+  // file <git common dir>/pantheon-worktrees.lock -- for every mutation of the worktree list; this runner's add, remove
+  // and prune of its disposable worktree run under the same lock, keyed by the repository root (never the worktree), and
+  // each holds it until its git has exited.
+  let repoLock = null;
   try {
-    const add = await git(repoRoot, ["worktree", "add", "--detach", wt, plan.commit], env);
+    repoLock = repoMutex(repoRoot);
+    const add = await repoLock(() => git(repoRoot, ["worktree", "add", "--detach", wt, plan.commit], env));
     if (add.code !== 0) throw new Error(`git worktree add failed: ${add.stderr.trim()}`);
     worktreeAdded = true;
     for (const f of plan.withheld_from_worktree) await rm(join(wt, f), { force: true });
@@ -370,8 +379,14 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     // What the reviewer wrote under .review-tests/, in full (capped), so a later --continue can restore it.
     if (worktreeAdded) state.review_tests = await captureReviewTests(wt).catch(e => ({ captured: false, why: e.message }));
     if (worktreeAdded && !opts.keep) {
-      await git(repoRoot, ["worktree", "remove", "--force", wt], env);
-      await git(repoRoot, ["worktree", "prune"], env);
+      // Under the repository lock (L-126); a lock that cannot be taken (REPO_LOCK_TIMEOUT) leaves the worktree
+      // registered and is recorded, rather than losing the transcript.
+      try {
+        await repoLock(async () => {
+          await git(repoRoot, ["worktree", "remove", "--force", wt], env);
+          await git(repoRoot, ["worktree", "prune"], env);
+        });
+      } catch (e) { state.cleanup_error = redact(e?.message ?? String(e), secrets); }
     }
     if (!opts.keep) await rm(tmp, { recursive: true, force: true });
   }
@@ -391,6 +406,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     ended_at: ended.toISOString(), status, stop_reason: state.stop, coverage, coverage_gate: gate, provider_calls: state.providerCalls, tool_calls: state.toolCalls,
     served_models: distinctServed, usage_totals: state.usage, worktree_kept: opts.keep ? wt : null,
     review_tests: state.review_tests ?? { captured: false, why: "no worktree was created" },
+    ...(state.cleanup_error ? { worktree_cleanup_error: state.cleanup_error } : {}),
   });
   const cum = resume ? cumulative(resume.prior, { provider_calls: state.providerCalls, tool_calls: state.toolCalls, usage: state.usage, wall_s: Math.round((ended - started) / 1000) }) : null;
   if (cum) transcript.cumulative = cum;
