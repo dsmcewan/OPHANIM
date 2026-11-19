@@ -245,6 +245,9 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
   // `admitRequest` (optional; the second charge contract of sdk/live.mjs: nothing charged before the turn, every provider
   // call admitted at its point of spend) is passed on as given (self-audit round 3, assignment 3 (sealed bb1287a), L-301).
   const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined, charge = null, admitRequest = null }) => {
+    // A seat of the SDK transport runs as a session on a work unit, never as one turn: handed on, it would be served
+    // lane-first by the agy CLI or by the metered API (the single-turn Gemini rule). Refused before anything is sent.
+    if (isSdkSeat(seat)) throw fail("SDK_SEAT_NOT_SINGLE_TURN", `${vendor}/${model} is a seat of the Antigravity SDK transport: it runs as a session on a work unit, and is not asked as a single ${seatRole} turn`);
     const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
       ...(typeof admitRequest === "function" ? { admitRequest } : typeof charge === "function" ? { charge } : {}) });
     // The served model is passed on exactly as the transport named it; a judging seat with none is refused upstream.

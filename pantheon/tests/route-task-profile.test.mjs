@@ -66,7 +66,7 @@ test("stakes from paths: ledger/governance/authority/key/security -> critical (f
   // hard ticket stays in the hard column.
   assert.equal(classFloor(docs, "implementer").value, "fast");
   assert.equal(s.class_floor.value, "frontier");
-  assert.deepEqual([s.matrix.difficulty, s.matrix.raised, s.matrix.pick], ["hard", false, "gemini-4-carbon-high"]);
+  assert.deepEqual([s.matrix.difficulty, s.matrix.raised, s.matrix.pick], ["hard", false, "gemini-4-carbon"]);
   assert.equal(s.requirements.review_labs.value, 1);
   const ordinary = taskProfile({ difficulty: "medium" }, { paths: ["src/feature.mjs"] });
   assert.equal(ordinary.stakes.value, "normal");
@@ -208,8 +208,9 @@ test("fit fallbacks cross labs at the same class before stepping class, and neve
     }
     assert.ok(models.some(c => labOf(c.vendor, c.model) !== labOf(candidates[0].vendor, candidates[0].model)), "the fallback set reaches another lab");
   }
-  // The implementer's order is its lane ladder and that ladder's quota failover, nothing else.
-  for (const [stakes, want] of [["low", "gemini-4-hydrogen-high,gemini-4-argon-high,gemini-4-hydrogen"], ["critical", "gemini-4-carbon-high,gemini-4-hydrogen-xhigh,gemini-4-argon-high,gemini-4-carbon"]]) {
+  // The implementer's order is its matrix ladder, nothing else (owner direction 2026-11-19: the Gemini API itself, with
+  // no Antigravity lane in front and no failover seat behind).
+  for (const [stakes, want] of [["low", "gemini-4-neon,gemini-4-argon"], ["critical", "gemini-4-carbon,gemini-4-hydrogen,gemini-4-argon"]]) {
     assert.equal(selectSeat("implementer", { profile: "fit", task: taskProfile({ difficulty: "medium", stakes }) }).candidates.map(c => c.model).join(","), want, `implementer/${stakes}`);
   }
 });
@@ -302,11 +303,15 @@ test("fit through the real dispatcher: every turn records the profile, and the r
       assert.equal(turn.selection.source, "policy");
       const want = turn.selection.effort.value;
       if (purpose === "work") {
-        // The fit matrix's implementer is an Antigravity lane: its thinking level is in its name, and the transport
-        // carries no effort setting, which the selection says.
-        assert.deepEqual([turn.model, turn.transport, want], ["gemini-4-hydrogen-high", "agy-cli", null]);
-        assert.match(turn.selection.effort.mapped, /not carried/);
-        assert.deepEqual(agy().filter(a => a.agent === "pantheon-implementer").map(a => a.model), ["gemini-4-hydrogen-high"]);
+        // The fit matrix's medium implementer is gemini-4-neon, whose window is unrecorded: it is not admitted against
+        // the prompt's context estimate, so the next rung answers (fit-sdk-routing.test.mjs). On this per-file board the
+        // implementer is one tool-less turn through the Gemini API, at the thinking level the matrix seats the model at
+        // (not the task depth's): no agy CLI lane is started for it.
+        assert.deepEqual([turn.model, turn.transport, want], ["gemini-4-argon", "api", "high"]);
+        assert.match(turn.selection.effort.mapped, /the thinking level the fit matrix seats gemini-4-argon at/);
+        assert.ok(turn.selection.excluded.some(e => e.model === "gemini-4-neon" && /window unrecorded/.test(e.why)), "the pick it could not admit is on the record, with the reason");
+        assert.deepEqual(agy().filter(a => a.agent === "pantheon-implementer"), [], "no agy CLI implementer ran");
+        assert.deepEqual(calls.filter(c => WORK.test(c.prompt)).map(c => [c.vendor, c.model, c.effort]), [["agy_google", "gemini-4-argon", "high"]]);
         continue;
       }
       assert.ok(want, `${purpose}: an effort was chosen up front (${turn.model})`);
@@ -315,8 +320,6 @@ test("fit through the real dispatcher: every turn records the profile, and the r
       assert.ok(asked.every(c => c.effort === want), `${purpose}: the request carried effort ${want} (got ${asked.map(c => c.effort)})`);
       assert.ok(Number.isInteger(turn.selection.requirements.review_labs.value));
     }
-    const work = calls.filter(c => WORK.test(c.prompt));
-    assert.equal(work.length, 0, "the metered API wrote nothing: the lane did");
     assert.equal(run.turns.filter(t => t.purpose === "work").length, 1);
   });
 });

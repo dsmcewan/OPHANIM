@@ -30,14 +30,14 @@ const FAKE = { kind: "fake", clients: "tests/fixtures/dispatch.mjs scriptedClien
 const quota = () => Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" });
 
 test("compareProfiles: the same tickets under argo and fit, through the real dispatcher, with the same bounds; nothing dropped", async () => {
-  await withDispatch(async ({ dir, spec, makeClientFor, fault, agyQuotaOnce }) => {
-    // The first implementer request of each "flaky" run is refused for quota: the router falls back. Under argo the
-    // implementer is an API seat (the scripted fault); under the fit matrix it is an Antigravity lane, so the fake CLI
-    // refuses that run's first lane turn for quota and the next rung of the lane ladder answers.
-    agyQuotaOnce("flaky-marker");
+  await withDispatch(async ({ dir, spec, makeClientFor, fault }) => {
+    // The first implementer request of the BASELINE's "flaky" run is refused for quota: the router falls back to the
+    // next vendor's seat. The fit arm is not made flaky here: since 2026-11-19 its Google implementer is the Gemini API
+    // itself (no Antigravity lane, no second seat behind it), so a quota refusal closes that credential pool for the
+    // whole ladder and for the tickets that follow (tests/quota-failover.test.mjs shows that case on its own).
     let refuseNext = true;
     fault(c => {
-      if (!WORK.test(c.prompt) || !/flaky-marker/.test(c.prompt)) return null;
+      if (c.vendor === "agy_google" || !WORK.test(c.prompt) || !/flaky-marker/.test(c.prompt)) return null;
       const r = refuseNext; refuseNext = !refuseNext;
       return r ? { error: quota() } : null;
     });
@@ -97,19 +97,22 @@ test("compareProfiles: the same tickets under argo and fit, through the real dis
       assert.equal(a.tokens_per_accept, a.provider_calls.value * (USAGE.input_tokens + USAGE.output_tokens));
     }
     const flaky = rec.results[1];
-    for (const arm of ["baseline", "candidate"]) {
-      const a = flaky[arm];
-      assert.equal(a.by_outcome.quota, 1, `${arm}: the refused request is counted`);
+    {
+      const a = flaky.baseline;
+      assert.equal(a.by_outcome.quota, 1, "baseline: the refused request is counted");
       assert.equal(a.failed_attempts.value, 1);
-      // baseline: the fallback after the refused API request. candidate (fit matrix): the next lane rung after the
-      // refused lane, and the reviewer's fallback -- its pinned OpenAI seat is on the pool the baseline arm's quota
-      // refusal just closed (the shared cooldown store), so the next admitted reviewer answered.
-      assert.equal(a.retries.value + a.fallbacks.value, arm === "baseline" ? 1 : 2, `${arm}: the recovery from it is counted`);
+      // The fallback after the refused API request.
+      assert.equal(a.retries.value + a.fallbacks.value, 1, "baseline: the recovery from it is counted");
       assert.equal(a.usage_complete, false, "the refused request reported no usage");
       assert.equal(a.tokens_in.value, null, "so the token total is unknown, not a partial sum");
       assert.equal(a.tokens_in.missing, 1);
       assert.equal(a.tokens_per_accept, null);
       assert.equal(a.accepted, true);
+      // The fit arm was not refused. Its reviewer's pinned OpenAI seat is on the pool the baseline's quota refusal just
+      // closed (the shared cooldown store), so the next admitted reviewer answered: one fallback, counted.
+      const b = flaky.candidate;
+      assert.deepEqual([b.accepted, b.by_outcome.quota ?? 0, b.failed_attempts.value, b.retries.value + b.fallbacks.value], [true, 0, 0, 1]);
+      assert.equal(b.operating_points.find(o => o.purpose === "work").model, "gemini-4-argon", "the fit arm's work was the Gemini API's");
     }
     const fails = rec.results[2];
     for (const arm of ["baseline", "candidate"]) {
@@ -132,10 +135,10 @@ test("compareProfiles: the same tickets under argo and fit, through the real dis
       assert.ok(g.accepted.wilson95[0] < 2 / 3 && g.accepted.wilson95[1] > 2 / 3);
       assert.equal(Object.values(g.status).reduce((x, y) => x + y, 0), 3);
       assert.equal(g.provider_calls.value, rows.reduce((n, a) => n + a.provider_calls.value, 0));
-      assert.equal(g.by_outcome.quota, 1);
+      assert.equal(g.by_outcome.quota ?? 0, arm === "baseline" ? 1 : 0);
       assert.equal(g.usd.value, null);
-      assert.equal(g.usage_complete, false);
-      assert.equal(g.tokens_in.value, null);
+      assert.equal(g.usage_complete, arm !== "baseline");
+      if (arm === "baseline") assert.equal(g.tokens_in.value, null);
       assert.equal(g.insufficient, true, "three tickets are an anecdote");
       assert.equal(g.min_n, 20);
       assert.ok(Object.keys(rec.aggregate[arm].strata).length >= 1, "stratified by stakes");

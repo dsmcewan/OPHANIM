@@ -17,6 +17,10 @@ import { prepareRequest, CAPABILITIES } from "../../packages/model-client/index.
 import { withEffort } from "../src/sdk/adapter.mjs";
 
 const D = ["easy", "medium", "hard"];
+// The Antigravity LANE ladders of the 2026-11-17 matrix. The Google implementer left them on 2026-11-19 (it runs on the
+// Antigravity SDK: fit-sdk-routing.test.mjs); the lane rules below still serve the other roles' Gemini seats and every
+// escalation RECORDED on a lane ladder, which is re-derived from its own record.
+const LANE_LADDERS = { easy: ["gemini-4-hydrogen-medium", "gemini-3.8-flash-high"], medium: ["gemini-4-hydrogen-high", "gemini-4-argon-high"], hard: ["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"] };
 const row = role => D.map(d => fitMatrix(role, d).model);
 const first = (role, o) => selectSeat(role, { profile: "fit", ...o }).seat;
 
@@ -24,12 +28,13 @@ test("the matrix: every role's pick per difficulty, by exact catalog id", () => 
   assert.deepEqual(row("planner"), ["claude-sonnet-5", "claude-opus-5-5", "claude-fable-5-2"]);
   // The MEDIUM dispatcher is gpt-6.1-sol (owner correction, same day), not gpt-6-sol.
   assert.deepEqual(row("dispatcher"), ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]);
-  assert.deepEqual(row("implementer"), ["gemini-4-hydrogen-medium", "gemini-4-hydrogen-high", "gemini-4-carbon-high"]);
-  assert.deepEqual(row("subagent"), ["grok-4.6", "grok-4.6", "grok-4.7"]);
+  // Owner direction 2026-11-19: the Google implementer by difficulty, and its own Hydrogen subagents.
+  assert.deepEqual(row("implementer"), ["gemini-4-hydrogen", "gemini-4-neon", "gemini-4-carbon"]);
+  assert.deepEqual(row("subagent"), ["gemini-4-hydrogen", "gemini-4-hydrogen", "gemini-4-hydrogen"]);
   assert.deepEqual(row("reviewer"), row("dispatcher"), "the reviewer is the dispatcher's exact model");
   assert.deepEqual(D.map(d => fitMatrix("dispatcher", d).vendor), ["openai", "openai", "openai"]);
   assert.deepEqual(D.map(d => fitMatrix("implementer", d).vendor), ["agy_google", "agy_google", "agy_google"]);
-  for (const d of D) assert.equal(seatTransport("agy_google", fitMatrix("implementer", d).model), "agy-cli", "the implementer is an Antigravity lane, not an API id");
+  for (const d of D) assert.equal(fitMatrix("implementer", d).transport, "antigravity-sdk", "the implementer is an Antigravity SDK seat, not an agy CLI lane");
   assert.throws(() => fitMatrix("planner", "trivial"), /unknown difficulty/);
   assert.throws(() => fitMatrix("controller", "easy"), /no row for role/);
   assert.equal(Object.isFrozen(FIT_MATRIX) && Object.isFrozen(FIT_MATRIX.planner), true);
@@ -37,7 +42,8 @@ test("the matrix: every role's pick per difficulty, by exact catalog id", () => 
 
 test("the selector's first seat follows the matrix for every role and difficulty (profile fit)", () => {
   for (const role of ["planner", "dispatcher", "implementer", "subagent", "reviewer"]) for (const d of D) {
-    const s = selectSeat(role, { profile: "fit", difficulty: d, needsContext: 1000 });
+    // (gemini-4-neon's window is unrecorded, so it is not admitted against a context estimate: fit-sdk-routing.test.mjs.)
+    const s = selectSeat(role, { profile: "fit", difficulty: d, ...(role === "implementer" && d === "medium" ? {} : { needsContext: 1000 }) });
     assert.equal(s.seat.model, fitMatrix(role, d).model, `${role}/${d}`);
     assert.equal(s.selection.eligibility, "fit-matrix");
     assert.deepEqual([s.selection.matrix.role, s.selection.matrix.difficulty, s.selection.matrix.pick], [role, d, fitMatrix(role, d).model]);
@@ -47,24 +53,15 @@ test("the selector's first seat follows the matrix for every role and difficulty
   assert.throws(() => selectSeat("dispatcher", { profile: "argo" }), /no admitted candidate/);
 });
 
-test("the implementer's failover ladders: Antigravity lanes in the stated order, then the metered API of the pick's base model as quota failover", () => {
-  assert.deepEqual(Object.fromEntries(D.map(d => [d, IMPLEMENTER_LADDERS[d].map(s => s.model)])), {
-    easy: ["gemini-4-hydrogen-medium", "gemini-3.8-flash-high"],
-    medium: ["gemini-4-hydrogen-high", "gemini-4-argon-high"],
-    hard: ["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"] });
-  assert.deepEqual(fitLadder("planner", "hard").map(s => s.model), ["claude-fable-5-2"]);
-  const want = { easy: "gemini-4-hydrogen", medium: "gemini-4-hydrogen", hard: "gemini-4-carbon" };
+test("the implementer's ladder is the matrix's Gemini models with no lane in front and no failover behind; every other role's ladder is its one pick", () => {
+  // The rungs themselves are pinned in fit-sdk-routing.test.mjs.
   for (const d of D) {
-    const { candidates } = selectSeat("implementer", { profile: "fit", difficulty: d, needsContext: 1000 });
-    const lanes = candidates.filter(c => !c.quota_failover), spare = candidates.filter(c => c.quota_failover);
-    assert.deepEqual(lanes.map(c => c.model), IMPLEMENTER_LADDERS[d].map(s => s.model), `${d}: the lane ladder, in order, first`);
-    assert.ok(lanes.every(c => c.transport === "agy-cli"));
-    assert.deepEqual(spare.map(c => [c.model, c.transport, c.rank]), [[want[d], "api", lanes.length]], `${d}: one API seat, last`);
-    assert.deepEqual(spare[0].quota_failover, { base: want[d], lanes: [IMPLEMENTER_LADDERS[d][0].model] });
-    assert.equal(spare[0].selection.quota_failover.used, false);
-    assert.match(spare[0].selection.quota_failover.rule, /only after an Antigravity lane .* refused for quota/);
-    assert.equal(spare[0].effort, laneParts(IMPLEMENTER_LADDERS[d][0].model).thinking, "the failover runs at the lane's thinking level");
+    const { candidates } = selectSeat("implementer", { profile: "fit", difficulty: d });
+    assert.deepEqual(candidates.map(c => c.model), IMPLEMENTER_LADDERS[d].map(s => s.model), `${d}: the ladder, in order`);
+    assert.ok(candidates.every(c => c.transport === "api" && c.direct_api === true && !c.quota_failover), `${d}: the Gemini API itself: no lane in front, no failover seat behind`);
+    assert.ok(IMPLEMENTER_LADDERS[d].every(s => laneParts(s.model) === null && quotaFailoverFor(s.model) === null));
   }
+  assert.deepEqual(fitLadder("planner", "hard").map(s => s.model), ["claude-fable-5-2"]);
 });
 
 test("the reviewer is pinned to the dispatcher's exact model and escalates only inside OpenAI: luna -> 6.1-sol -> astra", () => {
@@ -98,9 +95,9 @@ test("floors RAISE a pick and never lower it: stakes, ambiguity (planner) and di
   assert.equal(pick("dispatcher", { difficulty: "easy" }), "gpt-6-luna");
   assert.equal(pick("dispatcher", { difficulty: "easy", stakes: "normal" }), "gpt-6.1-sol", "normal stakes -> standard floor -> the medium column");
   assert.equal(pick("dispatcher", { difficulty: "easy", stakes: "critical" }), "gpt-6-astra", "easy + critical goes up");
-  assert.equal(pick("implementer", { difficulty: "easy", stakes: "critical" }), "gemini-4-carbon-high");
+  assert.equal(pick("implementer", { difficulty: "easy", stakes: "critical" }), "gemini-4-carbon");
   assert.equal(pick("planner", { difficulty: "easy", ambiguity: "contested" }), "claude-fable-5-2", "contested ambiguity raises the planner");
-  assert.equal(pick("implementer", { difficulty: "easy", ambiguity: "contested" }), "gemini-4-hydrogen-medium", "and only the planner");
+  assert.equal(pick("implementer", { difficulty: "easy", ambiguity: "contested" }), "gemini-4-hydrogen", "and only the planner");
   assert.equal(pick("dispatcher", { difficulty: "hard", stakes: "low" }), "gpt-6-astra", "low stakes do not lower a hard ticket");
   assert.equal(pick("planner", { difficulty: "medium", stakes: "low", ambiguity: "settled" }), "claude-opus-5-5", "nor a medium one");
   const raised = fitLevel(taskProfile({ difficulty: "easy", stakes: "high" }), "subagent");
@@ -110,8 +107,8 @@ test("floors RAISE a pick and never lower it: stakes, ambiguity (planner) and di
   assert.equal(first("dispatcher", { difficulty: "easy", task: taskProfile({ difficulty: "easy", depth: "max" }) }).effort, "max");
 });
 
-test("a rejection raises the lane's thinking level first, then the next ladder rung", () => {
-  const ladder = d => IMPLEMENTER_LADDERS[d].map(s => s.model);
+test("on a LANE ladder a rejection raises the lane's thinking level first, then the next ladder rung (recorded escalations still derive)", () => {
+  const ladder = d => LANE_LADDERS[d];
   const walk = d => { const seen = []; for (let s = { model: ladder(d)[0] }; s; s = implementerEscalation(s, ladder(d))) seen.push(`${s.action ?? "start"}:${s.model}`); return seen; };
   assert.deepEqual(walk("easy"), ["start:gemini-4-hydrogen-medium", "raise_thinking:gemini-4-hydrogen-high", "raise_thinking:gemini-4-hydrogen-xhigh", "step_rung:gemini-3.8-flash-high"]);
   assert.deepEqual(walk("medium"), ["start:gemini-4-hydrogen-high", "raise_thinking:gemini-4-hydrogen-xhigh", "step_rung:gemini-4-argon-high"]);
@@ -157,11 +154,15 @@ test("identity: an Antigravity lane and its metered API failover are one model",
     const keys = contributorKeys([{ vendor: "agy_google", model: lane }]);
     assert.match(candidateRefusal({ vendor: "agy_google", model: api }, keys), /contributed to the change under review/);
   }
-  // Every lane in a ladder has an API failover of the same identity, where the registry has an id for its base.
-  for (const d of D) for (const s of IMPLEMENTER_LADDERS[d]) {
-    const spare = quotaFailoverFor(s.model);
-    if (spare) assert.equal(resolveModel(spare.vendor, spare.model).id, resolveModel(s.vendor, s.model).id);
+  // Every live lane has an API failover of the same identity, where the registry has an id for its base.
+  let checked = 0;
+  for (const [name, l] of Object.entries(LANES.agy_cli).filter(([, l]) => !l.retired && l.base)) {
+    const spare = quotaFailoverFor(name);
+    if (spare) { checked += 1; assert.equal(resolveModel(spare.vendor, spare.model).id, resolveModel(l.vendor, name).id, name); }
   }
+  assert.ok(checked >= 10, "the carbon, argon and hydrogen lanes each have one");
+  // An SDK implementer seat and the lane of the same model are one identity too: the transport is not the model.
+  assert.equal(resolveModel("agy_google", IMPLEMENTER_LADDERS.hard[0].model).id, resolveModel("agy_google", "gemini-4-carbon-high").id);
 });
 
 test("gemini-4-hydrogen is seated; both Orchestrator ids stay undeclared", () => {
@@ -208,7 +209,7 @@ test("every live Antigravity lane carries a cited window, so the documented-wind
     assert.equal(resolveModel("agy_google", name).base, l.base, `${name}: lanes.json and the identity policy agree on the base model`);
   }
   for (const [name, l] of Object.entries(LANES.agy_cli).filter(([, l]) => l.retired)) assert.equal(l.window, undefined, `${name}: a retired lane gains nothing`);
-  for (const d of D) for (const s of IMPLEMENTER_LADDERS[d]) assert.equal(SEAT_FACTS.agy_google.windows[s.model], 1048576, `${s.model}: the router's window for a seated lane`);
+  for (const d of D) for (const name of LANE_LADDERS[d]) assert.equal(SEAT_FACTS.agy_google.windows[name], 1048576, `${name}: the router's window for a lane`);
   assert.equal(SEAT_FACTS.agy_google.windows["gemini-4-hydrogen"], 1048576);
 });
 

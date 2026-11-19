@@ -142,6 +142,21 @@ test("a seat that is neither an SDK seat nor an Antigravity lane is still refuse
   await assert.rejects(turns.implementer({ vendor: "agy_google", model: "gemini-4-carbon", seat: { vendor: "agy_google", model: "gemini-4-carbon" }, prompt: "p", cwd: "/tmp" }), e => e.code === "NOT_A_LANE");
 });
 
+test("a seat of the SDK transport is never asked as a single-turn seat: no relay reaches Hydrogen through a lane or the metered API", async () => {
+  // The fit matrix's subagent row is the implementer's OWN subagents (native Hydrogen). Were that seat handed to the
+  // A2A relay's single-turn path, it would be served lane-first by the agy CLI (sdk/agy-turn.mjs). It is refused instead.
+  const asked = [];
+  const turns = pipelineTurns({ turn: async a => { asked.push(a); return { text: "x", served_model: a.model }; } });
+  const native = { vendor: "agy_google", model: "gemini-4-hydrogen", transport: "antigravity-sdk", native: true };
+  for (const role of ["subagent", "dispatcher", "reviewer"]) {
+    await assert.rejects(turns[role]({ vendor: native.vendor, model: native.model, seat: native, prompt: "q" }), e => e.code === "SDK_SEAT_NOT_SINGLE_TURN" && /runs as a session/.test(e.message), role);
+  }
+  assert.equal(asked.length, 0, "nothing was sent");
+  // A seat that does not say it is an SDK seat is asked as before.
+  await turns.subagent({ vendor: "xai", model: "grok-4.6", seat: { vendor: "xai", model: "grok-4.6" }, prompt: "q" });
+  assert.equal(asked.length, 1);
+});
+
 test("every billed request of a session is charged at its point of spend, by class", async t => {
   const charged = [];
   const r = await pipeline(t, args => session(args, { root: 3, spawned: [{ type: "code-explorer" }, { type: "test-constructor" }], perSubagent: 2 }), { onCharge: ({ role }) => charged.push(role) });

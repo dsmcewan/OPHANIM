@@ -376,7 +376,9 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
       const brec = JSON.parse(readFileSync(join(store, "pairs", b.bundle.pair.pair_id, "pair.json"), "utf8"));
       assert.deepEqual([brec.status, brec.refusal.code, brec.counterpart], ["refused", "PAIR_UNBOUNDED", null]);
       const primaryRun = JSON.parse(readFileSync(join(repo, "boards", "pair-b", "run.json"), "utf8"));
-      assert.equal(calls.length - n0, primaryRun.attempts.filter(a => a.vendor !== "agy_google").length, "every provider call after the refusal is the primary's");
+      // (The scripted API clients record every API request; an Antigravity lane turn is not one. Since 2026-11-19 the fit
+      // matrix's Google implementer is an API request too.)
+      assert.equal(calls.length - n0, primaryRun.attempts.filter(a => a.transport === "api").length, "every provider call after the refusal is the primary's");
       const e2 = evaluate({ runs: store });
       assert.equal(e2.paired.refused.length, 1, "a refused pair is listed, not dropped, and is no outcome of either arm");
       assert.equal(e2.paired.pairs.length, 1);

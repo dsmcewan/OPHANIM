@@ -47,6 +47,7 @@ import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../r
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { reviewScope, CRITIQUE_VIA } from "../review/scope.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
+import { SDK_TRANSPORT } from "../antigravity/config.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
 import { assignArm, explicitAssignment, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
@@ -637,6 +638,14 @@ export async function runOpenItem(spec, opts = {}) {
     const failover = quota_failover?.used ? { quota_failover } : {};
     if (failover.quota_failover) progress({ event: "quota_failover", seat: vendor, model, detail: `metered API used as quota failover of ${quota_failover.lanes.join(", ")}: ${quota_failover.after.map(a => `${a.lane} ${a.outcome} (${a.source})`).join("; ")}` });
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
+    // A SEAT OF THE ANTIGRAVITY SDK TRANSPORT IS NOT RUN HERE (owner direction 2026-11-19): it is a tool-enabled session
+    // on a work unit, with its own jail, gateway and subagent governor (src/pipeline, src/antigravity). The selector
+    // gives this per-file board the fit matrix's Google implementer in the board's own form (route/frontier.mjs
+    // boardSeat: the same model as one tool-less Gemini API turn), so a seat that still names the SDK transport was
+    // seated by hand. It is refused before any call or charge, and no agy CLI lane is started in its place.
+    if (transport === SDK_TRANSPORT) {
+      throw Object.assign(new Error(`${vendor}/${model} is a seat of the Antigravity SDK transport: it runs as a session on a work unit (the pipeline), and the per-file board does not run it. Nothing is run in its place`), { code: "SDK_SEAT_NEEDS_PIPELINE" });
+    }
     // The seat's own transport decides the path; a seat built before transports were recorded falls back
     // to the rule the transports encode (a non-frontier agy_google model is not an API id).
     const lane = transport ? transport !== "api" : vendor === "agy_google" && !isFrontier(model);

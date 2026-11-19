@@ -9,11 +9,12 @@ import {ROSTER} from '../team/roster.mjs';
 import {routeFor,documentedWindow} from './protocol.mjs';
 import {taskProfile,classFloor,requirementsOf,effortForDepth,PROFILE_MAPPING,LATENCY_CLIMB} from './task-profile.mjs';
 import {FIT_MATRIX,FIT_MATRIX_BODY,FIT_DIFFICULTIES,FIT_ROLES,REVIEWER_ESCALATION,IMPLEMENTER_LADDERS,fitMatrix,fitLadder,
-  pinnedReviewer,reviewerEscalation,implementerEscalation,laneFor,laneParts,laneLevels,quotaFailoverFor} from './fit-matrix.mjs';
+  pinnedReviewer,reviewerEscalation,implementerEscalation,implementerPath,laneFor,laneParts,laneLevels,quotaFailoverFor} from './fit-matrix.mjs';
+import {isSdkSeat,SDK_TRANSPORT,thinkingLevelsOf} from '../antigravity/config.mjs';
 
 // The fit matrix (fit-matrix.mjs), re-exported so a caller of the selector imports one module.
 export {FIT_MATRIX,FIT_DIFFICULTIES,FIT_ROLES,REVIEWER_ESCALATION,IMPLEMENTER_LADDERS,fitMatrix,fitLadder,pinnedReviewer,
-  reviewerEscalation,implementerEscalation,laneFor,laneParts,quotaFailoverFor};
+  reviewerEscalation,implementerEscalation,implementerPath,laneFor,laneParts,quotaFailoverFor};
 
 // The `fit` candidate's class table (config/classes.json): a declared routing label per registered model,
 // every entry provisional.
@@ -74,11 +75,16 @@ export function resolvePinned(pin){
 // `quota_failover` {base, lanes}, and the dispatcher reaches it only after one of those lanes was refused for quota
 // (HTTP 429 / quota exhausted, packages/model-client classifyFailure). Any other lane failure never reaches it
 // (route/quota-failover.mjs walks the order). An API id whose model has no lane is left as it is.
+// NOT THE GOOGLE IMPLEMENTER (owner direction 2026-11-19): the fit matrix's Google implementer runs on the Gemini API
+// itself (GEMINI_API_KEY), with no Antigravity CLI lane in front of it and no metered failover behind it. A seat of the
+// Antigravity SDK transport ({transport: "antigravity-sdk"}, fit-matrix.mjs) and its per-file-board form ({transport:
+// "api", direct_api: true}; see boardSeat below) are both left exactly as they are.
 export const QUOTA_FAILOVER_RULE='used only after an Antigravity lane of the same base model was refused for quota (HTTP 429 / quota exhausted); never on any other failure';
 export function antigravityFirst(list,effortOf=c=>c.effort??null){
   const out=[];
   const has=c=>out.some(o=>o.vendor===c.vendor&&o.model===c.model&&Boolean(o.quota_failover)===Boolean(c.quota_failover));
   for(const c of list){
+    if(isSdkSeat(c)||c.direct_api){out.push(c);continue;}
     if(c.quota_failover||!(c.vendor==='agy_google'&&seatTransport(c.vendor,c.model)==='api'&&laneLevels(c.model).length)){if(!has(c))out.push(c);continue;}
     let lanes=out.filter(o=>!o.quota_failover&&laneParts(o.model)?.base===c.model).map(o=>o.model);
     if(!lanes.length){
@@ -221,11 +227,13 @@ export function selectSeat(role,{profile='argo',difficulty='medium',needsContext
   const base={policy:id.policy,policy_hash:id.hash,profile,role,difficulty,
     context:needsContext===null?null:{estimate_tokens:needsContext,method:'prompt chars / 4'},...(profiled?{task:profiled}:{})};
   const rows=(c,selection)=>{
-    const transport=seatTransport(c.vendor,c.model);
+    // A seat that names its own transport keeps it (the fit matrix's Google implementer, on this surface: boardSeat).
+    const transport=c.transport??seatTransport(c.vendor,c.model);
     const poolNamed=Boolean(c.pool&&c.pool!==c.vendor&&transport==='api');
     return seatPools(c.vendor,{pools,pool:c.pool??null,transport}).map(pool=>({vendor:c.vendor,model:c.model,transport,
       pool:pool.id,poolConfig:pool.credential_env?pool:null,poolNamed,basis:c.basis??'OPERATOR',band:c.band??null,why:c.why??null,
-      ...(c.effort!==undefined?{effort:c.effort}:{}),...(c.quota_failover?{quota_failover:c.quota_failover}:{}),selection}));
+      ...(c.effort!==undefined?{effort:c.effort}:{}),...(c.quota_failover?{quota_failover:c.quota_failover}:{}),
+      ...(c.direct_api?{direct_api:true,session_transport:c.session_transport}:{}),selection}));
   };
   const finish=groups=>{
     const candidates=groups.flatMap(([c,selection])=>rows(c,selection)).map((c,rank)=>({...c,rank,
@@ -345,6 +353,16 @@ export function fitLevel(task,role){
       :`ticket difficulty ${FIT_DIFFICULTIES[ticket]}; the class floor ${floor.value} does not raise it (a floor never lowers a pick)`};
 }
 
+// THE SURFACE THIS SELECTOR SEATS (owner direction 2026-11-19). The fit matrix's Google implementer is a seat of the
+// Antigravity SDK transport: a tool-enabled SESSION on a work unit, which the pipeline runs (ophanim/operate/stages.mjs
+// takes those seats from fit-matrix.mjs, not from here). This selector's callers are the per-file board
+// (board/run-item.mjs) and what reports on it; the board's implementer is ONE TOOL-LESS TURN whose reply the board
+// writes to disk itself. There the same model, at the same thinking level, is asked through the Gemini API client
+// (GEMINI_API_KEY): no Antigravity CLI lane is started for it and it has no metered failover behind it, because it IS
+// the Gemini API. The seat says what it is ({transport: "api", direct_api: true, session_transport: "antigravity-sdk"}).
+export const BOARD_SURFACE='per-file board: one tool-less turn through the Gemini API client; the pipeline runs the same model as an Antigravity SDK session';
+const boardSeat=c=>({transport:'api',direct_api:true,session_transport:c.transport,matrixEffort:c.effort??null});
+
 function fitCandidates(role,{needsContext,avoid,avoidLabs,base}){
   const task=base.task;
   const labs=roleLabs(role);
@@ -363,12 +381,15 @@ function fitCandidates(role,{needsContext,avoid,avoidLabs,base}){
     if(needsContext!==null&&w<needsContext){excluded.push({model:c.model,why:`documented window ${w} < estimated ${needsContext}`});return false;}
     return true;
   };
-  // THE MATRIX HEAD (fit-matrix.mjs): the role's pick for this column -- for the implementer its lane ladder, then
-  // the metered API id of the pick's base model as that lane's quota failover. Admitted like any candidate.
+  // THE MATRIX HEAD (fit-matrix.mjs): the role's pick for this column -- for the implementer its ladder, each rung the
+  // matrix's model at the thinking level the matrix seats it at, in the form THIS selector's caller runs (boardSeat). A
+  // lane rung, where a ladder holds one, is followed by the metered API id of the pick's base model as its quota
+  // failover. Admitted like any candidate.
   const ladder=FIT_ROLES.includes(role)?fitLadder(role,level.value):[];
   const matrix=ladder.length?{schema:FIT_MATRIX_BODY.schema,role,difficulty:level.value,ticket_difficulty:level.ticket,raised:level.raised,why:level.why,
-    pick:ladder[0].model,ladder:ladder.map(c=>c.model),...(role==='reviewer'?{pinned_to:'dispatcher',escalation:REVIEWER_ESCALATION.map(c=>c.model)}:{})}:null;
-  const head=ladder.map(c=>({vendor:c.vendor,model:c.model,lab:labOf(c.vendor,c.model),eligibility:'fit-matrix'})).filter(admissible);
+    pick:ladder[0].model,ladder:ladder.map(c=>c.model),...(isSdkSeat(ladder[0])?{transport:'api',session_transport:SDK_TRANSPORT,efforts:ladder.map(c=>c.effort??null),surface:BOARD_SURFACE}:{}),
+    ...(role==='reviewer'?{pinned_to:'dispatcher',escalation:REVIEWER_ESCALATION.map(c=>c.model)}:{})}:null;
+  const head=ladder.map(c=>({vendor:c.vendor,model:c.model,lab:labOf(c.vendor,c.model),eligibility:'fit-matrix',...(isSdkSeat(c)?boardSeat(c):{})})).filter(admissible);
   if(role==='implementer'&&head.some(c=>c.model===ladder[0].model)){
     const spare=quotaFailoverFor(ladder[0].model);
     if(spare)head.push({vendor:spare.vendor,model:spare.model,lab:labOf(spare.vendor,spare.model),eligibility:'fit-matrix',
@@ -407,10 +428,14 @@ function fitCandidates(role,{needsContext,avoid,avoidLabs,base}){
   return ordered.map((c,i)=>{
     const mapped=effortForDepth(task.depth.value,c);
     // A quota failover of a matrix lane runs at that lane's thinking level: the same model at the same setting.
-    const effort=c.fixedEffort&&mapped.ladder.includes(c.fixedEffort)?{...mapped,value:c.fixedEffort,mapped:`"${c.fixedEffort}": the thinking level of the Antigravity lane this seat stands behind`}:mapped;
+    // An SDK seat's thinking level is the MATRIX's (the level it seats that model at; none where none is recorded), not
+    // the task depth's: the pipeline raises it on a rejection (fit-matrix.mjs implementerPath), never the selector.
+    const effort=c.direct_api?{value:c.matrixEffort??null,depth:task.depth.value,ladder:thinkingLevelsOf(c.model),
+        mapped:c.matrixEffort?`"${c.matrixEffort}": the thinking level the fit matrix seats ${c.model} at`:`none: no thinking level is recorded for ${c.model}, so none is sent`}
+      :c.fixedEffort&&mapped.ladder.includes(c.fixedEffort)?{...mapped,value:c.fixedEffort,mapped:`"${c.fixedEffort}": the thinking level of the Antigravity lane this seat stands behind`}:mapped;
     const cls=CLASSES.models[c.model];
     const inMatrix=c.eligibility==='fit-matrix';
-    return [{vendor:c.vendor,model:c.model,basis:cls.basis,band:null,effort:effort.value,why:`fit: ${inMatrix?`matrix ${role}/${level.value}`:`${cls.class} class`} (${cls.basis}, ${cls.status})`,
+    return [{vendor:c.vendor,model:c.model,...(c.direct_api?{transport:c.transport,direct_api:true,session_transport:c.session_transport}:{}),basis:cls.basis,band:null,effort:effort.value,why:`fit: ${inMatrix?`matrix ${role}/${level.value}`:`${cls.class} class`} (${cls.basis}, ${cls.status})`,
       ...(c.quota_failover?{quota_failover:c.quota_failover}:{})},
       {...base,source:'policy',band:null,excluded,class_floor:floor,class:{value:cls.class,model:c.model,basis:cls.basis,status:cls.status},
         eligibility:c.eligibility,effort,output,requirements,kind,latency:{value:task.latency.value,basis:task.latency.basis,climb},lab_order:labs,
