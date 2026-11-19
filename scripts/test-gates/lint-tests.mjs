@@ -6,13 +6,17 @@
 //   node scripts/test-gates/lint-tests.mjs [--json FILE] [--enforce] [PATH ...]
 //
 // Rules (heuristics over source text, for a reviewer to judge -- not proofs):
-//   vacuous-conditional-assert  an assert inside `if (x)` / `if (x != null)` whose body asserts on x itself, with no
-//                               else branch: when x is absent the assert never runs and the test passes
-//                               (`if (tier) assert(...)` in planner-tier.test.mjs).
+//   vacuous-conditional-assert  an assert inside `if (x)` / `if (x != null)` whose body asserts on x itself (x in a
+//                               compared argument, not only in the failure message), with no else branch: when x is
+//                               absent the assert never runs and the test passes (`if (tier) assert(...)` in
+//                               planner-tier.test.mjs). A numeric loop index (`if (i)`: after the first iteration) is
+//                               not a presence test.
 //   truncated-sequence          `.slice(` on a sequence that is then compared with deepEqual/equal/strictEqual --
 //                               inline in the assert, or through a variable assigned from a `.slice(` (each
-//                               declarator of a declaration on its own) -- so items past the cut are never checked
-//                               (`.slice(0, 5)` hid re-dispatches).
+//                               declarator on its own, in its own scope) -- so items past the cut are never checked
+//                               (`.slice(0, 5)` hid re-dispatches). One element selected from the slice (`.find(`,
+//                               `.findLast(`, `.at(`, `[n]`) is not a sequence; a slice inside another call's
+//                               arguments still counts (a helper over a cut log hides the same items).
 //   scripted-terminal-status    a fixture (a returned object literal) hard-codes a terminal status ('failed',
 //                               'passed', 'completed', ...) that the same file then asserts: the outcome under test
 //                               may be chosen by the fixture (`status: 'failed'` for the elapsed stop).
@@ -90,6 +94,69 @@ function topLevelArgs(text) {
   return out;
 }
 
+/** The [start, end) of each top-level argument of the call whose parentheses are at `open`..`close` (blanked text). */
+function argRanges(b, open, close) {
+  const out = []; let depth = 0, from = open + 1;
+  for (let i = open + 1; i < close; i++) {
+    const c = b[i];
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === ',' && depth === 0) { out.push([from, i]); from = i + 1; }
+  }
+  if (b.slice(from, close).trim()) out.push([from, close]);
+  return out;
+}
+
+// How many leading arguments of an assert call are compared values; the rest are the failure message. An unknown
+// method counts every argument as a value.
+const VALUE_ARGS = {'': 1, ok: 1, ifError: 1, equal: 2, notEqual: 2, strictEqual: 2, notStrictEqual: 2, deepEqual: 2,
+  notDeepEqual: 2, deepStrictEqual: 2, notDeepStrictEqual: 2, partialDeepStrictEqual: 2, match: 2, doesNotMatch: 2,
+  throws: 2, doesNotThrow: 2, rejects: 2, doesNotReject: 2};
+const valueArgs = (method, n) => method === 'fail' ? (n >= 2 ? n : 0) : (VALUE_ARGS[method ?? ''] ?? n);
+
+/**
+ * Is `name` (tested by the `if` at `at`) a NUMERIC loop index of a loop enclosing it: `for (let i = 0; ...)`, or
+ * `for (const [i, x] of xs.entries())` when the body indexes with it (`xs[i - 1]`: an array's entries, not a Map's)?
+ */
+function loopIndex(b, name, at, bodyB) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return false;
+  const n = name.replace(/\$/g, '\\$');
+  for (const f of b.slice(0, at).matchAll(/\bfor\s*\(/g)) {
+    const fo = f.index + f[0].length - 1, fc = matchClose(b, fo);
+    if (fc < 0 || fc > at) continue;
+    let k = fc + 1; while (/\s/.test(b[k] ?? '')) k++;
+    if (!(b[k] === '{' ? at < matchClose(b, k) : at === k)) continue;
+    const head = b.slice(fo + 1, fc);
+    if (new RegExp(`^\\s*(?:let|var)\\s+${n}\\s*=\\s*\\d+\\s*[;,]`).test(head)) return true;
+    if (new RegExp(`^\\s*(?:const|let|var)\\s*\\[\\s*${n}\\s*,[^\\]]*\\]\\s+of\\s+[\\s\\S]*\\.entries\\(\\s*\\)\\s*$`).test(head)
+      && new RegExp(`\\[\\s*${n}\\s*-\\s*\\d+\\s*\\]`).test(bodyB)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does this (blanked) expression text compare a truncated sequence: a `.slice(...)` from which no single element is
+ * then selected? `xs.slice(k).find(p)`, `.findLast(p)`, `.at(n)` and `[n]` yield one element, not the sequence; any
+ * other use (`.map`, `.join`, `.length`, `.every`, the slice itself) keeps the cut in what is compared.
+ */
+function truncates(t) {
+  for (const s of t.matchAll(/\.slice\s*\(/g)) {
+    const close = matchClose(t, s.index + s[0].length - 1);
+    if (close < 0) return true;
+    if (!/^\s*(?:(?:\?\.|\.)\s*(?:find|findLast|at)\s*\(|(?:\?\.)?\[)/.test(t.slice(close + 1))) return true;
+  }
+  return false;
+}
+
+/** The block a declaration at `i` is scoped to: the innermost unclosed `{` before it, to its `}` (else the file). */
+function blockOf(b, i) {
+  let depth = 0, j = i - 1;
+  for (; j >= 0; j--) { if (b[j] === '}') depth++; else if (b[j] === '{') { if (depth === 0) break; depth--; } }
+  if (j < 0) return [0, b.length];
+  const end = matchClose(b, j);
+  return [j, end < 0 ? b.length : end];
+}
+
 const lineOf = (src, idx) => src.slice(0, idx).split('\n').length;
 const snippetAt = (src, line) => src.split('\n')[line - 1].trim().slice(0, 160);
 const norm = e => e.replace(/\?\./g, '.').replace(/\s+/g, '');
@@ -140,12 +207,16 @@ export function lintSource(src, file = '<src>') {
     if (bodyEnd < 0) continue;
     const body = src.slice(k, bodyEnd + 1), bodyB = b.slice(k, bodyEnd + 1);
     if (!/\bassert\b/.test(bodyB)) continue;
-    // The asserted value must be the one whose presence was tested.
+    // A numeric loop index is not a presence test: `if (i)` is "after the first iteration".
+    if (loopIndex(b, subject, m.index, bodyB)) continue;
+    // The asserted value must be the one whose presence was tested: the subject in a compared argument, not only in the
+    // failure message.
     let refersToSubject = false;
     for (const a of bodyB.matchAll(ASSERT_CALL)) {
       const ao = a.index + a[0].length - 1, ac = matchClose(bodyB, ao);
       if (ac < 0) continue;
-      if (norm(body.slice(ao + 1, ac)).includes(norm(subject))) { refersToSubject = true; break; }
+      const args = argRanges(bodyB, ao, ac), values = args.slice(0, valueArgs(a[1], args.length));
+      if (values.some(([s, e]) => norm(body.slice(s, e)).includes(norm(subject)))) { refersToSubject = true; break; }
     }
     if (!refersToSubject) continue;
     let e = bodyEnd + 1; while (/\s/.test(b[e] ?? '')) e++;
@@ -153,32 +224,38 @@ export function lintSource(src, file = '<src>') {
     add('vacuous-conditional-assert', m.index, `asserts on \`${subject}\` only when it is present; nothing fails when it is absent`);
   }
 
-  // (b) truncated sequence: inline, then through a variable. Each declarator of a declaration is read on its own:
-  // `const a = f(), b = x.slice(0, 2)` assigns the slice to b, not to a (and b is a sliced variable too).
-  const sliced = new Map(); // name -> index of its declarator
-  for (const m of b.matchAll(/\b(?:const|let|var)\s+/g)) {
+  // (b) truncated sequence: inline, then through a variable. Each declarator of a declaration is read on its own
+  // (`const a = f(), b = x.slice(0, 2)` assigns the slice to b, not to a), and is visible in its own scope only: a
+  // `const`/`let` in the block it is declared in (all of it: a closure may read it), a `var` in the whole file.
+  const decls = []; // {name, at, from, to, sliced}
+  for (const m of b.matchAll(/\b(const|let|var)\s+/g)) {
     const start = m.index + m[0].length;
     let end = b.indexOf(';', start); const nl = b.indexOf('\n', start);
     if (end < 0 || (nl >= 0 && nl < end)) end = nl < 0 ? b.length : nl;
+    const [from, to] = m[1] === 'var' ? [0, b.length] : blockOf(b, m.index);
     let at = start;
     for (const part of topLevelArgs(b.slice(start, end))) {
       const d = /^\s*([A-Za-z_$][\w$]*)\s*=(?!=)/.exec(part);
-      if (d && /\.slice\s*\(/.test(part.slice(d[0].length))) sliced.set(d[1], at + d[0].length - d[0].trimStart().length);
+      if (d) decls.push({name: d[1], at: at + d[0].length - d[0].trimStart().length, from, to, sliced: truncates(part.slice(d[0].length))});
       at += part.length + 1;
     }
   }
+  // The declaration a name at `p` refers to: the innermost scope holding p (any sliced one, if several share it).
+  const slicedAt = (name, p) => {
+    const holding = decls.filter(d => d.name === name && d.from <= p && p <= d.to);
+    const inner = Math.max(...holding.map(d => d.from));
+    return holding.find(d => d.from === inner && d.sliced) ?? null;
+  };
   for (const a of b.matchAll(ASSERT_CALL)) {
     if (!/^(deepEqual|deepStrictEqual|equal|strictEqual)$/.test(a[1] ?? '')) continue;
     const ao = a.index + a[0].length - 1, ac = matchClose(b, ao);
     if (ac < 0) continue;
     // The compared values only: the third argument is the failure message.
     const args = topLevelArgs(b.slice(ao + 1, ac)).slice(0, 2).join(',');
-    if (/\.slice\s*\(/.test(args)) { add('truncated-sequence', a.index, `assert.${a[1]} compares a .slice() of a sequence: items past the cut are not checked`); continue; }
-    for (const [name, at] of sliced) {
-      if (new RegExp(`(^|[^\\w$.])${name.replace(/\$/g, '\\$')}\\b`).test(args)) {
-        add('truncated-sequence', a.index, `assert.${a[1]} compares \`${name}\`, assigned from a .slice() at line ${lineOf(src, at)}`);
-        break;
-      }
+    if (truncates(args)) { add('truncated-sequence', a.index, `assert.${a[1]} compares a .slice() of a sequence: items past the cut are not checked`); continue; }
+    for (const name of new Set([...args.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)/g)].map(x => x[1]))) {
+      const d = slicedAt(name, a.index);
+      if (d) { add('truncated-sequence', a.index, `assert.${a[1]} compares \`${name}\`, assigned from a .slice() at line ${lineOf(src, d.at)}`); break; }
     }
   }
 
