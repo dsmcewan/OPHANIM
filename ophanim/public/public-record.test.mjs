@@ -178,12 +178,13 @@ test('apply updates only the issues whose ledger record changed', async () => {
   S.set({...base, checked: '2026-11-18', item: 'a', title: 'A', state: 'Resolved', basis: 'merged'});
   const s = await run(readStatusRecord({root}), gh, {ownerLogin: 'the-owner'});
   assert.deepEqual(s.issues.updated, ['a']);
-  const writes = gh.writes().slice(n);
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].method, 'PATCH');
-  assert.equal(writes[0].body.state, 'closed');
-  assert.equal(writes[0].body.state_reason, 'completed');
-  assert.match(writes[0].body.body, /\| 2 \| 2026-11-18 \| Resolved \|/, 'the new change is in the history');
+  // All writes so far: the first run's n, then exactly one by the second run.
+  assert.equal(gh.writes().length, n + 1, 'the second run wrote once');
+  const write = gh.writes()[n];
+  assert.equal(write.method, 'PATCH');
+  assert.equal(write.body.state, 'closed');
+  assert.equal(write.body.state_reason, 'completed');
+  assert.match(write.body.body, /\| 2 \| 2026-11-18 \| Resolved \|/, 'the new change is in the history');
   // A held decision item gets the configured person, added once; a later decision hold too.
   S.set({...base, item: 'd', title: 'D', state: 'On Hold', basis: 'custody', waiting_on: 'decision'});
   await run(readStatusRecord({root}), gh, {ownerLogin: 'the-owner'});

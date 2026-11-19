@@ -96,7 +96,7 @@ test('2. the requirement and its history are separate evidence: a partial histor
     // A different version of the same source does not complete the earlier one.
     f.S.set({item: 'long', title: 'Alpha for long', state: 'In progress', checked: '2026-11-18', basis: 'a later entry'});
     const later = R.run({...hist.coverage.next});
-    const mixed = deliveryOf(d, {requests: [...all.log.requests.slice(0, 1), {request: hist.coverage.next, ok: true, source: later.source, version: later.version, coverage: later.coverage}]});
+    const mixed = deliveryOf(d, {requests: [all.log.requests[0], {request: hist.coverage.next, ok: true, source: later.source, version: later.version, coverage: later.coverage}]});
     assert.equal(mixed.get(hist.source).complete, false, 'portions of two versions are not one complete delivery');
   } finally { fs.rmSync(repo, {recursive: true, force: true}); }
 });

@@ -213,7 +213,7 @@ test('validation returns an implementation defect to implement and an inadequate
     const va = a.find(s => s.stage === 'validate');
     assert.equal(va.next.stage, 'implement');
     assert.equal(va.outputs.verdict, 'implementation_defect');
-    assert.deepEqual(seq('impl-defect').slice(0, 5), ['plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'implement:pending']);
+    assert.deepEqual(seq('impl-defect'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'implement:pending']);
     // The returned implement received the validator's findings; the validator's critique now counts as a contribution,
     // so the next three-lab review is short of independent labs and the revision waits rather than lowering the bar.
     assert.ok(a[4].contributions.some(c => c.purpose === 'critique' && c.lab === va.outputs.validator.lab));
@@ -221,7 +221,7 @@ test('validation returns an implementation defect to implement and an inadequate
     const vb = b.find(s => s.stage === 'validate');
     assert.equal(vb.next.stage, 'plan');
     assert.equal(vb.outputs.verdict, 'plan_defect');
-    assert.deepEqual(seq('plan-defect').slice(0, 5), ['plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'plan:passed']);
+    assert.deepEqual(seq('plan-defect'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'plan:passed', 'implement:pending']);
     const revised = b[4];
     assert.equal(revised.outputs.plan.mode, 'revise');
     assert.deepEqual(revised.outputs.plan.answers.map(x => x.finding), ['validate-1'], 'the revised plan answers the validator\'s finding');
@@ -255,13 +255,14 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     // The reviewer comes back; at the retry time the scheduler re-dispatches review on its own: the SAME open cycle is
     // resumed, only the missing seat is asked, the two reviews kept, and the item goes on to validation and outcome.
     down = false;
-    const asked = turn.log.length;
+    const reviewsAsked = () => turn.log.filter(l => l.kind === 'review').map(l => l.vendor);
+    const askedBefore = reviewsAsked();
     const later = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, clock: () => due + 1000});
     assert.deepEqual(stagesOf(later), ['review:passed', 'validate:passed', 'outcome:passed']);
     const again = openWorkLedger({root: f.workRoot}).stages('flaky-review').find(s => s.stage === 'review' && s.status === 'passed');
     assert.equal(again.attempt, 2);
     assert.equal(again.outputs.cycle, rev.outputs.cycle, 'resumed, not reopened');
-    assert.deepEqual(turn.log.slice(asked).filter(l => l.kind === 'review').map(l => l.vendor), ['xai']);
+    assert.deepEqual(reviewsAsked(), [...askedBefore, 'xai'], 'the resumed cycle asked the missing seat only');
     assert.equal(again.usage.provider_calls, 1);
 
     // A reviewer that never comes back: the retries are bounded by stage_attempts on the same inputs, then the item is

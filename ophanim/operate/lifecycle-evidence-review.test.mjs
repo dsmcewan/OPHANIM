@@ -29,6 +29,7 @@ const REF = 'independent review, assignment 1 (Google gemini-4-carbon, 09d490f)'
 // work to implement, and the revision then ends as `second` says.
 function routing(repo, second) {
   let implCalls = 0;
+  // test-lint: allow scripted-terminal-status -- the scripted routing lifecycle, the INPUT: the question-1 tests assert where the gate routes the returned revision (plan, a structural block, never the superseded implement), not these stages' own statuses
   const ok = (stage, next) => ({status: 'passed', outputs: {[stage]: 1}, team: [{role: stage}], contributions: [], findings: [], usage: {provider_calls: 1}, next: {stage: next, why: 'ok'}});
   return {
     plan: async ctx => {
@@ -226,7 +227,7 @@ test(`${REF}, question 5: a resumed review records the dossier its seats were sh
     const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, profile: 'argo', independence: 'model'});
     let now = Date.parse('2026-11-18T00:00:00Z');
     const r1 = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, clock: () => now});
-    assert.deepEqual(stagesOf(r1).slice(0, 3), ['plan:passed', 'implement:passed', 'review:pending']);
+    assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:pending']);
     const pending = openWorkLedger({root: f.workRoot}).stages('resume-rv').find(s => s.stage === 'review');
     // HEAD moves on (an unrelated commit): a dossier built now would name another head.
     fs.writeFileSync(path.join(repo, 'unrelated.txt'), 'unrelated\n');

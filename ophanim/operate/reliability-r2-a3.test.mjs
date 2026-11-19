@@ -209,6 +209,7 @@ test('finding 3.2a: two services with different state_dirs on one work ledger: t
     fs.writeFileSync(file, JSON.stringify({schema: SERVICE_CONFIG_SCHEMA, repo: '.', state_dir: `state-${n}`, issues: {source: 'none'}, interval_s: 10, limits: {total_provider_calls: 40, stage_provider_calls: 10}}));
     return readServiceConfig(file);
   };
+  // test-lint: allow scripted-terminal-status -- the stub stages, the INPUT that keeps both services busy: the test asserts one service exits 1 refused as already running on this work ledger, never a stage status
   const pass = stage => async () => { await new Promise(r => setTimeout(r, 40)); return {status: 'passed', outputs: {[stage]: true}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, next: {stage: null, why: 'ok'}}; };
   const ex = Object.fromEntries(['plan', 'implement', 'review', 'validate', 'outcome'].map(s => [s, pass(s)]));
   const [r1, r2] = await Promise.all([1, 2].map(n => runService({config: cfg(n), executors: ex, maxTicks: 1, sleep: async () => {}})));

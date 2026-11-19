@@ -221,7 +221,9 @@ test('reviewers and validators use their own evidence: incomplete criteria are c
     const r = await run(repo, f, ex);
     const w = openWorkLedger({root: f.workRoot});
     const seq = w.stages('cyc').map(s => `${s.stage}:${s.status}`);
-    assert.deepEqual(seq.slice(0, 8), ['plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'plan:passed', 'implement:passed', 'review:passed', 'validate:returned'], JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next])));
+    // The whole sequence: the second validation's implementation defect is ROUTED back to implementation (the ninth
+    // record), not only recorded as the validator's verdict.
+    assert.deepEqual(seq, ['plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'plan:passed', 'implement:passed', 'review:passed', 'validate:returned', 'implement:pending'], JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next])));
     const [plan1, impl1, rev1, val1, plan2, , , val2] = w.stages('cyc');
     // Plan review: the reviewer was given the consumer itself, retrieved more on its own, and caught the missing criterion.
     assert.match(seen.reviewer[0], /### \[S\d+\] consumer\.mjs: mentions a file in play/);

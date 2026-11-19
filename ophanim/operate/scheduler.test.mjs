@@ -31,10 +31,12 @@ function scripted(f, overrides = {}) {
       const {readTicket} = await import('../../pantheon/src/board/operate.mjs');
       const t = readTicket({repo: f.repo, item: ctx.item});
       // A revised plan differs from the one it revises (it answers the returned findings).
+      // test-lint: allow scripted-terminal-status -- a scripted plan, the INPUT of these controller-core tests (the real executors are tested in stages.test.mjs): they assert the dispatch order, handoffs, reuse and budgets, not a stage's own outcome
       return {status: 'passed', identity: {ticket: {path: t.path, digest: t.digest}}, outputs: {plan_version: seen.length, ticket: {path: t.path, digest: t.digest}, deps: {}, evidence: []},
         team: [{role: 'planner', lab: 'anthropic'}], contributions: [], findings: [], usage: {provider_calls: 3}, next: {stage: 'implement', why: 'approved'}};
     }
     // Each run produces its own output (a real revision is a different commit).
+    // test-lint: allow scripted-terminal-status -- a scripted stage, the INPUT of these controller-core tests (the real executors are tested in stages.test.mjs): they assert the dispatch order, handoffs, reuse and budgets, not a stage's own outcome
     return {status: 'passed', outputs: {[`${stage}_done`]: true, run: seen.length}, team: [{role: stage}], contributions: [], findings: [], usage: {provider_calls: 2}, next: {stage: null, why: 'ok'}};
   };
   const ex = Object.fromEntries(['plan', 'implement', 'review', 'validate', 'outcome'].map(s => [s, overrides[s] ?? pass(s)]));
@@ -97,6 +99,7 @@ test('failures return to the right stage: an implementation defect to implement,
         usage: {provider_calls: 1}, next: {stage: 'implement', why: 'the change breaks a regression case'}};
       if (validations === 2) return {status: 'returned', outputs: {verdict: 'plan_defect'}, team: [], contributions: [], findings: [{id: 'v2', severity: 'block', text: 'criterion wrong'}],
         usage: {provider_calls: 1}, next: {stage: 'plan', why: 'the acceptance criterion does not test the requirement'}};
+      // test-lint: allow scripted-terminal-status -- the third validation's scripted acceptance, the INPUT: the test asserts the order the scheduler routes the two returns in (implement*, then plan*), ending at the outcome
       return {status: 'passed', outputs: {verdict: 'accept'}, team: [], contributions: [], findings: [], usage: {provider_calls: 1}, next: {stage: 'outcome', why: 'accepted'}};
     }});
     await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
@@ -201,7 +204,7 @@ test('a plan pending on a transient failure is retried once due and within the a
     t += 60_000;
     assert.deepEqual(await run(), ['flaky:plan:pending'], 'the transient one is retried when due; the structural one waits');
     t += 120_000;
-    assert.deepEqual((await run()).slice(0, 2), ['flaky:plan:passed', 'flaky:implement:passed']);
+    assert.deepEqual(await run(), ['flaky:plan:passed', 'flaky:implement:passed', 'flaky:review:passed', 'flaky:validate:passed', 'flaky:outcome:passed'], 'the retried plan hands on; the structural one is not dispatched');
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(w.stages('flaky').filter(s => s.stage === 'plan').map(s => s.attempt), [1, 2, 3]);
     assert.deepEqual(w.stages('short').map(s => s.status), ['pending']);

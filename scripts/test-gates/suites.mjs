@@ -8,7 +8,7 @@
 // the gate silently ignores. workflowRuns() lists every test-shaped command in .github/workflows so coverage can be
 // checked against the suites (see coverage()); qualificationBounds() makes coverage fail when qualification.yml stops
 // running the gate over every suite, leaves a suite step without a timeout below the job's, or overrides the gate's
-// bounds (L-505, L-506).
+// bounds (L-505, L-506), and when its test-lint step stops enforcing (lintEnforcement(), L-503).
 //
 // Inputs:  package.json files; .github/workflows/*.yml.
 // Outputs: [{id, label, cwd, flags, patterns, files}] (files: the test files the patterns expand to).
@@ -144,6 +144,57 @@ export function qualificationBounds(root = ROOT) {
       const t = /^\s*timeout-minutes:\s*(\d+)\s*$/m.exec(s.text);
       if (!t) problems.push(`qualification.yml:${s.line}: the step running "${name}" has no timeout-minutes: a hung run would use up the job`);
       else if (jobMin && Number(t[1]) >= jobMin) problems.push(`qualification.yml:${s.line}: the step running "${name}" may run ${t[1]} minutes, not below the job's ${jobMin}`);
+    }
+  }
+  problems.push(...lintEnforcement(root, steps.filter(s => runsScript(s, 'test:lint')), code));
+  return problems;
+}
+
+/**
+ * L-503: the test lint ENFORCES in CI, so a later edit cannot return it to report-only unnoticed. Each step of
+ * qualification.yml that runs `npm run test:lint` must
+ *  - pass `--enforce` to it (after `--`), unless package.json's test:lint script itself has `--enforce`;
+ *  - run the lint, over the whole repository: package.json's test:lint is `node scripts/test-gates/lint-tests.mjs ...`,
+ *    not something else, and neither it nor the step names paths (which would narrow what is enforced);
+ *  - keep its exit status: the command stands alone on its line (redirections only), or is followed by exactly
+ *    `|| status=$?` with an `exit $status` later in the step; no `set +e`, no `continue-on-error: true`, no `if: false`.
+ * Anything else (a pipe, `|| true`, `&&`, `;`, `&` after it) is refused as possibly discarding the lint's exit status.
+ */
+export function lintEnforcement(root, lintSteps, code = s => s.text) {
+  const problems = [];
+  // The lint's own arguments, less --enforce, --json FILE and redirections: what is left names paths.
+  const pathsIn = args => {
+    const out = [], w = args.trim().split(/\s+/).filter(Boolean);
+    for (let i = 0; i < w.length; i++) {
+      if (w[i] === '--enforce') continue;
+      if (w[i] === '--json' || /^\d*(?:>>?|<)$/.test(w[i])) { i++; continue; }
+      if (/^\d*(?:>>?|<|>&)/.test(w[i])) continue;
+      out.push(w[i]);
+    }
+    return out;
+  };
+  const script = (readJson(path.join(root, 'package.json')).scripts ?? {})['test:lint'] ?? '';
+  const own = /^node scripts\/test-gates\/lint-tests\.mjs(?:\s+(.*))?$/.exec(script.trim());
+  if (!own) problems.push(`package.json: the "test:lint" script (${JSON.stringify(script)}) is not \`node scripts/test-gates/lint-tests.mjs ...\`: CI's lint step would not run the lint`);
+  else if (pathsIn(own[1] ?? '').length) problems.push(`package.json: the "test:lint" script names ${pathsIn(own[1]).join(' ')}: the lint must run over the whole repository (L-503)`);
+  const scriptEnforces = /(^|\s)--enforce(\s|$)/.test(script);
+  if (!lintSteps.length) problems.push('qualification.yml: no step runs `npm run test:lint`: the test lint is not enforced (L-503)');
+  for (const s of lintSteps) {
+    const where = `qualification.yml:${s.line}: the test-lint step`;
+    const body = code(s).replace(/\\\n\s*/g, ' ');
+    if (/^\s*continue-on-error:\s*(?:true|\$\{\{\s*true\s*\}\})\s*$/m.test(body)) problems.push(`${where} has continue-on-error: a finding would not fail the job (L-503)`);
+    if (/^\s*if:\s*(?:false|\$\{\{\s*false\s*\}\})\s*$/m.test(body)) problems.push(`${where} never runs (if: false) (L-503)`);
+    if (/\bset\s+\+e\b/.test(body)) problems.push(`${where} turns off errexit (set +e): the lint's exit status may be discarded (L-503)`);
+    for (const m of body.matchAll(/\bnpm run (?:-[\w-]+ )*test:lint(?![\w:.=-])([^\n]*)/g)) {
+      const tail = m[1];
+      // The command ends at the first shell operator; redirections (`>> file`, `2>&1`) belong to it.
+      const op = /\|\||&&|(?<![<>&])&(?![>&])|\||;/.exec(tail);
+      const command = op ? tail.slice(0, op.index) : tail, rest = op ? tail.slice(op.index).trim() : '';
+      const passed = /^\s+--\s(.*)$/.exec(command)?.[1] ?? '';
+      if (!scriptEnforces && !/(^|\s)--enforce(\s|$)/.test(passed)) problems.push(`${where} does not pass --enforce: it is report-only and a finding would not fail the job (L-503)`);
+      if (pathsIn(passed).length) problems.push(`${where} names ${pathsIn(passed).join(' ')}: the lint must run over the whole repository (L-503)`);
+      const kept = rest === '' || (/^\|\|\s*status=\$\?\s*$/.test(rest) && /^\s*exit\s+"?\$status"?\s*$/m.test(body.slice(m.index)));
+      if (!kept) problems.push(`${where} may discard the lint's exit status (\`${rest}\` after it): the command must stand alone, or be followed by \`|| status=$?\` and a later \`exit $status\` (L-503)`);
     }
   }
   return problems;
