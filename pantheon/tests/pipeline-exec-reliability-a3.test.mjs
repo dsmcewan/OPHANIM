@@ -25,7 +25,8 @@ test("single-turn metered failover: charged on its own for every seat, refused p
   const plan = [unit("a")], seat = { vendor: "agy_google", model: "gemini-4-hydrogen-medium" };
   const run = async (name, max) => {
     let sent = 0;
-    const lane = async () => { sent++; throw QUOTA(); };
+    // The lane admits its call where the real one does, before its spawn (L-301: the per-request contract), then is refused.
+    const lane = async ({ charge }) => { charge(); sent++; throw QUOTA(); };
     const api = async ({ model }) => { sent++; return { served_model: model, text: JSON.stringify({ ...DISPATCH, cohesive: false, notes: "fixture ends at dispatch" }) }; };
     const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats({ dispatcher: () => seat }), turns: pipelineTurns({ turn: args => laneFirstTurn(args, { lane, api }) }),
       dir: join(env.root, name), limits: { max_provider_calls: max, judge_vendor: "agy_google" }, sameModel: () => true, planner: PLANNER });
@@ -104,7 +105,7 @@ test("a run killed mid-call has the call on disk, and a restart into the same di
     import { runPipeline } from ${JSON.stringify(url("../src/pipeline/index.mjs"))};
     import { seats, unit, scripted } from ${JSON.stringify(url("./fixtures/pipeline-stages.mjs"))};
     const plan = [unit("a")];
-    const s = scripted({ plan, implement: async args => { fs.writeFileSync(${JSON.stringify(join(dir, "call-sent"))}, args.cwd); await new Promise(() => {}); } });
+    const s = scripted({ plan, implement: async args => { args.admitRequest({ kind: "lane" }); fs.writeFileSync(${JSON.stringify(join(dir, "call-sent"))}, args.cwd); await new Promise(() => {}); } });
     setInterval(() => {}, 1000);
     await runPipeline({ repo: ${JSON.stringify(env.repo)}, base: "main", plan: { work_units: plan }, seats: seats(), turns: s.turns, dir: ${JSON.stringify(dir)} });`;
   mkdirSync(dir, { recursive: true });

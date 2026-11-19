@@ -26,7 +26,7 @@ import { rm } from "node:fs/promises";
 import { CAPABILITIES, digestOf, judgingTurn, keysRefusal, str, clone } from "./util.mjs";
 import { pathsOverlap as overlapOf, pathRefusal, matchesOwned } from "./paths.mjs";
 import { DIFFICULTIES, SPECIALIST_ROLE, SPECIALIST_ROLE_MAX, cycleOf, specialistRoleRefusal } from "./work-units.mjs";
-import { git } from "./git.mjs";
+import { git, repoMutex } from "./git.mjs";
 
 export const CONTROLLER = Object.freeze({ vendor: "controller", model: null });
 export const pathsOverlap = overlapOf;
@@ -237,10 +237,11 @@ export function waves(units) {
 /**
  * Bind ONE isolated worktree to a unit: a detached checkout of the run's base commit, plus the merged results
  * (patches) of the unit's upstream units applied in the order given and committed as one controller commit.
- * `lock` serialises the operations that touch the shared repository's worktree list.
+ * `lock` serialises the operations that touch the shared repository's worktree list: by default the repository's
+ * cross-process lock (git.mjs repoMutex; L-303), so no caller can mutate the worktree list outside it.
  * Returns {path, base_commit}: base_commit is what the unit's own work is diffed against.
  */
-export async function bindWorktree({ repo, base, path, upstream = [], lock = fn => fn() }) {
+export async function bindWorktree({ repo, base, path, upstream = [], lock = repoMutex(repo) }) {
   await lock(() => git(repo, ["worktree", "add", "--detach", path, base]));
   const applied = [];
   for (const up of upstream) {
@@ -253,7 +254,7 @@ export async function bindWorktree({ repo, base, path, upstream = [], lock = fn 
 }
 
 /** Remove a unit's worktree when the unit ends. Returns true when it is gone. */
-export async function releaseWorktree({ repo, path, lock = fn => fn() }) {
+export async function releaseWorktree({ repo, path, lock = repoMutex(repo) }) {
   return lock(async () => {
     const r = await git(repo, ["worktree", "remove", "--force", path], { allowFail: true });
     if (r.code !== 0) { await rm(path, { recursive: true, force: true }); await git(repo, ["worktree", "prune"], { allowFail: true }); }

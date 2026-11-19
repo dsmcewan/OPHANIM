@@ -45,19 +45,63 @@
 // with no provider keys and no controller key. Dispatch -- `watch` -- runs on the owner's machine, where the
 // provider keys and the controller key are.
 //
+// STOPPING (register L-121; as live-run.mjs does since L-305, 72303b2). tick, watch and serve install SIGINT and SIGTERM
+// handlers: the first signal aborts the scheduler's `interrupt`, so the stage in flight is stopped cooperatively and its
+// claim released `interrupted` (scheduler.mjs tick) -- the next start resumes it at once instead of waiting out its
+// lease -- and watch/serve stop their loop. If the command has not returned INTERRUPT_GRACE_MS later, or a second signal
+// arrives, every claim it took and still holds is released `interrupted` on the work ledger and the process exits
+// 128 + the signal's number. The lease fence is unchanged: a released claim records and charges nothing.
+//
 // Exit codes: 0 ok, 1 refused, 2 usage, 3 blocked (NO_AUTHORITY).
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {openWorkLedger, STAGES} from './work-ledger.mjs';
 import {reconcile, MARKER} from './reconcile.mjs';
-import {tick, watch, DEFAULT_LIMITS} from './scheduler.mjs';
+import {tick, watch, releaseInterrupted, DEFAULT_LIMITS} from './scheduler.mjs';
 import {readIssuesFile, fetchIssues} from './issues.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '../..');
 const refuse = (why, code = 'REFUSED') => { throw Object.assign(new Error(why), {code}); };
 const usage = why => { throw Object.assign(new Error(why), {usage: true}); };
+
+export const INTERRUPT_GRACE_MS = 10_000;
+const SIGNAL_NUMBERS = Object.freeze({SIGHUP: 1, SIGINT: 2, SIGTERM: 15});
+/**
+ * The launcher's own stop (STOPPING, above). Returns {signal, track(progressEvent), done()}: `signal` aborts on the first
+ * of `signals` (code INTERRUPTED); `track` records each claim the scheduler dispatched (its 'dispatch' events); done()
+ * removes the handlers and the grace timer.
+ */
+export function launcherStop({workRoot, proc = process, signals = ['SIGINT', 'SIGTERM'], exit = code => process.exit(code), graceMs = INTERRUPT_GRACE_MS, err = () => {}}) {
+  const ac = new AbortController(), held = new Map();
+  let grace = null;
+  const hardStop = sig => {
+    const why = `${sig} received and the command did not stop within ${graceMs} ms (or a second signal arrived): released by the launcher on exit`;
+    let released = [];
+    try {
+      const work = openWorkLedger({root: workRoot, create: false});
+      released = [...held].map(([claim, h]) => ({claim, ...h, released: releaseInterrupted(work, {claim, item: h.item, stage: h.stage, why})}));
+    } catch (e) { err(JSON.stringify({event: 'interrupt.release-failed', why: String(e?.message ?? e).slice(0, 300)})); }
+    err(JSON.stringify({event: 'interrupt.exit', signal: sig, released}));
+    exit(128 + (SIGNAL_NUMBERS[sig] ?? 0));
+  };
+  const onSignal = sig => {
+    if (ac.signal.aborted) { clearTimeout(grace); hardStop(sig); return; }
+    ac.abort(Object.assign(new Error(`${sig} received: the launcher was stopped`), {code: 'INTERRUPTED', signal: sig}));
+    grace = setTimeout(() => hardStop(sig), graceMs);   // NOT unref'd: a command that does not stop must still reach the hard stop
+  };
+  const handlers = signals.map(sig => [sig, () => onSignal(sig)]);
+  for (const [sig, h] of handlers) proc.on(sig, h);
+  return {
+    signal: ac.signal,
+    track: e => {
+      if (e?.event === 'dispatch' && e.claim) held.set(e.claim, {item: e.item, stage: e.stage});
+      if (e?.event === 'interrupted' && e.claim) held.delete(e.claim);
+    },
+    done: () => { clearTimeout(grace); for (const [sig, h] of handlers) proc.off(sig, h); },
+  };
+}
 
 const BOOLEAN = new Set(['json', 'github', 'once', 'init']);
 export function parseArgs(argv) {
@@ -329,7 +373,8 @@ export const tickSummary = (t, limits) => ({
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
 });
 
-export async function main(argv = process.argv.slice(2), {log = console.log, err = console.error, env = process.env, fetchImpl, stagesFile} = {}) {
+export async function main(argv = process.argv.slice(2), {log = console.log, err = console.error, env = process.env, fetchImpl, stagesFile, proc = process, exit, graceMs} = {}) {
+  const stopOpts = {proc, err, ...(exit ? {exit} : {}), ...(graceMs !== undefined ? {graceMs} : {})};
   try {
     const {verb, opts} = parseArgs(argv);
     const paths = pathsOf({opts, env});
@@ -350,7 +395,8 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
     }
     if (verb === 'tick' || verb === 'watch') {
       const limits = limitsOf(opts);
-      const progress = e => err(JSON.stringify(e));
+      let stop = null;
+      const progress = e => { stop?.track(e); err(JSON.stringify(e)); };
       const prep = await prepareDispatch({paths, opts, limits, stagesFile, progress});
       if (prep.blocked) { log(JSON.stringify(prep.blocked, null, 2)); return 3; }
       const holder = opts.holder ?? 'controller';
@@ -359,17 +405,19 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
         ...(opts.item !== undefined ? {only: opts.item} : {})};
       if (verb === 'tick') {
         const {issues} = await loadIssues(opts, {fetchImpl, env});
-        const t = await tick({...common, issues});
+        stop = launcherStop({workRoot: paths.workRoot, ...stopOpts});
+        let t;
+        try { t = await tick({...common, issues, interrupt: stop.signal}); } finally { stop.done(); }
         log(JSON.stringify(tickSummary(t, limits), null, 2));
         return 0;
       }
       if (opts.interval !== undefined && !/^\d+$/.test(opts.interval)) usage('--interval is a whole number of seconds');
-      const ac = new AbortController();
-      const stop = () => ac.abort();
-      process.once('SIGINT', stop); process.once('SIGTERM', stop);
       const fetchIssuesNow = async () => (await loadIssues(opts, {fetchImpl, env})).issues;
-      const ticks = await watch({...common, fetchIssues: fetchIssuesNow, interval_ms: Number(opts.interval ?? 60) * 1000, once: !!opts.once, signal: ac.signal});
-      process.off('SIGINT', stop); process.off('SIGTERM', stop);
+      stop = launcherStop({workRoot: paths.workRoot, ...stopOpts});
+      let ticks;
+      // The same signal stops the loop (`signal`) and the stage in flight (`interrupt`, passed on to tick).
+      try { ticks = await watch({...common, fetchIssues: fetchIssuesNow, interval_ms: Number(opts.interval ?? 60) * 1000, once: !!opts.once, signal: stop.signal, interrupt: stop.signal}); }
+      finally { stop.done(); }
       log(JSON.stringify({ticks: ticks.map(t => tickSummary(t, limits))}, null, 2));
       return 0;
     }
@@ -407,11 +455,11 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
       if (!opts.config) usage('serve needs --config FILE (see ophanim/operate/service/service.example.json)');
       const {readServiceConfig, runService} = await import('./service.mjs');
       const config = readServiceConfig(opts.config);
-      const ac = new AbortController();
-      const stop = () => ac.abort();
-      process.once('SIGINT', stop); process.once('SIGTERM', stop);
-      const r = await runService({config, signal: ac.signal, fetchImpl, env, ...(opts['max-ticks'] ? {maxTicks: Number(opts['max-ticks'])} : {})});
-      process.off('SIGINT', stop); process.off('SIGTERM', stop);
+      const stop = launcherStop({workRoot: config.workRoot, ...stopOpts});
+      let r;
+      // runService passes its signal on to every tick as the interrupt (service.mjs): the stage in flight stops too.
+      try { r = await runService({config, signal: stop.signal, onProgress: stop.track, fetchImpl, env, ...(opts['max-ticks'] ? {maxTicks: Number(opts['max-ticks'])} : {})}); }
+      finally { stop.done(); }
       log(JSON.stringify({code: r.code, stopped: r.stopped ?? null, refused: r.refused ?? null, blocked: r.blocked ?? null, ticks: r.ticks.length,
         status: path.relative(paths.repo, path.join(config.stateDir, 'service-status.json'))}, null, 2));
       return r.code;

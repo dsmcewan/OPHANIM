@@ -13,9 +13,12 @@
 //   visibility  after every tick: <state>/service-status.json (state, heartbeat, last tick summary, the next retry due,
 //               spend against the cap) and one line in <state>/service.jsonl. The public record (ophanim/public)
 //               projects the work ledger itself.
-//   stop        SIGTERM/SIGINT stop the loop between ticks. A stage in flight finishes or, if the process is killed,
-//               its claim's lease expires and the next start releases it as expired and resumes from the last
-//               recorded stage (scheduler.mjs): no work is repeated or lost.
+//   stop        SIGTERM/SIGINT (cli.mjs serve) abort `signal`, which is also every tick's `interrupt` (register L-121): the
+//               stage in flight is stopped cooperatively, its claim released `interrupted` with no stage record (the
+//               charges made under it stay counted), and the loop ends; the next start resumes the item at once.
+//               Only a process killed outright (SIGKILL, power loss) leaves its claim held until the lease expires;
+//               the next start then releases it as expired and resumes from the last recorded stage (scheduler.mjs).
+//               The lease fence is unchanged: a released claim records and charges nothing.
 //   errors      a tick that throws is logged with its reason and retried after the interval, at most
 //               `max_consecutive_errors` times in a row; then the service stops with the error recorded.
 //
@@ -100,7 +103,7 @@ export function acquireLock(file, {pid = process.pid, host = os.hostname(), now 
  * Run the service until `signal` aborts (or, with `maxTicks`, after that many loop turns: tests and bounded runs).
  * Returns {code, ticks, stopped}.
  */
-export async function runService({config, executors = null, signal = null, maxTicks = null, fetchImpl, env = process.env, clock = Date.now,
+export async function runService({config, executors = null, signal = null, maxTicks = null, fetchImpl, env = process.env, clock = Date.now, onProgress = null,
   sleep = (ms, sig) => new Promise(r => { const t = setTimeout(r, ms); sig?.addEventListener('abort', () => { clearTimeout(t); r(); }, {once: true}); })}) {
   const c = config;
   fs.mkdirSync(c.stateDir, {recursive: true});
@@ -139,8 +142,10 @@ export async function runService({config, executors = null, signal = null, maxTi
       if (maxTicks !== null && turns >= maxTicks) { stopped = 'max-ticks'; break; }
       turns++;
       try {
+        // `interrupt`: the service's own stop reaches the stage in flight (L-121), not only the loop.
         const ran = await watch({repo: c.repo, statusRoot: c.statusRoot, workRoot: c.workRoot, bundlesDir: c.bundlesDir, executors: exec, limits: c.limits,
-          holder: c.holder, fetchIssues, once: true, state, clock, progress: e => event({event: 'progress', ...e})});
+          holder: c.holder, fetchIssues, once: true, state, clock, ...(signal ? {interrupt: signal} : {}),
+          progress: e => { if (typeof onProgress === 'function') onProgress(e); event({event: 'progress', ...e}); }});
         errors = 0;
         const t = ran.at(-1) ?? null;
         if (t) { ticks.push(t); event({event: 'tick', summary: tickSummary(t, c.limits)}); }

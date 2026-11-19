@@ -13,12 +13,18 @@
 // after every step, so a crash leaves a truthful record of what had happened. A write that fails is NOT swallowed: the
 // next awaited write throws it (code RECORD_WRITE), so the run fails rather than carrying on without its record.
 //
-// THE CALL BUDGET. Every injected turn passes through `counted`, which refuses a call past max_provider_calls BEFORE it
-// is made and calls `onCharge()` (the caller's ledger charge; a throw refuses the call) before each one. A turn that
-// makes a SECOND provider call inside itself -- the implementer adapter's metered Gemini API failover after a lane
-// quota refusal, of ANY role -- receives `charge()` in its arguments and must call it before that call: it is counted, bounded and
-// charged as its own provider call (by_role.metered_failover), never hidden inside the lane attempt's charge
-// (independent review, assignment 3, question 1).
+// THE CALL BUDGET, PER REQUEST (L-301, self-audit round 3, assignment 3 (sealed bb1287a); the second charge contract of
+// sdk/live.mjs). Every injected turn passes through `counted`, which refuses it up front (an aborted run, or a bound
+// with no call left, opens no seat) and then charges NOTHING before it: the turn is handed `admitRequest({kind})`, which
+// it calls before EVERY provider call at its point of spend -- a lane's worker session between its jail build and its
+// spawn, each API request, a metered failover (by_role.metered_failover), a further billed request
+// (by_role.continuation). Each admission is bounded by max_provider_calls, charged by `onCharge()` (the caller's ledger
+// charge; a throw refuses the call) and on disk before the call. A lane turn that fails before its spawn costs nothing.
+// The up-front check RESERVES one call for the turn until its first admission (so concurrent turns cannot all pass it
+// and overrun the bound). A turn that does not take the contract (a scripted seat, an older adapter) and returns a
+// reply having admitted nothing is charged that one call on return (by_role as its role; one whose late charge the
+// caller refused is still counted, and named in provider_calls.late_uncharged), never dropped; the older `charge(what)`
+// is still passed and admits a further call the same way.
 //
 // The controller here is code ({vendor: "controller"}): it decides what is dispatched, kept, merged and skipped.
 //
@@ -72,7 +78,7 @@ import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
 import { candidateRefusal, contributorKeys, resolveModel, reviewerRefusal } from "../review/identity.mjs";
-import { git, mutex } from "./git.mjs";
+import { git, repoMutex } from "./git.mjs";
 import { laneParts } from "../route/fit-matrix.mjs";
 
 export { contributionsOf, arbitersOf } from "./record.mjs";
@@ -207,10 +213,16 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   // Unit keys (checkpoint.mjs), in wave order so every upstream key exists before its dependants'.
   for (const id of run.waves.flat()) run.units[id].unit_key = unitKey({ unit: byId.get(id), base_commit: run.base.commit, upstream: [...up.get(id)].map(d => ({ unit_id: d, unit_key: run.units[d].unit_key })), plan: units });
 
-  // ---- provider-call budget: every injected turn passes through here
-  const admit = role => {
+  // ---- provider-call budget: every injected turn passes through here (THE CALL BUDGET, PER REQUEST, in the header)
+  // `reserved`: the turns admitted up front that have not yet admitted their first call; total + reserved never exceeds
+  // the bound.
+  let reserved = 0;
+  const closed = () => {
     if (signal?.aborted) throw Object.assign(new Error("the run was aborted"), { code: "ABORTED" });
-    if (run.provider_calls.total >= lim.max_provider_calls) { run.provider_calls.refused_at_limit += 1; throw Object.assign(new Error(`the run's provider-call bound (${lim.max_provider_calls}) is exhausted`), { code: "PROVIDER_LIMIT" }); }
+    if (run.provider_calls.total + reserved >= lim.max_provider_calls) { run.provider_calls.refused_at_limit += 1; throw Object.assign(new Error(`the run's provider-call bound (${lim.max_provider_calls}) is exhausted`), { code: "PROVIDER_LIMIT" }); }
+  };
+  const admit = role => {
+    closed();
     // The caller's charge (the work ledger's spend) is made before the call; a refused charge refuses the call.
     if (typeof onCharge === "function") {
       try { onCharge({ role }); }
@@ -221,15 +233,34 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     // ON DISK BEFORE THE CALL: a record that cannot be written refuses the call.
     if (!persist()) throw recordError();
   };
+  // A reply from a turn that admitted no call: the call was made outside the contract, and is charged now (late).
+  const late = role => {
+    if (typeof onCharge === "function") {
+      try { onCharge({ role, late: true }); } catch { run.provider_calls.late_uncharged = (run.provider_calls.late_uncharged ?? 0) + 1; }
+    }
+    run.provider_calls.total += 1; run.provider_calls.by_role[role] = (run.provider_calls.by_role[role] ?? 0) + 1;
+    if (!persist()) throw recordError();
+  };
   const counted = role => async args => {
-    admit(role);
-    // `charge`: a second provider call made inside this turn (the metered API failover) is admitted here first. EVERY
-    // role gets it: a single-turn seat (dispatcher, reviewer, subagent) on a Gemini lane fails over too (sdk/agy-turn.mjs
-    // laneFirstTurn) (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 1).
-    // `charge("continuation")`: a further billed request of the same turn (a Google continuation hop, a compaction),
-    // admitted and counted the same way (by_role.continuation) (independent review round 2, assignment 3 (Google
+    closed();                                   // the refusals, up front: an aborted run or a spent bound opens no seat
+    reserved += 1;
+    let held = true, admitted = 0;
+    const release = () => { if (held) { held = false; reserved -= 1; } };
+    const take = r => { release(); admit(r); admitted += 1; };
+    // `admitRequest({kind})` before every provider call of this turn: its own call(s) (kind "lane", "request" or none),
+    // a metered failover (EVERY role: a single-turn seat on a Gemini lane fails over too, sdk/agy-turn.mjs laneFirstTurn;
+    // independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 1) and a further billed
+    // request of the same turn (a Google continuation hop, a compaction; independent review round 2, assignment 3 (Google
     // gemini-4-carbon, manual, 77480d6), finding 1.1).
-    return turns[role]({ ...args, charge: what => admit(what === "continuation" ? "continuation" : "metered_failover") });
+    const admitRequest = ({ kind } = {}) => take(kind === "continuation" ? "continuation" : kind === "failover" ? "metered_failover" : role);
+    // The older contract's `charge(what)` admits a FURTHER call; the turn's own first call, which that contract charged up
+    // front, is admitted with it when nothing was admitted yet.
+    const charge = what => { if (admitted === 0) take(role); take(what === "continuation" ? "continuation" : "metered_failover"); };
+    let r;
+    try { r = await turns[role]({ ...args, admitRequest, charge }); }
+    finally { release(); }
+    if (admitted === 0) late(role);
+    return r;
   };
   const T = { dispatcher: counted("dispatcher"), implementer: counted("implementer"), subagent: counted("subagent"), reviewer: counted("reviewer") };
 
@@ -629,19 +660,40 @@ export function liveOwner(dir) {
   return alive(o.pid) ? o : null;
 }
 
+// ONE LOCK PER REPOSITORY, for every operation on its shared worktree list and branches (worktree add/remove/prune,
+// the integration branch): git.mjs repoMutex, which now spans PROCESSES (L-303), re-exported here for its callers.
+export { repoMutex };
+
 /**
- * ONE MUTEX PER REPOSITORY in this process, for every operation on its shared worktree list and branches (worktree
- * add/remove/prune, the integration branch). Each run had its own (`mutex()` per runPipeline), and a lifecycle's
- * orphan recovery none, so with concurrency > 1 two items' runs (and a recovery's `worktree prune`) mutated one
- * repository's .git/worktrees at once (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
- * 77480d6), finding 3.3). Keyed by the repository's real path.
+ * THE INTEGRATION BRANCH OF A DEAD ATTEMPT (register L-304, self-audit round 3, assignment 3 (sealed bb1287a)). Each
+ * lifecycle attempt runs in a NEW directory with a new run_id, so the same-directory restart cleanup in runPipeline
+ * never sees a killed attempt's refs/heads/pantheon/pipeline/<run_id>, and those refs piled up. The implement stage's
+ * recovery calls this for every earlier attempt's run directory `dir`; the branch is deleted ONLY when:
+ *   - no live run holds `dir` (liveOwner: a pid on this host that is running, any other host's, or a run of this
+ *     process): never a live run's;
+ *   - the run never ended: its record (pipeline.json) is absent or still "running". A run that ended (completed,
+ *     incomplete, failed, refused) keeps its branch: a completed run's is handed on by its stage and an unfinished
+ *     one's is kept as its evidence ({integration: {kept: true}});
+ *   - the name is exactly pantheon/pipeline/<run_id> of that run (from its record, else its owner.json), a run_id of
+ *     plain characters (no "/"), so a record cannot name another ref to delete; and git deletes it only while no
+ *     worktree has it checked out.
+ * Under the repository lock. Returns {branch, deleted, why}.
  */
-const REPO_LOCKS = new Map();
-export function repoMutex(repo) {
-  let key;
-  try { key = realpathSync(repo); } catch { key = resolve(repo); }
-  if (!REPO_LOCKS.has(key)) REPO_LOCKS.set(key, mutex());
-  return REPO_LOCKS.get(key);
+export async function recoverDeadRunBranch({ repo, dir, lock = repoMutex(repo) }) {
+  const read = f => { try { return JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { return null; } };
+  const rec = read("pipeline.json"), owner = read(OWNER_FILE);
+  if (rec && rec.status !== "running") return { branch: rec.integration?.branch ?? null, deleted: false, why: `the run ended ${rec.status}: its branch is kept` };
+  const run_id = rec?.run_id ?? owner?.run_id ?? null;
+  if (typeof run_id !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(run_id)) return { branch: null, deleted: false, why: "no run id is recorded" };
+  const branch = `pantheon/pipeline/${run_id}`;
+  return lock(async () => {
+    // Judged under the repository lock, just before the deletion (a run of this directory that started meanwhile is seen).
+    const holder = liveOwner(dir);
+    if (holder) return { branch, deleted: false, why: `held by a live run (pid ${holder.pid} on ${holder.host})` };
+    if ((await git(repo, ["rev-parse", "--verify", "-q", `refs/heads/${branch}`], { allowFail: true })).code !== 0) return { branch, deleted: false, why: "no such branch" };
+    const del = await git(repo, ["branch", "-D", branch], { allowFail: true });
+    return { branch, deleted: del.code === 0, why: del.code === 0 ? "the run died before it ended" : del.stderr.trim().slice(0, 300) };
+  });
 }
 
 /**

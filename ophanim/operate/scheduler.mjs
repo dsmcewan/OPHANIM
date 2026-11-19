@@ -404,7 +404,8 @@ export async function watch({repo, statusRoot, workRoot, fetchIssues = async () 
       state.due = dues.length ? Math.min(...dues) : null;
     }
     if (once || signal?.aborted) return ticks;
-    await new Promise(r => setTimeout(r, interval_ms));
+    // The wait between polls ends on the stop (L-121): a stopped watch does not sleep out its interval first.
+    await new Promise(r => { const t = setTimeout(done, interval_ms); function done() { clearTimeout(t); signal?.removeEventListener('abort', done); r(); } signal?.addEventListener('abort', done, {once: true}); });
     if (signal?.aborted) return ticks;
   }
 }

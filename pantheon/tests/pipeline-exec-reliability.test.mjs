@@ -62,7 +62,9 @@ test("runPipeline: onCharge is called before every counted call, and a throwing 
   const plan = [unit("a")];
   const seen = [];
   const s = scripted({ plan });
-  const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats(), turns: s.turns, dir: join(env.root, "run"), planner: PLANNER,
+  // Seats that take the per-request contract (L-301): each admits its call before sending it.
+  const turns = Object.fromEntries(Object.entries(s.turns).map(([k, f]) => [k, async a => { a.admitRequest(); return f(a); }]));
+  const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats(), turns, dir: join(env.root, "run"), planner: PLANNER,
     onCharge: ({ role }) => { seen.push(role); if (seen.length > 1) throw new Error("the stage budget is spent"); } });
   assert.deepEqual(seen, ["dispatcher", "implementer"]);
   assert.equal(out.provider_calls.total, 1);
