@@ -1234,6 +1234,7 @@ export async function runOpenItem(spec, opts = {}) {
             // own transport (a lane rung is never an API pin). A rung on the same vendor keeps the pool the
             // operator named for this slot; the decision changed the model, not the credential.
             const keepPool = c.forced && c.forced.vendor === c.choice.seat.vendor && c.choice.seat.poolNamed ? { pool: c.choice.seat.pool } : {};
+            const workFrom = run.turns.length;
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
               choice: c.forced ? choose("implementer", { explicit: { seat: { vendor: c.forced.vendor, model: c.forced.model, ...keepPool }, source: "escalation",
                 reason: `recorded escalation ${c.forced.why === "thinking level raised" ? "raise_thinking" : "step_rung"} to ${c.forced.model}${c.forced.why ? `: ${c.forced.why}` : ""}` } }) : c.choice,
@@ -1242,8 +1243,16 @@ export async function runOpenItem(spec, opts = {}) {
             c.ranModel = made.seat.model;
             // Every model that wrote a revision contributed to the final bytes: the next revision's prompt carries the
             // previous file ("fix it; do not start over"). Kept for the reviewed scope (review/scope.mjs, owner audit RS2).
-            if (!(c.contributors ??= []).some(x => (x.purpose ?? "work") === "work" && x.vendor === made.seat.vendor && x.model === made.seat.model)) {
-              c.contributors.push({ purpose: "work", vendor: made.seat.vendor, model: made.seat.model, slot: c.sl.slot });
+            // The row keeps the model ASKED and the model that SERVED the turn, with the transport's marker of where the
+            // served name came from: under model-level independence both identities are contributors (independent
+            // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6, the work row).
+            const workRec = run.turns.slice(workFrom).findLast(t => t.purpose === "work" && t.vendor === made.seat.vendor && t.model === made.seat.model && t.prompt_chars === p.prompt.length);
+            const workServed = ledgerTurns.get(p.prompt)?.served_model ?? workRec?.served_model ?? null;
+            const workRow = { purpose: "work", vendor: made.seat.vendor, model: made.seat.model,
+              ...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),
+              ...(workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) };
+            if (!(c.contributors ??= []).some(x => (x.purpose ?? "work") === "work" && x.vendor === workRow.vendor && x.model === workRow.model && (x.served_model ?? null) === (workRow.served_model ?? null))) {
+              c.contributors.push({ ...workRow, slot: c.sl.slot });
             }
             // Under `fit`, the slot's effort is the one the answering seat ran with: when a fallback answered,
             // the next escalation starts from the fallback's own mapped effort, not the primary's.

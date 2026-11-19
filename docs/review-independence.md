@@ -282,15 +282,19 @@ Owner decision, 2026-11-19, on independent review round 2, assignment 2 (xAI gro
 - The capacity check before work predicts each unit's dispatcher as an arbiter. When no eligible capacity is left the stage is pending (`REVIEW_CAPACITY_PENDING`) with the blocker recorded and the work kept; nothing falls back to an excluded model and the three-lab floor is not lowered.
 - The arbiter record is preserved: on the stage record (`outputs.arbiters`, `team`, and the `arbiter` rows), across a resume (a unit resumed from its sealed v3 checkpoint carries the checkpoint's `dispatch` as its arbiter, `from_checkpoint: true`), and on the cycle, which a reassessment reads.
 
+- **Inside the pipeline**, the exception is the unit's own. A unit's Stage 5 reviewer, whether the pinned rung or any escalation rung, may not be another unit's dispatcher in the same run (the seat that unit is dispatched to, and the model that answered it), nor an authoring contributor of the unit (an implementer whose writes reached its worktree, a subagent whose answer was returned). Only the unit's own dispatcher identity is exempt (`pantheon/src/pipeline/index.mjs` `stage5Keys`). An excluded rung is skipped when the reviewer is chosen (`reviewer_exclusions`, escalation kind `reviewer_excluded`); an answer served by an excluded identity is not admitted (`STAGE5_EXCLUDED`); a checkpoint whose reviewer is now excluded is not resumed. A ladder exhausted by exclusions blocks the unit with `STAGE5_CAPACITY` and the work kept; nothing falls back.
+- A Stage 5 reviewer whose finding fed a revision of its own unit stays that unit's reviewer for the revised work (Decision 5): the revision sequence is inside the exception. It is a critique contributor for every later judgment.
+
 **Not changed**
 
-- The Stage 5 exception does not extend to another unit's later judgment, to the coordinated review, or to validation.
-- The pipeline's in-run Stage 5 ladder (`reviewerLadderRefusal`) and the frozen rubric hash are unchanged.
+- The Stage 5 exception does not extend to another unit, to the coordinated review, or to validation.
+- `reviewerLadderRefusal` (rung 0 is the dispatcher, every rung on its vendor) and the frozen rubric hash are unchanged.
 
 **Shown by tests**
 
 - `ophanim/operate/fit-lifecycle.test.mjs`: the pinned Stage 5 review approves each unit; the three dispatchers are excluded from the panel and the validator although each only approved; the three-lab panel still qualifies and the item reaches an outcome.
 - `ophanim/operate/independence-r2-a2.test.mjs`: requested and served identities excluded; a different OpenAI model seated; a resumed unit keeps its arbiter; no fallback when capacity is gone; a v3 cycle records the dispatcher and refuses an answer it served.
+- `pantheon/tests/pipeline-stage5-confined.test.mjs`: each unit's own dispatcher is pinned and approves it; unit b's ladder skips unit a's dispatcher model; a ladder exhausted by exclusions blocks on capacity; an answer served by another unit's dispatcher is not admitted.
 
 ## For the independent review
 
@@ -336,6 +340,7 @@ Independent review round 2, assignment 2 (xAI grok-4.7). Each regression test be
 |---|---|---|---|
 | Q6. Projection dropped a requested model | `dedupe` keyed `purpose\|vendor\|model\|lab`: a call asked as `grok-4.6` and served as `grok-4.7`, then a `grok-4.7` call, left only `grok-4.7`; `grok-4.6` was eligible for the panel and the validator. | The key includes `requested_model`: every identity `contributionsOf` kept stays excluded. | `ophanim/operate/independence-r2-a2.test.mjs` |
 | Q6. Board critique row kept the asked seat | A reviewer whose finding reached a revision was recorded as the seat asked; the model that served it stayed eligible. | The pending revision names the served models of the turns whose text it carries, and the critique contributor rows keep `served_model` beside `model`. | `pantheon/tests/independence-r2-a2.test.mjs` |
+| Q6. Board work row kept the asked seat | The slot's work contributor kept the implementer model asked; the model that served the turn stayed eligible for the slot's in-run review. | The row keeps `served_model` (and `served_model_source`) beside `model`. | `pantheon/tests/independence-r2-a2.test.mjs` |
 | Q6. Unnamed subagent answer | An answered call with no serving model stored `served_model: null` with no marker. | Recorded as `served_model_source: "unnamed"`; the asked model is the contributor that is excluded. | `pantheon/tests/independence-r2-a2.test.mjs` |
 | Q9. Board Antigravity guard | Refused a known non-Google model only; an undeclared name was stamped as served (`input`). | Refused, like `agySingleTurn`, unless the name is a declared Google model, before any lane starts. | `pantheon/tests/independence-r2-a2.test.mjs` (two board fixtures now name a declared Gemini model) |
 | Q9. `"provider"` by default | `pipelineTurns` `single()` labelled any served name without a source `"provider"`. | The transport's own report is passed on; `liveTurn` marks a name read off the provider's response `"provider"`; a name with no source is `"unknown"`. | `pantheon/tests/independence-r2-a2.test.mjs` |

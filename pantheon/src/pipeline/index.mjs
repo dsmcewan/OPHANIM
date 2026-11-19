@@ -71,6 +71,7 @@ import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, read
 import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
+import { candidateRefusal, contributorKeys, resolveModel, reviewerRefusal } from "../review/identity.mjs";
 import { git, mutex } from "./git.mjs";
 
 export { contributionsOf, arbitersOf } from "./record.mjs";
@@ -286,6 +287,35 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
 
   function finish(u, status, reason = null) { Object.assign(u, { status, reason, ended_at: now() }); }
 
+  /**
+   * DECISION 6 (owner, 2026-11-19): who may NOT judge unit `u` at Stage 5. The exception that lets a dispatcher review
+   * is its OWN unit's: every OTHER unit's dispatcher of this run -- the seat it is dispatched to (known before it
+   * answers, so the rule does not depend on which unit ran first) and the model that answered -- is excluded, and so is
+   * every authoring contributor of `u` (an implementer whose writes reached the worktree, a subagent whose answer was
+   * returned). `own` is u's dispatcher; its identities are not excluded. By canonical
+   * identity (review/identity.mjs), as contributorKeys returns it; an unresolved name leaves no rung eligible.
+   */
+  function stage5Keys(u, own, contributions = null) {
+    const rows = [];
+    for (const p of units) {
+      if (p.unit_id === u.unit_id) continue;
+      const s = seats.dispatcher(clone(p));
+      if (s?.vendor && s?.model) rows.push({ vendor: s.vendor, model: s.model });
+      const o = run.units[p.unit_id];
+      for (const d of [o?.dispatch, o?.resumed ? o.checkpoint?.dispatch : null]) {
+        if (d && (d.model || d.served_model)) rows.push({ vendor: d.vendor ?? null, model: d.model ?? null, served_model: d.served_model ?? null });
+      }
+    }
+    // The unit's own `critique` rows are its Stage 5 reviewers' (fed findings): such a reviewer stays the unit's
+    // reviewer for the revised work (Decision 5; the revision sequence is inside the exception). It is excluded from
+    // every LATER judgment (the change review, the validator) as a critique contributor, and from other units below.
+    rows.push(...(contributions ?? contributionsOf({ units: { [u.unit_id]: u } })).filter(c => c.kind === "work" || c.kind === "subtask")
+      .map(c => ({ vendor: c.vendor, model: c.model, served_model: c.served_model ?? null })));
+    const keys = contributorKeys(rows);
+    const mine = new Set([own?.model, own?.served_model].filter(Boolean).map(m => resolveModel(own.vendor, m)).filter(r => r.known).map(r => r.id));
+    return { ...keys, models: keys.models.filter(m => !mine.has(m)) };
+  }
+
   async function runUnit(planned) {
     const u = run.units[planned.unit_id];
     Object.assign(u, { status: "dispatching", started_at: now() });
@@ -381,9 +411,36 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         } else {
           checkpoint = a.checkpoint;
           // ---- Stage 5
-          const level = state.reviewer_level;
+          // THE EXCEPTION IS THIS UNIT'S OWN (Decision 6, owner 2026-11-19): a rung that is another unit's dispatcher
+          // (asked or served) or a contributor of this unit is skipped at SELECTION; with no rung left the unit blocks on
+          // capacity, with the reason recorded, and nothing falls back to an excluded model.
+          const k5 = stage5Keys(u, { vendor: dSeat.vendor, model: dSeat.model, served_model: u.dispatch.served_model ?? null });
+          let level = state.reviewer_level;
+          const skipped = [];
+          while (level < rLadder.length) {
+            const why = candidateRefusal(rLadder[level], k5);
+            if (!why) break;
+            skipped.push({ vendor: rLadder[level].vendor, model: rLadder[level].model, level, why });
+            level++;
+          }
+          if (skipped.length) (u.reviewer_exclusions ??= []).push(...skipped.map(x => ({ after_attempt: n, ...x })));
+          if (level >= rLadder.length) {
+            u.code = "STAGE5_CAPACITY";
+            await save();
+            return finish(u, "blocked", `STAGE5_CAPACITY: no rung of the reviewer ladder may judge unit ${unit.unit_id} (${skipped.map(x => `${x.vendor}/${x.model}: ${x.why}`).join("; ").slice(0, 600)}); the work is kept and the review is pending capacity`);
+          }
+          if (level !== state.reviewer_level) {
+            u.escalations.push({ after_attempt: n, kind: "reviewer_excluded", from: clone(rLadder[state.reviewer_level]), to: clone(rLadder[level]) });
+            state = { ...state, reviewer_level: level };
+          }
           review = await runReviewer({ unit: clone(unit), worktree: path, base_commit: wt.base_commit, checkpoint, seat: rLadder[level], turn: T.reviewer,
             dispatch: { rubric: [...u.dispatch.rubric], rubric_hash: u.dispatch.rubric_hash }, limits: lim, pinned: level === 0, level, attempt: n, signal, sameModel });
+          // ADMISSION, by the model that answered: an answer served by an excluded identity is not a review.
+          if (review.served_model && !["rubric_mismatch", "diff_too_large", "not_admitted"].includes(review.status)) {
+            const why = reviewerRefusal({ vendor: review.vendor, model: review.model, served_model: review.served_model },
+              stage5Keys(u, { vendor: dSeat.vendor, model: dSeat.model, served_model: u.dispatch.served_model ?? null }));
+            if (why) { Object.assign(review, { status: "not_admitted", code: "STAGE5_EXCLUDED", why: `the Stage 5 answer is not admitted: ${why}`, feedback: [] }); u.code = "STAGE5_EXCLUDED"; }
+          }
           u.reviews.push(review);
           // The review's findings are on the record IN THE SAME SAVE as the review: a kill between two saves cannot
           // leave a request_changes review whose feedback the next attempt never sees (independent review, assignment
@@ -480,6 +537,11 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       if (!dSeat || !sameSeat(dSeat, got.record.dispatch)) return reject(`the checkpoint's dispatcher ${got.record.dispatch.vendor}/${got.record.dispatch.model} is not the seat this run dispatches the unit to`);
       const ladder = (seats.reviewerLadder(clone(dSeat)) ?? []);
       if (!ladder.some(s => sameSeat(s, got.record.review))) return reject(`the checkpoint's reviewer ${got.record.review.vendor}/${got.record.review.model} is not on the unit's reviewer ladder`);
+      // The recorded reviewer must still be one that may judge this unit (Decision 6): not another unit's dispatcher of
+      // this run and not a contributor of the unit, by the model asked and by the model that answered.
+      const k5 = stage5Keys(u, got.record.dispatch, (got.record.contributions ?? []).map(c => ({ kind: c.kind, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null })));
+      const excluded = reviewerRefusal({ vendor: got.record.review.vendor, model: got.record.review.model, served_model: got.record.review.served_model ?? null }, k5);
+      if (excluded) return reject(`the checkpoint's reviewer may not judge this unit: ${excluded}`);
       patches.set(u.unit_id, got.patch);
       await writeFile(join(dir, "units", `${u.unit_id}.patch`), got.patch);
       Object.assign(u, { resumed: true, base_commit: wt.base_commit, commit: got.record.commit, tree, patch_digest: got.record.patch_digest,

@@ -143,6 +143,19 @@ test("Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), ques
   }, { review: (_p, k) => (k === 1 ? "The export is wrong.\nVERDICT: request_changes" : "VERDICT: approve"), served: (v, m) => (v === "xai" && m === "grok-4.6" ? "grok-4.7" : m) });
 });
 
+// Question 6, the work row (follow-up): the implementer was asked gpt-6-astra and served as gpt-6-sol. Before the fix
+// the slot's work contributor kept gpt-6-astra only, so gpt-6-sol stayed eligible to review those bytes.
+test("Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): a board work contributor keeps the served model beside the asked one", async () => {
+  await withBoard(async ({ spec, opts }) => {
+    const r = await runOpenItem(spec, opts);
+    const rows = runJson(r).files.flatMap(f => f.contributors ?? []).filter(c => c.purpose === "work");
+    assert.deepEqual(rows.map(c => [c.vendor, c.model, c.served_model ?? null]), [["openai", "gpt-6-astra", "gpt-6-sol"]], JSON.stringify(rows));
+    const keys = contributorKeys(reviewScope({ kind: "artifact", slot: "ok", turns: rows }).contributions);
+    assert.deepEqual(keys.models, ["openai/gpt-6-astra", "openai/gpt-6-sol"]);
+    assert.match(reviewerRefusal({ vendor: "openai", model: "gpt-6-sol", served_model: "gpt-6-sol" }, keys), /gpt-6-sol contributed/);
+  }, { review: () => "VERDICT: approve", served: (v, m) => (v === "openai" && m === "gpt-6-astra" ? "gpt-6-sol" : m) });
+});
+
 test("Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): an answered subagent call that names no serving model is recorded as unnamed", async () => {
   const shim = await startA2AShim({ unit_id: "u1", allowed_subagents: ["helper"], seatFor: () => ({ vendor: "xai", model: "grok-4.6" }), subagentTurn: async () => ({ text: "an answer", served_model: null }), tcp: true });
   try {
