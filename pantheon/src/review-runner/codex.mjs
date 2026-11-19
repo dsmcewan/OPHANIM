@@ -45,15 +45,39 @@
 // that does not say ChatGPT is refused), and that a ChatGPT sign-in bills the subscription (OpenAI's docs: "Sign in
 // with ChatGPT for subscription access"). NO event names the served model (served_model_source: input).
 //
-// Codex runs its OWN bubblewrap sandbox; this runner does NOT wrap it in ours. Containment is codex's sandbox mode
-// (read-only for assignment 4, workspace-write for 1-3) with approval_policy never, plus the runner's post-run git
-// check of the worktree (subscription.mjs), which records any write outside .review-tests/.
+// Codex runs its OWN bubblewrap sandbox; this runner does NOT wrap it in ours. Containment is a codex PERMISSION
+// PROFILE the runner defines (codexPermissionProfile, below) with approval_policy never, checked before the run by
+// `codex debug prompt-input` (the profile codex will actually apply, no model turn), plus the runner's post-run git
+// check of the worktree (subscription.mjs), which records any write outside .review-tests/ (any write, assignment 4).
+//
+// WHY NOT `--sandbox read-only` / `workspace-write` (the 09d490f runs). Observed with this 0.170.0 binary through
+// `codex sandbox -P <profile> -- <cmd>` (codex's own sandbox, no model, no credentials; the legacy modes map to the
+// built-in profiles :read-only and :workspace, which `codex debug prompt-input` shows): with the network off, codex's
+// seccomp filter refuses setsockopt(2) and shutdown(2), and libuv calls setsockopt(SO_RCVBUF/SO_SNDBUF) on the
+// socketpair behind every piped child, so any node spawn with pipes fails EPERM (`spawnSync git EPERM`, and
+// `node --test` itself, whose per-file child reports only "test failed"). :read-only also leaves no writable temp
+// dir. The profile below instead:
+//   - reads only :minimal (codex's runtime set: /usr, /etc, ...), the codex binary's vendor dir, the node install,
+//     the worktree and (when given) the telos root -- so the owner's HOME (~/.codex/auth.json included), /tmp and
+//     every host Unix socket outside those are invisible; /run and /var/run are denied outright;
+//   - writes only a per-run scratch dir outside the worktree (the commands' TMPDIR) and, for assignments 1-3,
+//     <worktree>/.review-tests;
+//   - turns the network ON only behind codex's managed proxy (features.network_proxy) with NO allowed domain: the
+//     commands run in their own network namespace (observed: the host's loopback is unreachable; https via the
+//     proxy and SOCKS both fail), which also lifts the setsockopt filter;
+//   - allows Unix sockets (dangerously_allow_all_unix_sockets): the pipeline's A2A shim listens on one under TMPDIR;
+//     with the read set above, no host socket is reachable (observed: a host socket under /root, /tmp or /run is
+//     ENOENT/EACCES inside).
+// Still failing inside it, and said so to the reviewer: anything that starts bwrap (nested user namespaces are
+// refused: "Creating new namespace failed" / "Failed to create NETLINK_ROUTE socket"), and a node fetch to a server
+// the test started unless NO_PROXY names loopback (codex clears NO_PROXY and sets NODE_USE_ENV_PROXY=1), which is why
+// codex's listed test commands carry an `env NO_PROXY=...` prefix.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactStrong } from "../board/agy-cli.mjs";
-import { runCli, tail } from "./cli-common.mjs";
+import { REVIEW_TESTS_DIR, runCli, tail } from "./cli-common.mjs";
 
 export const CODEX_SDK_PACKAGE = "@openai/codex-sdk";
 export const FORBIDDEN_SANDBOX = Object.freeze(["danger-full-access"]);
@@ -100,7 +124,70 @@ export function parseModelList(stdout, model) {
   return { status: idLines.length ? "missing" : "unknown", format: idLines.length ? "lines" : null, count: idLines.length };
 }
 
-export function codexSandboxFor(write_allowed) { return write_allowed ? "workspace-write" : "read-only"; }
+// ---- the permission profile ---------------------------------------------------------------------------------------
+
+export const REVIEW_PERMISSION_PROFILE = "ophanim-review";
+export const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,::1";
+const tq = s => JSON.stringify(String(s));
+const inlineToml = o => `{${Object.entries(o).map(([k, v]) => `${tq(k)}=${v && typeof v === "object" ? inlineToml(v) : typeof v === "string" ? tq(v) : String(v)}`).join(", ")}}`;
+
+/**
+ * The codex permission profile of a review run, as raw `--config` overrides (passed to the SDK as `configOverrides`,
+ * so codex sees exactly these strings), plus the file-system entries `codex debug prompt-input` must then report.
+ * All paths absolute and real. `readRoots`: the codex vendor dir, the node install, the telos root.
+ */
+export function codexPermissionProfile({ worktree, write_allowed, scratchTmp, readRoots = [] }) {
+  const name = REVIEW_PERMISSION_PROFILE;
+  for (const p of [worktree, scratchTmp, ...readRoots]) if (!String(p ?? "").startsWith("/")) throw new Error(`codex permission profile: ${p} is not an absolute path`);
+  if (scratchTmp === worktree || scratchTmp.startsWith(worktree + "/")) throw new Error("codex permission profile: the scratch TMPDIR must be outside the worktree");
+  const fs = { ":minimal": "read" };
+  for (const r of [...new Set(readRoots)]) fs[r] = "read";
+  Object.assign(fs, { "/run": "deny", "/var/run": "deny", [scratchTmp]: "write" });
+  const roots = { ".": "read", ...(write_allowed ? { [REVIEW_TESTS_DIR]: "write" } : {}) };
+  const network = { enabled: true, dangerously_allow_all_unix_sockets: true };
+  const overrides = [
+    `default_permissions=${tq(name)}`,
+    "features.network_proxy=true",
+    `permissions.${name}.filesystem=${inlineToml({ ...fs, ":workspace_roots": roots })}`,
+    `permissions.${name}.network=${inlineToml(network)}`,
+    'web_search="disabled"',
+  ];
+  const expected = [
+    ...Object.entries(fs).map(([k, v]) => `${v} ${k}`),
+    `read ${worktree}`, ...(write_allowed ? [`write ${worktree}/${REVIEW_TESTS_DIR}`] : []),
+  ].sort();
+  return { name, overrides, expected_entries: expected, filesystem: { ...fs, ":workspace_roots": roots }, network, scratch_tmp: scratchTmp };
+}
+
+/**
+ * What `codex debug prompt-input` says codex will apply: {found, type, entries ["<access> <path or :special>"],
+ * network "enabled" | "restricted" | null}. Its JSON holds the model-visible <environment_context>, whose
+ * <permission_profile> lists the file-system entries, and the permissions text ("Network access is ...").
+ */
+export function parsePromptPermissions(stdout) {
+  let text = String(stdout ?? "");
+  try { text = JSON.stringify(JSON.parse(text)).replace(/\\"/g, '"'); } catch { text = text.replace(/\\"/g, '"'); }
+  const m = text.match(/<permission_profile([^>]*)>(.*?)<\/permission_profile>/);
+  const net = text.match(/Network access is (enabled|restricted)/);
+  if (!m) return { found: false, type: null, entries: [], network: net?.[1] ?? null };
+  const entries = [...m[2].matchAll(/<entry access="(\w+)"[^>]*><(?:path|special)>([^<]*)<\/(?:path|special)><\/entry>/g)].map(x => `${x[1]} ${x[2]}`).sort();
+  return { found: true, type: (m[1].match(/type="(\w+)"/) ?? [])[1] ?? null, file_system: (m[2].match(/<file_system type="(\w+)"/) ?? [])[1] ?? null, entries, network: net?.[1] ?? null };
+}
+
+/** Does the observed profile match the expected one exactly? {ok, missing, unexpected, why}. */
+export function checkPromptPermissions(observed, expected) {
+  if (!observed.found) return { ok: false, missing: expected, unexpected: [], why: "`codex debug prompt-input` named no permission profile" };
+  const want = new Set(expected), got = new Set(observed.entries);
+  // Codex adds one entry of its own: read access to the per-process helper it re-executes inside the sandbox
+  // ($CODEX_HOME/tmp/arg0-linux/codex-arg0<random>; observed, 0.170.0). Only that shape, and only `read`, is tolerated.
+  const own = e => /^read \/.+\/arg0-linux\/codex-arg0[A-Za-z0-9]+$/.test(e);
+  const missing = expected.filter(e => !got.has(e)), unexpected = observed.entries.filter(e => !want.has(e) && !own(e));
+  const why = [];
+  if (missing.length || unexpected.length) why.push(`file-system entries differ (missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)})`);
+  if (observed.file_system !== "restricted") why.push(`file_system is ${observed.file_system}, not restricted`);
+  if (observed.network !== "enabled") why.push(`network is ${observed.network} (the profile turns it on behind codex's proxy; anything else means another profile is in force)`);
+  return { ok: why.length === 0, missing, unexpected, why: why.join("; ") || null };
+}
 
 // ---- the installed SDK -----------------------------------------------------------------------------------------------
 
@@ -171,19 +258,29 @@ export function inspectCodexSdk() {
   return { ...info, key_injection: sdkKeyInjection(source), binary: resolveSdkCodexBinary({ entry: info.entry }) };
 }
 
-/** The Codex constructor options. Never an apiKey or a baseUrl: the scrubbed env and the pinned binary only. */
-export function codexSdkOptions({ env, binary, allowApiKeyLogin = false }) {
+/**
+ * The Codex constructor options. Never an apiKey or a baseUrl: the scrubbed env, the pinned binary, and the raw
+ * permission-profile overrides (`configOverrides`, passed to the CLI unchanged). No override may name sandbox_mode
+ * (that would switch codex back to the legacy sandbox settings) or danger-full-access.
+ */
+export function codexSdkOptions({ env, binary, allowApiKeyLogin = false, configOverrides = [] }) {
   const o = { env: { ...env }, codexPathOverride: binary };
   if (!allowApiKeyLogin) o.config = { forced_login_method: "chatgpt" };
+  for (const c of configOverrides) if (/sandbox_mode|sandbox_workspace_write|danger-full-access|bypass/i.test(c)) throw new Error(`codex config override ${c}: refused`);
+  if (configOverrides.length) o.configOverrides = [...configOverrides];
   for (const k of ["apiKey", "baseUrl"]) if (k in o) throw new Error(`codex SDK options carry ${k}: refused`);
   for (const k of Object.keys(o.env)) if (/^(CODEX_API_KEY|OPENAI_API_KEY|CODEX_ACCESS_TOKEN)$/.test(k)) throw new Error(`codex SDK env carries ${k}: refused`);
   return o;
 }
 
-/** The ThreadOptions (names from the SDK's index.d.ts:252-265). Refuses danger-full-access. */
-export function codexThreadOptions({ model, worktree, write_allowed }) {
-  const o = { model, sandboxMode: codexSandboxFor(write_allowed), workingDirectory: worktree, skipGitRepoCheck: true, approvalPolicy: "never" };
-  if (FORBIDDEN_SANDBOX.includes(o.sandboxMode)) throw new Error(`codex sandbox ${o.sandboxMode}: refused`);
+/**
+ * The ThreadOptions (names from the SDK's index.d.ts:252-265). NO sandboxMode: the SDK would pass `--sandbox`, and
+ * codex then ignores the permission profile (docs: "If ... you pass --sandbox ... Codex uses those older sandbox
+ * settings instead of default_permissions"). The profile comes from codexPermissionProfile via configOverrides.
+ */
+export function codexThreadOptions({ model, worktree }) {
+  const o = { model, workingDirectory: worktree, skipGitRepoCheck: true, approvalPolicy: "never" };
+  if ("sandboxMode" in o || FORBIDDEN_SANDBOX.includes(o.sandboxMode)) throw new Error("codex thread options carry a sandbox mode: refused");
   return o;
 }
 
@@ -191,6 +288,7 @@ export function codexThreadOptions({ model, worktree, write_allowed }) {
 export function sdkSpawnArgv({ binary, sdkOptions, threadOptions, resumeId = null }) {
   const a = [binary, "exec", "--experimental-json"];
   for (const [k, v] of Object.entries(sdkOptions.config ?? {})) a.push("--config", `${k}=${JSON.stringify(v)}`);
+  for (const c of sdkOptions.configOverrides ?? []) a.push("--config", c);
   const t = threadOptions;
   if (t.model) a.push("--model", t.model);
   if (t.sandboxMode) a.push("--sandbox", t.sandboxMode);
@@ -201,8 +299,12 @@ export function sdkSpawnArgv({ binary, sdkOptions, threadOptions, resumeId = nul
   return a;
 }
 
-/** Zero-spend preflight on the binary the SDK will spawn: version, login status (must be ChatGPT), model catalog. */
-export async function codexPreflight({ cli, env, model, opts, sdk, timeoutMs = 60_000 }) {
+/**
+ * Zero-spend preflight on the binary the SDK will spawn: version, login status (must be ChatGPT), model catalog, and
+ * (with `permissions`: {overrides, expected_entries, cwd}) the permission profile codex will apply, as `codex debug
+ * prompt-input` renders it with the same overrides and working directory (no model turn).
+ */
+export async function codexPreflight({ cli, env, model, opts, sdk, permissions = null, timeoutMs = 60_000 }) {
   const checks = {}, failed = [];
   if (sdk) {
     checks.sdk = sdk;
@@ -223,6 +325,16 @@ export async function codexPreflight({ cli, env, model, opts, sdk, timeoutMs = 6
   checks.model_list = { argv: [cli, "debug", "models"], exit_code: m.exit_code, model, ...list, stderr_tail: redactStrong(tail(m.stderr, 1000), env) };
   if (list.status === "missing") failed.push(`\`codex debug models\` does not list ${model}`);
   else if (list.status === "unknown" && !opts.skipModelCheck) failed.push(`\`codex debug models\` could not be read for ${model} (status unknown); pass --skip-model-check to run without that check`);
+  if (permissions) {
+    const args = ["debug", "prompt-input", ...permissions.overrides.flatMap(c => ["--config", c]), "permission check"];
+    const pi = await runCli({ cmd: cli, args, cwd: permissions.cwd, env, timeoutMs });
+    const seen = parsePromptPermissions(pi.stdout);
+    const verdict = checkPromptPermissions(seen, permissions.expected_entries);
+    checks.permission_profile = { argv: [cli, ...args], cwd: permissions.cwd, exit_code: pi.exit_code, observed: seen, expected_entries: permissions.expected_entries, ok: verdict.ok, why: verdict.why,
+      ...(pi.exit_code !== 0 ? { stderr_tail: redactStrong(tail(pi.stderr, 1000), env) } : {}) };
+    if (pi.exit_code !== 0) failed.push(`\`codex debug prompt-input\` failed (exit ${pi.exit_code ?? pi.killed_for ?? pi.spawn_error}): the permission profile codex would apply could not be checked`);
+    else if (!verdict.ok) failed.push(`codex would not apply the review's permission profile: ${verdict.why}`);
+  }
   return { ok: failed.length === 0, failed, checks, cli_version: checks.version.text, auth_method_observed: login.method, model_check: list.status };
 }
 

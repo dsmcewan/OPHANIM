@@ -15,7 +15,8 @@
 //     fresh /tmp, the worktree read-only with `.review-tests/` bound read-write for assignments 1-3 (nothing writable
 //     in the worktree for 4), the main repository's git dirs read-only, the CLI's own directory read-only (it may sit
 //     under /tmp), the state scratch read-write at the state dir's path; the network is NOT cut (the CLI must reach xAI).
-//   - the stream is parsed tolerantly: the final text is the last result / assistant message event's text; lines that
+//   - the stream is parsed tolerantly (parseGrokStream): complete assistant / result messages, or incremental text chunks
+//     joined in order; tool and reasoning events never count; lines that
 //     are not JSON are counted.
 import { cp, chmod, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -90,16 +91,43 @@ export async function grokStateScratch(stateDir, runDir) {
 }
 export const dropGrokScratch = s => (s ? rm(s.scratch, { recursive: true, force: true }).catch(() => {}) : Promise.resolve());
 
-const textOf = v => {
+// The Grok CLI's streaming-json schema is UNDOCUMENTED: docs.x.ai/build/cli/headless-scripting (read 2026-11-19) says
+// only "`streaming-json`: newline-delimited JSON events" and "Streaming JSON emits incremental events as they arrive";
+// its ACP mode sends the assistant text as `session/update` `agent_message_chunk` chunks. The 09d490f run ended with
+// 6722 events and no final text, so the text most likely came in incremental chunks the old reader (complete
+// messages and `result` events only) did not join. ASSUMED, not observed: the field names below are the common
+// shapes of such streams (Claude/OpenAI/ACP style); an unknown shape still ends `incomplete`, now with the event
+// types it saw.
+const textOf = (v, depth = 0) => {
+  if (depth > 6 || v == null) return null;
   if (typeof v === "string") return v;
-  if (Array.isArray(v)) { const t = v.map(x => (typeof x === "string" ? x : typeof x?.text === "string" ? x.text : "")).join(""); return t || null; }
-  if (v && typeof v === "object") return typeof v.text === "string" ? v.text : typeof v.content === "string" ? v.content : Array.isArray(v.content) ? textOf(v.content) : null;
+  if (Array.isArray(v)) {
+    const t = v.map(x => (typeof x === "string" ? x : x && typeof x === "object" && !TOOLISH.test(String(x.type ?? "")) ? textOf(x, depth + 1) ?? "" : "")).join("");
+    return t || null;
+  }
+  if (typeof v === "object") {
+    for (const k of ["text", "content", "message", "output", "output_text", "result", "response", "delta", "value"]) {
+      if (!(k in v)) continue;
+      const x = textOf(v[k], depth + 1);
+      if (x) return x;
+    }
+  }
   return null;
 };
+// Tool activity, the model's reasoning and housekeeping: never the final answer.
+const TOOLISH = /tool|function|command|exec|shell|patch|diff|file|search|plan|thought|thinking|reason|permission|usage|error|status|start|init|session_(created|started)/i;
+const CHUNKISH = /chunk|delta|partial|stream/i;
+const FINALISH = /result|final|done|complete|message|assistant|response|answer|text/i;
+/** The event's own name: type / event / kind, or an ACP-style update's sessionUpdate. */
+const eventName = e => String(e.type ?? e.event ?? e.kind ?? e.sessionUpdate ?? e.params?.update?.sessionUpdate ?? e.update?.sessionUpdate ?? e.method ?? "");
+const bodyOf = e => e.params?.update ?? e.update ?? e;
 /**
- * Read the streaming-json lines tolerantly. The final text: walking back from the last event, the first whose type
- * names a result / final answer with a text field (result, text, content, response, output), or an assistant message
- * (role "assistant", or a type naming a message) with text content. Usage: the last `usage` object seen.
+ * Read the streaming-json lines tolerantly. In order: a complete assistant message or a result event (a name matching
+ * result / final / message / assistant / response, or role "assistant") with text sets the final text and clears the
+ * chunk buffer; a chunk / delta event (by name, or a `delta` field) appends its text to the buffer, which then stands
+ * as the final text until a complete message replaces it; tool, reasoning and housekeeping events are never the final
+ * text (a tool event ends the current chunk run). Usage: the last `usage` object seen. On no final text, `diagnosis`
+ * names the last event types, the type counts and the last event's keys (never its values).
  */
 export function parseGrokStream(lines) {
   const events = [];
@@ -108,26 +136,41 @@ export function parseGrokStream(lines) {
     if (!line.trim()) continue;
     try { const e = JSON.parse(line); if (e && typeof e === "object" && !Array.isArray(e)) events.push(e); else unparsed++; } catch { unparsed++; }
   }
-  let final = null, usage = null, error = null;
+  let final = null, final_source = null, usage = null, error = null, buffer = "", chunks = 0, messages = 0;
   // own: every event the CLI printed except a bare start (its own messages and tool activity), each capped.
-  const own = events.filter(e => !/^(start|init)$/i.test(String(e.type ?? e.event ?? ""))).map(e => {
+  const own = events.filter(e => !/^(start|init)$/i.test(eventName(e))).map(e => {
     const t = JSON.stringify(e);
-    return { kind: String(e.type ?? e.event ?? "event"), text: t.length > 16384 ? `${t.slice(0, 16384)}… (truncated)` : t };
+    return { kind: eventName(e) || "event", text: t.length > 16384 ? `${t.slice(0, 16384)}… (truncated)` : t };
   });
+  const counts = {};
   for (const e of events) {
+    const name = eventName(e), body = bodyOf(e);
+    counts[name || "(no type)"] = (counts[name || "(no type)"] ?? 0) + 1;
     if (e.usage && typeof e.usage === "object") usage = e.usage;
     else if (e.result?.usage && typeof e.result.usage === "object") usage = e.result.usage;
-    const t = String(e.type ?? e.event ?? "");
-    if (/error/i.test(t) || (e.error && !e.result)) error = String(e.error?.message ?? e.error ?? e.message ?? "error").slice(0, 1000);
-  }
-  for (let i = events.length - 1; i >= 0 && final === null; i--) {
-    const e = events[i], t = String(e.type ?? e.event ?? "");
-    if (/result|final|done|complete/i.test(t)) {
-      for (const k of ["result", "text", "content", "response", "output"]) { const x = textOf(e[k]); if (x && x.trim()) { final = x; break; } }
-    } else if (e.role === "assistant" || /message|assistant/i.test(t)) {
-      const x = textOf(e.content ?? e.message ?? e.text);
-      if (x && x.trim()) final = x;
+    if (/error/i.test(name) || (e.error && !e.result)) error = String(e.error?.message ?? e.error ?? e.message ?? "error").slice(0, 1000);
+    const role = body.role ?? body.message?.role ?? null;
+    if (role && role !== "assistant") continue;                            // the user's / a tool's message
+    const toolish = TOOLISH.test(name) && !/^(result|final|done|complete)/i.test(name) && role !== "assistant";
+    if (toolish) { buffer = ""; continue; }
+    if (CHUNKISH.test(name) || ("delta" in body && !FINALISH.test(name.replace(CHUNKISH, "")))) {
+      const x = textOf(body.delta ?? body.content ?? body.text ?? body.message);
+      if (x) { buffer += x; chunks++; final = buffer; final_source = "chunks"; }
+      continue;
+    }
+    if (FINALISH.test(name) || role === "assistant") {
+      const x = /result|final|done|complete/i.test(name)
+        ? textOf(["result", "text", "content", "response", "output", "message"].map(k => body[k]).find(v => textOf(v)?.trim()))
+        : textOf(body.content ?? body.message ?? body.text);
+      if (x && x.trim()) { final = x; final_source = name || "assistant"; messages++; buffer = ""; }
     }
   }
-  return { final_text: final, usage, error, events: events.length, unparsed, own };
+  if (final !== null && !final.trim()) final = null;
+  const last = events.slice(-8).map(e => eventName(e) || "(no type)");
+  const diagnosis = final === null ? {
+    last_event_types: last,
+    type_counts: Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 20)),
+    last_event_keys: events.length ? Object.keys(events.at(-1)).slice(0, 20) : [],
+  } : null;
+  return { final_text: final, final_source, usage, error, events: events.length, unparsed, chunks, messages, own, diagnosis };
 }

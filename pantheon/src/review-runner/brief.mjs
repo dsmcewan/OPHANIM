@@ -61,6 +61,12 @@ export function renderHarness(template, values) {
   return out;
 }
 
+/** The findings-header lines naming the reviewer substitution (--reviewer); `r` carries default_reviewer, reviewer_override. */
+export const reviewerHeaderLines = r => [
+  `- default_reviewer: ${r.default_reviewer.lab}, \`${r.default_reviewer.model}\` (the README's reviewer for this assignment)`,
+  `- reviewer_override: ${r.reviewer_override ? `true (--reviewer ${r.reviewer})` : "false"}`,
+];
+
 export const commitLine = commit => `Commit under review: ${commit}`;
 
 export function composeBrief({ readme, assignmentText, commit }) {

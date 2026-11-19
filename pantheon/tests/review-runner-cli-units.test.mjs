@@ -8,8 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decide, loadPolicy } from "../src/agy/jail-hook.mjs";
 import { prepareReviewWorkspace, reviewCardText, reviewLane, REVIEW_CARD, REVIEW_AGENT } from "../src/review-runner/agy.mjs";
-import { allowedCommands, compareWorktree, scrubEnv, writeRule } from "../src/review-runner/cli-common.mjs";
-import { codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, parseCodexEvents, parseLoginStatus, parseModelList, sdkKeyInjection, sdkSpawnArgv } from "../src/review-runner/codex.mjs";
+import { allowedCommands, compareWorktree, readRule, reviewTmpBase, sandboxNote, scrubEnv, writeRule, READ_ONLY_SHELL } from "../src/review-runner/cli-common.mjs";
+import { renderHarness } from "../src/review-runner/brief.mjs";
+import { checkPromptPermissions, codexPermissionProfile, codexSdkOptions, codexThreadOptions, findCodexSession, parsePromptPermissions, inspectCodexSdk, parseCodexEvents, parseLoginStatus, parseModelList, sdkKeyInjection, sdkSpawnArgv } from "../src/review-runner/codex.mjs";
 import { Codex as RealCodex } from "@openai/codex-sdk";
 import { grokBwrapArgs, parseGrokStream } from "../src/review-runner/grok.mjs";
 import { permissionsFor } from "../src/review-runner/tools.mjs";
@@ -140,15 +141,42 @@ test("codex SDK options: the scrubbed env and the pinned binary, never an apiKey
   for (const k of ["CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"]) assert.throws(() => codexSdkOptions({ env: { [k]: "x" }, binary: "/b" }), /refused/);
 });
 
-test("codex thread options and the argv the SDK builds: read-only for a no-write assignment, workspace-write otherwise; approval never; resume after the exec-level flags; no bypass", () => {
-  const t4 = codexThreadOptions({ model: "gpt-6.1-sol", worktree: "/w", write_allowed: false });
-  assert.deepEqual(t4, { model: "gpt-6.1-sol", sandboxMode: "read-only", workingDirectory: "/w", skipGitRepoCheck: true, approvalPolicy: "never" });
-  assert.equal(codexThreadOptions({ model: "m", worktree: "/w", write_allowed: true }).sandboxMode, "workspace-write");
-  const sdkOptions = codexSdkOptions({ env: {}, binary: "/b/codex" });
+test("codex thread options and the argv the SDK builds: no --sandbox (the permission profile comes as raw --config overrides); approval never; resume after the exec-level flags; no bypass", () => {
+  const t4 = codexThreadOptions({ model: "gpt-6.1-sol", worktree: "/w" });
+  assert.deepEqual(t4, { model: "gpt-6.1-sol", workingDirectory: "/w", skipGitRepoCheck: true, approvalPolicy: "never" });
+  const prof = codexPermissionProfile({ worktree: "/w", write_allowed: false, scratchTmp: "/r/tmp", readRoots: ["/v", "/n"] });
+  const sdkOptions = codexSdkOptions({ env: {}, binary: "/b/codex", configOverrides: prof.overrides });
   const a = sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4 });
-  assert.deepEqual(a, ["/b/codex", "exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', "--model", "gpt-6.1-sol", "--sandbox", "read-only", "--cd", "/w", "--skip-git-repo-check", "--config", 'approval_policy="never"']);
+  assert.deepEqual(a, ["/b/codex", "exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', ...prof.overrides.flatMap(c => ["--config", c]),
+    "--model", "gpt-6.1-sol", "--cd", "/w", "--skip-git-repo-check", "--config", 'approval_policy="never"']);
   assert.deepEqual(sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4, resumeId: "01a1f0fe-d28f" }).slice(-2), ["resume", "01a1f0fe-d28f"]);
-  assert.ok(!a.some(x => /danger|bypass|full-auto|yolo/.test(x)));
+  assert.ok(!a.some(x => /--sandbox|danger-full-access|bypass|full-auto|yolo/.test(x)));
+  for (const bad of ['sandbox_mode="workspace-write"', "sandbox_workspace_write.network_access=true", 'default_permissions=":danger-full-access"'])
+    assert.throws(() => codexSdkOptions({ env: {}, binary: "/b", configOverrides: [bad] }), /refused/, bad);
+});
+
+test("codex permission profile: reads :minimal + the given roots + the worktree, writes the scratch TMPDIR (+ .review-tests for 1-3), /run denied, network only behind codex's proxy; prompt-input is checked exactly", () => {
+  const p4 = codexPermissionProfile({ worktree: "/w", write_allowed: false, scratchTmp: "/r/tmp", readRoots: ["/v", "/n", "/v"] });
+  assert.deepEqual(p4.overrides, ['default_permissions="ophanim-review"', "features.network_proxy=true",
+    'permissions.ophanim-review.filesystem={":minimal"="read", "/v"="read", "/n"="read", "/run"="deny", "/var/run"="deny", "/r/tmp"="write", ":workspace_roots"={"."="read"}}',
+    'permissions.ophanim-review.network={"enabled"=true, "dangerously_allow_all_unix_sockets"=true}', 'web_search="disabled"']);
+  assert.deepEqual(p4.expected_entries, ["deny /run", "deny /var/run", "read /n", "read /v", "read /w", "read :minimal", "write /r/tmp"]);
+  const p2 = codexPermissionProfile({ worktree: "/w", write_allowed: true, scratchTmp: "/r/tmp" });
+  assert.ok(p2.expected_entries.includes("write /w/.review-tests") && !p2.expected_entries.some(e => e === "write /w"));
+  assert.throws(() => codexPermissionProfile({ worktree: "/w", write_allowed: false, scratchTmp: "/w/tmp" }), /outside the worktree/);
+  assert.throws(() => codexPermissionProfile({ worktree: "w", write_allowed: false, scratchTmp: "/r" }), /absolute/);
+  // The real 0.170.0 binary's rendering (JSON-escaped inside the prompt input), with its own arg0 helper entry.
+  const ent = (a, p) => `<entry access=\\"${a}\\"${a === "deny" ? ' escalatable=\\"false\\"' : ""}><${p.startsWith(":") ? "special" : "path"}>${p}</${p.startsWith(":") ? "special" : "path"}></entry>`;
+  const out = entries => JSON.stringify([{ content: [{ text: "Network access is enabled." }] }, { content: [{ text: `<permission_profile type=\\"managed\\"><file_system type=\\"restricted\\">${entries.join("")}</file_system></permission_profile>` }] }]).replace(/\\\\\\"/g, '\\"');
+  const real = p4.expected_entries.map(e => ent(...e.split(" "))).concat(ent("read", "/h/.codex/tmp/arg0-linux/codex-arg0blDcn"));
+  const seen = parsePromptPermissions(out(real));
+  assert.deepEqual([seen.found, seen.type, seen.file_system, seen.network], [true, "managed", "restricted", "enabled"]);
+  assert.equal(checkPromptPermissions(seen, p4.expected_entries).ok, true, JSON.stringify(checkPromptPermissions(seen, p4.expected_entries)));
+  const legacy = parsePromptPermissions(out([ent("read", ":root"), ent("write", "/w"), ent("write", ":slash_tmp")]));
+  assert.match(checkPromptPermissions(legacy, p4.expected_entries).why, /file-system entries differ/);
+  assert.equal(checkPromptPermissions(parsePromptPermissions(out([...real, ent("write", "/home/u")])), p4.expected_entries).ok, false, "an extra writable path is refused");
+  assert.equal(checkPromptPermissions(parsePromptPermissions(out([...real, ent("write", "/h/.codex/tmp/arg0-linux/codex-arg0x")])), p4.expected_entries).ok, false, "the helper entry is tolerated as read only");
+  assert.match(checkPromptPermissions(parsePromptPermissions("[]"), p4.expected_entries).why, /no permission profile/);
 });
 
 test("codex event log: usage summed over turns, the last agent message is final, commands/file changes/non-fatal item errors kept, retries recorded as errors", () => {
@@ -236,4 +264,25 @@ test("compareWorktree: a change outside .review-tests/ (any change for assignmen
   assert.deepEqual(compareWorktree(before, after, { write_allowed: false }).violations, [".review-tests/a.test.mjs", "pantheon/x.mjs"]);
   assert.deepEqual(compareWorktree(before, st("h2", [["node_modules/", "!!"]]), { write_allowed: true }).violations, ["HEAD moved from h1 to h2"]);
   assert.deepEqual(compareWorktree(before, before, { write_allowed: false }).violations, []);
+});
+
+test("HARNESS-cli.md: reading the source is explicitly permitted beside the test commands (read-only shell for codex/grok, file tools for agy); writes and network stay confined", async () => {
+  const tpl = await readFile(new URL("../../docs/reviews/2026-11-18-independent-review/HARNESS-cli.md", import.meta.url), "utf8");
+  assert.doesNotMatch(tpl, /You may run only these commands/, "the 09d490f wording that kept a literal reader from reading any source");
+  const permissions = permissionsFor(CLOSED, ["pantheon/tests/a.test.mjs"]);
+  for (const transport of ["codex-sdk", "grok-cli", "agy-cli"]) {
+    const cmds = allowedCommands({ permissions, worktree: "/w", prefixWithCd: transport === "agy-cli", envPrefix: transport === "codex-sdk" ? "env NO_PROXY=127.0.0.1 " : "" });
+    const h = renderHarness(tpl, { COMMIT: "c", WORKTREE: "/w", ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed: false, worktree: "/w" }),
+      READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: "/r/tmp" }), MAX_WALL_S: 60 });
+    assert.doesNotMatch(h, /\{\{/, transport);
+    assert.match(h, /Reading the source is the review/, transport);
+    assert.match(h, /Apart from reading, you may run only these test commands, exactly as written/, transport);
+    assert.match(h, /You may not create, change or delete any file/, transport);
+    assert.match(h, /Make no network request and no call to a model provider/, transport);
+    assert.match(h, /bwrap unavailable/, transport);
+    if (transport === "agy-cli") { assert.match(h, /`view_file`/); assert.match(h, /`run_command` is limited to that list/); }
+    else { for (const c of READ_ONLY_SHELL) assert.ok(h.includes(`\`${c}\``), `${transport}: ${c}`); assert.match(h, /no `sed -i`/); }
+    if (transport === "codex-sdk") { assert.match(h, /`\/r\/tmp`/); assert.match(h, /- `env NO_PROXY=127\.0\.0\.1 node --test pantheon\/tests\/a\.test\.mjs`/); }
+  }
+  assert.equal(reviewTmpBase({ HOME: "/home/fixture" }), "/home/fixture/.cache/ophanim-review", "review worktrees are not put under /tmp");
 });

@@ -4,9 +4,10 @@
 import { spawn } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { reviewTmpBase } from "./cli-common.mjs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { REVIEW_DIR, BriefError, loadBrief, sha256, inScopePaths, listedTests, testingLine } from "./brief.mjs";
+import { REVIEW_DIR, BriefError, loadBrief, reviewerHeaderLines, sha256, inScopePaths, listedTests, testingLine } from "./brief.mjs";
 import { CAPS, permissionsFor, toolDefinitions, createToolbox } from "./tools.mjs";
 import { buildChildEnv, WITHHELD } from "./sandbox.mjs";
 import { VENDORS, authHeaders, createConversation, addUsage, redact } from "./vendors.mjs";
@@ -23,6 +24,10 @@ const USAGE = `usage: node pantheon/scripts/run-review.mjs --via api|subscriptio
                        (1: agy, 2 and 4: codex via @openai/codex-sdk, 3: grok): --max-wall-s N [--timeout-s N]
                        [--allow-api-key-in-cli] [--skip-model-check] [--grok-state-dir DIR]
                        [--codex-cli PATH (default: the SDK's own codex binary)] [--grok-cli PATH] [--agy-cli PATH]
+  [--reviewer <lab>:<model>]   run the assignment on another reviewer than its README default (lab: google, openai
+                       or xai); the same brief, withheld files, tools, write rules and worktree checks, and that lab's
+                       transport and model check; the findings are named by the actual lab (findings-<n>-<lab>.md)
+                       and their header records default_reviewer and reviewer_override: true
   [--continue <findings-<n>-<lab>.transcript.json>]   resume an incomplete review of the same assignment
   [--out DIR] [--dry-run] [--keep] [--force] [--telos-root DIR]`;
 
@@ -55,12 +60,14 @@ function parseCli(argv) {
       force: { type: "boolean" }, "telos-root": { type: "string" }, help: { type: "boolean" },
       via: { type: "string" }, "max-wall-s": { type: "string" }, "allow-api-key-in-cli": { type: "boolean" }, "skip-model-check": { type: "boolean" },
       "grok-state-dir": { type: "string" }, continue: { type: "string" }, "codex-cli": { type: "string" }, "grok-cli": { type: "string" }, "agy-cli": { type: "string" },
+      reviewer: { type: "string" },
     } }).values;
   } catch (e) { throw new UsageError(e.message); }
   if (v.help) throw new UsageError("help");
   if (!/^[1-4]$/.test(v.assignment ?? "")) throw new UsageError("--assignment must be 1, 2, 3 or 4");
   if (!/^[0-9a-f]{40}$/.test(v.commit ?? "")) throw new UsageError("--commit must be a full 40-character lowercase hex commit id");
   // --via has no default: the owner chooses between metered API spend and the subscription CLIs every time.
+  const reviewer = v.reviewer === undefined ? null : parseReviewer(v.reviewer);
   if (v.via !== "api" && v.via !== "subscription") throw new UsageError("--via is required: api (the metered API, the owner's key) or subscription (the vendors' CLIs, signed in to the owner's subscriptions)");
   const limits = {}, notes = [], ignoredCaps = [];
   const int = k => { if (!/^[1-9]\d*$/.test(v[k])) throw new UsageError(`--${k} must be a positive integer`); return Number(v[k]); };
@@ -84,7 +91,24 @@ function parseCli(argv) {
   }
   return { via: v.via, n: Number(v.assignment), commit: v.commit, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
     allowApiKeyInCli: !!v["allow-api-key-in-cli"], skipModelCheck: !!v["skip-model-check"], grokStateDir: v["grok-state-dir"] ?? null,
-    codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null };
+    codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null, reviewer };
+}
+
+// --reviewer <lab>:<model>: the lab names the vendor exactly as the README table's labs do (brief.mjs LAB_TO_VENDOR).
+export const REVIEWER_LABS = Object.freeze({ google: { lab: "Google", vendor: "gemini" }, openai: { lab: "OpenAI", vendor: "openai" }, xai: { lab: "xAI", vendor: "xai" } });
+export function parseReviewer(spec) {
+  const m = /^([a-z]+):([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(String(spec ?? ""));
+  if (!m) throw new UsageError(`--reviewer must be <lab>:<model> (lab: ${Object.keys(REVIEWER_LABS).join(", ")}), e.g. google:gemini-4-carbon; got ${JSON.stringify(spec)}`);
+  const l = REVIEWER_LABS[m[1]];
+  if (!l) throw new UsageError(`--reviewer: unknown lab ${JSON.stringify(m[1])} (one of ${Object.keys(REVIEWER_LABS).join(", ")})`);
+  return { spec: `${m[1]}:${m[2]}`, lab: l.lab, vendor: l.vendor, model: m[2] };
+}
+
+/** The assignment row with the reviewer replaced (everything else -- title, file, scope, testing -- is the assignment's own). */
+export function withReviewer(row, reviewer) {
+  const default_reviewer = { lab: row.lab, vendor: row.vendor, model: row.model };
+  if (!reviewer) return { ...row, default_reviewer, reviewer_override: false, reviewer_spec: null };
+  return { ...row, lab: reviewer.lab, vendor: reviewer.vendor, model: reviewer.model, default_reviewer, reviewer_override: true, reviewer_spec: reviewer.spec };
 }
 
 // What both modes read: the commit's file list, the brief, the assignment row, the tool permissions.
@@ -98,7 +122,8 @@ async function loadAssignment(opts, { repoRoot, env, harnessValues }) {
   let b;
   try { b = await loadBrief({ repoRoot, n, commit, harnessValues }); }
   catch (e) { if (e instanceof BriefError || e.code === "ENOENT") throw new Refusal(e.message); throw e; }
-  const { row } = b;
+  const row = withReviewer(b.row, opts.reviewer);
+  b.row = row;
   const listed = listedTests(b.assignmentText, files);
   const permissions = permissionsFor(row.testing, listed.files);
   if (!permissions) throw new Refusal(`assignment ${n}: testing limit "${row.testing}" has no tool policy in the runner; refusing rather than guessing`);
@@ -144,6 +169,7 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
     via: "api",
     assignment: { n, title: row.title, file: `${REVIEW_DIR}/${row.file}`, scope: row.scope, testing: row.testing, testing_line_in_file: fileTesting },
     lab: row.lab, vendor: row.vendor, model: row.model,
+    default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}),
     model_facts: { cited_max_output: cited, reasoning_effort_sent: null },
     commit,
     endpoint: row.vendor === "gemini" ? vendor.endpoint.replace("<model>", row.model) : vendor.endpoint,
@@ -204,7 +230,7 @@ export async function main(argv, deps = {}) {
   let resume = null;
   if (opts.continue) {
     try {
-      resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: plan.lab.toLowerCase(), vendor: plan.vendor, model: plan.model, commit: plan.commit, via: "api", brief_sha256: plan.request.brief.sha256 });
+      resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: plan.lab.toLowerCase(), vendor: plan.vendor, model: plan.model, commit: plan.commit, via: "api", brief_sha256: plan.request.brief.sha256, reviewer: plan.reviewer_override ? plan.reviewer : null });
     } catch (e) { if (e instanceof ContinueRefusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; } throw e; }
     plan.continue = { from: resume.path, transcript_sha256: resume.sha256, method: plan.vendor === "openai" ? "previous_response_id" : "replayed-history",
       prior: resume.prior, review_tests_to_restore: (resume.t.review_tests.files ?? []).map(f => f.path) };
@@ -235,12 +261,16 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   const b = plan._brief;
 
   const started = now();
-  const tmp = await mkdtemp(join(deps.tmpBase ?? tmpdir(), "ophanim-review-"));
+  // Not under /tmp (cli-common.mjs reviewTmpBase: the repository's jail fixtures hide /tmp from the code they jail).
+  const tmpBase = deps.tmpBase ?? reviewTmpBase(env);
+  await mkdir(tmpBase, { recursive: true, mode: 0o700 });
+  const tmp = await mkdtemp(join(tmpBase, "ophanim-review-"));
   const wt = join(tmp, "worktree"), home = join(tmp, "home"), childTmp = join(tmp, "tmp");
   await mkdir(home); await mkdir(childTmp);
   const transcript = {
     schema: "ophanim.review-transcript/v1",
     assignment: plan.assignment.n, lab: plan.lab, vendor: plan.vendor, requested_model: plan.model, commit: plan.commit,
+    default_reviewer: plan.default_reviewer, reviewer_override: plan.reviewer_override, ...(plan.reviewer_override ? { reviewer: plan.reviewer } : {}),
     endpoint: plan.endpoint,
     hashes: { harness_template: plan.request.harness_template.sha256, system: plan.request.system.sha256, brief: plan.request.brief.sha256, tools: plan.request.tools.sha256 },
     via: "api", limits: opts.limits, started_at: started.toISOString(),
@@ -367,6 +397,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     `- stop_reason: ${state.stop}`,
     `- lab: ${plan.lab}`,
     `- requested_model: \`${plan.model}\``,
+    ...reviewerHeaderLines(plan),
     `- served_model: ${servedFinal === null ? "null (the provider's response named no served model; the requested name is not substituted)" : `\`${servedFinal}\``}`,
     ...(distinctServed.length > 1 ? [`- served_models_across_calls: ${distinctServed.map(s => s === null ? "null" : `\`${s}\``).join(", ")}`] : []),
     `- commit: \`${plan.commit}\``,

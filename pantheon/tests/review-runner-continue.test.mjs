@@ -175,7 +175,11 @@ test("codex: a failed run is continued by resuming its own thread (the SDK's res
   assert.deepEqual(r2.plan.argv.slice(-3, -1), ["resume", t1.cli.thread_id], "the SDK puts resume after the exec-level --cd/--sandbox");
   const ran = r2.sdk.find(c => c.kind === "run");
   assert.equal(ran.resume_id, t1.cli.thread_id);
-  assert.deepEqual([ran.thread_options.workingDirectory, ran.thread_options.sandboxMode, ran.thread_options.approvalPolicy], [r2.plan.worktree.path, "workspace-write", "never"]);
+  assert.deepEqual([ran.thread_options.workingDirectory, "sandboxMode" in ran.thread_options, ran.thread_options.approvalPolicy], [r2.plan.worktree.path, false, "never"]);
+  const made = r2.sdk.find(c => c.kind === "new");
+  assert.ok(made.config_overrides.some(c => c.includes(`":workspace_roots"={"."="read", ".review-tests"="write"}`)) && made.config_overrides.includes('default_permissions="ophanim-review"'),
+    "the resumed thread runs under the same permission profile, rebuilt for the new run");
+  assert.deepEqual(r2.plan.preflight.checks.permission_profile.cwd, r2.plan.worktree.path);
   assert.notEqual(t1.argv[t1.argv.indexOf("--cd") + 1], r2.plan.worktree.path, "the earlier worktree is gone; the resumed thread works in the rebuilt one");
   const prompt = await readFile(promptFile, "utf8");
   assert.ok(prompt.startsWith(CLI_CONTINUE_NOTE), "a resumed thread gets the continuation note, then the same prompt");

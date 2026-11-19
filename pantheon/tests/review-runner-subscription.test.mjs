@@ -37,7 +37,8 @@ const calls = async log => (existsSync(log) ? (await readFile(log, "utf8")).trim
 async function run(f, { n, args = [], env = {}, realSdk = false, extra = {} }) {
   const out = capture(), fetch = fakeFetch([]);
   const d = await deps({ root: f.repo.root, out, fetch, env: { PATH: `${f.bin}:${process.env.PATH}`, HOME: f.home, FAKE_CLI_LOG: f.log, ...KEYS, ...env } });
-  const codex = n === 2 || n === 4;
+  const reviewer = args[args.indexOf("--reviewer") + 1];
+  const codex = args.includes("--reviewer") ? reviewer.startsWith("openai:") : n === 2 || n === 4;
   if (codex && !realSdk) d.CodexSDK = fakeCodexSdk();
   Object.assign(d, extra);
   const cliArg = codex && !args.includes("--codex-cli") && !extra.inspectCodexSdk ? ["--codex-cli", f.clis.codex] : [];
@@ -64,7 +65,7 @@ test("usage: --via is required, subscription requires --max-wall-s, the API caps
   assert.deepEqual(r.plan.limits.ignored, ["--max-turns"]);
 });
 
-const SDK_ARGV = wt => ["exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', "--model", "gpt-6-astra", "--sandbox", "workspace-write", "--cd", wt, "--skip-git-repo-check", "--config", 'approval_policy="never"'];
+const SDK_ARGV = (wt, overrides) => ["exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', ...overrides.flatMap(c => ["--config", c]), "--model", "gpt-6-astra", "--cd", wt, "--skip-git-repo-check", "--config", 'approval_policy="never"'];
 
 test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's binary (version, login status, model list), the SDK's argv with the prompt on stdin, no model turn", async () => {
   const f = await setup();
@@ -73,13 +74,25 @@ test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's b
   assert.equal(r.fetch.calls.length, 0);
   assert.deepEqual(r.sdk, [], "no SDK object was constructed: no model turn");
   const c = await calls(f.log);
-  assert.deepEqual(c.map(x => x.argv.slice(0, 2).join(" ")), ["--version", "login status", "debug models"]);
+  assert.deepEqual(c.map(x => x.argv.slice(0, 2).join(" ")), ["--version", "login status", "debug models", "debug prompt-input"]);
   const p = r.plan;
   assert.deepEqual([p.via, p.transport, p.requested_model, p.subscription_coverage, p.model_turns, p.preflight.ok], ["subscription", "codex-sdk", "gpt-6-astra", "documented", 0, true]);
   assert.deepEqual([p.sdk.package, p.sdk.version, p.sdk.ok, p.sdk.binary.path, p.sdk.key_injection.conditional], ["@openai/codex-sdk", "0.170.0", true, f.clis.codex, true]);
-  assert.deepEqual(p.argv.slice(0, -1), [f.clis.codex, ...SDK_ARGV(p.worktree.path)]);
+  assert.deepEqual(p.argv.slice(0, -1), [f.clis.codex, ...SDK_ARGV(p.worktree.path, p.sdk_options.configOverrides)]);
+  // The permission profile: no --sandbox; codex's own rendering of what it will apply was checked before any turn.
+  assert.ok(!p.argv.includes("--sandbox"));
+  assert.equal(p.sandbox.profile, "ophanim-review");
+  assert.deepEqual(p.sandbox.filesystem[":workspace_roots"], { ".": "read", ".review-tests": "write" });
+  assert.equal(p.sandbox.network.enabled, true);
+  const pp = p.preflight.checks.permission_profile;
+  assert.deepEqual([pp.ok, pp.cwd, pp.observed.network, pp.argv.slice(1, 3)], [true, p.worktree.path, "enabled", ["debug", "prompt-input"]]);
+  assert.ok(pp.expected_entries.includes(`write ${p.worktree.path}/.review-tests`) && pp.expected_entries.includes("read :minimal"));
+  const tmpEntry = pp.expected_entries.find(e => e.startsWith("write ") && !e.endsWith(".review-tests"));
+  assert.ok(tmpEntry && !tmpEntry.slice(6).startsWith(p.worktree.path + "/"), "the scratch TMPDIR is outside the worktree");
+  assert.ok(p.env.passed.includes("TMPDIR"));
+  assert.ok(p.allowed_commands.every(l => l.includes("env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 ")), p.allowed_commands.join("\n"));
   assert.equal(p.argv.at(-1), `(stdin: <prompt sha256:${p.prompt.sha256}>)`);
-  assert.deepEqual(p.thread_options, { model: "gpt-6-astra", sandboxMode: "workspace-write", workingDirectory: p.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
+  assert.deepEqual(p.thread_options, { model: "gpt-6-astra", workingDirectory: p.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
   assert.deepEqual([p.sdk_options.apiKey, p.sdk_options.baseUrl, p.sdk_options.codexPathOverride, p.sdk_options.config], ["never passed", "never passed", f.clis.codex, { forced_login_method: "chatgpt" }]);
   assert.equal(p.preflight.checks.login_status.auth_method_observed, "chatgpt");
   assert.equal(p.preflight.checks.model_list.status, "listed");
@@ -96,11 +109,13 @@ test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary,
   const r = await run(f, { n: 4, args: ["--max-wall-s", "60"] });
   assert.equal(r.code, EXIT.complete, r.out.err);
   const [made, ran] = r.sdk;
-  assert.deepEqual(made.option_names, ["codexPathOverride", "config", "env"], "never apiKey or baseUrl");
+  assert.deepEqual(made.option_names, ["codexPathOverride", "config", "configOverrides", "env"], "never apiKey or baseUrl");
+  assert.ok(made.config_overrides.some(c => c.endsWith(`":workspace_roots"={"."="read"}}`)), "assignment 4: nothing in the worktree is writable");
+  assert.ok(made.tmpdir && !made.tmpdir.startsWith(r.plan.worktree.path), "TMPDIR is the scratch dir outside the worktree");
   assert.deepEqual([made.codexPathOverride, made.config, made.env_keylike, made.home], [f.clis.codex, { forced_login_method: "chatgpt" }, [], f.home]);
-  assert.deepEqual((await calls(f.log)).map(x => x.keys), [[], [], []], "no key reaches the preflight either");
+  assert.deepEqual((await calls(f.log)).map(x => x.keys), [[], [], [], []], "no key reaches the preflight either");
   const t = JSON.parse(await r.read("findings-4-openai.transcript.json"));
-  assert.deepEqual(ran.thread_options, { model: "gpt-6.1-sol", sandboxMode: "read-only", workingDirectory: r.plan.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
+  assert.deepEqual(ran.thread_options, { model: "gpt-6.1-sol", workingDirectory: r.plan.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
   assert.equal(ran.resume_id, null);
   assert.equal(ran.has_signal, true, "the wall clock goes to the SDK as an AbortSignal");
   assert.equal(createHash("sha256").update(ran.input).digest("hex"), t.prompt.sha256, "the prompt given to the SDK is the recorded one");
@@ -109,7 +124,7 @@ test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary,
   for (const line of ["- status: complete", "- via: subscription", "- transport: codex-sdk", "- cli_version: `codex-cli 9.9.9-fake`", "- auth_method_observed: chatgpt",
     "- subscription_coverage: documented", "- requested_model: `gpt-6.1-sol`", "- served_model: `gpt-6.1-sol`", "- policy_violations: none"]) assert.ok(h.includes(line + "\n"), line);
   assert.match(h, /- served_model_source: input/);
-  assert.match(h, /- sandbox: codex read-only .*approvals never/);
+  assert.match(h, /- sandbox: codex permission profile ophanim-review .*writes a scratch TMPDIR outside the worktree.*approvals never/);
   assert.match(h, /- usage_totals: `\{"input_tokens":100,"cached_input_tokens":10,"output_tokens":20\}`/);
   assert.equal(bodyOf(md), "# Findings (fake codex)\n\n1. holds\n\nModel: gpt-6.1-sol\n");
   assert.deepEqual([t.via, t.transport, t.status, t.worktree_check.violations], ["subscription", "codex-sdk", "complete", []]);
@@ -195,6 +210,14 @@ test("codex refusals, never a fallback: API-key login, no login, model missing, 
   assert.equal(r.code, EXIT.refused);
   r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--dry-run", "--skip-model-check"], env: { FAKE_CODEX_MODELS: "garbage" } });
   assert.equal(r.code, EXIT.complete);
+  // The permission profile codex would apply must be the runner's, exactly (a legacy profile means the overrides were
+  // ignored, e.g. a sandbox_mode in the owner's config); none reported, or prompt-input failing, is a refusal too.
+  for (const [perms, why] of [["legacy", /would not apply the review's permission profile: file-system entries differ/], ["none", /named no permission profile/], ["fail", /prompt-input` failed/]]) {
+    r = await run(f, { n: 2, args: ["--max-wall-s", "60"], env: { FAKE_CODEX_PERMS: perms } });
+    assert.equal(r.code, EXIT.refused, perms);
+    assert.match(r.out.err, why, perms);
+    assert.deepEqual(r.sdk, [], `${perms}: no SDK turn`);
+  }
   r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--codex-cli", join(f.base, "absent")] });
   assert.equal(r.code, EXIT.refused);
   assert.match(r.out.err, /never falls back to the API/);
@@ -265,6 +288,24 @@ test("grok refusals: no browser login state, or a CLI that asks for a key (never
   assert.match(h, /asked for an API key or a login: subscription mode never supplies XAI_API_KEY/);
 });
 
+test("grok stream: an answer sent as incremental text chunks is the final text (tool output never is); a stream with no assistant text ends incomplete naming its last event types", needBwrap, async () => {
+  const f = await setup();
+  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  let r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "chunks" } });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  const md = await r.read("findings-3-xai.md");
+  assert.match(bodyOf(md), /^# Findings \(fake grok, chunked\)\n\nPROBE \{/);
+  assert.doesNotMatch(bodyOf(md), /NOT THE ANSWER|hmm/);
+  const t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
+  assert.deepEqual([t.cli.final_source, t.cli.text_chunks, t.cli.complete_messages], ["chunks", 4, 0]);
+  r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "nofinal" } });
+  assert.equal(r.code, EXIT.incomplete, r.out.err + (await r.read("findings-3-xai.md").catch(() => "")));
+  const h = headerOf(await r.read("findings-3-xai.md"));
+  assert.match(h, /grok returned no final text \(5 event\(s\), 0 unparsed line\(s\); no assistant message, result event or text chunk was recognised; last event types: start, tool_call, tool_result, thinking_delta, usage/);
+  const t2 = JSON.parse(await r.read("findings-3-xai.transcript.json"));
+  assert.deepEqual(t2.cli.no_final_text.last_event_keys, ["type", "usage"]);
+});
+
 // ---- agy (assignment 1) with the fake agy under the real bwrap -------------------------------------------------
 const usage = fraction => JSON.stringify({ conversation_id: "", status: "SUCCESS", response: "", num_turns: 0, usage: { total_tokens: 0 }, command: { name: "usage", data: { groups: [
   { name: "Gemini Models", description: "Models within this group: Gemini 4 Carbon, Gemini 3.8 Flash", buckets: [{ id: "gemini-weekly", name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: fraction }] }] } } });
@@ -325,4 +366,89 @@ test("agy refuses before any model turn when the in-jail /usage shows no login (
   assert.match(r.out.err, /agy preflight auth/);
   assert.deepEqual(await f.launches(), []);
   assert.equal(r.fetch.calls.length, 0);
+});
+
+// ---- --reviewer <lab>:<model>: another lab's reviewer on an assignment, with that lab's transport ------------------
+const overrideHeader = (h, { lab, model, def }) => {
+  for (const line of [`- lab: ${lab}`, `- requested_model: \`${model}\``, `- default_reviewer: ${def}`]) assert.ok(h.includes(line), line);
+  assert.match(h, new RegExp(`^- reviewer_override: true \\(--reviewer ${lab.toLowerCase()}:${model.replace(/\./g, "\\.")}\\)$`, "m"));
+};
+
+test("--reviewer openai:<model> on assignment 1: codex-sdk transport, its ChatGPT-only guard and model check, assignment 1's write rule; plan names the substitution and findings-1-openai", async () => {
+  const f = await setup();
+  const r = await run(f, { n: 1, args: ["--max-wall-s", "60", "--dry-run", "--reviewer", "openai:gpt-6-astra"] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  const p = r.plan;
+  assert.deepEqual([p.transport, p.lab, p.vendor, p.requested_model, p.reviewer_override, p.reviewer], ["codex-sdk", "OpenAI", "openai", "gpt-6-astra", true, "openai:gpt-6-astra"]);
+  assert.deepEqual(p.default_reviewer, { lab: "Google", vendor: "gemini", model: "gemini-4-carbon" });
+  assert.match(p.out.findings, /findings-1-openai\.md$/);
+  assert.equal(p.sdk_options.config.forced_login_method, "chatgpt", "the ChatGPT-only guard");
+  assert.equal(p.preflight.checks.model_list.status, "listed");
+  assert.deepEqual(p.sandbox.filesystem[":workspace_roots"], { ".": "read", ".review-tests": "write" }, "assignment 1 writes .review-tests/ only");
+  // The same model check as the lab's own assignments: an unlisted model is refused; an API-key login too.
+  let x = await run(f, { n: 1, args: ["--max-wall-s", "60", "--dry-run", "--reviewer", "openai:gpt-9-nope"] });
+  assert.equal(x.code, EXIT.refused); assert.match(x.out.err, /does not list gpt-9-nope/);
+  x = await run(f, { n: 1, args: ["--max-wall-s", "60", "--dry-run", "--reviewer", "openai:gpt-6-astra"], env: { FAKE_CODEX_LOGIN: "apikey" } });
+  assert.equal(x.code, EXIT.refused); assert.match(x.out.err, /reports an API key/);
+});
+
+test("--reviewer on a codex run: the header and transcript record the substitution; assignment 4 still writes nothing", async () => {
+  const f = await setup();
+  const r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--reviewer", "openai:gpt-6-astra"] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.ok(r.files.includes("findings-4-openai.md"));
+  overrideHeader(headerOf(await r.read("findings-4-openai.md")), { lab: "OpenAI", model: "gpt-6-astra", def: "OpenAI, `gpt-6.1-sol`" });
+  const t = JSON.parse(await r.read("findings-4-openai.transcript.json"));
+  assert.deepEqual([t.reviewer_override, t.reviewer, t.default_reviewer.model, t.requested_model], [true, "openai:gpt-6-astra", "gpt-6.1-sol", "gpt-6-astra"]);
+  assert.ok(r.sdk.find(c => c.kind === "new").config_overrides.some(c => c.endsWith(`":workspace_roots"={"."="read"}}`)), "assignment 4: nothing writable");
+  const d = await run(f, { n: 2, args: ["--max-wall-s", "60", "--dry-run"] });
+  assert.equal(d.plan.reviewer_override, false, "without the flag: no override");
+});
+
+test("--reviewer xai:<model> on assignment 1: the grok CLI in the runner's jail; findings-1-xai", needBwrap, async () => {
+  const f = await setup();
+  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  const r = await run(f, { n: 1, args: ["--max-wall-s", "60", "--dry-run", "--reviewer", "xai:grok-4.7"] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.deepEqual([r.plan.transport, r.plan.lab, r.plan.requested_model, r.plan.reviewer_override, r.plan.default_reviewer.lab], ["grok-cli", "xAI", "grok-4.7", true, "Google"]);
+  assert.match(r.plan.out.findings, /findings-1-xai\.md$/);
+  assert.equal(r.plan.argv[0], "bwrap");
+});
+
+test("--reviewer google:<model> on assignment 4: agy with the lane check and the review hook; assignment 4's hook owns no path", needBwrap, async () => {
+  const f = await agySetup();
+  const r = await run(f, { n: 4, args: ["--max-wall-s", "120", "--dry-run", "--agy-cli", f.cli, "--reviewer", "google:gemini-4-carbon"], env: f.env });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  const p = r.plan;
+  assert.deepEqual([p.transport, p.lab, p.lane, p.reviewer_override, p.default_reviewer.model], ["agy-cli", "Google", "gemini-4-carbon-high", true, "gpt-6.1-sol"]);
+  assert.deepEqual(p.hook_policy.owned_paths, [], "assignment 4 writes nothing, whoever reviews it");
+  assert.match(p.out.findings, /findings-4-google\.md$/);
+  const x = await run(f, { n: 4, args: ["--max-wall-s", "120", "--dry-run", "--agy-cli", f.cli, "--reviewer", "google:gemini-0-nope"], env: f.env });
+  assert.equal(x.code, EXIT.refused, "the same lane check as assignment 1");
+});
+
+test("--reviewer refusals: bad syntax and an unknown lab are usage errors, before anything runs", async () => {
+  const f = await setup();
+  for (const [spec, why] of [["gemini-4-carbon", /must be <lab>:<model>/], ["google:", /must be <lab>:<model>/], ["Google:gemini-4-carbon", /must be <lab>:<model>/], ["anthropic:claude-x", /unknown lab "anthropic"/], ["google:a b", /must be <lab>:<model>/]]) {
+    const r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--dry-run", "--reviewer", spec] });
+    assert.equal(r.code, EXIT.usage, spec); assert.match(r.out.err, why, spec);
+  }
+  assert.deepEqual(await calls(f.log), [], "no CLI was started");
+});
+
+test("--continue refuses when the reviewer override differs from the transcript's (either way)", async () => {
+  const f = await setup();
+  const r1 = await run(f, { n: 4, args: ["--max-wall-s", "60", "--reviewer", "openai:gpt-6-astra"], env: { FAKE_CLI_MODE: "partial" } });
+  assert.equal(r1.code, EXIT.incomplete, r1.out.err);
+  const tpath = join(f.outDir, "findings-4-openai.transcript.json");
+  let r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--continue", tpath] });
+  assert.equal(r.code, EXIT.refused); assert.match(r.out.err, /model gpt-6-astra vs gpt-6\.1-sol.*reviewer override openai:gpt-6-astra vs none/);
+  r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--continue", tpath, "--reviewer", "openai:gpt-6-astra"] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  // A default run continued with a --reviewer naming the very same model is a different review too.
+  const g = await setup();
+  const d1 = await run(g, { n: 4, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "partial" } });
+  assert.equal(d1.code, EXIT.incomplete);
+  r = await run(g, { n: 4, args: ["--max-wall-s", "60", "--continue", join(g.outDir, "findings-4-openai.transcript.json"), "--reviewer", "openai:gpt-6.1-sol"] });
+  assert.equal(r.code, EXIT.refused); assert.match(r.out.err, /reviewer override none vs openai:gpt-6\.1-sol/);
 });

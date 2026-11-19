@@ -3,6 +3,7 @@
 // worktree. See subscription.mjs for the run and HARNESS-cli.md for the text the reviewer is shown.
 import { access, constants, realpath } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
 import { spawnPromise } from "../board/spawn.mjs";
 import { shQuote } from "../agy/jail-hook.mjs";
 
@@ -68,8 +69,9 @@ export const OPEN_TEST_GLOBS = Object.freeze(["ophanim/**/*.test.mjs", "pantheon
  * (run_command has no working directory) and "" for the CLIs that run in the worktree. Returns {lines (markdown list
  * items), run_command_policy (jail.json), suites, files (listed-only) | null, write_allowed}.
  */
-export function allowedCommands({ permissions, worktree, prefixWithCd, telosRoot = null }) {
-  const prefix = prefixWithCd ? `cd ${shQuote(worktree)} && ` : "";
+export function allowedCommands({ permissions, worktree, prefixWithCd, telosRoot = null, envPrefix = "" }) {
+  // envPrefix: codex's `env NO_PROXY=... ` (codex clears NO_PROXY inside its sandbox; codex.mjs).
+  const prefix = (prefixWithCd ? `cd ${shQuote(worktree)} && ` : "") + envPrefix;
   const listed = permissions.run_tests.files ?? null;
   const lines = [];
   if (listed) {
@@ -91,10 +93,52 @@ export function allowedCommands({ permissions, worktree, prefixWithCd, telosRoot
   };
 }
 
+const TESTS_OWN_TEMP = "The temporary files the authorized tests create for themselves (under `$TMPDIR`) are theirs, not yours.";
 export function writeRule({ write_allowed, worktree }) {
   return write_allowed
-    ? `You may create and change files only under \`${REVIEW_TESTS_DIR}/\` in the copy (\`${worktree}/${REVIEW_TESTS_DIR}/\`), for example \`${REVIEW_TESTS_DIR}/<name>.test.mjs\`; give absolute paths where a tool asks for one. Write nothing anywhere else, inside the copy or outside it.`
-    : "You may not create, change or delete any file, inside the copy or outside it.";
+    ? `You may create and change files only under \`${REVIEW_TESTS_DIR}/\` in the copy (\`${worktree}/${REVIEW_TESTS_DIR}/\`), for example \`${REVIEW_TESTS_DIR}/<name>.test.mjs\`; give absolute paths where a tool asks for one. Write nothing anywhere else, inside the copy or outside it. ${TESTS_OWN_TEMP}`
+    : `You may not create, change or delete any file, inside the copy or outside it. ${TESTS_OWN_TEMP}`;
+}
+
+// The read-only shell commands a command-line reviewer may use to read the source (codex, grok). Reading is the
+// review: the 09d490f run of assignment 4 read the old "You may run only these commands" literally, ran only tests,
+// and read no source at all.
+export const READ_ONLY_SHELL = Object.freeze(["cat", "head", "tail", "sed -n", "nl", "wc", "ls", "find", "rg", "grep", "diff", "cmp", "file", "stat",
+  "git log", "git show", "git diff", "git grep", "git ls-files", "git blame", "git status", "git rev-parse"]);
+
+/** How the reviewer reads the source: agy has file-reading tools and a jail-limited run_command; codex and grok read with the shell. */
+export function readRule({ transport }) {
+  if (transport === "agy-cli") {
+    return "Reading the source is the review. Read any file in the copy with your file-reading tools (`view_file`, `view_file_outline`, `view_code_item`, `list_dir`, `find_by_name`, `grep_search`, `codebase_search`): they are permitted for this and are not limited by the list under Commands. `run_command` is limited to that list (the jail refuses any other command, `cat` and `ls` included), so read files with those tools, not with the shell. Cite what you read as `file:line`.";
+  }
+  const cmds = READ_ONLY_SHELL.map(c => `\`${c}\``).join(", ");
+  return [
+    "Reading the source is the review. Read any file in the copy, and its git history, with your own file-reading tools or with read-only shell commands. Both are permitted for this and are not limited by the list under Commands. The read-only commands are:",
+    "",
+    `${cmds}, alone or piped into one another (\`find\` without \`-delete\`, \`-exec\`, \`-execdir\`, \`-ok\`, \`-fprint\` or \`-fls\`).`,
+    "",
+    "A read-only command writes no file (no `>`, `>>` or `tee`, no `sed -i`), changes no git state, starts no other program and reaches no network. Cite what you read as `file:line`.",
+  ].join("\n");
+}
+
+/** What the reviewer should know about the sandbox its commands run in. */
+export function sandboxNote({ transport, scratchTmp = null }) {
+  const bwrap = "Tests that start a bwrap jail of their own cannot do so in this sandbox (nested namespaces are refused): they skip with \"bwrap unavailable\" or fail with \"Creating new namespace failed\" / \"Failed to create NETLINK_ROUTE socket\". Report what such a test would have shown as `cannot tell` (a limit of this environment), not as a defect, and say so.";
+  if (transport === "codex-sdk") {
+    return [`Your commands run in Codex's own sandbox under the runner's permission profile: they can read only the copy, the system's runtime files, the node install and the codex binary; they can write only \`$TMPDIR\` (\`${scratchTmp}\`, a per-run scratch directory outside the copy, deleted after the run) and what the Writing section allows; the network is cut (codex's proxy, with no host allowed). Codex clears \`NO_PROXY\` there, which is why the test commands above start with \`env NO_PROXY=...\`: without it a test's request to a server it started on 127.0.0.1 goes to the proxy and fails (403 or \"fetch failed\"). Run them as written.`, "", bwrap].join("\n");
+  }
+  if (transport === "grok-cli") return `Your commands run in the runner's bubblewrap jail: the host is read-only, \`/tmp\` is a fresh private directory (\`$TMPDIR\` is \`/tmp\`), and the copy is read-only except what the Writing section allows. The jail does not cut the network (the CLI itself must reach xAI); make no network request yourself.\n\n${bwrap}`;
+  return `Your commands run in the runner's bubblewrap jail with its PreToolUse hook: the host is read-only, \`/tmp\` is a fresh private directory, and the hook refuses any write or command this harness does not allow.\n\n${bwrap}`;
+}
+
+/**
+ * Where a review run's temp dir (the worktree, the run dir) goes: NOT under /tmp. The repository's jail fixtures
+ * mount a fresh tmpfs on /tmp (src/agy/sandbox.mjs bwrapArgs), so code checked out under /tmp is hidden inside the
+ * jails the tests start (observed at 604d297: ophanim/operate/fit-lifecycle.test.mjs passes 5/5 in a worktree under
+ * /root and 1-3/5 in one under /tmp). Default ~/.cache/ophanim-review (created 0700).
+ */
+export function reviewTmpBase(env) {
+  return join(env?.HOME || homedir(), ".cache", "ophanim-review");
 }
 
 // ---- the post-run check of the worktree ---------------------------------------------------------------------------

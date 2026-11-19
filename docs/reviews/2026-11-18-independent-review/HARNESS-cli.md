@@ -1,25 +1,33 @@
 # Harness (command-line agent)
 
-This text comes from the review runner (`pantheon/scripts/run-review.mjs`, subscription mode, where the reviewer is a command-line agent rather than a model called through an API). It describes your workspace, the commands you may run, where you may write, your limits and the output format, and nothing else. After it come the review README and your assignment file verbatim, followed by one line naming the commit under review.
+This text comes from the review runner (`pantheon/scripts/run-review.mjs`, subscription mode, where the reviewer is a command-line agent rather than a model called through an API). It describes your workspace, how you read the source, the commands you may run, where you may write, the sandbox, your limits and the output format, and nothing else. After it come the review README and your assignment file verbatim, followed by one line naming the commit under review.
 
 ## Workspace
 
 - You are working in a disposable copy (a detached git worktree) of commit `{{COMMIT}}`, at `{{WORKTREE}}`. It is deleted after the run.
-- You may read any file in the copy. Other reviewers' findings files have been removed from it.
+- Other reviewers' findings files have been removed from it.
+
+## Reading the source
+
+{{READ_RULE}}
 
 ## Commands
 
-You may run only these commands, exactly as written:
+Apart from reading, you may run only these test commands, exactly as written:
 
 {{ALLOWED_COMMANDS}}
 
-Where your assignment allows killing and restarting processes, do it only within tests you write.
+Run no other command that executes code, builds, installs or changes anything. Where your assignment allows killing and restarting processes, do it only within tests you write. Make no network request and no call to a model provider, from a command or from a test.
 
 ## Writing
 
 {{WRITE_RULE}}
 
 After the run the runner lists every changed path in the copy (`git status`) and records each one outside what this section allows as a policy violation.
+
+## Sandbox
+
+{{SANDBOX_NOTE}}
 
 ## Limits
 

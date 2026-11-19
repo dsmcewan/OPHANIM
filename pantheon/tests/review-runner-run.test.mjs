@@ -240,3 +240,28 @@ test("--keep leaves the worktree in place", async () => {
   assert.ok((await readdir(join(r.d.tmpBase, kept[0], "worktree"))).includes("hello.txt"));
   await sh("git", ["-C", r.repo.root, "worktree", "remove", "--force", join(r.d.tmpBase, kept[0], "worktree")]);
 });
+
+test("--via api --reviewer google:<model> on assignment 3: the Gemini endpoint and key, the assignment's own brief, tools and withheld files; findings-3-google records the substitution", async () => {
+  const repo = await fixtureRepo();
+  const dry = await run({ vendor: "gemini", script: [], repo, assignment: "3", args: ["--dry-run", "--reviewer", "google:gemini-4-carbon"] });
+  assert.equal(dry.code, EXIT.complete, dry.out.err);
+  const p = JSON.parse(dry.out.out);
+  const base = JSON.parse((await run({ vendor: "xai", script: [], repo, assignment: "3", args: ["--dry-run"] })).out.out);
+  assert.deepEqual([p.vendor, p.lab, p.model, p.reviewer_override, p.reviewer, p.key.env], ["gemini", "Google", "gemini-4-carbon", true, "google:gemini-4-carbon", "GEMINI_API_KEY"]);
+  assert.deepEqual(p.default_reviewer, { lab: "xAI", vendor: "xai", model: base.model });
+  assert.equal(p.endpoint, "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-carbon:generateContent");
+  assert.match(p.out.findings, /findings-3-google\.md$/);
+  for (const k of ["brief", "system", "tools"]) assert.equal(p.request[k].sha256, base.request[k].sha256, `the same ${k} as assignment 3's own reviewer`);
+  assert.deepEqual([p.tool_permissions, p.withheld_from_worktree], [base.tool_permissions, base.withheld_from_worktree]);
+  const r = await run({ vendor: "gemini", script: SCRIPTS.gemini(), repo, assignment: "3", args: ["--reviewer", "google:gemini-4-carbon"] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.ok(r.files.includes("findings-3-google.md"), r.files.join(","));
+  const md = await r.read("findings-3-google.md");
+  assert.match(md, /^- lab: Google$/m);
+  assert.match(md, /^- default_reviewer: xAI, `[^`]+` \(the README's reviewer for this assignment\)$/m);
+  assert.match(md, /^- reviewer_override: true \(--reviewer google:gemini-4-carbon\)$/m);
+  const t = JSON.parse(await r.read("findings-3-google.transcript.json"));
+  assert.deepEqual([t.reviewer_override, t.reviewer, t.default_reviewer.lab], [true, "google:gemini-4-carbon", "xAI"]);
+  const bad = await run({ vendor: "gemini", script: [], repo, assignment: "3", args: ["--dry-run", "--reviewer", "meta:llama"] });
+  assert.equal(bad.code, EXIT.usage); assert.match(bad.out.err, /unknown lab "meta"/);
+});

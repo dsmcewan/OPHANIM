@@ -4,7 +4,11 @@
 // (names that scrubEnv passes through: no KEY/TOKEN/SECRET in them):
 //   FAKE_CODEX_LOGIN   chatgpt (default) | apikey | none | weird        what `codex login status` prints
 //   FAKE_CODEX_MODELS  json (default) | lines | missing | garbage       what `codex debug models` prints
+//   FAKE_CODEX_PERMS   match (default) | legacy | none | fail          what `codex debug prompt-input` reports: the profile
+//                      the --config overrides define (as the real 0.170.0 binary renders it), the legacy workspace-write
+//                      profile (as if the overrides were ignored), no profile at all, or exit 1
 //   FAKE_CLI_MODE      ok (default) | hang | fail | needkey             what a model run (`codex exec` / `grok -p`) does
+//                      (grok also: chunks -- the answer as text_delta events; nofinal -- tool events only)
 //   FAKE_CLI_WRITE     a worktree-relative path the model run writes (a policy probe)
 //   FAKE_CLI_PIDFILE   hang: the file the run writes its child's pid to (the timeout test checks it was killed)
 // The fake `codex exec` speaks the SDK's protocol (`exec --experimental-json ... [resume <id>]`, the prompt on stdin):
@@ -49,6 +53,28 @@ if (argv[0] === "debug" && argv[1] === "models") {
   else console.log("~~~ ??? ~~~");
   process.exit(0);
 }
+if (argv[0] === "debug" && argv[1] === "prompt-input") {
+  const m = process.env.FAKE_CODEX_PERMS || "match", cwd = process.cwd();
+  if (m === "fail") { console.error("fake codex: prompt-input failed"); process.exit(1); }
+  const cfg = argv.flatMap((a, i) => (a === "--config" ? [argv[i + 1]] : []));
+  const val = k => { const c = cfg.find(x => x.startsWith(k + "=")); return c ? JSON.parse(c.slice(k.length + 1).replace(/"=/g, '":')) : undefined; };
+  const name = val("default_permissions");
+  const entry = (access, p) => '<entry access="' + access + '">' + (p.startsWith(":") ? "<special>" + p + "</special>" : "<path>" + p + "</path>") + "</entry>";
+  let entries = [], net = "restricted";
+  if (m === "legacy" || !name) { entries = [entry("read", ":root"), entry("write", cwd), entry("write", ":slash_tmp"), entry("write", ":tmpdir"), entry("read", cwd + "/.git")]; }
+  else {
+    for (const [k, v] of Object.entries(val("permissions." + name + ".filesystem") ?? {})) {
+      if (k === ":workspace_roots") for (const [sub, a] of Object.entries(v)) entries.push(entry(a, sub === "." ? cwd : cwd + "/" + sub));
+      else entries.push(entry(v, k));
+    }
+    entries.push(entry("read", (process.env.HOME || "/h") + "/.codex/tmp/arg0-linux/codex-arg0Fake12"));
+    if (val("permissions." + name + ".network")?.enabled) net = "enabled";
+  }
+  const profile = m === "none" ? "" : '<permission_profile type="managed"><file_system type="restricted">' + entries.join("") + "</file_system></permission_profile>";
+  console.log(JSON.stringify([{ type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions instructions>Network access is " + net + ".</permissions instructions>" }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "<environment_context><filesystem>" + profile + "</filesystem></environment_context>" }] }]));
+  process.exit(0);
+}
 if (argv[0] === "exec" && argv[1] === "--experimental-json") {
   const val = f => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : null; };
   const dir = val("--cd"), prompt = fs.readFileSync(0, "utf8");
@@ -88,6 +114,16 @@ if (pi >= 0) {
   if (process.env.FAKE_CLI_WRITE) probe.extra = tryWrite(path.join(wt, process.env.FAKE_CLI_WRITE));
   const ev = o => process.stdout.write(JSON.stringify(o) + "\n");
   ev({ type: "start", model: argv[argv.indexOf("-m") + 1] });
+  if (mode === "chunks" || mode === "nofinal") {
+    // An incremental stream (ASSUMED shapes: the Grok CLI's schema is undocumented): tool activity, reasoning chunks,
+    // then (chunks) the answer in pieces; nofinal ends on tool activity with no assistant text at all.
+    ev({ type: "tool_call", name: "bash", input: { command: "cat README.md" } });
+    ev({ type: "tool_result", output: "NOT THE ANSWER" });
+    ev({ type: "thinking_delta", delta: "hmm" });
+    if (mode === "chunks") for (const piece of ["# Findings (fake grok, ", "chunked)\n\nPROBE ", JSON.stringify(probe), "\n"]) ev({ type: "text_delta", delta: piece });
+    ev({ type: "usage", usage: { prompt_tokens: 7, completion_tokens: 3 } });
+    process.exit(0);
+  }
   process.stdout.write("this line is not json\n");
   ev({ type: "message", role: "assistant", content: "thinking..." });
   ev({ type: "result", result: "# Findings (fake grok)\n\nPROBE " + JSON.stringify(probe) + "\n", usage: { prompt_tokens: 7, completion_tokens: 3 } });
@@ -159,7 +195,7 @@ export function fakeCodexSdk() {
       this.options = options;
       const envNames = Object.keys(options.env ?? {}).sort();
       calls.push({ kind: "new", option_names: Object.keys(options).sort(), env_names: envNames, env_keylike: envNames.filter(k => /KEY|TOKEN|SECRET/.test(k)),
-        codexPathOverride: options.codexPathOverride ?? null, config: options.config ?? null, home: options.env?.HOME ?? null });
+        codexPathOverride: options.codexPathOverride ?? null, config: options.config ?? null, config_overrides: options.configOverrides ?? null, home: options.env?.HOME ?? null, tmpdir: options.env?.TMPDIR ?? null });
     }
     startThread(threadOptions = {}) { return new Thread(this, threadOptions, null); }
     resumeThread(id, threadOptions = {}) { return new Thread(this, threadOptions, id); }

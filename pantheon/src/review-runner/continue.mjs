@@ -102,6 +102,12 @@ export async function loadContinuation(path, expect) {
   if (t.commit !== expect.commit) mism.push(`commit ${t.commit} vs ${expect.commit}`);
   if (via !== expect.via) mism.push(`via ${via} vs ${expect.via}`);
   if (expect.transport && t.transport !== expect.transport) mism.push(`transport ${t.transport} vs ${expect.transport}`);
+  // --reviewer: the override (or its absence) must be the earlier run's. A transcript written before the flag existed
+  // records none, which reads as no override.
+  if ("reviewer" in expect) {
+    const was = t.reviewer_override ? (t.reviewer ?? "an unrecorded override") : null;
+    if (was !== expect.reviewer) mism.push(`reviewer override ${was ?? "none"} vs ${expect.reviewer ?? "none"}`);
+  }
   if (mism.length) refuse(`--continue ${name} is not this review: ${mism.join("; ")}`);
   // `failed` is a subscription run whose transport reported the failure itself (Codex: turn.failed, an SDK error).
   if (t.status !== "incomplete" && !(via === "subscription" && t.status === "failed")) refuse(`--continue ${name}: its status is ${JSON.stringify(t.status)}; only an incomplete review is continued (in subscription mode, a failed one too)`);
