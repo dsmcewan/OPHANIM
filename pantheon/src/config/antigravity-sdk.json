@@ -1,0 +1,85 @@
+{
+  "schema": "pantheon.antigravity-sdk/v1",
+  "set": "2026-11-19",
+  "basis": "owner direction 2026-11-19 (prompt intake and Antigravity SDK migration): the Google IMPLEMENTATION transport is the official google-antigravity Python SDK on the Gemini API with GEMINI_API_KEY. No subscription OAuth, no agy CLI, no ACP or CLI wrapper. The assignments below apply to Google implementation routing only: planning, investigation, dispatch and review seats are unchanged.",
+  "vendor": "agy_google",
+  "transport": "antigravity-sdk",
+  "lab": "google",
+  "sdk": {
+    "distribution": "google-antigravity",
+    "version": "0.1.24",
+    "module": "google.antigravity",
+    "observed": "2026-11-19: the manylinux x86_64 wheel from PyPI, with its bundled localharness runtime. The contract this transport relies on is probed by pantheon/tests/antigravity-sdk-contract.test.mjs against the installed SDK; another version is refused at launch until that test has passed on it."
+  },
+  "api": {
+    "base_url": "https://generativelanguage.googleapis.com",
+    "key_env": "GEMINI_API_KEY",
+    "key_header": "x-goog-api-key",
+    "generation_verbs": ["streamGenerateContent", "generateContent"],
+    "note": "observed on SDK 0.1.24: the runtime calls POST /v1beta/models/<model>:streamGenerateContent?alt=sse over HTTP/1.1 with the key in x-goog-api-key. The controller's model gateway holds the key; the SDK process is given a per-session token and the gateway's loopback address instead."
+  },
+  "implementer": {
+    "easy": { "model": "gemini-4-hydrogen", "effort": "medium" },
+    "medium": { "model": "gemini-4-neon", "effort": null },
+    "hard": { "model": "gemini-4-carbon", "effort": "high" }
+  },
+  "implementer_basis": {
+    "models": "owner direction 2026-11-19: hard gemini-4-carbon, medium gemini-4-neon, easy gemini-4-hydrogen",
+    "effort": "the thinking level the 2026-11-17 matrix seated the same base model at (gemini-4-carbon high; gemini-4-hydrogen medium on easy work). gemini-4-neon carries none: no thinking level of it is recorded here, so none is sent and the provider's default applies."
+  },
+  "ladders": {
+    "easy": [{ "model": "gemini-4-hydrogen", "effort": "medium" }, { "model": "gemini-3.8-flash", "effort": "high" }],
+    "medium": [{ "model": "gemini-4-neon", "effort": null }, { "model": "gemini-4-argon", "effort": "high" }],
+    "hard": [{ "model": "gemini-4-carbon", "effort": "high" }, { "model": "gemini-4-hydrogen", "effort": "xhigh" }, { "model": "gemini-4-argon", "effort": "high" }]
+  },
+  "ladders_basis": "the head of each ladder is the owner's 2026-11-19 pick. The rungs after it are the base models of the 2026-11-17 ladders, unchanged (easy: gemini-3.8-flash; medium: gemini-4-argon; hard: gemini-4-hydrogen, then gemini-4-argon), each at the thinking level that ladder named. A rung is reached only by a recorded step: a rejection (after the thinking levels of the rung before it), a transport failure, a quota refusal, or the provider reporting the model unavailable. Never silently.",
+  "models": {
+    "gemini-4-carbon": { "thinking": ["low", "medium", "high"], "facts": "capability-facts.json" },
+    "gemini-4-hydrogen": { "thinking": ["low", "medium", "high", "xhigh"], "facts": "capability-facts.json (owner-stated 2026-11-17)" },
+    "gemini-4-argon": { "thinking": ["low", "medium", "high"], "facts": "capability-facts.json" },
+    "gemini-3.8-flash": { "thinking": ["low", "medium", "high"], "facts": "lanes.json (the base model of the gemini-3.8-flash lanes)" },
+    "gemini-4-neon": {
+      "thinking": [],
+      "facts": "UNRECORDED",
+      "note": "named by the owner on 2026-11-19 as the medium Google implementer. No context window, output ceiling or thinking level of it is recorded in this repository: the vendor page was not readable from the session that added it, and no key that Google accepts was available to read the model resource. The transport asks the provider for the model (GET /v1beta/models/gemini-4-neon) before its first use in a run and records what it answers; a model the provider does not serve is reported as MODEL_UNAVAILABLE and is never substituted silently."
+    }
+  },
+  "subagents": {
+    "model": "gemini-4-hydrogen",
+    "ceilings": { "gemini-4-carbon": 8, "gemini-4-neon": 4, "gemini-4-hydrogen": 0 },
+    "default_ceiling": 0,
+    "max_depth": 1,
+    "min_assignment_chars": 24,
+    "basis": "owner direction 2026-11-19: a Carbon implementer at most 8 concurrently active Hydrogen subagents, a Neon implementer at most 4, a Hydrogen implementer no automatic delegation. Ceilings, not team sizes. An implementer model with no declared ceiling delegates to none.",
+    "accounting": "LIVE instances. Observed on SDK 0.1.24: a parent wakes an idle subagent with the runtime's send_message tool, for which neither an SDK hook nor an SDK policy fires, and ending a subagent with manage_subagents emits no event. An idle subagent can therefore become active again without any controller checkpoint, so a slot is held from admission to the end of the implementer session: live <= ceiling, hence active <= ceiling.",
+    "types": {
+      "code-explorer": {
+        "description": "Explores code in this worktree for one specific question and reports what it found, with paths and line numbers. Reads only.",
+        "instructions": "You are a code exploration specialist working for one implementer on one work unit. Answer the one assignment you are given by reading files in the worktree. Report facts with file paths and line numbers. You cannot write files or run commands. Do not guess: say what you could not find.",
+        "write": false
+      },
+      "dependency-analyst": {
+        "description": "Traces what one named symbol, file or module depends on and what depends on it, and reports the edges with paths. Reads only.",
+        "instructions": "You are a dependency analysis specialist working for one implementer on one work unit. For the assignment you are given, trace imports, callers, consumers and shared state by reading files in the worktree, and report each edge with its file path and line. You cannot write files or run commands. Separate what you verified from what you infer.",
+        "write": false
+      },
+      "context-retriever": {
+        "description": "Retrieves the specific files or passages an assignment names and returns them condensed, with their paths. Reads only.",
+        "instructions": "You are a context retrieval specialist working for one implementer on one work unit. Fetch exactly the files or passages the assignment names from the worktree and return what matters from them, quoted with paths and line numbers. You cannot write files or run commands. Do not summarise what you did not read.",
+        "write": false
+      },
+      "test-constructor": {
+        "description": "Writes tests for one named behaviour of the unit, inside the unit's owned paths only.",
+        "instructions": "You are a test construction specialist working for one implementer on one work unit. Write the tests the assignment names, inside the unit's owned paths only: a write anywhere else is refused before it happens. You cannot run commands; the implementer runs the unit's verify command. Report the files you wrote and what each test asserts.",
+        "write": true
+      },
+      "bounded-implementer": {
+        "description": "Implements one bounded, named piece of the unit, inside the unit's owned paths only.",
+        "instructions": "You are an implementation specialist working for one implementer on one work unit. Implement exactly the bounded piece the assignment names, inside the unit's owned paths only: a write anywhere else is refused before it happens. You cannot run commands; the implementer runs the unit's verify command. Report the files you changed and anything you left undone.",
+        "write": true
+      }
+    },
+    "read_tools": ["view_file", "list_directory", "search_directory", "find_file"],
+    "write_tools": ["create_file", "edit_file"]
+  }
+}
