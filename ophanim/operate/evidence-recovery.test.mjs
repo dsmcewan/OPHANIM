@@ -21,7 +21,7 @@ const attest = (f, item) => f.S.set({item, title: `Alpha for ${item}`, state: 'R
 test('recovery: a retained run\'s verified evidence becomes an unsigned proposal for the current Resolved status; the owner applies it; nothing is searched twice', async () => {
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'ran'}, {item: 'never-ran'}]);
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, ...FIVE});
     // Both go through the lifecycle; neither outcome proposal is applied.
     const r1 = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.ok(stagesOf(r1).filter(x => x === 'outcome:passed').length === 2, JSON.stringify(r1.dispatched));
@@ -75,7 +75,7 @@ test('recovery: a retained run\'s verified evidence becomes an unsigned proposal
 test('recovery refuses evidence that does not re-check, searches again when the cited bytes change, and treats a changed requirement as stale', async () => {
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'tampered'}, {item: 'moved'}]);
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, ...FIVE});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     const runJson = JSON.parse(fs.readFileSync(w.stages('tampered').find(s => s.stage === 'outcome').outputs.proposal_path, 'utf8')).locations.run_json;

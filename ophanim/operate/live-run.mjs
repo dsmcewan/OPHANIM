@@ -13,15 +13,18 @@
 //                         pipeline: {max_provider_calls, max_revisions, max_concurrent_units, verify_timeout_ms}}:
 //                         positive integers; stage_provider_calls <= total_provider_calls and
 //                         pipeline.max_provider_calls <= stage_provider_calls (a pipeline runs inside one stage)
-//   billing              {scope: owner text, gemini_api_implementer: true, metered_gemini_failover: true|false, note}.
-//                         gemini_api_implementer MUST be true (owner direction 2026-11-19): the Google implementer of a
-//                         fit run is an Antigravity SDK session billed on the Gemini API (GEMINI_API_KEY); every model
-//                         request of it, and of each of its native subagents, is one provider call. A manifest that
-//                         does not say so is refused: the run cannot implement without that spend.
-//                         That field is the BY-NAME authorization of that transport's own billing, and of nothing else.
-//                         metered_gemini_failover is the switch EVERY OTHER Google-billed seat follows (L-504 invariant
-//                         4): false, none is called -- a lane's proven quota refusal is not answered by the metered API,
-//                         and a Gemini seat with no lane is refused. Both are enforced at the point of spend
+//   billing              {scope: owner text, gemini_api_primary: true, metered_gemini_failover: true|false, note}.
+//                         Two separate authorizations (owner decision 2026-11-19, register L-136), each enforced at the
+//                         point of spend and never by the presence of a key:
+//                         gemini_api_primary       primary Gemini API execution; off unless this says true. The Google
+//                                                  implementer of a fit run is an Antigravity SDK session billed on the
+//                                                  Gemini API (GEMINI_API_KEY): every model request of it, and of each
+//                                                  of its native subagents, is one provider call. This launcher runs
+//                                                  only fit, so it REFUSES a manifest that does not say true: the run
+//                                                  could plan and then not implement.
+//                         metered_gemini_failover  whether a proven quota refusal of an Antigravity lane (a single-turn
+//                                                  Gemini seat: a reviewer, the validator) may be answered by the
+//                                                  metered Gemini API. It neither enables nor disables the implementer.
 //   require_subagent     (optional) {type: a specialist type, model: gemini-4-hydrogen, min_calls >= 1}: the run is NOT
 //                         accepted unless that many NATIVE subagents of that type, admitted by the controller and
 //                         answered by the provider under that model, are recorded in an implementer session whose
@@ -109,7 +112,7 @@ import {spawnPromise} from '../../pantheon/src/board/spawn.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '../..');
-// v2 (2026-11-19): the Google implementer is billed on the Gemini API (billing.gemini_api_implementer), the required
+// v2 (2026-11-19): the Google implementer is billed on the Gemini API (billing.gemini_api_primary), the required
 // subagent is a native one ({type, model}), and agy-login is optional. A v1 manifest is refused: it authorized neither.
 export const LIVE_RUN_SCHEMA = 'ophanim.live-run/v2';
 export const PLAN_SCHEMA = 'ophanim.live-run-plan/v1';
@@ -177,10 +180,10 @@ export function validateManifest(m, {baseDir = process.cwd()} = {}) {
       why.push('limits.pipeline.max_provider_calls is at most limits.stage_provider_calls (the pipeline runs inside the implement stage, whose budget bounds it)');
     }
   }
-  if (keys(m.billing, 'billing', ['scope', 'gemini_api_implementer', 'metered_gemini_failover', 'note'])) {
+  if (keys(m.billing, 'billing', ['scope', 'gemini_api_primary', 'metered_gemini_failover', 'note'])) {
     if (!str(m.billing.scope)) why.push('billing.scope is the owner\'s text naming what may be billed');
-    if (m.billing.gemini_api_implementer !== true) why.push('billing.gemini_api_implementer is true: the Google implementer of a fit run is an Antigravity SDK session billed on the Gemini API (GEMINI_API_KEY), and this run cannot implement without that spend');
-    if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether any Google-billed seat other than the SDK implementer may be called (false: a lane\'s quota refusal is not answered by the metered Gemini API)');
+    if (m.billing.gemini_api_primary !== true) why.push('billing.gemini_api_primary is true: the Google implementer of a fit run is an Antigravity SDK session, a primary Gemini API seat (GEMINI_API_KEY), and primary Gemini API execution is off unless the owner enables it; without it this run could plan and not implement');
+    if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether a quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API');
     if (typeof m.billing.note !== 'string') why.push('billing.note is a string (empty when there is nothing to add)');
   }
   if (m.require_subagent !== undefined && keys(m.require_subagent, 'require_subagent', ['type', 'model', 'min_calls'])) {
@@ -499,7 +502,7 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
     credentials: {required: [...creds.rows, ...agyLogin], gemini_api_key: creds.gemini, values: 'never read into the record: presence only'},
     antigravity_sdk: sdk, preflight, gate, seats, policy: policyHashes(), profile: 'fit', independence: 'model',
     limits: L, billing: m.billing,
-    gemini_api_implementer: 'the Google implementer is an Antigravity SDK session on the Gemini API (GEMINI_API_KEY; no subscription login, no agy CLI): every model request of it and of each native subagent is one provider call, charged before it is sent',
+    gemini_api_primary: 'ENABLED by the manifest: the Google implementer is an Antigravity SDK session on the Gemini API (GEMINI_API_KEY; no subscription login, no agy CLI): every model request of it and of each native subagent is one provider call, charged before it is sent',
     metered_gemini_failover: m.billing.metered_gemini_failover
       ? 'ALLOWED: a proven quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API of the same base model'
       : 'DISABLED: a quota refusal of an Antigravity lane (a single-turn Gemini seat) is not answered by the metered Gemini API',
@@ -773,15 +776,14 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const progressFile = path.join(m.out_dir, 'progress.jsonl');
   const note = e => { fs.appendFileSync(progressFile, JSON.stringify({at: new Date().toISOString(), ...e}) + '\n'); progress(e); };
   // GEMINI_API_KEY stays in this process: the implementer's model gateway holds it (it is never given to a worker).
-  // TWO AUTHORIZATIONS, each enforced at the point of spend (L-504 invariant 4), never by withholding the key:
-  //   billing.metered_gemini_failover  the switch every Google-billed seat follows (meteredFailover): false, none is called
-  //   billing.gemini_api_implementer   the by-name authorization of the SDK implementer's own Gemini API billing
-  //                                    (validated true above: a fit run cannot implement without it). It covers that
-  //                                    transport and nothing else, so the implementer runs with the switch off.
+  // TWO SEPARATE AUTHORIZATIONS (owner decision 2026-11-19, L-136), each enforced at the point of spend, never by
+  // withholding or finding a key:
+  //   billing.gemini_api_primary       primary Gemini API execution: the SDK implementer (validated true above)
+  //   billing.metered_gemini_failover  the metered fallback of a single-turn Gemini lane seat
   const s = seats ?? await liveSeats({meteredFailover: m.billing.metered_gemini_failover});
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
     profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, meteredFailover: m.billing.metered_gemini_failover,
-    antigravity: {geminiApi: m.billing.gemini_api_implementer === true}, progress: note});
+    geminiApiPrimary: m.billing.gemini_api_primary === true, progress: note});
   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
   // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).

@@ -25,3 +25,15 @@ export const sdkModels = () => Object.keys(SDK_CONFIG.models);
 export const isSdkModel = model => Object.hasOwn(SDK_CONFIG.models, String(model));
 /** The thinking levels recorded for `model`, lowest first ([] when none is recorded). */
 export const thinkingLevelsOf = model => [...(SDK_CONFIG.models[model]?.thinking ?? [])];
+
+// PRIMARY GEMINI API EXECUTION (owner decision 2026-11-19, register L-136): "its own setting, gemini_api_primary, default
+// off, independent of the failover switch. Without it every primary Gemini API or SDK seat is refused at the point of
+// spend." A session of this transport is such a seat: it is billed to the Gemini API key from its first request. The
+// seat's refusal is made where the seat is (pipeline/turns.mjs), before the transport is entered, and the presence of
+// the key never stands for the setting.
+export const GEMINI_API_PRIMARY_DISABLED = "GEMINI_API_PRIMARY_DISABLED";
+/** The refusal of a primary Gemini API seat of this transport while the setting is off: nothing was sent or charged. */
+export function primaryGeminiRefusal({ vendor, model, purpose = null }) {
+  return Object.assign(new Error(`${vendor}/${model}${purpose ? ` (${purpose})` : ""} is a primary Gemini API seat (the Antigravity SDK transport), and primary Gemini API execution is not enabled for this run (gemini_api_primary, default off): the seat is refused before it is admitted, charged or called`),
+    { code: GEMINI_API_PRIMARY_DISABLED, provider_requests: 0, transport: SDK_TRANSPORT });
+}

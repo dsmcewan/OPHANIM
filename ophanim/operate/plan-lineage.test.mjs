@@ -68,7 +68,7 @@ test('a revised plan keeps the previous planner as a contributor, also when the 
       validator: () => (++judged > 1 ? ACCEPT
         : json({verdict: 'plan_defect', reasons: ['criterion a1 does not test that alpha.mjs keeps its other exports'], criteria: [{id: 'a1', met: true, why: 'passes, but is inadequate'}]})),
     });
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
+    const ex = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const stages = openWorkLedger({root: f.workRoot}).stages('plan-defect');
     const plans = stages.filter(s => s.stage === 'plan' && s.status === 'passed');

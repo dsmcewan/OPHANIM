@@ -188,7 +188,7 @@ async function withLauncher(fn) {
     const before = process.env.HOME; process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture: scripted providers and the fake agy only', gemini_api_implementer: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
+      billing: {scope: 'fixture: scripted providers and the fake agy only', gemini_api_primary: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
       credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     const file = path.join(outside, 'manifest.json'); fs.writeFileSync(file, JSON.stringify(manifest));
     const childFile = path.join(outside, 'launcher-child.mjs');
@@ -295,7 +295,7 @@ test('L-307 (self-audit round 3, assignment 3 (sealed bb1287a)): the run.json on
     const before = process.env.HOME; process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture', gemini_api_implementer: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
+      billing: {scope: 'fixture', gemini_api_primary: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
       credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     const file = path.join(outside, 'manifest.json'); fs.writeFileSync(file, JSON.stringify(manifest));
     const runFile = path.join(manifest.out_dir, 'run.json');

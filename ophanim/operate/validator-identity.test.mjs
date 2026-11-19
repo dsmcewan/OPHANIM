@@ -25,7 +25,7 @@ test('4. a validator answer served by a contributor, or by an unresolved model, 
     // are not asked at all, and a lab off the review panel, OpenAI here, is asked first.)
     const turn = scriptedTurn({'plan-review': xaiFinds(),
       validator: ({vendor}) => ({text: ACCEPT, served_model: vendor === 'openai' ? 'gpt-6-luna' : 'unreleased-model-x'})});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: {...LIMITS, stage_attempts: 1}});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'val'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:failed'], 'an ACCEPT from an ineligible model is not a validation');
@@ -93,7 +93,7 @@ test('an in-run code-review finding is followed by a code revision: the finding 
     // The in-run reviewer (Stage 5, pinned to the dispatcher's model) requests changes of the first, passing revision.
     let reviews = 0;
     const turn = scriptedTurn({'unit-review': ({rubric, passed}) => JSON.stringify(++reviews === 1 || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))});
-    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', profile: 'fit'});
+    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', profile: 'fit'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = () => openWorkLedger({root: f.workRoot});
     // The rejection is answered by a revision inside the run: one implement stage, which ships.

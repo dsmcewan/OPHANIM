@@ -57,7 +57,7 @@ async function withLiveFixture(fn, {worker = 'printf \'export const ok = true;\\
     process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: ITEM, candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture: scripted providers only', gemini_api_implementer: true, metered_gemini_failover: false, note: ''},
+      billing: {scope: 'fixture: scripted providers only', gemini_api_primary: true, metered_gemini_failover: false, note: ''},
       ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
       credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     let n = 0;
@@ -83,7 +83,7 @@ test('the manifest: every limit must be chosen (the example\'s nulls are refused
   const example = path.join(HERE, 'live-run.example.json');
   assert.throws(() => readManifest(example), e => e.code === 'MANIFEST' && e.reasons.length === 9 && e.reasons.every(r => /is null: the owner must choose it/.test(r)));
   const good = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: 'a'.repeat(40), profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-    billing: {scope: 's', gemini_api_implementer: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: '/s', work_root: '/w'},
+    billing: {scope: 's', gemini_api_primary: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: '/s', work_root: '/w'},
     credentials: {required: ['anthropic-oauth', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: '/o'};
   assert.equal(validateManifest(good).item, 'two');
   assert.equal(confirmString(good), `two@${'a'.repeat(7)}`);
@@ -102,8 +102,8 @@ test('the manifest: every limit must be chosen (the example\'s nulls are refused
   assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}}), [], 'agy-login need not be named');
   assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}}), ['credentials.required includes OPENAI_API_KEY']);
   assert.match(why({credentials: {...good.credentials, gemini_api_key: 'not-used'}})[0], /^credentials\.gemini_api_key is "required": the Google implementer runs on the Gemini API with GEMINI_API_KEY/);
-  assert.match(why({billing: {...good.billing, gemini_api_implementer: false}})[0], /^billing\.gemini_api_implementer is true: .* billed on the Gemini API/);
-  assert.ok(why({billing: {scope: 's', metered_gemini_failover: false, note: ''}}).includes('billing.gemini_api_implementer is required'));
+  assert.match(why({billing: {...good.billing, gemini_api_primary: false}})[0], /^billing\.gemini_api_primary is true: .* a primary Gemini API seat \(GEMINI_API_KEY\), and primary Gemini API execution is off unless the owner enables it/);
+  assert.ok(why({billing: {scope: 's', metered_gemini_failover: false, note: ''}}).includes('billing.gemini_api_primary is required'));
   assert.deepEqual(why({schema: 'ophanim.live-run/v1'}), ['schema is "ophanim.live-run/v2"']);
   assert.deepEqual(why({require_subagent: {type: 'api-designer', model: 'grok-4.7', min_calls: 0}}), ['require_subagent.type is a specialist type: one of code-explorer, dependency-analyst, context-retriever, test-constructor, bounded-implementer',
     'require_subagent.model is gemini-4-hydrogen (the model every implementer\'s native subagents run on)', 'require_subagent.min_calls is a positive integer']);
@@ -147,7 +147,7 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     assert.deepEqual(p.seats.by_difficulty.hard.implementer.ladder, implementerPath('hard').map(x => ({vendor: x.vendor, model: x.model, transport: x.transport, effort: x.effort})));
     assert.deepEqual([p.policy.selection.hash, p.policy.identity.digest, p.policy.independence], [selectionPolicy('fit').hash, policyDigest(currentPolicy()), 'model']);
     assert.match(p.metered_gemini_failover, /^DISABLED/);
-    assert.match(p.gemini_api_implementer, /Antigravity SDK session on the Gemini API \(GEMINI_API_KEY; no subscription login, no agy CLI\)/);
+    assert.match(p.gemini_api_primary, /^ENABLED by the manifest: .*Antigravity SDK session on the Gemini API \(GEMINI_API_KEY; no subscription login, no agy CLI\)/);
     assert.match(p.notes[0], /bound CALLS, not dollars/);
 
     const refused = async (file, re, extra) => { const x = await run(['--manifest', file], extra); assert.equal(x.code, 1, x.out); assert.ok(x.json.refusals.some(w => re.test(w)), JSON.stringify(x.json.refusals)); return x; };

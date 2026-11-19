@@ -182,9 +182,9 @@ test(`${L106}, W3 over the real executors: a change review pending on capacity i
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = gitFixture(repo, [{item: 'cap-a'}, {item: 'cap-b'}]);
     const turn = scriptedTurn();
-    const six = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const six = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     // The four configured labs for the review: the planner's and implementers' labs contributed, so no three are left.
-    const four = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const four = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
     const ex = {plan: six.plan, implement: six.implement, review: four.review};
     const r1 = await tick({repo, ...f, executors: ex, limits: GIT_LIMITS});
     assert.deepEqual(r1.dispatched.filter(d => d.stage === 'review').map(d => `${d.item}:${d.status}`), ['cap-a:pending', 'cap-b:pending']);

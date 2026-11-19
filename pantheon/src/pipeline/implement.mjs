@@ -61,11 +61,11 @@ export const MCP_SERVER_PATH = fileURLToPath(new URL("./a2a-mcp-server.mjs", imp
 export const LANE_FAILURE_KINDS = Object.freeze(["timeout", "exit", "stream", "spawn"]);
 
 /**
- * The faults of the SDK transport that no rung of a ladder can cure: the unit blocks on them. METERED_GEMINI_DISABLED is
- * the seat's own refusal with metered Gemini spend off (route/quota-failover.mjs): every rung of the transport is billed
- * the same way, and no lane is seated in its place.
+ * The faults of the SDK transport that no rung of a ladder can cure: the unit blocks on them. GEMINI_API_PRIMARY_DISABLED
+ * is the seat's own refusal while primary Gemini API execution is off (antigravity/config.mjs; owner decision L-136):
+ * every rung of the transport is the same primary seat, and no lane is seated in its place.
  */
-export const TRANSPORT_BLOCKERS = Object.freeze(["CREDENTIAL_REFUSED", "NO_API_KEY", "SANDBOX_UNAVAILABLE", "SDK_VERSION", "SDK_UNAVAILABLE", "METERED_GEMINI_DISABLED"]);
+export const TRANSPORT_BLOCKERS = Object.freeze(["CREDENTIAL_REFUSED", "NO_API_KEY", "SANDBOX_UNAVAILABLE", "SDK_VERSION", "SDK_UNAVAILABLE", "GEMINI_API_PRIMARY_DISABLED"]);
 /** The blocker code a thrown error of the SDK transport names (TRANSPORT_BLOCKERS), or null. */
 export function transportBlockerOf(e) {
   if (e?.transport !== SDK_TRANSPORT) return null;

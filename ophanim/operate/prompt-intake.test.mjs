@@ -177,7 +177,7 @@ test('A RAW AUTHORIZED PROMPT ENTERS THE BACKLOG AND PROCEEDS TO PLANNING WITHOU
     assert.deepEqual(before.items.map(i => [i.item, i.status, i.gate.gate, i.gate.mode, i.ticket, i.prompt.digest, i.prompt.verified]), [[r.item, 'Ready', 'plan', 'author', null, sha(PROMPT), true]]);
     const seen = [];
     const turn = scriptedTurn({planner: ({prompt}) => { seen.push(prompt); return json(planFor(prompt, {work_units: [UNIT('alpha')]})); }});
-    const ex = makeExecutors({repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir});
     const t = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.equal(w.verify().ok, true);

@@ -25,10 +25,12 @@
 // statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
 // tests inject a synthetic pool with both), pipelineLimits (overrides of the pipeline's DEFAULT_LIMITS under `fit`; the
 // provider-call bound is the stage budget, or a lower max_provider_calls given here), meteredFailover (default true; false:
-// no Google-billed seat of the pipeline is called, the SDK implementer included unless it is authorized by name below),
-// antigravity (options of the pipeline's Google implementer transport, the Antigravity SDK session: pipeline/turns.mjs
-// `antigravity`; none is needed: the transport reads GEMINI_API_KEY and PANTHEON_ANTIGRAVITY_PYTHON itself. Its
-// `geminiApi: true` authorizes that transport's own Gemini API billing by name, so it runs with meteredFailover false)}. Every stage
+// a Gemini lane's quota refusal in the pipeline is never answered by the metered Gemini API, pipeline/turns.mjs),
+// geminiApiPrimary (default FALSE; owner decision 2026-11-19, register L-136: primary Gemini API execution is its own
+// setting, independent of the failover switch. The `fit` implementer is an Antigravity SDK session, a primary Gemini API
+// seat: without this it is refused at the point of spend and the implement stage is blocked by name),
+// antigravity (other options of that transport: pipeline/turns.mjs `antigravity`; none is needed: it reads
+// GEMINI_API_KEY and PANTHEON_ANTIGRAVITY_PYTHON itself)}. Every stage
 // stays within ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -571,7 +573,8 @@ const findingContribution = (f, via) => ({purpose: isAdvisory(f) ? 'dispatcher-r
 // selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
   seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
-  pipelineLimits = {}, meteredFailover = true, antigravity = {}} = {}) {
+  pipelineLimits = {}, meteredFailover = true, geminiApiPrimary = false, antigravity = {}} = {}) {
+  if (typeof geminiApiPrimary !== 'boolean') throw new Error('makeExecutors: geminiApiPrimary is true or false (primary Gemini API execution; default off)');
   independence ??= independenceFor(profile);
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
@@ -1374,7 +1377,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.2).
     let run, admitted = 0;
     try {
-      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}, antigravity}), dir, sameModel,
+      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}, antigravity: {...antigravity, geminiApiPrimary}}), dir, sameModel,
         // Checkpoints are sealed under a key held beside the work ledger (outside the item's state directory), and a
         // checkpoint whose seal, review or rubric does not re-derive is not resumed (independent review, assignment 3
         // (OpenAI gpt-6-astra extra review, 09d490f), question 7).
@@ -1512,8 +1515,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         const codes = [...new Set(noTransport.map(u => u.code))].sort();
         return result('blocked', {outputs: {...kept, transport_blocker: {codes, units: noTransport.map(u => u.unit_id)}}, team, contributions: all, findings, usage: usage(calls),
           blocker: {code: 'IMPLEMENTER_TRANSPORT', what: `IMPLEMENTER_TRANSPORT: the Antigravity SDK transport could not run (${codes.join(', ')}): ${String(noTransport[0].reason).slice(0, 300)}; the run record is kept (${recordFile})`,
-            role: 'lead@orch', resume_when: codes.includes('METERED_GEMINI_DISABLED')
-              ? 'the run allows metered Gemini spend, or authorizes the SDK implementer\'s Gemini API billing by name (makeExecutors antigravity.geminiApi; the live-run manifest\'s billing.gemini_api_implementer)'
+            role: 'lead@orch', resume_when: codes.includes('GEMINI_API_PRIMARY_DISABLED')
+              ? 'primary Gemini API execution is enabled for the run (gemini_api_primary): the fit implementer is an Antigravity SDK session billed on the Gemini API'
               : 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable'},
           next: {stage: 'implement', why: `the implementer transport could not run: ${codes.join(', ')}`}});
       }

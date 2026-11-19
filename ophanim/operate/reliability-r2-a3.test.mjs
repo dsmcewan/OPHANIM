@@ -300,7 +300,7 @@ test('finding 10: run.json lists a reviewer\'s stage-budget stop, verifies an op
   const manifest = (name, over = {}) => validateManifest({schema: LIVE_RUN_SCHEMA, item: 'rec-item', candidate_commit: head, profile: 'fit', independence: 'model',
     limits: {total_provider_calls: 30, stage_provider_calls: 4, revisions: 1, stage_attempts: 1, elapsed_ms: 60_000,
       pipeline: {max_provider_calls: 4, max_revisions: 1, max_concurrent_units: 1, verify_timeout_ms: 10_000}},
-    billing: {scope: 'test', gemini_api_implementer: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
+    billing: {scope: 'test', gemini_api_primary: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
     credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
   const run = (m, turn, d) => runConfirmed({manifest: m, digest: 'sha256:' + d.repeat(64), file: path.join(root, `${d}.json`)}, {ok: true}, statusLedgerState(m.ledgers.status_root),
     inspectWorkRoot(m.ledgers.work_root, m.item), {repo, seats: {turn, makeClientFor: () => ({})},

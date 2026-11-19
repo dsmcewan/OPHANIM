@@ -193,7 +193,7 @@ test(`${SA}, Q1/Q10: an outcome after the owner recorded a new status entry is p
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'moved'}]);
     const turn = scriptedTurn();
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const ex = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const r1 = await tick({repo, ...f, executors: {plan: ex.plan, implement: ex.implement, review: ex.review, validate: ex.validate}, limits: LIMITS});
     assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed']);
     const before = f.S.board().items.find(i => i.item === 'moved');
@@ -349,7 +349,7 @@ test(`${SA}, Q5: a file the validator relied on changes; the validation is not r
     const turn = scriptedTurn({validator: ({prompt}) => (prompt.includes('## Retrieved')
       ? json({...JSON.parse(/```json\n([\s\S]*)\n```/.exec(ACCEPT)[1]), sources: ['consumer-contract.md']})
       : json({requests: [{op: 'file', path: 'consumer-contract.md'}]}))});
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const ex = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const four = {plan: ex.plan, implement: ex.implement, review: ex.review, validate: ex.validate};
     assert.deepEqual(stagesOf(await tick({repo, ...f, executors: four, limits: LIMITS})), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed']);
     const w = openWorkLedger({root: f.workRoot});
@@ -393,7 +393,7 @@ test(`${SA}, Q10: an awaiting-owner outcome is re-checked on reuse; a proposal t
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'oc'}]);
     const turn = scriptedTurn();
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const ex = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     assert.deepEqual(stagesOf(await tick({repo, ...f, executors: ex, limits: LIMITS})), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
     const w = openWorkLedger({root: f.workRoot});
     const o = w.stages('oc').at(-1);
@@ -438,7 +438,7 @@ test(`${SA}, Q1: an implement stage pending on review capacity is dispatched aga
     const turn = scriptedTurn();
     // The four configured labs under the lab rule: the change the implement stage would make (its predicted contributors
     // with the planner's) leaves no three review labs -- a recorded capacity pending before any work (see SYNTH).
-    const four = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const four = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
     const r1 = await tick({repo, ...f, executors: {plan: four.plan, implement: four.implement}, limits: LIMITS});
     assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:pending']);
     const w = openWorkLedger({root: f.workRoot});
@@ -446,7 +446,7 @@ test(`${SA}, Q1: an implement stage pending on review capacity is dispatched aga
     assert.equal(pending.blocker.code, 'REVIEW_CAPACITY_PENDING');
     assert.equal(pending.usage.provider_calls, 0, 'nothing was launched');
     assert.deepEqual(stagesOf(await tick({repo, ...f, executors: {implement: four.implement}, limits: LIMITS})), [], 'the same pool is not re-asked');
-    const six = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const six = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const r3 = await tick({repo, ...f, executors: {implement: six.implement}, limits: LIMITS});
     assert.deepEqual(stagesOf(r3), ['implement:passed']);
     const passed = w.stages('later').filter(s => s.stage === 'implement').at(-1);
@@ -459,10 +459,10 @@ test(`${SA}, Q1: a change review pending on capacity is dispatched again when th
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'rev-cap'}]);
     const turn = scriptedTurn();
-    const six = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const six = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     // The four configured labs for the review only: the planner's and the implementers' labs contributed, so no three
     // review labs are left (see SYNTH in test-fixtures.mjs).
-    const four = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const four = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
     const r1 = await tick({repo, ...f, executors: {plan: six.plan, implement: six.implement, review: four.review}, limits: LIMITS});
     assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:pending']);
     const w = openWorkLedger({root: f.workRoot});
@@ -482,7 +482,7 @@ test(`${SA}, Q1: a validation pending on capacity (no eligible validator) is dis
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'val-cap'}]);
     const turn = scriptedTurn();
-    const six = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const six = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const r1 = await tick({repo, ...f, executors: {plan: six.plan, implement: six.implement, review: six.review}, limits: LIMITS});
     assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:passed']);
     const w = openWorkLedger({root: f.workRoot});
@@ -490,7 +490,7 @@ test(`${SA}, Q1: a validation pending on capacity (no eligible validator) is dis
     // contributed to the work: no validator is eligible.
     const contributed = new Set((w.stages('val-cap').find(s => s.stage === 'implement').outputs.contributions ?? []).map(c => c.lab).filter(Boolean));
     const shortSeating = Object.fromEntries(Object.entries(SIX.seating).map(([role, rows]) => [role, Array.isArray(rows) ? rows.filter(r => contributed.has(labOf(r.vendor, r.model))) : rows]));
-    const short = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', seating: shortSeating, facts: SIX.facts});
+    const short = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', seating: shortSeating, facts: SIX.facts});
     assert.deepEqual(stagesOf(await tick({repo, ...f, executors: {validate: short.validate}, limits: LIMITS})), ['validate:pending']);
     const pending = w.stages('val-cap').at(-1);
     assert.equal(pending.blocker.code, 'REVIEW_CAPACITY_PENDING');

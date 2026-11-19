@@ -34,9 +34,10 @@
 //   - THE SERVED MODEL is the provider's own statement as the gateway saw it (served_model_source "provider"). The
 //     transport's model guard refuses a session in which any answered request was not named as the model it asked for
 //     (AGY_MODEL_MISMATCH, with both identities): the model asked is never recorded in a missing name's place.
-//   - NO METERED GEMINI SPEND WITH THE SWITCH OFF (L-504 invariant 4). The seat refuses itself before the transport is
-//     entered (METERED_GEMINI_DISABLED) when agy.meteredFailover is false, unless antigravity.geminiApi authorizes this
-//     transport's own Gemini API billing by name; antigravity.geminiApi false refuses it whatever the switch says.
+//   - PRIMARY GEMINI API EXECUTION IS ITS OWN SETTING, DEFAULT OFF (owner decision 2026-11-19, register L-136). An SDK
+//     session is a primary Gemini API seat. It refuses itself before the transport is entered
+//     (GEMINI_API_PRIMARY_DISABLED) unless antigravity.geminiApiPrimary is true. The failover switch
+//     (agy.meteredFailover) is a separate authorization: it neither enables nor disables this seat.
 // The session's failures are thrown as they are (antigravity/turn.mjs FAILURES): the pipeline steps its ladder on
 // quota_exhausted, model_unavailable and lane_failure, and blocks the unit on a fault no rung can cure and on the
 // model guard's refusal.
@@ -70,10 +71,10 @@
 //
 // Inputs: the injected `turn` and `makeClientFor(vendor)` (the lifecycle's own), and `agy` options {cli?, timeoutS?,
 // sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?, meteredFailover? (default true)} — `run` replaces runAgyWorkerTurn, `api`
-// the metered-API call and `probe` the quota probe, for tests; and `antigravity` options {run?, geminiApi?, python?,
-// bridge?, upstream?, apiKey?, sandbox? {enabled, allowUnsandboxed, bwrap, home}, timeoutS?, graceS?, budget?,
-// fetchImpl?, checkAvailability?, allowSdkVersion?} — `run` replaces runAntigravitySdkTurn, for tests; `geminiApi`
-// (true | false) is the by-name authorization above; the rest are the transport's options.
+// the metered-API call and `probe` the quota probe, for tests; and `antigravity` options {run?, geminiApiPrimary?,
+// python?, bridge?, upstream?, apiKey?, sandbox? {enabled, allowUnsandboxed, bwrap, home}, timeoutS?, graceS?, budget?,
+// fetchImpl?, checkAvailability?, allowSdkVersion?} — `run` replaces runAntigravitySdkTurn, for tests;
+// `geminiApiPrimary` (default false) is the setting above; the rest are the transport's options.
 // Outputs: for every role, {text, served_model, served_model_source} (+ transport, quota_failover on the implementer).
 //
 // Must never: block the event loop on a child process (async spawn only); send a Google API key to the CLI; run the
@@ -89,8 +90,7 @@ import { probeQuota } from "../agy/quota.mjs";
 import { decideWrite } from "../agy/jail-hook.mjs";
 import { quotaFailoverFor, laneParts } from "../route/fit-matrix.mjs";
 import { QUOTA_FAILOVER_RULE } from "../route/frontier.mjs";
-import { isMeteredGemini, meteredGeminiRefusal } from "../route/quota-failover.mjs";
-import { isSdkSeat, SDK_TRANSPORT } from "../antigravity/config.mjs";
+import { isSdkSeat, SDK_TRANSPORT, primaryGeminiRefusal } from "../antigravity/config.mjs";
 import { runAntigravitySdkTurn } from "../antigravity/turn.mjs";
 import { keysRefusal, sha256, str, strictJson } from "./util.mjs";
 import { matchesOwned, pathRefusal } from "./paths.mjs";
@@ -239,7 +239,7 @@ async function sessionEvidence(x, { control_dir, seat, unit_id, attempt, timeout
 
 export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravity = {} } = {}) {
   if (typeof turn !== "function") throw new Error("pipelineTurns: pass turn({vendor, model, prompt, seat, extra}) for the single-turn seats");
-  if (antigravity.geminiApi !== undefined && typeof antigravity.geminiApi !== "boolean") throw new Error("pipelineTurns: antigravity.geminiApi is true or false (the by-name authorization of the SDK implementer's Gemini API billing)");
+  if (antigravity.geminiApiPrimary !== undefined && typeof antigravity.geminiApiPrimary !== "boolean") throw new Error("pipelineTurns: antigravity.geminiApiPrimary is true or false (primary Gemini API execution: default off)");
   const lane = agy.run ?? runAgyWorkerTurn;
   const probe = agy.probe ?? probeQuota;
   const timeoutS = agy.timeoutS ?? 1800;
@@ -290,15 +290,10 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
   const sdkImplementer = async ({ vendor, model, seat = null, prompt, cwd, control_dir = null, owned_paths = null, verify_cmd = null, unit_id = null, allowed_subagents = [], sandbox: cap = null,
     attempt = 1, signal = undefined, charge = null, admitRequest = null, verify_hide = [], deadline = null, timeoutS: askedS = null }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
-    // NO METERED GEMINI SPEND WITH THE SWITCH OFF (L-504 invariant 4; route/quota-failover.mjs). An SDK session is a
-    // metered Google call from its first request. The seat refuses itself HERE, before the transport is entered (no
-    // gateway, no bridge, no admission, no charge), when the caller disabled metered Gemini spend (agy.meteredFailover
-    // false) without authorizing this transport's own billing by name (antigravity.geminiApi true), or refused it by
-    // name (false). Whatever key the environment holds.
-    const billed = { vendor: seat?.vendor ?? vendor, model: seat?.model ?? model };
-    if (!(antigravity.geminiApi ?? (agy.meteredFailover !== false)) && isMeteredGemini({ vendor: billed.vendor, transport: SDK_TRANSPORT })) {
-      throw meteredGeminiRefusal({ ...billed, purpose: "implementer", transport: SDK_TRANSPORT });
-    }
+    // PRIMARY GEMINI API EXECUTION, DEFAULT OFF (owner decision 2026-11-19, L-136; antigravity/config.mjs). The seat
+    // refuses itself HERE, before the transport is entered (no gateway, no bridge, no admission, no charge), unless the
+    // setting is on. Whatever key the environment holds, and whatever the failover switch says.
+    if (antigravity.geminiApiPrimary !== true) throw primaryGeminiRefusal({ vendor: seat?.vendor ?? vendor, model: seat?.model ?? model, purpose: "implementer" });
     const owned = Array.isArray(owned_paths) ? owned_paths : Array.isArray(cap?.owned_paths) ? cap.owned_paths : [];
     const grace = antigravity.graceS ?? graceS;
     const turnS = printTimeoutOf({ timeoutS: Number.isFinite(askedS) && askedS > 0 ? askedS : antigravity.timeoutS ?? timeoutS, graceS: grace, deadline });

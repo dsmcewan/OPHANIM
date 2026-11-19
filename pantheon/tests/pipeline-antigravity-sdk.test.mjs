@@ -106,7 +106,9 @@ async function pipeline(t, script, { plan = PLAN(), ladder = HARD, limits = {}, 
   const turns = pipelineTurns({
     turn: async () => { throw new Error("no single-turn seat goes through pipelineTurns in this test"); },
     agy: { run: async a => { cli.push(a); throw new Error("the agy CLI must not be started for an SDK seat"); }, ...agy },
-    antigravity: { run: async a => { calls.push(a); return script(a, calls.length); }, ...antigravity },
+    // Primary Gemini API execution is enabled here (it is off by default: its own test is below), since every other
+    // test in this file is about a session that runs.
+    antigravity: { run: async a => { calls.push(a); return script(a, calls.length); }, geminiApiPrimary: true, ...antigravity },
   });
   const s = scripted({ plan, ...(review ? { review } : {}) });
   const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, dir: env.dir, planner: PLANNER, limits, ...(checkpoints ? { checkpoints } : {}), ...(onCharge ? { onCharge } : {}),
@@ -311,28 +313,29 @@ test("the model guard blocks the unit: a session refused with AGY_MODEL_MISMATCH
   assert.equal(r.s.calls.filter(c => c.role === "reviewer").length, 0, "and nothing of it reached a reviewer");
 });
 
-test("NO METERED GEMINI SPEND WITH THE SWITCH OFF (L-504 invariant 4), at the SDK seat: the implementer refuses itself before any request, spawn or charge, and runs with the switch off only when its own Gemini API billing was authorized by name", async t => {
-  // The switch off and nothing else said. An SDK session is a metered Google call from its first request, so it is not started.
-  const off = await pipeline(t, args => session(args), { agy: { meteredFailover: false } });
-  assert.equal(off.calls.length, 0, "the transport was not entered: no gateway, no bridge, no request");
-  assert.deepEqual([off.u.status, off.u.code], ["blocked", "METERED_GEMINI_DISABLED"]);
-  assert.match(off.u.reason, /agy_google\/gemini-4-carbon \(implementer\) would be served by the Antigravity SDK transport \(the Gemini API, billed to its key\), and metered Gemini spend is disabled for this run/);
-  assert.deepEqual(off.u.attempts.map(a => [a.status, a.code, a.lane_failures.length]), [["failed", "METERED_GEMINI_DISABLED", 0]]);
-  assert.deepEqual(off.u.escalations, [], "no other rung is tried: every rung of this ladder is the Gemini API");
-  assert.equal(off.out.provider_calls.by_role.implementer ?? 0, 0, "nothing was charged for it");
-  assert.equal(off.cli.length, 0, "and no agy CLI lane stood in");
-  // The implementer's own billing authorized BY NAME, the switch still off for every other Google-billed seat
-  // (ophanim/operate/live-run.mjs: billing.gemini_api_implementer true beside metered_gemini_failover false).
-  const named = await pipeline(t, args => session(args), { agy: { meteredFailover: false }, antigravity: { geminiApi: true } });
-  assert.deepEqual([named.u.status, named.calls.length], ["approved", 1], named.u.reason);
-  // Refused by name, whatever the switch says.
-  const denied = await pipeline(t, args => session(args), { antigravity: { geminiApi: false } });
-  assert.deepEqual([denied.calls.length, denied.u.status, denied.u.code], [0, "blocked", "METERED_GEMINI_DISABLED"]);
-  // Nothing said at all: the owner's routing runs (the switch defaults to on, as on every other path).
-  const dflt = await pipeline(t, args => session(args));
-  assert.deepEqual([dflt.u.status, dflt.calls.length], ["approved", 1]);
-  // The authorization is a boolean, or absent: a truthy string is not an authorization.
-  assert.throws(() => pipelineTurns({ turn: async () => ({}), antigravity: { geminiApi: "yes" } }), /antigravity\.geminiApi is true or false/);
+test("PRIMARY GEMINI API EXECUTION IS ITS OWN SETTING, DEFAULT OFF (owner decision 2026-11-19, L-136): without it the SDK implementer refuses itself before any request, spawn or charge; the failover switch neither enables nor disables it", async t => {
+  const refused = (r, what) => {
+    assert.equal(r.calls.length, 0, `${what}: the transport was not entered (no gateway, no bridge, no request)`);
+    assert.deepEqual([r.u.status, r.u.code], ["blocked", "GEMINI_API_PRIMARY_DISABLED"], what);
+    assert.deepEqual(r.u.attempts.map(a => [a.status, a.code, a.lane_failures.length]), [["failed", "GEMINI_API_PRIMARY_DISABLED", 0]], what);
+    assert.deepEqual(r.u.escalations, [], `${what}: no other rung is tried, every rung of this ladder is the same primary seat`);
+    assert.equal(r.out.provider_calls.by_role.implementer ?? 0, 0, `${what}: nothing was charged`);
+    assert.equal(r.cli.length, 0, `${what}: no agy CLI lane stood in`);
+  };
+  // DEFAULT: nothing said. Not enabled, so not called.
+  const dflt = await pipeline(t, args => session(args), { antigravity: { geminiApiPrimary: undefined } });
+  refused(dflt, "default");
+  assert.match(dflt.u.reason, /agy_google\/gemini-4-carbon \(implementer\) is a primary Gemini API seat \(the Antigravity SDK transport\), and primary Gemini API execution is not enabled for this run \(gemini_api_primary, default off\)/);
+  // The FAILOVER switch on does not enable it: the two authorizations are separate.
+  refused(await pipeline(t, args => session(args), { antigravity: { geminiApiPrimary: undefined }, agy: { meteredFailover: true } }), "failover on, primary unset");
+  refused(await pipeline(t, args => session(args), { antigravity: { geminiApiPrimary: false }, agy: { meteredFailover: true } }), "failover on, primary off");
+  // Enabled: it runs, with the failover switch off as well as on.
+  for (const meteredFailover of [false, true]) {
+    const on = await pipeline(t, args => session(args), { antigravity: { geminiApiPrimary: true }, agy: { meteredFailover } });
+    assert.deepEqual([on.u.status, on.calls.length], ["approved", 1], `primary on, failover ${meteredFailover}: ${on.u.reason}`);
+  }
+  // The setting is a boolean, or absent: a truthy string is not an authorization.
+  assert.throws(() => pipelineTurns({ turn: async () => ({}), antigravity: { geminiApiPrimary: "yes" } }), /antigravity\.geminiApiPrimary is true or false/);
 });
 
 for (const [code, more] of [["CREDENTIAL_REFUSED", { status: 403 }], ["NO_API_KEY", {}], ["SANDBOX_UNAVAILABLE", {}], ["SDK_VERSION", {}]]) {
@@ -416,7 +419,7 @@ test("the real session inside the pipeline: gateway, governor and decisions agai
     { request: { model: "gemini-4-carbon", as: "root" } },
   ];
   const plan = [unit("a", { difficulty: "hard", allowed_subagents: ["code-explorer"], invariants: [`src/a/impl.mjs exists FAKE:${JSON.stringify(steps)}:ENDFAKE`] })];
-  const turns = pipelineTurns({ turn: async () => { throw new Error("not used"); }, antigravity: { python: process.execPath, bridge: FAKE_BRIDGE, upstream: gemini.url, apiKey: "AIza-synthetic-key-for-the-test", sandbox: { enabled: false, allowUnsandboxed: true } } });
+  const turns = pipelineTurns({ turn: async () => { throw new Error("not used"); }, antigravity: { geminiApiPrimary: true, python: process.execPath, bridge: FAKE_BRIDGE, upstream: gemini.url, apiKey: "AIza-synthetic-key-for-the-test", sandbox: { enabled: false, allowUnsandboxed: true } } });
   const s = scripted({ plan });
   const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, dir: env.dir, planner: PLANNER, turns: { ...s.turns, implementer: turns.implementer },
     seats: seats({ implementer: () => ({ seat: { ...CARBON }, ladder: [{ ...CARBON }] }) }) });

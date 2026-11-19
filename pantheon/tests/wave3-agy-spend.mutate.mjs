@@ -71,7 +71,7 @@ export const MUTATIONS = [
   {id: 'S6', path: 'B(sdk) the python SDK seat (L-124)', what: 'the SDK seat\'s point-of-spend guard removed (the base)',
     edits: [one(RUN, '      if (!METERED_FAILOVER && isMeteredGemini({ vendor: "agy_google", transport: "sdk" })) {', '      if (false) {')]},
   {id: 'S7', path: 'B(sdk) the python SDK seat (L-124)', what: 'the metered classification forgets the SDK transport',
-    edits: [one('pantheon/src/route/quota-failover.mjs', 'Object.freeze(["api", "sdk", "antigravity-sdk"]);', 'Object.freeze(["api", "antigravity-sdk"]);')]},
+    edits: [one('pantheon/src/route/quota-failover.mjs', '(transport === "api" || transport === "sdk")', 'transport === "api"')]},
   {id: 'S8', path: 'B(spare) the walk\'s quota-failover candidate', what: 'both protections of the spare removed: the walk reaches it and the seat is not refused at spend',
     edits: [one('pantheon/src/route/quota-failover.mjs', '    if (c.quota_failover && !meteredFailover) {', '    if (false) {'),
       one(RUN, '    if (!METERED_FAILOVER && isMeteredGemini({ vendor, transport: transport ?? "api" })) {', '    if (false) {')]},
