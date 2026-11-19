@@ -8,8 +8,8 @@ import { spawn } from "node:child_process";
 import { accessSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { prepareWorkerWorkspace, hookWrapper, JAIL_HOOK, HOOK_NAME } from "../src/agy/workspace.mjs";
-import { decide } from "../src/agy/jail-hook.mjs";
+import { prepareWorkerWorkspace, hookWrapper, JAIL_HOOK, HOOK_NAME, HOOK_TIMEOUT_S } from "../src/agy/workspace.mjs";
+import { decide, STDIN_TIMEOUT_MS, WRAPPER_TIMEOUT_S, WRITE_FAILED_EXIT, stdinTimeoutMs } from "../src/agy/jail-hook.mjs";
 import { MCP_SERVER_PATH } from "../src/pipeline/index.mjs";
 
 /** Run a hook command as agy does (sh -c <command>, cwd = .agents/); returns {code, lines, out, err}. */
@@ -25,6 +25,7 @@ function runCommand(command, cwd, stdin) {
   });
 }
 const one = r => { assert.equal(r.lines.length, 1, `exactly one decision line, got ${JSON.stringify(r.out)} (${r.err})`); return JSON.parse(r.lines[0]); };
+const A2A_TOKEN = "t0ken-a2a-0123456789abcdef";
 const call = (name, args) => ({ toolCall: { name, args }, stepIdx: 1, conversationId: "c", workspacePaths: [], transcriptPath: "", modelName: "m" });
 
 async function setup(t) {
@@ -34,7 +35,7 @@ async function setup(t) {
   for (const d of [wt, join(wt, ".git"), join(wt, "src", "a"), join(wt, "src", "b"), outside]) mkdirSync(d, { recursive: true });
   writeFileSync(join(wt, ".git", "config"), "[core]\n");
   const ws = await prepareWorkerWorkspace({ control_dir: ctl, worktree: wt, unit_id: "a", owned_paths: ["src/a/**", "docs/a.md"], verify_cmd: "node --test tests/a.test.mjs",
-    roles: ["math", "probe-helper"], mcp_server: MCP_SERVER_PATH, a2a_env: { PANTHEON_A2A_SOCKET: join(ctl, "a2a.sock"), PANTHEON_A2A_TOKEN: "t0ken", PANTHEON_A2A_ROLES: "math,probe-helper", PANTHEON_UNIT_ID: "a" } });
+    roles: ["math", "probe-helper"], mcp_server: MCP_SERVER_PATH, a2a_env: { PANTHEON_A2A_SOCKET: join(ctl, "a2a.sock"), PANTHEON_A2A_TOKEN: A2A_TOKEN, PANTHEON_A2A_ROLES: "math,probe-helper", PANTHEON_UNIT_ID: "a" } });
   const log = () => readFileSync(ws.jail_log, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
   const agentsDir = join(ws.control_dir, ".agents");
   const command = JSON.parse(readFileSync(ws.hooks, "utf8"))[HOOK_NAME].PreToolUse[0].hooks[0].command;
@@ -69,8 +70,12 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
     ["multi_replace_file_content", { TargetFile: join(wt, "docs/a.md") }, "auto_approve"],
     ["write_to_file", { TargetFile: join(wt, "docs/b.md") }, "deny", /not one of the unit's owned paths/],
     ["write_to_file", { TargetFile: join(wt, "src/b/impl.mjs") }, "deny", /not one of the unit's owned paths/],
-    ["write_to_file", { TargetFile: `${wt}/src/a/../../../outside/x` }, "deny", /outside the unit's worktree/],
-    ["write_to_file", { TargetFile: `${wt}/src/a/../b/x.mjs` }, "deny", /not one of the unit's owned paths/],
+    // A `..` (or `.`) component is refused AS WRITTEN, before normalisation (independent review round 2, assignment 4
+    // (OpenAI gpt-6-astra, 77480d6), question 2: a symlink then `..` means something else on disk than lexically).
+    ["write_to_file", { TargetFile: `${wt}/src/a/../../../outside/x` }, "deny", /has a "\.\." component: traversal is refused before normalisation/],
+    ["write_to_file", { TargetFile: `${wt}/src/a/../b/x.mjs` }, "deny", /has a "\.\." component/],
+    ["write_to_file", { TargetFile: `${wt}/src/a/../a/x.mjs` }, "deny", /has a "\.\." component/],
+    ["write_to_file", { TargetFile: `${wt}/src/a/./x.mjs` }, "deny", /has a "\." component/],
     ["write_to_file", { TargetFile: join(wt, ".git/config") }, "deny", /inside \.git/],
     ["write_to_file", { TargetFile: join(wt, "src/a/.agents/hooks.json") }, "deny", /inside \.agents/],
     ["write_to_file", { TargetFile: join(ctl, ".agents/hooks.json") }, "deny", /outside the unit's worktree/],
@@ -79,7 +84,7 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
     // write_file {Path, Content}: the tool agy 1.5.10 actually emitted (observed 2026-11-18); every check applies to Path.
     ["write_file", { Path: join(wt, "src/a/impl.mjs"), Content: "x" }, "auto_approve"],
     ["write_file", { Path: join(wt, "docs/b.md"), Content: "x" }, "deny", /not one of the unit's owned paths/],
-    ["write_file", { Path: `${wt}/src/a/../../../outside/x`, Content: "x" }, "deny", /outside the unit's worktree/],
+    ["write_file", { Path: `${wt}/src/a/../../../outside/x`, Content: "x" }, "deny", /traversal is refused/],
     ["write_file", { Path: join(wt, ".git/config"), Content: "x" }, "deny", /inside \.git/],
     ["write_file", { Path: "src/a/impl.mjs", Content: "x" }, "deny", /Path "src\/a\/impl\.mjs" is not absolute/],
     ["write_file", { Content: "x" }, "deny", /names no target/],
@@ -88,6 +93,20 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
     ["write_to_file", { AbsolutePath: join(wt, "src/a/y.mjs") }, "auto_approve"],
     ["write_to_file", { File: join(wt, "src/b/y.mjs") }, "deny", /not one of the unit's owned paths/],
     ["write_to_file", { TargetFile: join(wt, "src/a") }, "deny", /directory/],
+    // EVERY path argument is checked, and they must agree (independent review round 2, assignment 4 (OpenAI
+    // gpt-6-astra, 77480d6), question 2): an owned Path used to launder an unowned TargetFile (only the first was read).
+    ["replace_file_content", { Path: join(wt, "src/a/x.mjs"), TargetFile: join(wt, "docs/b.md") }, "deny", /TargetFile|docs\/b\.md is not one of/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), AbsolutePath: join(ctl, ".agents/hooks.json") }, "deny", /outside the unit's worktree/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), File: join(wt, ".git/config") }, "deny", /inside \.git/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: join(wt, "src/a/y.mjs") }, "deny", /name different files .*conflicting targets are refused/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: join(wt, "src/a/x.mjs"), Content: "/etc/passwd" }, "auto_approve"],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), DestinationPath: join(wt, "docs/b.md") }, "deny", /docs\/b\.md is not one of/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), Extra: { SourceFile: "/etc/shadow" } }, "deny", /outside the unit's worktree/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), Other: join(wt, "src/b/x.mjs") }, "deny", /src\/b\/x\.mjs is not one of/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), Where: "~/.bashrc" }, "deny", /not absolute/],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFiles: [join(wt, "src/a/x.mjs"), join(wt, "README.md")] }, "deny", /README\.md is not one of/],
+    ["write_to_file", { TargetFile: join(wt, "src/a/z.mjs"), CodeContent: "/x", EmptyFile: false, ReplacementChunks: [{ TargetContent: "/a", ReplacementContent: "/b" }] }, "auto_approve"],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: 7 }, "deny", /TargetFile is not a path/],
   ];
   for (const [name, args, want, why] of cases) {
     const d = await hook(call(name, args));
@@ -184,12 +203,22 @@ test("MCP is denied when the unit has no MCP server configured", async t => {
   assert.match(d.reason, /no pantheon-subagents MCP server configured/);
 });
 
-test("read tools are auto-approved inside the worktree or the control dir only (never a bare allow); malformed input is denied", async t => {
+test("read tools are auto-approved inside the worktree only (never a bare allow); malformed input is denied", async t => {
   const { wt, ctl, outside, hook } = await setup(t);
-  for (const [name, args] of [["view_file", { AbsolutePath: join(wt, "src/a/x.mjs") }], ["list_dir", { DirectoryPath: ctl }], ["grep_search", { SearchPath: wt, Query: "x" }],
+  for (const [name, args] of [["view_file", { AbsolutePath: join(wt, "src/a/x.mjs") }], ["grep_search", { SearchPath: wt, Query: "x" }],
     ["find_by_name", { SearchDirectory: wt, Pattern: "*.mjs" }], ["view_file_outline", { AbsolutePath: join(wt, "README.md") }], ["codebase_search", { Query: "x", TargetDirectories: [wt] }]]) {
     assert.equal((await hook(call(name, args))).decision, "auto_approve", name);
   }
+  // The control dir is no longer readable: its .agents/mcp_config.json holds the A2A bearer token (independent review
+  // round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7). A symlink from the worktree into it is denied too.
+  symlinkSync(ctl, join(wt, "src", "a", "ctl-link"));
+  for (const [name, args] of [["list_dir", { DirectoryPath: ctl }], ["view_file", { AbsolutePath: join(ctl, ".agents", "mcp_config.json") }],
+    ["read_file", { Path: join(ctl, ".agents", "mcp_config.json") }], ["view_file", { AbsolutePath: join(wt, "src/a/ctl-link/.agents/mcp_config.json") }]]) {
+    const d = await hook(call(name, args));
+    assert.equal(d.decision, "deny", `${name} ${JSON.stringify(args)}`);
+  }
+  assert.match((await hook(call("read_file", { Path: join(ctl, ".agents", "mcp_config.json") }))).reason, /inside the control dir/);
+  assert.match((await hook(call("view_file", { AbsolutePath: `${wt}/src/a/../../README.md` }))).reason, /traversal is refused/);
   assert.equal((await hook(call("view_file", { AbsolutePath: "/etc/passwd" }))).decision, "deny");
   assert.equal((await hook(call("view_file", { AbsolutePath: join(outside, "secret") }))).decision, "deny");
   assert.equal((await hook(call("codebase_search", { Query: "x", TargetDirectories: [wt, "/etc"] }))).decision, "deny");
@@ -199,6 +228,34 @@ test("read tools are auto-approved inside the worktree or the control dir only (
     assert.equal(d.decision, "deny", bad);
     assert.match(d.reason, /malformed/);
   }
+});
+
+// Assignment 3 Antigravity run, read_file (findings-3-google-77480d6, agy 1.5.11): the installed CLI advertised read_file
+// {Path} as its only file-reading tool and the hook denied every source read ("tool read_file is not allowed for a unit
+// worker"). It is a read tool now, with view_file's containment: inside the worktree approved, outside denied.
+test("read_file (observed on agy 1.5.11) is a read tool: auto-approved inside the worktree, denied outside it and in the control dir", async t => {
+  const { wt, outside, hook, log } = await setup(t);
+  writeFileSync(join(wt, "package.json"), "{}\n");
+  const d = await hook(call("read_file", { Path: join(wt, "package.json") }));
+  assert.deepEqual([d.decision, d.reason], ["auto_approve", "a read inside the worktree"]);
+  assert.notEqual(log().at(-1).reason, "tool read_file is not allowed for a unit worker");
+  for (const p of ["/etc/passwd", join(outside, "secret"), "package.json"]) assert.equal((await hook(call("read_file", { Path: p }))).decision, "deny", p);
+  assert.equal((await hook(call("read_file", {}))).decision, "deny", "no path: denied");
+  // The CLI's other advertised tools without an observed argument shape stay denied (deny by default).
+  for (const name of ["edit_file", "list_resources", "read_resource", "manage_task"]) assert.equal((await hook(call(name, { Path: join(wt, "package.json") }))).decision, "deny", name);
+});
+
+// Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7: the hook log kept the raw payload,
+// so a token the model echoed into a tool call (or a Bearer header in a command) was stored verbatim.
+test("the hook log redacts the unit's A2A token (read from the control dir's MCP config) and Bearer/token= pairs", async t => {
+  const { wt, hook, log } = await setup(t);
+  const leaky = call("write_file", { Path: join(wt, "src/a/x.mjs"), Content: `const t = "${A2A_TOKEN}"; // Authorization: Bearer sk-abcdefghijklmnop token=zzzzzzzzzzzz` });
+  assert.equal((await hook(leaky)).decision, "auto_approve");
+  const row = log().at(-1), text = JSON.stringify(row);
+  assert.ok(!text.includes(A2A_TOKEN), "the A2A token never reaches jail.log");
+  assert.ok(!text.includes("sk-abcdefghijklmnop") && !text.includes("zzzzzzzzzzzz"), text);
+  assert.equal(row.raw_redacted, true);
+  assert.equal(row.args.Path, join(wt, "src/a/x.mjs"), "paths stay readable");
 });
 
 test("fail closed: an unreadable jail.json, one that is not JSON, a policy missing fields, a wrapper whose node prints nothing — each prints exactly one deny and exits 0", async t => {
@@ -235,14 +292,16 @@ test("fail closed: an unreadable jail.json, one that is not JSON, a policy missi
   const r = await runCommand(broken, agentsDir, write);
   assert.equal(r.code, 0);
   assert.deepEqual(one(r), { decision: "deny", reason: "hook exception: the jail hook printed nothing" });
-  // A hook process whose stdout is closed still exits 0 (the write error is swallowed, not a crash).
+  // A hook process whose stdout is closed could not deliver its decision: that is NOT silently an answer (an empty
+  // stdout ALLOWS), it exits WRITE_FAILED_EXIT so the wrapper prints the deny (independent review round 2, assignment 4
+  // (OpenAI gpt-6-astra, 77480d6), question 1: the write error used to be swallowed with exit 0).
   const closed = await new Promise(resolve => {
     const c = spawn(process.execPath, [JAIL_HOOK, ws.jail], { stdio: ["pipe", "pipe", "pipe"] });
     c.stdout.destroy();
     c.on("close", code => resolve(code));
     c.stdin.end(JSON.stringify(write));
   });
-  assert.equal(closed, 0);
+  assert.equal(closed, WRITE_FAILED_EXIT);
   // The pure decide() fails closed too.
   assert.match(decide(null, write).reason, /hook exception: the policy is not an object/);
   assert.equal(decide({ worktree: wt, owned_paths: ["src/a/**"] }, write).decision, "deny", "no roles: an exception, a deny");
@@ -251,4 +310,71 @@ test("fail closed: an unreadable jail.json, one that is not JSON, a policy missi
   await viaNode(join(root, "garbage.json"));
   const row = JSON.parse(readFileSync(join(root, "run", "jail.log"), "utf8").trim().split("\n").at(-1));
   assert.deepEqual([row.decision, row.payload, typeof row.raw], ["deny", write, "string"]);
+});
+
+// ---- Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 1: FAIL CLOSED ON TIME --------
+// The wrapper used to buffer node's output in $(...) until node exited; a node stuck past the CLI's 30 s hook timeout was
+// killed with the wrapper and left an EMPTY stdout, which ALLOWS (owner-stated). And the node hook's stdin timer printed
+// a deny but never exited. These assert the DECISION TEXT and the time it took, not only an exit code.
+
+/** Spawn `cmd` (sh -c) with stdin kept OPEN (as a CLI that never closes it); resolve {code, out, first_ms, ms}. */
+function runOpenStdin(cmd, cwd, stdin, { env = process.env } = {}) {
+  return new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const c = spawn("sh", ["-c", cmd], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "", first_ms = null;
+    c.stdout.on("data", d => { if (first_ms === null) first_ms = Date.now() - t0; out += d; });
+    c.on("error", reject);
+    c.on("close", code => { c.stdin.destroy(); resolve({ code, out, lines: out.split("\n").filter(Boolean), first_ms, ms: Date.now() - t0 }); });
+    c.stdin.on("error", () => {});
+    c.stdin.write(typeof stdin === "string" ? stdin : JSON.stringify(stdin));   // never ended
+  });
+}
+const fakeNode = (root, name, body) => { const p = join(root, name); writeFileSync(p, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return p; };
+
+test("the wrapper kills a node that gives no decision within its own timeout and prints a deny that says so (not an empty stdout)", async t => {
+  const { ws, root, agentsDir, wt } = await setup(t);
+  const w = join(root, "stuck-hook");
+  writeFileSync(w, hookWrapper({ node: fakeNode(root, "stuck-node", "exec sleep 600"), policy: ws.jail, timeout_s: 1 }), { mode: 0o755 });
+  const r = await runOpenStdin(w, agentsDir, call("write_file", { Path: join(wt, "src/a/x.mjs") }));
+  assert.equal(r.code, 0);
+  assert.deepEqual(one(r), { decision: "deny", reason: "hook exception: the jail hook gave no decision within 1 s (the wrapper killed it)" });
+  assert.ok(r.ms < 8000, `answered in ${r.ms} ms, well before the CLI's 30 s hook timeout`);
+  // The default wrapper's timer is under the CLI's hook timeout (and over the node's stdin timer); one at or over it is refused.
+  assert.ok(WRAPPER_TIMEOUT_S < HOOK_TIMEOUT_S && STDIN_TIMEOUT_MS < WRAPPER_TIMEOUT_S * 1000);
+  assert.match(readFileSync(ws.hook_command, "utf8"), new RegExp(`sleep ${WRAPPER_TIMEOUT_S} `));
+  assert.throws(() => hookWrapper({ policy: ws.jail, timeout_s: HOOK_TIMEOUT_S }), /under the CLI's 30 s hook timeout/);
+});
+
+test("the wrapper forwards a complete decision AS SOON AS node prints it, even when node then hangs; partial or non-decision output is a deny", async t => {
+  const { ws, root, agentsDir } = await setup(t);
+  const w1 = join(root, "w1");
+  writeFileSync(w1, hookWrapper({ node: fakeNode(root, "approve-hang", `printf '%s\\n' '{"decision":"auto_approve","reason":"x"}'; exec sleep 600`), policy: ws.jail, timeout_s: 3 }), { mode: 0o755 });
+  const r1 = await runOpenStdin(w1, agentsDir, "{}");
+  assert.deepEqual(one(r1), { decision: "auto_approve", reason: "x" }, "exactly the one complete line, and no second decision after the kill");
+  assert.ok(r1.first_ms !== null && r1.first_ms < 2500, `forwarded at ${r1.first_ms} ms, before the 3 s watchdog`);
+  for (const [name, body] of [["partial", `printf '%s' '{"decision":"auto_approve","reason":"x"}'; exec sleep 600`],
+    ["partial-exit", `printf '%s' '{"decision":"auto_approve","reason":"a}'; exit 3`], ["garbage", "echo '{}'; echo 'allow'"], ["silent-fail", "exit 3"]]) {
+    const w = join(root, `w-${name}`);
+    writeFileSync(w, hookWrapper({ node: fakeNode(root, `n-${name}`, body), policy: ws.jail, timeout_s: 1 }), { mode: 0o755 });
+    const d = one(await runOpenStdin(w, agentsDir, "{}"));
+    assert.equal(d.decision, "deny", name);
+    assert.match(d.reason, /^hook exception: the jail hook (printed nothing|gave no decision within 1 s)/, name);
+  }
+});
+
+test("the node hook with a stdin that never closes prints a deny AND exits (the CLI keeps stdin open); the real wrapper forwards it", async t => {
+  const { ws, wt, agentsDir, log } = await setup(t);
+  const env = { ...process.env, PANTHEON_JAIL_STDIN_TIMEOUT_MS: "300" };
+  const r = await runOpenStdin(`'${process.execPath}' '${JAIL_HOOK}' '${ws.jail}'`, agentsDir, '{"toolCall":', { env });
+  assert.equal(r.code, 0);
+  assert.deepEqual(one(r), { decision: "deny", reason: "hook exception: stdin did not close within 300 ms" });
+  assert.ok(r.ms < 5000, `the process exited after ${r.ms} ms (it used to linger until killed)`);
+  const viaWrapper = await runOpenStdin(ws.hook_command, agentsDir, call("write_file", { Path: join(wt, "src/a/x.mjs") }), { env });
+  assert.deepEqual(one(viaWrapper), { decision: "deny", reason: "hook exception: stdin did not close within 300 ms" });
+  assert.ok(viaWrapper.ms < 5000);
+  assert.equal(log().at(-1).decision, "deny");
+  // The env variable may only LOWER the timer.
+  assert.equal(stdinTimeoutMs({ PANTHEON_JAIL_STDIN_TIMEOUT_MS: "999999" }), STDIN_TIMEOUT_MS);
+  assert.equal(stdinTimeoutMs({}), STDIN_TIMEOUT_MS);
 });

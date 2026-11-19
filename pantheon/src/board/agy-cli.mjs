@@ -112,7 +112,9 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
 // auto-approves it (the unit's verify_cmd). NEVER --dangerously-skip-permissions. NOT --sandbox: the outer bwrap jail
 // is the containment, and the CLI's own sandbox nested inside it is undocumented (see the role card).
 //
-// ENV: process.env minus GEMINI_API_KEY / GOOGLE_API_KEY, plus `env`, plus ANTIGRAVITY_AGY_CLEANUP=all.
+// ENV: an ALLOWLIST of process.env (workerEnv: PATH, HOME, locale, TERM, TMPDIR, proxy and CA variables, AGY_* and
+// ANTIGRAVITY_*, and what PANTHEON_AGY_ENV_PASS lists; never a secret-named variable, never the Google keys), plus the
+// non-secret part of `env`, plus ANTIGRAVITY_AGY_CLEANUP=all.
 // ANTIGRAVITY_AGY_CLEANUP is OWNER-SPECIFIED and UNDOCUMENTED (it appears nowhere in Antigravity's CLI docs as read
 // 2026-11-18); it is set because the owner asked for it, and every turn record says so (`cleanup_env`).
 //
@@ -129,6 +131,7 @@ import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf }
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
 import { MCP_SERVER as MCP_SERVER_NAME } from "../agy/jail-hook.mjs";
+import { SECRETISH, controlDirSecrets, redactDeep, redactExact, redactStrong, secretValues } from "../agy/redact.mjs";
 
 export const WORKER_AGENT = "pantheon-unit-worker";
 export const AGY_CLEANUP = Object.freeze({ name: "ANTIGRAVITY_AGY_CLEANUP", value: "all", documented: false,
@@ -159,17 +162,51 @@ export function workerArgv({ model, worktree, prompt, timeoutS, log_file = null,
   return assertWorkerArgv(["--agent", agent, ...(conversation ? ["--conversation", conversation] : []), "--model", model, "--mode=accept-edits", "--add-dir", worktree,
     "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`, ...(log ? ["--log-file", log] : []), "--print", prompt]);
 }
-// `base` (optional): the environment to start from instead of process.env (the review runner passes an already
-// scrubbed one); the Google keys are stripped either way.
-export function workerEnv(extra = {}, base = null) {
-  // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
-  const env = { ...(base ?? process.env), ...(extra ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
-  delete env.GEMINI_API_KEY;
-  delete env.GOOGLE_API_KEY;
-  return env;
+// THE WORKER'S ENVIRONMENT IS AN ALLOWLIST (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6),
+// question 7: workerEnv removed only GEMINI_API_KEY / GOOGLE_API_KEY, so OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY
+// and every other credential of the controller's environment reached the CLI and every command it ran). From `base`
+// (default process.env) ONLY these pass: the WORKER_ENV_ALLOW names, names starting with a WORKER_ENV_PREFIXES prefix,
+// and the names or `PREFIX*` patterns the operator lists in PANTHEON_AGY_ENV_PASS (":"- or ","-separated; the test
+// fixtures pass their fake CLI's FAKE_* this way); a secret-named variable (ENV_SECRETISH) never passes from `base`,
+// whatever the lists say. `extra` is the caller's EXPLICIT choice and passes, EXCEPT a provider API key (`*_API_KEY`;
+// the Google keys as before). CHOICE, recorded: the unit's own A2A token stays an explicit extra (the pipeline passes
+// it, and ophanim/operate's lifecycle test, owned elsewhere, asserts it reaches the CLI); it is per unit, good only for
+// this unit's bounded shim, and the code the verify command runs can read it from the control dir's MCP config anyway
+// (same uid); what IS closed is the model's read tools (the hook denies the control dir) and other units' tokens (their
+// control dirs are hidden in this jail: src/agy/sandbox.mjs siblingsHidden).
+export const WORKER_ENV_ALLOW = Object.freeze(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "TZ", "TMPDIR",
+  "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"]);
+export const WORKER_ENV_PREFIXES = Object.freeze(["LC_", "XDG_", "AGY_", "ANTIGRAVITY_"]);
+export const ENV_SECRETISH = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE/i;
+/** A provider API key: never in a worker env, not even as an explicit extra. */
+export const PROVIDER_KEY = /(^|_)API_?KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$/i;
+/** Is env variable `k` allowed into a worker's environment from `base` (see WORKER_ENV_ALLOW)? */
+export function workerEnvAllows(k, pass = "") {
+  if (ENV_SECRETISH.test(k) || k === "GEMINI_API_KEY" || k === "GOOGLE_API_KEY") return false;
+  if (WORKER_ENV_ALLOW.includes(k) || WORKER_ENV_PREFIXES.some(p => k.startsWith(p))) return true;
+  return String(pass ?? "").split(/[:,]/).map(s => s.trim()).filter(Boolean).some(p => (p.endsWith("*") ? k.startsWith(p.slice(0, -1)) : k === p));
 }
-// An env variable whose value a record never carries (the A2A token, any key or secret).
-export const SECRETISH = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i;
+/** {env, dropped: [names]}: the worker env and the names of `base` / `extra` it left out (never their values). */
+export function workerEnvOf(extra = {}, base = null) {
+  const src = base ?? process.env, pass = src.PANTHEON_AGY_ENV_PASS ?? process.env.PANTHEON_AGY_ENV_PASS ?? "";
+  const env = {}, dropped = [];
+  for (const [k, v] of Object.entries(src)) { if (v === undefined) continue; if (workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k); }
+  for (const [k, v] of Object.entries(extra ?? {})) {
+    if (v === undefined || v === null) continue;
+    if (PROVIDER_KEY.test(k)) { dropped.push(k); delete env[k]; continue; }
+    env[k] = String(v);
+  }
+  // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
+  Object.assign(env, { [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" });
+  return { env, dropped: [...new Set(dropped)].sort() };
+}
+// `base` (optional): the environment to start from instead of process.env (the review runner passes an already
+// scrubbed one); it is filtered through the allowlist either way.
+export function workerEnv(extra = {}, base = null) {
+  return workerEnvOf(extra, base).env;
+}
+// An env variable whose value a record never carries (the A2A token, any key or secret): src/agy/redact.mjs.
+export { SECRETISH, redactSecrets, redactStrong } from "../agy/redact.mjs";
 const laneFailure = (kind, message, more = {}) => Object.assign(new Error(message), { code: "lane_failure", kind, transport: "agy-cli", ...more });
 const TIMEOUT_TEXT = /print[ _-]?timeout|timed out|DEADLINE_EXCEEDED/i;
 const BAD_STATUS = new Set(["ERROR", "CANCELED", "CANCELLED", "INTERRUPTED", "INVALID"]);
@@ -362,28 +399,6 @@ export const PREFLIGHT_BLOCKING = Object.freeze(["card_tools", "auth", "lane_quo
 export const PREFLIGHT_ADVISORY = Object.freeze(["mcp_list", "discovery", "hooks_discovery"]);
 export const USAGE_ARGS = Object.freeze(["--print", "/usage", "--output-format", "json"]);
 const lines = t => String(t ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
-/** Redact every value of a secret-looking env variable (8+ chars) from `text`. */
-export function redactSecrets(text, env = {}) {
-  let out = String(text ?? "");
-  for (const [k, v] of Object.entries(env ?? {})) if (SECRETISH.test(k) && typeof v === "string" && v.length >= 8) out = out.split(v).join(`<redacted:${k}>`);
-  return out;
-}
-const LONG_RUN = /[A-Za-z0-9_\-.=+/]{24,}/g;
-/**
- * STRONG redaction for any CLI output a record keeps: the env-derived secrets (redactSecrets), `Bearer <x>`,
- * `authorization|api_key|token|secret|password <: or => <x>`, `--header <x>`, and every run of 24+ characters of
- * [A-Za-z0-9_-.=+/]. ONE NARROWING (a choice, so the EROFS and GeminiDir diagnostics keep their paths): a run that
- * starts with "/" is an absolute path; in it only 24+ runs of [A-Za-z0-9+=] (no separator: a token, not a file name)
- * are redacted.
- */
-export function redactStrong(text, env = {}) {
-  let out = redactSecrets(text, env);
-  out = out.replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
-  out = out.replace(/(?<![A-Za-z0-9_-])(authorization|api[_-]?key|token|secret|password)(\s*[:=]\s*)(?!<redacted)\S+/gi, "$1$2<redacted>");
-  out = out.replace(/--header(\s+|=)\S+/g, "--header$1<redacted>");
-  out = out.replace(LONG_RUN, run => (run.startsWith("/") ? run.replace(/[A-Za-z0-9+=]{24,}/g, "<redacted>") : "<redacted>"));
-  return out;
-}
 const ENTRY = /^(?:[-*•✓✗✔✘]\s+)?([A-Za-z][A-Za-z0-9_.@-]{0,63})(?=[\s:,]|$)/;
 const NOT_A_SERVER = /^(no|none|name|names|server|servers|configured|mcp|usage|error|warning|warn|info|flags|list|available|total|global|workspace|authorization|headers?|env|command|args|url|bearer)$/i;
 const CREDENTIAL_SHAPED = /^(sk-|ctx7sk|ya29\.|ghp_|gho_|AIza|xox[abp]-)/i;
@@ -552,18 +567,41 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
 
   // THE JAIL: bwrap, or a refusal. Never a silent unjailed run. A caller that already built one (the probe's preflight
   // ran in it) passes it as `jail` and drops its state itself.
-  const env = workerEnv(extraEnv, base_env);
-  const ownJail = !jail;
-  const { prefix, sandboxRec, gstate } = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
-  const dropState = () => (ownJail ? dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true }).catch(() => null) : Promise.resolve(null));
-
+  // THE ARGUMENTS FIRST, THE JAIL AFTER (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6),
+  // question 7): the scratch copy of the OAuth token used to be made before workerArgv could refuse an argument, outside
+  // any cleanup. Now a refused argument creates nothing, and every later failure drops the scratch (the finally below).
   const log_file = join(control_dir, "run", "agy.log");
   const args = workerArgv({ model, worktree, prompt, timeoutS, log_file, agent, conversation });
+  const { env, dropped: envDropped } = workerEnvOf(extraEnv, base_env);
+  // Every value a record must never carry: the secret-named env of the caller and the control dir's MCP env (the A2A token).
+  const secrets = secretValues({ ...process.env, ...(base_env ?? {}), ...(extraEnv ?? {}) }, controlDirSecrets(control_dir));
+  const ownJail = !jail;
+  const { prefix, sandboxRec, gstate } = jail ?? await prepareWorkerJail({ cli, control_dir, worktree, env, sandbox, a2a_socket });
+  let stateDropped = false, droppedState = null;
+  const dropState = async () => {
+    if (!ownJail || stateDropped) return droppedState;
+    stateDropped = true;
+    droppedState = await dropGeminiState(gstate, { keep: sandbox.keep_gemini_scratch === true })
+      .catch(e => ({ removed: false, removal_error: { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 300) } }));
+    return droppedState;
+  };
+  try {
+    return await workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS, extraEnv, signal, onEvent, agent, log_file, args, env, envDropped, secrets, prefix, sandboxRec, gstate, dropState });
+  } finally {
+    await dropState();
+  }
+}
+
+/** The rest of runAgyWorkerTurn, inside its jail (the caller drops the state on every path). */
+async function workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS, extraEnv, signal, onEvent, agent, log_file, args, env, envDropped, secrets, prefix, sandboxRec, gstate, dropState }) {
   const cmd = prefix.length ? prefix[0] : cli;
   const argv = assertWorkerArgv(prefix.length ? [...prefix.slice(1), cli, ...args] : args);
   const launch = { cmd, args: argv.map(a => (a === prompt ? "<prompt>" : a)), cwd: control_dir, log_file,
     env_added: { ...(extraEnv ?? {}), [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" },
-    env_stripped: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
+    // The names (never the values) of what the allowlist left out of the CLI's env: secret-named extras, the Google
+    // keys, and every variable of the base env that is not on the allowlist (env_dropped_count).
+    env_stripped: [...new Set(["GEMINI_API_KEY", "GOOGLE_API_KEY", ...envDropped.filter(k => Object.prototype.hasOwnProperty.call(extraEnv ?? {}, k) || ENV_SECRETISH.test(k))])].sort(),
+    env_dropped_count: envDropped.length, env_policy: "allowlist" };
   for (const k of launch.env_stripped) delete launch.env_added[k];
   for (const k of Object.keys(launch.env_added)) if (SECRETISH.test(k)) launch.env_added[k] = "<redacted>";
 
@@ -606,13 +644,16 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   } catch (e) {
     await dropState();
     if (e?.name === "AbortError" || signal?.aborted) throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED" });
-    throw laneFailure("spawn", `agy worker could not be started (${e?.code ?? e?.message ?? e})`, { launch, sandbox: sandboxRec, tool_steps });
+    throw laneFailure("spawn", `agy worker could not be started (${e?.code ?? e?.message ?? e})`, { launch, sandbox: sandboxRec, tool_steps: redactDeep(tool_steps, secrets) });
   }
-  const jail_log = await readJailLog(control_dir);
+  // REDACTED before any record keeps them (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6),
+  // question 7): the hook log, the tool steps' tool_info, the stderr tail, the CLI's error, the answer and its summary.
+  const jail_log = redactDeep(await readJailLog(control_dir), secrets);
   const stderr = String(run.stderr ?? "");
-  const cli_log = await turnCliLog({ logDir, before: logBefore, log_file, stderr, env });
+  const cli_log = await turnCliLog({ logDir, before: logBefore, log_file, stderr: redactExact(stderr, secrets), env });
   const gemini_scratch = await dropState();
-  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps, gemini_scratch, cli_log, exit_code: run.status, stderr_tail: stderr.slice(-4000),
+  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps: redactDeep(tool_steps, secrets), gemini_scratch, cli_log, exit_code: run.status,
+    stderr_tail: redactStrong(redactExact(stderr.slice(-4000), secrets)),
     result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null,
     conversation_id: (typeof result?.conversation_id === "string" && result.conversation_id) || conversationId };
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED", ...more });
@@ -623,21 +664,22 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
   if (failed) {
     const q = quotaEvidence({ result, stderr });
     if (q) throw Object.assign(new Error(`agy CLI exited ${run.status}; status ${result?.status ?? "missing"}: Antigravity refused for quota ("${q.matched}")`),
-      { status: 429, code: "quota_exhausted", quota: q, transport: "agy-cli", result_error: typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? null, ...more });
+      { status: 429, code: "quota_exhausted", quota: q, transport: "agy-cli", result_error: redactExact(typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? "", secrets) || null, ...more });
     const errText = `${stderr}\n${typeof result?.error === "string" ? result.error : result?.error?.message ?? ""}\n${result?.status ?? ""}`;
     if (TIMEOUT_TEXT.test(errText)) throw laneFailure("timeout", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"}: print timeout`, more);
-    if (run.status !== 0) throw laneFailure("exit", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"} (inspect local CLI diagnostics)`, { ...more, result_error: typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? null });
+    if (run.status !== 0) throw laneFailure("exit", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"} (inspect local CLI diagnostics)`, { ...more, result_error: redactExact(typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? "", secrets) || null });
   }
   if (!sawResult) throw laneFailure("stream", `agy CLI stream ended without a result event${unparseable ? ` (${unparseable} unparseable line(s))` : ""}`, more);
   if (init?.agent !== agent || init?.model !== model) {
     throw laneFailure("stream", `agy CLI identity mismatch: expected ${agent}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`, { detail: "identity", ...more });
   }
   if (result?.status !== "SUCCESS") throw laneFailure("exit", `agy CLI status ${result?.status ?? "missing"}${BAD_STATUS.has(result?.status) ? "" : " (unrecognised)"}`, more);
-  const text = typeof result.response === "string" ? result.response.trim() : "";
-  const structured = result.structured_output;
+  // The answer and its JSON summary: only the exact known secrets are replaced (a model's prose is not pattern-guessed).
+  const text = typeof result.response === "string" ? redactExact(result.response.trim(), secrets) : "";
+  const structured = result.structured_output === undefined ? undefined : redactDeep(result.structured_output, secrets, { exact: true });
   if (!Number.isInteger(result.num_turns) || result.num_turns < 1 || (!text && !structured)) {
     throw laneFailure("exit", "agy CLI returned no completed model turn (empty response)", more);
   }
-  return { text, structured_output: structured ?? null, summary: summaryOf(text), response_id: result.conversation_id ?? null, status: result.status,
+  return { text, structured_output: structured ?? null, summary: redactDeep(summaryOf(text), secrets, { exact: true }), response_id: result.conversation_id ?? null, status: result.status,
     tool_calls: toolCalls, subagent_calls: subagentCalls, tools, served_model: model, served_model_source: "input", ...more };
 }

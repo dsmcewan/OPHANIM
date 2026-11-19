@@ -19,6 +19,10 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The worker's env is an ALLOWLIST (src/board/agy-cli.mjs workerEnv; independent review round 2, assignment 4, question
+// 7): the fake CLI's own switches (FAKE_*) reach it only because the operator variable lists them.
+process.env.PANTHEON_AGY_ENV_PASS ??= "FAKE_*";
+
 /** What agy 1.5.10 printed on stderr when `agy agents` / `agy mcp list` got --log-file (observed, owner's probe of 5893432, 2026-11-18). */
 export const AGY_1_5_10_BAD_FLAG_STDERR = Object.freeze({
   agents: "Usage: agy agent [flags]\n\nList available agents\n\nFlags:\n  -h      Show help\n  --help  Show help\nError: flags provided but not defined: -log-file\n",
@@ -413,7 +417,7 @@ if (cmd === "write") {
     process.stderr.write((agents ? ${JSON.stringify(AGY_1_5_10_BAD_FLAG_STDERR.agents)} : ${JSON.stringify(AGY_1_5_10_BAD_FLAG_STDERR.mcp_list)}).replace(/-log-file\n$/, "-" + name + "\n"));
     process.exit(1);
   }
-  const home = process.env.HOME, g = home ? join(home, ".gemini") : null, rnd = process.pid;
+  const home = process.env.HOME, g = home ? join(home, ".gemini") : null, rnd = process.pid * 100000 + Math.floor(Math.random() * 100000);   // the jail has its own PID namespace (--unshare-pid): every jailed process may see the same small pid
   let cliLog = null;
   const say = line => { if (cliLog) { try { appendFileSync(cliLog, line + "\n"); return; } catch { /* fall through to stderr */ } } process.stderr.write(line + "\n"); };
   const tryWrite = (p, content, what) => {

@@ -16,6 +16,7 @@
 // repository or a reserved path; reorder, default or repair a field. A broken plan is refused whole, with each reason named.
 import { keysRefusal, isObject, str, strictJson } from "./util.mjs";
 import { pathRefusal, overlapsReserved } from "./paths.mjs";
+import { verifyCmdProblem } from "../agy/jail-hook.mjs";
 
 /** Transport configuration lives under these names; no unit may own a path that could match them. */
 export const RESERVED_NAMES = Object.freeze([".agents", ".gemini", ".git"]);
@@ -103,6 +104,9 @@ export function validateWorkUnits(plan) {
     if (!str(u.specialist_role)) no("SPECIALIST_ROLE", at, `unit ${at}: specialist_role is a non-empty string`);
     else if (specialistRoleRefusal(u.specialist_role)) no("SPECIALIST_ROLE", at, `unit ${at}: ${specialistRoleRefusal(u.specialist_role)}`);
     if (!str(u.verify_cmd)) no("VERIFY_CMD", at, `unit ${at}: verify_cmd is a non-empty string`);
+    // The SAFE FORM (src/agy/jail-hook.mjs verifyCmdProblem): simple commands joined by " && ", no shell metacharacter
+    // outside quotes. Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 3.
+    else if (verifyCmdProblem(u.verify_cmd)) no("VERIFY_CMD", at, `unit ${at}: ${verifyCmdProblem(u.verify_cmd)}`);
     if (!strings(u.invariants) || !u.invariants.length) no("INVARIANTS", at, `unit ${at}: invariants is a non-empty array of non-empty strings`);
     if (!strings(u.allowed_subagents)) no("ALLOWED_SUBAGENTS", at, `unit ${at}: allowed_subagents is an array of non-empty strings (it may be empty)`);
     else if (new Set(u.allowed_subagents).size !== u.allowed_subagents.length) no("ALLOWED_SUBAGENTS", at, `unit ${at}: allowed_subagents repeats a role`);
@@ -172,7 +176,7 @@ export function PLANNER_PROMPT({ task, context = "", subagents = [] }) {
     "- difficulty is easy, medium or hard, judged by reasoning needed, not by line count.",
     "- specialist_role names the kind of engineer who should own the unit (for example \"node-esm-library-engineer\").",
     `- allowed_subagents lists the subagent roles the implementer may consult for a single stateless question${subagents.length ? ` (available: ${subagents.join(", ")})` : ""}; use [] when none is needed.`,
-    "- verify_cmd is one deterministic shell command, run by the controller in the unit's worktree, whose exit code is the ground truth. No network, no interactive input, no dependence on wall-clock time.",
+    "- verify_cmd is one deterministic shell command, run by the controller in the unit's worktree, whose exit code is the ground truth. No network, no interactive input, no dependence on wall-clock time. It is one line of simple commands joined by \" && \" (a command may start with \"!\"): no ; | || & > < ( ) { } $ ` \\ # ~ outside quotes, and no $, ` or \\ inside double quotes (wrap anything else as sh -c '...').",
     "- invariants are explicit acceptance constraints a reviewer can check against the diff and the verify output.",
     "",
     "Prefer FEWER, cohesive units over many small ones. A unit that touches one file because its coupled files were given to another unit is a planning error.",

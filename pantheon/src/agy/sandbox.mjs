@@ -10,6 +10,10 @@
 //   - a fresh tmpfs on /tmp
 // and the main repository's .git (the worktree's `.git` file points into <repo>/.git/worktrees/<name>) is bound
 // READ-ONLY last, so the worker can neither commit nor move a ref even when a writable bind contains it.
+// HIDDEN: the OTHER units' control dirs (an empty tmpfs over the dedicated parent of the control dirs, or over each
+// existing sibling control dir; siblingsHidden), so one unit's jail cannot read another's MCP config (its A2A bearer
+// token) or reach its socket. The jail has its own PID namespace (--unshare-pid: /proc shows only the jail's processes)
+// and session (--new-session). The network is shared (below).
 //
 // THE agy STATE LAYOUT (observed on agy 1.5.10, owner's probe 2026-11-18). The CLI keeps its state under
 // ~/.gemini/antigravity-cli/, NOT ~/.gemini/antigravity/: that probe bound scratch dirs over antigravity/conversations and
@@ -76,12 +80,16 @@
 //
 // Must never: run the worker unjailed silently (sandboxAvailable is probed and the caller refuses with
 // SANDBOX_UNAVAILABLE unless the caller explicitly allows an unsandboxed run); block the event loop (async spawn).
-import { existsSync, readFileSync, statSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, readdir, readFile, readlink, rm, stat, symlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnPromise } from "../board/spawn.mjs";
+
+// The source tree the jail hook runs from (src/): it must stay visible inside every jail.
+const HERE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const inside = (root, p) => p === root || p.startsWith(root + sep);
 const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
@@ -116,11 +124,17 @@ export function repoGitDirs(worktree) {
  * Returns {argv, binds, git} — binds as [{mode: "ro" | "rw", path, src?}] in the order emitted (`src` only when the
  * source differs from the destination `path`).
  */
-export function bwrapArgs({ worktree, control_dir, agy_state_dirs = [], extra_ro = [], gemini_state = null, bwrap = "bwrap" }) {
+export function bwrapArgs({ worktree, control_dir, agy_state_dirs = [], extra_ro = [], gemini_state = null, bwrap = "bwrap", keep_visible = [process.execPath, HERE] }) {
   if (!worktree || !control_dir) throw new Error("bwrapArgs: pass the worktree and the control dir");
   const wt = real(worktree), ctl = real(control_dir), run = join(ctl, "run");
   if (inside(wt, ctl)) throw Object.assign(new Error(`the control dir ${ctl} is inside the worktree ${wt}`), { code: "CONTROL_IN_WORKTREE" });
   const binds = [];
+  // OTHER UNITS' CONTROL DIRS ARE HIDDEN (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6),
+  // question 8): under the read-only bind of / they were readable, with their MCP config (the A2A bearer token) and
+  // their A2A socket. See siblingsHidden.
+  const needed = [wt, ...extra_ro, ...agy_state_dirs, ...(gemini_state?.enabled ? [gemini_state.gemini_dir, ...(gemini_state.mounts ?? []).flatMap(m => [m.src, m.dest])] : []), ...keep_visible].filter(Boolean).map(real);
+  const hide = siblingsHidden(ctl, needed);
+  for (const p of hide.paths) binds.push({ mode: "tmpfs", path: p });
   // One bind per path. Before the sort a writable bind of a path wins over a read-only one of the same path (a state
   // dir that is also the CLI's own directory); after it (the .git binds) the read-only bind wins.
   const add = (mode, p, ro_wins = false, src = null) => {
@@ -143,10 +157,44 @@ export function bwrapArgs({ worktree, control_dir, agy_state_dirs = [], extra_ro
   const git = repoGitDirs(wt);
   if (git) { add("ro", git.common_dir, true); if (!inside(git.common_dir, git.git_dir)) add("ro", git.git_dir, true); }
   // The .git read-only binds go last (add() appended them after the sort).
-  const argv = [bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
-  for (const b of binds) argv.push(b.mode === "rw" ? "--bind" : "--ro-bind", b.src ?? b.path, b.path);
+  // --unshare-pid: a PID namespace of its own, so the fresh /proc lists only the jail's processes, not the host's (and
+  // no host process's /proc/<pid>/root, cwd or fd links); --new-session: setsid, so the jailed CLI cannot push input
+  // into the controller's terminal (TIOCSTI); --die-with-parent: the jail dies with the controller. Independent review
+  // round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 5. THE NETWORK IS NOT UNSHARED, by design (question
+  // 8): the CLI must reach Google, so --unshare-net would cut the CLI itself, and bwrap has no egress filter; host
+  // loopback services, the LAN and a cloud metadata endpoint stay reachable to the jailed CLI and to the code its verify
+  // command runs. The A2A sockets are per unit and token-protected, and other units' control dirs are hidden (above).
+  const argv = [bwrap, "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
+  for (const b of binds) {
+    if (b.mode === "tmpfs") argv.push("--tmpfs", b.path);
+    else argv.push(b.mode === "rw" ? "--bind" : "--ro-bind", b.src ?? b.path, b.path);
+  }
   argv.push("--chdir", ctl, "--");
-  return { argv, binds, git };
+  return { argv, binds, git, hidden: { mode: hide.mode, paths: hide.paths, why: hide.why } };
+}
+
+const CONTROL_MARKS = ["jail.json", "pantheon-jail-hook", "a2a.sock", join(".agents", "mcp_config.json"), join(".agents", "hooks.json")];
+const looksLikeControlDir = d => CONTROL_MARKS.some(m => { try { lstatSync(join(d, m)); return true; } catch { return false; } });
+/**
+ * Which host paths to cover with an empty tmpfs so this unit's jail cannot see the OTHER units' control dirs.
+ * {mode: "parent", paths: [<parent of control_dir>]} when that parent is DEDICATED to control dirs (the pipeline's
+ * <run>/control/<unit_id>: every entry a directory, and no path the jail needs -- the worktree, the state dirs, the CLI,
+ * node, this source tree -- inside it): the whole parent is hidden, so a sibling created later is hidden too, and only
+ * this unit's control dir is bound back. Otherwise {mode: "siblings", paths: [...]}: each EXISTING sibling directory
+ * that looks like a control dir (CONTROL_MARKS) and holds nothing the jail needs (a sibling created after the launch
+ * stays visible: the limit of this mode, recorded). {mode: "none"} when the parent is "/" or unreadable.
+ */
+export function siblingsHidden(ctl, needed = []) {
+  const parent = dirname(ctl);
+  if (parent === ctl || depth(parent) < 1) return { mode: "none", paths: [], why: "the control dir has no parent to hide" };
+  if (inside("/tmp", parent)) return { mode: "none", paths: [], why: "under /tmp, which is a fresh tmpfs inside the jail: only the binds are visible there" };
+  let entries;
+  try { entries = readdirSync(parent, { withFileTypes: true }); } catch { return { mode: "none", paths: [], why: `${parent} cannot be listed` }; }
+  const neededIn = p => needed.some(n => inside(p, n) && !inside(ctl, n));
+  const dedicated = !neededIn(parent) && entries.every(e => e.isDirectory());
+  if (dedicated) return { mode: "parent", paths: [parent], why: `${parent} holds only control dirs: hidden whole, ${ctl} bound back` };
+  const paths = entries.filter(e => e.isDirectory()).map(e => join(parent, e.name)).filter(p => p !== ctl && !neededIn(p) && looksLikeControlDir(p)).sort();
+  return { mode: "siblings", paths, why: `${parent} holds more than control dirs: only the existing sibling control dirs are hidden (one created later would stay visible)` };
 }
 
 const probes = new Map();
@@ -348,7 +396,8 @@ export async function geminiState({ home = homedir(), run_dir, mode = "scratch" 
     }
     return out;
   } catch (e) {
-    await rm(scratch_root, { recursive: true, force: true }).catch(() => {});
+    const err = await rm(scratch_root, { recursive: true, force: true }).then(() => null, x => x);
+    if (err || existsSync(scratch_root)) e.scratch_removal_error = { code: err?.code ?? "STILL_PRESENT", message: String(err?.message ?? "the partial scratch still exists").slice(0, 300), path: scratch_root };
     throw e;
   }
 }
@@ -383,7 +432,7 @@ const sameBytes = async (a, b) => {
  * changed: its bytes differ from the host's now), `subdirs` every directory of the scratch except the read-only mount
  * points (whose content is the host's, not a write), `writable_copies` the files of each GEMINI_WRITABLE_COPIES copy.
  */
-export async function dropGeminiState(state, { keep = false } = {}) {
+export async function dropGeminiState(state, { keep = false, remove = p => rm(p, { recursive: true, force: true }) } = {}) {
   if (!state?.enabled || !state.scratch_root) return null;
   const root = state.scratch_cli, listing = { dir: state.cli_dir, top_level: [], subdirs: {}, writable_subdirs: {}, writable_copies: {} };
   const ro = new Set(state.readonly_subdirs ?? []);
@@ -417,7 +466,14 @@ export async function dropGeminiState(state, { keep = false } = {}) {
       listing.writable_copies[w.path].push({ ...f, copied, changed: copied ? !(await sameBytes(join(w.src, f.path), join(w.dest, f.path))) : true });
     }
   }
-  if (!keep) await rm(state.scratch_root, { recursive: true, force: true }).catch(() => {});
+  // A removal that fails is SURFACED, not swallowed (independent review round 2, assignment 4 (OpenAI gpt-6-astra,
+  // 77480d6), question 7): the scratch holds a copy of the OAuth token. `removed` says whether it is gone.
+  if (!keep) {
+    const err = await Promise.resolve().then(() => remove(state.scratch_root)).then(() => null, e => e);
+    const left = existsSync(state.scratch_root);
+    listing.removed = !err && !left;
+    if (err || left) listing.removal_error = { code: err?.code ?? "STILL_PRESENT", message: String(err?.message ?? `${state.scratch_root} still exists after removal`).slice(0, 300), path: state.scratch_root, contains_credentials: true };
+  } else listing.removed = false;
   return listing;
 }
 /** The real path of `p`, resolving the deepest existing ancestor when `p` itself is gone (a removed file). */
@@ -444,10 +500,18 @@ export function jailReach(binds, p) {
     if (seenAt(jail_path) === b) return { reach: "reachable_by_jail", jail_view: "read-write", why: `mounted read-write in the jail at ${jail_path}`, via: via(b), jail_path };
   }
   const e = seenAt(host);
-  if (!e) return inside("/tmp", host) ? { reach: "outside_jail_reach", jail_view: "hidden", why: "/tmp is a fresh tmpfs inside the jail" }
-    : { reach: "outside_jail_reach", jail_view: "read-only", why: "visible only through the read-only bind of /" };
-  if ((e.src ?? e.path) !== e.path) return { reach: "outside_jail_reach", jail_view: "hidden", why: `the jail sees ${e.src} at ${e.path}, not the host's`, via: via(e) };
-  return { reach: "outside_jail_reach", jail_view: "read-only", why: `bound read-only at ${e.path}`, via: via(e) };
+  const out = !e ? (inside("/tmp", host) ? { reach: "outside_jail_reach", jail_view: "hidden", why: "/tmp is a fresh tmpfs inside the jail" }
+    : { reach: "outside_jail_reach", jail_view: "read-only", why: "visible only through the read-only bind of /" })
+    : e.mode === "tmpfs" ? { reach: "outside_jail_reach", jail_view: "hidden", why: `an empty tmpfs covers ${e.path} inside the jail`, via: via(e) }
+    : (e.src ?? e.path) !== e.path ? { reach: "outside_jail_reach", jail_view: "hidden", why: `the jail sees ${e.src} at ${e.path}, not the host's`, via: via(e) }
+    : { reach: "outside_jail_reach", jail_view: "read-only", why: `bound read-only at ${e.path}`, via: via(e) };
+  // A HARD LINK defeats path-based reach (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6),
+  // question 10): realpath cannot name its aliases, and one of them may sit under a read-write bind. A regular file with
+  // more than one link is therefore UNRESOLVED, never "outside the jail's reach".
+  let st = null;
+  try { st = lstatSync(host); } catch { /* gone: path-based reach is all there is */ }
+  if (st?.isFile() && st.nlink > 1) return { ...out, reach: "unresolved", why: `${out.why}; but it has ${st.nlink} hard links (dev ${st.dev}, inode ${st.ino}): an alias under a read-write bind could have written it`, nlink: st.nlink, dev: st.dev, ino: st.ino };
+  return out;
 }
 
 /** The directory to bind read-only so the CLI binary itself is visible inside the sandbox (/tmp is a fresh tmpfs). */

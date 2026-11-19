@@ -11,16 +11,20 @@
 //   - headless `--mode=accept-edits` soft-denies Ask-tier tools (run_command, MCP) when a hook answers only "allow".
 //   Therefore this hook always prints one explicit decision: "auto_approve" or "deny" (never "allow", never nothing),
 //   and every code path — an unreadable or non-JSON jail.json, stdin that is not JSON, a policy missing fields, a
-//   thrown error, an unhandled rejection, a stdout write error, stdin that never closes — ends in a printed deny with
-//   exit code 0. Printing nothing would FAIL OPEN.
+//   thrown error, an unhandled rejection, stdin that never closes (a deny after STDIN_TIMEOUT_MS, then the process
+//   EXITS) — ends in a printed deny with exit code 0. A decision that cannot be WRITTEN (a closed or broken stdout) is
+//   exit code WRITE_FAILED_EXIT, and the wrapper (workspace.mjs hookWrapper), which reads this process's stdout through
+//   a pipe and forwards one complete decision line as soon as it has one, prints a deny itself; it also kills this
+//   process and prints a deny when no decision came within WRAPPER_TIMEOUT_S. Printing nothing would FAIL OPEN.
 //
 // THE DECISION TABLE (decide(policy, payload)):
 //   write tools (WRITE_TOOLS: write_file, write_to_file, replace_file_content, multi_replace_file_content)
-//       the target is the FIRST PRESENT of args.Path, args.TargetFile, args.AbsolutePath, args.File (WRITE_PATH_KEYS;
-//       OBSERVED on agy 1.5.10, owner's machine, 2026-11-18: the real write tool is `write_file` with args {Path,
-//       Content}, emitted although the card listed write_to_file; the hook denied it as an unknown tool, so the owned
-//       write was blocked too and the forbidden-write deny proved nothing about the owned-path policy). auto_approve
-//       ONLY when that target is an absolute path that, resolved WITHOUT following a final symlink and with every
+//       EVERY path-like argument is a target (writePathArgsOf: args.Path, args.TargetFile, args.AbsolutePath, args.File
+//       -- WRITE_PATH_KEYS -- every other key naming a path/file/dir/target/uri at any depth, and every other top-level
+//       string starting with /, ~ or file: under a key that is not content-like) and they must all name the SAME file
+//       (OBSERVED on agy 1.5.10, owner's machine, 2026-11-18: the real write tool is `write_file` with args {Path,
+//       Content}, emitted although the card listed write_to_file). auto_approve ONLY when every target is an absolute
+//       path with no `.` or `..` component AS WRITTEN, that, resolved WITHOUT following a final symlink and with every
 //       intermediate symlink resolved, stays inside the worktree, is not inside .git or .agents, and is matched by the
 //       unit's owned_paths (pipeline/paths.mjs matchesOwned) both as written and as resolved; else deny.
 //   run_command
@@ -38,9 +42,10 @@
 //       existing regular file whose real path stays inside the worktree, listed in `files` when given, else matched by
 //       `allowed_files_glob`, both as written and as resolved); Cwd as for the worker; else deny. Used by the review
 //       runner (src/review-runner/agy.mjs): no shell metacharacter can reach the command, so it runs nothing else.
-//   read tools (READ_TOOLS)
-//       auto_approve (not "allow": owner-stated, "allow" may be soft-denied) when every path argument resolves inside
-//       the worktree or the control dir; deny otherwise, and deny when no path argument is found.
+//   read tools (READ_TOOLS, read_file included: observed on agy 1.5.11)
+//       auto_approve (not "allow": owner-stated, "allow" may be soft-denied) when every path argument has no `.` or
+//       `..` component and resolves inside the worktree; deny otherwise (the control dir included: its MCP config holds
+//       the A2A bearer token), and deny when no path argument is found.
 //   MCP, OWNER-STATED: tools are lazy-loaded by default and called through the built-in `call_mcp_tool` with args
 //   {ServerName, ToolName, Arguments}; with `tools.ask_subagent.eager = true` in mcp_config.json the tool may instead be
 //   called directly (its name spelled as one of MCP_NAMES, args {role, question}). BOTH forms are auto_approved ONLY
@@ -51,7 +56,8 @@
 //
 // Every invocation is appended as ONE JSON line to <control_dir>/run/jail.log (the policy's `log`, or run/jail.log
 // next to jail.json when the policy cannot be read): the raw stdin verbatim, the parsed payload when it parses, the
-// hook's cwd (owner-stated: agy runs hooks with cwd = .agents/), the decision and its reason. That file is the ONLY one
+// hook's cwd (owner-stated: agy runs hooks with cwd = .agents/), the decision and its reason, with the known secrets
+// (the control dir's MCP env, this process's secret-named env) and Bearer/token= pairs redacted. That file is the ONLY one
 // this hook writes; a logging failure never changes or delays the decision (the decision is printed first).
 // There is no PostToolUse audit hook any more: under these semantics a post-tool hook's output is meaningless and
 // risky; the audit is the PreToolUse log.
@@ -60,9 +66,13 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { matchesOwned } from "../pipeline/paths.mjs";
 import { matchGlob } from "../review-runner/sandbox.mjs";
+import { controlDirSecrets, redactDeep, secretValues } from "./redact.mjs";
 
 export const WRITE_TOOLS = Object.freeze(["write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"]);
-/** The argument naming a write's target: the FIRST PRESENT of these wins (observed on agy 1.5.10: write_file {Path, Content}). */
+/**
+ * The arguments that name a write's target (observed on agy 1.5.10: write_file {Path, Content}). EVERY one present is
+ * checked, together with every other path-like argument (writePathArgsOf), and they must all name the same file.
+ */
 export const WRITE_PATH_KEYS = Object.freeze(["Path", "TargetFile", "AbsolutePath", "File"]);
 /** Single-quote a word for a POSIX shell (always quoted: the result is compared byte for byte). */
 export const shQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -73,10 +83,60 @@ export const shQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function workerVerifyCommand(worktree, verify_cmd) {
   if (typeof worktree !== "string" || !isAbsolute(worktree)) throw Object.assign(new Error(`workerVerifyCommand: the worktree must be an absolute path, not ${JSON.stringify(worktree)}`), { code: "BAD_INPUT" });
   if (typeof verify_cmd !== "string" || !verify_cmd.trim()) return null;
+  const why = verifyCmdProblem(verify_cmd);
+  if (why) throw Object.assign(new Error(`workerVerifyCommand: ${why}`), { code: "BAD_VERIFY_CMD" });
   return `cd ${shQuote(worktree)} && ${verify_cmd.trim()}`;
 }
-// Read-only tools of the Antigravity/Cascade tool family whose path arguments the jail can check.
-export const READ_TOOLS = Object.freeze(["view_file", "grep_search", "list_dir", "find_by_name", "view_file_outline", "view_code_item", "codebase_search"]);
+
+// THE SAFE FORM OF A verify_cmd (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 3:
+// verify_cmd was inserted verbatim as shell code after `cd '<worktree>' &&`, and plan validation required only a
+// non-empty string). CHOICE: constrain it, at plan validation (pipeline/work-units.mjs) and here, rather than exec it
+// without a shell (the controller's ground-truth run is `sh -c`, and planners write `test -f a && ! grep -q x b`).
+// The safe form is one line of SIMPLE COMMANDS joined by ` && `, each optionally negated by a leading `!` word; a word is
+// made of [A-Za-z0-9_./:=@%+,*?[\]^-] characters, '...' single-quoted text (no newline) and "..." double-quoted text
+// without $, ` or \. So ; | || & > < ( ) { } $ ` \ # ~ and newlines never appear outside quotes, every command runs
+// only after `cd '<worktree>'` (and each one before it) succeeded, and no expansion or redirection reaches the shell.
+// It does not make the command's CONTENT safe: it runs worker-editable code (and `sh -c '...'` is one simple command);
+// that is what the bwrap jail contains.
+const VERIFY_WORD_CHAR = /[A-Za-z0-9_./:=@%+,*?[\]^-]/;
+/** Why `cmd` is not a verify_cmd in the safe form (above), or null. */
+export function verifyCmdProblem(cmd) {
+  if (typeof cmd !== "string" || !cmd.trim()) return "verify_cmd is a non-empty string";
+  const s = cmd.trim();
+  if (/[\n\r\0]/.test(s)) return "verify_cmd is one line (no newline or NUL)";
+  let i = 0, words = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === " " || c === "\t") { i++; continue; }
+    if (c === "&" && s[i + 1] === "&" && (s[i + 2] === " " || s[i + 2] === "\t")) {
+      if (!words) return "verify_cmd has an empty command before `&&`";
+      i += 2; words = 0; continue;
+    }
+    if (c === "!" && !words && (s[i + 1] === " " || s[i + 1] === "\t")) { i++; continue; }   // a negated command
+    while (i < s.length && s[i] !== " " && s[i] !== "\t") {
+      const ch = s[i];
+      if (ch === "'") { const j = s.indexOf("'", i + 1); if (j < 0) return "verify_cmd has an unterminated single quote"; i = j + 1; continue; }
+      if (ch === '"') {
+        let j = i + 1;
+        for (; j < s.length && s[j] !== '"'; j++) if ("$`\\".includes(s[j])) return `verify_cmd has ${JSON.stringify(s[j])} inside double quotes (no expansion is allowed)`;
+        if (j >= s.length) return "verify_cmd has an unterminated double quote";
+        i = j + 1; continue;
+      }
+      if (!VERIFY_WORD_CHAR.test(ch)) return `verify_cmd has the shell metacharacter ${JSON.stringify(ch)} outside quotes: only simple commands joined by " && " are allowed`;
+      i++;
+    }
+    words++;
+  }
+  if (!words) return "verify_cmd ends with `&&` or `!`";
+  return null;
+}
+// Read-only tools of the Antigravity/Cascade tool family whose path arguments the jail can check. read_file: OBSERVED on
+// agy 1.5.11 (assignment 3 Antigravity run at 77480d6, 2026-11-19, findings-3-google-77480d6): the installed CLI
+// advertised read_file {Path} as its only file-reading tool (beside run_command, manage_task, write_file, edit_file,
+// list_resources, read_resource, call_mcp_tool), and this hook denied all 8 source reads as "tool read_file is not
+// allowed for a unit worker". It gets the same path containment as view_file. edit_file, list_resources and
+// read_resource stay denied: no observed arguments, and the last two read MCP resources, not files.
+export const READ_TOOLS = Object.freeze(["view_file", "read_file", "grep_search", "list_dir", "find_by_name", "view_file_outline", "view_code_item", "codebase_search"]);
 export const MCP_SERVER = "pantheon-subagents", MCP_TOOL = "ask_subagent";
 export const MCP_WRAPPER = "call_mcp_tool";   // owner-stated: the built-in lazy MCP caller
 export const HARD_DENY = Object.freeze(["invoke_subagent", "define_subagent"]);
@@ -86,7 +146,15 @@ export const MCP_NAMES = Object.freeze([MCP_TOOL, `${MCP_SERVER}/${MCP_TOOL}`, `
   `${MCP_SERVER}.${MCP_TOOL}`, `${MCP_SERVER}:${MCP_TOOL}`, `mcp_${MCP_SERVER}_${MCP_TOOL}`, `mcp:${MCP_SERVER}:${MCP_TOOL}`]);
 const READ_KEYS = ["AbsolutePath", "TargetFile", "File", "FilePath", "Path", "SearchPath", "SearchDirectory", "DirectoryPath", "Directory", "TargetDirectories", "Paths"];
 const FORBIDDEN_SEGMENTS = [".git", ".agents"];
-export const STDIN_TIMEOUT_MS = 20000;   // under the 30 s hook timeout in hooks.json: a stuck stdin is a deny, not a kill
+// A stuck stdin is a deny, not a kill: the node hook answers after STDIN_TIMEOUT_MS and EXITS; the wrapper
+// (workspace.mjs hookWrapper) kills a node that has not answered after its own, longer WRAPPER_TIMEOUT_S and prints a
+// deny itself. Both are well under the CLI's 30 s hook timeout (hooks.json), at which an empty stdout would ALLOW.
+// Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 1. The env variable
+// PANTHEON_JAIL_STDIN_TIMEOUT_MS may only LOWER the node timer (tests).
+export const STDIN_TIMEOUT_MS = 10000;
+export const WRAPPER_TIMEOUT_S = 20;
+/** The node hook's exit code when its decision could not be written (the wrapper then prints a deny). */
+export const WRITE_FAILED_EXIT = 3;
 const RAW_LOG_CAP = 1024 * 1024;
 
 const inside = (root, p) => p === root || p.startsWith(root + sep);
@@ -126,19 +194,71 @@ function onRoot(policy, p) {
   return n;
 }
 
-/** {key, value} of the first present WRITE_PATH_KEYS argument, or null. */
+/** {key, value} of the first present WRITE_PATH_KEYS argument, or null (kept for callers; decideWrite checks them ALL). */
 export function writeTargetOf(args) {
   if (!isObj(args)) return null;
   const key = WRITE_PATH_KEYS.find(k => args[k] !== undefined && args[k] !== null);
   return key ? { key, value: args[key] } : null;
 }
 
+// A key that names a path (at any depth): Path, TargetFile, AbsolutePath, File, SourcePath, DestinationPath,
+// TargetDirectory, Uri, ...; never a content-like key (TargetContent, ReplacementContent, CodeContent, Instruction).
+const PATH_KEY = /(path|paths|file|files|filename|dir|dirs|directory|directories|destination|dest|uri|url|target)$/i;
+const CONTENT_KEY = /content|instruction|description|summary|message|markdown|language|comment|text|query|pattern|code|chunk|explanation/i;
+const looksLikePath = v => typeof v === "string" && v.length < 4096 && !/[\n\r]/.test(v) && /^(\/|~|file:)/.test(v);
+/**
+ * EVERY path-like argument of a write: each WRITE_PATH_KEYS argument, every other key (at any depth) whose name says
+ * path/file/dir/target/uri, and every other top-level string that looks like a path (starts with /, ~ or file:) unless
+ * its key is content-like. Returns [{key, value}] (the value as given: a non-string is refused by decideWrite).
+ * Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 2: only the FIRST recognised path
+ * argument was checked, so an owned Path could launder an unowned TargetFile.
+ */
+export function writePathArgsOf(args) {
+  if (!isObj(args)) return [];
+  const out = [];
+  const walk = (o, pre, top) => {
+    for (const [k, v] of Object.entries(o)) {
+      const key = pre ? `${pre}.${k}` : k;
+      if (v === undefined || v === null) continue;
+      if (top && WRITE_PATH_KEYS.includes(k)) { out.push({ key, value: v }); continue; }   // a non-string here is refused
+      if (PATH_KEY.test(k) && !CONTENT_KEY.test(k)) {
+        // A boolean or number (EmptyFile: true) names no path; a string, each string of an array, or a nested object does.
+        if (Array.isArray(v)) v.forEach((x, i) => { if (typeof x === "string") out.push({ key: `${key}[${i}]`, value: x }); else if (isObj(x)) walk(x, `${key}[${i}]`, false); });
+        else if (isObj(v)) walk(v, key, false);
+        else if (typeof v === "string") out.push({ key, value: v });
+        continue;
+      }
+      if (CONTENT_KEY.test(k)) continue;
+      if (top && looksLikePath(v)) out.push({ key, value: v });
+      else if (isObj(v)) walk(v, key, false);
+      else if (Array.isArray(v)) v.forEach((x, i) => { if (isObj(x)) walk(x, `${key}[${i}]`, false); });
+    }
+  };
+  walk(args, "", true);
+  return out;
+}
+/** A `.` or `..` component of a path AS WRITTEN, refused before any normalisation (a symlink then `..` differs on disk). */
+export const traversalOf = p => String(p).split(/[\\/]+/).find(s => s === ".." || s === ".") ?? null;
+
 export function decideWrite(policy, args) {
-  const t = writeTargetOf(args);
-  if (!t) return deny(`the write names no target (${WRITE_PATH_KEYS.join(", ")})`);
-  const target = t.value;
-  if (typeof target !== "string" || !target.trim()) return deny(`the write's ${t.key} is not a path`);
-  if (!isAbsolute(target)) return deny(`${t.key} "${target}" is not absolute; the jail resolves absolute paths only`);
+  const targets = writePathArgsOf(args);
+  if (!targets.length) return deny(`the write names no target (${WRITE_PATH_KEYS.join(", ")})`);
+  const ok = [];
+  for (const { key, value } of targets) {
+    const t = writeTarget(policy, key, value);
+    if (t.decision) return t;
+    ok.push({ key, ...t });
+  }
+  if (new Set(ok.map(t => t.real)).size > 1) return deny(`the write's path arguments name different files (${ok.map(t => `${t.key}=${t.rel}`).join(", ")}): conflicting targets are refused`);
+  return approve(`${ok[0].rel} is owned by unit ${policy.unit_id}`);
+}
+
+/** One write target -> {rel, real}, or a deny. */
+function writeTarget(policy, key, target) {
+  if (typeof target !== "string" || !target.trim()) return deny(`the write's ${key} is not a path`);
+  if (!isAbsolute(target)) return deny(`${key} "${target}" is not absolute; the jail resolves absolute paths only`);
+  const dots = traversalOf(target);
+  if (dots) return deny(`${key} "${target}" has a "${dots}" component: traversal is refused before normalisation`);
   const root = policy.worktree, abs = onRoot(policy, target);
   if (!inside(root, abs) || abs === root) return deny(`${target} is outside the unit's worktree ${root}`);
   const rel = relative(root, abs).split(sep).join("/");
@@ -151,7 +271,7 @@ export function decideWrite(policy, args) {
   const seg2 = forbidden(realRel);
   if (seg2) return deny(`${rel} resolves into ${seg2}`);
   if (!matchesOwned(rel, policy.owned_paths) || !matchesOwned(realRel, policy.owned_paths)) return deny(`${rel}${realRel !== rel ? ` (resolved ${realRel})` : ""} is not one of the unit's owned paths (${policy.owned_paths.join(", ")})`);
-  return approve(`${rel} is owned by unit ${policy.unit_id}`);
+  return { rel, real: land.real };
 }
 
 export function decideCommand(policy, args) {
@@ -212,20 +332,28 @@ export function decideReviewCommand(policy, rcp, args) {
   return approve(`node --test on ${files.length} allowed test file(s)`);
 }
 
+/**
+ * Reads: every path argument must resolve inside the WORKTREE. The control dir is NOT readable (independent review
+ * round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7: its .agents/mcp_config.json carries the A2A bearer
+ * token for the MCP relay, and the read tools could read it), nor is anything that resolves into it.
+ */
 export function decideRead(policy, args) {
   const paths = READ_KEYS.flatMap(k => (Array.isArray(args?.[k]) ? args[k] : [args?.[k]])).filter(v => typeof v === "string" && v.trim());
   if (!paths.length) return deny("a read names no path argument the jail can check");
-  const roots = [policy.worktree, policy.control_dir].filter(Boolean);
+  const ctl = typeof policy.control_dir === "string" && policy.control_dir ? policy.control_dir : null;
   for (const p of paths) {
     if (!isAbsolute(p)) return deny(`read path "${p}" is not absolute`);
+    const dots = traversalOf(p);
+    if (dots) return deny(`read path "${p}" has a "${dots}" component: traversal is refused before normalisation`);
     const abs = onRoot(policy, p);
     // The deepest existing ancestor's real path decides (a symlink inside a root that points out is caught here).
     let at = abs, r = null;
     while (!(r = realOr(at)) && at !== resolve(at, "..")) at = resolve(at, "..");
     const landed = r ? join(r, relative(at, abs)) : abs;
-    if (!roots.some(root => inside(root, landed))) return deny(`${p} is outside the worktree and the control dir`);
+    if (ctl && (inside(ctl, landed) || inside(ctl, abs))) return deny(`${p} is inside the control dir: it holds the unit's MCP credentials and is never read by the model`);
+    if (!inside(policy.worktree, landed)) return deny(`${p} is outside the worktree`);
   }
-  return approve("a read inside the worktree or the control dir");
+  return approve("a read inside the worktree");
 }
 
 /** The MCP identity of a DIRECT (eager) tool call: {server, tool} when it looks like an MCP tool, else null. */
@@ -319,19 +447,36 @@ const summary = tc => {
 
 // ---- the process ----------------------------------------------------------------------------------------------------
 
+/** Write all of `text` to `fd` (a pipe may take part of it, or say EAGAIN); throws when the fd cannot take it. */
+function writeAll(fd, text) {
+  let buf = Buffer.from(text), tries = 0;
+  while (buf.length) {
+    try { const n = writeSync(fd, buf); buf = buf.subarray(n); tries = 0; }
+    catch (e) { if (e?.code !== "EAGAIN" || ++tries > 1000) throw e; }
+  }
+}
+/** The node timer: STDIN_TIMEOUT_MS, or a LOWER PANTHEON_JAIL_STDIN_TIMEOUT_MS (never a higher one). */
+export const stdinTimeoutMs = (env = process.env) => {
+  const n = Number(env.PANTHEON_JAIL_STDIN_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 10 && n < STDIN_TIMEOUT_MS ? Math.floor(n) : STDIN_TIMEOUT_MS;
+};
+
 function main() {
-  let printed = false;
+  // printed: a decision was attempted; wrote: it reached stdout whole. A decision that could not be written is NOT an
+  // answer (an empty stdout would ALLOW): the process exits WRITE_FAILED_EXIT and the wrapper prints a deny itself.
+  // Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 1.
+  let printed = false, wrote = false;
   const emit = d => {
     if (printed) return;
     printed = true;
-    const line = JSON.stringify(d) + "\n";
-    try { writeSync(1, line); } catch { try { process.stdout.write(line); } catch { /* nothing more can be done */ } }
+    try { writeAll(1, JSON.stringify(d) + "\n"); wrote = true; } catch { wrote = false; }
   };
-  const failClosed = e => { emit(deny(`hook exception: ${msg(e)}`)); process.exitCode = 0; };
+  const settle = () => { process.exitCode = printed && wrote ? 0 : WRITE_FAILED_EXIT; };
+  const failClosed = e => { emit(deny(`hook exception: ${msg(e)}`)); settle(); };
   try { process.stdout.on("error", () => {}); } catch { /* ignore */ }
   process.on("uncaughtException", failClosed);
   process.on("unhandledRejection", failClosed);
-  process.on("exit", () => { if (!printed) emit(deny("hook exception: the hook ended without a decision")); process.exitCode = 0; });
+  process.on("exit", () => { if (!printed) emit(deny("hook exception: the hook ended without a decision")); settle(); });
 
   const file = process.argv[2];
   const fallbackLog = typeof file === "string" && file ? join(dirname(resolve(file)), "run", "jail.log") : null;
@@ -352,15 +497,28 @@ function main() {
     try {
       const tc = parsed ? toolCallOf(payload) : null;
       const mcp = tc ? mcpCallOf(tc) : null;
-      const row = { at: new Date().toISOString(), event: "PreToolUse", unit_id: policy?.unit_id ?? null, cwd: process.cwd(),
-        raw: raw.length > RAW_LOG_CAP ? raw.slice(0, RAW_LOG_CAP) : raw, ...(raw.length > RAW_LOG_CAP ? { raw_truncated: raw.length } : {}),
+      // REDACTED (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7): the known
+      // secrets -- the control dir's MCP env (the A2A bearer token) and this process's secret-named env -- and
+      // Bearer / token= shaped pairs, in the raw stdin, the payload and every logged field.
+      const secrets = secretValues(process.env, controlDirSecrets(policy?.control_dir ?? (file ? dirname(resolve(file)) : null)));
+      const rawCut = raw.length > RAW_LOG_CAP ? raw.slice(0, RAW_LOG_CAP) : raw;
+      const row = redactDeep({ at: new Date().toISOString(), event: "PreToolUse", unit_id: policy?.unit_id ?? null, cwd: process.cwd(),
+        raw: rawCut, ...(raw.length > RAW_LOG_CAP ? { raw_truncated: raw.length } : {}),
         payload: parsed ? payload : null, ...summary(tc), ...(mcp ? { mcp: { form: mcp.form, server: mcp.server, tool: mcp.tool, role: isObj(mcp.args) ? mcp.args.role ?? null : null } } : {}),
-        step: isObj(payload) ? payload.stepIdx ?? null : null, decision: out.decision, reason: out.reason ?? null };
+        step: isObj(payload) ? payload.stepIdx ?? null : null, decision: out.decision, reason: out.reason ?? null }, secrets);
+      if (row.raw !== rawCut) row.raw_redacted = true;
       const log = typeof policy?.log === "string" && policy.log ? policy.log : fallbackLog;
       if (log) appendFileSync(log, JSON.stringify(row) + "\n");
     } catch { /* the log is evidence, not the decision */ }
   };
-  const timer = setTimeout(() => finish(Buffer.concat(chunks).toString("utf8"), `stdin did not close within ${STDIN_TIMEOUT_MS} ms`), STDIN_TIMEOUT_MS);
+  const ms = stdinTimeoutMs();
+  // A stdin that never closes: the deny is printed, logged, and the process EXITS (it used to linger with the stdin open
+  // until the CLI's own hook timeout killed it, so the wrapper forwarded nothing: an empty stdout ALLOWS).
+  const timer = setTimeout(() => {
+    finish(Buffer.concat(chunks).toString("utf8"), `stdin did not close within ${ms} ms`);
+    try { process.stdin.destroy(); } catch { /* exiting anyway */ }
+    process.exit();
+  }, ms);
   process.stdin.on("data", c => { chunks.push(c); });
   process.stdin.on("end", () => { clearTimeout(timer); finish(Buffer.concat(chunks).toString("utf8")); });
   process.stdin.on("error", e => { clearTimeout(timer); finish(Buffer.concat(chunks).toString("utf8"), `stdin failed: ${msg(e)}`); });
@@ -369,7 +527,8 @@ function main() {
 const self = fileURLToPath(import.meta.url);
 if (process.argv[1] && (realOr(process.argv[1]) ?? process.argv[1]) === (realOr(self) ?? self)) {
   try { main(); } catch (e) {
-    try { writeSync(1, JSON.stringify(deny(`hook exception: ${msg(e)}`)) + "\n"); } catch { /* ignore */ }
-    process.exitCode = 0;
+    let ok = false;
+    try { writeAll(1, JSON.stringify(deny(`hook exception: ${msg(e)}`)) + "\n"); ok = true; } catch { /* the wrapper prints the deny */ }
+    process.exitCode = ok ? 0 : WRITE_FAILED_EXIT;
   }
 }

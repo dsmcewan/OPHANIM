@@ -53,3 +53,16 @@ test("the jail hook still accepts every spelling (harmless: it decides per call)
   for (const t of ["view_file", "grep_search", "list_dir"]) assert.ok(READ_TOOLS.includes(t), t);
   assert.equal(MCP_WRAPPER, "call_mcp_tool");
 });
+
+// Assignment 3 Antigravity run, read_file (findings-3-google-77480d6): agy 1.5.11 advertised read_file as its only file
+// reader whatever the card listed, and the hook denied it. The hook accepts it as a read tool for every card (worker and
+// reviewer share the hook). The CARDS do not list it: it was never observed resolving as a card component, and an
+// unmapped card name may hang the subagent process (the reason this file exists); the card list is not an allowlist.
+test("read_file is a read tool of the jail hook (agy 1.5.11), and the cards keep only names observed to resolve", () => {
+  assert.ok(READ_TOOLS.includes("read_file"));
+  assert.ok(!WRITE_TOOLS.includes("read_file"));
+  assert.ok(!cardTools(card).includes("read_file"));
+  const reviewer = readFileSync(new URL("../.agents/agents/pantheon-reviewer-agent/agent.md", import.meta.url), "utf8");
+  assert.deepEqual(validateCardTools(cardTools(reviewer)), { ok: true, bad: [], why: null });
+  assert.ok(!cardTools(reviewer).includes("read_file"));
+});

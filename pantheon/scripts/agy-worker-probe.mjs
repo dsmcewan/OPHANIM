@@ -41,9 +41,10 @@
 // EXACT worker command `cd '<worktree>' && node -e "process.exit(0)"` (run_command has no Cwd: observed on agy 1.5.10).
 // Then it verifies from the hook log, the tool steps AND the disk (turnChecks: a tool RAN only when the LAST step of
 // its call is a terminal success -- ACTIVE never counts, a later ERROR undoes a DONE, a reported non-zero exit fails
-// run_command), classifies every host ~/.gemini change against the jail's bind list (hostChanges: only a change the
-// jail could write fails gemini_state_untouched; the rest is reported with possible_writer "another host process",
-// next to the host's agy processes before and after the turn, args redacted), and prints ONE JSON object (schema
+// run_command), classifies every host ~/.gemini change against the jail's bind list (hostChanges: a change the jail
+// could write fails gemini_state_untouched; any other change leaves it null = UNRESOLVED, reported with possible_writer
+// "another host process" and in gemini_state.unresolved_host_changes, next to the host's agy processes before and after
+// the turn, args redacted; only NO change at all is "untouched"), and prints ONE JSON object (schema
 // pantheon.agy-worker-probe/v1) and exits 0 when every check passed, 1 otherwise, 2 when it aborted before spending. Diagnostics: `startup_errors` (E-level and read-only
 // file system lines of the CLI log and stderr up to the first tool step, de-duplicated, at most 60), `deprecations`,
 // `stderr_tail`, `log_tail`, `gemini_state.scratch_written` (what the CLI wrote into the scratch copy),
@@ -108,17 +109,23 @@ const quotaView = q => q && { state: q.state, scope: q.scope ? { model: q.scope.
   buckets: (q.buckets ?? []).map(b => ({ group: b.group ?? null, name: b.name ?? null, window: b.window ?? null, remaining_fraction: b.remaining_fraction ?? null, exhausted: b.exhausted })),
   exit_code: q.exit_code ?? null, format: q.format ?? null, spent: q.spent ?? null, error: q.error ?? null };
 
-/** A recursive listing {relative path: "size:mtimeMs"} of a directory (null when it does not exist). Never follows a symlink. */
+/**
+ * A file's identity in a snapshot: size, mtime, ctime, mode, dev, inode and link count. ctime catches a chmod or a
+ * restored write; dev/inode a replaced file; nlink a hard link made to it (independent review round 2, assignment 4
+ * (OpenAI gpt-6-astra, 77480d6), question 10: size:mtime alone missed all of these).
+ */
+const statKey = st => `${st.size}:${st.mtimeMs}:${st.ctimeMs}:${st.mode}:${st.dev}:${st.ino}:${st.nlink}`;
+/** A recursive listing {relative path: statKey} of a directory (null when it does not exist). Never follows a symlink. */
 function snapshot(dir) {
   try { if (!statSync(dir).isDirectory()) return null; } catch { return null; }
   const out = {};
-  const walk = (d, pre) => { for (const e of readdirSync(d, { withFileTypes: true })) { const r = pre ? `${pre}/${e.name}` : e.name; const p = join(d, e.name); if (e.isDirectory()) walk(p, r); else { try { const st = lstatSync(p); out[r] = `${st.size}:${st.mtimeMs}`; } catch { out[r] = "unreadable"; } } } };
+  const walk = (d, pre) => { for (const e of readdirSync(d, { withFileTypes: true })) { const r = pre ? `${pre}/${e.name}` : e.name; const p = join(d, e.name); if (e.isDirectory()) walk(p, r); else { try { const st = lstatSync(p); out[r] = statKey(st); } catch { out[r] = "unreadable"; } } } };
   walk(dir, "");
   return out;
 }
 /** The top level of ~/.gemini (every entry: files as size:mtime, others by kind), to see an OAuth refresh, any other rewrite, or a created entry. */
 function topFiles(dir) {
-  try { return Object.fromEntries(readdirSync(dir, { withFileTypes: true }).map(e => { const st = lstatSync(join(dir, e.name)); return [e.name, e.isFile() ? `${st.size}:${st.mtimeMs}` : e.isDirectory() ? "dir" : "other"]; })); } catch { return null; }
+  try { return Object.fromEntries(readdirSync(dir, { withFileTypes: true }).map(e => { const st = lstatSync(join(dir, e.name)); return [e.name, e.isFile() ? statKey(st) : e.isDirectory() ? "dir" : "other"]; })); } catch { return null; }
 }
 // A CLI log line's identity for de-duplication: without the glog prefix, uuids and long hex/numeric ids.
 const lineKey = l => l.replace(/^[IWEF]\d{4} [\d:.]+\s+\d+ [^\]]*\]\s*/, "").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>").replace(/\b[0-9a-f]{12,}\b|\b\d{3,}\b/gi, "<n>").trim();
@@ -156,13 +163,24 @@ export function hostChanges(before, after, roots, binds) {
       const path = join(roots[k], ...rel.split("/"));
       const r = jailReach(binds, path);
       out.push({ path, change: !(rel in a) ? "added" : !(rel in b) ? "removed" : "changed", before: a[rel] ?? null, after: b[rel] ?? null,
-        reach: r.reach, jail_view: r.jail_view, why: r.why, ...(r.reach === "outside_jail_reach" ? { possible_writer: "another host process" } : {}) });
+        reach: r.reach, jail_view: r.jail_view, why: r.why, ...(r.nlink ? { nlink: r.nlink, dev: r.dev, ino: r.ino } : {}),
+        // A change the jail could not reach by path is NOT attributed: it stays UNRESOLVED evidence (see untouchedBy).
+        // (With no jail run at all -- binds null -- the jail cannot be the writer: attributed, not unresolved.)
+        ...(r.reach !== "reachable_by_jail" ? { possible_writer: "another host process", unresolved: r.jail_view !== "no jail ran" } : {}) });
     }
   }
   return out.sort((x, y) => x.path.localeCompare(y.path));
 }
-/** gemini_state_untouched: true when no host change was reachable by the jail; null when nothing was snapshotted. */
-export const untouchedBy = (changes, snapped = true) => (snapped ? !changes.some(c => c.reach === "reachable_by_jail") : null);
+/**
+ * gemini_state_untouched: true ONLY when no host change was seen at all; false when one was reachable by the jail; null
+ * (UNRESOLVED) when every change was outside the jail's reach by path, or hard-linked. Independent review round 2,
+ * assignment 4 (OpenAI gpt-6-astra, 77480d6), question 10: jailReach describes where the jail's binds point, not who
+ * wrote a file; a change it cannot attribute (another host process, a hard-link alias, an actual escape) must not read
+ * as "untouched". null when nothing was snapshotted.
+ */
+export const untouchedBy = (changes, snapped = true) => (!snapped ? null : changes.some(c => c.reach === "reachable_by_jail") ? false : changes.some(c => c.unresolved) ? null : true);
+/** The host changes no one could attribute (untouchedBy null): [{path, change, reach, jail_view, why}]. */
+export const unresolvedOf = changes => changes.filter(c => c.unresolved).map(c => ({ path: c.path, change: c.change, reach: c.reach, jail_view: c.jail_view, why: c.why }));
 
 /**
  * The agy processes of a `ps -eo pid,lstart,args` listing: those whose binary (the first word of args) is named agy /
@@ -392,7 +410,8 @@ function judge({ rows, steps, shimCalls, checks, turnRan, turnOk, launchArgs, ag
   const ev5 = { gemini_state_untouched: checks.gemini_state_untouched, erofs_lines: lines, erofs_paths: erofsPaths, writes_in_scratch: written, scratch_written: scratch };
   m.state_mounts = !turnRan ? mechanic("not exercised", { ...ev5, note: "the turn did not run" })
     : lines.length ? mechanic("refuted", { ...ev5, note: `EROFS under a protected path: ${erofsPaths.join(", ") || "(no path in the lines)"}` })
-    : !checks.gemini_state_untouched ? mechanic("refuted", { ...ev5, note: "a host ~/.gemini path the jail can write changed during the run" })
+    : checks.gemini_state_untouched === false ? mechanic("refuted", { ...ev5, note: "a host ~/.gemini path the jail can write changed during the run" })
+    : checks.gemini_state_untouched === null ? mechanic("unresolved", { ...ev5, note: "host ~/.gemini changed during the run where the jail could not write by path (or through a hard-linked file): not attributed, so not confirmed untouched" })
     : turnOk && written.length ? mechanic("confirmed", { ...ev5, note: "writes landed in the scratch copy of ~/.gemini/antigravity-cli (confirmed); ~/.gemini stayed read-only and unchanged" })
     : turnOk ? mechanic("confirmed", { ...ev5, note: "a full turn ran with ~/.gemini read-only and no EROFS; the CLI wrote nothing into the scratch" })
     : mechanic("not exercised", { ...ev5, note: "the turn did not complete (and no EROFS line was seen)" });
@@ -559,7 +578,7 @@ async function main() {
     summary.log_tail = tail(logText);
     summary.gemini_state = { home_gemini: g, ...layout, before: { cli_state: before.cli_state, config_projects: before.config_projects, top_files: before.top },
       after: { cli_state: after.cli_state, config_projects: after.config_projects, top_files: after.top }, scratch_written: scratch,
-      host_changes: changes, host_agy_processes: { before: procsBefore, after: procsAfter } };
+      host_changes: changes, unresolved_host_changes: unresolvedOf(changes), host_agy_processes: { before: procsBefore, after: procsAfter } };
     let mcpConfig = null;
     try { mcpConfig = JSON.parse(readFileSync(ws.mcp_config, "utf8")); } catch { /* reported as not eager */ }
     summary.owner_stated_mechanics = judge({ rows, steps, shimCalls, checks: { ...summary.checks, forbidden_absent }, turnRan: Boolean(res.launch) && res.exit_code !== undefined,
