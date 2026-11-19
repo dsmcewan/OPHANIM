@@ -49,7 +49,7 @@ import {REVIEW_BRIEF} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {selectSeat, readPools} from '../../pantheon/src/route/frontier.mjs';
 import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, implementerEscalation} from '../../pantheon/src/route/fit-matrix.mjs';
-import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT} from '../../pantheon/src/pipeline/index.mjs';
+import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT, liveOwner, recoverOrphanWorktrees} from '../../pantheon/src/pipeline/index.mjs';
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
@@ -110,14 +110,22 @@ export const PLAN_BRIEF = [
 // The stage's call meter. With the scheduler's ctx ({charge, signal}), every call is CHARGED on the work ledger
 // before it is made (a call that leaves the process is counted even if the process dies), and no call is admitted
 // once the stage's elapsed budget is spent (the cooperative stop). A refused charge is a refused call.
+// The turn is given the stage's `signal` (a live adapter aborts its in-flight request or process with it) and a
+// `charge()` for a SECOND provider call made inside the turn -- the metered Gemini API failover after a lane's quota
+// refusal -- which is admitted, bounded and charged like any other call before it is made, or refused (it throws) and
+// not made (independent review, assignment 3 (xAI grok-4.7, 09d490f), question 9; (OpenAI gpt-6-astra extra review,
+// 09d490f), questions 1 and 9).
 function meter(turn, limit, ctx = {}) {
   const m = {made: 0, refused: 0, limit};
-  m.turn = args => {
-    if (ctx.signal?.aborted) { m.refused++; return Promise.reject(Object.assign(new Error(`STAGE_ELAPSED: ${ctx.signal.reason?.message ?? 'the stage was stopped'}`), {code: 'STAGE_ELAPSED'})); }
-    if (m.made >= m.limit) { m.refused++; return Promise.reject(Object.assign(new Error(`PROVIDER_CALL_LIMIT: ${m.made} of ${m.limit} stage provider call(s) used`), {code: 'PROVIDER_CALL_LIMIT'})); }
-    if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch (e) { m.refused++; return Promise.reject(e); } }
+  const admit = () => {
+    if (ctx.signal?.aborted) { m.refused++; throw Object.assign(new Error(`STAGE_ELAPSED: ${ctx.signal.reason?.message ?? 'the stage was stopped'}`), {code: 'STAGE_ELAPSED'}); }
+    if (m.made >= m.limit) { m.refused++; throw Object.assign(new Error(`PROVIDER_CALL_LIMIT: ${m.made} of ${m.limit} stage provider call(s) used`), {code: 'PROVIDER_CALL_LIMIT'}); }
+    if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch (e) { m.refused++; throw e; } }
     m.made++;
-    return Promise.resolve().then(() => turn(args));
+  };
+  m.turn = args => {
+    try { admit(); } catch (e) { return Promise.reject(e); }
+    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), charge: admit}));
   };
   m.left = () => m.limit - m.made;
   return m;
@@ -915,14 +923,26 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const checkpointDir = dirOf(ctx, 'checkpoints');
     fs.writeFileSync(path.join(dir, 'attempt.json'), JSON.stringify({item, attempt: ctx.attempt, plan_record: planRec.hash, claim: ctx.claim ?? null}) + '\n');
     const recordedRuns = new Set(ctx.work.stages(item).filter(x => x.stage === 'implement').flatMap(x => [x.outputs?.run?.dir, ...(x.outputs?.carried_runs ?? []).map(r => r.dir)]).filter(Boolean));
-    const itemDir = path.dirname(dir), carriedRuns = [], carriedFindings = [];
+    const itemDir = path.dirname(dir), carriedRuns = [], carriedFindings = [], recovered = [];
     for (const name of fs.readdirSync(itemDir).filter(x => /^pipeline-/.test(x)).sort()) {
       const d = path.join(itemDir, name);
-      if (d === dir || recordedRuns.has(d)) continue;
+      if (d === dir) continue;
+      // An earlier attempt's run that no live process holds: the worktrees its process left registered (it was
+      // killed before its `finally`) are removed, so they neither pile up nor interfere (independent review,
+      // assignment 3 (xAI grok-4.7, 09d490f), question 8).
+      if (!liveOwner(d)) recovered.push(...await recoverOrphanWorktrees({repo: top, root: path.join(d, 'worktrees')}));
+      if (recordedRuns.has(d)) continue;
       let marker, rec;
       try { marker = JSON.parse(fs.readFileSync(path.join(d, 'attempt.json'), 'utf8')); rec = JSON.parse(fs.readFileSync(path.join(d, 'pipeline.json'), 'utf8')); } catch { continue; }
       if (marker.plan_record !== planRec.hash) continue;
-      const rows = Object.values(rec.units ?? {}).flatMap(u => (u.findings ?? []).flatMap(f => (f.findings ?? []).map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller',
+      // A Stage 5 review that did not approve carries its feedback even when the kill came before that feedback was
+      // copied into the unit's findings (a record written before the two were saved together): it is read from the
+      // review itself, unless the findings already hold that attempt's (independent review, assignment 3 (xAI
+      // grok-4.7, 09d490f), question 8).
+      const reviewRows = u => (u.reviews ?? []).filter(r => r && ['request_changes', 'approve_refused'].includes(r.status) && Array.isArray(r.feedback) && r.feedback.length
+        && !(u.findings ?? []).some(f => f.attempt === (r.n ?? null) && f.code === r.status))
+        .map(r => ({attempt: r.n ?? null, source: r.status === 'request_changes' ? 'reviewer' : 'controller', code: r.status, vendor: r.vendor ?? null, model: r.model ?? null, findings: r.feedback}));
+      const rows = Object.values(rec.units ?? {}).flatMap(u => [...(u.findings ?? []), ...reviewRows(u)].flatMap(f => (f.findings ?? []).map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller',
         unit: u.unit_id, attempt: f.attempt, code: f.code ?? null, text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null,
         lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null, carried_from: {run_id: rec.run_id ?? null, record: path.join(d, 'pipeline.json'), attempt: marker.attempt}}))));
       carriedRuns.push({dir: d, run_id: rec.run_id ?? null, attempt: marker.attempt, status: rec.status ?? null, findings: rows.length});
@@ -943,7 +963,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let run;
     try {
       run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}}), dir, sameModel,
-        checkpoints: {dir: checkpointDir},
+        // Checkpoints are sealed under a key held beside the work ledger (outside the item's state directory), and a
+        // checkpoint whose seal, review or rubric does not re-derive is not resumed (independent review, assignment 3
+        // (OpenAI gpt-6-astra extra review, 09d490f), question 7).
+        checkpoints: {dir: checkpointDir, ...(ctx.work?.root ? {keyFile: path.join(ctx.work.root, 'checkpoint-seal.key')} : {})},
         // Every pipeline call is charged on the work ledger before it is made; the stage's elapsed budget stops the run
         // admitting calls (the scheduler's cooperative stop).
         ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}), ...(ctx.signal ? {signal: ctx.signal} : {}),
@@ -987,7 +1010,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
       units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length}]))};
     const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'},
-      ...(carriedRuns.length ? {carried_runs: carriedRuns} : {})};
+      ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}), ...(recovered.length ? {recovered_worktrees: recovered} : {})};
     // Every finding the run kept (the Stage 5 reviewers' and the controller's own: write jail, ground truth), by unit.
     const findings = [...carriedFindings, ...unitsOut.flatMap(u => (u.findings ?? []).flatMap(f => f.findings.map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller', unit: u.unit_id, attempt: f.attempt, code: f.code ?? null,
       text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null, lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null}))))]

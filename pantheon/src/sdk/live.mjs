@@ -3,7 +3,8 @@
 //
 // liveClients(): makeClientFor(vendor, {pool, poolConfig}) for the work seats, one client per vendor and pool,
 // marked {providers: {kind: "live"}} so a run records that live providers answered.
-// liveTurn(): turn({vendor, model, prompt}) for single-turn seats; an incomplete reply is an error, never a text.
+// liveTurn(): turn({vendor, model, prompt, signal?, charge?}) for single-turn seats; an incomplete reply is an error, never a
+// text. `signal` reaches the request (API) or the CLI process (lane); `charge` admits a metered failover (laneFirstTurn).
 // Nothing here calls a provider until a seat is used.
 import { agySingleTurn, laneFirstTurn } from "./agy-turn.mjs";
 
@@ -22,10 +23,12 @@ export async function liveTurn({ label = "cycle-review", meteredFailover = true 
     import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("./adapter.mjs")]);
   const clients = new Map();
   // `extra` carries per-seat request options (e.g. reasoning.context for an OpenAI reviewer); only OpenAI receives it.
-  const api = async ({ vendor, model, prompt, extra = null }) => {
+  // `signal` aborts the in-flight request (a stage stopped at its elapsed budget does not wait for it).
+  const api = async ({ vendor, model, prompt, extra = null, signal = undefined }) => {
     if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
+    signal?.throwIfAborted();
     const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-${label}`,
-      ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}) });
+      ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}) });
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null };
   };

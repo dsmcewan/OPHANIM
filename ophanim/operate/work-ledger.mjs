@@ -15,6 +15,13 @@
 //                 A FENCED claim (payload `fence: 1`, every claim this module writes) is also refused while ANY earlier
 //                 claim on the item is unreleased, expired or not: `claim()` first releases an expired one as `expired`,
 //                 so two claims can never both lead to recorded stages (independent review, assignment 3, Q3/Q4).
+//                 A RESERVING claim (payload `reserve: {total_provider_calls}`, every claim the scheduler writes since
+//                 independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), questions 1 and 3) is
+//                 also refused when its stage budget does not fit in that total less what the ledger before it already
+//                 uses: every other claim's recorded usage (unknown usage at its budget) or charges, whichever is larger,
+//                 and the rest of the budget of every claim still live at its `leased_at` (scheduler.mjs spent()). The
+//                 check is part of the claim's re-derivation, so it runs under the ledger's append lock: two processes
+//                 cannot both reserve the same remainder. Older claims carry no `reserve` and keep verifying as written.
 //   work.release  the claim ends: completed, returned, failed, blocked, interrupted or expired. Cites its claim.
 //   work.spend    provider calls CHARGED under a claim, recorded (signed) BEFORE the calls are made: {item, stage,
 //                 attempt, provider_calls (cumulative for the claim), at}. A call that already left the process is
@@ -95,6 +102,25 @@ const identityRefusal = id => {
 function kinds({operators}) {
   const byController = a => operators.includes(a.key_id);
   const entriesOf = (view, kind) => view.entries().filter(h => view.entry(h)?.kind === kind);
+  // Provider calls used by the claims in `view` at `at` (ms): scheduler.mjs spent()'s calls + reserved, over the ledger
+  // before the entry being re-derived. Deterministic over that prefix, so a claim that fit when appended verifies later.
+  const usedBefore = (view, at) => {
+    const charged = new Map(), stageOf = new Map(), released = new Set();
+    for (const h of view.entries()) {
+      const x = view.entry(h);
+      if (x?.kind === 'work.spend') charged.set(x.derived_from[0], Math.max(charged.get(x.derived_from[0]) ?? 0, view.payload(h).provider_calls));
+      else if (x?.kind === 'work.stage') stageOf.set(x.derived_from[0], view.payload(h));
+      else if (x?.kind === 'work.release') for (const d of x.derived_from) released.add(d);
+    }
+    let used = 0;
+    for (const h of entriesOf(view, 'work.claim')) {
+      const c = view.payload(h), ch = charged.get(h) ?? 0, st = stageOf.get(h);
+      if (st) { const u = st.usage?.provider_calls; used += Number.isInteger(u) ? Math.max(u, ch) : Math.max(c.budget.provider_calls, ch); continue; }
+      used += ch;
+      if (!released.has(h) && Date.parse(c.leased_at) + c.lease_ms > at) used += Math.max(0, c.budget.provider_calls - ch);
+    }
+    return used;
+  };
   const releaseOf = (view, claim) => entriesOf(view, 'work.release').find(h => view.entry(h).derived_from.includes(claim)) ?? null;
   return {
     'work.recovery': {
@@ -144,6 +170,7 @@ function kinds({operators}) {
         if (p?.schema !== WORK_SCHEMA || !ID.test(p.item ?? '') || !STAGES.includes(p.stage)) return 'a claim names {item, stage}';
         if (!(Number.isInteger(p.attempt) && p.attempt >= 1) || !SHA.test(p.key ?? '') || !str(p.holder)) return 'a claim names {attempt >= 1, key, holder}';
         if (!ISO(p.leased_at) || !(Number.isInteger(p.lease_ms) && p.lease_ms > 0)) return 'a claim names its lease {leased_at, lease_ms}';
+        if (p.reserve !== undefined && !(plain(p.reserve) && nonneg(p.reserve.total_provider_calls) && Object.keys(p.reserve).length === 1)) return 'a reserving claim names reserve {total_provider_calls}';
         return budgetRefusal(p.budget);
       },
       rederive: (e, view) => {
@@ -156,6 +183,10 @@ function kinds({operators}) {
           if (!rel && p.fence === 1 && Date.parse(c.leased_at) + c.lease_ms <= at) return `"${p.item}" has an unreleased claim (${c.stage}, attempt ${c.attempt}) whose lease expired: release it as expired before claiming again`;
           if (!rel && Date.parse(c.leased_at) + c.lease_ms > at) return `"${p.item}" is already claimed (${c.stage}, attempt ${c.attempt}, lease until ${new Date(Date.parse(c.leased_at) + c.lease_ms).toISOString()}): no duplicate execution`;
           if (rel && c.key === p.key && view.payload(rel).outcome === 'completed') return `"${p.item}" ${p.stage} already completed for these exact inputs (${p.key.slice(0, 19)}): reuse it, do not pay twice`;
+        }
+        if (p.reserve !== undefined) {
+          const used = usedBefore(view, at), left = p.reserve.total_provider_calls - used;
+          if (left < p.budget.provider_calls) return `PROVIDER_CALL_BUDGET: ${left} of ${p.reserve.total_provider_calls} provider call(s) left (used or reserved by other claims: ${used}); this stage reserves ${p.budget.provider_calls}`;
         }
         return null;
       },
@@ -334,12 +365,14 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     /** Claim one stage of one item. Throws (code WORK_REFUSED) on a duplicate or an already-completed key. */
     // An unreleased claim on the item whose lease expired at `at` is first released as `expired` (a claim racing to
     // release it is fine: the ledger refuses the second release, and the fenced claim then re-derives).
-    claim: ({item, stage, attempt, inputs, holder, budget, lease_ms = 30 * 60_000, at = new Date().toISOString()}) => {
+    // `total_provider_calls` (optional): the total this claim's budget is RESERVED against, atomically (see the header).
+    claim: ({item, stage, attempt, inputs, holder, budget, lease_ms = 30 * 60_000, at = new Date().toISOString(), total_provider_calls = undefined}) => {
       for (const c of of('work.claim', x => x.item === item && !released(x.hash) && Date.parse(x.leased_at) + x.lease_ms <= Date.parse(at))) {
         try { append('work.release', {item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: released before a new claim', at}, [c.hash]); }
         catch (e) { if (!/already released/.test(e.message)) throw e; }
       }
-      return append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget, fence: 1});
+      return append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget, fence: 1,
+        ...(total_provider_calls !== undefined ? {reserve: {total_provider_calls}} : {})});
     },
     release: ({claim, item, stage, outcome, why, at = new Date().toISOString()}) => append('work.release', {item, stage, outcome, why, at}, [claim]),
     /** Record a stage's result under its claim; `from` is the stage record it received (verified on append). */

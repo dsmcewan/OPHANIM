@@ -16,7 +16,7 @@
 // THE CALL BUDGET. Every injected turn passes through `counted`, which refuses a call past max_provider_calls BEFORE it
 // is made and calls `onCharge()` (the caller's ledger charge; a throw refuses the call) before each one. A turn that
 // makes a SECOND provider call inside itself -- the implementer adapter's metered Gemini API failover after a lane
-// quota refusal -- receives `charge()` in its arguments and must call it before that call: it is counted, bounded and
+// quota refusal, of ANY role -- receives `charge()` in its arguments and must call it before that call: it is counted, bounded and
 // charged as its own provider call (by_role.metered_failover), never hidden inside the lane attempt's charge
 // (independent review, assignment 3, question 1).
 //
@@ -45,19 +45,29 @@
 // its patch, digest and tree were rewritten to agree with each other (independent review, assignment 3, question 7).
 // The checkpoint binds the approval: the rubric hash and the digest of the Stage 5 review record are part of it, and a
 // checkpoint without them, or whose verify command is not the unit's, is rejected. A checkpoint that does not hold is
-// recorded as `checkpoint_rejected` and the unit runs normally.
+// recorded as `checkpoint_rejected` and the unit runs normally. THE APPROVAL IS AUTHENTICATED (checkpoint.mjs v3): a
+// checkpoint is sealed under the controller's checkpoint key (`checkpoints: {dir, key?, keyFile?}`), carries the
+// approving review and the dispatch whole, and is resumed only when the seal verifies, the review re-hashes to
+// review_digest and reviewed exactly this patch, the rubric hash recomputes from the CURRENT unit, and the recorded
+// dispatcher and reviewer are the seats this run would use (independent review, assignment 3 (OpenAI gpt-6-astra
+// extra review, 09d490f), question 7).
+//
+// THE RUN DIRECTORY (<dir>/owner.json) is held by one live run; a run that finds the directory held by a dead one
+// removes the worktrees and control directories that run left before it binds its own, and every provider call is on
+// <dir>/pipeline.json before it is made (the record is written synchronously).
 //
 // Must never: merge a unit that was not approved against a passing verify_cmd; run a unit whose upstream did not
 // merge; exceed an injected limit; let an injected function mutate the frozen unit; block the event loop on git.
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
+import { hostname, tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { CAPABILITIES, PIPELINE_SCHEMA, clone, digestOf, now, sameSeat, seatRefusal, sha256 } from "./util.mjs";
 import { validateWorkUnits } from "./work-units.mjs";
-import { bindWorktree, lockConflicts, releaseWorktree, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
+import { bindWorktree, lockConflicts, releaseWorktree, rubricHash, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
 import { runImplementer, MCP_SERVER_PATH } from "./implement.mjs";
-import { checkpointFile, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint } from "./checkpoint.mjs";
+import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint } from "./checkpoint.mjs";
 import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
@@ -131,17 +141,25 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     contributions: [], arbiters: [], provider_calls: { total: 0, refused_at_limit: 0, by_role: { dispatcher: 0, implementer: 0, subagent: 0, reviewer: 0 } },
   };
 
-  // The record is written after every step. Writes are queued so they land in order; each is a whole-file replace.
-  // A failed write is kept (the first one) and thrown by every later awaited save: never swallowed.
-  let writing = Promise.resolve(), writeError = null;
+  // The record is written after every step, SYNCHRONOUSLY (a whole-file replace: temp file, then rename), so the file
+  // holds the latest state the moment save() returns -- in particular a provider call's charge is on disk BEFORE the
+  // call is made (admit, below): a kill during the call leaves a record that counts it (independent review, assignment
+  // 3 (OpenAI gpt-6-astra extra review, 09d490f), question 8). A failed write is kept (the first one) and thrown by
+  // this and every later save: never swallowed.
+  let writeError = null, owned = false;
   const file = join(dir, "pipeline.json");
-  const save = () => {
+  const recordError = () => Object.assign(new Error(`the run record ${file} could not be written: ${writeError.message}`), { code: "RECORD_WRITE", cause: writeError });
+  const persist = () => {
     run.contributions = contributionsOf(run); run.arbiters = arbitersOf(run);
-    const text = JSON.stringify(run, null, 2) + "\n";
-    writing = writing.then(async () => { await writeFile(file + ".tmp", text); await rename(file + ".tmp", file); }).catch(e => { writeError ??= e; });
-    return writing.then(() => { if (writeError) throw Object.assign(new Error(`the run record ${file} could not be written: ${writeError.message}`), { code: "RECORD_WRITE", cause: writeError }); });
+    try { writeFileSync(file + ".tmp", JSON.stringify(run, null, 2) + "\n"); renameSync(file + ".tmp", file); } catch (e) { writeError ??= e; }
+    return !writeError;
   };
-  const end = async (status, reason = null) => { Object.assign(run, { status, reason, ended_at: now() }); await save(); return run; };
+  const save = () => (persist() ? Promise.resolve() : Promise.reject(recordError()));
+  const end = async (status, reason = null) => {
+    Object.assign(run, { status, reason, ended_at: now() });
+    if (owned) { ACTIVE_DIRS.delete(resolve(dir)); rmSync(join(dir, OWNER_FILE), { force: true }); }
+    await save(); return run;
+  };
   const refuse = (refusals) => { run.refusals = refusals; return end("refused", refusals.map(r => r.message).join("; ")); };
 
   // ---- inputs
@@ -149,6 +167,13 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     const have = k === "seats" ? seats : turns;
     const missing = list.filter(n => typeof have?.[n] !== "function");
     if (missing.length) return refuse([{ code: "INPUT", unit_id: null, message: `${k} must provide function(s): ${missing.join(", ")}` }]);
+  }
+  // The checkpoint key (checkpoint.mjs): checkpoints are written sealed under it, and only a seal that verifies under
+  // it is resumed.
+  let ckKey = null;
+  if (run.checkpoints) {
+    try { ckKey = checkpointKey({ dir: checkpoints.dir, key: checkpoints.key ?? null, file: checkpoints.keyFile ?? null }); }
+    catch (e) { return refuse([{ code: "INPUT", unit_id: null, message: `checkpoints: ${String(e?.message ?? e)}` }]); }
   }
   const v = validateWorkUnits(plan);
   if (!v.ok) return refuse(v.refusals);
@@ -181,17 +206,36 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     }
     // by_role.metered_failover appears once a metered failover call is charged.
     run.provider_calls.total += 1; run.provider_calls.by_role[role] = (run.provider_calls.by_role[role] ?? 0) + 1;
+    // ON DISK BEFORE THE CALL: a record that cannot be written refuses the call.
+    if (!persist()) throw recordError();
   };
   const counted = role => async args => {
     admit(role);
-    // `charge`: a second provider call made inside this turn (the metered API failover) is admitted here first.
-    return turns[role](role === "implementer" ? { ...args, charge: () => admit("metered_failover") } : args);
+    // `charge`: a second provider call made inside this turn (the metered API failover) is admitted here first. EVERY
+    // role gets it: a single-turn seat (dispatcher, reviewer, subagent) on a Gemini lane fails over too (sdk/agy-turn.mjs
+    // laneFirstTurn) (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 1).
+    return turns[role]({ ...args, charge: () => admit("metered_failover") });
   };
   const T = { dispatcher: counted("dispatcher"), implementer: counted("implementer"), subagent: counted("subagent"), reviewer: counted("reviewer") };
 
   const lock = mutex();
   const patches = new Map();   // unit_id -> the approved unit's patch against its own base
   const integrationPath = join(dir, "worktrees", "_integration"), branch = `pantheon/pipeline/${run.run_id}`;
+  // THE RUN DIRECTORY IS OWNED by one live run at a time (<dir>/owner.json). A run that died there (SIGKILL: its
+  // `finally` never ran) left its worktrees registered under <dir>/worktrees; they are removed before this run binds
+  // its own, so a restart into the same directory does not fail on them (independent review, assignment 3 (OpenAI
+  // gpt-6-astra extra review, 09d490f), question 8; (xAI grok-4.7, 09d490f), question 8).
+  const holder = liveOwner(dir);
+  // Refused WITHOUT writing: <dir>/pipeline.json is the live run's record.
+  if (holder) {
+    const refusals = [{ code: "DIR_IN_USE", unit_id: null, message: `the run directory ${dir} is held by a live run (pid ${holder.pid}, run ${holder.run_id})` }];
+    return Object.assign(run, { status: "refused", reason: refusals[0].message, refusals, ended_at: now() });
+  }
+  writeFileSync(join(dir, OWNER_FILE), JSON.stringify({ pid: process.pid, host: hostname(), run_id: run.run_id, at: now() }) + "\n");
+  ACTIVE_DIRS.add(resolve(dir)); owned = true;
+  run.recovered_worktrees = await recoverOrphanWorktrees({ repo, root: join(dir, "worktrees"), lock });
+  // The dead run's per-unit control directories (a stale a2a.sock there would refuse this run's shim).
+  await rm(join(dir, "control"), { recursive: true, force: true });
   await mkdir(join(dir, "worktrees"), { recursive: true });
   await mkdir(join(dir, "units"), { recursive: true });
   try {
@@ -341,15 +385,19 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           review = await runReviewer({ unit: clone(unit), worktree: path, base_commit: wt.base_commit, checkpoint, seat: rLadder[level], turn: T.reviewer,
             dispatch: { rubric: [...u.dispatch.rubric], rubric_hash: u.dispatch.rubric_hash }, limits: lim, pinned: level === 0, level, attempt: n, signal, sameModel });
           u.reviews.push(review);
+          // The review's findings are on the record IN THE SAME SAVE as the review: a kill between two saves cannot
+          // leave a request_changes review whose feedback the next attempt never sees (independent review, assignment
+          // 3 (xAI grok-4.7, 09d490f), question 8).
+          const stops = review.status === "not_admitted" || review.status === "diff_too_large";
+          if (stops && review.feedback.length) u.findings.push({ attempt: n, source: "controller", code: review.code, findings: review.feedback });
+          if (!stops && review.status !== "approved" && review.status !== "rubric_mismatch") {
+            u.findings.push({ attempt: n, source: review.status === "request_changes" ? "reviewer" : "controller", code: review.status, vendor: review.vendor, model: review.model, findings: review.feedback });
+          }
           await save();
           if (review.status === "approved") break;
           if (review.status === "rubric_mismatch") return finish(u, "refused", review.why);
-          if (review.status === "not_admitted" || review.status === "diff_too_large") {
-            if (review.feedback.length) u.findings.push({ attempt: n, source: "controller", code: review.code, findings: review.feedback });
-            return finish(u, "blocked", review.why);
-          }
+          if (stops) return finish(u, "blocked", review.why);
           event = "rejected"; findings = review.feedback;
-          u.findings.push({ attempt: n, source: review.status === "request_changes" ? "reviewer" : "controller", code: review.status, vendor: review.vendor, model: review.model, findings: review.feedback });
         }
         const step = escalate(state, event, cfg);
         if (step.action === "blocked") return finish(u, "blocked", `${step.why}; ${u.findings.reduce((k, f) => k + f.findings.length, 0)} finding(s) retained`);
@@ -383,10 +431,13 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   async function keep(u, { patch, unit_base_commit, upstream }) {
     const rv = u.reviews.at(-1);
     try {
-      const rec = await writeCheckpoint({ dir: run.checkpoints.dir, patch, record: {
+      const d = u.dispatch;
+      const rec = await writeCheckpoint({ dir: run.checkpoints.dir, patch, key: ckKey, record: {
         unit_key: u.unit_key, unit_id: u.unit_id, rubric_hash: u.dispatch.rubric_hash, base_commit: run.base.commit, unit_base_commit, upstream,
         commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model },
         verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest }, review_digest: digestOf(clone(rv)),
+        // The approval itself, to re-derive on resume (checkpoint.mjs approvalRefusal).
+        review: clone(rv), dispatch: { vendor: d.vendor, model: d.model, served_model: d.served_model ?? null, specialist_role: d.specialist_role, difficulty: d.difficulty, rubric: [...d.rubric], rubric_hash: d.rubric_hash },
         // The unit's authoring lineage: restored on resume so its contributors stay excluded downstream (checkpoint.mjs).
         contributions: contributionsOf({ units: { [u.unit_id]: u } }).filter(c => c.kind !== "plan").map(({ unit_id, ...c }) => c) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
@@ -420,6 +471,15 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const verify = await runVerify({ worktree: path, verify_cmd: planned.verify_cmd, timeout_ms: lim.verify_timeout_ms, max_output_bytes: lim.verify_output_bytes });
       u.resume_verify = { cmd: verify.cmd, exit_code: verify.exit_code, timed_out: verify.timed_out, digest: verify.digest, duration_ms: verify.duration_ms };
       if (!verify.passed) return reject(`the unit's verify_cmd fails on the checkpoint's tree (exit ${verify.exit_code}${verify.timed_out ? ", timed out" : ""}): ground truth wins over the recorded approval`);
+      // The approval, authenticated: the seal under this controller's key, the review re-hashed and bound to this patch,
+      // the rubric hash recomputed from the CURRENT unit, and the dispatcher and reviewer the seats this run would use
+      // (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 7).
+      const approval = approvalRefusal(got, { key: ckKey, unit: planned, rubricHash });
+      if (approval) return reject(approval);
+      const dSeat = seats.dispatcher(clone(planned));
+      if (!dSeat || !sameSeat(dSeat, got.record.dispatch)) return reject(`the checkpoint's dispatcher ${got.record.dispatch.vendor}/${got.record.dispatch.model} is not the seat this run dispatches the unit to`);
+      const ladder = (seats.reviewerLadder(clone(dSeat)) ?? []);
+      if (!ladder.some(s => sameSeat(s, got.record.review))) return reject(`the checkpoint's reviewer ${got.record.review.vendor}/${got.record.review.model} is not on the unit's reviewer ladder`);
       patches.set(u.unit_id, got.patch);
       await writeFile(join(dir, "units", `${u.unit_id}.patch`), got.patch);
       Object.assign(u, { resumed: true, base_commit: wt.base_commit, commit: got.record.commit, tree, patch_digest: got.record.patch_digest,
@@ -433,6 +493,47 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       if (bound) { const removed = await releaseWorktree({ repo, path, lock }).catch(() => false); if (ok) u.worktree_removed = removed; }
     }
   }
+}
+
+const OWNER_FILE = "owner.json";
+const ACTIVE_DIRS = new Set();   // run directories a run in THIS process currently holds
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; } };
+/** The live run holding `dir` ({pid, host, run_id}), or null: none, a dead process on this host, or a finished run. */
+export function liveOwner(dir) {
+  let o;
+  try { o = JSON.parse(readFileSync(join(dir, OWNER_FILE), "utf8")); } catch { return null; }
+  if (!o || !Number.isInteger(o.pid)) return null;
+  if (o.host !== hostname()) return o;                               // another host's run: not judged dead from here
+  if (o.pid === process.pid) return ACTIVE_DIRS.has(resolve(dir)) ? o : null;
+  return alive(o.pid) ? o : null;
+}
+
+/**
+ * Remove the worktrees a dead run left under `root` (registered or not): `git worktree prune`, then every worktree of
+ * `repo` whose path is inside `root` is removed (force), and whatever is left in `root` is deleted. Returns the paths
+ * removed. The caller holds the run directory (liveOwner): nothing a live run uses is under `root`.
+ */
+export async function recoverOrphanWorktrees({ repo, root, lock = fn => fn() }) {
+  if (!existsSync(root)) return [];
+  const roots = [resolve(root)];
+  try { roots.push(realpathSync(root)); } catch { /* gone */ }
+  const under = p => roots.some(r => p === r || p.startsWith(r + sep));
+  return lock(async () => {
+    await git(repo, ["worktree", "prune"], { allowFail: true });
+    const listed = await git(repo, ["worktree", "list", "--porcelain"], { allowFail: true });
+    const removed = [];
+    for (const line of String(listed.stdout ?? "").split("\n")) {
+      if (!line.startsWith("worktree ")) continue;
+      const p = line.slice("worktree ".length).trim();
+      if (!under(p)) continue;
+      const r = await git(repo, ["worktree", "remove", "--force", p], { allowFail: true });
+      if (r.code !== 0) await rm(p, { recursive: true, force: true });
+      removed.push(p);
+    }
+    for (const name of readdirSync(root)) { const p = join(root, name); if (!removed.includes(p)) removed.push(p); await rm(p, { recursive: true, force: true }); }
+    await git(repo, ["worktree", "prune"], { allowFail: true });
+    return removed;
+  });
 }
 
 /** Run `fn` over `items` with at most `width` in flight. */

@@ -168,8 +168,10 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     ...(agy.agy_state_dirs ?? box.agy_state_dirs ? { agy_state_dirs: agy.agy_state_dirs ?? box.agy_state_dirs } : {}), ...(agy.bwrap ?? box.bwrap ? { bwrap: agy.bwrap ?? box.bwrap } : {}),
     ...(box.extra_ro ? { extra_ro: box.extra_ro } : {}) };
 
-  const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined }) => {
-    const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}) });
+  // `charge` (the pipeline's admit for a second provider call inside the turn: a lane's metered failover) is passed on.
+  const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined, charge = null }) => {
+    const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
+      ...(typeof charge === "function" ? { charge } : {}) });
     // The served model is passed on exactly as the transport named it; a judging seat with none is refused upstream.
     return { text: r?.text ?? "", served_model: r?.served_model ?? null, served_model_source: r?.served_model_source ?? (r?.served_model ? "provider" : null), response_id: r?.response_id ?? null };
   };

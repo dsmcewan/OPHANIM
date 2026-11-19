@@ -29,7 +29,7 @@ test("run 2 resumes the approved units with zero provider calls, runs the one th
   assert.equal(files.some(f => f.endsWith(".tmp")), false);
   const cpA = JSON.parse(readFileSync(one.out.units.a.checkpoint.file, "utf8"));
   assert.equal(cpA.schema, CHECKPOINT_SCHEMA);
-  assert.deepEqual(Object.keys(cpA).sort(), ["base_commit", "commit", "contributions", "patch_digest", "patch_path", "recorded_at", "review_digest", "reviewer", "rubric_hash", "schema", "tree", "unit_base_commit", "unit_id", "unit_key", "upstream", "verdict", "verify"].sort());
+  assert.deepEqual(Object.keys(cpA).sort(), ["base_commit", "commit", "contributions", "dispatch", "patch_digest", "patch_path", "recorded_at", "review", "review_digest", "reviewer", "rubric_hash", "schema", "seal", "tree", "unit_base_commit", "unit_id", "unit_key", "upstream", "verdict", "verify"].sort());
   assert.deepEqual([cpA.unit_id, cpA.verdict, cpA.unit_key, cpA.tree, cpA.commit, cpA.verify.exit_code, cpA.reviewer.model], ["a", "approve", one.out.units.a.unit_key, one.out.units.a.tree, one.out.units.a.commit, 0, "gpt-6-luna"]);
   const cpC = JSON.parse(readFileSync(one.out.units.c.checkpoint.file, "utf8"));
   assert.deepEqual(cpC.upstream, [{ unit_id: "a", unit_key: one.out.units.a.unit_key, tree: one.out.units.a.tree }]);

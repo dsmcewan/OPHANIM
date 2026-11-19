@@ -490,17 +490,25 @@ export function freshVerification({workRoot, stages, statusRoot, statusBefore}) 
  * recorded (`process: {pid, exit_code, entry}`), with the in-process check kept beside it as `in_process`. A child
  * that cannot be run, or whose output is not its JSON, is a failed verification, never a pass.
  */
+// The child writes its verdict to a file this process names (fsync'd before it exits) and prints it; the file is read
+// first, stdout is the fallback, and no verdict from either is a failed verification, whatever the exit code
+// (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 10).
 export async function verifyInChild({workRoot, item, statusRoot, statusBefore, inProcess = null, timeout = 120_000}) {
   const entry = path.join(HERE, 'verify-run.mjs');
-  const arg = JSON.stringify({workRoot, item, statusRoot, statusBefore: {head: statusBefore.head, files: {digest: statusBefore.files.digest}}});
-  let r;
-  try { r = await spawnPromise(process.execPath, [entry, arg], {cwd: REPO_ROOT, env: process.env, timeout}); }
-  catch (e) { return {ok: false, why: `the verifier process could not be run: ${e.message}`, process: {entry, exit_code: null}, in_process: inProcess}; }
-  let out = null;
-  try { out = JSON.parse(String(r.stdout).trim().split('\n').at(-1)); } catch { /* below */ }
-  if (!out || typeof out !== 'object') return {ok: false, why: `the verifier process printed no verdict (exit ${r.status}): ${String(r.stderr).slice(0, 300)}`, process: {entry, exit_code: r.status}, in_process: inProcess};
-  const {pid, ...verdict} = out;
-  return {...verdict, ok: verdict.ok === true && r.status === 0, process: {entry, pid, parent_pid: process.pid, exit_code: r.status}, in_process: inProcess};
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-verdict-'));
+  const verdictFile = path.join(tmp, 'verdict.json');
+  try {
+    const arg = JSON.stringify({workRoot, item, statusRoot, statusBefore: {head: statusBefore.head, files: {digest: statusBefore.files.digest}}, verdictFile});
+    let r;
+    try { r = await spawnPromise(process.execPath, [entry, arg], {cwd: REPO_ROOT, env: process.env, timeout}); }
+    catch (e) { return {ok: false, why: `the verifier process could not be run: ${e.message}`, process: {entry, exit_code: null}, in_process: inProcess}; }
+    const parse = text => { try { const v = JSON.parse(String(text).trim().split('\n').at(-1)); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { return null; } };
+    const fromFile = fs.existsSync(verdictFile) ? parse(fs.readFileSync(verdictFile, 'utf8')) : null;
+    const out = fromFile ?? parse(r.stdout);
+    if (!out) return {ok: false, why: `the verifier process gave no verdict, in its verdict file or on stdout (exit ${r.status}): ${String(r.stderr).slice(0, 300)}`, process: {entry, exit_code: r.status, verdict_from: null}, in_process: inProcess};
+    const {pid, ...verdict} = out;
+    return {...verdict, ok: verdict.ok === true && r.status === 0, process: {entry, pid, parent_pid: process.pid, exit_code: r.status, verdict_from: fromFile ? 'file' : 'stdout'}, in_process: inProcess};
+  } finally { fs.rmSync(tmp, {recursive: true, force: true}); }
 }
 
 // ---- the confirmed run ------------------------------------------------------------------------------------------

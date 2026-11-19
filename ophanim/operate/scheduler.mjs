@@ -171,9 +171,17 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const budget = {provider_calls: L.stage_provider_calls, iterations: 1, elapsed_ms: stageMs, retries: L.stage_attempts};
       const attempt = attempts + 1;
       let claim;
-      try { claim = work.claim({item, stage: gate.gate, attempt, inputs, holder, budget, lease_ms: L.lease_ms, at: new Date(clock()).toISOString()}); }
+      // The claim RESERVES its stage budget against the total ATOMICALLY: the work ledger refuses it, under its append
+      // lock, when the total less every other claim's spend and live reservation cannot cover it, so two scheduler
+      // processes that both passed the check above cannot both start (independent review, assignment 3 (OpenAI
+      // gpt-6-astra extra review, 09d490f), questions 1 and 3).
+      try { claim = work.claim({item, stage: gate.gate, attempt, inputs, holder, budget, lease_ms: L.lease_ms, at: new Date(clock()).toISOString(), total_provider_calls: L.total_provider_calls}); }
       // Missing authority is a block on the whole tick, never a quiet skip of one item.
-      catch (e) { if (e.code === 'NO_AUTHORITY') throw e; log.skipped.push({item, gate: gate.gate, why: e.message}); return; }
+      catch (e) {
+        if (e.code === 'NO_AUTHORITY') throw e;
+        if (/PROVIDER_CALL_BUDGET/.test(e.message)) { log.stopped ??= `provider-call budget: ${e.message.slice(0, 300)}`; return; }
+        log.skipped.push({item, gate: gate.gate, why: e.message}); return;
+      }
       iterations++;
       progress({event: 'dispatch', item, stage: gate.gate, attempt, mode: gate.mode ?? null});
       // CHARGE BEFORE THE CALL: an executor calls ctx.charge(n) before it makes n provider calls. The charge is signed
@@ -207,8 +215,20 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         result = {...result, status: 'failed', blocker: undefined, outputs: {...(result.outputs ?? {}), over_budget: {reported, budget: budget.provider_calls, status_reported: result.status}},
           next: {stage: gate.gate, why: `STAGE_BUDGET_EXCEEDED: the ${gate.gate} result reports ${reported} provider call(s), over its stage budget of ${budget.provider_calls}`}};
       }
-      if (ac.signal.aborted) {
-        result = {...result, outputs: {...(result.outputs ?? {}), stopped: {code: 'STAGE_ELAPSED', elapsed_ms: budget.elapsed_ms, charged, refused_charges: refusedCharges}}};
+      // THE ELAPSED STOP IS NOT A HANDOFF (independent review, assignment 3 (xAI grok-4.7, 09d490f), questions 2 and 9;
+      // (OpenAI gpt-6-astra extra review, 09d490f), questions 2 and 9). A result that arrives after the stage's signal
+      // aborted is recorded with the stop; one that would hand the work on (passed, or returned to an earlier stage) is
+      // recorded PENDING on a transient STAGE_ELAPSED blocker instead, with the status it reported: reconciliation never
+      // reuses it, it is retried within the stage's attempt bound, and no further stage of the item starts in this tick.
+      const stopped = ac.signal.aborted;
+      if (stopped) {
+        const late = result.status === 'passed' || result.status === 'returned';
+        const why = `STAGE_ELAPSED: the ${gate.gate} stage's elapsed budget of ${budget.elapsed_ms} ms was spent before it returned${late ? ` (it reported ${result.status}); the late result is not a handoff` : ''}`;
+        result = {...result, outputs: {...(result.outputs ?? {}), stopped: {code: 'STAGE_ELAPSED', elapsed_ms: budget.elapsed_ms, charged, refused_charges: refusedCharges, ...(late ? {status_reported: result.status} : {})}}};
+        if (late) {
+          result = {...result, status: 'pending', next: {stage: gate.gate, why},
+            blocker: {code: 'STAGE_ELAPSED', transient: true, what: why, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, by a tick with elapsed budget left'}};
+        }
         log.stopped ??= `stage elapsed limit ${budget.elapsed_ms} ms reached (${item} ${gate.gate})`;
       }
       const identity = {item, requirement: 'sha256:' + digest({item: gate.requirement.item, title: gate.requirement.title, basis: gate.requirement.basis}),
@@ -236,7 +256,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       log.dispatched.push({item, stage: gate.gate, attempt, status: result.status, record: stageHash, next: result.next?.stage ?? null,
         provider_calls: result.usage?.provider_calls ?? null});
       progress({event: 'stage', item, stage: gate.gate, status: result.status});
-      if (result.status === 'failed') return;
+      if (result.status === 'failed' || stopped) return;
     }
   };
   // Concurrency: up to L.concurrency items at once; the work ledger's claims keep them from colliding.

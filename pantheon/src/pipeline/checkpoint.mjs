@@ -32,15 +32,35 @@
 // (independent review, assignment 3, question 7). The approval is bound by the rubric hash and the review record's
 // digest; a checkpoint without them (written before they were bound) is not resumed: the unit runs again.
 //
+// THE APPROVAL IS AUTHENTICATED, NOT ONLY SHAPED (v3; independent review, assignment 3 (OpenAI gpt-6-astra extra
+// review, 09d490f), question 7: a fabricated review_digest and rubric_hash, and a reviewer that never reviewed, were
+// resumed as approved with zero provider calls because both were checked for shape only). A v3 checkpoint carries
+//   review    the Stage 5 review record that approved the unit, whole; review_digest is ITS digest, recomputed on resume;
+//   dispatch  {vendor, model, served_model, specialist_role, difficulty, rubric, rubric_hash}: the frozen rubric;
+//   seal      "hmac-sha256:<hex>" over the canonical record without `seal`, under the controller's CHECKPOINT KEY.
+// approvalRefusal() refuses a checkpoint unless: the seal verifies under the key this run holds (a checkpoint written by
+// anyone without the key, or edited after it was written, does not); the review re-hashes to review_digest, approved,
+// with a passing verify, on the rubric hash recorded, over exactly this patch (review.diff_digest === patch_digest), by
+// the reviewer recorded; and the rubric hash is RECOMPUTED from the CURRENT planned unit (unit_id, owned_paths,
+// verify_cmd, invariants) and the recorded dispatch (rubric, specialist_role, difficulty). The controller (index.mjs)
+// also requires the recorded dispatcher to be the seat this run would dispatch the unit to, and the reviewer to be on
+// that dispatcher's reviewer ladder. THE KEY: `checkpoints.key` (the lifecycle passes one held beside its work ledger's
+// controller keys), else a key file the pipeline creates (mode 0600) at <checkpoints.dir>.seal-key, OUTSIDE the
+// checkpoint directory. The seal authenticates against whoever cannot read the key; a holder of the key can forge it,
+// as a holder of a ledger's signing key can, and ground truth (tree + verify_cmd, re-run) still has to hold.
+//
 // Must never: accept a checkpoint whose upstream trees differ from this run's; accept patch bytes that do not hash
-// to the recorded digest; leave a half-written checkpoint where a reader would find it.
+// to the recorded digest; leave a half-written checkpoint where a reader would find it; resume an approval whose seal,
+// review or rubric does not re-derive.
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { canonical } from "../../../packages/ledger/canonical.mjs";
 import { digestOf, isObject, sha256, str } from "./util.mjs";
 import { UNIT_KEYS } from "./work-units.mjs";
 
-export const CHECKPOINT_SCHEMA = "pantheon.unit-checkpoint/v2";
+export const CHECKPOINT_SCHEMA = "pantheon.unit-checkpoint/v3";
 export const CHECKPOINT_CONTRIBUTION_KINDS = Object.freeze(["work", "subtask", "critique"]);
 export const UNIT_KEY_SCHEMA = "pantheon.unit-key/v1";
 const hexOf = key => String(key).replace(/^sha256:/, "");
@@ -61,11 +81,40 @@ async function atomicWrite(file, data) {
   await rename(tmp, file);
 }
 
-/** Write a checkpoint record and its patch. Returns the record as written. */
-export async function writeCheckpoint({ dir, record, patch }) {
+/**
+ * The checkpoint key: `key` when given (a string or Buffer of at least 32 bytes), else the key file `file` (default
+ * <dir>.seal-key), created with 32 random bytes, mode 0600, on first use. A file readable by others is refused.
+ */
+export function checkpointKey({ dir, key = null, file = null }) {
+  if (key !== null && key !== undefined) {
+    const k = Buffer.isBuffer(key) ? key : Buffer.from(String(key));
+    if (k.length < 32) throw Object.assign(new Error("a checkpoint key is at least 32 bytes"), { code: "CHECKPOINT_KEY" });
+    return k;
+  }
+  const f = file ?? `${String(dir).replace(/[/\\]+$/, "")}.seal-key`;
+  mkdirSync(dirname(f), { recursive: true });
+  if (!existsSync(f)) { try { writeFileSync(f, randomBytes(32).toString("hex") + "\n", { mode: 0o600, flag: "wx" }); } catch (e) { if (e?.code !== "EEXIST") throw e; } }
+  if ((statSync(f).mode & 0o077) !== 0) throw Object.assign(new Error(`the checkpoint key ${f} is readable by others`), { code: "CHECKPOINT_KEY" });
+  const k = Buffer.from(readFileSync(f, "utf8").trim());
+  if (k.length < 32) throw Object.assign(new Error(`the checkpoint key ${f} is shorter than 32 bytes`), { code: "CHECKPOINT_KEY" });
+  return k;
+}
+
+/** The seal of a checkpoint record (every field but `seal`) under `key`. */
+export function sealOf(record, key) {
+  const { seal, ...body } = record;
+  return "hmac-sha256:" + createHmac("sha256", key).update(canonical(body)).digest("hex");
+}
+
+/** Write a checkpoint record and its patch, sealed under `key`. Returns the record as written. */
+export async function writeCheckpoint({ dir, record, patch, key }) {
   await mkdir(dir, { recursive: true });
   const patch_path = patchFileName(record.unit_key);
-  const full = { schema: CHECKPOINT_SCHEMA, ...record, verdict: "approve", patch_path, patch_digest: sha256(patch), recorded_at: record.recorded_at ?? new Date().toISOString() };
+  // As JSON reads it back: the seal is over exactly the bytes a reader will parse.
+  const body = JSON.parse(JSON.stringify({ schema: CHECKPOINT_SCHEMA, ...record, verdict: "approve", patch_path, patch_digest: sha256(patch), recorded_at: record.recorded_at ?? new Date().toISOString() }));
+  delete body.seal;
+  if (!key) throw Object.assign(new Error("a checkpoint is written sealed: pass its key (checkpointKey)"), { code: "CHECKPOINT_KEY" });
+  const full = { ...body, seal: sealOf(body, key) };
   await atomicWrite(join(dir, patch_path), patch);
   await atomicWrite(checkpointFile(dir, record.unit_key), JSON.stringify(full, null, 2) + "\n");
   return full;
@@ -107,5 +156,29 @@ export function checkpointRefusal({ record, patch }, expect) {
   const norm = list => (Array.isArray(list) ? list : []).map(u => `${u?.unit_id}\u0000${u?.unit_key}\u0000${u?.tree}`).sort();
   const got = norm(record.upstream), want = norm(expect.upstream);
   if (!Array.isArray(record.upstream) || got.length !== want.length || got.some((x, i) => x !== want[i])) return "the checkpoint's upstream units or their trees differ from this run's";
+  return null;
+}
+
+/**
+ * Why the APPROVAL a checkpoint records may not be trusted, or null (see the header). `expect` is {key, unit (the
+ * CURRENT planned unit), rubricHash (dispatch.mjs rubricHash)}.
+ */
+export function approvalRefusal({ record }, { key, unit, rubricHash }) {
+  if (!isObject(record)) return "the checkpoint is not an object";
+  let want;
+  try { want = sealOf(record, key); } catch (e) { return `the checkpoint cannot be sealed for checking: ${String(e?.message ?? e).slice(0, 200)}`; }
+  const got = typeof record.seal === "string" ? record.seal : "";
+  if (got.length !== want.length || !timingSafeEqual(Buffer.from(got), Buffer.from(want))) return "the checkpoint's seal does not verify under this controller's checkpoint key: it was not written by this controller, or was changed since";
+  const rv = record.review, d = record.dispatch;
+  if (!isObject(rv) || !isObject(d)) return "the checkpoint does not carry the review that approved it and the dispatch it was judged against";
+  if (digestOf(rv) !== record.review_digest) return "the checkpoint's review does not hash to its review_digest";
+  if (rv.status !== "approved" || rv.verdict !== "approve" || rv.verify?.exit_code !== 0) return "the checkpoint's review is not an approval against a passing verify";
+  if (rv.rubric_hash !== record.rubric_hash || d.rubric_hash !== record.rubric_hash) return "the checkpoint's review and dispatch were not on its rubric hash";
+  if (rv.diff_digest !== record.patch_digest) return "the checkpoint's review did not review this patch (its diff digest is not the patch digest)";
+  if (!isObject(record.reviewer) || rv.vendor !== record.reviewer.vendor || rv.model !== record.reviewer.model) return "the checkpoint's reviewer is not the review's";
+  if (!Array.isArray(d.rubric) || !d.rubric.length) return "the checkpoint's dispatch records no rubric";
+  const now = rubricHash({ unit_id: unit.unit_id, owned_paths: unit.owned_paths, verify_cmd: unit.verify_cmd, invariants: unit.invariants, rubric: d.rubric,
+    specialist_role: d.specialist_role, difficulty: d.difficulty });
+  if (now !== record.rubric_hash) return `the rubric hash recomputed from the current unit and the recorded rubric is ${now}, not the recorded ${record.rubric_hash}`;
   return null;
 }
