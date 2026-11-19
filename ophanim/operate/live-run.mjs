@@ -429,12 +429,16 @@ const pick = (o, keys) => Object.fromEntries(keys.filter(k => o?.[k] !== undefin
 /** Every pipeline record an implement stage names. */
 const pipelinesOf = stages => stages.filter(s => s.stage === 'implement' && s.outputs?.run?.kind === 'pipeline')
   .map(s => ({stage_record: s.hash, attempt: s.attempt, status: s.status, dir: s.outputs.run.dir, record: s.outputs.run.record, run_json: s.outputs.run.run_json ?? null, ledger: s.outputs.run.ledger ?? null}));
-/** The served identities: every stage team row, and every seat of every pipeline record, with what served it. */
+/**
+ * The served identities: every stage team row, and every seat of every pipeline record, with what served it. Each row
+ * keeps the name asked, the name that answered AND the marker of where that name came from (`served_model_source`;
+ * wave 3, L-504 invariant 2: the team rows and the validator's record lost it here).
+ */
 export function servedIdentities(stages) {
   const out = [];
   for (const s of stages) {
-    for (const t of s.team ?? []) if (t.vendor || t.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: 'stage team', ...pick(t, ['role', 'vendor', 'model', 'lab', 'served_model', 'requested_model', 'standing', 'authored', 'shared_lab'])});
-    for (const k of ['planner', 'validator']) if (s.outputs?.[k]?.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: `outputs.${k}`, role: k, ...pick(s.outputs[k], ['vendor', 'model', 'lab', 'served_model'])});
+    for (const t of s.team ?? []) if (t.vendor || t.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: 'stage team', ...pick(t, ['role', 'vendor', 'model', 'lab', 'served_model', 'requested_model', 'served_model_source', 'standing', 'authored', 'shared_lab'])});
+    for (const k of ['planner', 'validator']) if (s.outputs?.[k]?.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: `outputs.${k}`, role: k, ...pick(s.outputs[k], ['vendor', 'model', 'lab', 'served_model', 'requested_model', 'served_model_source'])});
   }
   for (const p of pipelinesOf(stages)) {
     const r = readJson(p.record);
@@ -467,7 +471,9 @@ export function subagentReceipt(stages, req) {
     // checkpoint (u.checkpoint.a2a_calls, from_checkpoint) and count here (independent review round 2, assignment 3
     // (Google gemini-4-carbon, manual, 77480d6), finding 7.3).
     const callsOfUnit = u => [...(u.a2a?.calls ?? []), ...(u.resumed ? u.checkpoint?.a2a_calls ?? [] : [])];
-    return Object.values(r?.units ?? {}).flatMap(u => callsOfUnit(u).map(c => ({unit: u.unit_id, role: c.role, status: c.status, model: c.model, served_model: c.served_model ?? null, answer_digest: c.answer_digest ?? null, ...(c.from_checkpoint ? {from_checkpoint: true} : {})})));
+    // Each call by its vendor, the model asked, the model that answered and the marker (wave 3, L-504 invariant 2).
+    return Object.values(r?.units ?? {}).flatMap(u => callsOfUnit(u).map(c => ({unit: u.unit_id, role: c.role, status: c.status, vendor: c.vendor ?? null, model: c.model, served_model: c.served_model ?? null,
+      served_model_source: c.served_model_source ?? null, answer_digest: c.answer_digest ?? null, ...(c.from_checkpoint ? {from_checkpoint: true} : {})})));
   };
   const all = pipelinesOf(stages).flatMap(p => callsOf(stages.find(s => s.hash === p.stage_record)));
   const counted = callsOf(accepted).filter(c => c.status === 'answered' && c.role === req.role && c.model === req.model && c.served_model && sameModel(c.served_model, req.model));

@@ -60,7 +60,7 @@ import {canonical} from '../../../packages/ledger/canonical.mjs';
 import {labOf, labRuleLab} from './lineage-kinds.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {PRACTICE, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, carriesPractice, DEFAULT_PRACTICE_SCOPE, validPolicy, currentPolicy, admittedPractice} from './practice-kinds.mjs';
-import {reviewerRefusal, reviewerIdentity, candidateRefusal, candidateIdentity, resolveModel, policyRefusal, policyDigest, contributorKeys} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, candidateRefusal, candidateIdentity, resolveModel, policyRefusal, policyDigest, contributorKeys, servedSourceRefusal} from '../review/identity.mjs';
 
 export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 
@@ -85,8 +85,25 @@ export {CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3};
 //                    every lab a lab-only contribution names, and `author_labs` every contributing lab. A cycle whose
 //                    exclusion arrays are narrower than its contributors is refused. (Wider `excluded_labs` only
 //                    excludes more; v3 cycles opened before lab-only contributors were recorded carry exactly that.)
+/**
+ * Why a v3 contributor row's stated identity is not a consistent statement, or null (wave 3, L-504 invariant 2). Rows
+ * recorded before it state none and are checked as recorded. A row that states it names its requested model (a name),
+ * its served model (a name, or null: none was named) and a marker of the vocabulary consistent with them, and its
+ * `model` is one of those names.
+ */
+export function contributorIdentityRefusal(x) {
+  const stated = x.requested_model !== undefined || x.served_model !== undefined || x.served_model_source !== undefined;
+  if (!stated) return null;
+  if (!str(x.model)) return 'a contributor row that states an identity names its model';
+  if (!str(x.requested_model) || !(x.served_model === null || str(x.served_model))) return 'a contributor row states {requested_model, served_model}: the name asked and the name that answered (or null)';
+  if (x.served_model_source === null) return 'a contributor row\'s served_model_source is omitted or one of the vocabulary';
+  const why = servedSourceRefusal(x);
+  if (why) return `a contributor row: ${why}`;
+  return [x.requested_model, x.served_model].includes(x.model) ? null : `a contributor row names ${x.model}, which is neither the name it was asked as (${x.requested_model}) nor the name that answered (${x.served_model})`;
+}
 /** Why a v3 cycle payload's exclusions are not the ones its recorded contributors derive, or null. */
 export function v3LineageRefusal(p) {
+  for (const x of p.contributors) { const why = contributorIdentityRefusal(x); if (why) return `a ${CYCLE_CONTRACT_V3} cycle's ${why}`; }
   const keys = contributorKeys(p.contributors, p.identity_policy.rules);
   if (keys.unresolved.length) {
     return `a ${CYCLE_CONTRACT_V3} cycle's contributor identity is unresolved (${keys.unresolved.map(u => `${u.vendor ?? '?'}/${u.model ?? '-'}`).join(', ')}): no reviewer can be shown not to be it, so no panel can qualify`;
@@ -515,9 +532,13 @@ export function cycleRecorder({ledger, controller, order, historical = false}) {
       const prior = admittedPractice(ledgerView(ledger), {scope: practice_scope, profile: inEffect.profile})?.disposition ?? null;
       const model = contract === CYCLE_CONTRACT_V3 ? {independence: 'model', author_models: [...(author_models ?? [])].sort(), excluded_labs: [...(excluded_labs ?? [])].sort(),
         // A contribution that names a lab and no model is recorded with its lab, so the excluded lab re-derives from it.
+        // A name row keeps the identity of its contribution as review-cycle.mjs contributorRows states it (which name was
+        // asked, which answered, the marker): wave 3, L-504 invariant 2. Rows identical in every field are one row.
         contributors: [...new Map((contributors ?? []).map(x => {
-          const row = {vendor: x.vendor ?? null, model: x.model ?? null, ...(!x.model && x.lab ? {lab: x.lab} : {})};
-          return [`${row.vendor}|${row.model}|${row.lab ?? ''}`, row];
+          const row = {vendor: x.vendor ?? null, model: x.model ?? null, ...(!x.model && x.lab ? {lab: x.lab} : {}),
+            ...(x.model && x.requested_model !== undefined ? {requested_model: x.requested_model ?? null} : {}), ...(x.model && x.served_model !== undefined ? {served_model: x.served_model ?? null} : {}),
+            ...(x.model && x.served_model_source ? {served_model_source: x.served_model_source} : {})};
+          return [canonical(row), row];
         })).values()],
         // The identity policy travels WITH the cycle: its rules and their digest.
         ...(identity_policy ? {identity_policy: {digest: policyDigest(identity_policy), rules: identity_policy}} : {})} : {};

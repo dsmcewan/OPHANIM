@@ -141,9 +141,11 @@ export function evidenceSection(ev) {
     '',
     `- **Run ledger:** anchor ${short(ev.run.ledger_anchor)}, head ${short(ev.run.ledger_head)}; run.json digest ${short(ev.run.run_json_digest)}; shipped: ${ev.run.shipped ? 'yes' : 'no'}; gate verdict entry ${short(ev.run.gate_entry)}`,
     `- **Review cycle:** ${rv ? `${short(rv.cycle)} on the ledger anchored at ${short(rv.cycle_ledger_anchor)}; close entry ${short(rv.close_entry)}; outcome **${rv.outcome ?? 'open'}**` : 'none cited'}`,
+    // The served model with the marker of where it came from, when the evidence records one ("input": the model the
+    // seat was required to run, recorded by the transport, not a provider's statement; wave 3, L-504 invariant 2).
     ...(rv ? ['', '| Reviewer seat (vendor) | Requested model | Served model | Lab |', '|---|---|---|---|',
       ...rv.reviewers.map(r =>
-        `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`),
+        `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')}${r.served_model_source ? ` (${cell(r.served_model_source)})` : ''} | ${cell(r.lab)} |`),
       ''] : []),
     `- **Commit:** ${ev.commit ? `\`${ev.commit}\`` : 'none'}`,
     `- **Tests:** ${ev.tests ? `\`${cell(ev.tests.cmd)}\` exited ${ev.tests.exit}` : 'none recorded'}`,
@@ -184,7 +186,14 @@ export function workSection(work) {
   const usage = u.known_records + u.unknown_records === 0 ? 'none recorded'
     : `${u.provider_calls} provider call(s) recorded on ${u.known_records} stage record(s)` + (u.tokens != null ? `, ${u.tokens} token(s)` : '')
       + (u.unknown_records ? `; usage **unknown** on ${u.unknown_records} stage record(s) (unknown, not zero)` : '');
-  const seat = t => `| ${cell(t.role)} | ${cell(t.vendor ?? '—')} | ${cell(t.served_model ?? t.model ?? t.requested_model ?? '—')} | ${cell(t.lab ?? '—')} |`;
+  // The Model cell names the model that answered; the name asked beside it when it differs, and the marker of where the
+  // served name came from (it showed one name only: wave 3, L-504 invariant 2). A team row is a public view: it feeds no
+  // decision. An answer that named no serving model shows the name asked, marked "unnamed".
+  const seat = t => {
+    const served = t.served_model ?? (t.served_model_source === 'unnamed' ? null : t.model ?? null), asked = t.requested_model ?? (t.served_model !== undefined ? t.model : null) ?? null;
+    const note = [...(asked && served && asked !== served ? [`asked ${asked}`] : []), ...(t.served_model_source ? [t.served_model_source] : [])];
+    return `| ${cell(t.role)} | ${cell(t.vendor ?? '—')} | ${cell(served ?? asked ?? t.model ?? '—')}${note.length ? ` (${cell(note.join('; '))})` : ''} | ${cell(t.lab ?? '—')} |`;
+  };
   const ev = w.evidence;
   // Evidence taken from the latest attempt after the reused chain (not part of it) says so.
   const from = stage => (ev.attempt?.stage === stage ? ` (from the latest \`${stage}\` attempt, \`${ev.attempt.status}\`, not part of the reused chain)` : '');

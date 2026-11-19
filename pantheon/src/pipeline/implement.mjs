@@ -284,6 +284,9 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
     if (e?.quota_failover) rec.quota_failover = clone(e.quota_failover);
     const lane = laneFailureOf(e);
     if (lane) return Object.assign(rec, { code: lane.cause === "quota" ? "QUOTA_EXHAUSTED" : "LANE_FAILURE", lane_failure: lane, why: `the implementer lane ${seat.model} failed (${lane.kind}): ${lane.why}` });
+    // THE MODEL GUARD (L-504 invariant 3; board/agy-cli.mjs AGY_MODEL_MISMATCH): the lane's CLI started on another agent or
+    // model. Kept under its own code with both identities (not TURN_FAILED), never a lane failure: no ladder step.
+    if (e?.code === "AGY_MODEL_MISMATCH") return Object.assign(rec, { code: "AGY_MODEL_MISMATCH", identity: e.identity ?? null, why: `the implementer lane ${seat.model} was refused by the model guard: ${String(e?.message ?? e)}` });
     return Object.assign(rec, { code: e?.code === "PROVIDER_LIMIT" ? "PROVIDER_LIMIT" : "TURN_FAILED", why: `the implementer turn failed: ${String(e?.message ?? e)}` });
   }
   rec.text_digest = typeof out?.text === "string" ? sha256(out.text) : null;

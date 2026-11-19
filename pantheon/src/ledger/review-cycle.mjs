@@ -14,7 +14,7 @@
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {labOf} from './lineage-kinds.mjs';
 import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, independenceRefusal, answerRefusal, seatLab} from './cycle-kinds.mjs';
-import {resolveModel, contributorKeys, candidateRefusal, candidateIdentity, currentPolicy} from '../review/identity.mjs';
+import {resolveModel, contributorKeys, candidateRefusal, candidateIdentity, currentPolicy, identityOf} from '../review/identity.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
 
@@ -22,10 +22,19 @@ import {canonical} from '../../../packages/ledger/canonical.mjs';
  * The raw contributor names a v3 cycle records: every requested and served model of each contribution, and a
  * contribution that names a lab and no model as {vendor, model: null, lab} (its lab is excluded outright). The ledger
  * re-derives the cycle's exclusions from exactly these rows (cycle-kinds.mjs v3LineageRefusal).
+ * EACH NAME ROW KEEPS THE IDENTITY OF ITS CONTRIBUTION (wave 3, L-504 invariant 2): a contribution that states more than
+ * one plain name (a requested and a served name, an unnamed answer, a marker) is recorded on every one of its name rows
+ * with {requested_model, served_model, served_model_source} as review/identity.mjs identityOf reads it, so the cycle
+ * says which name was asked, which answered (null: none was named) and where the served name came from. A plain row
+ * ({vendor, model}: one name, nothing else stated) is recorded as before. The lab of a named contributor is the cycle's
+ * own resolution under its pinned policy (author_labs), never the controller's claim, so it is not copied here.
  */
 export const contributorRows = contributions => contributions.flatMap(c => {
   const names = [...new Set([c.model, c.served_model, c.requested_model].filter(Boolean))];
-  return names.length ? names.map(model => ({vendor: c.vendor ?? null, model})) : [{vendor: c.vendor ?? null, model: null, ...(c.lab ? {lab: c.lab} : {})}];
+  const stated = ['served_model', 'requested_model', 'served_model_source'].some(k => c[k] !== undefined && c[k] !== null) || (Object.hasOwn(c, 'served_model') && c.model);
+  const who = stated ? identityOf(c) : null;
+  const id = who ? {requested_model: who.requested_model, served_model: who.served_model, ...(who.served_model_source ? {served_model_source: who.served_model_source} : {})} : {};
+  return names.length ? names.map(model => ({vendor: c.vendor ?? null, model, ...id})) : [{vendor: c.vendor ?? null, model: null, ...(c.lab ? {lab: c.lab} : {})}];
 });
 
 /** Tries per reviewer seat of one cycle, the first included, unless the caller names another limit. */
@@ -273,7 +282,8 @@ async function resumeCycle({ledger, change, seats, turn, brief, max_attempts, at
     if (a.outcome === 'failed' && !reviewed.has(a.seat.lab)) failedSeat.set(a.seat.lab, {vendor: a.seat.vendor, model: a.seat.model, lab: a.seat.lab});
   }
   const missing = c.reviewers - state.reviews.length;
-  const retained = state.reviews.map(r => ({vendor: r.seat.vendor, model: r.model, served_model: r.served_model, lab: r.lab, turn: r.turn, review: r.hash,
+  // A retained review keeps the marker of where its served name came from (wave 3, L-504 invariant 2: it was dropped here).
+  const retained = state.reviews.map(r => ({vendor: r.seat.vendor, model: r.model, served_model: r.served_model, ...(r.served_model_source ? {served_model_source: r.served_model_source} : {}), lab: r.lab, turn: r.turn, review: r.hash,
     verdict: r.verdict, parsed: r.reported.parsed, retained: true,
     findings: state.findings.filter(f => f.review === r.hash).map(f => ({hash: f.hash, ...findingFields(f.payload)}))}));
   const result = extra => ({cycle, scope, base: c.base, head: c.head, prompt_sha: c.prompt_sha, resumed: true, max_attempts: limit,

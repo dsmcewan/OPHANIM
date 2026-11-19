@@ -83,12 +83,15 @@ export function cycleRecord(view, cycle) {
   if (e?.kind !== CYCLE) fail(`${cycle} is not a cycle on this ledger`);
   const state = deriveCycle(view, cycle);
   const c = state.cycle;
-  // One seat row from an entry and its payload. The lab is judged from the served model when the provider
-  // reported one, else from the requested model.
+  // One seat row from an entry and its payload. The lab is judged from the served model when one was named, else
+  // from the requested model (the report says so for each such review). `served_model_source` is where the served
+  // name came from (the transport's marker; null on entries recorded without one): "input" means the name is the model
+  // the seat was required to run, not a provider's statement (wave 3, L-504 invariant 2: the marker was dropped here,
+  // and an input-stamped name was counted as reported by its provider).
   const seat = (h, p) => ({
     entry: h, key_id: view.entry(h).author.key_id, seat_id: p.seat?.seat_id, vendor: p.seat?.vendor,
     role: roleOfMode(p.seat?.mode),
-    requested_model: p.requested_model ?? p.model ?? null, served_model: p.served_model ?? null,
+    requested_model: p.requested_model ?? p.model ?? null, served_model: p.served_model ?? null, served_model_source: p.served_model_source ?? null,
     lab: labOf(p.seat?.vendor, p.served_model ?? p.requested_model ?? p.model), response_id: p.response_id ?? null,
   });
   // Authors: the turns the cycle entry cites. Reviews take the requested model from the turn they cite.
@@ -96,7 +99,7 @@ export function cycleRecord(view, cycle) {
   const reviews = state.reviews.map(r => {
     const p = view.payload(r.hash), turn = p.turn ? view.payload(p.turn) : null;
     return {
-      ...seat(r.hash, {...p, requested_model: turn?.requested_model ?? p.model}), turn: p.turn ?? null,
+      ...seat(r.hash, {...p, requested_model: turn?.requested_model ?? p.model, served_model_source: turn?.served_model_source ?? null}), turn: p.turn ?? null,
       verdict: r.verdict, lab: r.lab, parsed: r.reported.parsed};
   });
   const findings = state.findings.map(f => ({
@@ -125,7 +128,9 @@ export function cycleRecord(view, cycle) {
     labs: [...labs].sort(),
     author_labs: c.author_labs,
     author_lab_reviewed: labs.filter(l => c.author_labs.includes(l)),
-    served_reported: reviews.filter(r => r.served_model !== null).length,
+    // A served name counts as REPORTED only when the provider gave it: not one the transport stamped from the input.
+    served_reported: reviews.filter(r => r.served_model !== null && !['input', 'unnamed'].includes(r.served_model_source)).length,
+    served_input: reviews.filter(r => r.served_model !== null && r.served_model_source === 'input'),
     served_differs: reviews.filter(r => r.served_model !== null && r.served_model !== r.requested_model),
     reviews_expected: c.reviewers,
   };
@@ -136,7 +141,7 @@ export function cycleRecord(view, cycle) {
 const LIMITS = [
   'Every seat runs under one operator and one GitHub account; distinct labs are distinct model vendors, not distinct people or organisations.',
   'Distinct labs do not establish independent training data or that the models share no blind spots.',
-  'The served model is what the provider reported answering; the ledger records it, it cannot observe it.',
+  'The served model is what the provider reported answering; the ledger records it, it cannot observe it. A served model marked `input` is the model the seat was required to run, recorded by the transport, which names none: it is not a provider\'s statement.',
   'Re-derivation checks signatures, citations and the cold-review rule; it does not run tests or reproductions. Fail-before / pass-after exit codes are recorded by the controller and checked for consistency only.',
   'A finding without a reproduction can be deferred; such a cycle closes `unverified`, never `verified`.',
 ];
@@ -159,7 +164,7 @@ function seatTable(rows, {verdict = false} = {}) {
     `| Role | Vendor | Requested model | Served model | Lab | Seat key id |${verdict ? ' Verdict |' : ''} Ledger entry |`,
     `|---|---|---|---|---|---|${verdict ? '---|' : ''}---|`,
     ...rows.map(
-      r => `| ${cell(r.role)} | ${code(r.vendor)} | ${code(r.requested_model)} | ${r.served_model ? code(r.served_model) : 'not reported'} | ${code(r.lab)} | ${code(r.key_id)} |${verdict ? ` ${r.verdict} |` : ''} \`${r.entry}\` |`),
+      r => `| ${cell(r.role)} | ${code(r.vendor)} | ${code(r.requested_model)} | ${r.served_model ? `${code(r.served_model)}${r.served_model_source ? ` (${cell(r.served_model_source)})` : ''}` : 'not reported'} | ${code(r.lab)} | ${code(r.key_id)} |${verdict ? ` ${r.verdict} |` : ''} \`${r.entry}\` |`),
   ];
 }
 
@@ -176,7 +181,7 @@ function independenceLines(rec) {
   out.push(
     `- **Cold-review check:** passed for every recorded review (the ledger verified in full, and a review whose lab, seat or response is in the lineage of what it reviews does not re-derive).`);
   out.push(
-    `- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} reviews${i.served_differs.length ? `; served differs from requested for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}.`);
+    `- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} reviews${i.served_differs.length ? `; served differs from requested for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}${i.served_input.length ? `; recorded as the required input model, not reported by the provider, for ${i.served_input.map(r => `${r.vendor} (${r.served_model})`).join(', ')}` : ''}.`);
   return out;
 }
 
@@ -285,6 +290,8 @@ export function cycleReport(view, cycle, {anchor, slug} = {}) {
       [`- ${c.reviewers - rec.reviews.length} of ${c.reviewers} reviews were not recorded; the range is re-reviewed in a new cycle.`] : []),
     ...rec.reviews.filter(r => !r.served_model).map(
       r => `- ${r.vendor} did not report the served model; its lab is judged from the requested model.`),
+    ...rec.reviews.filter(r => r.served_model && r.served_model_source === 'input').map(
+      r => `- ${r.vendor}'s served model (${cell(r.served_model)}) is the required input model, recorded by the transport: its provider did not report it.`),
     ...rec.reviews.filter(r => !r.parsed).map(
       r => `- ${r.vendor}'s reply was not in the required form and failed closed as a blocking finding.`),
   ];
