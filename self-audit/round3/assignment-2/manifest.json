@@ -1,0 +1,150 @@
+{
+  "schema": "ophanim.self-audit-seal/v1",
+  "assignment": 2,
+  "candidate_commit": "af0dc3012688703ccac0f6de31836822a3279eae",
+  "assessment": {
+    "path": "self-audit/round3/assignment-2/assessment.md",
+    "sha256": "0205b63c8ccdbdbbecd1bdd5ea0fff6a2f12cdac16ca0ad50a30650ee079b0f2",
+    "bytes": 23590
+  },
+  "reproductions": [
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/a2-ledger.test.mjs",
+      "sha256": "9ca0cb44d0cd35eede50976d8fd19427bde41e8ced472963f65352692e01b034"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/a2-lifecycle.test.mjs",
+      "sha256": "934f28c7a8229055d440a5769ee38a347ba9b3d350e8af2a0771653aa39bae95"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M1-impl-requested.log",
+      "sha256": "d48d61a0f4f453b53866aee355f99aec1421df156627e0aff2cb83d5ade2171f"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M10-planner-served.log",
+      "sha256": "22297e8a8a6a69bbfe087da00cc2c2d810ff366d7442d9b9077db4ad0e078a8a"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M10c-planner-served.log",
+      "sha256": "c4804509e2ee026d3e4c473b2b80f45645df7b6c7a1580be5c7c12b4e85450c6"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M1c-impl-requested.log",
+      "sha256": "0f2a3ca333df4f1ff2812250db77a05bd20fb69b2ccf3f4819031a572f8c6cff"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M2-withServed.log",
+      "sha256": "add0b4a5f3d6fd9e44778a241d50cdb5ffd0a6fc79803fef586c22ab3abd8140"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M2c-withServed.log",
+      "sha256": "423fcba1022bb88026d3bbedcb47f3e7fffcfdd7201b8da3d739d007a656b4f7"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M3-no-arbiter-rows.log",
+      "sha256": "868d83c32e20d02a22e4dec9cd19e8964c9f5dfca6cb45e00b37d06fc99d72e0"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M4-arbiter-requested.log",
+      "sha256": "eff43208a0102fd974c2eeaea4582a6cfd1f49b6dba857f5fadefe539671677a"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M5-stage5-predicted.log",
+      "sha256": "3bd91df8d63618af39634ee6f9e3ffc2fc1e7648075366b8ce87862b58bd8b17"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M5b-stage5-predicted.log",
+      "sha256": "ed95afa2ca94bb8bd3f437077369dabe7ed80b9571d0a287ae630de4c2984166"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M6-validator-admission.log",
+      "sha256": "3a6f34189a008cd2e5130bdf03e8b9bca04b5164cd5c0cafd36c8fa2778dece2"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M7-agy-single-undeclared.log",
+      "sha256": "a7a08372508f37cf604bf0a30e5fe894282b1b3b3b4bd41f19bcae6c6fa9e8ce"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M7b-agy-single-undeclared.log",
+      "sha256": "01f4448dfe993b12753a1eac8c66d1cbd2ac0fb3a2aac8be96920f13741e075f"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M8-single-provider.log",
+      "sha256": "f53e57a53db5a5ba2483f4c2a8256931323674496d6db1a82da67597d2f096ae"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M9-contributorRows-asked-only.log",
+      "sha256": "5efc5c05823fa8cf9ce3bcbe8f63295d331864b67ebbf34db1dd8ddf128fb22e"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mut-M9c-contributorRows.log",
+      "sha256": "c4c36bc932db62a46a83ad552bd69bde7411c0590c479b492637ac4bdd3ef488"
+    },
+    {
+      "path": "self-audit/round3/assignment-2/reproductions/mutate.sh",
+      "sha256": "7f230c05ff6f9d75a4775bce1542124cd363eedebceed8b7e4abe309a95a256e"
+    }
+  ],
+  "assessor": {
+    "lab": "Anthropic",
+    "role": "self-audit by the coordinating lab (a subagent of the coordinating session); NOT independent",
+    "model_identity": "withheld from repository artifacts by session policy; recorded in the session reply to the owner"
+  },
+  "assessment_completed_at": "2026-11-19T08:13:58Z",
+  "assessment_completed_at_source": "file modification time of the delivered assessment (UTC)",
+  "sealed_at": "2026-11-19T08:14:33Z",
+  "findings": [
+    {
+      "question": 1,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 1. Same model, other name — **holds** (model rule), see Q2 for the lab rule"
+    },
+    {
+      "question": 2,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 2. Unresolved names — **does not hold** under the lab rule; holds under the model rule"
+    },
+    {
+      "question": 3,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 3. Answer admission — **does not hold**"
+    },
+    {
+      "question": 4,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 4. History — **holds**"
+    },
+    {
+      "question": 5,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 5. Quorum — **does not hold**"
+    },
+    {
+      "question": 6,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 6. Lineage completeness — **does not hold**"
+    },
+    {
+      "question": 7,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 7. Arbiter confinement — **does not hold**"
+    },
+    {
+      "question": 8,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 8. Critique contributors — **holds**"
+    },
+    {
+      "question": 9,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 9. The input-model marker — **does not hold**"
+    },
+    {
+      "question": 10,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 10. Reassessment — **holds** for review cycles; scope gap"
+    }
+  ],
+  "blind_status": "verified: no round-3 independent findings, transcripts or intermediate outputs had been received by, uploaded to, or committed in reach of the coordinating session at sealing time",
+  "immutability": "This assessment is sealed as written. Corrections or later discoveries must be separate, later-timestamped records; the prospective comparison uses only this sealed text."
+}

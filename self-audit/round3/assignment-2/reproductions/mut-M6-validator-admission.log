@@ -1,0 +1,308 @@
+fatal: path 'plans/fresh.json' does not exist in 'f40cd5502ac27a3ae6a6fc6c6a4f96ce98fe8191'
+fatal: path 'plans/ticketed.json' does not exist in 'f40cd5502ac27a3ae6a6fc6c6a4f96ce98fe8191'
+fatal: path 'plans/fresh.json' does not exist in 'a689e0b9fa23c81c7e7c5114c33817563db9aec2'
+✔ LIFECYCLE, default routing (fit): an item without a ticket and one with a ticket go plan -> dispatcher -> implementer in per-unit worktrees -> pinned reviewer -> integration -> three-lab review -> validation -> an outcome the owner applies (8307.425559ms)
+fatal: path 'plans/ticketed.json' does not exist in 'a689e0b9fa23c81c7e7c5114c33817563db9aec2'
+fatal: path 'plans/fresh.json' does not exist in 'a0c54588dade1d679fa48578366d3af505379b9f'
+✔ LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implementer's thinking level first; after repeated rejections the reviewer escalates inside OpenAI only; the reviewer whose finding fed a revision is excluded from the three-lab review, the one that only approved is not (6854.348367ms)
+fatal: path 'plans/ticketed.json' does not exist in 'a0c54588dade1d679fa48578366d3af505379b9f'
+fatal: path 'plans/fresh.json' does not exist in '4a6204c00557d3b9441ad9c2f763c063d3b3bfb1'
+✔ LIFECYCLE, default routing (fit): a write outside the unit's owned paths is refused and discarded, the unit does not integrate, and the stage is blocked with the findings kept (2485.152233ms)
+fatal: path 'plans/fresh.json' does not exist in 'c5adcb76ac02194a217613961f566f0dc0e64f31'
+✔ LIFECYCLE, default routing (fit): a plan whose units overlap without an order is returned to the planner by the controller; the revised units run to an outcome (3313.607238ms)
+✔ LIFECYCLE: under fit a plan without valid work_units is refused at plan validation like any other malformed plan; under argo the same plan runs the per-file path (2998.946658ms)
+✔ Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): a distinct requested model survives the projection (3.797302ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): the dispatcher is not an author, and is excluded from later judgment even when Stage 5 only approved (2.829536ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): the requested and the serving identity are both excluded; a resumed unit keeps its arbiter (0.607317ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): no capacity is no review, never a fallback to the dispatcher (0.72547ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): a cycle opened with the arbiter rows records them and refuses an answer the dispatcher served (152.13007ms)
+fatal: path 'plans/fresh.json' does not exist in 'f40cd5502ac27a3ae6a6fc6c6a4f96ce98fe8191'
+fatal: path 'plans/ticketed.json' does not exist in 'f40cd5502ac27a3ae6a6fc6c6a4f96ce98fe8191'
+✔ the policy is not active: the lab rule is the default, and neither the service config nor an unknown value can switch it (3.730217ms)
+fatal: path 'plans/cyc.json' does not exist in 'fb1c4df884918f7e72b9d3622d53a699d0a7590d'
+✔ four real labs: an item without a ticket and one with an existing ticket complete the lifecycle; the panel is three distinct labs, no contributing model reviews, and the shared lab is recorded (7785.937701ms)
+✔ four real labs, repeated revisions: contributions come to span all four labs and each later panel is still three labs of models that never contributed (8532.069729ms)
+✔ an implementer turn that asked for one model and was served by another excludes both, in the contributions later stages carry (1.220187ms)
+fatal: path 'plans/plan-lineage.json' does not exist in 'a41815378ed65e64eb37a0cf9806c65fd93f044f'
+fatal: path 'plans/plan-defect.json' does not exist in '3aa6875aa1c8ddad5c92202ab61c6056d29f2570'
+✔ resuming an open plan-review cycle keeps the earlier plan-review finders in the plan's contributions (4557.453935ms)
+fatal: path 'plans/marked.json' does not exist in '70c7cda5495191087abce1c29bef22cc235a1908'
+✔ a revised plan keeps the previous planner as a contributor, also when the planner seat changed (3287.575704ms)
+✔ the planner's ledger turn keeps the input-model marker of its answer (731.331432ms)
+fatal: path 'plans/fresh.json' does not exist in 'f40cd5502ac27a3ae6a6fc6c6a4f96ce98fe8191'
+fatal: path 'plans/ticketed.json' does not exist in 'f40cd5502ac27a3ae6a6fc6c6a4f96ce98fe8191'
+fatal: path 'plans/rounds.json' does not exist in '5ddd76e24eeba1f3a758bb3f06553dd48f5da222'
+✔ LIFECYCLE, argo routing: an in-run finding is followed by a revision by the same worker model, across a process restart, for an item without a ticket and one with a ticket (13957.261642ms)
+fatal: path 'plans/fresh.json' does not exist in '3741e20a22bb5c8ffd1b91d494187a994ce1905c'
+✔ LIFECYCLE, argo routing: repeated in-run findings are revised within bounds; when no eligible in-run reviewer is left the work is blocked with every finding kept, not restarted (4624.121106ms)
+fatal: path 'plans/ticketed.json' does not exist in '3741e20a22bb5c8ffd1b91d494187a994ce1905c'
+✖ LIFECYCLE: a validator answer that names no serving model is never a validation; each is kept; the item does not reach an outcome (no ticket, and a ticket) (5218.805968ms)
+fatal: path 'plans/active.json' does not exist in '05c294f0ecc5cec658564dfa7651c3b46bfbd09d'
+✔ BOUNDARY (injected stage records): with every declared model a contributor, validation waits on capacity; it does not fall back to a contributor (no ticket, and a ticket) (890.257424ms)
+fatal: path 'plans/done.json' does not exist in '05c294f0ecc5cec658564dfa7651c3b46bfbd09d'
+fatal: path 'plans/ticketed.json' does not exist in '05c294f0ecc5cec658564dfa7651c3b46bfbd09d'
+✔ LIFECYCLE: a recorded reassessment stops the disqualified review, and the validation resting on it, from being reused; the work is re-reviewed; a Resolved item is marked for re-verification and left alone (9591.57557ms)
+fatal: path 'plans/val.json' does not exist in 'a41815378ed65e64eb37a0cf9806c65fd93f044f'
+fatal: path 'plans/val2.json' does not exist in 'dde5476c055e19c8027db16c7b6851ebfe2b1457'
+✖ 4. a validator answer served by a contributor, or by an unresolved model, is not accepted: it is kept on the record and the item does not reach an outcome (3496.506164ms)
+fatal: path 'plans/inrun.json' does not exist in '45d8402c54e090972ac6da4a446f87392e0f3808'
+✖ 4. after a rejected answer the next eligible seat is asked; the accepted record names the model asked for and the model that answered (3860.009478ms)
+✔ an in-run code-review finding is followed by a code revision: the finding reaches the worker in the same run, and that reviewer model is excluded from the change review (3092.189733ms)
+✔ a cycle that records the requirement is refused with fewer reviewers, and the requirement cannot be lowered (215.552852ms)
+✔ cycles without the field keep their meaning: a recorded v2 or v1 cycle of one reviewer still re-derives and closes as before (87.494302ms)
+✔ a newly opened cycle needs three labs, on every contract: n: 1 is refused before anything is opened (138.861613ms)
+✔ Q3 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 3): a re-ask served by a contributor is not admitted; the slot fails closed (1151.434659ms)
+✔ Q3 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 3): a re-ask that names no serving model is not admitted (909.483842ms)
+✔ Q3 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 3): an admitted re-ask is recorded citing the re-ask turn and its serving model (873.15695ms)
+✔ Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): a board critique contributor keeps the served model beside the asked one (1516.256056ms)
+✔ Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): a board work contributor keeps the served model beside the asked one (822.947316ms)
+✔ Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): an answered subagent call that names no serving model is recorded as unnamed (61.720979ms)
+✔ Q9 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9): the board Antigravity guard refuses an undeclared name before the lane (135.608724ms)
+✔ Q9 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9): a served name without the transport's source is not labelled a provider statement (0.863298ms)
+✔ Q5 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 5): the recorder refuses a NEW cycle below three labs; a recorded one still verifies (47.090259ms)
+✔ three reviewers on three labs are recorded, each citing the cycle, and the cycle closes verified (452.842204ms)
+✔ a same-lab reviewer is refused: before the turn, by the served model, by a second review, and through the author lineage (175.704542ms)
+✔ cold review applies through the cycle: a lab with a turn in the author lineage may not review (120.222787ms)
+✔ a finding without a reproduction keeps the cycle from closing as verified (171.710229ms)
+✔ a fixed finding with fail-before and pass-after evidence lets the cycle close verified (232.39609ms)
+✔ a forged close, an invented or omitted finding, and a late entry are refused (386.335326ms)
+✔ an omitted finding keeps the cycle open (160.369356ms)
+✔ seating offers three labs other than the author's, and refuses when there are not enough (0.354912ms)
+✔ the CLI runs the review at a cycle boundary: review, fix, close, and the next cycle starts at the last head (2651.391953ms)
+✔ a 503 on one reviewer is resumed: only that seat is asked again, the two reviews stand, and the cycle closes (245.57203ms)
+✔ a resume stops at the cycle's attempt limit, and the ledger refuses an attempt past it (200.492684ms)
+✔ a forged resume is refused: another change, brief or seat, a closed cycle, or no cycle at all (170.690748ms)
+✔ a cycle opened before attempts were recorded still verifies, and resumes on the labs that have not reviewed it (145.016829ms)
+✔ a recorded review with a finding left unrecorded is completed by the resume from its own reply, without asking again (180.329073ms)
+✔ the CLI resumes a cycle a failed reviewer left open, and refuses when there is nothing to resume (2000.507085ms)
+✔ run 2 resumes the approved units with zero provider calls, runs the one that failed, and integrates the same tree as a clean run (2323.566609ms)
+✔ a tampered checkpoint is rejected with the reason and its unit re-runs: patch bytes changed, or the recorded tree changed (1497.885426ms)
+✔ a checkpoint whose upstream tree differs from this run's is not trusted (1825.12702ms)
+✔ a resumed unit keeps its authoring lineage: implementer, subagent and the critique reviewer stay contributors (932.120362ms)
+✔ a checkpoint written before the lineage was kept (v1, or without contributions) is not resumed: the unit runs again (1621.800899ms)
+✔ an `approve` while verify_cmd FAILED is refused by the controller: ground truth wins, nothing merges (527.82877ms)
+✔ a verify_cmd that times out is a failure, its process group is killed, and its output is capped (531.953365ms)
+✔ rubric hash tamper: a rubric, command or path that no longer hashes to the frozen rubric_hash is refused before any model is asked (352.558871ms)
+✔ review answers are strict: every rubric criterion exactly once, no unknown key, no approval with an unmet criterion (1.71051ms)
+✔ a reviewer answer that breaks the schema, or names no served model, is not admitted: asked once more, then the unit is blocked (1507.898071ms)
+✔ escalate() is pure: the implementer is raised first; the reviewer only after N consecutive rejections; revisions are bounded (0.639416ms)
+✔ the reviewer ladder starts at the dispatcher's exact seat and never leaves its vendor (0.2827ms)
+✔ in a run: rejection raises the implementer's thinking level first; repeated rejections escalate the reviewer luna -> sol -> astra, only within OpenAI; exhaustion ends `blocked` with every finding kept (1328.688064ms)
+✔ with the defaults (3 revisions, escalation after 2) a unit that is fixed on its second revision is approved by the escalated reviewer (887.746654ms)
+✔ an openai reviewer turn carries reasoning.context = all_turns as an opaque option; another vendor's does not (635.393227ms)
+✔ the reviewer prompt is a read-only specialist's and says an approval over a failing command is void (0.404227ms)
+✔ Decision 6 (follow-up to independent review round 2, assignment 2, question 7): each unit's own dispatcher is pinned and approves it (581.102694ms)
+✔ Decision 6 (follow-up to independent review round 2, assignment 2, question 7): unit b's ladder skips unit a's dispatcher model (993.166234ms)
+✔ Decision 6 (follow-up to independent review round 2, assignment 2, question 7): a ladder exhausted by exclusions blocks the unit on capacity; nothing falls back (643.085319ms)
+✔ Decision 6 (follow-up to independent review round 2, assignment 2, question 7): an answer served by another unit's dispatcher is not admitted (544.516108ms)
+✔ 1. selection and admission are separate: a seat may be asked on the model asked for; an answer counts only on the model that answered (10.662517ms)
+✔ 1. the ledger: three answers that name no serving model do not close a cycle; each is kept; a retry that names it is admitted (513.367572ms)
+✔ 1. history: a cycle recorded under the earlier admission rule still verifies and closes as it was recorded (354.78569ms)
+✔ 3. the protocol: a rejection at the top of the dial stops under v1 and is a bounded revision by the same seat under v2 (1.604531ms)
+✔ 3. the run ledger: an in-run review made under the model rule carries its policy; a sibling is admitted, a contributor or an unnamed answer is not; without the policy the lab rule applies (164.720738ms)
+✔ resolver 3: Antigravity is seated for Gemini models only; contributors still resolve by model; earlier policies are unchanged (0.425181ms)
+✔ twenty copies of one completed live bundle are one observation, not a verdict (77.696208ms)
+✔ unverified bundles are counted apart; synthetic runs are reported apart from the live rule; failed, unknown and inconclusive stay counted (137.041548ms)
+✔ classify: each outcome of a coordinated review, and a run that needed none (1.656935ms)
+✔ the rule: insufficient below 20 runs; enough at 95% completed; not enough below (30.827664ms)
+✔ through real board runs: a completed review, a refusal before work, and a mixed-lab pending are each classified from the evidence they leave (3227.427403ms)
+✔ strict: two contributing labs leave the configured cycle pool short -- pending, with no seats and nothing narrowed (1.915804ms)
+✔ alternative A (current default, a model writes the title): the board run is refused before any provider call (211.872945ms)
+✔ alternative B (the ticket's own title, no planner model): it ships and the cycle closes with three labs outside the worker's (1784.474652ms)
+✔ worker escalation is never prevented: when a fallback in a second lab writes the bytes, the work is kept and the review is pending (1442.030444ms)
+✔ alternative C (separate title and implementation panels) gains no capacity: the implementation's bytes include the title (4.128071ms)
+✔ alternative D (a fifth qualified reviewer lab) restores capacity for a model-written title -- mechanics only, no lab is qualified (0.461008ms)
+✔ a reviewer whose findings reach the revision is a contributor: its lab is in the scope and does not review again (2393.925387ms)
+✔ reviewScope: a critique counts only when its text reached a revision prompt (0.714525ms)
+✔ a lane model names its lab; the review rules compare labs as well as vendors (3.875067ms)
+✔ 3. the resolver: one model has one identity and one lab through every route, alias and snapshot; the lab is never taken from the transport (5.716218ms)
+✔ 3. the ledger: a contributor answering through another route under a snapshot name is refused; the cycle does not close and does not count three labs (257.608413ms)
+✔ 2. an unresolved reviewer does not qualify: the response is preserved and the gap recorded, and it is not an approval (142.239073ms)
+✔ 1. the policy is pinned: a v3 cycle carries its rules, and a fresh process over CHANGED alias rules verifies the old ledger as before; the correction is reported as new evidence (415.120538ms)
+✔ identity: effort levels, lane names, dated snapshots and routes are the same model; an unknown name is not assumed to be a different one (4.851375ms)
+✔ the real inventory: a plan and an implementation from two labs leave a three-lab panel; non-contributing labs come first and a shared lab is recorded (3.156948ms)
+✔ repeated revisions: contributions come to span all four labs and a three-lab panel still forms; when fewer than three labs have a model left, the review is pending (1.49246ms)
+✔ the ledger enforces v3: a contributing model is refused under any of its names, a sibling model is accepted and recorded as sharing a lab, and three distinct labs are still required (505.611354ms)
+✔ history is verified under the rule it was recorded under: a v2 cycle on the same ledger still refuses the contributing lab, and v2 stays the default (457.831729ms)
+✔ a v3 cycle's exclusions are re-derived from its contributors: an inconsistent or unresolved contribution record is refused (246.883758ms)
+✔ cold review, by contract: with the author's turn cited, v3 refuses the model in the lineage and admits a sibling; v2 still refuses the whole lab (578.255619ms)
+✔ README table: vendor and model per assignment, as the owner assigned them (13.0317ms)
+✔ a row naming no model, or an unknown lab, is refused (1.498738ms)
+✔ the runner refuses (exit 1) an assignment whose README row names no model, with no provider call (176.099509ms)
+✔ brief = README + separator + assignment file verbatim + one commit line; system = HARNESS.md (4.993424ms)
+✔ HARNESS rendering refuses an unknown placeholder (0.368181ms)
+✔ assignment 4's listed tests expand its globs and bare names against the commit's files (3.179291ms)
+✔ agy review hook, assignments 1-3: writes only under .review-tests/, run_command only the review's verify launchers `<ctl>/pantheon-test <allowed files>` and `<ctl>/pantheon-suite-<name>` (33.636201ms)
+✔ agy review hook, assignment 4: no write at all, run_command only each listed test file (through the launcher), no suite (6.145349ms)
+✔ the hook process itself, through the review workspace's wrapper, decides with the review policy (stdin -> one decision line) (171.336095ms)
+✔ a worker policy (no run_command_policy) keeps the worker rule: only the unit's verify launcher, never a cd-prefixed command (2.752691ms)
+✔ the review card: named pantheon-reviewer-agent, its tools resolve on agy 1.5.10, and the read-only variant drops the write tools (3.928855ms)
+✔ codex preflight parsers: ChatGPT vs API-key login (an API-key mention wins), model listed / missing / unknown (6.300259ms)
+✔ codex SDK options: the scrubbed env and the pinned binary, never an apiKey or baseUrl; forced ChatGPT login unless allowed; no key in env (1.028428ms)
+✔ codex thread options and the argv the SDK builds: no --sandbox (the permission profile comes as raw --config overrides); approval never; resume after the exec-level flags; no bypass (1.142058ms)
+✔ codex permission profile: reads :minimal + the given roots + the worktree, writes the scratch TMPDIR (+ .review-tests for 1-3), /run denied, network only behind codex's proxy; prompt-input is checked exactly (4.92083ms)
+✔ codex event log: usage summed over turns, the last agent message is final, commands/file changes/non-fatal item errors kept, retries recorded as errors (0.87608ms)
+✔ the SDK's CODEX_API_KEY check: only `env.CODEX_API_KEY = args.apiKey;` under `if (args.apiKey) {` passes (0.392257ms)
+✔ the REAL installed @openai/codex-sdk (no run): the pinned version, the API this runner calls, CODEX_API_KEY only under an apiKey option, and the binary the runner preflights is the one the SDK resolves (15.372476ms)
+✔ findCodexSession: a rollout file for the thread under $CODEX_HOME (or ~/.codex)/sessions, else null (6.453154ms)
+✔ grok: the stream is parsed tolerantly; the jail mounts the worktree read-only with .review-tests read-write only when writing is allowed (5.418418ms)
+✔ scrubEnv removes every key, token and secret (and credentialed proxies); HOME and PATH stay (2.841343ms)
+✔ compareWorktree: a change outside .review-tests/ (any change for assignment 4) and a moved HEAD are violations (0.347057ms)
+✔ HARNESS-cli.md: reading the source is explicitly permitted beside the test commands (read-only shell for codex/grok, file tools for agy); writes and network stay confined (4.846582ms)
+✔ the Antigravity reading rule names read_file (0.450629ms)
+✔ the review's pantheon-test launcher runs node --test on the files in a verify jail: the code under review cannot reach the OAuth copy, the control dir, the home or the network; a bad file argument is refused by the launcher itself (2271.608946ms)
+✔ OpenAI: continue from the last response id with previous_response_id, the recorded pending outputs and the unrun call; .review-tests restored; header and cumulative totals (446.508134ms)
+✔ Gemini: the recorded model turn and full tool results are replayed as the conversation so far (273.661691ms)
+✔ xAI: a cut-off reply is kept as context and the model is asked for the complete document (282.255158ms)
+✔ refusals: another assignment, another commit, another model, an old transcript without full tool results (503.653908ms)
+✔ codex: a failed run is continued by resuming its own thread (the SDK's resumeThread) with the NEW worktree and the same sandbox; .review-tests restored (915.958937ms)
+✔ codex without the earlier thread on this machine: a new session whose prompt appends ONLY the reviewer's own earlier messages and tool results; .review-tests restored (927.461547ms)
+✔ agy: an incomplete run keeps its conversation state; --continue passes --conversation <id> with that state restored (1288.943154ms)
+✔ fixture: the fixture holds no home path and no credential-looking value (1.65394ms)
+✔ observed leg 2 (end_turn): the final text is the text chunks after the last tool event, joined; thoughts, plan, usage and end never count (1.708124ms)
+✔ observed leg 1 (cancelled): narration before a tool call is not a final text; the stop reason and the cancelled tool are reported (0.718314ms)
+✔ the recorded 09d490f transcripts: the parser reproduces the owner's recovered final message byte for byte (leg 2) and none for leg 1 (31.78298ms)
+✔ the other stream shapes still parse (results, assistant messages, *_delta chunks); a tool call after a message drops it (0.606055ms)
+✔ grokPermissionConfig reads the [ui] permission mode and the [permission] section; only the STRING form counts as loaded rules (grok 1.0.44 loaded zero from structured rules); never throws (25.859913ms)
+✔ the owner's round-2 Grok profile (77480d6): the six string-form rules count, the structured array does not; the missing read-only allowances that cancelled the first leg (wc, find) are named (2.441074ms)
+✔ the README's Grok example is the string form, holds every recommended allowance, and no auto/always-approve mode (2.43271ms)
+✔ the review copy is a fresh single-commit repository: git works in it, every blob id is the source's, the withheld findings are in no object, the owner's repository is untouched, and the commit id is reproducible (570.734748ms)
+✔ compareExport refuses any difference: a changed blob, a missing path, an extra or withheld path (0.324399ms)
+✔ a codex run reviews the fresh copy: the header records review_copy (HEAD, tree, the source commit's blob ids, the withheld count) (523.964929ms)
+✔ the codex scratch TMPDIR is at most 48 bytes: under the review temp base when that fits, else /var/tmp; removed after the run; a warning when nothing fits (920.176195ms)
+✔ detectWsl: the kernel release or WSL_DISTRO_NAME; the launcher is the operator's argv (host read-only, private /run and /tmp) around codex (1.133373ms)
+✔ on WSL (detected, or --codex-outer-runtime on) codex and every preflight run through the outer namespace: a private /tmp, the unchanged inner profile passes its exact check, WSL_INTEROP dropped, the header says so (1143.967882ms)
+✔ the SCRATCH_TMP_MAX budget holds for the repository's own socket tests: pipeline-a2a, -mcp and -run pass with a TMPDIR of exactly that many bytes (21 of 29 failed under a ~100-byte one) (5790.042051ms)
+✔ openai: tool round-trip then final answer; served model and usage recorded; key only in the auth header (232.097707ms)
+✔ xai: tool round-trip then final answer; served model and usage recorded; key only in the auth header (225.871975ms)
+✔ gemini: tool round-trip then final answer; served model and usage recorded; key only in the auth header (301.459964ms)
+✔ a response naming no served model records served_model null and says so (291.20093ms)
+✔ max turns: stops with a recorded reason, status incomplete, exit 3 (270.456584ms)
+✔ max tool calls: stops before the call over the limit, exit 3 (310.704815ms)
+✔ 429 is retried once with backoff; a second 5xx stops with a redacted message (538.591406ms)
+✔ --dry-run prints the plan, makes no provider call and needs no key (166.718252ms)
+✔ refusals and usage errors: missing key, missing limit, unknown commit, existing findings (354.994421ms)
+✔ the reviewer cannot read another reviewer's findings in the worktree (254.052085ms)
+✔ --keep leaves the worktree in place (203.471649ms)
+✔ --via api --reviewer google:<model> on assignment 3: the Gemini endpoint and key, the assignment's own brief, tools and withheld files; findings-3-google records the substitution (382.728549ms)
+✔ paths: absolute, '..', .git, symlink escape and withheld findings are refused; inside paths work (36.738971ms)
+✔ write_test writes only .review-tests/<name>.test.mjs (21.38042ms)
+✔ run_tests under assignments 1-3: existing ophanim/ or pantheon/tests/ tests and .review-tests only (322.399002ms)
+✔ assignment 4: no write_test, no run_suite, run_tests only on the listed files (181.176499ms)
+✔ child env is built from nothing: no keys, tokens, secrets or credentialed proxies (0.73526ms)
+✔ a test run sees the scrubbed env, and a hanging process is killed at the timeout (1672.887163ms)
+✔ usage: --via is required, subscription requires --max-wall-s, the API caps are ignored with a note (441.768755ms)
+✔ codex dry run: the SDK transport, the zero-spend preflights on the SDK's binary (version, login status, model list), the SDK's argv with the prompt on stdin, no model turn (185.814495ms)
+✔ codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary, no apiKey/baseUrl, read-only thread options; the events become the transcript; the final message verbatim (338.665819ms)
+✔ codex through the REAL @openai/codex-sdk spawning the fake binary: the argv it builds is the plan's, the prompt goes to stdin, no key in its env (655.049804ms)
+✔ codex failure is explicit: turn.failed and a thrown SDK error are status `failed` with the message; no findings body (553.539008ms)
+✔ the post-run git check: a change outside .review-tests/ is a policy violation; inside it is allowed for 1-3 and a violation for 4 (769.735377ms)
+✔ codex refusals, never a fallback: API-key login, no login, model missing, unreadable catalog, binary absent, an SDK that would inject CODEX_API_KEY (2259.902985ms)
+✔ the wall clock aborts the SDK turn (its AbortSignal) and the run is incomplete; a stream that ignores the abort is abandoned after the grace (2637.659866ms)
+✔ grok, assignment 3: inside bwrap -- worktree read-only, .review-tests writable, state dir a scratch copy; XAI_API_KEY scrubbed; coverage undocumented; unknowns printed (172.885967ms)
+✔ grok refusals: no browser login state, or a CLI that asks for a key (never given XAI_API_KEY) (277.782696ms)
+✔ grok stream: an answer sent as incremental text chunks is the final text (tool output never is); a stream with no assistant text ends incomplete naming its last event types (340.21585ms)
+✔ grok, the observed grok 1.0.44 shapes: text chunks after the last tool call are the answer (end_turn); stopReason cancelled with exit 0 is a failed run naming the permission profile; grok_permissions recorded (326.607763ms)
+✔ grok permission refusals (round 2, 77480d6): no config.toml, or only the structured `rules = [...]` array grok 1.0.44 loads as zero rules, is refused before any model turn; --grok-permissions-inspect runs the CLI's own count in the jail and refuses 0 loaded (367.351076ms)
+✔ agy dry run, assignment 1: the jailed zero-spend preflight (/usage, lane quota, card, agents) and the plan; zero model turns (154.040788ms)
+✔ agy run, assignment 1: the hook approves the .review-tests write and the listed test command, denies the rest; findings written with the lane as served model (839.015552ms)
+✔ agy refuses before any model turn when the in-jail /usage shows no login (no fallback) (164.839505ms)
+✔ --reviewer openai:<model> on assignment 1: codex-sdk transport, its ChatGPT-only guard and model check, assignment 1's write rule; plan names the substitution and findings-1-openai (431.519133ms)
+✔ --reviewer on a codex run: the header and transcript record the substitution; assignment 4 still writes nothing (392.013776ms)
+✔ --reviewer xai:<model> on assignment 1: the grok CLI in the runner's jail; findings-1-xai (48.237999ms)
+✔ --reviewer google:<model> on assignment 4: agy with the lane check and the review hook; assignment 4's hook owns no path (182.516779ms)
+✔ --reviewer refusals: bad syntax and an unknown lab are usage errors, before anything runs (3.337318ms)
+✔ --continue refuses when the reviewer override differs from the transcript's (either way) (707.495574ms)
+✔ change scope: the plan and every work turn contributed, each with the path it took; a scout did not, with the reason (3.547039ms)
+✔ artifact scope: one slot's bytes -- the plan and every model that wrote that slot; another slot's work is outside it (0.496635ms)
+✔ the plan's inclusion is derived from what the worker reads, not from the label 'planner' (0.541995ms)
+✔ law 3 and the seating check name the contribution a reviewer shares a lab with (0.77848ms)
+✔ cycle reviewers carry the scope they applied; a short pool is pending with the planner's contribution kept (0.970689ms)
+✔ through the dispatcher: run.json records each slot's reviewed scope, the reviewer is outside every contributing lab (791.256002ms)
+✔ through the dispatcher: an operator reviewer on the planner's lab is refused, and the refusal names the plan contribution (276.922454ms)
+ℹ tests 197
+ℹ suites 0
+ℹ pass 194
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 36728.738959
+
+✖ failing tests:
+
+test at ophanim/operate/revision-reassessment.test.mjs:133:1
+✖ LIFECYCLE: a validator answer that names no serving model is never a validation; each is kept; the item does not reach an outcome (no ticket, and a ticket) (5218.805968ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'plan:passed',
+      'implement:passed',
+      'review:passed',
+  +   'validate:passed',
+  +   'outcome:passed'
+  -   'validate:failed'
+    ]
+  
+      at file:///home/user/a2mut-selfaudit/ophanim/operate/revision-reassessment.test.mjs:143:14
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withDispatch (file:///home/user/a2mut-selfaudit/pantheon/tests/fixtures/dispatch.mjs:583:12)
+      at async TestContext.<anonymous> (file:///home/user/a2mut-selfaudit/ophanim/operate/revision-reassessment.test.mjs:134:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed' ],
+    expected: [ 'plan:passed', 'implement:passed', 'review:passed', 'validate:failed' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at ophanim/operate/validator-identity.test.mjs:19:1
+✖ 4. a validator answer served by a contributor, or by an unresolved model, is not accepted: it is kept on the record and the item does not reach an outcome (3496.506164ms)
+  AssertionError [ERR_ASSERTION]: an ACCEPT from an ineligible model is not a validation
+  + actual - expected
+  
+    [
+      'plan:passed',
+      'implement:passed',
+      'review:passed',
+  +   'validate:passed',
+  +   'outcome:passed'
+  -   'validate:failed'
+    ]
+  
+      at file:///home/user/a2mut-selfaudit/ophanim/operate/validator-identity.test.mjs:29:12
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withDispatch (file:///home/user/a2mut-selfaudit/pantheon/tests/fixtures/dispatch.mjs:583:12)
+      at async TestContext.<anonymous> (file:///home/user/a2mut-selfaudit/ophanim/operate/validator-identity.test.mjs:20:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed' ],
+    expected: [ 'plan:passed', 'implement:passed', 'review:passed', 'validate:failed' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at ophanim/operate/validator-identity.test.mjs:48:1
+✖ 4. after a rejected answer the next eligible seat is asked; the accepted record names the model asked for and the model that answered (3860.009478ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at file:///home/user/a2mut-selfaudit/ophanim/operate/validator-identity.test.mjs:63:12
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withDispatch (file:///home/user/a2mut-selfaudit/pantheon/tests/fixtures/dispatch.mjs:583:12)
+      at async TestContext.<anonymous> (file:///home/user/a2mut-selfaudit/ophanim/operate/validator-identity.test.mjs:49:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

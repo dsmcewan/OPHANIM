@@ -1,0 +1,245 @@
+✔ reconcile on the real repository: every item has its earliest unmet gate; nothing is created, called or dispatched (611.445373ms)
+✔ issues with and without markers: linked, candidate, duplicate, unknown marker and drift are each reported (36.452893ms)
+✔ tick without the controller key: the work ledger is verified, then a NO_AUTHORITY block; nothing is recorded (13.393803ms)
+✔ tick refuses clearly without ophanim/operate/stages.mjs, and creates no work ledger for a run that cannot dispatch (15.722551ms)
+✔ tick and watch dispatch through makeExecutors only within the declared provider-call budget (421.063939ms)
+✔ tick and watch --item ID dispatch only that item; the other runnable items are skipped "outside the --item scope" (360.282159ms)
+✔ the issues intake reads through the public record's REST client, GET only, pages followed, pull requests dropped (2.888343ms)
+✔ the operating workflow: triggers, minimal permissions, reconcile --github and the projection; no provider path (1.495876ms)
+✔ the backlog markdown is generated from the view alone (no hardcoded counts) (21.4274ms)
+✔ the CLI seats the REAL stage executors (stages.mjs): live seats by default, or --turn and --clients modules (59.920709ms)
+✔ serve: the execution service from the command line; a config is required, and missing authority is exit 3 with nothing recorded (20.569332ms)
+fatal: path 'plans/deep.json' does not exist in '58b2d01a3175164d9b05d0ac7fce200c88537f2b'
+fatal: path 'plans/deep-ticket.json' does not exist in '58b2d01a3175164d9b05d0ac7fce200c88537f2b'
+✔ 1. containment is applied to the actual target: a link out of the repository is refused by retrieval and never read into the dossier (424.094464ms)
+✔ 2. the requirement and its history are separate evidence: a partial history stays partial, and becomes complete only when the rest is retrieved (2597.92024ms)
+✔ 3. every cut source can be continued: status history, a selection of it, a stage record, and a file that is one oversized line (2910.792462ms)
+✔ 4. budgets hold before anything enters a prompt: result_bytes per result and total_bytes per investigation, counted in bytes, with cuts and what remains recorded (365.454638ms)
+✔ decisive history beyond the initial excerpt is retrieved and changes the diagnosis, and the partly delivered history stays partial in the self-evaluation (no ticket, and an existing ticket) (11588.085697ms)
+✔ recheck: ignored files and git internals are never evidence (keys, .env, .git); an untracked, unignored working file still is (159.205457ms)
+✔ recheck: a view's version identifies its body, a window always makes progress or is refused, and offsets are validated (308.061866ms)
+✔ recheck: the gap's continuation starts at the first undelivered byte; the initial view is bounded as a whole and keeps the most recent history (1904.310599ms)
+fatal: path 'plans/hist.json' does not exist in 'c5de35fcd82d1f2f94b8bbe8a21beb6fe62c7d99'
+fatal: path 'plans/hist-ticket.json' does not exist in 'c5de35fcd82d1f2f94b8bbe8a21beb6fe62c7d99'
+fatal: path 'plans/plain.json' does not exist in 'c5de35fcd82d1f2f94b8bbe8a21beb6fe62c7d99'
+fatal: path 'plans/cut.json' does not exist in '1fd35888aa64058a93b0967e2e76bd898bf0d88a'
+fatal: path 'plans/cut-ticket.json' does not exist in '1fd35888aa64058a93b0967e2e76bd898bf0d88a'
+fatal: path 'plans/nocut.json' does not exist in '4d9eb10e3943ac93ce0e82867a256795cf3f2e21'
+fatal: path 'plans/spec.json' does not exist in '803ad8debf344a99f7e5bed814b7f92b50d6e7c1'
+fatal: path 'plans/cyc.json' does not exist in 'dd06b1ad52bff7f3dc9de5921580e18d252d64c5'
+✔ the dossier states source, version and coverage; omissions are listed; retrieval shows errors, cuts and pages; a path outside the repository is refused (351.086297ms)
+✔ older, contradictory evidence changes the diagnosis; unrelated issue text is dismissed without redirecting the work (no ticket, and an existing ticket) (2403.167416ms)
+✔ a cut downstream file is retrieved and changes the plan; without retrieval the gap is stated; a missing source blocks with its gaps kept and resumes when the evidence appears (3144.609465ms)
+✔ reviewers and validators use their own evidence: incomplete criteria are caught at plan review and at validation, and a later cycle's defect is caught with the earlier findings in view (6770.082818ms)
+fatal: path 'plans/never-ran.json' does not exist in 'c3bbf85e1e13cd43684549cf3b6abfe56336bad8'
+fatal: path 'plans/ran.json' does not exist in 'c3bbf85e1e13cd43684549cf3b6abfe56336bad8'
+fatal: path 'plans/moved.json' does not exist in '4d635211b854b85a894945cf8e2db38f87414dea'
+✔ recovery: a retained run's verified evidence becomes an unsigned proposal for the current Resolved status; the owner applies it; nothing is searched twice (6857.548763ms)
+fatal: path 'plans/tampered.json' does not exist in '4d635211b854b85a894945cf8e2db38f87414dea'
+✔ recovery refuses evidence that does not re-check, searches again when the cited bytes change, and treats a changed requirement as stale (6576.698511ms)
+fatal: path 'plans/ticketed.json' does not exist in '44c1a25f3c5f12d7b793e155ef1ccbb723367a9a'
+fatal: path 'plans/ticketed.json' does not exist in '10226ae3881505e716ffe287e923d7c362f13bfa'
+✔ an elapsed abort is not a handoff: a late `passed` is recorded pending STAGE_ELAPSED, no next stage starts, and it is not reused (1006.389742ms)
+✔ the lifecycle meter hands every turn the stage signal and a charge() that is its own metered, bounded call (692.620926ms)
+✔ carry reads a request_changes review's feedback, and a dead attempt's registered worktrees are removed (810.321933ms)
+✔ a claim reserves its stage budget against the total atomically: a claim past the remainder is refused by the ledger (25.213132ms)
+✔ verifyInChild reads the child's verdict from the file it names (243.638254ms)
+✔ the lease fence: a stage recorded under a released or expired claim is refused, and the stage resumes (185.816955ms)
+✔ a second claim over an unreleased expired claim releases it first; the old holder cannot record (38.42107ms)
+✔ a restart: calls charged before a kill stay counted, and the total bounds calls across the restart (257.226599ms)
+✔ concurrency: a dispatched stage reserves its budget; two stages cannot both start on the same remainder (124.823017ms)
+✔ a result reporting more calls than its stage budget is recorded failed (STAGE_BUDGET_EXCEEDED); an over-budget charge is refused (71.894308ms)
+✔ the cooperative stop: past the stage's elapsed budget no call is admitted, and the stop is on the stage record (115.907703ms)
+fatal: path 'plans/ticketed.json' does not exist in '44c1a25f3c5f12d7b793e155ef1ccbb723367a9a'
+✔ verifyInChild: a separate node process verifies the work and status ledgers and reports a tampered chain (491.821855ms)
+✔ LIFECYCLE (fit): an implement stage killed after its units were approved resumes them from checkpoints and keeps the killed run's findings (1990.891361ms)
+fatal: path 'plans/fresh.json' does not exist in '10226ae3881505e716ffe287e923d7c362f13bfa'
+fatal: path 'plans/ticketed.json' does not exist in '10226ae3881505e716ffe287e923d7c362f13bfa'
+fatal: path 'plans/fresh.json' does not exist in '83be183016c4a43d12c7fcc86035fb58c20b2b74'
+✔ LIFECYCLE, default routing (fit): an item without a ticket and one with a ticket go plan -> dispatcher -> implementer in per-unit worktrees -> pinned reviewer -> integration -> three-lab review -> validation -> an outcome the owner applies (7601.923665ms)
+fatal: path 'plans/ticketed.json' does not exist in '83be183016c4a43d12c7fcc86035fb58c20b2b74'
+fatal: path 'plans/fresh.json' does not exist in '231dacc47ddca361d1be73e4859fe181d3cb4ce2'
+✔ LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implementer's thinking level first; after repeated rejections the reviewer escalates inside OpenAI only; the reviewer whose finding fed a revision is excluded from the three-lab review, the one that only approved is not (6255.168657ms)
+fatal: path 'plans/ticketed.json' does not exist in '231dacc47ddca361d1be73e4859fe181d3cb4ce2'
+fatal: path 'plans/fresh.json' does not exist in 'e8e3ff56e9129df3eceede318839fdfe71b35798'
+✔ LIFECYCLE, default routing (fit): a write outside the unit's owned paths is refused and discarded, the unit does not integrate, and the stage is blocked with the findings kept (2351.179419ms)
+fatal: path 'plans/fresh.json' does not exist in '64ad66e9b289c7c5b0814adf0264b3a69f04d3d4'
+✔ LIFECYCLE, default routing (fit): a plan whose units overlap without an order is returned to the planner by the controller; the revised units run to an outcome (3244.482331ms)
+✔ LIFECYCLE: under fit a plan without valid work_units is refused at plan validation like any other malformed plan; under argo the same plan runs the per-file path (2851.061686ms)
+✔ Q6 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6): a distinct requested model survives the projection (3.125403ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): the dispatcher is not an author, and is excluded from later judgment even when Stage 5 only approved (1.653913ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): the requested and the serving identity are both excluded; a resumed unit keeps its arbiter (0.517856ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): no capacity is no review, never a fallback to the dispatcher (0.671281ms)
+✔ Q7 (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7; Decision 6): a cycle opened with the arbiter rows records them and refuses an answer the dispatcher served (165.546127ms)
+fatal: path 'plans/fresh.json' does not exist in 'c7afba988fd0ef9c202d859c34a959848a36fcbb'
+fatal: path 'plans/ticketed.json' does not exist in 'c7afba988fd0ef9c202d859c34a959848a36fcbb'
+✔ the policy is not active: the lab rule is the default, and neither the service config nor an unknown value can switch it (4.703186ms)
+fatal: path 'plans/cyc.json' does not exist in '8ed216e7bcd9cf21748a46667beb422970ec2f42'
+✔ four real labs: an item without a ticket and one with an existing ticket complete the lifecycle; the panel is three distinct labs, no contributing model reviews, and the shared lab is recorded (6626.612854ms)
+✔ four real labs, repeated revisions: contributions come to span all four labs and each later panel is still three labs of models that never contributed (7333.421492ms)
+✔ an implementer turn that asked for one model and was served by another excludes both, in the contributions later stages carry (0.769639ms)
+fatal: path 'plans/target.json' does not exist in '3acad6464fd4f214a8277a2dfdf546945537e115'
+✔ an issue view is versioned over the exact bytes delivered: a title or state change is a new version (round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, question 5) (2.822036ms)
+✔ a cited view whose current version cannot be established makes the plan stale; a work-ledger view is not judged (round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, questions 1 and 5) (1.689974ms)
+✔ a plan citing a derived relations view is reused while the view is unchanged and is stale once its bytes change (round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, questions 1 and 5) (965.142204ms)
+✔ watch wakes an evidence-blocked plan when only the missing evidence appears, and not before (round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, question 5) (811.642437ms)
+✔ the watch signature changes when a retained run of an item with an evidence gap appears (round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, question 5) (206.01659ms)
+fatal: path 'plans/req-swap.json' does not exist in '4b3f40973c3f1e8fbbc91a3bc5ffeb9a3bb5e02a'
+fatal: path 'plans/req-swap.json' does not exist in '4b3f40973c3f1e8fbbc91a3bc5ffeb9a3bb5e02a'
+fatal: path 'plans/item-b.json' does not exist in '4d635211b854b85a894945cf8e2db38f87414dea'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 1: after validate returns to implement, the revision that returns to plan is routed to plan; one that pends structurally blocks; a superseded passed implement is never resurrected (465.643396ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 1: a requirement changed while a plan cycle is open is planned afresh, never finished on the old requirement's plan (1039.306199ms)
+fatal: path 'plans/unticketed.json' does not exist in 'f9b7ee36d1af58f5613e2a42062e7e32e2e53189'
+fatal: path 'plans/hist-ev.json' does not exist in '918507283d8f2a0cc59447d9dfcec6d083b85ab0'
+fatal: path 'plans/inv-ev.json' does not exist in '918507283d8f2a0cc59447d9dfcec6d083b85ab0'
+fatal: path 'plans/race-ev.json' does not exist in '918507283d8f2a0cc59447d9dfcec6d083b85ab0'
+fatal: path 'plans/resume-rv.json' does not exist in '6a7298472f10274ea48fd2fe5b9eb8dbc67e7e73'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 2: a non-plan stage cannot start from nothing or skip a stage; verifyHandoff checks the chain and the requirement; an executor refuses another item's record (1742.317493ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 4: an item without a ticket is recorded as planning at medium (581.040404ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), questions 1 and 5: citations are bound to the bytes the planner was shown; files cited in investigation sources or copy, and non-file views, make the plan stale when they change (2877.461319ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 5: derived dossier views (relations, consumers, guesses, runs, index) are versioned by the digest of their bytes (215.844614ms)
+fatal: path 'plans/resume-plan.json' does not exist in '26f6aba0a526eb5ed2e40651d87892c97f4fb846'
+fatal: path 'plans/resume-log.json' does not exist in 'a03b5d41ff4ac1448e75b7f5490ffa8f0816fb6b'
+fatal: path 'plans/resume-nolog.json' does not exist in 'cbded2674d4bc0d8cbe0f2c30254c33b76e12759'
+fatal: path 'plans/obj-tamper.json' does not exist in 'e8e3ff56e9129df3eceede318839fdfe71b35798'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 5: a resumed review records the dossier its seats were shown (the one bound with its brief), not a rebuilt one (3205.454085ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 5: a resumed PLAN review records the dossier its seats were shown (the one bound with its brief), not a rebuilt one (918.654426ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: a resumed plan counts delivery against the accepted planner's own investigation, restored from the attempt that opened the cycle (865.092607ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: a resumed plan whose opening record lacks the planner's investigation marks the delivery unknown, never complete from the dossier alone (654.811365ms)
+fatal: path 'plans/val-pool.json' does not exist in '77d38e95ea2d57c98b3fb21b76778e0cbb56107c'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 5: evidence recovery searches again when cited ledger objects are repaired, and re-checks a recovered proposal when its sources change (3479.762505ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 5: the dossier (and its stable digest) sees untracked, unignored files the retriever can read (222.608637ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: retrieval is contained: no git pathspec magic, and log and show are limited to the repository (271.396021ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: a line window or offset past the end is refused, never an empty success (226.470838ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: a cut dossier view carries its continuation, which delivers the rest of the same bytes (1613.857879ms)
+fatal: path 'plans/val-tail.json' does not exist in 'ac3e9db09860418b257ce875907ebe5378097696'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: a validator is credited only with what its own accepted answer was given, never a rejected seat's retrieval (4122.748123ms)
+fatal: path 'plans/re-active.json' does not exist in '53fae6bb1262d58055c65a204837f95c2b3fdb2a'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 6: a test output the validator was shown only as its tail is recorded as an unresolved gap, with the request that continues it (5088.439112ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 7: intake records every source once -- status items, tickets (an item's and an orphan), linked and candidate issues -- and refuses a duplicate (132.937548ms)
+fatal: path 'plans/re-plan-done.json' does not exist in 'cfc1a21579f6165f3b8a3cf95d34316cb616337a'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 9: a transient re-review keeps its reassessment on retry: no claim-key collision, and the disqualified cycle is never reused (5413.606798ms)
+fatal: path 'plans/re-recover.json' does not exist in 'd7a6917a70713892c2f68c9d006e699e84eee2a8'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 9: a Resolved item whose PLAN review was disqualified by a reassessment needs re-verification (2777.561157ms)
+fatal: path 'plans/bad-outcome.json' does not exist in 'a02ac5b346b5b84b9cc266a4d61fd0481f8f9718'
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 8: evidence recovery does not propose a retained bundle whose review a reassessment disqualified (1958.586557ms)
+✔ independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 10: an outcome whose proposal would not re-check at apply is not passed (1915.41197ms)
+✔ the manifest: every limit must be chosen (the example's nulls are refused), unknown keys, a wrong profile or independence and inconsistent billing are refused, each reason named (6.586353ms)
+✔ DRY RUN (the default): ONE plan, zero provider calls, nothing created; the refusals: commit mismatch, dirty tree, foreign work_root, out_dir inside the repo, a missing credential, a wrong confirm string (2939.941267ms)
+fatal: path 'plans/two.json' does not exist in '26f6aba0a526eb5ed2e40651d87892c97f4fb846'
+✔ CONFIRMED: only the selected item runs (two other runnable items present) to an UNSIGNED outcome; the required Grok subagent call is recorded; a fresh reader verifies the record; the status ledger is byte-identical (3874.689064ms)
+fatal: path 'plans/two.json' does not exist in '63d408aa593ac152cb24d31e4119f7e42b80e27f'
+✔ CONFIRMED: require_subagent unmet (the plan allowed no subagent) -> exit 3, the reason recorded, the outcome still unsigned (2876.103963ms)
+fatal: path 'plans/two.json' does not exist in 'a3635cd33deaa962746e3ed5b84e108d8668d6d9'
+✔ CONFIRMED with metered_gemini_failover: false: a quota refusal on every lane of the unit's ladder BLOCKS the unit; the metered Gemini API is never called -> exit 3 (1687.339945ms)
+fatal: path 'plans/two.json' does not exist in 'a871ede194db7dccda96ae17d6e5188936d16756'
+✔ CONFIRMED: the declared total stops the run when a stage could exceed it; the budget stop is recorded -> exit 3 (1539.369649ms)
+fatal: path 'plans/plan-lineage.json' does not exist in 'c9e0c712ebd8d36c1092ccbc1f40cfd5f14e0456'
+fatal: path 'plans/plan-defect.json' does not exist in 'e8e3ff56e9129df3eceede318839fdfe71b35798'
+✔ resuming an open plan-review cycle keeps the earlier plan-review finders in the plan's contributions (3891.527131ms)
+fatal: path 'plans/marked.json' does not exist in '53f855444355a96def068b7b7562e89473d7d133'
+✔ a revised plan keeps the previous planner as a contributor, also when the planner seat changed (2769.975373ms)
+✔ the planner's ledger turn keeps the input-model marker of its answer (598.513203ms)
+fatal: path 'plans/critical.json' does not exist in '58bddf308d6988c71bd2809c45cc01964690bd8b'
+fatal: path 'plans/easy.json' does not exist in '58bddf308d6988c71bd2809c45cc01964690bd8b'
+fatal: path 'plans/fresh.json' does not exist in '58bddf308d6988c71bd2809c45cc01964690bd8b'
+fatal: path 'plans/hard.json' does not exist in '58bddf308d6988c71bd2809c45cc01964690bd8b'
+fatal: path 'plans/medium.json' does not exist in '58bddf308d6988c71bd2809c45cc01964690bd8b'
+✔ the model-level rule is the default under fit; other profiles keep the configured rule (0.7532ms)
+✔ the planner is seated from the ticket's difficulty and stakes: easy, medium, hard, and a critical easy ticket; an item without a ticket plans at medium (3291.246771ms)
+fatal: path 'plans/cap-item.json' does not exist in '14475e9dfb73088ccbcc2d4e58f597a3f9b0e25e'
+fatal: path 'plans/budget.json' does not exist in '88ff0397952dd08c58aa94920a0c99990fd9b624'
+fatal: path 'plans/item-1.json' does not exist in '00c43b9591907073379a567a2cec2f0259d9ca83'
+fatal: path 'plans/item-2.json' does not exist in '00c43b9591907073379a567a2cec2f0259d9ca83'
+✔ finding 2.2: a stage stopped at the pipeline's own lower bound, with no unit approved, is not retried by runConfirmed; finding 10.1: run.json and pipeline.json are verified by digest after run.json is written (1505.228338ms)
+✔ finding 2.3: a plan review left incomplete by the stage's provider-call budget is recorded STAGE_PROVIDER_CALLS, not REVIEW_PENDING (435.275604ms)
+✔ finding 3.2b: a release, an intake or a recovery that another scheduler recorded first does not crash the tick (477.52312ms)
+fatal: path 'plans/dirty.json' does not exist in 'c34fd2aa4caf49e93426d75b5dac4c4aa943a355'
+✔ finding 3.3: a ticket the lifecycle wrote (this item's or a concurrent item's) does not fail an implement whose copy covers tickets/ (2110.79022ms)
+fatal: path 'plans/slow.json' does not exist in '6008ddebbf11a380367fc5ad27ff3dbcf31d19be'
+✔ finding 3.3: a real uncommitted change under the copy paths still fails the dirty-copy check (749.440338ms)
+fatal: path 'plans/q.json' does not exist in '96a5b21550972ecc1dc5987e5965ff1cac738f5c'
+✔ findings 3.3 and 9: validate runs its tests without blocking the event loop, bounded by the stage's elapsed budget (4460.712931ms)
+fatal: path 'plans/killed.json' does not exist in 'f239cb40671286bb8a5a7d28f222843ce3b2fd3e'
+✔ finding 6: a validator refused for quota with the metered failover off is a pending METERED_FAILOVER_DISABLED block, not a failure with no blocker (3502.615365ms)
+✔ finding 8.3: a plan attempt that dies mid-cycle loses neither its author's investigation nor its contributions on resume (981.872828ms)
+✔ finding 9: a live run's stage gets the run's remaining elapsed time (no lease grace taken from it); the preflight and the verifier are bounded by it (690.715129ms)
+fatal: path 'plans/fresh.json' does not exist in '53f855444355a96def068b7b7562e89473d7d133'
+✔ finding 9: a stopped implement stage cancels runOpenItem's in-flight request and admits no further provider call (997.690563ms)
+fatal: path 'plans/slow-item.json' does not exist in '14475e9dfb73088ccbcc2d4e58f597a3f9b0e25e'
+✔ finding 2.1: an elapsed abort during fit implement is a retryable STAGE_ELAPSED pending, and a later tick resumes the item (1817.346314ms)
+fatal: path 'plans/item-a.json' does not exist in 'c34fd2aa4caf49e93426d75b5dac4c4aa943a355'
+✔ finding 7: a resumed unit keeps its subagent receipts, a changed sibling re-dispatches it, and this run's identity rule is re-applied (1567.784437ms)
+fatal: path 'plans/cap.json' does not exist in '0a1f9b36bc788c366715de7d476e1f32f9536f99'
+✔ finding 1.2: an implement stage whose pipeline throws before any call is charged 0 provider calls, not its whole stage budget (919.912521ms)
+fatal: path 'plans/carry.json' does not exist in '417bfe9ea610a14aa78218b48ce89d1015bae85a'
+✔ finding 2.2: a pipeline stopped by a lower pipeline max_provider_calls names that bound and the calls made, not the stage budget (1046.259517ms)
+fatal: path 'plans/fresh.json' does not exist in 'ac3e9db09860418b257ce875907ebe5378097696'
+✔ finding 8.2: findings carried from a killed pipeline run stay carried when the attempt that carried them did not pass (1644.77797ms)
+✔ finding 1.3: a resumed runOpenItem attempt is bounded by its own stage budget, and every one of its calls is charged on the work ledger (8506.159131ms)
+fatal: path 'plans/race.json' does not exist in '5fe8a7b2ffa0ba358350bd08aa78237b4960137a'
+fatal: path 'plans/race.json' does not exist in '5fe8a7b2ffa0ba358350bd08aa78237b4960137a'
+fatal: path 'plans/rec-item.json' does not exist in 'e7931a4784465e653e7c781a4009d26326cb3222'
+✔ finding 3.2a: two services with different state_dirs on one work ledger: the second is refused (490.616037ms)
+✔ finding 4: a plan holder whose lease expired writes no ticket; its successor's approved plan stands (1300.333949ms)
+✔ finding 10: run.json lists a reviewer's stage-budget stop, verifies an open plan ledger by its domain rules, and lists the final gate's blocker (1610.163673ms)
+fatal: path 'plans/fresh.json' does not exist in '1db30dbbfed9205e285b3d6419fae23911ee3fd1'
+fatal: path 'plans/ticketed.json' does not exist in '1db30dbbfed9205e285b3d6419fae23911ee3fd1'
+fatal: path 'plans/rounds.json' does not exist in 'd7a6917a70713892c2f68c9d006e699e84eee2a8'
+✔ LIFECYCLE, argo routing: an in-run finding is followed by a revision by the same worker model, across a process restart, for an item without a ticket and one with a ticket (17647.029632ms)
+fatal: path 'plans/fresh.json' does not exist in '468a6d2c51200996574d144a56a59052d4ccf0d1'
+✔ LIFECYCLE, argo routing: repeated in-run findings are revised within bounds; when no eligible in-run reviewer is left the work is blocked with every finding kept, not restarted (2505.673833ms)
+fatal: path 'plans/ticketed.json' does not exist in '468a6d2c51200996574d144a56a59052d4ccf0d1'
+✔ LIFECYCLE: a validator answer that names no serving model is never a validation; each is kept; the item does not reach an outcome (no ticket, and a ticket) (3313.549769ms)
+fatal: path 'plans/active.json' does not exist in '727297b513730e0cd3ae5d421bb44f278516bb96'
+✔ BOUNDARY (injected stage records): with every declared model a contributor, validation waits on capacity; it does not fall back to a contributor (no ticket, and a ticket) (607.334103ms)
+fatal: path 'plans/done.json' does not exist in '727297b513730e0cd3ae5d421bb44f278516bb96'
+fatal: path 'plans/ticketed.json' does not exist in '727297b513730e0cd3ae5d421bb44f278516bb96'
+✔ LIFECYCLE: a recorded reassessment stops the disqualified review, and the validation resting on it, from being reused; the work is re-reviewed; a Resolved item is marked for re-verification and left alone (8438.355003ms)
+✔ a Ready item with no ticket is dispatched by the scheduler through every stage, each handoff verified, to the owner (529.531578ms)
+✔ an existing ticket enters the lifecycle at planning, to re-check it (mode revalidate) (50.722981ms)
+✔ stale evidence: changing the requirement after planning re-plans; unchanged inputs are reused (125.236351ms)
+✔ failures return to the right stage: an implementation defect to implement, an invalid assumption to plan (1256.533755ms)
+✔ duplicates, budgets, interruption and missing executors are bounded (341.596903ms)
+✔ the trigger: watch ticks only when its inputs change, and a dependency resolving wakes the waiting item (591.323007ms)
+✔ a handoff that does not re-derive is refused by the receiving stage and by the ledger (70.473473ms)
+✔ missing authority: with no controller key the tick refuses (NO_AUTHORITY) rather than skipping work (34.740464ms)
+✔ a plan pending on a transient failure is retried once due and within the attempt bound; a structural block is not re-dispatched (605.42458ms)
+✔ the item selector: with `only`, intake still records every item, but only the selected one is dispatched; every other runnable item is skipped "outside the --item scope" (379.393409ms)
+✔ the service config is validated: a declared provider-call cap, known keys only, a sane interval (47.143228ms)
+✔ one service per work ledger: a live holder is refused, a dead one's lock is taken over and recorded, another host is refused (4.787142ms)
+✔ the service runs ticks until stopped, writes its status and log, ticks only on change, and never exceeds its lifetime cap (560.893327ms)
+✔ a second service on the same ledger is refused while the first runs; a signal stops the loop between ticks (451.457957ms)
+✔ without the controller key the service stops with NO_AUTHORITY and records nothing (21.006712ms)
+fatal: path 'plans/four-labs.json' does not exist in 'ac3e9db09860418b257ce875907ebe5378097696'
+fatal: path 'plans/alpha-item.json' does not exist in '7d2412fba6a5040bf7bdb5f77e508beaa9d9bbbb'
+✔ the four configured labs: a Ready item with no ticket gets a reviewed plan and its ticket, then the change review is a recorded capacity pending, nothing narrowed (856.342771ms)
+fatal: path 'plans/keep-item.json' does not exist in '8200070b9bff521bce8a66ac211b6b7dd02e98b6'
+fatal: path 'plans/stale-item.json' does not exist in '8200070b9bff521bce8a66ac211b6b7dd02e98b6'
+fatal: path 'plans/rev-item.json' does not exist in '84973359fee01cdeec55498bf5a8804ac39e5045'
+fatal: path 'plans/rev-four.json' does not exist in '7d381cbe6277386a6af30f64ce06a4fb70e8a39f'
+fatal: path 'plans/impl-defect.json' does not exist in 'c376f907b22f70f65deecf493bb08cfaf683dd3e'
+✔ with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes through reviewed planning, ticket creation, implementation, review, validation and an unsigned outcome (4460.401506ms)
+✔ an existing ticket enters at planning (revalidate): still valid, it is kept byte-identical; no longer valid, it is revised with the reasons (1608.029204ms)
+✔ plan review findings cause a revision and a re-review of the new version; a malformed plan is refused; the finder then counts as a contributor (2017.701117ms)
+fatal: path 'plans/plan-defect.json' does not exist in 'c376f907b22f70f65deecf493bb08cfaf683dd3e'
+fatal: path 'plans/flaky-review.json' does not exist in '759183911bc091ace52dc11caa65cca5e2293c42'
+✔ validation returns an implementation defect to implement and an inadequate criterion to plan (5765.910584ms)
+fatal: path 'plans/always-down.json' does not exist in '2d1b5095fd44279ad18ed2f214ee56bd11d53a48'
+fatal: path 'plans/tight.json' does not exist in 'ae71410ad5817dbd8752c4950ab6fe6d8b65882b'
+✔ an unavailable reviewer or a short pool is pending with a blocker and the work kept; an exhausted stage budget stops within bounds (4102.727618ms)
+✔ a one-line-title "plan" is refused, never reviewed, and writes no ticket; the review floor cannot be lowered (188.176911ms)
+fatal: path 'plans/val.json' does not exist in 'd14d296804d0af3fed88826b6583e8cf2c56c6f2'
+fatal: path 'plans/val2.json' does not exist in '84973359fee01cdeec55498bf5a8804ac39e5045'
+✔ 4. a validator answer served by a contributor, or by an unresolved model, is not accepted: it is kept on the record and the item does not reach an outcome (4636.568597ms)
+fatal: path 'plans/inrun.json' does not exist in 'ff03818b18a96adba0c6f90b9162b3077ea57bb5'
+✔ 4. after a rejected answer the next eligible seat is asked; the accepted record names the model asked for and the model that answered (4985.918095ms)
+✔ an in-run code-review finding is followed by a code revision: the finding reaches the worker in the same run, and that reviewer model is excluded from the change review (1989.698064ms)
+ℹ tests 139
+ℹ suites 0
+ℹ pass 139
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 57220.855047

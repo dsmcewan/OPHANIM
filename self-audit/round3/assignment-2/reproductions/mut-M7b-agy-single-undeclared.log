@@ -1,0 +1,43 @@
+✔ a single-turn seat on an Antigravity Gemini lane runs through the agy CLI and its answer carries the input model, marked as an input (24.804279ms)
+✖ a non-Gemini or undeclared model is refused before the agy CLI is launched; an Orchestrator id has no single identity (9.239263ms)
+✔ the walk: the metered API is reached only after its lane was refused for QUOTA, and the result says so (4.399556ms)
+✔ the walk: any other lane failure never moves the turn to the metered API (8.354905ms)
+✔ the walk: a lane's quota cooldown is its own authority, counts as quota evidence, and never closes the API pool (14.237163ms)
+✔ antigravityFirst: a metered Gemini API id in a policy order stands behind its lane; other seats are untouched (6.918325ms)
+✔ the CLI transport raises Antigravity's quota refusal in the shape classifyFailure classifies as quota, and nothing else (1.785762ms)
+✔ argo through the real dispatcher: the Google seat's lane answers; on a lane quota refusal the metered API answers and the turn records it (1217.917094ms)
+✔ fit through the real dispatcher: the implementer walks its lane ladder; the metered API answers only when the pick's lane was refused for quota (1257.988064ms)
+✔ a single-turn seat: lane first; the API only as the lane's quota failover, and it says so (14.887365ms)
+✔ the agy path is non-blocking: no synchronous child process on it, and two lane turns overlap in time (613.307771ms)
+✔ finding 6: every agy_google seat of the seating table names a declared Antigravity lane (or an API id that has one) (3.297758ms)
+✔ finding 6: with the metered failover off, a Gemini seat with no lane is refused and the metered API is never called (0.961081ms)
+✔ finding 8.1: a run SIGKILLed mid-wave leaves its integration branch, and a restart with the same directory and run_id removes it and completes (468.351818ms)
+✔ finding 5.1: a quota refusal steps the implementer to the next rung on ANOTHER base model, not the same model's next thinking level (249.076369ms)
+✔ finding 5.2: a 429 in free text (a stack-trace line number) is not explicit quota evidence; a 429 status is (1.252657ms)
+✔ finding 5.3: a metered-failover answer refused (API_FILES_REFUSED) steps the lane ladder and spends no review revision (236.047031ms)
+✔ finding 1.1: every Google continuation hop is a charged provider call, and a hop over the bound is refused, not sent (314.943627ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 17
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3290.562595
+
+✖ failing tests:
+
+test at pantheon/tests/agy-single-turn.test.mjs:26:1
+✖ a non-Gemini or undeclared model is refused before the agy CLI is launched; an Orchestrator id has no single identity (9.239263ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async file:///home/user/a2mut-selfaudit/pantheon/tests/agy-single-turn.test.mjs:29:5
+      at async withDispatch (file:///home/user/a2mut-selfaudit/pantheon/tests/fixtures/dispatch.mjs:583:12)
+      at async TestContext.<anonymous> (file:///home/user/a2mut-selfaudit/pantheon/tests/agy-single-turn.test.mjs:27:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'rejects',
+    diff: 'simple'
+  }
