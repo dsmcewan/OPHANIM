@@ -323,7 +323,7 @@ async function sendTurnOn({
     // given its own identity instead of overwriting the vendor's pane with another model's
     // output -- two models writing one pane is a display that lies about who said what.
     await admit(req);
-    const acc = await streamTurn({ client, surface: spec.surface, req, seat: label ?? vendor, onEvent });
+    const acc = await streamTurn({ client, surface: spec.surface, req, seat: label ?? vendor, onEvent, signal });
     if (mode === "replay") {
       // EVERY OUTPUT ITEM, on this path too. The unary Responses replay below keeps res.output so the
       // reasoning items (encrypted_content) survive to the next turn; this streaming branch rebuilt the

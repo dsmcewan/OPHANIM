@@ -26,8 +26,8 @@ const STREAMERS = {
   // OpenAI + xAI: Responses streaming emits typed server events. The text deltas are
   // `response.output_text.delta`; the terminal event carries the completed response, which is
   // where the response id we must persist lives.
-  async *responses({ client, req, seat }) {
-    const stream = await client.responses.create({ ...req, stream: true });
+  async *responses({ client, req, seat, signal }) {
+    const stream = await client.responses.create({ ...req, stream: true }, ...(signal ? [{ signal }] : []));
     for await (const e of stream) {
       if (typeof e?.type === "string" && /reasoning|thought|thinking/i.test(e.type)) {
         const reasoning = typeof e.delta === "string" ? e.delta : e.text;
@@ -52,9 +52,9 @@ const STREAMERS = {
   // Google: generateContentStream yields chunks, each with the text so far for that chunk.
   // There is no response id at all -- this is a replay vendor, so `done` carries none and the
   // seat layer mints its own handle rather than inventing one here.
-  async *genai({ client, req, seat }) {
+  async *genai({ client, req, seat, signal }) {
     yield ev(seat, "start", { id: null });
-    const stream = await client.models.generateContentStream(req);
+    const stream = await client.models.generateContentStream(signal ? { ...req, config: { ...req.config, abortSignal: signal } } : req);
     let full = "", finishReason = null, blocked = false, usage = null;
     const modelParts = [];
     for await (const chunk of stream) {
@@ -82,9 +82,9 @@ const STREAMERS = {
 
   // Anthropic: a typed event stream. content_block_delta carries text_delta; tool_use arrives
   // as a content_block_start whose block names the tool.
-  async *messages({ client, req, seat }) {
+  async *messages({ client, req, seat, signal }) {
     yield ev(seat, "start", { id: null });
-    const stream = await client.messages.create({ ...req, stream: true });
+    const stream = await client.messages.create({ ...req, stream: true }, ...(signal ? [{ signal }] : []));
     let full = "", stopReason = null, usage = null;
     const blocks = [], json = new Map();
     for await (const e of stream) {
@@ -124,9 +124,15 @@ export const canStream = surface => Boolean(STREAMERS[surface]);
 //
 // onEvent is called inside the loop and its throw is NOT swallowed: a view that breaks should
 // surface loudly rather than silently stop updating while the turn appears to continue.
-export async function streamTurn({ client, surface, req, seat, onEvent }) {
+//
+// `signal` (optional): the caller's stop. It is handed to the SDK call (the request's fetch signal; Google's
+// config.abortSignal), and the turn rejects with the abort reason as soon as it fires, even while the provider's
+// stream is still open -- a stopped stage does not wait on an in-flight turn (independent review round 2, assignment 3
+// (Google gemini-4-carbon, manual, 77480d6), finding 9).
+export async function streamTurn({ client, surface, req, seat, onEvent, signal }) {
   const gen = STREAMERS[surface];
   if (!gen) throw new Error(`streamTurn: no streamer for surface "${surface}"`);
+  signal?.throwIfAborted();
   let text = "";
   let thinking_bytes = 0;
   const tools = [];
@@ -134,7 +140,7 @@ export async function streamTurn({ client, surface, req, seat, onEvent }) {
   let sawDone = false;
   let final = null;
   let terminal = null, parts = null, blocks = null, usage = null;
-  for await (const e of gen({ client, req, seat })) {
+  for await (const e of abortable(gen({ client, req, seat, signal }), signal)) {
     if ((e.type === "done" || e.type === "error") && e.usage) usage = e.usage;
     if (e.type === "delta" && e.text) text += e.text;
     if (e.type === "thinking") thinking_bytes += e.bytes;
@@ -176,6 +182,30 @@ export async function streamTurn({ client, surface, req, seat, onEvent }) {
     why_incomplete: !sawDone ? "stream ended without a terminal event; the reply may be truncated"
       : complete ? null : terminal.why,
   };
+}
+
+// The events of `it`, ending with the abort reason the moment `signal` fires: the pending read is not awaited, and the
+// generator is closed (its SDK stream with it) in the background.
+async function* abortable(it, signal) {
+  if (!signal) { yield* it; return; }
+  let onAbort, done = false;
+  const stopped = new Promise((_, reject) => { onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError")); });
+  stopped.catch(() => {});
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const next = it.next();
+      next.catch(() => {});
+      const r = await Promise.race([next, stopped]);
+      if (r.done) { done = true; return; }
+      yield r.value;
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    // Closed as `for await` would close it; after an abort the pending read is not waited for.
+    if (!done) { const closing = Promise.resolve(it.return?.()).catch(() => {}); if (!signal.aborted) await closing; }
+  }
 }
 
 function collectToolNamesFromFinal(final) {

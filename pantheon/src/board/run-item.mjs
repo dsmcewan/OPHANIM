@@ -437,7 +437,15 @@ export async function runOpenItem(spec, opts = {}) {
   // 77480d6), finding 6). Default true, as before.
   const METERED_FAILOVER = opts.meteredFailover ?? true;
   if (typeof METERED_FAILOVER !== "boolean") throw new Error("runOpenItem: meteredFailover is true or false");
+  // `opts.signal` (optional): the caller's stop (a lifecycle stage's elapsed bound). Once it fires no provider call is
+  // admitted, and every turn carries it to its request (independent review round 2, assignment 3 (Google
+  // gemini-4-carbon, manual, 77480d6), finding 9).
   function admitProviderCall({ vendor, model, pool, transport, purpose }) {
+    if (opts.signal?.aborted) {
+      const why = `ABORTED: ${opts.signal.reason?.message ?? "the run was stopped"}; ${vendor}/${model} (${purpose}) was not called`;
+      progress({ event: "turn.refused", seat: vendor, model, detail: why });
+      throw Object.assign(new Error(why), { code: opts.signal.reason?.code ?? "ABORTED", name: "AbortError", cause: opts.signal.reason });
+    }
     if (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS) {
       const why = `PROVIDER_CALL_LIMIT: this run has made ${providerCalls} of its ${MAX_PROVIDER_CALLS} permitted provider call(s); ` +
         `${vendor}/${model} (${purpose}) was not called`;
@@ -598,7 +606,7 @@ export async function runOpenItem(spec, opts = {}) {
   // is a recorded fact rather than an absence.
   function skippedFailover({ seat, why }) { progress({ event: "quota_failover.skipped", seat: seat.vendor, model: seat.model, detail: why }); }
 
-  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null, transport = null, selection = null, quota_failover = null }) {
+  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal = opts.signal, effort = null, transport = null, selection = null, quota_failover = null }) {
     const t0 = Date.now();
     // The metered Gemini API answering as the QUOTA FAILOVER of an Antigravity lane (route/quota-failover.mjs): the
     // lane refusal it followed is recorded on every attempt and on the turn, beside the selection that carries it too.

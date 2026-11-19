@@ -873,6 +873,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}),
         // The run's metered-failover switch reaches runOpenItem's walks too (finding 6).
         meteredFailover,
+        // The stage's stop reaches runOpenItem: no call is admitted after it, and each turn's request carries it (finding 9).
+        ...(ctx.signal ? {signal: ctx.signal} : {}),
         // A checker's rejection at the top of the worker's dial is a revision by the same seat, not a stop (protocol v2).
         escalation: 'pantheon.escalation/v2',
         // The in-run checker follows the same independence rule as the rest of the lifecycle.
