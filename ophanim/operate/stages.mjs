@@ -1095,6 +1095,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         // admitting calls (the scheduler's cooperative stop).
         // Every admitted call is counted here too, so a run that throws is charged what it made (finding 1.2, below).
         onCharge: () => { if (typeof ctx.charge === 'function') ctx.charge(1); admitted += 1; }, ...(ctx.signal ? {signal: ctx.signal} : {}),
+        // The stage's hard end: caps every verify_cmd run and every worker turn's --print-timeout (finding 9).
+        ...(Number.isFinite(ctx.budget?.elapsed_ms) && Number.isFinite(t0) ? {deadline: t0 + ctx.budget.elapsed_ms} : {}),
         planner: {vendor: planRec.outputs.planner.vendor, model: planRec.outputs.planner.model},
         // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here
         // (a lower pipelineLimits.max_provider_calls is kept: the stricter bound wins).

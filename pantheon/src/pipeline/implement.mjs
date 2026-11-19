@@ -254,7 +254,7 @@ export async function checkpointWrites({ worktree, message }) {
  *   findings  the findings this attempt must address (empty on the first)
  *   rubric    the frozen rubric (default unit.rubric); checkpoint: the commit the attempt starts from (default HEAD)
  */
-export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH, verify_jail = null }) {
+export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH, verify_jail = null, deadline = null }) {
   const start = checkpoint ?? (await git(worktree, ["rev-parse", "HEAD"])).trim();
   const level = ladder.findIndex(s => s.vendor === seat.vendor && s.model === seat.model);
   const rec = { n: attempt, role: "implementer", standing: "author", authored: true, vendor: seat.vendor, model: seat.model, level: level < 0 ? null : level, requested_model: seat.model, served_model: null, served_model_source: null,
@@ -278,7 +278,7 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
       a2a: a2a ? { socket: a2a.socket, token: a2a.token, roles, url: null } : null,
       env: a2a ? { PANTHEON_A2A_SOCKET: a2a.socket, PANTHEON_A2A_TOKEN: a2a.token, PANTHEON_A2A_ROLES: roles.join(","), PANTHEON_UNIT_ID: unit.unit_id } : {},
       sandbox: { ...CAPABILITIES.implementer, owned_paths: [...unit.owned_paths] }, owned_paths: [...unit.owned_paths], verify_cmd: unit.verify_cmd,
-      control_dir, mcp_server, role: "implementer", unit_id: unit.unit_id, attempt, ...(verify_jail?.hide?.length ? { verify_hide: [...verify_jail.hide] } : {}) });
+      control_dir, mcp_server, role: "implementer", unit_id: unit.unit_id, attempt, ...(verify_jail?.hide?.length ? { verify_hide: [...verify_jail.hide] } : {}), ...(Number.isFinite(deadline) ? { deadline } : {}) });
   } catch (e) {
     await discardWrites({ worktree, checkpoint: start });
     if (e?.quota_failover) rec.quota_failover = clone(e.quota_failover);

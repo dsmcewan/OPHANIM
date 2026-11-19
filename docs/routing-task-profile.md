@@ -500,6 +500,14 @@ Owner direction: worker-controlled code must not be able to obtain or disclose a
 | `/proc` of credential-bearing processes | `--unshare-pid` with a fresh `/proc`: agy, the relay and the controller are not visible, so their `environ`, `cmdline`, `fd`, `mem` and `root` cannot be opened, and they cannot be signalled or traced. Also `--unshare-ipc` and `--new-session`. |
 | Unix sockets | The A2A socket and its directory are hidden, and so is every path socket under the homes, `/run` and `/tmp`. In this container `/run/sandbox-telemetry/ingest.sock` was reachable until `/run` was hidden. |
 
+The verify run is bounded and can be cancelled (round 2, assignment 3, finding 9). `runVerify` takes the stage's `signal` and its `deadline`, the stage's hard end, which `runPipeline({deadline})` passes on and `ophanim/operate/stages.mjs` sets from the stage's elapsed budget.
+
+- Abort or timeout kills the launcher's process group, and the jail dies with it, background children included.
+- An exec failsafe resolves the run even when a stray process holds the pipes.
+- A run stopped this way FAILED and records `aborted` or `timed_out`.
+- A run whose deadline has already passed is not started.
+- The worker's `--print-timeout` is the caller's timeout, capped at the time left before the deadline minus the kill grace (`printTimeoutOf`). If no time is left, the turn is not started (`DEADLINE`).
+
 The launcher fails closed. If bwrap cannot start the jail, it exits 125 and the script never runs. The only exception is a policy with `allow_unjailed: true`, which still gets the clean environment and closed descriptors and is recorded as such.
 
 **The design.**

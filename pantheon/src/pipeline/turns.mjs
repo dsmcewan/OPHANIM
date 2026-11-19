@@ -158,11 +158,23 @@ const laneFailure = (kind, message, more = {}) => Object.assign(new Error(messag
  *                   agy_state_dirs (default agy/sandbox.mjs defaultAgyStateDirs), allowUnsandboxed = false, bwrap,
  *                   run = runAgyWorkerTurn, api = null, probe = probeQuota, probeTimeoutS = 30}
  */
+/**
+ * The worker's --print-timeout in seconds: `timeoutS` (the caller's), capped by `deadline` (epoch ms) minus `graceS` (the
+ * kill grace runAgyWorkerTurn adds after it) when one is given; null when that leaves less than 1 s.
+ */
+export function printTimeoutOf({ timeoutS, graceS = 15, deadline = null, now = Date.now() }) {
+  const asked = Math.max(1, Math.floor(timeoutS));
+  if (!Number.isFinite(deadline)) return asked;
+  const left = Math.floor((deadline - now) / 1000) - graceS;
+  return left < 1 ? null : Math.min(asked, left);
+}
+
 export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
   if (typeof turn !== "function") throw new Error("pipelineTurns: pass turn({vendor, model, prompt, seat, extra}) for the single-turn seats");
   const lane = agy.run ?? runAgyWorkerTurn;
   const probe = agy.probe ?? probeQuota;
   const timeoutS = agy.timeoutS ?? 1800;
+  const graceS = agy.graceS ?? 15;
   const box = agy.sandbox === false ? {} : (agy.sandbox && typeof agy.sandbox === "object" ? agy.sandbox : {});
   const sandbox = { enabled: agy.sandbox === false ? false : box.enabled !== false, allowUnsandboxed: agy.allowUnsandboxed ?? box.allowUnsandboxed ?? false,
     ...(agy.agy_state_dirs ?? box.agy_state_dirs ? { agy_state_dirs: agy.agy_state_dirs ?? box.agy_state_dirs } : {}), ...(agy.bwrap ?? box.bwrap ? { bwrap: agy.bwrap ?? box.bwrap } : {}),
@@ -199,7 +211,7 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
    * {a2a: {url, token}} are still read; without a control_dir a temporary one (outside the worktree) is used and removed.
    */
   const implementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
-    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null, verify_hide = [] }) => {
+    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null, verify_hide = [], deadline = null, timeoutS: askedS = null }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
     if (!laneParts(model)) throw fail("NOT_A_LANE", `the pipeline implementer runs on an Antigravity lane, and ${vendor}/${model} is not one (config/lanes.json)`);
     const cli = agy.cli ?? process.env.PANTHEON_AGY_CLI ?? join(homedir(), ".local", "bin", "agy");
@@ -214,6 +226,12 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     // (prepareWorkerWorkspace), never into agy's environment (CREDENTIAL ISOLATION, src/agy/verify-jail.mjs).
     const { PANTHEON_A2A_TOKEN: _token, ...childEnv } = { ...env, ...a2a_env, ...(a2a?.url ? { PANTHEON_A2A_URL: a2a.url } : {}) };
 
+    // THE PRINT TIMEOUT IS DERIVED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+    // finding 9): the caller's timeout (this call's `timeoutS`, else agy.timeoutS, else 1800 s), capped by what is left of
+    // the stage's `deadline` (epoch ms) minus the kill grace, so the CLI's own print timeout fires before the stage's end
+    // and the process is killed by it at the latest. No time left: the turn is not started.
+    const printS = printTimeoutOf({ timeoutS: Number.isFinite(askedS) && askedS > 0 ? askedS : timeoutS, graceS, deadline });
+    if (printS === null) throw fail("DEADLINE", `the stage's deadline leaves no time for an implementer turn (${graceS} s of kill grace needed beyond a 1 s turn)`);
     let made = null;
     try {
       const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-agy-control-")));
@@ -221,10 +239,10 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
         verify_hide: Array.isArray(verify_hide) ? verify_hide : [] });
       // base_env: the ALLOWLISTED controller env, never process.env whole (independent review round 2, assignment 4,
       // question 7); childEnv (the unit's non-secret A2A env) is an explicit extra; no key or token ever passes.
-      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS, env: childEnv, base_env: workerEnv(), sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
+      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS: printS, graceS, env: childEnv, base_env: workerEnv(), sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
       return { text: r.text ?? "", served_model: model, served_model_source: "input", transport: "agy-cli", requested_model: model,
         response_id: r.response_id ?? null, tool_calls: r.tool_calls ?? null, subagent_calls: r.subagent_calls ?? null, summary: r.summary ?? null,
-        jail_log: r.jail_log ?? [], cleanup_env: r.cleanup_env ?? null, sandbox: r.sandbox ?? null };
+        jail_log: r.jail_log ?? [], cleanup_env: r.cleanup_env ?? null, sandbox: r.sandbox ?? null, print_timeout_s: printS };
     } catch (e) {
       if (e?.code !== "quota_exhausted") throw e;   // lane_failure, SANDBOX_UNAVAILABLE, ABORTED, ...: as they are
       // QUOTA EVIDENCE. Probe once; then decide (see the header).

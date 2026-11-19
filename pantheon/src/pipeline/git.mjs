@@ -5,17 +5,24 @@
 // blocking child would stall every other unit's worker, shim and timer.
 //
 // Must never: block the event loop on a child process; run a repository's git hooks or signing as the controller;
-// leave a timed-out command's process group running.
+// leave a timed-out or aborted command's process group running; wait forever on a pipe a stray process still holds.
 import { spawn } from "node:child_process";
 
-/** Run a child to completion. `max_bytes` caps EACH of stdout and stderr (the rest is dropped, `truncated: true`). */
-export function exec(cmd, args, { cwd, input = null, env = process.env, timeout_ms = 0, max_bytes = 64 * 1024 * 1024, group = false } = {}) {
+/**
+ * Run a child to completion. `max_bytes` caps EACH of stdout and stderr (the rest is dropped, `truncated: true`).
+ * `signal` (an AbortSignal) kills the child (its process group with `group`) like the timeout does, and the result says
+ * `aborted: true`; a signal already aborted runs nothing. THE FAILSAFE (independent review round 2, assignment 3 (Google
+ * gemini-4-carbon, manual, 77480d6), finding 9): after a kill, the result is resolved within `kill_grace_ms` even when
+ * a process outside the group (a setsid'd grandchild) still holds the output pipes open; the streams are destroyed.
+ */
+export function exec(cmd, args, { cwd, input = null, env = process.env, timeout_ms = 0, max_bytes = 64 * 1024 * 1024, group = false, signal = null, kill_grace_ms = 2000 } = {}) {
   return new Promise(resolve => {
+    if (signal?.aborted) { resolve({ code: null, signal: null, stdout: "", stderr: "", timed_out: false, aborted: true, truncated: false, spawn_error: false }); return; }
     let child;
     try { child = spawn(cmd, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: group }); }
     catch (e) { resolve({ code: null, signal: null, stdout: "", stderr: String(e.message), timed_out: false, truncated: false, spawn_error: true }); return; }
     const out = [], err = [];
-    let nOut = 0, nErr = 0, truncated = false, timed_out = false, done = false;
+    let nOut = 0, nErr = 0, truncated = false, timed_out = false, aborted = false, done = false, failsafe = null;
     const take = (list, n, chunk) => {
       const room = max_bytes - n;
       if (room <= 0) { truncated = true; return 0; }
@@ -26,13 +33,20 @@ export function exec(cmd, args, { cwd, input = null, env = process.env, timeout_
     child.stdout.on("data", c => { nOut += take(out, nOut, c); });
     child.stderr.on("data", c => { nErr += take(err, nErr, c); });
     child.stdin.on("error", () => {});
-    const kill = () => { try { group ? process.kill(-child.pid, "SIGKILL") : child.kill("SIGKILL"); } catch { /* already gone */ } };
+    const kill = () => {
+      try { group ? process.kill(-child.pid, "SIGKILL") : child.kill("SIGKILL"); } catch { /* already gone */ }
+      failsafe ??= setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(null, "SIGKILL", false, "\n[killed; a process outside the group still held the output open]"); }, kill_grace_ms);
+    };
     const timer = timeout_ms > 0 ? setTimeout(() => { timed_out = true; kill(); }, timeout_ms) : null;
-    const finish = (code, signal, spawn_error = false, msg = "") => {
+    const onAbort = () => { aborted = true; kill(); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = (code, sig, spawn_error = false, msg = "") => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
-      resolve({ code, signal, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") + msg, timed_out, truncated, spawn_error });
+      if (failsafe) clearTimeout(failsafe);
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ code, signal: sig, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") + msg, timed_out, aborted, truncated, spawn_error });
     };
     child.on("error", e => finish(null, null, true, String(e.message)));
     child.on("close", (code, signal) => finish(code, signal));
