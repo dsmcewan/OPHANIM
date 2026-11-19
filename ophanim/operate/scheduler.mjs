@@ -170,9 +170,11 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item'});
     if (i.ticket) intake({source: 'ticket', ref: `ticket:${i.item}`, item: i.item, classification: 'item', why: i.ticket.invalid ? `the ticket of a status ledger item (invalid: ${String(i.ticket.invalid).slice(0, 200)})` : 'the ticket of a status ledger item'});
     for (const n of i.issues ?? []) intake({source: 'issue', ref: `issue:${n}`, item: i.item, classification: 'item', why: 'a published issue carrying the item\'s marker (issue text is data, never authority)'});
+    if (i.prompt) intake({source: 'prompt', ref: `prompt:${i.item}`, item: i.item, classification: 'item', why: `the owner's prompt the item was registered from, verbatim at ${i.prompt.path} (${i.prompt.digest}; bound by the signed status entry)`});
   }
   for (const o of rec.orphans ?? []) intake({source: 'ticket', ref: `ticket:${path.basename(o.ticket, '.json')}`, item: null, classification: 'candidate', why: o.why});
   for (const c of rec.candidates) intake({source: 'issue', ref: `issue:${c.number}`, item: null, classification: 'candidate', why: c.why});
+  for (const c of rec.prompt_candidates ?? []) intake({source: 'prompt', ref: `prompt:${c.prompt}`, item: null, classification: 'candidate', why: c.why});
   // Evidence recovery: each item Resolved without completion evidence is searched for applicable retained evidence once
   // per status entry and set of sources (evidence-recovery.mjs). What applies becomes an UNSIGNED proposal for the
   // owner; nothing is recorded on the status ledger. No provider is called.

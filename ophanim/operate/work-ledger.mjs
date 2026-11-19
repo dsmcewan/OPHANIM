@@ -4,7 +4,7 @@
 // cites. Every receiving stage re-derives its handoff from this ledger before it proceeds.
 //
 // Kinds (schema ophanim.work/v1), each re-derived on append and on every verify:
-//   work.intake   a source of work seen by reconciliation: a status item, a published issue, a ticket. An issue
+//   work.intake   a source of work seen by reconciliation: a status item, a published issue, a ticket, a prompt. An issue
 //                 with no ledger item is a CANDIDATE: it is recorded, never executed, until the owner adds an item.
 //                 ONCE PER SOURCE: an intake carrying `once: 1` (every intake this module writes since independent
 //                 review, assignment 1, Google gemini-4-carbon, 09d490f, question 7) is refused when an intake of the
@@ -74,7 +74,9 @@ export const STAGE_STATUS = Object.freeze(['passed', 'returned', 'failed', 'pend
 /** The reservation refusal's own prefix: produced by the claim's re-derivation, mapped to code PROVIDER_CALL_BUDGET by claim(). */
 export const RESERVE_REFUSAL = 'PROVIDER_CALL_BUDGET:';
 export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed', 'blocked', 'interrupted', 'expired']);
-export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket']);
+// `prompt` (2026-11-19): the owner's prompt a status item was registered from (prompt-intake.mjs), or -- as a candidate
+// -- a prompt record with no owner-signed status entry.
+export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket', 'prompt']);
 export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
 export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
 /** Why a claim may no longer record a result or charge a call at `at` (ms), or null. Shared by append and re-derivation. */

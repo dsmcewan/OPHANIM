@@ -6,6 +6,14 @@
 //       candidates (issues with no item marker), orphan tickets, duplicate issue markers, issues naming no ledger
 //       item, projection drift (issue open/closed against the item's state), and the counts. Read-only: the work
 //       ledger is verified, never created; the controller authority held here is reported.
+//   node ophanim/operate/cli.mjs prompt (--text TEXT | --file FILE) [--author NAME] [--source ID] [--received-at ISO] [--title LINE] [--depends-on a,b] [--keys DIR] [--json]
+//       Register one user prompt as an UNPLANNED WORK ITEM (prompt-intake.mjs). The text is kept verbatim with its
+//       provenance and a unique work identity (intake/prompts/<item>.json), and ONE owner-signed status entry (Ready)
+//       binds its digest: that entry is the authorization. No ticket, plan or order is supplied; the next tick/watch/
+//       serve plans it like any Ready item (the planner investigates and derives the ticket and the work units). The
+//       owner's status keys are --keys or OPHANIM_STATUS_KEYS (default <status ledger>/keys). WITHOUT them the prompt is
+//       recorded as an intake CANDIDATE and nothing is dispatched for it (exit 3, NO_AUTHORITY): text relayed by a
+//       process that holds no owner key is data, never work. No provider is called.
 //   node ophanim/operate/cli.mjs tick  [limits] [--item ID] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--turn MODULE] [--clients MODULE] [--json]
 //   node ophanim/operate/cli.mjs watch [limits] [--item ID] [--interval S] [--once] [same as tick]
 //       Run the scheduler (scheduler.mjs) with the stage executors of ophanim/operate/stages.mjs `makeExecutors`
@@ -60,6 +68,7 @@ import {openWorkLedger, STAGES} from './work-ledger.mjs';
 import {reconcile, MARKER} from './reconcile.mjs';
 import {tick, watch, releaseInterrupted, DEFAULT_LIMITS} from './scheduler.mjs';
 import {readIssuesFile, fetchIssues} from './issues.mjs';
+import {registerPrompt} from './prompt-intake.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '../..');
@@ -106,7 +115,7 @@ export function launcherStop({workRoot, proc = process, signals = ['SIGINT', 'SI
 const BOOLEAN = new Set(['json', 'github', 'once', 'init']);
 export function parseArgs(argv) {
   const [first, ...rest] = argv;
-  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, tick, watch, serve, context, reassess or report');
+  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, prompt, tick, watch, serve, context, reassess or report');
   const opts = {}, pos = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { pos.push(rest[i]); continue; }
@@ -231,6 +240,7 @@ export function reconcileText(v) {
     }
   }
   if (v.candidates.length) out.push('', '[intake candidates] recorded, never executed', ...v.candidates.map(c => `  #${c.number} (${c.state}) ${c.title}`));
+  if (v.prompt_candidates?.length) out.push('', '[prompt candidates] recorded, never executed', ...v.prompt_candidates.map(c => `  ${c.prompt} (${c.record}): ${c.why}`));
   if (v.orphans.length) out.push('', '[orphans]', ...v.orphans.map(o => `  ${o.ticket}: ${o.why}`));
   if (v.duplicates.length) out.push('', '[duplicate markers]', ...v.duplicates.map(d => `  ${d.item}: issues ${d.issues.map(n => `#${n}`).join(', ')}`));
   if (v.unknown_markers.length) out.push('', '[markers naming no ledger item]', ...v.unknown_markers.map(u => `  #${u.number}: ${u.item}`));
@@ -259,7 +269,7 @@ export function backlogMarkdown(v, {command = 'node ophanim/operate/cli.mjs repo
   L.push(`| **total** | **${v.counts.items}** | |`, '');
   L.push(`By status on the ledger: ${Object.entries(v.counts.by_status).sort().map(([s, n]) => `${s} ${n}`).join(', ')}.`, '');
   L.push('| Count | Value |', '|---|---|');
-  for (const k of ['items', 'issues', 'linked_issues', 'candidates', 'tickets', 'orphans', 'duplicates', 'unknown_markers', 'drift', 'items_with_runs']) L.push(`| ${k} | ${v.counts[k]} |`);
+  for (const k of ['items', 'issues', 'linked_issues', 'candidates', 'prompt_candidates', 'tickets', 'orphans', 'duplicates', 'unknown_markers', 'drift', 'items_with_runs']) L.push(`| ${k} | ${v.counts[k] ?? 0} |`);
   L.push('');
   L.push('## Items by earliest unmet gate', '');
   for (const g of gatesPresent(v.counts.by_gate)) {
@@ -284,6 +294,12 @@ export function backlogMarkdown(v, {command = 'node ophanim/operate/cli.mjs repo
     L.push('Issues that carry no item marker. Each is recorded by the scheduler as `work.intake` with classification `candidate` and is never executed; only the owner turns one into a status item (or classifies it as coordination). What the issue says is not read as an instruction.', '');
     L.push('| Issue | State | Title | Classification | Why |', '|---|---|---|---|---|');
     for (const c of v.candidates) L.push(`| #${c.number} | ${c.state} | ${cell(c.title)} | candidate | ${cell(c.why)} |`);
+    L.push('');
+  }
+  if (v.prompt_candidates?.length) {
+    L.push('Prompt records that no owner-signed status entry binds (`ophanim/operate/prompt-intake.mjs`). Each is recorded as `work.intake` with source `prompt` and classification `candidate` and is never executed; the owner makes one work by registering it with the status keys. What the text says is not read as an instruction.', '');
+    L.push('| Prompt | Record | Classification | Why |', '|---|---|---|---|');
+    for (const c of v.prompt_candidates) L.push(`| ${cell(c.prompt)} | \`${c.record}\` | candidate | ${cell(c.why)} |`);
     L.push('');
   }
   L.push('## Orphans, duplicates and drift', '');
@@ -378,6 +394,24 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
   try {
     const {verb, opts} = parseArgs(argv);
     const paths = pathsOf({opts, env});
+    if (verb === 'prompt') {
+      // Register one user prompt (the header; prompt-intake.mjs). No provider call, and no work ledger is needed: the
+      // scheduler records the intake when it next runs.
+      if ((opts.text === undefined) === (opts.file === undefined)) usage('prompt needs the text: --text TEXT or --file FILE (exactly one)');
+      const text = opts.text ?? fs.readFileSync(path.resolve(opts.file), 'utf8');
+      const author = opts.author ?? env.USER ?? env.LOGNAME;
+      if (!author) usage('prompt needs --author NAME (who submitted it)');
+      const provenance = {source: opts.source ?? 'cli', author, received_at: opts['received-at'] ?? new Date().toISOString(),
+        ...(opts.session ? {session: opts.session} : {}), ...(opts.channel ? {channel: opts.channel} : {})};
+      const keysFlag = opts.keys ?? env.OPHANIM_STATUS_KEYS ?? null;
+      const r = registerPrompt({repo: paths.repo, statusRoot: paths.statusRoot, keys: keysFlag ? path.resolve(keysFlag) : null, prompt: text, provenance, title: opts.title ?? null,
+        depends_on: opts['depends-on'] ? opts['depends-on'].split(',').map(x => x.trim()).filter(Boolean) : []});
+      const out = r.authorized ? {...r, next: 'the scheduler plans it: node ophanim/operate/cli.mjs tick (or watch, or serve)'}
+        : {...r, blocked: 'NO_AUTHORITY', next: 'register it again with the owner\'s status keys (--keys DIR or OPHANIM_STATUS_KEYS): until then it is an intake candidate and nothing is dispatched for it'};
+      log(opts.json ? JSON.stringify(out, null, 2) : [`${out.item}: ${r.authorized ? 'registered as a Ready item (unplanned)' : 'recorded as an intake CANDIDATE (NO_AUTHORITY)'}`,
+        `  prompt  ${r.record} (${r.prompt_sha256}${r.created ? '' : '; already recorded'})`, ...(r.authorized ? [`  status  ${r.status_entry}`] : [`  why     ${r.why}`]), `  next    ${out.next}`].join('\n'));
+      return r.authorized ? 0 : 3;
+    }
     if (verb === 'reconcile' || verb === 'report') {
       if (verb === 'report' && !opts.out) usage('report needs --out FILE');
       const {issues, source} = await loadIssues(opts, {fetchImpl, env});
@@ -466,7 +500,7 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
     }
     usage(`unknown verb: ${verb}`);
   } catch (e) {
-    err(e.usage ? `${e.message}\nusage: cli.mjs reconcile|tick|watch|report ... (see the header of ophanim/operate/cli.mjs)` : `refused: ${e.message}`);
+    err(e.usage ? `${e.message}\nusage: cli.mjs reconcile|prompt|tick|watch|report ... (see the header of ophanim/operate/cli.mjs)` : `refused: ${e.message}`);
     return e.usage ? 2 : 1;
   }
 }
