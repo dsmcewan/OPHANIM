@@ -20,7 +20,8 @@
     "3B is split: 3B-1 runs three agents concurrently (evidence+wake, identity, agy guard+spend) from the integrated 3A commit; 3B-2 (lint review and enforcement, L-503) runs after 3B-1 is integrated, because lint fixes touch test files every 3B-1 agent owns and enforcement must cover their new tests",
     "shared hot files have ONE owner each in 3B-1: stages.mjs and live-run.mjs -> identity; context/gates/reconcile/scheduler -> evidence+wake; agy-cli/run-item/sdk/turns/util -> agy+spend. A needed change in another owner's file is written as a patch under the agent's report, not made; the coordinator routes it",
     "L-123 (writable verification boundary) is unresolved: no 3B claim may assert artifact integrity after verification",
-    "3B-2 runs two agents from the 3B-1 integration commit, split by tree: 3b-lint-ophanim (ophanim findings + the lint rules and their CI enforcement) and 3b-lint-pantheon (pantheon and packages findings). Rule changes only for a demonstrated false positive/negative with a self-test; the integrated tree must pass `lint-tests.mjs --enforce`"
+    "3B-2 runs two agents from the 3B-1 integration commit, split by tree: 3b-lint-ophanim (ophanim findings + the lint rules and their CI enforcement) and 3b-lint-pantheon (pantheon and packages findings). Rule changes only for a demonstrated false positive/negative with a self-test; the integrated tree must pass `lint-tests.mjs --enforce`",
+    "3B-2 follow-up (coordinator, after both agents reported): P1 (recorded codex argv names the binary twice under the outer runtime) is repaired by 3b-lint-pantheon because the strengthened round2 test cannot land without it; the 32 rule misreads are resolved by 3b-lint-ophanim refining the rule, validated against both branches, not by suppression"
   ],
   "subwaves": {
     "3A": {
@@ -229,9 +230,13 @@
           "packages/model-client/tests/request.test.mjs",
           "pantheon/tests/{acceptance-tool-links,agy-jail-hook,agy-observed-pass-1.5.10,agy-sandbox-r2a4,agy-sandbox,agy-seat-identity,agy-tool-drift,agy-worker-probe,agy-worker,context-chain,fit-matrix,frontier-adapter,practice-paired,review-model-independence,review-runner-cli-units,review-runner-continue,review-runner-round2,review-runner-run,review-runner-subscription,role-seating,route-dispatch-selection,route-protocol,route-task-profile,seat-argv,view-bus}.test.mjs",
           "pantheon/tests/fixtures/**",
-          "pantheon/tests/review-runner-helper.mjs"
+          "pantheon/tests/review-runner-helper.mjs",
+          "pantheon/src/review-runner/subscription.mjs"
         ],
-        "new_files": []
+        "new_files": [],
+        "region_limits": {
+          "pantheon/src/review-runner/subscription.mjs": "follow-up only: the plan argv construction when the outer runtime is applied (~:282, production defect P1 exposed by the strengthened review-runner-round2 test); nothing else"
+        }
       }
     }
   }
