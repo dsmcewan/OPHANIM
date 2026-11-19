@@ -31,6 +31,9 @@ import { sh } from "./fixtures/pipeline-stages.mjs";
 
 const have = await sandboxAvailable("bwrap");
 const varTmp = (() => { try { rmSync(mkdtempSync("/var/tmp/pantheon-cred-probe-"), { recursive: true }); return true; } catch { return false; } })();
+// The two credential-isolation tests drive real bwrap jails end to end: about 17 s each locally, but 75 s in CI's plain
+// run and over 120 s (the gate's per-test default, L-505) in its per-file run, so they declare their own bound, below the
+// gate's 360 s per-file watchdog.
 const gate = { skip: !have.ok ? `bwrap unavailable: ${have.why}` : !varTmp ? "/var/tmp is not writable" : false };
 const REVIEW = new URL("../src/pipeline/review.mjs", import.meta.url).href;
 const dummy = tag => `${tag}-${randomBytes(16).toString("hex")}`;
@@ -172,7 +175,7 @@ function hostFiles(t, secret) {
   return planted;
 }
 
-test("credential isolation, WORKER path: the verify_cmd run by agy's run_command (the unit's verify launcher) cannot reach the A2A token, the OAuth token, the provider keys or the home's secrets -- by env, file, inherited fd, /proc or the A2A socket -- while ask_subagent keeps working through the relay, authorised and call-limited", gate, async t => {
+test("credential isolation, WORKER path: the verify_cmd run by agy's run_command (the unit's verify launcher) cannot reach the A2A token, the OAuth token, the provider keys or the home's secrets -- by env, file, inherited fd, /proc or the A2A socket -- while ask_subagent keeps working through the relay, authorised and call-limited", { ...gate, timeout: 300_000 }, async t => {
   const f = await fixture(t);
   const calls = [];
   const shim = await startA2AShim({ unit_id: "u1", allowed_subagents: ["math"], socket: join(f.ctl, "a2a.sock"), seatFor: () => ({ vendor: "xai", model: "grok-x" }),
@@ -251,7 +254,7 @@ reply=''
   assert.ok(leak.env.some(h => h.found.includes("openai")), "unjailed, the env hands over the provider key");
 });
 
-test("credential isolation, CONTROLLER path: runVerify runs the verify_cmd with none of the controller's credentials (env, inherited fd, the run's control dirs with the A2A token and the OAuth scratch, the seal key, the home's secrets, /proc of the relay, the A2A socket); the same probe UNJAILED finds every one (positive control)", gate, async t => {
+test("credential isolation, CONTROLLER path: runVerify runs the verify_cmd with none of the controller's credentials (env, inherited fd, the run's control dirs with the A2A token and the OAuth scratch, the seal key, the home's secrets, /proc of the relay, the A2A socket); the same probe UNJAILED finds every one (positive control)", { ...gate, timeout: 300_000 }, async t => {
   const f = await fixture(t);
   const shim = await startA2AShim({ unit_id: "u1", allowed_subagents: ["math"], socket: join(f.ctl, "a2a.sock"), seatFor: () => ({ vendor: "xai", model: "grok-x" }), subagentTurn: async () => ({ text: "42" }) });
   t.after(() => shim.close());
