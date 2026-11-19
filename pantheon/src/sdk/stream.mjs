@@ -184,6 +184,16 @@ export async function streamTurn({ client, surface, req, seat, onEvent, signal }
   };
 }
 
+// `promise`, or the abort reason the moment `signal` fires (the request itself is cancelled by the same signal).
+export function untilAborted(promise, signal) {
+  if (!signal) return promise;
+  let onAbort;
+  const stopped = new Promise((_, reject) => { onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError")); });
+  if (signal.aborted) onAbort(); else signal.addEventListener("abort", onAbort, { once: true });
+  Promise.resolve(promise).catch(() => {});
+  return Promise.race([promise, stopped]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
 // The events of `it`, ending with the abort reason the moment `signal` fires: the pending read is not awaited, and the
 // generator is closed (its SDK stream with it) in the background.
 async function* abortable(it, signal) {

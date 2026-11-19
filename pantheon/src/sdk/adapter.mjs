@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { streamTurn } from "./stream.mjs";
+import { streamTurn, untilAborted } from "./stream.mjs";
 import { modelId } from "../config/models.mjs";
 import { defaultOutputFor } from "../config/tiers.mjs";
 import { SEAT_FACTS } from "../route/router.mjs";
@@ -311,7 +311,11 @@ async function sendTurnOn({
   }
   // The direct path has no frontier client in front of it, so its context admission is done here, from
   // the cited capability facts, before any generation call.
-  const admit = req => admitDirect({ client, vendor, spec, req, signal });
+  // The stage's stop reaches the direct path's unary requests as well as its streams: each request carries it (SDK
+  // request options; Google config.abortSignal), an aborted signal sends nothing, and the turn rejects as soon as it
+  // fires (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 9).
+  const admit = async req => { signal?.throwIfAborted(); await admitDirect({ client, vendor, spec, req, signal }); signal?.throwIfAborted(); };
+  const opt = signal ? [{ signal }] : [];
 
   // Streaming is an OBSERVATION channel, not a second result format: streamTurn accumulates
   // into the same shape the non-streaming path returns, so the seat layer hashes one thing.
@@ -370,7 +374,7 @@ async function sendTurnOn({
     const items = [...(history ?? []), { role: "user", content: prompt }];
     const req = withEffort(spec.surface, model ?? spec.default_model, effort, buildRequest({ spec, vendor, model, prompt, history, extra, mode }));
     await admit(req);
-    const res = await client.responses.create(req);
+    const res = await untilAborted(client.responses.create(req, ...opt), signal);
     const n = { ...normalize(res, vendor, (history ?? []).length > 0), reasoning_context: reasoningContextReport(req.reasoning?.context, res) };
     const hasOutput = Array.isArray(res?.output) && res.output.length > 0;
     return {
@@ -394,16 +398,16 @@ async function sendTurnOn({
       ...extra,
     });
     await admit(req);
-    const res = await client.responses.create(req);
+    const res = await untilAborted(client.responses.create(req, ...opt), signal);
     return normalize(res, vendor, Boolean(previousResponseId));
   }
-  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort, admit });
+  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort, admit, signal });
 }
 
 // Replay surfaces. `history` is the prior conversation in the vendor's own message shape; the
 // caller owns it and gets an updated copy back. Returning the new history rather than mutating
 // the input keeps a failed turn from corrupting the caller's record.
-async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort, admit }) {
+async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort, admit, signal }) {
   const resumed = history.length > 0;
   if (spec.surface === "genai") {
     const contents = [...history, { role: "user", parts: [{ text: prompt }] }];
@@ -411,7 +415,7 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
       model: model ?? spec.default_model, contents, ...extra,
     });
     await admit(req);
-    const res = await client.models.generateContent(req);
+    const res = await untilAborted(client.models.generateContent(signal ? { ...req, config: { ...req.config, abortSignal: signal } } : req), signal);
     const candidate = res?.candidates?.[0];
     const text = typeof res?.text === "string" ? res.text : collectGenaiText(res);
     const terminal = terminalState("genai", { finishReason: candidate?.finishReason ?? null, blocked: Boolean(res?.promptFeedback?.blockReason) });
@@ -434,7 +438,7 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
       ...extra,
     });
     await admit(req);
-    const res = await client.messages.create(req);
+    const res = await untilAborted(client.messages.create(req, ...(signal ? [{ signal }] : [])), signal);
     const text = (res?.content ?? []).filter(b => b?.type === "text").map(b => b.text).join("");
     const tools = [...new Set((res?.content ?? []).filter(b => b?.type === "tool_use").map(b => b.name))].sort();
     // A max_tokens stop is a truncated reply, not a complete exchange.
