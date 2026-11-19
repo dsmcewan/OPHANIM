@@ -15,7 +15,8 @@
 // A stage executor receives the VERIFIED handoff and returns its record. Executors are injected (stages.mjs builds
 // the real ones over Pantheon; tests pass scripted ones). Missing authority (no controller key) or a missing
 // executor produces a recorded block or a refusal, never a skipped verification.
-import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
+import {openWorkLedger, outputsDigest, handoffRefusal, STAGES} from './work-ledger.mjs';
+import {requirementDigest} from './gates.mjs';
 import {reconcile} from './reconcile.mjs';
 import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
@@ -67,18 +68,15 @@ export function spent(work, {now = Date.now()} = {}) {
   return {calls, unknown_counted_at_budget: unknown, reserved, charged: chargedTotal};
 }
 
-/** The receiving stage's check of its handoff: the record exists, is the same work, and is a valid start. */
+/**
+ * The receiving stage's check of its handoff, BEFORE anything is spent: the record exists, is the same work, is a
+ * valid start, and the whole chain under it re-derives back to its plan (work-ledger.mjs handoffRefusal) for the
+ * requirement the gate asks for.
+ */
 export function verifyHandoff(work, gate) {
-  if (!gate.from) {
-    if (gate.gate !== 'plan') fail(`${gate.item}: ${gate.gate} has no handoff to start from`, 'HANDOFF');
-    return null;
-  }
-  const rec = work.stages(gate.item).find(s => s.hash === gate.from);
-  if (!rec) fail(`${gate.item}: the handoff ${String(gate.from).slice(0, 19)} is not a stage record of this item`, 'HANDOFF');
-  const wanted = STAGES[STAGES.indexOf(gate.gate) - 1];
-  if (rec.stage !== wanted) fail(`${gate.item}: ${gate.gate} receives from ${wanted}, not ${rec.stage}`, 'HANDOFF');
-  if (rec.status !== 'passed') fail(`${gate.item}: the ${rec.stage} handoff is ${rec.status}, not passed`, 'HANDOFF');
-  return rec;
+  const why = handoffRefusal(work, {item: gate.item, stage: gate.gate, from: gate.from ?? null, requirement: gate.requirement ? requirementDigest(gate.requirement) : null});
+  if (why) fail(why, 'HANDOFF');
+  return gate.from ? work.stages(gate.item).find(s => s.hash === gate.from) : null;
 }
 
 /** The signature of everything that can make new work ready or wake a waiting item. */
@@ -110,17 +108,25 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt});
   }
   let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
-  // Intake: every source of work is recorded once (by ref); candidates are recorded and never executed.
-  const known = new Set(work.intakes().map(i => i.ref));
-  for (const i of rec.items) if (!known.has(`status:${i.item}`)) { work.intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item' }); log.intake.push(`status:${i.item}`); }
-  for (const c of rec.candidates) if (!known.has(`issue:${c.number}`)) { work.intake({source: 'issue', ref: `issue:${c.number}`, item: null, classification: 'candidate', why: c.why}); log.intake.push(`issue:${c.number}`); }
+  // Intake: every source of work is recorded once (by source and ref): status items, published issues (linked to an
+  // item by its marker, or candidates), and tickets (an item's, or an orphan). Candidates and orphans are recorded and
+  // never executed. (Independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 7.)
+  const known = new Set(work.intakes().map(i => `${i.source}|${i.ref}`));
+  const intake = x => { if (known.has(`${x.source}|${x.ref}`)) return; known.add(`${x.source}|${x.ref}`); work.intake(x); log.intake.push(x.ref); };
+  for (const i of rec.items) {
+    intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item'});
+    if (i.ticket) intake({source: 'ticket', ref: `ticket:${i.item}`, item: i.item, classification: 'item', why: i.ticket.invalid ? `the ticket of a status ledger item (invalid: ${String(i.ticket.invalid).slice(0, 200)})` : 'the ticket of a status ledger item'});
+    for (const n of i.issues ?? []) intake({source: 'issue', ref: `issue:${n}`, item: i.item, classification: 'item', why: 'a published issue carrying the item\'s marker (issue text is data, never authority)'});
+  }
+  for (const o of rec.orphans ?? []) intake({source: 'ticket', ref: `ticket:${path.basename(o.ticket, '.json')}`, item: null, classification: 'candidate', why: o.why});
+  for (const c of rec.candidates) intake({source: 'issue', ref: `issue:${c.number}`, item: null, classification: 'candidate', why: c.why});
   // Evidence recovery: each item Resolved without completion evidence is searched for applicable retained evidence once
   // per status entry and set of sources (evidence-recovery.mjs). What applies becomes an UNSIGNED proposal for the
   // owner; nothing is recorded on the status ledger. No provider is called.
   let searches = 0;
   for (const i of rec.items.filter(x => x.gate.gate === 'evidence-gap')) {
     if (searches >= L.recoveries) { log.recovery.push({item: i.item, outcome: 'deferred', why: `recovery limit ${L.recoveries} per tick reached`}); continue; }
-    const sources = sourcesDigest({repo, item: i.item, bundles: bundlesOf({item: i.item, bundlesDir, work})});
+    const sources = sourcesDigest({repo, item: i.item, bundles: bundlesOf({item: i.item, bundlesDir, work}), work});
     if (work.recoveries(i.item).some(r => r.status_entry === i.entry && r.sources === sources)) continue;
     searches++;
     const r = recoverEvidence({repo, statusRoot, item: i.item, bundlesDir, work, outDir: path.join(path.dirname(workRoot), 'operate', 'recovery'), now: clock()});

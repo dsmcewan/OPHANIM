@@ -36,10 +36,13 @@ export const KINDS = Object.freeze(['authoritative-requirement', 'observation', 
 // rounds and requests bound the calls; result_bytes bounds one result and total_bytes one seat's whole investigation, both in UTF-8 BYTES of delivered record text.
 // dossier_bytes bounds the whole initial view (the evidence text of all its entries).
 export const DEFAULT_INVESTIGATION = Object.freeze({rounds: 3, requests_per_round: 6, result_bytes: 16_000, total_bytes: 160_000, dossier_bytes: 80_000});
-export const OPS = Object.freeze(['file', 'list', 'grep', 'log', 'show', 'status', 'work', 'record', 'issue', 'output']);
+export const OPS = Object.freeze(['file', 'list', 'grep', 'log', 'show', 'status', 'work', 'record', 'issue', 'output', 'dossier']);
 
 const sha = b => 'sha256:' + createHash('sha256').update(b).digest('hex');
-const gitOf = repo => (args, opts = {}) => execFileSync('git', ['-C', repo, ...args], {encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], ...opts});
+// Every pathspec is LITERAL: git's pathspec magic (":/", ":(top)", globs) would reach outside a repository that is a
+// subdirectory of its checkout (independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 6).
+// (check-ignore takes plain path names and refuses the flag.)
+const gitOf = repo => (args, opts = {}) => execFileSync('git', [...(args[0] === 'check-ignore' ? [] : ['--literal-pathspecs']), '-C', repo, ...args], {encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], ...opts});
 const tryGit = (G, args) => { try { return G(args); } catch { return null; } };
 const under = (root, abs) => abs === root || abs.startsWith(root + path.sep);
 /**
@@ -81,9 +84,17 @@ export function windowBytes(text, offset = 0, cap = Infinity) {
  * `next`: the complete request that continues it. So any cut source -- a long history, a large record, a file that is
  * one line -- can be continued, and deliveries of the same view and version can be added up.
  */
-export function makeRetriever({repo, statusRoot, work = null, issues = null, outputsDir = null, limits = {}}) {
+export function makeRetriever({repo, statusRoot, work = null, issues = null, outputsDir = null, limits = {}, dossierViews = null}) {
   const L = {...DEFAULT_INVESTIGATION, ...limits};
   const G = gitOf(repo);
+  // A path given to list, grep, log or show is the repository's: never pathspec magic, never outside it as written or
+  // as resolved (a missing path is allowed for history, and matches nothing in the working tree). {error, why} or null.
+  const pathRefusal = (p, what) => {
+    if (typeof p !== 'string' || !p) return {error: 'BAD_REQUEST', why: `${what} is a repository path`};
+    if (p.startsWith(':')) return {error: 'BAD_REQUEST', why: `${p}: git pathspec magic is not accepted; name a path inside the repository`};
+    const c = contained(repo, p);
+    return c.error && c.error !== 'NOT_FOUND' ? {error: c.error, why: c.why} : null;
+  };
   const headOf = () => tryGit(G, ['rev-parse', 'HEAD'])?.trim() ?? null;
   const no = (error, why) => ({ok: false, error, why});
   const keep = (rows, match) => (typeof match === 'string' && match ? rows.filter(r => r.includes(match)) : rows);
@@ -91,6 +102,7 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
   // Each op returns the WHOLE body of its view: {source, version, body, rows?}; `finish` windows it.
   const views = {
     file({path: p, start, lines}) {
+      if (typeof p === 'string' && p.startsWith(':')) return no('BAD_REQUEST', `${p}: git pathspec magic is not accepted`);
       const c = contained(repo, p);
       if (c.error) return no(c.error, c.why);
       if (!fs.statSync(c.abs).isFile()) return no('NOT_FOUND', `${p} is not a file in the working tree`);
@@ -107,20 +119,26 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       // `start` (a line number) and `lines` are a convenience: they become a byte range of the same file body.
       let range = null;
       if (Number.isInteger(start) && start > 1 || Number.isInteger(lines)) {
-        const all = body.split('\n'), from = Math.max(1, start ?? 1), to = Math.min(all.length, from + Math.max(1, lines ?? all.length) - 1);
+        const all = body.split('\n');
+        // A window past the end is refused, never delivered as an empty success (question 6).
+        const lastLine = all.length - (body.endsWith('\n') ? 1 : 0);
+        if (Number.isInteger(start) && start > Math.max(1, lastLine)) return no('OUT_OF_RANGE', `${p} has ${lastLine} line(s); line ${start} is past its end`);
+        const from = Math.max(1, start ?? 1), to = Math.min(all.length, from + Math.max(1, lines ?? all.length) - 1);
         const at = n => Buffer.byteLength(all.slice(0, n).join('\n'), 'utf8') + (n > 0 && n < all.length ? 1 : 0);
         range = {from: at(from - 1), to: to >= all.length ? b.length : at(to)};
       }
       return {source: `file:${p}`, version: sha(b), body, range, rows: body.split('\n').length};
     },
     list({prefix = ''}) {
-      if (prefix && contained(repo, prefix).error === 'REFUSED') return no('REFUSED', `${prefix} is outside the repository`);
+      const bad = prefix ? pathRefusal(prefix, 'prefix') : null;
+      if (bad) return no(bad.error, bad.why);
       const files = (tryGit(G, ['ls-files', '--', prefix || '.']) ?? '').split('\n').filter(Boolean);
       return {source: `list:${prefix || '.'}`, version: sha(files.join('\n')), body: files.join('\n'), rows: files.length};
     },
     grep({pattern, path: p = '.'}) {
       if (typeof pattern !== 'string' || !pattern) return no('BAD_REQUEST', 'grep needs {pattern} (a fixed string)');
-      if (contained(repo, p).error === 'REFUSED') return no('REFUSED', `${p} is outside the repository`);
+      const bad = pathRefusal(p, 'path');
+      if (bad) return no(bad.error, bad.why);
       let out = '';
       try { out = G(['grep', '-n', '-I', '-F', '-e', pattern, '--', p]); } catch (e) { if (e.status !== 1) return no('GREP_FAILED', String(e.stderr ?? e.message).slice(0, 300)); }
       const rows = out.split('\n').filter(Boolean);
@@ -128,14 +146,21 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       return {source: `grep:${pattern}@${p}`, version: sha(rows.join('\n')), body: rows.join('\n') || '(no match)', rows: rows.length};
     },
     log({path: p = null, grep: g = null}) {
-      const out = tryGit(G, ['log', '--date=short', '--format=%h %ad %s', ...(g ? ['-F', `--grep=${g}`] : []), ...(p ? ['--', p] : [])]);
+      const bad = p !== null ? pathRefusal(p, 'path') : null;
+      if (bad) return no(bad.error, bad.why);
+      // Always limited to this repository's own paths ("." when no path is named): a subdirectory repository's log is
+      // not its parent checkout's.
+      const out = tryGit(G, ['log', '--date=short', '--format=%h %ad %s', ...(g ? ['-F', `--grep=${g}`] : []), '--', p ?? '.']);
       if (out === null) return no('LOG_FAILED', 'git log failed for that path or pattern');
       const rows = out.split('\n').filter(Boolean);
       return {source: `log:${p ?? '*'}${sel({grep: g})}`, version: sha(rows.join('\n')), body: rows.join('\n') || '(no commit)', rows: rows.length};
     },
     show({commit, path: p = null}) {
       if (!/^[0-9a-f]{7,64}$/.test(commit ?? '')) return no('BAD_REQUEST', 'show needs {commit} (a hex id) and optionally {path}');
-      const out = tryGit(G, p ? ['show', `${commit}:${p}`] : ['show', '--stat', '--format=%H%n%an %ad%n%B', commit]);
+      const bad = p !== null ? pathRefusal(p, 'path') : null;
+      if (bad) return no(bad.error, bad.why);
+      // `<commit>:./<path>` is relative to this repository, not to the top of its checkout; the stat is limited to it.
+      const out = tryGit(G, p ? ['show', `${commit}:./${path.relative(path.resolve(repo), path.resolve(repo, p)).split(path.sep).join('/')}`] : ['show', '--stat', '--format=%H%n%an %ad%n%B', commit, '--', '.']);
       if (out === null) return no('NOT_FOUND', `${commit}${p ? `:${p}` : ''} is not in this repository`);
       return {source: `show:${commit}${p ? `:${p}` : ''}`, version: commit, body: out};
     },
@@ -174,6 +199,13 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       const all = fs.readFileSync(c.abs, 'utf8');
       return {source: `output:${id}`, version: sha(all), body: all};
     },
+    // A view the dossier derived (its relations, consumers, guesses, runs, index): the same bytes the dossier was cut
+    // from, so a cut entry can be continued (question 6).
+    dossier({source}) {
+      const v = typeof source === 'string' ? dossierViews?.get(source) : null;
+      if (!v) return no('NOT_FOUND', `${source} is not a view of the dossier given to this seat`);
+      return {source, version: v.version, body: v.body};
+    },
   };
   /**
    * Window a view's body: at most `cap` bytes from `offset` (within the view's own range, when it has one). `tail`
@@ -190,6 +222,8 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       if (off > total || (off === total && total > 0)) return no('OUT_OF_RANGE', `offset ${off} is past the end of ${v.source} (${total} bytes)`);
     }
     let start = Math.max(lo, off ?? lo);
+    // An offset at or past the end of the range asked for delivers nothing: refused, never an empty success (question 6).
+    if (start >= hi && total > 0) return no('OUT_OF_RANGE', `offset ${start} is at or past the end of the range asked for of ${v.source} (bytes ${lo}-${hi} of ${total})`);
     if (tail && off === null && hi - lo > cap) {
       const b = Buffer.from(v.body, 'utf8'), nl = b.indexOf(0x0A, hi - cap);
       start = nl !== -1 && nl + 1 < hi ? nl + 1 : hi - cap;
@@ -208,7 +242,21 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       coverage: {complete, unit: 'bytes', from: w.from, to: w.to, total: w.total, ...(v.rows !== undefined ? {rows: v.rows} : {}), ...(v.of !== undefined ? {of: v.of} : {}),
         ...(note ? {note} : {}), ...(next ? {next} : {})}};
   };
-  return {limits: L, run(req, {cap = L.result_bytes, tail = false} = {}) {
+  return {limits: L,
+    /**
+     * The CURRENT version of the view `req` names, without delivering it: undefined when it cannot be read here (no
+     * work ledger, no issue snapshot, a dossier view, a stored output), null when it is gone. A work-ledger view is
+     * never "changed evidence": recording an attempt is not new evidence (as `stable` in buildDossier).
+     */
+    versionOf(req) {
+      if (!req || typeof req !== 'object' || !OPS.includes(req.op) || ['work', 'dossier', 'output'].includes(req.op)) return undefined;
+      try {
+        const v = views[req.op](req);
+        if (v.ok === false) return v.error === 'UNAVAILABLE' ? undefined : null;
+        return v.version ?? null;
+      } catch { return undefined; }
+    },
+    run(req, {cap = L.result_bytes, tail = false} = {}) {
     if (!req || typeof req !== 'object' || !OPS.includes(req.op)) return no('BAD_REQUEST', `op is one of ${OPS.join(', ')}`);
     try {
       const v = views[req.op](req);
@@ -228,7 +276,9 @@ const words = s => [...new Set(String(s ?? '').match(/[A-Za-z0-9_][A-Za-z0-9_.\/
  */
 export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}}) {
   const G = gitOf(repo);
-  const R = makeRetriever({repo, statusRoot, work, issues, limits});
+  // The full bytes of every view derived here, so a cut entry is continued from the same bytes ({"op":"dossier"}).
+  const derived = new Map();
+  const R = makeRetriever({repo, statusRoot, work, issues, limits, dossierViews: derived});
   const head = tryGit(G, ['rev-parse', 'HEAD'])?.trim() ?? null;
   const {board, byItem} = statusHistory(statusRoot);
   const history = byItem.get(item) ?? [];
@@ -244,13 +294,19 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     spent += Buffer.byteLength(text, 'utf8');
     entries.push({id: `S${entries.length + 1}`, kind, title, source, version, as_of, coverage, text, ...(request ? {request} : {})});
   };
-  /** A small entry made here (a view of its own). `cap` bounds it; a cut list says so. The requirement is never cut. */
+  /**
+   * A small entry made here: a view of its own, versioned by the digest of its bytes unless it is a ledger entry
+   * (question 5: a working-tree view is bound to the bytes shown, not to HEAD). `cap` bounds it; a cut entry carries
+   * the request that continues it (question 6). The requirement is never cut.
+   */
   const add = (kind, title, source, version, as_of, text, cap = 4000) => {
     const room = kind === 'authoritative-requirement' ? Infinity : Math.min(cap, left());
-    if (room < 200) { omissions.push(`"${title.slice(0, 80)}" is NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent`); return; }
+    const request = {op: 'dossier', source};
+    derived.set(source, {version: version ?? sha(text), body: text});
+    if (room < 200) { omissions.push(`"${title.slice(0, 80)}" is NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent; retrieve it with ${JSON.stringify(request)}`); return; }
     const w = windowBytes(text, 0, room);
-    push(kind, title, source, version, as_of, w.text, {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total,
-      ...(w.to < w.total ? {note: `the first ${w.to} of ${w.total} bytes of this list; the rest is not in this view (use list, grep or status to see it)`} : {})});
+    push(kind, title, source, version ?? sha(text), as_of, w.text, {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total,
+      ...(w.to < w.total ? {note: `the first ${w.to} of ${w.total} bytes of this view; continue with next`, next: {...request, offset: w.to}} : {})}, request);
   };
   /** An entry that IS a retrieval result: same source, version, byte window and continuation. Returns its bytes, or why not. */
   const fetch = (kind, title, req, cap, {as_of = null, tail = false} = {}) => {
@@ -273,7 +329,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // 2. Operational relationships.
   const dep = d => { const s = board.items.find(i => i.item === d); return s ? `${d}: ${s.state} [${s.entry.slice(0, 19)}] ${s.basis}` : `${d}: NOT ON THE LEDGER`; };
   const dependents = board.items.filter(i => (i.depends_on ?? []).includes(item)).map(i => i.item);
-  add('observation', 'Dependencies (what this item waits on) and dependents (what waits on it), latest status of each', `status:${item}#relations`, board.head, now.checked,
+  add('observation', 'Dependencies (what this item waits on) and dependents (what waits on it), latest status of each', `status:${item}#relations`, null, now.checked,
     `depends on: ${(now.depends_on ?? []).map(dep).join('\n  ') || '(none recorded)'}\ndependents: ${dependents.map(dep).join('\n  ') || '(none recorded)'}`);
   const ticketPath = `tickets/${item}.json`;
   let ticket = null;
@@ -288,7 +344,12 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   for (const i of mine.slice(3)) omissions.push(`issue #${i.number} is NOT shown (three issues are shown at most); retrieve it with ${JSON.stringify({op: 'issue', number: i.number})}`);
   if (!issues) omissions.push('no issue snapshot was supplied: the published issue text is not in this view');
   // 3. The files in play: named by the ticket or the requirement; then files that refer to them (consumers).
-  const tracked = (tryGit(G, ['ls-files']) ?? '').split('\n').filter(Boolean), trackedSet = new Set(tracked);
+  // The project's files are what the retriever reads: tracked, AND untracked but not ignored (question 5: a file that
+  // appeared in the working tree was readable yet invisible to the dossier and to `stable`). The ledgers' own files are
+  // not project files: the status and work ledgers are their own views.
+  const own = [statusRoot, work?.root].filter(Boolean).map(r => path.relative(fs.realpathSync(path.resolve(repo)), path.resolve(r))).filter(r => r && !r.startsWith('..'));
+  const tracked = [...new Set((tryGit(G, ['ls-files', '--cached', '--others', '--exclude-standard']) ?? '').split('\n').filter(Boolean))]
+    .filter(f => !own.some(r => f === r || f.startsWith(r + '/'))).sort(), trackedSet = new Set(tracked);
   const named = new Set();
   if (ticket) for (const p of [ticket.path, ...(ticket.copy ?? []), ...(ticket.slots ?? []).map(s => s.path)]) if (p && trackedSet.has(p)) named.add(p);
   for (const w of words(`${ready.title} ${ready.basis} ${mine.map(i => i.body).join(' ')}`)) if (trackedSet.has(w)) named.add(w);
@@ -304,7 +365,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     for (const w of words(`${ready.title} ${ready.basis}`).slice(0, 12)) for (const f of (tryGit(G, ['grep', '-l', '-I', '-i', '-F', '-e', w, '--', '.']) ?? '').split('\n').filter(Boolean)) hits.set(f, (hits.get(f) ?? 0) + 1);
     guessed = [...hits].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8);
     add('hypothesis', 'Candidate files, guessed by matching words of the requirement (NOT a finding: no file is named by the requirement or a ticket; verify or replace this selection)',
-      `guess:${item}`, head, null, guessed.map(([f, n]) => `${f} (${n} word(s) matched)`).join('\n') || '(no file matched any word)');
+      `guess:${item}`, null, null, guessed.map(([f, n]) => `${f} (${n} word(s) matched)`).join('\n') || '(no file matched any word)');
   }
   let used = 0;
   const showFile = (p, why) => {
@@ -315,7 +376,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
     if (r.error) omissions.push(`${p} is NOT shown: ${r.why}`); else used += r.bytes;
   };
   for (const p of named) showFile(p, 'named by the requirement or the ticket (current bytes)');
-  if (consumers.size) add('derived', 'Files that mention the files in play by name (textual references: possible consumers or tests, not proven dependencies)', `consumers:${item}`, head, null,
+  if (consumers.size) add('derived', 'Files that mention the files in play by name (textual references: possible consumers or tests, not proven dependencies)', `consumers:${item}`, null, null,
     [...consumers].map(([f, of]) => `${f} (mentions ${of.join(', ')})`).join('\n'));
   for (const [f] of [...consumers].slice(0, 6)) showFile(f, 'mentions a file in play (current bytes)');
   if (consumers.size > 6) omissions.push(`${consumers.size - 6} more file(s) that mention the files in play are listed but not shown`);
@@ -332,13 +393,17 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   else omissions.push(bundlesDir ? 'no retained run of this item was found' : 'no retained-runs directory was given: earlier board runs are not in this view');
   const top = new Map();
   for (const f of tracked) { const d = f.includes('/') ? f.split('/')[0] + '/' : '(root)'; top.set(d, (top.get(d) ?? 0) + 1); }
-  add('derived', `Repository index: ${tracked.length} tracked files at ${head ? head.slice(0, 12) : 'no commit'} (a COUNT, not their contents: use list, grep and file)`, `index:${head ?? 'none'}`, head, null,
+  add('derived', `Repository index: ${tracked.length} tracked files at ${head ? head.slice(0, 12) : 'no commit'} (a COUNT, not their contents: use list, grep and file)`, `index:${head ?? 'none'}`, null, null,
     [...top].sort((a, b) => b[1] - a[1]).map(([d, n]) => `${d} ${n}`).join('\n'));
   const core = entries.map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, coverage: {complete: e.coverage.complete, from: e.coverage.from, to: e.coverage.to, total: e.coverage.total}}));
   // `stable` leaves out the work ledger's own records, so recording an attempt does not itself look like new evidence.
   const outside = core.filter(e => !e.source.startsWith('work:')).map(({id, ...e}) => e);
-  return {schema: DOSSIER_SCHEMA, item, head, entries, omissions, digest: 'sha256:' + digest({item, head, core, omissions}),
+  const d = {schema: DOSSIER_SCHEMA, item, head, entries, omissions, digest: 'sha256:' + digest({item, head, core, omissions}),
     stable: 'sha256:' + digest({item, head, core: outside, omissions: omissions.filter(o => !o.includes('work ledger'))})};
+  // The derived views' full bytes travel with the dossier (not enumerable: never recorded or rendered), for the
+  // retriever given to the seats that are shown it.
+  Object.defineProperty(d, 'views', {value: derived, enumerable: false});
+  return d;
 }
 
 const coverageLine = c => (!c || c.complete ? 'complete' : `PARTIAL (${c.note ?? `bytes ${c.from}-${c.to} of ${c.total}`})`) + (c?.next ? ` | next: ${JSON.stringify(c.next)}` : '');
@@ -355,7 +420,8 @@ export const RETRIEVAL_HELP = limits => [
   `${limits.result_bytes} bytes per result and ${limits.total_bytes} bytes in all); the results come back and you are asked again.`,
   'Operations (all read-only): {"op":"file","path":P,"start":LINE?,"lines":N?} | {"op":"list","prefix":DIR?} | {"op":"grep","pattern":FIXED_STRING,"path":DIR?} |',
   ' {"op":"log","path":P?,"grep":TEXT?} | {"op":"show","commit":ID,"path":P?} | {"op":"status","item":ID,"match":TEXT?,"entry":HASH?} | {"op":"work","item":ID,"match":TEXT?} |',
-  ' {"op":"record","hash":RECORD} | {"op":"issue","number":N} | {"op":"output","id":ID}. Any of them takes "offset": BYTE to continue a cut result.',
+  ' {"op":"record","hash":RECORD} | {"op":"issue","number":N} | {"op":"output","id":ID} | {"op":"dossier","source":SOURCE} (a view the dossier derived).',
+  ' Any of them takes "offset": BYTE to continue a cut result. Paths are the repository\'s own (no git pathspec magic).',
   'Each result states its source, version and coverage in bytes. A PARTIAL result or dossier entry gives "next": the request that continues it; "match" selects rows instead of',
   'paging through them. A missing source, an error, a cut or a request that did not fit the budget is shown as such: do not assume what you were not given.',
 ].join('\n');
@@ -389,7 +455,8 @@ export function deliveryOf(dossier, log = null) {
     const via = ['supplied', 'retrieved'].filter(x => v.via.has(x)).join('+');
     // The continuation starts at the first byte NOT delivered, computed from the ranges (never a remembered cut).
     const gap = !portions.length || portions[0][0] > 0 ? 0 : portions[0][1];
-    return {source: v.source, version: v.version, via, portions, total: v.total, complete, next: complete || !v.base ? null : {...v.base, offset: gap}, ...(v.earlier.length ? {earlier_versions: v.earlier} : {})};
+    return {source: v.source, version: v.version, via, portions, total: v.total, complete, next: complete || !v.base ? null : {...v.base, offset: gap},
+      ...(v.base ? {request: v.base} : {}), ...(v.earlier.length ? {earlier_versions: v.earlier} : {})};
   };
   for (const v of views.values()) out.set(v.source, view(v));
   for (const [id, source] of refs) out.set(id, out.get(source));

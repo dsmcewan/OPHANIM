@@ -13,7 +13,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs';
-import {openWorkLedger} from './work-ledger.mjs';
+import {openWorkLedger, outputsDigest} from './work-ledger.mjs';
 import {tick} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, REVIEW_INDEPENDENCE} from './stages.mjs';
@@ -173,8 +173,10 @@ test('BOUNDARY (injected stage records): with every declared model a contributor
       const contributions = [{purpose: 'plan', vendor: 'anthropic', model: 'claude-fable-5-2', lab: 'anthropic'}, {purpose: 'work', vendor: 'openai', model: 'gpt-6-astra', lab: 'openai'}, ...all];
       assert.throws(() => reviewSeatsByModel({n: 1, contributions}), e => e.code === 'NO_SEATS');
       const p = {hash: 'sha256:' + '1'.repeat(64), identity, stage: 'plan', status: 'passed', outputs: {plan: {...planFor(''), requirement: {title: 'alpha succeeds', basis: 'alpha.mjs exports ok as true'}}}};
-      const i = {hash: 'sha256:' + '2'.repeat(64), identity, stage: 'implement', status: 'passed', handoff: {from: p.hash}, outputs: {base, commit, contributions}};
-      const r = {hash: 'sha256:' + '3'.repeat(64), identity, stage: 'review', status: 'passed', handoff: {from: i.hash}, outputs: {commit}, findings: []};
+      // The injected chain re-derives as a handoff chain must (each record's inputs are its upstream's outputs): the
+      // executors check their upstream since independent review, assignment 1 (Google gemini-4-carbon, 09d490f), question 2.
+      const i = {hash: 'sha256:' + '2'.repeat(64), identity, stage: 'implement', status: 'passed', handoff: {from: p.hash}, inputs: {upstream: outputsDigest(p.outputs)}, outputs: {base, commit, contributions}};
+      const r = {hash: 'sha256:' + '3'.repeat(64), identity, stage: 'review', status: 'passed', handoff: {from: i.hash}, inputs: {upstream: outputsDigest(i.outputs)}, outputs: {commit}, findings: []};
       const asked = [];
       const ex = makeExecutors({repo, stateDir: f.stateDir, independence: 'model', makeClientFor: () => { throw new Error('no live client'); },
         turn: async ({vendor, model}) => { asked.push(`${vendor}/${model}`); return {text: ACCEPT, served_model: model}; }});

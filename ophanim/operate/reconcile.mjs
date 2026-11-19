@@ -15,8 +15,9 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
-import {buildDossier} from './context.mjs';
-import {earliestGate} from './gates.mjs';
+import {buildDossier, makeRetriever} from './context.mjs';
+import {earliestGate, completionEvidence} from './gates.mjs';
+import {sourcesDigest, bundlesOf} from './evidence-recovery.mjs';
 
 export const MARKER = /<!--\s*ophanim:item=([a-z0-9][a-z0-9.-]{0,63})\s*-->/;
 
@@ -74,13 +75,24 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     if (list.length === 2) duplicates.push({item: m[1], issues: list});
   }
   const bytesOf = bytesOfRepo(repo);
+  // The current version of a non-file view a plan cited (an issue, a status history, a grep): re-read with the same
+  // read-only retriever the seats use, made once and only when a plan needs it (gates.mjs planValidity).
+  let R = null;
+  const versionOf = request => (R ??= makeRetriever({repo, statusRoot, work: workLedger, issues})).versionOf(request);
   const items = board.items.map(s => {
     const ticketFile = path.join(ticketsDir, `${s.item}.json`);
     const ticket = fs.existsSync(ticketFile) ? readTicket({repo, item: s.item}) : null;
     const stages = workLedger ? workLedger.stages(s.item) : [];
     const activeClaim = workLedger ? workLedger.activeClaim(s.item, now) : null;
-    const gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, now,
-      recovery: workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry).at(-1) ?? null : null,
+    // Evidence recovery for a Resolved item without completion evidence: the digest of its sources NOW, and the recorded
+    // search of exactly those sources when there is one (else the latest). A recovered proposal whose sources changed
+    // since no longer stands: the item is searched again (gates.mjs; independent review, assignment 1, question 5).
+    const gap = workLedger && s.state === 'Resolved' && !completionEvidence(s).ok;
+    const recoverySources = gap ? sourcesDigest({repo, item: s.item, bundles: bundlesOf({item: s.item, bundlesDir, work: workLedger}), work: workLedger}) : null;
+    const recs = workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry) : [];
+    const recovery = recs.filter(r => r.sources === recoverySources).at(-1) ?? recs.at(-1) ?? null;
+    const gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, versionOf, now,
+      recovery, recoverySources,
       reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'

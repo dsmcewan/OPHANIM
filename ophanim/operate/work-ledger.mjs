@@ -6,6 +6,9 @@
 // Kinds (schema ophanim.work/v1), each re-derived on append and on every verify:
 //   work.intake   a source of work seen by reconciliation: a status item, a published issue, a ticket. An issue
 //                 with no ledger item is a CANDIDATE: it is recorded, never executed, until the owner adds an item.
+//                 ONCE PER SOURCE: an intake carrying `once: 1` (every intake this module writes since independent
+//                 review, assignment 1, Google gemini-4-carbon, 09d490f, question 7) is refused when an intake of the
+//                 same {source, ref} is already recorded. Older intakes carry no marker and keep verifying as written.
 //   work.claim    the controller takes one stage of one item: attempt, idempotency key, lease, budget. Refused
 //                 while another unreleased, unexpired claim on the same item exists (no duplicate execution), and
 //                 refused when the same idempotency key already completed (no paying twice for the same inputs).
@@ -26,6 +29,10 @@
 //                 ticket, requirement) matches the previous stage's, and the inputs it names are exactly the
 //                 previous stage's outputs (by digest). Team, contributions, findings, usage, next stage and any
 //                 blocker are part of the record.
+//                 THE LINEAGE RULE (a record carrying `lineage: 1`, every record this module writes since independent
+//                 review, assignment 1, Google gemini-4-carbon, 09d490f, question 2; older records keep verifying as
+//                 written): only a plan starts without a handoff, and a handoff from a passed record is from the stage
+//                 immediately before this one (no stage is skipped).
 //   work.recovery an evidence-recovery attempt for an item Resolved without completion evidence: the status entry
 //                 it was made against, the digest of the sources searched, every source with its result, and, when
 //                 evidence was recovered, the digest of the UNSIGNED proposal written for the owner. Only the owner
@@ -123,8 +130,13 @@ function kinds({operators}) {
       validate: p => p?.schema === WORK_SCHEMA && INTAKE_SOURCES.includes(p.source) && str(p.ref) && INTAKE_CLASSES.includes(p.classification)
         && (p.item === null || ID.test(p.item ?? '')) && str(p.why) && ISO(p.at) ? null
         : 'an intake names {source, ref, item|null, classification, why, at}',
-      rederive: e => (e.payload.classification === 'item') !== (e.payload.item !== null)
-        ? 'only an intake classified as an item names one; a candidate or coordination issue is never an item until the owner adds it' : null,
+      rederive: (e, view) => {
+        if ((e.payload.classification === 'item') !== (e.payload.item !== null)) return 'only an intake classified as an item names one; a candidate or coordination issue is never an item until the owner adds it';
+        if (e.payload.once === 1 && entriesOf(view, 'work.intake').some(h => h !== e.hash && view.payload(h).source === e.payload.source && view.payload(h).ref === e.payload.ref)) {
+          return `the ${e.payload.source} source ${e.payload.ref} is already recorded: intake is recorded once per source`;
+        }
+        return null;
+      },
     },
     'work.claim': {
       authors: byController,
@@ -215,6 +227,7 @@ function kinds({operators}) {
         // The handoff: the stage it received from, if any, is the same work, and what this stage consumed is exactly
         // what that stage produced.
         const from = p.handoff?.from ?? null;
+        if (p.lineage === 1 && from === null && p.stage !== 'plan') return `a ${p.stage} stage starts from a handoff; only a plan starts without one`;
         if (from !== null) {
           if (!e.derived_from.includes(from) || view.entry(from)?.kind !== 'work.stage') return 'a handoff cites the stage record it received';
           const prev = view.payload(from);
@@ -222,12 +235,45 @@ function kinds({operators}) {
             return 'a handoff keeps the item and the original requirement';
           }
           if (prev.status !== 'passed' && !(prev.status === 'returned' && prev.next?.stage === p.stage)) return `a handoff starts from a passed stage, or one that returned to this stage (it was ${prev.status})`;
+          if (p.lineage === 1 && prev.status === 'passed' && prev.stage !== STAGES[STAGES.indexOf(p.stage) - 1]) return `${p.stage} receives from ${STAGES[STAGES.indexOf(p.stage) - 1] ?? 'no stage'}, not ${prev.stage}: no stage is skipped`;
           if (p.inputs.upstream !== outputsDigest(prev.outputs)) return 'the stage\'s inputs are not the outputs of the stage it received from';
         }
         return null;
       },
     },
   };
+}
+
+/**
+ * Why `from` is not a valid handoff for `stage` of `item`, or null. The WHOLE chain is re-derived, not one hop: from
+ * `from` back to its plan, each record is this item's, passed, the stage immediately before the one it hands to, keeps
+ * the original requirement (and, given `requirement`, the one the gate asks for), and its inputs are exactly the outputs
+ * of the record it received. Only a plan starts the chain. (Independent review, assignment 1, Google gemini-4-carbon,
+ * 09d490f, question 2: a stage consumed a record that started from nothing, or another item's.)
+ */
+export function handoffRefusal(work, {item, stage, from, requirement = null}) {
+  if (!from) return stage === 'plan' ? null : `${item}: ${stage} has no handoff to start from`;
+  const mine = work.stages(item);
+  const byHash = new Map(mine.map(s => [s.hash, s]));
+  let rec = byHash.get(from), want = stage;
+  if (!rec) return `${item}: the handoff ${String(from).slice(0, 19)} is not a stage record of this item`;
+  const head = rec;
+  for (;;) {
+    const wanted = STAGES[STAGES.indexOf(want) - 1];
+    if (rec.stage !== wanted) return `${item}: ${want} receives from ${wanted}, not ${rec.stage}`;
+    if (rec.status !== 'passed') return `${item}: the ${rec.stage} handoff is ${rec.status}, not passed`;
+    if (rec.identity?.item !== item) return `${item}: the ${rec.stage} record is of "${rec.identity?.item}"`;
+    if (rec.identity.requirement !== head.identity.requirement) return `${item}: the ${rec.stage} record was made for another requirement than the rest of its chain`;
+    if (requirement && rec.identity.requirement !== requirement) return `${item}: the ${rec.stage} record was made for another requirement than the one the gate asks for`;
+    const up = rec.handoff?.from ?? null;
+    if (rec.stage === 'plan') return up === null ? null : `${item}: the plan record names a handoff`;
+    if (!up) return `${item}: the ${rec.stage} record starts from no handoff; only a plan does`;
+    const prev = byHash.get(up);
+    if (!prev) return `${item}: the ${rec.stage} record's handoff is not a stage record of this item`;
+    if (rec.inputs?.upstream !== outputsDigest(prev.outputs)) return `${item}: the ${rec.stage} record's inputs are not the outputs of the record it received`;
+    want = rec.stage;
+    rec = prev;
+  }
 }
 
 /** Open (or create on first use) the work ledger at `root`. Keys for the controller live under <root>/keys. */
@@ -284,7 +330,7 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
   return {
     ledger: L, anchor: pinned, root,
     verify: () => L.verify(),
-    intake: ({source, ref, item = null, classification, why, at = new Date().toISOString()}) => append('work.intake', {source, ref, item, classification, why, at}),
+    intake: ({source, ref, item = null, classification, why, at = new Date().toISOString()}) => append('work.intake', {source, ref, item, classification, why, at, once: 1}),
     /** Claim one stage of one item. Throws (code WORK_REFUSED) on a duplicate or an already-completed key. */
     // An unreleased claim on the item whose lease expired at `at` is first released as `expired` (a claim racing to
     // release it is fine: the ledger refuses the second release, and the fenced claim then re-derives).
@@ -301,7 +347,7 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     // re-derivation refuses the same, so the check cannot be skipped by appending directly.
     recordStage: ({claim, from = null, at = new Date().toISOString(), ...rec}) => {
       fence(claim, at);
-      return append('work.stage', {...rec, at, handoff: {from}}, [claim, ...(from ? [from] : [])]);
+      return append('work.stage', {...rec, at, handoff: {from}, lineage: 1}, [claim, ...(from ? [from] : [])]);
     },
     /** Charge provider calls under a live claim, BEFORE they are made: `provider_calls` is the claim's cumulative count. */
     recordSpend: ({claim, provider_calls, at = new Date().toISOString()}) => {
