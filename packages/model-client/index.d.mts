@@ -65,6 +65,8 @@ export interface TurnOptions extends RequestOptions {
   compactAfterBytes?:number;
   countTokens?:TokenCounter;
   onEvent?:(event:OpaqueItem)=>void;
+  /** Called before EVERY billed generation request (compaction, the request, each continuation hop); throw to refuse it. */
+  onRequest?:(request:{request:number;kind:'compaction'|'generation'})=>void|Promise<void>;
 }
 export interface TurnResult {
   vendor:Vendor;
@@ -81,6 +83,8 @@ export interface TurnResult {
   usage:unknown;
 }
 export function sendModelTurn(options:TurnOptions):Promise<TurnResult>;
+export const GENERATION_METHODS:Readonly<Record<'responses'|'messages'|'models',readonly string[]>>;
+export function chargedClient<T>(client:T,onRequest?:(request:{request:number;kind:string})=>unknown,options?:{kind?:(method:string,args:unknown[])=>string}):T;
 
 export interface Candidate {vendor:Vendor;model:string;pool:string;poolConfig?:unknown}
 export interface Cooldown {

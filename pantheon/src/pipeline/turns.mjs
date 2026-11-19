@@ -181,9 +181,11 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     ...(box.extra_ro ? { extra_ro: box.extra_ro } : {}) };
 
   // `charge` (the pipeline's admit for a second provider call inside the turn: a lane's metered failover) is passed on.
-  const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined, charge = null }) => {
+  // `admitRequest` (optional; the second charge contract of sdk/live.mjs: nothing charged before the turn, every provider
+  // call admitted at its point of spend) is passed on as given (self-audit round 3, assignment 3 (sealed bb1287a), L-301).
+  const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined, charge = null, admitRequest = null }) => {
     const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
-      ...(typeof charge === "function" ? { charge } : {}) });
+      ...(typeof admitRequest === "function" ? { admitRequest } : typeof charge === "function" ? { charge } : {}) });
     // The served model is passed on exactly as the transport named it; a judging seat with none is refused upstream.
     // Its SOURCE is the transport's own report, passed on as given: "provider" only when the transport said the provider
     // named it (sdk/live.mjs liveTurn does, from the response), "input" when the transport substituted the model it was
@@ -194,11 +196,15 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
   };
 
   /** The metered Gemini API of a lane's base model: one unary answer, by default through makeClientFor + sendTurn. */
-  const api = agy.api ?? (async ({ vendor, model, prompt, effort, signal, charge = null }) => {
+  // `admitRequest` (optional): every request of this call, the first included, is admitted before it is sent (sendTurn's
+  // chargeFirstRequest); else `charge` admits the requests after the first, which the caller charged (L-301).
+  const api = agy.api ?? (async ({ vendor, model, prompt, effort, signal, charge = null, admitRequest = null }) => {
     if (typeof makeClientFor !== "function") throw fail("NO_API_CLIENT", "the metered Gemini API was needed as a quota failover, and no makeClientFor was given");
     const { sendTurn } = await import("../sdk/adapter.mjs");
     const r = await sendTurn({ client: makeClientFor(vendor), vendor, model, prompt, label: "pipeline-implementer-quota-failover", onEvent: () => {},   // streamed: whole files can be long
-      ...(effort ? { effort } : {}), ...(signal ? { signal } : {}), ...(typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });   // every further billed request (finding 1.1)
+      ...(effort ? { effort } : {}), ...(signal ? { signal } : {}),
+      ...(typeof admitRequest === "function" ? { onRequest: ({ request }) => admitRequest({ kind: request === 1 ? "request" : "continuation" }), chargeFirstRequest: true }
+        : typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });   // every further billed request (finding 1.1)
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     // sendTurn's served_model is the model the provider's response named.
     return { text: r.text ?? "", served_model: r.served_model ?? null, served_model_source: str(r.served_model) ? "provider" : null, response_id: r.response_id ?? null };
@@ -211,7 +217,11 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
    * {a2a: {url, token}} are still read; without a control_dir a temporary one (outside the worktree) is used and removed.
    */
   const implementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
-    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null, verify_hide = [], deadline = null, timeoutS: askedS = null }) => {
+    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null, verify_hide = [], deadline = null, timeoutS: askedS = null,
+    // `admitRequest` (optional; L-301): the pipeline charged nothing before this turn. The lane's worker session is admitted
+    // inside runAgyWorkerTurn between its jail build and its spawn (kind "lane"); a quota failover is admitted before the
+    // metered API is asked (kind "failover"), and that API's further requests as continuations.
+    admitRequest = null }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
     if (!laneParts(model)) throw fail("NOT_A_LANE", `the pipeline implementer runs on an Antigravity lane, and ${vendor}/${model} is not one (config/lanes.json)`);
     const cli = agy.cli ?? process.env.PANTHEON_AGY_CLI ?? join(homedir(), ".local", "bin", "agy");
@@ -239,7 +249,8 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
         verify_hide: Array.isArray(verify_hide) ? verify_hide : [] });
       // base_env: the ALLOWLISTED controller env, never process.env whole (independent review round 2, assignment 4,
       // question 7); childEnv (the unit's non-secret A2A env) is an explicit extra; no key or token ever passes.
-      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS: printS, graceS, env: childEnv, base_env: workerEnv(), sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
+      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS: printS, graceS, env: childEnv, base_env: workerEnv(), sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}),
+        ...(typeof admitRequest === "function" ? { charge: () => admitRequest({ kind: "lane" }) } : {}) });
       return { text: r.text ?? "", served_model: model, served_model_source: "input", transport: "agy-cli", requested_model: model,
         response_id: r.response_id ?? null, tool_calls: r.tool_calls ?? null, subagent_calls: r.subagent_calls ?? null, summary: r.summary ?? null,
         jail_log: r.jail_log ?? [], cleanup_env: r.cleanup_env ?? null, sandbox: r.sandbox ?? null, print_timeout_s: printS };
@@ -264,9 +275,12 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       const { shown, truncated } = owned ? await ownedFiles(cwd, owned) : { shown: [], truncated: false };
       // The metered API call is a provider call of its own: the pipeline's `charge` admits it against max_provider_calls
       // (and the caller's ledger charge) BEFORE it is made; a refusal (PROVIDER_LIMIT) means it is not made.
-      if (typeof charge === "function") charge();
+      const admits = typeof admitRequest === "function";
+      if (admits) admitRequest({ kind: "failover" });
+      else if (typeof charge === "function") charge();
+      const further = admits ? () => admitRequest({ kind: "continuation" }) : charge;
       let r;
-      try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal, charge }); }
+      try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal, charge: further }); }
       catch (err) {
         if (err?.code === "PROVIDER_LIMIT") throw Object.assign(err, { quota_failover });   // a further request refused at the bound (finding 1.1)
         throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and the metered API ${spare.model} could not answer either: ${String(err?.message ?? err).slice(0, 300)}`),

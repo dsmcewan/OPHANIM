@@ -419,14 +419,46 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 
 **What is scripted only, and known gaps**
 
-- Every test uses scripted model turns and a fake `agy` CLI. No live model, no live quota and no real `agy` binary has run this pipeline.
-- The `pantheon-implementer` role card says the seat has no tools and replies with file text. The pipeline needs a worker that writes files. A tool-enabled card has not been written or tried against the real CLI.
-- The implementer is not sandboxed at OS level. The write jail detects and discards out-of-scope writes inside the worktree after the turn. It cannot see or undo a write elsewhere on the machine. The real `agy` process also starts in Pantheon's directory (for its role cards) with the worktree as `--add-dir`.
-- Whether the real `agy` sandbox lets the worker reach the A2A endpoint on `127.0.0.1` is not verified.
+This list was first written on 2026-11-17. Three of its entries were overtaken by later work and are corrected here (self-audit round 3, assignment 3, L-308):
+
+- Most tests use scripted model turns and a fake `agy` CLI. The first live worker turn is described under [Live-run hardening](#live-run-hardening-2026-11-18).
+- The worker is the `pantheon-unit-worker` card, which edits files itself. The `pantheon-implementer` card (reply with file text) stays for the `argo`/`legacy` per-file path.
+- **Corrected.** The implementer is sandboxed at OS level: it runs in `bwrap`, and its one command runs in the verify jail. See [Live-run hardening](#live-run-hardening-2026-11-18) and [Credential isolation](#credential-isolation-2026-11-19). The write jail after the turn stays as a third layer.
+- The worker reaches its subagents over a Unix socket and a stdio MCP relay, not TCP.
 - `liveTurn` does not forward `extra` (`reasoning.context`) to the provider yet; the adapter passes it and tests check that.
-- A lane failure that is not a rejection retries the same lane; the pipeline does not step to another lane on it.
-- A pipeline run is not resumed. A stage that is retried starts a new run.
+- **Corrected.** A lane failure that is not a quota refusal is retried once on the same lane, then the unit steps down its Antigravity ladder. A quota refusal goes to the metered failover when that is allowed and the refusal is proven (see below); otherwise it steps down at once. An exhausted ladder blocks the unit.
+- **Corrected.** A retried implement stage resumes from its checkpoints: each approved unit is re-verified and skipped with no provider call. Units without a valid checkpoint run again.
 - The run's ledger holds the review cycle only. The pipeline's own record is `pipeline.json`, bound by digest in `run.json`.
+
+### What one provider call is
+
+A **provider call** is one billed request to a model provider. Every bound counts this unit: `maxProviderCalls`, the stage budget, `total_provider_calls`, the pipeline's `max_provider_calls`. Each call is charged before it is sent, and a refused charge means the call is not made (self-audit round 3, assignment 3, L-301).
+
+| Transport | One provider call is | Where it is charged |
+|---|---|---|
+| Direct API, streamed or unary (`sendTurn`) | Each generation request: the turn's request, each Google continuation hop (up to 16, each billed) and an Anthropic compaction | `onRequest`, before each request is sent. By default the caller charges the first request and `onRequest` the rest. With `chargeFirstRequest` it charges every one, so a turn the seat layer refuses before any request costs nothing. |
+| Model client (`sendModelTurn`, `packages/model-client`) | The same: compaction, the request, each continuation hop | `onRequest`, before every one, the first included |
+| Board SDK seat (`sdkTurn`, used by `runOpenItem`) | The same | `runOpenItem` passes `onRequest` with `chargeFirstRequest`. Each request is admitted against the run's bound and the caller's `onCharge` (the work ledger) before it is sent. |
+| Antigravity CLI, single turn (`runAgyCliTurn`: planner, reviewers, validator, subagents, the board's agy seat) | One CLI session. Antigravity bills its subscription per session, not per request. | `charge`, after the jail is built and before the CLI is spawned. A turn that fails before the spawn costs nothing. |
+| Antigravity CLI, unit worker (`runAgyWorkerTurn`) | One worker session, however many turns it takes inside | `charge`, after the jail is built and before the spawn |
+| Python agy SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`) | One seat process | Right before the spawn |
+| Metered Gemini failover of a lane | A provider call of its own, plus each further request of the API turn | Before the API is asked (`charge`, or `admitRequest` with kind `failover`) |
+
+**Two contracts for a single-turn `turn`** (`pantheon/src/sdk/live.mjs`):
+
+- `charge`: the caller charged the turn's first call before calling `turn`. `charge` admits every further call: a hop, a compaction, a failover. The stage meter (`ophanim/operate/stages.mjs`) and the pipeline (`pipeline/index.mjs`) use this one.
+- `admitRequest`: the caller charges nothing up front, and every call is admitted at its point of spend. Kinds: `request` and `continuation` (API), `lane` (between the jail and the spawn), `failover`. `pipelineTurns` passes it to its seats, its implementer and its failover. Moving the stage meter and the pipeline to it is subwave 2b's work.
+
+**Not provider calls:** token counts (`countTokens`, `inputTokens.count`), because providers do not bill them (L-604; if one does, the budget undercounts), and the zero-spend Antigravity `/usage` probe (`num_turns` 0).
+
+**How a budget stop is recorded** (L-308). The run record classifies stops by code, never by the words of a reason. Each entry of `budget_stops` in `run.json` names its `kind` (`provider_calls`, `elapsed` or `iterations`) and its `code`:
+
+- a tick's structured stop (`stop.code`: `PROVIDER_CALL_BUDGET`, `ELAPSED_LIMIT`, `STAGE_ELAPSED`, `ITERATIONS_LIMIT`);
+- a stage blocker `STAGE_PROVIDER_CALLS` or `STAGE_ELAPSED`;
+- `STAGE_BUDGET_EXCEEDED`, a pipeline's own bound (`PIPELINE_PROVIDER_CALLS`), or pipeline turns refused at the limit;
+- a stage the scheduler charged its whole budget that did not pass (`usage.budget_exhausted`).
+
+An elapsed stop is never listed as a provider-call stop.
 
 ## Live-run hardening (2026-11-18)
 

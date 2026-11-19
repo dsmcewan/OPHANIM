@@ -238,13 +238,15 @@ const sentSettings = req => !req || typeof req !== "object" ? null : {
 };
 // EVERY BILLED REQUEST IS ADMITTED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
 // finding 1.1). One turn can make several generation requests: Google's long-decode continuation hops (up to 16, each
-// billed), and an Anthropic compaction before the turn. The caller charged the turn's FIRST request; every further one
-// is passed to `seen.onRequest` BEFORE it is sent, and a throw there refuses it (it is not sent). Token counts
-// (countTokens / inputTokens.count) are not generation requests and are not billed by the providers: they are not
-// charged here.
+// billed), and an Anthropic compaction before the turn. By default the caller charged the turn's FIRST request and every
+// further one is passed to `seen.onRequest` BEFORE it is sent; with `seen.chargeFirst` (sendTurn's `chargeFirstRequest`,
+// self-audit round 3, assignment 3 (sealed bb1287a), L-301) the FIRST one is passed to it too, at the point of spend, so
+// a turn the seat layer refuses before any request is charged nothing. A throw there refuses the request (it is not
+// sent). Token counts (countTokens / inputTokens.count) are not generation requests and are not billed by the
+// providers: they are not charged here (L-604; docs/routing-task-profile.md, "What one provider call is").
 function observe(fn, seen) {
   return async (...args) => {
-    if ((seen.requests ?? 0) >= 1 && typeof seen.onRequest === "function") seen.onRequest({ request: (seen.requests ?? 0) + 1 });
+    if (((seen.requests ?? 0) >= 1 || seen.chargeFirst === true) && typeof seen.onRequest === "function") await seen.onRequest({ request: (seen.requests ?? 0) + 1 });
     seen.requests = (seen.requests ?? 0) + 1;
     seen.sent = sentSettings(args[0]);
     const out = await fn(...args);
@@ -269,10 +271,11 @@ function observedClient(client, seen) {
 }
 
 export async function sendTurn(args) {
-  // `onRequest` (optional): called before every generation request after the first (observe, above); a throw refuses it.
-  const seen = { model: null, sent: null, requests: 0, onRequest: typeof args.onRequest === "function" ? args.onRequest : null };
+  // `onRequest` (optional): called before every generation request after the first (observe, above), and before the first
+  // as well when `chargeFirstRequest` is true; a throw refuses it.
+  const seen = { model: null, sent: null, requests: 0, onRequest: typeof args.onRequest === "function" ? args.onRequest : null, chargeFirst: args.chargeFirstRequest === true };
   let result;
-  try { const { onRequest, ...rest } = args; result = await sendTurnOn({ ...rest, client: args.client ? observedClient(args.client, seen) : args.client }); }
+  try { const { onRequest, chargeFirstRequest, ...rest } = args; result = await sendTurnOn({ ...rest, client: args.client ? observedClient(args.client, seen) : args.client }); }
   catch (e) {
     // A failed request's evidence: what it carried and how many requests reached the SDK. Attached to
     // the error the caller already receives, never in place of it.

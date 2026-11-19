@@ -3,8 +3,16 @@
 //
 // liveClients(): makeClientFor(vendor, {pool, poolConfig}) for the work seats, one client per vendor and pool,
 // marked {providers: {kind: "live"}} so a run records that live providers answered.
-// liveTurn(): turn({vendor, model, prompt, signal?, charge?}) for single-turn seats; an incomplete reply is an error, never a
-// text. `signal` reaches the request (API) or the CLI process (lane); `charge` admits a metered failover (laneFirstTurn).
+// liveTurn(): turn({vendor, model, prompt, signal?, charge?, admitRequest?}) for single-turn seats; an incomplete reply is an
+// error, never a text. `signal` reaches the request (API) or the CLI process (lane). TWO CHARGE CONTRACTS (docs/routing-task-
+// profile.md, "What one provider call is"; self-audit round 3, assignment 3 (sealed bb1287a), L-301):
+//   charge        the caller charged the turn's first provider call BEFORE calling turn(); `charge` admits every FURTHER one
+//                 (a continuation hop, a compaction, a lane's metered failover) before it is sent.
+//   admitRequest  the caller charged NOTHING up front; `admitRequest({kind})` is called before EVERY provider call at its
+//                 point of spend: the API's first request and each further one (kind "request"/"continuation"), the
+//                 lane's CLI process between its jail build and its spawn (kind "lane": a lane turn that fails before
+//                 the spawn is charged nothing), and a metered failover (kind "failover"). A throw refuses the call.
+// When both are given, admitRequest wins.
 // Nothing here calls a provider until a seat is used.
 import { agySingleTurn, laneFirstTurn } from "./agy-turn.mjs";
 
@@ -24,14 +32,15 @@ export async function liveTurn({ label = "cycle-review", meteredFailover = true 
   const clients = new Map();
   // `extra` carries per-seat request options (e.g. reasoning.context for an OpenAI reviewer); only OpenAI receives it.
   // `signal` aborts the in-flight request (a stage stopped at its elapsed budget does not wait for it).
-  const api = async ({ vendor, model, prompt, extra = null, signal = undefined, charge = null }) => {
+  const api = async ({ vendor, model, prompt, extra = null, signal = undefined, charge = null, admitRequest = null }) => {
     if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
     signal?.throwIfAborted();
     const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-${label}`,
       ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
       // Every billed request after the turn's first (a continuation hop, a compaction) is charged before it is sent;
       // a refused charge refuses it (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.1).
-      ...(typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });
+      ...(typeof admitRequest === "function" ? { onRequest: ({ request }) => admitRequest({ kind: request === 1 ? "request" : "continuation" }), chargeFirstRequest: true }
+        : typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     // sendTurn's served_model is the model named by the provider's own response: marked "provider" (a pipeline seat
     // labels a served name with no source "unknown", pipeline/turns.mjs).

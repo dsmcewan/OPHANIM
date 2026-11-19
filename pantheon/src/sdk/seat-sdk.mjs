@@ -80,6 +80,11 @@ function readIntent(seat, home) {
 export async function sdkTurn({
   vendor, purpose, cwd, prompt, model, client, home, extra, onEvent, label, continuity, acknowledgeLost = false, reseatModel = false,
   scope, sessionId, effort, architecture, contractHeader, signal, deadline, ledger = null, outputBudgetPolicy,
+  // `onRequest` (optional): the caller's charge for each billed generation request of this turn, called BEFORE it is
+  // sent (sendTurn); a throw refuses it. With `chargeFirstRequest: true` the turn's first request is charged here too,
+  // at the point of spend, so a turn the seat layer refuses (no request sent) is charged nothing (self-audit round 3,
+  // assignment 3 (sealed bb1287a), L-301: runOpenItem counted a 3-request Google turn once).
+  onRequest = null, chargeFirstRequest = false,
 } = {}) {
   if (!vendor || !purpose || !cwd) throw new Error("sdkTurn: vendor, purpose and cwd are required");
   if (typeof prompt !== "string" || prompt === "") throw new Error("sdkTurn: prompt is required");
@@ -181,7 +186,8 @@ export async function sdkTurn({
         workspace_tenant_id: `pantheon:private_upload:${sha256(cwd)}`, campaign_id: 'build', world_id: sha256(cwd),
         branch_id: 'build', actor_id: purpose }, sessionId: sessionId ?? sha256(`${homeDir}:${purpose}:${model}`),
       // The caller's output policy travels with the turn; omitted, the adapter derives it from the cap.
-      effort, architecture, contractHeader, signal, deadline, ...(outputBudgetPolicy ? { outputBudgetPolicy } : {}) }); }
+      effort, architecture, contractHeader, signal, deadline, ...(outputBudgetPolicy ? { outputBudgetPolicy } : {}),
+      ...(typeof onRequest === "function" ? { onRequest, chargeFirstRequest: chargeFirstRequest === true } : {}) }); }
     catch (e) { clearIntent(); throw e; }   // the failure is REPORTED to the caller; the intent's job is the silent case
 
     if (!result.usable_for_resume) {
