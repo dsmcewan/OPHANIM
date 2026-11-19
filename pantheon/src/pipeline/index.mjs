@@ -7,10 +7,18 @@
 //                          the stdio MCP relay a2a-mcp-server.mjs
 //   Stage 5  review        pinned to the Stage 2 model; ground truth from verify_cmd; the ladder (review.mjs)
 //
-// Inputs: runPipeline({repo, base, plan, seats, turns, limits, dir, signal, planner?, run_id?, sameModel?, checkpoints?}).
+// Inputs: runPipeline({repo, base, plan, seats, turns, limits, dir, signal, planner?, run_id?, sameModel?, checkpoints?, onCharge?}).
 // Seats and turns are INJECTED: this module imports no routing table, no vendor SDK and calls no provider.
 // Outputs: the run record (schema pantheon.pipeline/v1), returned and written INCREMENTALLY to <dir>/pipeline.json
-// after every step, so a crash leaves a truthful record of what had happened.
+// after every step, so a crash leaves a truthful record of what had happened. A write that fails is NOT swallowed: the
+// next awaited write throws it (code RECORD_WRITE), so the run fails rather than carrying on without its record.
+//
+// THE CALL BUDGET. Every injected turn passes through `counted`, which refuses a call past max_provider_calls BEFORE it
+// is made and calls `onCharge()` (the caller's ledger charge; a throw refuses the call) before each one. A turn that
+// makes a SECOND provider call inside itself -- the implementer adapter's metered Gemini API failover after a lane
+// quota refusal -- receives `charge()` in its arguments and must call it before that call: it is counted, bounded and
+// charged as its own provider call (by_role.metered_failover), never hidden inside the lane attempt's charge
+// (independent review, assignment 3, question 1).
 //
 // The controller here is code ({vendor: "controller"}): it decides what is dispatched, kept, merged and skipped.
 //
@@ -32,8 +40,12 @@
 // CHECKPOINTS (checkpoint.mjs). With `checkpoints: {dir}` (a directory that persists across runs of one item),
 // every unit approved by Stage 5 is written there; a later run re-verifies a unit's checkpoint (digest, upstream
 // trees, and the patch applied on the freshly bound base yielding the recorded tree) and, if it holds, takes the
-// unit as approved with `resumed: true` and no provider call. A checkpoint that does not hold is recorded as
-// `checkpoint_rejected` and the unit runs normally.
+// unit as approved with `resumed: true` and no provider call. GROUND TRUTH WINS on resume too: the unit's verify_cmd is
+// RE-RUN in the rebuilt worktree after the patch is applied, and a checkpoint whose verify fails is rejected even when
+// its patch, digest and tree were rewritten to agree with each other (independent review, assignment 3, question 7).
+// The checkpoint binds the approval: the rubric hash and the digest of the Stage 5 review record are part of it, and a
+// checkpoint without them, or whose verify command is not the unit's, is rejected. A checkpoint that does not hold is
+// recorded as `checkpoint_rejected` and the unit runs normally.
 //
 // Must never: merge a unit that was not approved against a passing verify_cmd; run a unit whose upstream did not
 // merge; exceed an injected limit; let an injected function mutate the frozen unit; block the event loop on git.
@@ -41,13 +53,13 @@ import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { CAPABILITIES, PIPELINE_SCHEMA, clone, now, sameSeat, seatRefusal, sha256 } from "./util.mjs";
+import { CAPABILITIES, PIPELINE_SCHEMA, clone, digestOf, now, sameSeat, seatRefusal, sha256 } from "./util.mjs";
 import { validateWorkUnits } from "./work-units.mjs";
 import { bindWorktree, lockConflicts, releaseWorktree, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
 import { runImplementer, MCP_SERVER_PATH } from "./implement.mjs";
 import { checkpointFile, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint } from "./checkpoint.mjs";
 import { startA2AShim } from "./a2a-shim.mjs";
-import { escalate, reviewerLadderRefusal, runReviewer } from "./review.mjs";
+import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
 import { git, mutex } from "./git.mjs";
 
@@ -108,7 +120,7 @@ const FINAL = new Set(["approved", "returned", "blocked", "refused", "failed", "
  * Returns the run record. status: "completed" (every unit approved and merged), "incomplete" (some unit was not),
  * "refused" (the plan or the run's inputs were refused; nothing ran) or "failed".
  */
-export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null }) {
+export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null, onCharge = null }) {
   const lim = { ...DEFAULT_LIMITS, ...limits };
   await mkdir(dir, { recursive: true });
   const run = {
@@ -120,13 +132,14 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   };
 
   // The record is written after every step. Writes are queued so they land in order; each is a whole-file replace.
-  let writing = Promise.resolve();
+  // A failed write is kept (the first one) and thrown by every later awaited save: never swallowed.
+  let writing = Promise.resolve(), writeError = null;
   const file = join(dir, "pipeline.json");
   const save = () => {
     run.contributions = contributionsOf(run); run.arbiters = arbitersOf(run);
     const text = JSON.stringify(run, null, 2) + "\n";
-    writing = writing.then(async () => { await writeFile(file + ".tmp", text); await rename(file + ".tmp", file); }).catch(() => {});
-    return writing;
+    writing = writing.then(async () => { await writeFile(file + ".tmp", text); await rename(file + ".tmp", file); }).catch(e => { writeError ??= e; });
+    return writing.then(() => { if (writeError) throw Object.assign(new Error(`the run record ${file} could not be written: ${writeError.message}`), { code: "RECORD_WRITE", cause: writeError }); });
   };
   const end = async (status, reason = null) => { Object.assign(run, { status, reason, ended_at: now() }); await save(); return run; };
   const refuse = (refusals) => { run.refusals = refusals; return end("refused", refusals.map(r => r.message).join("; ")); };
@@ -158,11 +171,21 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
   for (const id of run.waves.flat()) run.units[id].unit_key = unitKey({ unit: byId.get(id), base_commit: run.base.commit, upstream: [...up.get(id)].map(d => ({ unit_id: d, unit_key: run.units[d].unit_key })) });
 
   // ---- provider-call budget: every injected turn passes through here
-  const counted = role => async args => {
+  const admit = role => {
     if (signal?.aborted) throw Object.assign(new Error("the run was aborted"), { code: "ABORTED" });
     if (run.provider_calls.total >= lim.max_provider_calls) { run.provider_calls.refused_at_limit += 1; throw Object.assign(new Error(`the run's provider-call bound (${lim.max_provider_calls}) is exhausted`), { code: "PROVIDER_LIMIT" }); }
-    run.provider_calls.total += 1; run.provider_calls.by_role[role] += 1;
-    return turns[role](args);
+    // The caller's charge (the work ledger's spend) is made before the call; a refused charge refuses the call.
+    if (typeof onCharge === "function") {
+      try { onCharge({ role }); }
+      catch (e) { run.provider_calls.refused_at_limit += 1; throw Object.assign(new Error(`the call was not charged: ${String(e?.message ?? e)}`), { code: "PROVIDER_LIMIT", cause: e }); }
+    }
+    // by_role.metered_failover appears once a metered failover call is charged.
+    run.provider_calls.total += 1; run.provider_calls.by_role[role] = (run.provider_calls.by_role[role] ?? 0) + 1;
+  };
+  const counted = role => async args => {
+    admit(role);
+    // `charge`: a second provider call made inside this turn (the metered API failover) is admitted here first.
+    return turns[role](role === "implementer" ? { ...args, charge: () => admit("metered_failover") } : args);
   };
   const T = { dispatcher: counted("dispatcher"), implementer: counted("implementer"), subagent: counted("subagent"), reviewer: counted("reviewer") };
 
@@ -270,7 +293,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       // ---- Stage 4: the unit's subagent leaf, up for exactly as long as the unit is active. It is never told `path`.
       shim = await startA2AShim({ unit_id: unit.unit_id, allowed_subagents: unit.allowed_subagents, socket: a2aSocket, seatFor: role => seats.subagent(frozen(), role), subagentTurn: T.subagent,
         limits: { max_calls: lim.a2a_max_calls, max_bytes: lim.a2a_max_bytes }, sandbox: CAPABILITIES.subagent, signal,
-        onCall: rec => { u.a2a.calls.push(rec); u.a2a.usage = shim?.usage() ?? null; save(); } });
+        // Not awaited here; a failed write is thrown by the next awaited save.
+        onCall: rec => { u.a2a.calls.push(rec); u.a2a.usage = shim?.usage() ?? null; save().catch(() => {}); } });
       await save();
 
       let state = { revisions: 0, implementer_level: iLadder.findIndex(s => sameSeat(s, impl.seat)), reviewer_level: 0, consecutive_rejections: 0 };
@@ -362,7 +386,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const rec = await writeCheckpoint({ dir: run.checkpoints.dir, patch, record: {
         unit_key: u.unit_key, unit_id: u.unit_id, rubric_hash: u.dispatch.rubric_hash, base_commit: run.base.commit, unit_base_commit, upstream,
         commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model },
-        verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest } } });
+        verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest }, review_digest: digestOf(clone(rv)) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
       run.checkpoints.written.push(u.unit_id);
     } catch (e) { u.checkpoint = { written: false, why: String(e?.message ?? e) }; }
@@ -377,7 +401,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     if (!got.found) return false;
     const reject = why => { u.checkpoint_rejected = { unit_key: u.unit_key, why, at: now() }; run.checkpoints.rejected.push(u.unit_id); return false; };
     if (got.why) return reject(got.why);
-    const why = checkpointRefusal(got, { unit_key: u.unit_key, unit_id: u.unit_id, base_commit: run.base.commit, upstream: upstreamNow });
+    const planned = byId.get(u.unit_id);
+    const why = checkpointRefusal(got, { unit_key: u.unit_key, unit_id: u.unit_id, base_commit: run.base.commit, upstream: upstreamNow, verify_cmd: planned.verify_cmd });
     if (why) return reject(why);
     let bound = false, ok = false;
     try {
@@ -389,10 +414,14 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       }
       const tree = (await git(path, ["write-tree"])).trim();
       if (tree !== got.record.tree) return reject(`the checkpoint's patch applied on the unit's base yields tree ${tree}, not the recorded ${got.record.tree}`);
+      // Ground truth, re-run: the unit's own verify_cmd on the rebuilt tree. A checkpoint is evidence to re-check.
+      const verify = await runVerify({ worktree: path, verify_cmd: planned.verify_cmd, timeout_ms: lim.verify_timeout_ms, max_output_bytes: lim.verify_output_bytes });
+      u.resume_verify = { cmd: verify.cmd, exit_code: verify.exit_code, timed_out: verify.timed_out, digest: verify.digest, duration_ms: verify.duration_ms };
+      if (!verify.passed) return reject(`the unit's verify_cmd fails on the checkpoint's tree (exit ${verify.exit_code}${verify.timed_out ? ", timed out" : ""}): ground truth wins over the recorded approval`);
       patches.set(u.unit_id, got.patch);
       await writeFile(join(dir, "units", `${u.unit_id}.patch`), got.patch);
       Object.assign(u, { resumed: true, base_commit: wt.base_commit, commit: got.record.commit, tree, patch_digest: got.record.patch_digest,
-        checkpoint: { resumed_from: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, rubric_hash: got.record.rubric_hash, reviewer: clone(got.record.reviewer ?? null), verify: clone(got.record.verify ?? null) } });
+        checkpoint: { resumed_from: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, rubric_hash: got.record.rubric_hash, review_digest: got.record.review_digest, reviewer: clone(got.record.reviewer ?? null), verify: clone(got.record.verify ?? null), reverified: clone(u.resume_verify) } });
       run.checkpoints.resumed.push(u.unit_id);
       finish(u, "approved");
       ok = true;

@@ -46,7 +46,8 @@
 // every stage record (hash, inputs, outputs digest, findings, evidence, usage, next, blocker), budget stops, served
 // identities (stage teams and the pipeline records), the subagent receipt check, the pipeline.json paths, the final
 // gate, and a FRESH verification: the work ledger and the run ledgers re-opened read-only and verified, the status
-// ledger re-verified and its files compared. The outcome proposal stays UNSIGNED; the launcher prints the exact
+// ledger re-verified and its files compared -- by a CHILD node process (verify-run.mjs), whose verdict is the one
+// recorded (the in-process check is kept beside it as `in_process`). The outcome proposal stays UNSIGNED; the launcher prints the exact
 // `packages/ledger/status.mjs apply` command the owner would run and never runs it.
 //
 // Exit codes: 0 plan ok, or the run reached its outcome with every acceptance criterion met; 1 refused (manifest,
@@ -483,6 +484,25 @@ export function freshVerification({workRoot, stages, statusRoot, statusBefore}) 
   return out;
 }
 
+/**
+ * The recorded verification: a CHILD `node` process (verify-run.mjs) re-opens and verifies the work ledger, the run
+ * ledgers its stage records cite and the status ledger, read-only, and prints its verdict; that verdict is the one
+ * recorded (`process: {pid, exit_code, entry}`), with the in-process check kept beside it as `in_process`. A child
+ * that cannot be run, or whose output is not its JSON, is a failed verification, never a pass.
+ */
+export async function verifyInChild({workRoot, item, statusRoot, statusBefore, inProcess = null, timeout = 120_000}) {
+  const entry = path.join(HERE, 'verify-run.mjs');
+  const arg = JSON.stringify({workRoot, item, statusRoot, statusBefore: {head: statusBefore.head, files: {digest: statusBefore.files.digest}}});
+  let r;
+  try { r = await spawnPromise(process.execPath, [entry, arg], {cwd: REPO_ROOT, env: process.env, timeout}); }
+  catch (e) { return {ok: false, why: `the verifier process could not be run: ${e.message}`, process: {entry, exit_code: null}, in_process: inProcess}; }
+  let out = null;
+  try { out = JSON.parse(String(r.stdout).trim().split('\n').at(-1)); } catch { /* below */ }
+  if (!out || typeof out !== 'object') return {ok: false, why: `the verifier process printed no verdict (exit ${r.status}): ${String(r.stderr).slice(0, 300)}`, process: {entry, exit_code: r.status}, in_process: inProcess};
+  const {pid, ...verdict} = out;
+  return {...verdict, ok: verdict.ok === true && r.status === 0, process: {entry, pid, parent_pid: process.pid, exit_code: r.status}, in_process: inProcess};
+}
+
 // ---- the confirmed run ------------------------------------------------------------------------------------------
 async function liveSeats({meteredFailover}) {
   const live = await import(pathToFileURL(path.join(REPO_ROOT, 'pantheon/src/sdk/live.mjs')).href);
@@ -509,7 +529,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   for (let n = 0; n < maxTicks && STAGES.includes(gate.gate); n++) {
     const left = deadline - Date.now();
     if (left <= 0) { launcherStops.push({source: 'launcher', why: `elapsed limit ${L.elapsed_ms} ms reached`}); break; }
-    const spentNow = spent(work).calls;
+    const sp = spent(work), spentNow = sp.calls + sp.reserved;   // a live claim (another holder) reserves its budget
     if (L.total_provider_calls - spentNow < L.stage_provider_calls) {
       launcherStops.push({source: 'launcher', why: `provider-call budget: ${L.total_provider_calls - spentNow} left of ${L.total_provider_calls}, a stage needs up to ${L.stage_provider_calls}`});
       break;
@@ -524,7 +544,8 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const stages = work.stages(m.item);
   const outcome = [...stages].reverse().find(x => x.stage === 'outcome' && x.status === 'passed') ?? null;
   const receipt = subagentReceipt(stages, m.require_subagent);
-  const verification = freshVerification({workRoot: m.ledgers.work_root, stages, statusRoot: m.ledgers.status_root, statusBefore: status});
+  const verification = await verifyInChild({workRoot: m.ledgers.work_root, item: m.item, statusRoot: m.ledgers.status_root, statusBefore: status,
+    inProcess: freshVerification({workRoot: m.ledgers.work_root, stages, statusRoot: m.ledgers.status_root, statusBefore: status})});
   const reasons = [];
   if (gate.gate !== 'awaiting-owner' || !outcome) reasons.push(`the item did not reach its outcome: gate "${gate.gate}"${gate.reason ? ` (${gate.reason})` : ''}`);
   if (!receipt.met) reasons.push(`require_subagent not met: ${receipt.why}`);

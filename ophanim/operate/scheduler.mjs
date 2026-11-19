@@ -5,7 +5,9 @@
 // published issues), so new work and dependency changes reach dispatch on their own.
 //
 // Bounds, declared before dispatch and enforced across the whole tick: total provider calls (recorded usage;
-// a stage whose usage is unknown counts at its claim's budget, never as zero), iterations (stage attempts),
+// a stage whose usage is unknown counts at its claim's budget, never as zero; calls CHARGED on the ledger before they
+// were made, work.spend, count even when their stage never recorded; a live claim RESERVES the rest of its stage
+// budget, so concurrent stages cannot both start on one remainder), iterations (stage attempts),
 // elapsed time, retries per item and stage, and concurrency. A duplicate claim is refused by the work ledger
 // itself. An interrupted claim (lease expired) is released as `expired` and the next tick resumes from the last
 // recorded stage, reusing every stage that is still valid: nothing completed is repeated, no lineage is lost.
@@ -33,16 +35,36 @@ export const DEFAULT_LIMITS = Object.freeze({
 });
 const fail = (why, code) => { throw Object.assign(new Error(why), {code}); };
 
-/** Provider calls already spent by the work ledger's stage records; unknown usage counts at its claim's budget. */
-export function spent(work) {
-  const claims = new Map(work.claims().map(c => [c.hash, c]));
-  let calls = 0, unknown = 0;
-  for (const s of work.stages()) {
-    const c = s.usage?.provider_calls;
-    if (Number.isInteger(c)) calls += c;
-    else { const claim = claims.get(s.derived_from.find(h => claims.has(h))); calls += claim?.budget.provider_calls ?? 0; unknown++; }
+/**
+ * Provider calls spent according to the work ledger, per claim:
+ *   - a claim with a stage record: the larger of the record's usage (unknown usage counts at the claim's budget) and
+ *     what was charged under it (work.spend);
+ *   - a claim with no stage record (released, expired or interrupted): what was charged under it, so calls that left a
+ *     process which then died are still counted (independent review, assignment 3, question 8);
+ *   - a claim still live at `now` with no stage record: its charges so far, plus the REST OF ITS BUDGET as `reserved`
+ *     (an in-flight reservation: a concurrent stage cannot spend what this one may still use; questions 1-3).
+ * The budget check is total - calls - reserved.
+ */
+export function spent(work, {now = Date.now()} = {}) {
+  const charged = new Map();
+  for (const x of work.spends()) { const h = x.derived_from[0]; charged.set(h, Math.max(charged.get(h) ?? 0, x.provider_calls)); }
+  const byClaim = new Map();
+  for (const s of work.stages()) byClaim.set(s.derived_from[0], s);
+  const released = new Set(work.releases().map(r => r.derived_from[0]));
+  let calls = 0, unknown = 0, reserved = 0, chargedTotal = 0;
+  for (const c of work.claims()) {
+    const ch = charged.get(c.hash) ?? 0, s = byClaim.get(c.hash);
+    chargedTotal += ch;
+    if (s) {
+      const u = s.usage?.provider_calls;
+      if (Number.isInteger(u)) calls += Math.max(u, ch);
+      else { calls += Math.max(c.budget.provider_calls, ch); unknown++; }
+      continue;
+    }
+    calls += ch;
+    if (!released.has(c.hash) && Date.parse(c.leased_at) + c.lease_ms > now) reserved += Math.max(0, c.budget.provider_calls - ch);
   }
-  return {calls, unknown_counted_at_budget: unknown};
+  return {calls, unknown_counted_at_budget: unknown, reserved, charged: chargedTotal};
 }
 
 /** The receiving stage's check of its handoff: the record exists, is the same work, and is a valid start. */
@@ -84,7 +106,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null};
   // Interrupted work: a claim past its lease is released as expired; its item resumes from its last valid stage.
   for (const c of work.expiredClaims(clock())) {
-    work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted'});
+    work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted', at: new Date(clock()).toISOString()});
     log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt});
   }
   let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
@@ -109,7 +131,8 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock()});
   const order = dependencyOrder(rec.items);
   let iterations = 0;
-  const budgetLeft = () => L.total_provider_calls - spent(work).calls;
+  // Recorded and charged calls, and the in-flight reservation of every live claim (spent() above).
+  const budgetLeft = () => { const sp = spent(work, {now: clock()}); return L.total_provider_calls - sp.calls - sp.reserved; };
   const runItem = async item => {
     for (;;) {
       if (iterations >= L.iterations) { log.stopped ??= `iterations limit ${L.iterations} reached`; return; }
@@ -135,7 +158,11 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const exec = executors[gate.gate];
       if (typeof exec !== 'function') { log.skipped.push({item, gate: gate.gate, why: `no executor for ${gate.gate}`}); return; }
       const upstream = verifyHandoff(work, gate);
-      const budget = {provider_calls: L.stage_provider_calls, iterations: 1, elapsed_ms: L.elapsed_ms, retries: L.stage_attempts};
+      // The stage's elapsed budget: what is left of the tick's, and never past the lease (a result recorded after the
+      // lease is refused by the work ledger's fence), less a grace for recording it.
+      const grace = Math.min(60_000, Math.floor(L.lease_ms / 10));
+      const stageMs = Math.floor(Math.max(1, Math.min(L.elapsed_ms - (clock() - started), L.lease_ms - grace, 2 ** 31 - 1)));
+      const budget = {provider_calls: L.stage_provider_calls, iterations: 1, elapsed_ms: stageMs, retries: L.stage_attempts};
       const attempt = attempts + 1;
       let claim;
       try { claim = work.claim({item, stage: gate.gate, attempt, inputs, holder, budget, lease_ms: L.lease_ms, at: new Date(clock()).toISOString()}); }
@@ -143,23 +170,63 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       catch (e) { if (e.code === 'NO_AUTHORITY') throw e; log.skipped.push({item, gate: gate.gate, why: e.message}); return; }
       iterations++;
       progress({event: 'dispatch', item, stage: gate.gate, attempt, mode: gate.mode ?? null});
+      // CHARGE BEFORE THE CALL: an executor calls ctx.charge(n) before it makes n provider calls. The charge is signed
+      // onto the work ledger (work.spend) first, so a call that leaves the process is counted even if the process dies
+      // before the stage record. A charge over the stage budget, after the stage's deadline, or under a claim that
+      // was released or expired (the lease fence) throws, and the call is not made.
+      // THE COOPERATIVE STOP (question 9): ctx.signal aborts at the stage's elapsed budget; an executor passes it on
+      // (to the pipeline, the review cycles) and stops admitting provider calls. The stop is recorded on the stage.
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(Object.assign(new Error(`STAGE_ELAPSED: the stage's elapsed budget of ${budget.elapsed_ms} ms is spent`), {code: 'STAGE_ELAPSED'})), budget.elapsed_ms);
+      timer.unref?.();
+      let charged = 0, refusedCharges = 0;
+      const charge = (n = 1) => {
+        if (!(Number.isInteger(n) && n >= 1)) fail('charge(n): n is a positive integer', 'USAGE');
+        const why = ac.signal.aborted ? ac.signal.reason.message
+          : charged + n > budget.provider_calls ? `PROVIDER_CALL_LIMIT: ${charged} of ${budget.provider_calls} stage provider call(s) charged, ${n} more refused` : null;
+        if (why) { refusedCharges += n; fail(why, ac.signal.aborted ? 'STAGE_ELAPSED' : 'PROVIDER_CALL_LIMIT'); }
+        work.recordSpend({claim, provider_calls: charged + n, at: new Date(clock()).toISOString()});
+        charged += n;
+        return charged;
+      };
       let result;
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir}); }
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, signal: ac.signal, claim}); }
       catch (e) {
-        result = {status: 'failed', outputs: {error: String(e.message).slice(0, 300)}, team: [], contributions: [], findings: [], usage: {provider_calls: e.provider_calls ?? null},
+        result = {status: 'failed', outputs: {error: String(e.message).slice(0, 300)}, team: [], contributions: [], findings: [], usage: {provider_calls: e.provider_calls ?? (charged || null)},
           next: {stage: gate.gate, why: `the ${gate.gate} executor failed: ${String(e.message).slice(0, 200)}`}};
+      } finally { clearTimeout(timer); }
+      // A result that reports more calls than its stage budget is not a pass: recorded failed, with the reason named.
+      const reported = result.usage?.provider_calls;
+      if (Number.isInteger(reported) && reported > budget.provider_calls) {
+        result = {...result, status: 'failed', blocker: undefined, outputs: {...(result.outputs ?? {}), over_budget: {reported, budget: budget.provider_calls, status_reported: result.status}},
+          next: {stage: gate.gate, why: `STAGE_BUDGET_EXCEEDED: the ${gate.gate} result reports ${reported} provider call(s), over its stage budget of ${budget.provider_calls}`}};
+      }
+      if (ac.signal.aborted) {
+        result = {...result, outputs: {...(result.outputs ?? {}), stopped: {code: 'STAGE_ELAPSED', elapsed_ms: budget.elapsed_ms, charged, refused_charges: refusedCharges}}};
+        log.stopped ??= `stage elapsed limit ${budget.elapsed_ms} ms reached (${item} ${gate.gate})`;
       }
       const identity = {item, requirement: 'sha256:' + digest({item: gate.requirement.item, title: gate.requirement.title, basis: gate.requirement.basis}),
         ...(result.identity?.ticket ?? upstream?.identity.ticket ? {ticket: result.identity?.ticket ?? upstream.identity.ticket} : {})};
-      const stageHash = work.recordStage({claim, from: upstream?.hash ?? null, stage: gate.gate, attempt, status: result.status, identity,
+      const stageAt = new Date(clock()).toISOString();
+      let stageHash;
+      try { stageHash = work.recordStage({claim, from: upstream?.hash ?? null, at: stageAt, stage: gate.gate, attempt, status: result.status, identity,
         inputs: {...inputs, ...(result.inputs ?? {})}, outputs: result.outputs ?? {}, team: result.team ?? [], contributions: result.contributions ?? [],
         findings: result.findings ?? [], usage: result.usage ?? {provider_calls: null}, next: result.next ?? null,
         // A transient pending (an unavailable reviewer) is retried when due, bounded by stage_attempts on the same inputs;
         // a structural one (capacity, a missing prerequisite) waits for a change of inputs.
         ...(result.blocker ? {blocker: result.blocker.transient && result.status === 'pending'
-          ? {...result.blocker, retry_at: new Date(clock() + L.retry_after_ms).toISOString()} : result.blocker} : {})});
+          ? {...result.blocker, retry_at: new Date(clock() + L.retry_after_ms).toISOString()} : result.blocker} : {})}); }
+      catch (e) {
+        if (e.code !== 'LEASE_FENCED') throw e;
+        // The lease fence refused the result: this holder outlived its claim. Nothing it produced becomes the handoff;
+        // the charges it made stay counted. The claim is released as expired if nobody has done so yet.
+        if (!work.released(claim)) work.release({claim, item, stage: gate.gate, outcome: 'expired', why: `the result arrived after the lease: ${e.message}`.slice(0, 300), at: stageAt});
+        log.skipped.push({item, gate: gate.gate, why: e.message});
+        progress({event: 'fenced', item, stage: gate.gate, why: e.message});
+        return;
+      }
       const outcome = {passed: 'completed', returned: 'returned', failed: 'failed', pending: 'blocked', blocked: 'blocked'}[result.status];
-      work.release({claim, item, stage: gate.gate, outcome, why: result.next?.why ?? result.status});
+      work.release({claim, item, stage: gate.gate, outcome, why: result.next?.why ?? result.status, at: stageAt});
       log.dispatched.push({item, stage: gate.gate, attempt, status: result.status, record: stageHash, next: result.next?.stage ?? null,
         provider_calls: result.usage?.provider_calls ?? null});
       progress({event: 'stage', item, stage: gate.gate, status: result.status});
@@ -177,7 +244,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   for (const i of rec.items) if (!STAGES.includes(i.gate.gate) && i.gate.blocker) log.blocked.push({item: i.item, gate: i.gate.gate, blocker: i.gate.blocker});
   const workers = Array.from({length: Math.max(1, L.concurrency)}, async () => { for (let it = queue.shift(); it; it = queue.shift()) await runItem(it); });
   await Promise.all(workers);
-  return {...log, spent: spent(work), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}};
+  return {...log, spent: spent(work, {now: clock()}), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}};
 }
 
 /** Items in dependency order (a dependency before its dependents), then by id. */

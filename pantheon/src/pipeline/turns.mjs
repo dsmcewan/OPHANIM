@@ -191,7 +191,7 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
    * {a2a: {url, token}} are still read; without a control_dir a temporary one (outside the worktree) is used and removed.
    */
   const implementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
-    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined }) => {
+    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
     if (!laneParts(model)) throw fail("NOT_A_LANE", `the pipeline implementer runs on an Antigravity lane, and ${vendor}/${model} is not one (config/lanes.json)`);
     const cli = agy.cli ?? process.env.PANTHEON_AGY_CLI ?? join(homedir(), ".local", "bin", "agy");
@@ -231,6 +231,9 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       if (!spare) throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and has no metered API failover`), { status: 429, quota_probe: seen });
       const quota_failover = { used: true, base: spare.model, lanes: [model], rule: QUOTA_FAILOVER_RULE, after, probe: seen };
       const { shown, truncated } = owned ? await ownedFiles(cwd, owned) : { shown: [], truncated: false };
+      // The metered API call is a provider call of its own: the pipeline's `charge` admits it against max_provider_calls
+      // (and the caller's ledger charge) BEFORE it is made; a refusal (PROVIDER_LIMIT) means it is not made.
+      if (typeof charge === "function") charge();
       let r;
       try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal }); }
       catch (err) {

@@ -194,6 +194,10 @@ test('CONFIRMED: only the selected item runs (two other runnable items present) 
     assert.equal(rec.verification.ok, true, JSON.stringify(rec.verification));
     assert.deepEqual(rec.verification.run_ledgers.map(l => [l.role, l.ok]).sort(), [['plan review ledger', true], ['run ledger', true]].sort());
     assert.equal(rec.verification.status.unchanged, true);
+    // The recorded verdict is a CHILD process's (independent review, assignment 3 (xAI grok-4.7, 7997657), question 10:
+    // a fresh reader in the same process is not a fresh process); the in-process check is kept beside it.
+    assert.ok(Number.isInteger(rec.verification.process.pid) && rec.verification.process.pid !== process.pid, JSON.stringify(rec.verification.process));
+    assert.deepEqual([rec.verification.process.exit_code, rec.verification.in_process.ok], [0, true]);
     assert.equal(openWorkLedger({root: manifest.ledgers.work_root, create: false}).verify().ok, true);
     // The outcome stays UNSIGNED; the apply command is printed, never run.
     assert.deepEqual([rec.proposal.signed, fs.existsSync(rec.proposal.path)], [false, true]);

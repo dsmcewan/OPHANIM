@@ -78,10 +78,18 @@ out.cwd = process.cwd();
 console.log(JSON.stringify(out));
 `);
   const { argv } = bwrapArgs({ worktree: wt, control_dir: ctl, agy_state_dirs: [state], extra_ro: [sockDir, root] });
+  const homeBefore = readdirSync(home).sort();
   const r = await run([...argv, process.execPath, probe, wt, join(ctl, "run"), state, home, repo, ws.hooks, join(repo, ".git", "refs", "heads", "evil"), join(ctl, "a2a.sock"), join(sockDir, "a2a.sock")]);
   assert.equal(r.code, 0, r.err);
   const out = JSON.parse(r.out);
-  assert.deepEqual(out, { worktree: "written", run: "written", state: "written", tmp: "written", home: "EROFS", repo: "EROFS", hooks: "EROFS", ref: "EROFS", sockA: "pong", sockB: "pong", cwd: ctl });
+  // The property is that a write cannot reach the HOST home. When HOME itself lies under /tmp (a test or CI home in a
+  // temporary directory), the sandbox's fresh tmpfs at /tmp hides it: inside, the path does not exist and the write
+  // fails ENOENT instead of EROFS. Either errno means the write did not land; ENOENT is accepted ONLY in that case, and
+  // the host home is checked unchanged below either way.
+  const homeUnderTmp = realpathSync(home) === "/tmp" || realpathSync(home).startsWith("/tmp/");
+  assert.ok(homeUnderTmp ? ["EROFS", "ENOENT"].includes(out.home) : out.home === "EROFS", `home write inside the sandbox: ${out.home}`);
+  assert.deepEqual({ ...out, home: undefined }, { worktree: "written", run: "written", state: "written", tmp: "written", home: undefined, repo: "EROFS", hooks: "EROFS", ref: "EROFS", sockA: "pong", sockB: "pong", cwd: ctl });
+  assert.deepEqual(readdirSync(home).sort(), homeBefore, "the host home is unchanged by the sandboxed write attempt");
   assert.equal(readFileSync(join(wt, "src-a.txt"), "utf8"), "x");
   assert.equal(existsSync(join(repo, "escaped.txt")), false);
   assert.equal(existsSync(join(repo, ".git", "refs", "heads", "evil")), false);

@@ -9,8 +9,20 @@
 //   work.claim    the controller takes one stage of one item: attempt, idempotency key, lease, budget. Refused
 //                 while another unreleased, unexpired claim on the same item exists (no duplicate execution), and
 //                 refused when the same idempotency key already completed (no paying twice for the same inputs).
+//                 A FENCED claim (payload `fence: 1`, every claim this module writes) is also refused while ANY earlier
+//                 claim on the item is unreleased, expired or not: `claim()` first releases an expired one as `expired`,
+//                 so two claims can never both lead to recorded stages (independent review, assignment 3, Q3/Q4).
 //   work.release  the claim ends: completed, returned, failed, blocked, interrupted or expired. Cites its claim.
-//   work.stage    the stage's result, citing its claim. Its handoff is verified on append: the identity (item,
+//   work.spend    provider calls CHARGED under a claim, recorded (signed) BEFORE the calls are made: {item, stage,
+//                 attempt, provider_calls (cumulative for the claim), at}. A call that already left the process is
+//                 therefore on the ledger even when the process dies before its stage record, and `spent()`
+//                 (scheduler.mjs) counts it, so a restarted attempt cannot spend a full budget again. Refused once the
+//                 claim is released or its lease has expired at `at`: a stale holder cannot charge (or make) new calls.
+//   work.stage    the stage's result, citing its claim. THE LEASE FENCE: refused when its claim was already released
+//                 (any outcome), and -- for a record carrying `at` (the recording time; every record this module writes
+//                 since the fence; older records carry none and keep verifying as written) -- when the claim's lease had
+//                 expired at `at` (leased_at + lease_ms <= at) or the claim already has a stage record. A holder that
+//                 outlived its lease cannot make its late result the handoff. Its handoff is verified on append: the identity (item,
 //                 ticket, requirement) matches the previous stage's, and the inputs it names are exactly the
 //                 previous stage's outputs (by digest). Team, contributions, findings, usage, next stage and any
 //                 blocker are part of the record.
@@ -42,6 +54,13 @@ export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed'
 export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket']);
 export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
 export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
+/** Why a claim may no longer record a result or charge a call at `at` (ms), or null. Shared by append and re-derivation. */
+export function fenceRefusal(claim, {released, at}) {
+  if (released) return `the claim (${claim.stage}, attempt ${claim.attempt}) was already released (${released.outcome ?? 'released'}): LEASE_FENCED, a released claim records nothing`;
+  const until = Date.parse(claim.leased_at) + claim.lease_ms;
+  if (Number.isFinite(at) && until <= at) return `the claim's lease (${claim.stage}, attempt ${claim.attempt}) expired at ${new Date(until).toISOString()}, before ${new Date(at).toISOString()}: LEASE_FENCED, a holder past its lease records nothing`;
+  return null;
+}
 const ID = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 const SHA = /^sha256:[0-9a-f]{64}$/;
 const ISO = s => typeof s === 'string' && !Number.isNaN(Date.parse(s));
@@ -121,6 +140,8 @@ function kinds({operators}) {
           const c = view.payload(h);
           if (c.item !== p.item) continue;
           const rel = releaseOf(view, h);
+          // A fenced claim waits for every earlier claim on the item to be released (an expired one as `expired`).
+          if (!rel && p.fence === 1 && Date.parse(c.leased_at) + c.lease_ms <= at) return `"${p.item}" has an unreleased claim (${c.stage}, attempt ${c.attempt}) whose lease expired: release it as expired before claiming again`;
           if (!rel && Date.parse(c.leased_at) + c.lease_ms > at) return `"${p.item}" is already claimed (${c.stage}, attempt ${c.attempt}, lease until ${new Date(Date.parse(c.leased_at) + c.lease_ms).toISOString()}): no duplicate execution`;
           if (rel && c.key === p.key && view.payload(rel).outcome === 'completed') return `"${p.item}" ${p.stage} already completed for these exact inputs (${p.key.slice(0, 19)}): reuse it, do not pay twice`;
         }
@@ -138,6 +159,24 @@ function kinds({operators}) {
         if (c.item !== e.payload.item || c.stage !== e.payload.stage) return 'a release names its claim\'s item and stage';
         const other = entriesOf(view, 'work.release').find(h => h !== e.hash && view.entry(h).derived_from.includes(claims[0]));
         return other ? 'that claim is already released' : null;
+      },
+    },
+    'work.spend': {
+      authors: byController,
+      validate: p => p?.schema === WORK_SCHEMA && ID.test(p.item ?? '') && STAGES.includes(p.stage) && Number.isInteger(p.attempt) && p.attempt >= 1
+        && Number.isInteger(p.provider_calls) && p.provider_calls >= 1 && ISO(p.at) ? null
+        : 'a spend names {item, stage, attempt, provider_calls >= 1 (cumulative under its claim), at}',
+      rederive: (e, view) => {
+        const claims = e.derived_from.filter(h => view.entry(h)?.kind === 'work.claim');
+        if (claims.length !== 1) return 'a spend cites the claim it was charged under';
+        const c = view.payload(claims[0]), p = e.payload;
+        if (c.item !== p.item || c.stage !== p.stage || c.attempt !== p.attempt) return 'a spend matches its claim (item, stage, attempt)';
+        const rel = releaseOf(view, claims[0]);
+        const why = fenceRefusal(c, {released: rel ? view.payload(rel) : null, at: Date.parse(p.at)});
+        if (why) return why;
+        if (p.provider_calls > c.budget.provider_calls) return `a spend of ${p.provider_calls} is over its claim's budget of ${c.budget.provider_calls} provider call(s)`;
+        const prev = entriesOf(view, 'work.spend').filter(h => h !== e.hash && view.entry(h).derived_from.includes(claims[0])).map(h => view.payload(h).provider_calls);
+        return prev.some(n => n >= p.provider_calls) ? 'a spend is cumulative: it only grows under its claim' : null;
       },
     },
     'work.stage': {
@@ -166,6 +205,13 @@ function kinds({operators}) {
         if (claims.length !== 1) return 'a stage cites the claim it ran under';
         const c = view.payload(claims[0]);
         if (c.item !== p.identity.item || c.stage !== p.stage || c.attempt !== p.attempt) return 'a stage matches its claim (item, stage, attempt)';
+        // THE LEASE FENCE (see the header). A released claim never records; a record that carries `at` is also refused
+        // past the lease, and once its claim already has a result.
+        const rel = releaseOf(view, claims[0]);
+        if (p.at !== undefined && !ISO(p.at)) return 'a stage\'s `at` is its recording time (ISO)';
+        const fenced = fenceRefusal(c, {released: rel ? view.payload(rel) : null, at: p.at === undefined ? NaN : Date.parse(p.at)});
+        if (fenced) return fenced;
+        if (p.at !== undefined && entriesOf(view, 'work.stage').some(h => h !== e.hash && view.entry(h).derived_from[0] === claims[0])) return 'that claim already has a stage record';
         // The handoff: the stage it received from, if any, is the same work, and what this stage consumed is exactly
         // what that stage produced.
         const from = p.handoff?.from ?? null;
@@ -227,17 +273,43 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
   };
   const of = (kind, pred = () => true) => { const v = view(); return v.entries().filter(h => v.entry(h).kind === kind).map(h => ({hash: h, ...v.payload(h), derived_from: v.entry(h).derived_from})).filter(pred); };
   const released = claimHash => of('work.release', r => r.derived_from.includes(claimHash))[0] ?? null;
+  const fence = (claimHash, at) => {
+    const c = of('work.claim', x => x.hash === claimHash)[0];
+    if (!c) fail('no such claim');
+    const why = fenceRefusal(c, {released: released(claimHash), at: Date.parse(at)});
+    if (why) fail(why, 'LEASE_FENCED');
+    return c;
+  };
 
   return {
     ledger: L, anchor: pinned, root,
     verify: () => L.verify(),
     intake: ({source, ref, item = null, classification, why, at = new Date().toISOString()}) => append('work.intake', {source, ref, item, classification, why, at}),
     /** Claim one stage of one item. Throws (code WORK_REFUSED) on a duplicate or an already-completed key. */
-    claim: ({item, stage, attempt, inputs, holder, budget, lease_ms = 30 * 60_000, at = new Date().toISOString()}) =>
-      append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget}),
+    // An unreleased claim on the item whose lease expired at `at` is first released as `expired` (a claim racing to
+    // release it is fine: the ledger refuses the second release, and the fenced claim then re-derives).
+    claim: ({item, stage, attempt, inputs, holder, budget, lease_ms = 30 * 60_000, at = new Date().toISOString()}) => {
+      for (const c of of('work.claim', x => x.item === item && !released(x.hash) && Date.parse(x.leased_at) + x.lease_ms <= Date.parse(at))) {
+        try { append('work.release', {item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: released before a new claim', at}, [c.hash]); }
+        catch (e) { if (!/already released/.test(e.message)) throw e; }
+      }
+      return append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget, fence: 1});
+    },
     release: ({claim, item, stage, outcome, why, at = new Date().toISOString()}) => append('work.release', {item, stage, outcome, why, at}, [claim]),
     /** Record a stage's result under its claim; `from` is the stage record it received (verified on append). */
-    recordStage: ({claim, from = null, ...rec}) => append('work.stage', {...rec, handoff: {from}}, [claim, ...(from ? [from] : [])]),
+    // Refused up front (code LEASE_FENCED) when the claim is released or its lease expired at `at`; the ledger's
+    // re-derivation refuses the same, so the check cannot be skipped by appending directly.
+    recordStage: ({claim, from = null, at = new Date().toISOString(), ...rec}) => {
+      fence(claim, at);
+      return append('work.stage', {...rec, at, handoff: {from}}, [claim, ...(from ? [from] : [])]);
+    },
+    /** Charge provider calls under a live claim, BEFORE they are made: `provider_calls` is the claim's cumulative count. */
+    recordSpend: ({claim, provider_calls, at = new Date().toISOString()}) => {
+      const c = fence(claim, at);
+      return append('work.spend', {item: c.item, stage: c.stage, attempt: c.attempt, provider_calls, at}, [claim]);
+    },
+    releases: () => of('work.release'),
+    spends: claimHash => of('work.spend', s => claimHash === undefined || s.derived_from.includes(claimHash)),
     /** Record an evidence-recovery attempt (evidence-recovery.mjs). Writes nothing to the status ledger. */
     recordRecovery: ({item, status_entry, sources, outcome, searched, proposal = undefined, at = new Date().toISOString()}) =>
       append('work.recovery', {item, status_entry, sources, outcome, searched, ...(proposal !== undefined ? {proposal} : {}), at}),

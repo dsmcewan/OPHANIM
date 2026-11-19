@@ -106,10 +106,15 @@ export const PLAN_BRIEF = [
 
 // --- bounded provider calls ------------------------------------------------------------------------------------
 /** A metered `turn`: every call (failed ones included) counts; a call past the limit is refused, not made. */
-function meter(turn, limit) {
+// The stage's call meter. With the scheduler's ctx ({charge, signal}), every call is CHARGED on the work ledger
+// before it is made (a call that leaves the process is counted even if the process dies), and no call is admitted
+// once the stage's elapsed budget is spent (the cooperative stop). A refused charge is a refused call.
+function meter(turn, limit, ctx = {}) {
   const m = {made: 0, refused: 0, limit};
   m.turn = args => {
+    if (ctx.signal?.aborted) { m.refused++; return Promise.reject(Object.assign(new Error(`STAGE_ELAPSED: ${ctx.signal.reason?.message ?? 'the stage was stopped'}`), {code: 'STAGE_ELAPSED'})); }
     if (m.made >= m.limit) { m.refused++; return Promise.reject(Object.assign(new Error(`PROVIDER_CALL_LIMIT: ${m.made} of ${m.limit} stage provider call(s) used`), {code: 'PROVIDER_CALL_LIMIT'})); }
+    if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch (e) { m.refused++; return Promise.reject(e); } }
     m.made++;
     return Promise.resolve().then(() => turn(args));
   };
@@ -417,7 +422,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   // ---- plan ----
   async function plan(ctx) {
     const t0 = Date.now(), item = ctx.item, gate = ctx.gate, mode = gate.mode ?? 'author';
-    const m = meter(turn, ctx.budget.provider_calls);
+    const m = meter(turn, ctx.budget.provider_calls, ctx);
     const board = readBoard({statusRoot: statusAt});
     const status = board.items.find(i => i.item === item);
     const deps = Object.fromEntries((status?.depends_on ?? []).map(d => [d, board.items.find(i => i.item === d)?.entry ?? null]));
@@ -800,6 +805,27 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const units = v.units.map(u => ({...u, invariants: [...u.invariants, ...carried.filter(c => !u.invariants.includes(c))]}));
     const dir = dirOf(ctx, `pipeline-${ctx.attempt}-${Date.now()}`);
     const recordFile = path.join(dir, 'pipeline.json');
+    // ACROSS ATTEMPTS (independent review, assignment 3, question 8). Approved units persist in ONE checkpoint directory
+    // per item, so a later attempt (a restart after a kill, a retry) resumes them instead of paying for them again;
+    // the pipeline re-verifies each checkpoint (patch, tree, verify_cmd) before it trusts it. And the in-run findings
+    // of an INTERRUPTED attempt on this plan (a pipeline directory no implement record names: its process died before
+    // its stage record) are carried into this attempt's record, marked with the run they came from, not dropped.
+    const checkpointDir = dirOf(ctx, 'checkpoints');
+    fs.writeFileSync(path.join(dir, 'attempt.json'), JSON.stringify({item, attempt: ctx.attempt, plan_record: planRec.hash, claim: ctx.claim ?? null}) + '\n');
+    const recordedRuns = new Set(ctx.work.stages(item).filter(x => x.stage === 'implement').flatMap(x => [x.outputs?.run?.dir, ...(x.outputs?.carried_runs ?? []).map(r => r.dir)]).filter(Boolean));
+    const itemDir = path.dirname(dir), carriedRuns = [], carriedFindings = [];
+    for (const name of fs.readdirSync(itemDir).filter(x => /^pipeline-/.test(x)).sort()) {
+      const d = path.join(itemDir, name);
+      if (d === dir || recordedRuns.has(d)) continue;
+      let marker, rec;
+      try { marker = JSON.parse(fs.readFileSync(path.join(d, 'attempt.json'), 'utf8')); rec = JSON.parse(fs.readFileSync(path.join(d, 'pipeline.json'), 'utf8')); } catch { continue; }
+      if (marker.plan_record !== planRec.hash) continue;
+      const rows = Object.values(rec.units ?? {}).flatMap(u => (u.findings ?? []).flatMap(f => (f.findings ?? []).map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller',
+        unit: u.unit_id, attempt: f.attempt, code: f.code ?? null, text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null,
+        lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null, carried_from: {run_id: rec.run_id ?? null, record: path.join(d, 'pipeline.json'), attempt: marker.attempt}}))));
+      carriedRuns.push({dir: d, run_id: rec.run_id ?? null, attempt: marker.attempt, status: rec.status ?? null, findings: rows.length});
+      carriedFindings.push(...rows);
+    }
     const seats = {
       dispatcher: u => fitMatrix('dispatcher', u.difficulty),
       // Called with the unit AS DISPATCHED: a difficulty the dispatcher raised moves the implementer and its ladder.
@@ -815,12 +841,17 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let run;
     try {
       run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}}), dir, sameModel,
+        checkpoints: {dir: checkpointDir},
+        // Every pipeline call is charged on the work ledger before it is made; the stage's elapsed budget stops the run
+        // admitting calls (the scheduler's cooperative stop).
+        ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}), ...(ctx.signal ? {signal: ctx.signal} : {}),
         planner: {vendor: planRec.outputs.planner.vendor, model: planRec.outputs.planner.model},
         // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here
         // (a lower pipelineLimits.max_provider_calls is kept: the stricter bound wins).
         limits: {...pipelineLimits, max_provider_calls: Math.min(ctx.budget.provider_calls, pipelineLimits.max_provider_calls ?? Infinity)}});
     } catch (e) {
-      return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile}, error: String(e?.message ?? e).slice(0, 300)}, contributions, usage: usage(ctx.budget.provider_calls),
+      return result('failed', {outputs: {run: {kind: 'pipeline', dir, record: recordFile}, error: String(e?.message ?? e).slice(0, 300), ...(carriedRuns.length ? {carried_runs: carriedRuns} : {})},
+        contributions, findings: carriedFindings.map((f, i) => ({id: `unit-${i + 1}`, ...f})), usage: usage(ctx.budget.provider_calls),
         next: {stage: 'implement', why: `the pipeline run failed: ${String(e?.message ?? e).slice(0, 200)}`}});
     }
     const calls = run.provider_calls.total;
@@ -852,10 +883,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const branchOf = run.integration?.branch ?? null;
     const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
       units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length}]))};
-    const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'}};
+    const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'},
+      ...(carriedRuns.length ? {carried_runs: carriedRuns} : {})};
     // Every finding the run kept (the Stage 5 reviewers' and the controller's own: write jail, ground truth), by unit.
-    const findings = unitsOut.flatMap(u => (u.findings ?? []).flatMap(f => f.findings.map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller', unit: u.unit_id, attempt: f.attempt, code: f.code ?? null,
-      text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null, lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null}))))
+    const findings = [...carriedFindings, ...unitsOut.flatMap(u => (u.findings ?? []).flatMap(f => f.findings.map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller', unit: u.unit_id, attempt: f.attempt, code: f.code ?? null,
+      text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null, lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null}))))]
       .map((f, i) => ({id: `unit-${i + 1}`, ...f}));
 
     if (run.status !== 'completed') {
@@ -919,7 +951,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const sys = openPantheonLedger({root: path.join(dir, 'ledger'), board: openBoard(boardDir)});
     const lv = sys.recorder().verify();
     if (!lv.ok) throw new Error(`the run ledger does not verify: ${lv.why}`);
-    const verifies = unitsOut.map(u => u.reviews.at(-1).verify);
+    // A unit resumed from its checkpoint has no review in this run: its ground truth is the verify_cmd re-run on resume.
+    const verifies = unitsOut.map(u => u.reviews.at(-1)?.verify ?? u.resume_verify);
     const tests = {cmd: [...new Set(verifies.map(x => x.cmd))].join(' && '), exit: verifies.every(x => x.exit_code === 0) ? 0 : 1};
     const board = readBoard({statusRoot: statusAt});
     // run.json: the run as the status ledger's evidence check reads it (packages/ledger/status.mjs: the ticket key the
@@ -934,7 +967,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         run: {...runOut, board: boardDir, ledger: path.join(dir, 'ledger'), ledger_anchor: sys.anchor, ledger_head: lv.head, run_json: runFile, gate_entry: null, tests},
         integration: {branch: branchOf, head, tree, merged: run.integration.merged, deleted: true}, arbiters,
         ticket: {path: t.path, digest: t.digest, slice: t.ticket.slice, proposes: t.ticket.proposes, key: t.spec.key},
-        made_against: board.items.find(i => i.item === item)?.entry ?? null, contributions: all, carried: common.carried,
+        made_against: board.items.find(i => i.item === item)?.entry ?? null, contributions: all, carried: common.carried, ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}),
         ...(critiques.length ? {answers: critiques.map(f => f.id)} : {})},
       team, contributions: all, findings, usage: usage(calls), next: {stage: 'review', why: `integrated ${run.integration.merged.length} unit(s) as ${commit.slice(0, 12)} on ${branch}`}});
   }
@@ -942,7 +975,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   // ---- review ----
   async function review(ctx) {
     const t0 = Date.now(), item = ctx.item, impl = ctx.upstream, o = impl.outputs;
-    const m = meter(turn, ctx.budget.provider_calls);
+    const m = meter(turn, ctx.budget.provider_calls, ctx);
     const usage = () => ({provider_calls: m.made, elapsed_ms: Date.now() - t0});
     if (!fs.existsSync(o.run.run_json) || sha256(fs.readFileSync(o.run.run_json)) !== o.run_json_digest) {
       return result('failed', {next: {stage: 'implement', why: 'the run.json the implement stage recorded is missing or changed'}});
@@ -1025,7 +1058,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const t0 = Date.now(), item = ctx.item, rv = ctx.upstream;
     const chain = chainOf(ctx.work, rv);
     const impl = chain.implement, planRec = chain.plan, planDoc = planRec.outputs.plan;
-    const m = meter(turn, ctx.budget.provider_calls);
+    const m = meter(turn, ctx.budget.provider_calls, ctx);
     const usage = () => ({provider_calls: m.made, elapsed_ms: Date.now() - t0});
     const commit = rv.outputs.commit;
     if (commit !== impl.outputs.commit) return result('failed', {next: {stage: 'review', why: 'the reviewed commit is not the implemented one'}});

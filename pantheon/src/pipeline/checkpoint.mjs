@@ -14,13 +14,16 @@
 //   {schema, unit_key, unit_id, verdict: "approve", rubric_hash, base_commit (the run's base), unit_base_commit (the
 //    unit's worktree base: base + upstream patches), upstream: [{unit_id, unit_key, tree}], commit, tree,
 //    patch_path (relative to checkpoints.dir), patch_digest, reviewer: {vendor, model, served_model},
-//    verify: {cmd, exit_code, digest}, recorded_at}
+//    verify: {cmd, exit_code, digest}, review_digest (digest of the Stage 5 review record that approved it), recorded_at}
 //   and the patch beside it at <hex>.patch. Both are written atomically (temp file + rename), patch first.
 //
 // A checkpoint is EVIDENCE TO RE-CHECK, never a verdict to trust: checkpointRefusal() refuses one whose schema,
 // key, unit, base, verdict or upstream (unit set, keys and trees) differ from the current run, and whose patch bytes
 // do not hash to patch_digest; the controller (index.mjs) then applies the patch on the unit's freshly bound base
-// and refuses it unless the result is exactly the recorded tree.
+// and refuses it unless the result is exactly the recorded tree AND the unit's verify_cmd, re-run there, passes: a
+// patch, digest and tree rewritten to agree with each other still have to pass the unit's own ground truth
+// (independent review, assignment 3, question 7). The approval is bound by the rubric hash and the review record's
+// digest; a checkpoint without them (written before they were bound) is not resumed: the unit runs again.
 //
 // Must never: accept a checkpoint whose upstream trees differ from this run's; accept patch bytes that do not hash
 // to the recorded digest; leave a half-written checkpoint where a reader would find it.
@@ -84,6 +87,9 @@ export function checkpointRefusal({ record, patch }, expect) {
   if (record.verdict !== "approve") return `the checkpoint's verdict is ${record.verdict}, not approve`;
   if (record.base_commit !== expect.base_commit) return `the checkpoint was recorded on base ${record.base_commit}, not ${expect.base_commit}`;
   if (!str(record.tree) || !/^[0-9a-f]{40,64}$/.test(record.tree)) return "the checkpoint records no tree";
+  if (!/^sha256:[0-9a-f]{64}$/.test(record.rubric_hash ?? "") || !/^sha256:[0-9a-f]{64}$/.test(record.review_digest ?? "")) return "the checkpoint does not bind its approval (rubric_hash and review_digest)";
+  if (!isObject(record.verify) || record.verify.exit_code !== 0) return "the checkpoint records no passing verify";
+  if (expect.verify_cmd !== undefined && record.verify.cmd !== expect.verify_cmd) return "the checkpoint's verify command is not the unit's";
   if (typeof patch !== "string") return "the checkpoint's patch is missing";
   if (sha256(patch) !== record.patch_digest) return `the checkpoint's patch hashes to ${sha256(patch)}, not the recorded ${record.patch_digest}`;
   const norm = list => (Array.isArray(list) ? list : []).map(u => `${u?.unit_id}\u0000${u?.unit_key}\u0000${u?.tree}`).sort();
