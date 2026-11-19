@@ -1,4 +1,4 @@
-const R='/home/user/OPHANIM/';
+const R=new URL('../../../', import.meta.url).pathname;
 const {resolveModel, contributorKeys, candidateRefusal} = await import(R+'pantheon/src/review/identity.mjs');
 const {reviewSeatsByModel} = await import(R+'pantheon/src/ledger/review-cycle.mjs');
 const {FIT_MATRIX, IMPLEMENTER_LADDERS} = await import(R+'pantheon/src/route/fit-matrix.mjs');
