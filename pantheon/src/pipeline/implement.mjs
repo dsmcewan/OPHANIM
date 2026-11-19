@@ -26,11 +26,15 @@
 // THE JAIL. A changed, added or deleted path (tracked, untracked or git-ignored) must match the unit's owned_paths.
 // A symlink the turn created must point inside the worktree, by a relative target. No changed path may resolve,
 // through a symlinked directory, outside the worktree. The turn may not move HEAD. A worktree that already TRACKS a
-// symlink leaving it is refused before the turn: a write through such a link is invisible to git.
+// symlink leaving it is refused before the turn: a write through such a link is invisible to git. Git status is not a
+// complete inventory, so a PRE/POST FILESYSTEM SNAPSHOT (snapshotTree: path, type, mode, size, mtime, ctime, dev,
+// inode, link count, for every entry, the `.git` pointer included, `.git` internals excluded) is compared too: a
+// mode-only change, a restored write, a hard link made to a file, or a touched `.git` pointer outside owned_paths is a
+// violation as well.
 //
 // Must never: keep any part of an attempt that broke the jail; accept the implementer's own account of what it
 // changed; follow a symlink out of the worktree; run git synchronously.
-import { lstat, readlink, realpath, readdir, rm } from "node:fs/promises";
+import { lstat, readFile, readlink, realpath, readdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CAPABILITIES, clone, sha256, str } from "./util.mjs";
@@ -101,12 +105,65 @@ async function walk(root, rel, out) {
 const inside = (root, p) => p === root || p.startsWith(root + sep);
 
 /**
+ * THE PRE/POST FILESYSTEM SNAPSHOT of a worktree (independent review round 2, assignment 4 (OpenAI gpt-6-astra,
+ * 77480d6), question 6: git status misses a mode-only change that keeps the executable bit, directory metadata, a write
+ * later restored to the original bytes, a hard link made to a file, and the linked worktree's `.git` pointer file).
+ * {<relative path>: {type, mode, size, mtime_ms, ctime_ms, dev, ino, nlink, link?}} for every entry under the
+ * worktree, the `.git` entry itself included (the pointer file of a linked worktree, or the directory's own metadata)
+ * but nothing inside a `.git` directory (git's own internals, which the controller's own git commands rewrite).
+ * ctime is the one a process cannot set back: a write restored to its original bytes and mtime still changes it.
+ */
+export async function snapshotTree(worktree, { hashIf = () => false } = {}) {
+  const root = await realpath(worktree), out = {};
+  const rec = (st, extra = {}) => ({ type: st.isFile() ? "file" : st.isDirectory() ? "dir" : st.isSymbolicLink() ? "symlink" : "other",
+    mode: st.mode, size: st.isDirectory() ? null : st.size, mtime_ms: st.mtimeMs, ctime_ms: st.ctimeMs, dev: st.dev, ino: st.ino, nlink: st.nlink, ...extra });
+  const visit = async rel => {
+    const abs = rel ? join(root, rel) : root;
+    const st = await lstat(abs).catch(() => null);
+    if (!st) return;
+    // `hashIf(rel)` (the owned paths, in runImplementer): a content hash too, so an owned file's bytes are on record.
+    const hash = st.isFile() && rel && hashIf(rel) ? sha256(await readFile(abs).catch(() => Buffer.alloc(0))) : undefined;
+    out[rel || "."] = rec(st, { ...(st.isSymbolicLink() ? { link: await readlink(abs).catch(() => null) } : {}), ...(hash ? { hash } : {}) });
+    if (!st.isDirectory() || (rel && rel.split("/").at(-1) === ".git")) return;
+    for (const e of (await readdir(abs).catch(() => [])).sort()) await visit(rel ? `${rel}/${e}` : e);
+  };
+  await visit("");
+  return out;
+}
+/** Is the entry's change a side effect of its children changing (a directory's mtime/ctime/nlink), not a write to it? */
+const dirSideEffect = (a, b) => a.type === "dir" && b.type === "dir" && a.mode === b.mode && a.dev === b.dev && a.ino === b.ino;
+const sameEntry = (a, b) => a.type === b.type && a.mode === b.mode && a.size === b.size && a.mtime_ms === b.mtime_ms && a.ctime_ms === b.ctime_ms
+  && a.dev === b.dev && a.ino === b.ino && a.nlink === b.nlink && (a.link ?? null) === (b.link ?? null) && (!a.hash || !b.hash || a.hash === b.hash);
+/**
+ * What the snapshots say changed: [{path, state: "added" | "deleted" | "metadata" | "modified", what: [fields]}].
+ * A directory whose only change is its timestamps or link count (its children changed) is not listed; a NEW directory
+ * is listed only when nothing below it is listed (an empty directory git cannot see).
+ */
+export function snapshotChanges(before, after) {
+  const out = [];
+  for (const p of [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])].sort()) {
+    const a = before?.[p], b = after?.[p];
+    if (p === ".") { if (a && b && a.mode !== b.mode) out.push({ path: p, state: "metadata", what: ["mode"] }); continue; }
+    if (a && b) {
+      if (sameEntry(a, b) || dirSideEffect(a, b)) continue;
+      const what = ["type", "mode", "size", "mtime_ms", "ctime_ms", "dev", "ino", "nlink", "link", ...(a.hash && b.hash ? ["hash"] : [])].filter(k => (a[k] ?? null) !== (b[k] ?? null));
+      out.push({ path: p, state: what.some(k => k === "size" || k === "mtime_ms" || k === "type" || k === "ino" || k === "link" || k === "hash") ? "modified" : "metadata", what });
+    } else out.push({ path: p, state: a ? "deleted" : "added", what: [] });
+  }
+  return out.filter(c => !(c.state === "added" && after[c.path].type === "dir" && out.some(o => o.path.startsWith(`${c.path}/`))));
+}
+
+/**
  * Read what a turn changed, FROM DISK, against `checkpoint`, and judge it against `owned_paths`.
  * `scratch_paths` are patterns for tool droppings the controller is told in advance to delete rather than count
  * (injected, default none); what was deleted is listed, never hidden.
+ * `before` (optional): snapshotTree(worktree) taken before the turn; every entry the pre/post snapshot comparison says
+ * changed (snapshotChanges) is judged too, so a change git status cannot see is still a violation outside owned_paths
+ * (code OUTSIDE_OWNED, state "metadata" / "modified" / "added" / "deleted"; the `.git` entry is never owned: code
+ * GIT_POINTER_CHANGED).
  * Returns {ok, changed: [{path, state}], violations: [{path, code, why}], scratch_discarded: [path]}, each sorted.
  */
-export async function inspectWrites({ worktree, owned_paths, checkpoint, scratch_paths = [] }) {
+export async function inspectWrites({ worktree, owned_paths, checkpoint, scratch_paths = [], before = null }) {
   const root = await realpath(worktree);
   const violations = [], changed = new Map(), scratch_discarded = [];
   const head = (await git(worktree, ["rev-parse", "HEAD"])).trim();
@@ -122,12 +179,24 @@ export async function inspectWrites({ worktree, owned_paths, checkpoint, scratch
     if (p.endsWith("/")) { const files = []; await walk(root, p.slice(0, -1), files); for (const f of files) changed.set(f, state); }
     else changed.set(p, state);
   }
+  // What git cannot see: the pre/post snapshot (see snapshotTree). A path git already listed keeps git's state.
+  const snapOnly = new Map();
+  if (before) {
+    for (const c of snapshotChanges(before, await snapshotTree(worktree, { hashIf: p => matchesOwned(p, owned_paths) }))) {
+      if (c.path === ".git") { violations.push({ path: ".git", code: "GIT_POINTER_CHANGED", why: `the worktree's .git entry changed (${c.state}${c.what.length ? `: ${c.what.join(", ")}` : ""}): a turn never touches it` }); continue; }
+      if (c.path === ".") { violations.push({ path: ".", code: "OUTSIDE_OWNED", why: `the worktree root's mode changed: it is never owned` }); continue; }
+      if (!changed.has(c.path)) { changed.set(c.path, c.state); snapOnly.set(c.path, c); }
+    }
+  }
   for (const [p] of [...changed]) if (scratch_paths.length && matchesOwned(p, scratch_paths)) {
     await rm(join(root, p), { recursive: true, force: true });
     changed.delete(p); scratch_discarded.push(p);
   }
   for (const [p] of changed) {
-    if (!matchesOwned(p, owned_paths)) { violations.push({ path: p, code: "OUTSIDE_OWNED", why: `${p} is not matched by the unit's owned_paths` }); continue; }
+    const snap = snapOnly.get(p);
+    // A new directory (snapshot-only) is owned when a path under it could be: an empty dir src/a/new under src/a/**.
+    const owned = matchesOwned(p, owned_paths) || (snap?.state === "added" && before && matchesOwned(`${p}/x`, owned_paths));
+    if (!owned) { violations.push({ path: p, code: "OUTSIDE_OWNED", why: `${p} is not matched by the unit's owned_paths${snap ? ` (seen by the filesystem snapshot, not by git: ${snap.state}${snap.what.length ? ` ${snap.what.join(", ")}` : ""})` : ""}` }); continue; }
     const abs = join(root, p);
     const parent = await realpath(dirname(abs)).catch(() => null);
     if (parent && !inside(root, parent)) { violations.push({ path: p, code: "RESOLVES_OUTSIDE", why: `${p} resolves through a symlinked directory to ${parent}, outside the worktree` }); continue; }
@@ -196,6 +265,8 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
   const escapes = await preexistingEscapes(worktree);
   if (escapes.length) return Object.assign(rec, { status: "refused", code: "JAIL_UNENFORCEABLE", violations: escapes,
     why: `write jail cannot be enforced: the worktree tracks symlink(s) that leave it (${escapes.map(v => v.path).join(", ")}); no turn was asked` });
+  // The pre-turn filesystem snapshot: the post-turn jail compares against it as well as against git (see snapshotTree).
+  const before = await snapshotTree(worktree, { hashIf: p => matchesOwned(p, unit.owned_paths) });
   let out;
   try {
     const roles = a2a ? [...(a2a.roles ?? unit.allowed_subagents ?? [])] : [];
@@ -217,7 +288,7 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
   // A transport that fell over from an Antigravity lane to the metered API of the same base model says so; kept as said.
   if (out?.quota_failover) rec.quota_failover = clone(out.quota_failover);
 
-  const jail = await inspectWrites({ worktree, owned_paths: unit.owned_paths, checkpoint: start, scratch_paths });
+  const jail = await inspectWrites({ worktree, owned_paths: unit.owned_paths, checkpoint: start, scratch_paths, before });
   Object.assign(rec, { changed: jail.changed, violations: jail.violations, scratch_discarded: jail.scratch_discarded });
   if (!jail.ok) {
     await discardWrites({ worktree, checkpoint: start });

@@ -54,7 +54,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import { runAgyWorkerTurn } from "../board/agy-cli.mjs";
+import { runAgyWorkerTurn, workerEnv } from "../board/agy-cli.mjs";
 import { prepareWorkerWorkspace } from "../agy/workspace.mjs";
 import { probeQuota } from "../agy/quota.mjs";
 import { decideWrite } from "../agy/jail-hook.mjs";
@@ -216,7 +216,9 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     try {
       const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-agy-control-")));
       await prepareWorkerWorkspace({ control_dir: ctl, worktree: cwd, unit_id: unit_id ?? a2a_env.PANTHEON_UNIT_ID ?? null, owned_paths: owned ?? [], verify_cmd, roles, mcp_server, a2a_env });
-      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS, env: childEnv, sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
+      // base_env: the ALLOWLISTED controller env, never process.env whole (independent review round 2, assignment 4,
+      // question 7); childEnv (the unit's own A2A env) stays an explicit extra, a provider API key never passes.
+      const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS, env: childEnv, base_env: workerEnv(), sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
       return { text: r.text ?? "", served_model: model, served_model_source: "input", transport: "agy-cli", requested_model: model,
         response_id: r.response_id ?? null, tool_calls: r.tool_calls ?? null, subagent_calls: r.subagent_calls ?? null, summary: r.summary ?? null,
         jail_log: r.jail_log ?? [], cleanup_env: r.cleanup_env ?? null, sandbox: r.sandbox ?? null };

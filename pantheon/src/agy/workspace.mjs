@@ -28,7 +28,7 @@ import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRITE_PATH_KEYS, WRITE_TOOLS, workerVerifyCommand } from "./jail-hook.mjs";
+import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRAPPER_TIMEOUT_S, WRITE_PATH_KEYS, WRITE_TOOLS, workerVerifyCommand } from "./jail-hook.mjs";
 
 export { workerVerifyCommand } from "./jail-hook.mjs";
 
@@ -101,16 +101,55 @@ export function hooksConfig({ command, timeout = HOOK_TIMEOUT_S }) {
   return { [HOOK_NAME]: { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command, timeout }] }] } };
 }
 
-/** The wrapper script: runs node on the hook with the policy; prints a deny itself if node prints nothing. */
-export function hookWrapper({ node = process.execPath, hook = JAIL_HOOK, policy }) {
+/** The marker the wrapper's watchdog writes into the pipe after it killed a node that gave no decision in time. */
+export const WRAPPER_TIMEOUT_MARK = "__pantheon_jail_hook_timeout__";
+/**
+ * The wrapper script: runs node on the hook with the policy and prints EXACTLY ONE decision line, whatever node does.
+ * Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 1: the earlier wrapper buffered
+ * node's whole output in $(...) until node exited, so a node stuck past the CLI's 30 s hook timeout was killed with the
+ * wrapper and left an EMPTY stdout, which ALLOWS (owner-stated). Now:
+ *   - node's stdout is a pipe the wrapper reads line by line; the FIRST complete line that is a decision
+ *     ({"decision":"auto_approve",...} or {"decision":"deny",...}) is forwarded at once;
+ *   - a watchdog kills node after `timeout_s` (WRAPPER_TIMEOUT_S, well under the CLI's HOOK_TIMEOUT_S) and the wrapper
+ *     prints a deny that says so;
+ *   - nothing, a partial line or anything that is not a decision (a node that crashed, could not write, or is not
+ *     there) is answered with a deny;
+ *   - the wrapper's own write failure exits non-zero (there is nothing else it can do).
+ * POSIX sh only (no coreutils timeout): node runs in the background with the hook's stdin (fd 3) and the watchdog's
+ * stdout is the same pipe, so its marker line arrives only after node is dead.
+ */
+export function hookWrapper({ node = process.execPath, hook = JAIL_HOOK, policy, timeout_s = WRAPPER_TIMEOUT_S }) {
+  if (!Number.isInteger(timeout_s) || timeout_s < 1 || timeout_s >= HOOK_TIMEOUT_S) throw Object.assign(new Error(`hookWrapper: timeout_s must be a whole number of seconds under the CLI's ${HOOK_TIMEOUT_S} s hook timeout`), { code: "BAD_INPUT" });
+  const deny = why => `'${JSON.stringify({ decision: "deny", reason: `hook exception: ${why}` })}'`;
   return [
     "#!/bin/sh",
     "# Pantheon's PreToolUse jail hook for one unit (written by pantheon/src/agy/workspace.mjs). It takes no arguments and",
     "# does not depend on its cwd (owner-stated: agy runs hook commands in .agents/). It ALWAYS prints one decision:",
-    "# owner-stated, an empty hook stdout ALLOWS the tool, so a node that prints nothing is answered with a deny here.",
-    `out=$(${shWord(node)} ${shWord(hook)} ${shWord(policy)})`,
-    'if [ -n "$out" ]; then printf \'%s\\n\' "$out"; else printf \'%s\\n\' \'{"decision":"deny","reason":"hook exception: the jail hook printed nothing"}\'; fi',
-    "exit 0",
+    "# owner-stated, an empty hook stdout ALLOWS the tool, so anything but a complete decision from node is a deny here,",
+    `# and a node that has not answered within ${timeout_s} s is killed and answered with a deny.`,
+    "exec 3<&0",
+    "{",
+    `  ${shWord(node)} ${shWord(hook)} ${shWord(policy)} <&3 3<&- &`,
+    "  pid=$!",
+    "  exec 3<&-",
+    `  ( trap 'kill "$s" 2>/dev/null; exit 0' TERM; sleep ${timeout_s} </dev/null >/dev/null 2>&1 & s=$!; wait "$s"; kill -9 "$pid" 2>/dev/null; printf '%s\\n' '${WRAPPER_TIMEOUT_MARK}' ) &`,
+    "  w=$!",
+    '  wait "$pid"',
+    '  kill "$w" 2>/dev/null',
+    '  wait "$w" 2>/dev/null',
+    "} | {",
+    "  answered=",
+    "  while IFS= read -r line; do",
+    '    case "$line" in',
+    `      '{"decision":"auto_approve",'*'}'|'{"decision":"deny",'*'}') printf '%s\\n' "$line" || exit 3; answered=1; break ;;`,
+    `      *${WRAPPER_TIMEOUT_MARK}) printf '%s\\n' ${deny(`the jail hook gave no decision within ${timeout_s} s (the wrapper killed it)`)} || exit 3; answered=1; break ;;`,
+    "      *) ;;",
+    "    esac",
+    "  done",
+    `  [ -n "$answered" ] || printf '%s\\n' ${deny("the jail hook printed nothing")} || exit 3`,
+    "  cat >/dev/null",
+    "}",
+    "exit $?",
     "",
   ].join("\n");
 }

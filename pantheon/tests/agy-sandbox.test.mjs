@@ -38,7 +38,8 @@ test("bwrapArgs: the read-only host, the writable worktree/run/state dirs, the r
   assert.equal(g.common_dir, join(repo, ".git"));
   assert.equal(g.git_dir, join(repo, ".git", "worktrees", "a"));
   const { argv, binds } = bwrapArgs({ worktree: wt, control_dir: ctl, agy_state_dirs: [state] });
-  assert.deepEqual(argv.slice(0, 11), ["bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]);
+  // --unshare-pid and --new-session: independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 5.
+  assert.deepEqual(argv.slice(0, 13), ["bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]);
   assert.deepEqual(argv.slice(-3), ["--chdir", ctl, "--"]);
   assert.ok(!argv.includes("--unshare-net") && !argv.includes("--unshare-all"), "the network is not unshared: the CLI must reach Google");
   assert.deepEqual(binds, [{ mode: "rw", path: state }, { mode: "rw", path: wt }, { mode: "ro", path: ctl }, { mode: "rw", path: join(ctl, "run") }, { mode: "ro", path: join(repo, ".git") }]);
@@ -239,7 +240,7 @@ console.log(JSON.stringify(out));
       { name: "last_check.timestamp", size: 21, copied: true, changed: false }, { name: "settings.json", size: 16, copied: true, changed: true }],
     subdirs: { brain: [{ path: "id1/task.md", size: 1 }], cache: [], conversations: [{ path: "x", size: 4 }], crashes: [], implicit: [], log: [{ path: "cli.log", size: 8 }], mcp: [], presence: [] },
     writable_subdirs: { bin: [{ path: "agentapi", size: 21, copied: true, changed: true }, { path: "language_server", size: 10, copied: true, changed: false }, { path: "ls-link", size: 15, copied: true, changed: false }] },
-    writable_copies: { "config/projects": [{ path: "default-cli-project.json", size: 7, copied: true, changed: true }] } });
+    writable_copies: { "config/projects": [{ path: "default-cli-project.json", size: 7, copied: true, changed: true }] }, removed: true });
   assert.equal(existsSync(st.scratch_root), false);
   assert.deepEqual(snapshot(home), before, "the host ~/.gemini is unchanged and nothing was created under HOME");
 });

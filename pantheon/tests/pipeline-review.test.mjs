@@ -16,7 +16,7 @@ const run = async (t, plan, script, limits, seatOver) => {
 const of = (calls, role) => calls.filter(c => c.role === role);
 
 test("an `approve` while verify_cmd FAILED is refused by the controller: ground truth wins, nothing merges", async t => {
-  const r = await run(t, [unit("a", { verify_cmd: "echo boom-from-verify; exit 3" })], { review: () => approve(RUBRIC) }, { max_revisions: 1 });
+  const r = await run(t, [unit("a", { verify_cmd: "sh -c 'echo boom-from-verify; exit 3'" })], { review: () => approve(RUBRIC) }, { max_revisions: 1 });
   const u = r.out.units.a;
   assert.deepEqual(u.reviews.map(x => [x.verdict, x.status, x.code, x.verify.exit_code, x.verify.passed]), [["approve", "approve_refused", "APPROVE_AGAINST_GROUND_TRUTH", 3, false], ["approve", "approve_refused", "APPROVE_AGAINST_GROUND_TRUTH", 3, false]]);
   assert.equal(u.status, "blocked"); assert.equal(u.merged, false); assert.equal(r.out.integration.head, r.out.base.commit);

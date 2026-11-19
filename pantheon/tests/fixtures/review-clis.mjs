@@ -25,6 +25,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+// The agy worker's env is an ALLOWLIST (src/board/agy-cli.mjs workerEnv; independent review round 2, assignment 4,
+// question 7): the fake CLIs' own switches reach the fake agy only because the operator variable lists them.
+process.env.PANTHEON_AGY_ENV_PASS ??= "FAKE_*";
+
 const KEYS = "Object.keys(process.env).filter(k => /KEY|TOKEN|SECRET/.test(k)).sort()";
 const COMMON = String.raw`
 const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process");

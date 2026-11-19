@@ -215,7 +215,10 @@ for (const form of ["direct", "wrapped"]) {
 
 // OBSERVED (owner's machine, 2026-11-18): gemini_state_untouched read false only because a HOST log file under
 // ~/.gemini/antigravity-cli/log/ grew during the probe -- a file the jail cannot reach (it sees the scratch there).
-test("a host process writing ~/.gemini/antigravity-cli/log/ during the probe: classified outside_jail_reach (hidden), reported with possible_writer, NOT a failure (exit 0)", needBwrap, async t => {
+// Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 10: "cannot reach by path" does not
+// identify the writer, so the change is UNRESOLVED evidence: gemini_state_untouched is null (not true), the probe exits 1
+// (not every check passed), and the change is listed in gemini_state.unresolved_host_changes.
+test("a host process writing ~/.gemini/antigravity-cli/log/ during the probe: classified outside_jail_reach (hidden), reported with possible_writer, UNRESOLVED (untouched null, exit 1)", needBwrap, async t => {
   const s = await setup(t);
   const hostLog = join(s.c, "log", "cli-20261114_185251.log");
   writeFileSync(hostLog, "host line\n");
@@ -223,10 +226,12 @@ test("a host process writing ~/.gemini/antigravity-cli/log/ during the probe: cl
   let r;
   try { r = await probe(s); } finally { clearInterval(timer); }
   const o = r.summary;
-  assert.equal(r.code, 0, JSON.stringify([o.aborted, o.checks]));
-  assert.equal(o.checks.gemini_state_untouched, true);
+  assert.equal(r.code, 1, JSON.stringify([o.aborted, o.checks]));
+  assert.deepEqual(o.checks, { forbidden_denied: true, allowed_written: true, mcp_called: true, verify_ran: true, gemini_state_untouched: null });
+  assert.deepEqual(o.gemini_state.unresolved_host_changes.map(c => c.path), [hostLog]);
+  assert.equal(o.owner_stated_mechanics.state_mounts.status, "unresolved");
   const ch = o.gemini_state.host_changes.filter(c => c.path === hostLog);
-  assert.deepEqual(ch.map(c => [c.change, c.reach, c.jail_view, c.possible_writer]), [["changed", "outside_jail_reach", "hidden", "another host process"]]);
+  assert.deepEqual(ch.map(c => [c.change, c.reach, c.jail_view, c.possible_writer, c.unresolved]), [["changed", "outside_jail_reach", "hidden", "another host process", true]]);
   assert.match(ch[0].why, /the jail sees .*agy-state.* at .*antigravity-cli, not the host's/);
   assert.ok(o.gemini_state.host_changes.every(c => c.reach === "outside_jail_reach"));
 });

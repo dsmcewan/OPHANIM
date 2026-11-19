@@ -8,7 +8,7 @@
 //   - gemini_state_untouched failed on a host log file the jail could not reach.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,14 +145,40 @@ test("the observed host change (a host log file under ~/.gemini/antigravity-cli/
   const before = { cli_state: { "log/cli-20261114_185251.log": "1000:1" }, config_projects: null, top: { "settings.json": "2:1" } };
   const after = { cli_state: { "log/cli-20261114_185251.log": "1306:2" }, config_projects: null, top: { "settings.json": "2:1" } };
   const ch = hostChanges(before, after, roots, binds);
-  assert.deepEqual(ch.map(c => [c.path, c.change, c.reach, c.possible_writer]), [[hostLog, "changed", "outside_jail_reach", "another host process"]]);
-  assert.equal(untouchedBy(ch), true, "gemini_state_untouched: no REACHABLE change");
+  assert.deepEqual(ch.map(c => [c.path, c.change, c.reach, c.possible_writer, c.unresolved]), [[hostLog, "changed", "outside_jail_reach", "another host process", true]]);
+  // Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 10: outside the jail's reach BY
+  // PATH is where the binds point, not who wrote it; the change is UNRESOLVED evidence, never "untouched".
+  assert.equal(untouchedBy(ch), null, "gemini_state_untouched: unresolved, not true");
+  assert.equal(untouchedBy([]), true, "only no change at all is untouched");
   // The same change with that log dir bound read-write into the jail (an explicit agy state dir) is a failure.
   const rw = bwrapArgs({ worktree: u.wt, control_dir: u.ctl, gemini_state: gs, agy_state_dirs: [join(cli, "log")] }).binds;
   const ch2 = hostChanges(before, after, roots, rw);
   assert.deepEqual(ch2.map(c => c.reach), ["reachable_by_jail"]);
   assert.equal(untouchedBy(ch2), false);
   assert.equal(untouchedBy(hostChanges(before, after, roots, null)), true, "no jail ran: nothing the jail could have done");
+});
+
+// Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 10: a HARD-LINK alias of a host file
+// inside a read-write bind changes the host file while its own path stays "outside the jail's reach"; realpath cannot
+// name the alias. jailReach now reports such a file (nlink > 1) as unresolved, and the probe's snapshot sees the link.
+test("a host file hard-linked from inside a writable bind is UNRESOLVED, not outside_jail_reach; its change is never 'untouched'", async t => {
+  const u = await unit(t);
+  const g = join(u.home, ".gemini"), cli = join(g, "antigravity-cli");
+  mkdirSync(join(cli, "log"), { recursive: true });
+  const gs = await geminiState({ home: u.home, run_dir: join(u.ctl, "run") });
+  t.after(() => dropGeminiState(gs));
+  const { binds } = bwrapArgs({ worktree: u.wt, control_dir: u.ctl, gemini_state: gs });
+  const hostFile = join(g, "settings.json");
+  writeFileSync(hostFile, "{}\n");
+  assert.equal(jailReach(binds, hostFile).reach, "outside_jail_reach", "one link: read-only by path");
+  try { linkSync(hostFile, join(u.wt, "alias.json")); } catch (e) { t.skip(`no hard link across these dirs (${e.code})`); return; }
+  const r = jailReach(binds, hostFile);
+  assert.deepEqual([r.reach, r.nlink], ["unresolved", 2]);
+  assert.match(r.why, /2 hard links/);
+  const roots = { cli_state: cli, config_projects: join(g, "config", "projects"), top: g };
+  const ch = hostChanges({ cli_state: {}, config_projects: null, top: { "settings.json": "a" } }, { cli_state: {}, config_projects: null, top: { "settings.json": "b" } }, roots, binds);
+  assert.deepEqual(ch.map(c => [c.reach, c.unresolved]), [["unresolved", true]]);
+  assert.equal(untouchedBy(ch), null);
 });
 
 test("host agy processes are listed by binary only: args after the binary path are redacted", () => {
