@@ -5,7 +5,9 @@
 //   writes      only under <worktree>/.review-tests/ (owned_paths [".review-tests/**"]) for assignments 1-3; none for 4
 //               (owned_paths [], and the card lists no write tool)
 //   reads       anywhere in the worktree (and the control dir), as for the worker
-//   run_command only the exact commands the CLI harness lists: `run_command_policy` {kind: "node-test", ...}
+//   run_command only the exact commands the CLI harness lists: `run_command_policy` {kind: "node-test", launcher, ...}: the
+//               review's VERIFY LAUNCHERS in the control dir (<ctl>/pantheon-test <files>, <ctl>/pantheon-suite-<name>),
+//               which run the code under review in a verify jail (credential isolation, src/agy/verify-jail.mjs)
 //   MCP         none (no subagents in a review): mcp_config.json has no server and the hook denies every MCP call
 // The card is pantheon-reviewer-agent (pantheon/.agents/agents/); the argv is the worker's (workerArgv: --mode=
 // accept-edits, --add-dir <worktree>, --disable-slash-commands, --output-format stream-json, --print-timeout,
@@ -13,10 +15,11 @@
 // `served_model_source: "input"` (Antigravity names no served model).
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOOK_WRAPPER, JAIL_HOOK, hookWrapper, hooksConfig, cardTools, validateCardTools } from "../agy/workspace.mjs";
-import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRITE_PATH_KEYS, WRITE_TOOLS } from "../agy/jail-hook.mjs";
+import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, REVIEW_SUITE_LAUNCHER, REVIEW_TEST_LAUNCHER, WRITE_PATH_KEYS, WRITE_TOOLS } from "../agy/jail-hook.mjs";
+import { writeVerifyLauncher } from "../agy/verify-jail.mjs";
 import { REVIEW_TESTS_DIR } from "./cli-common.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -69,5 +72,19 @@ export async function prepareReviewWorkspace({ control_dir, worktree, n, write_a
   await chmod(paths.hook_command, 0o755);
   await writeFile(paths.hooks, JSON.stringify(hooksConfig({ command: paths.hook_command }), null, 2) + "\n");
   await writeFile(paths.jail_log, "", { flag: "a" });
+  // THE VERIFY LAUNCHERS (credential isolation, src/agy/verify-jail.mjs): the code under review runs only through them,
+  // in a verify jail, never as agy's own child. pantheon-test takes the test files (checked again by the launcher);
+  // each pantheon-suite-<name> runs its suite script. The hook approves exactly these paths (decideReviewCommand).
+  paths.launchers = {};
+  const rcp = run_command_policy;
+  if (rcp?.launcher) {
+    if (rcp.launcher !== join(ctl, REVIEW_TEST_LAUNCHER)) throw Object.assign(new Error(`the review's test launcher ${rcp.launcher} is not ${join(ctl, REVIEW_TEST_LAUNCHER)}`), { code: "BAD_POLICY" });
+    const extra_ro = (rcp.extra_ro ?? []).filter(p => typeof p === "string" && isAbsolute(p));
+    paths.launchers.test = writeVerifyLauncher({ control_dir: ctl, worktree: wt, script: "node --test", test_files: true, name: REVIEW_TEST_LAUNCHER, policyName: "verify-test.json", extra_ro, node }).command;
+    for (const [name, script] of Object.entries(rcp.suite_scripts ?? {})) {
+      if (!/^[a-z][a-z0-9-]*$/.test(name) || rcp.suites?.[name] !== join(ctl, REVIEW_SUITE_LAUNCHER(name))) throw Object.assign(new Error(`the review suite ${name} has no launcher in ${ctl}`), { code: "BAD_POLICY" });
+      paths.launchers[name] = writeVerifyLauncher({ control_dir: ctl, worktree: wt, script, name: REVIEW_SUITE_LAUNCHER(name), policyName: `verify-suite-${name}.json`, extra_ro, node }).command;
+    }
+  }
   return { paths, policy };
 }

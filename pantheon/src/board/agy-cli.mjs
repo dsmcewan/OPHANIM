@@ -129,6 +129,7 @@ import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
+import { extendVerifyPolicy } from "../agy/verify-jail.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
 import { MCP_SERVER as MCP_SERVER_NAME } from "../agy/jail-hook.mjs";
 import { SECRETISH, controlDirSecrets, redactDeep, redactExact, redactStrong, secretValues } from "../agy/redact.mjs";
@@ -169,11 +170,10 @@ export function workerArgv({ model, worktree, prompt, timeoutS, log_file = null,
 // and the names or `PREFIX*` patterns the operator lists in PANTHEON_AGY_ENV_PASS (":"- or ","-separated; the test
 // fixtures pass their fake CLI's FAKE_* this way); a secret-named variable (ENV_SECRETISH) never passes from `base`,
 // whatever the lists say. `extra` is the caller's EXPLICIT choice and passes, EXCEPT a provider API key (`*_API_KEY`;
-// the Google keys as before). CHOICE, recorded: the unit's own A2A token stays an explicit extra (the pipeline passes
-// it, and ophanim/operate's lifecycle test, owned elsewhere, asserts it reaches the CLI); it is per unit, good only for
-// this unit's bounded shim, and the code the verify command runs can read it from the control dir's MCP config anyway
-// (same uid); what IS closed is the model's read tools (the hook denies the control dir) and other units' tokens (their
-// control dirs are hidden in this jail: src/agy/sandbox.mjs siblingsHidden).
+// the Google keys as before) and any secret-named variable (ENV_SECRETISH): the unit's A2A token NEVER enters agy's
+// environment (CREDENTIAL ISOLATION, src/agy/verify-jail.mjs; owner direction 2026-11-19). The relay reads the token
+// from its token file (src/agy/workspace.mjs A2A_TOKEN_FILE), which the verify jail hides like the rest of the control
+// dir; worker-controlled code runs only in that jail (the verify launcher), never as agy's child.
 export const WORKER_ENV_ALLOW = Object.freeze(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "TZ", "TMPDIR",
   "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"]);
 export const WORKER_ENV_PREFIXES = Object.freeze(["LC_", "XDG_", "AGY_", "ANTIGRAVITY_"]);
@@ -193,7 +193,7 @@ export function workerEnvOf(extra = {}, base = null) {
   for (const [k, v] of Object.entries(src)) { if (v === undefined) continue; if (workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k); }
   for (const [k, v] of Object.entries(extra ?? {})) {
     if (v === undefined || v === null) continue;
-    if (PROVIDER_KEY.test(k)) { dropped.push(k); delete env[k]; continue; }
+    if (PROVIDER_KEY.test(k) || ENV_SECRETISH.test(k)) { dropped.push(k); delete env[k]; continue; }
     env[k] = String(v);
   }
   // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
@@ -244,7 +244,16 @@ export async function prepareWorkerJail({ cli, control_dir, worktree, env = work
       if (a2a_socket) { const d = dirOf(resolveOf(a2a_socket)); const r = relOf(resolveOf(control_dir), d); if (r.startsWith("..") || resolveOf(r) === r) extra_ro.push(d); }
       const gstate = await geminiState({ home: sandbox.home ?? env.HOME ?? homeOf(), run_dir: join(control_dir, "run"), mode: sandbox.gemini_state ?? "scratch" });
       let b;
-      try { b = bwrapArgs({ worktree, control_dir, agy_state_dirs: sandbox.agy_state_dirs ?? defaultAgyStateDirs(), extra_ro: extra_ro.filter(p => existsSync(p)), gemini_state: gstate, bwrap: sandbox.bwrap ?? "bwrap" }); }
+      const agy_state_dirs = sandbox.agy_state_dirs ?? defaultAgyStateDirs();
+      try {
+        b = bwrapArgs({ worktree, control_dir, agy_state_dirs, extra_ro: extra_ro.filter(p => existsSync(p)), gemini_state: gstate, bwrap: sandbox.bwrap ?? "bwrap" });
+        // THE VERIFY JAIL hides what THIS jail adds for agy (CREDENTIAL ISOLATION, src/agy/verify-jail.mjs): the Gemini
+        // state layout (~/.gemini of the jail's home, with the scratch copy of the OAuth token bound over its
+        // antigravity-cli/), the agy state dirs and the A2A socket's directory. Written into the unit's verify policy, in
+        // the control dir (read-only to the worker), before the CLI starts.
+        extendVerifyPolicy(control_dir, { hide: [...(gstate?.gemini_dir ? [gstate.gemini_dir] : []), ...(gstate?.mounts ?? []).map(m => m.dest), ...agy_state_dirs,
+          ...(a2a_socket ? [dirOf(resolveOf(a2a_socket))] : [])].filter(p => existsSync(p)) });
+      }
       catch (e) { await dropGeminiState(gstate).catch(() => null); throw e; }   // the scratch holds the OAuth token: never leave it behind
       return { prefix: b.argv, gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
         gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, cli_dir: gstate.cli_dir, mounts: gstate.mounts, copied: gstate.copied,

@@ -141,7 +141,8 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual(o.hook.decisions.map(d => [d.tool, d.decision]), [["write_file", "deny"], ["write_file", "auto_approve"],
       [direct, "auto_approve"], ["run_command", "auto_approve"]]);
     const run = o.hook.payloads[3].toolCall.args;
-    assert.deepEqual([run.CommandLine, "Cwd" in run], [`cd '${wt}' && node -e "process.exit(0)"`, false], "the exact worker command, no Cwd");
+    // The worker's one command: the unit's verify launcher (it runs `cd '<wt>' && node -e ...` in the verify jail).
+    assert.deepEqual([run.CommandLine, "Cwd" in run], [join(ctl, "pantheon-verify"), false], "the exact worker command, no Cwd");
     // The checks' evidence: each from the hook decision AND the call's terminal step.
     const ev = o.check_evidence;
     assert.deepEqual(ev.forbidden.attempts.map(a => [a.decision, a.states]), [["deny", ["ACTIVE", "ERROR"]]]);
@@ -161,7 +162,8 @@ for (const form of ["direct", "wrapped"]) {
     assert.equal(o.launch.argv[0], "bwrap");
     assert.ok(o.launch.argv.includes("<prompt>") && o.launch.argv.includes("--log-file") && o.launch.argv.includes("--add-dir"));
     assert.ok(!o.launch.argv.some(a => a === "--sandbox" || a.startsWith("--dangerously-skip-permissions")));
-    assert.equal(o.launch.env_added.PANTHEON_A2A_TOKEN, "<redacted>");
+    // CREDENTIAL ISOLATION: the A2A token never enters the CLI's environment (the relay reads its token file).
+    assert.equal(o.launch.env_added.PANTHEON_A2A_TOKEN, undefined);
     assert.doesNotMatch(r.out, /(?<![0-9a-f])[0-9a-f]{48}(?![0-9a-f])/, "the A2A token (48 hex digits) appears nowhere");
     assert.ok(o.launch.bwrap_binds.some(b => b.path === join(s.g) && b.mode === "ro"));
     assert.match(o.log_tail, /fake-agy start agent=pantheon-unit-worker model=gemini-3\.8-flash-low/);

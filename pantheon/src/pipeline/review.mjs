@@ -4,8 +4,8 @@
 // GOVERNANCE DECISION in dispatch.mjs: that model is a non-authoring arbiter, so it may judge the work it wrote the
 // rubric for). What it judges is gathered by the CONTROLLER, FROM DISK:
 //   - the unit's diff (git, base_commit..checkpoint);
-//   - the ground truth: the unit's deterministic verify_cmd, run by the controller in the worktree with a timeout
-//     and an output cap (exit code, captured output, digest);
+//   - the ground truth: the unit's deterministic verify_cmd, run by the controller in the worktree, inside the verify
+//     jail (src/agy/verify-jail.mjs), with a timeout and an output cap (exit code, captured output, digest);
 //   - the frozen rubric, RE-HASHED and compared with the rubric_hash frozen at dispatch.
 //
 // Inputs: {unit, worktree, base_commit, checkpoint, seat, turn, dispatch: {rubric, rubric_hash}, limits}.
@@ -28,7 +28,9 @@
 // (`reasoning` is passed through to the injected turn as an opaque `extra`).
 import { CAPABILITIES, clone, isObject, judgingTurn, keysRefusal, sameSeat, seatRefusal, sha256, str } from "./util.mjs";
 import { rubricHash } from "./dispatch.mjs";
+import { isAbsolute } from "node:path";
 import { exec, git } from "./git.mjs";
+import { VERIFY_JAIL_MODULE, VERIFY_JAIL_REFUSED, VERIFY_JAIL_SCHEMA, launcherEnv } from "../agy/verify-jail.mjs";
 
 export const REVIEW_KEYS = Object.freeze(["verdict", "criteria", "findings"]);
 export const VERDICTS = Object.freeze(["approve", "request_changes"]);
@@ -45,14 +47,41 @@ export const REVIEW_SCHEMA = Object.freeze({
   },
 });
 
-/** Run the unit's verify_cmd in its worktree: the ground truth. Async, bounded in time and in captured output. */
-export async function runVerify({ worktree, verify_cmd, timeout_ms = 120000, max_output_bytes = 65536 }) {
+/**
+ * Run the unit's verify_cmd in its worktree: the ground truth. Async, bounded in time and in captured output.
+ * It is WORKER-CONTROLLED CODE, so it runs only in the VERIFY JAIL (src/agy/verify-jail.mjs, the credential-isolation
+ * invariant): a launcher process with a clean env, which closes every inherited fd and runs the script under bwrap with
+ * its own PID namespace, the homes, the run's control dirs and whatever `jail.hide` names hidden, and only the worktree
+ * writable. It never runs with the controller's environment (provider keys) or view (A2A tokens, the OAuth scratch
+ * copies, the checkpoint seal key). `jail` {hide: [abs paths], extra_ro, bwrap, allowUnjailed}; no bwrap -> the
+ * launcher refuses (exit VERIFY_JAIL_REFUSED, the command FAILED) unless allowUnjailed.
+ * BOUNDED AND CANCELLABLE (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 9):
+ * `signal` (the stage's AbortSignal) kills the launcher's process group, and with it the jail (bwrap --die-with-parent;
+ * the jail's PID namespace dies with its first process); `deadline` (epoch ms: the stage's hard end) caps the timeout at
+ * what is left of it; the exec failsafe resolves even if a pipe stays open. A command stopped either way FAILED
+ * (exit_code null) and says `aborted` / `timed_out`; one whose deadline is already past, or whose signal already fired,
+ * is not started (`not_started: true`).
+ */
+export async function runVerify({ worktree, verify_cmd, timeout_ms = 120000, max_output_bytes = 65536, jail = {}, signal = null, deadline = null }) {
   const t0 = Date.now();
-  // One shell, its own process group (killed whole on timeout), stderr folded into stdout so the capture is one stream.
-  const r = await exec("sh", ["-c", `exec 2>&1\n${verify_cmd}`], { cwd: worktree, timeout_ms, max_bytes: max_output_bytes, group: true });
-  const output = r.stdout + (r.spawn_error ? r.stderr : "");
-  const exit_code = r.timed_out || r.spawn_error ? null : r.code;
-  return { cmd: verify_cmd, exit_code, signal: r.signal ?? null, timed_out: r.timed_out, passed: exit_code === 0, output, output_bytes: Buffer.byteLength(output), truncated: r.truncated, digest: sha256(output), duration_ms: Date.now() - t0 };
+  const left = Number.isFinite(deadline) ? deadline - t0 : Infinity;
+  const bound = Math.max(0, Math.min(timeout_ms > 0 ? timeout_ms : Infinity, left));
+  if (signal?.aborted || bound <= 0) {
+    const why = signal?.aborted ? "not run: the stage was aborted" : "not run: the stage's deadline has passed";
+    return { cmd: verify_cmd, exit_code: null, signal: null, timed_out: !signal?.aborted, aborted: Boolean(signal?.aborted), not_started: true, passed: false, output: why, output_bytes: Buffer.byteLength(why), truncated: false,
+      digest: sha256(why), duration_ms: 0, timeout_ms: bound, jail: { kind: "verify-jail", refused: false } };
+  }
+  const policy = { schema: VERIFY_JAIL_SCHEMA, worktree, cwd: worktree, script: `exec 2>&1\n${verify_cmd}`, hide: [...(jail?.hide ?? [])].filter(p => typeof p === "string" && isAbsolute(p)),
+    extra_ro: [...(jail?.extra_ro ?? [])], bwrap: jail?.bwrap ?? "bwrap", ...(jail?.allowUnjailed === true ? { allow_unjailed: true } : {}) };
+  const env = launcherEnv(process.env);
+  // One launcher, its own process group (killed whole on timeout; the jail dies with it), stderr folded into stdout
+  // inside the jail so the capture is one stream; the launcher's own diagnostics (stderr) are appended.
+  const r = await exec(process.execPath, [VERIFY_JAIL_MODULE, "--inline", JSON.stringify(policy)], { cwd: worktree, env, timeout_ms: Number.isFinite(bound) ? Math.max(1, Math.floor(bound)) : 0, max_bytes: max_output_bytes, group: true, ...(signal ? { signal } : {}) });
+  const output = r.stdout + r.stderr;
+  const exit_code = r.timed_out || r.aborted || r.spawn_error ? null : r.code;
+  const refused = exit_code === VERIFY_JAIL_REFUSED && /^pantheon-verify: (refused|the verify jail could not start)/m.test(r.stderr);
+  return { cmd: verify_cmd, exit_code, signal: r.signal ?? null, timed_out: r.timed_out, aborted: Boolean(r.aborted), passed: exit_code === 0, output, output_bytes: Buffer.byteLength(output), truncated: r.truncated, digest: sha256(output), duration_ms: Date.now() - t0,
+    timeout_ms: Number.isFinite(bound) ? Math.floor(bound) : null, jail: { kind: "verify-jail", refused } };
 }
 
 export function REVIEWER_PROMPT({ unit, rubric, diff, verify }) {
@@ -115,7 +144,7 @@ const tail = (s, n) => (s.length > n ? "…" + s.slice(-n) : s);
  * turn({vendor, model, prompt, seat, schema, extra, sandbox, role: "reviewer", unit_id, signal}) -> {text, served_model, ...}
  * `extra` is {reasoning: {context: "all_turns"}} for an openai seat, {} otherwise; the transport applies it.
  */
-export async function runReviewer({ unit, worktree, base_commit, checkpoint = "HEAD", seat, turn, dispatch, limits = {}, pinned = true, level = 0, attempt = 1, signal = null, sameModel }) {
+export async function runReviewer({ unit, worktree, base_commit, checkpoint = "HEAD", seat, turn, dispatch, limits = {}, pinned = true, level = 0, attempt = 1, signal = null, sameModel, verify_jail = {}, deadline = null }) {
   const extra = seat.vendor === "openai" ? { reasoning: { context: "all_turns" } } : {};
   const rec = { n: attempt, role: "reviewer", vendor: seat.vendor, model: seat.model, level, pinned_to_dispatcher: pinned, requested_model: seat.model, served_model: null, served_model_source: null,
     status: "not_admitted", code: null, why: null, verdict: null, criteria: null, findings: [], feedback: [], fed_revision: false, rubric_hash: dispatch.rubric_hash, rubric_rehash: null,
@@ -127,7 +156,7 @@ export async function runReviewer({ unit, worktree, base_commit, checkpoint = "H
 
   const diff = await git(worktree, ["diff", "--binary", "--no-renames", "--no-color", "--no-ext-diff", base_commit, checkpoint]);
   rec.diff_digest = sha256(diff); rec.diff_bytes = Buffer.byteLength(diff);
-  const v = await runVerify({ worktree, verify_cmd: unit.verify_cmd, timeout_ms: limits.verify_timeout_ms, max_output_bytes: limits.verify_output_bytes });
+  const v = await runVerify({ worktree, verify_cmd: unit.verify_cmd, timeout_ms: limits.verify_timeout_ms, max_output_bytes: limits.verify_output_bytes, jail: verify_jail, signal, deadline });
   // The command ran in the unit's worktree and may have written there: put the worktree back to the checkpoint.
   await git(worktree, ["reset", "-q", "--hard", checkpoint]);
   await git(worktree, ["clean", "-ffdxq"]);

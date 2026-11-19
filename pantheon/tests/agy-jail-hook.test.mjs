@@ -136,13 +136,19 @@ test("symlinks: a final symlink, a symlinked directory that leaves the worktree,
 });
 
 // run_command carries no Cwd (observed on agy 1.5.10, 2026-11-18: {CommandLine, WaitMsBeforeAsync, toolSummary}), so the
-// one approved command is the exact worker command that cds into the worktree; the plain verify_cmd is denied.
-test("run_command: only the unit's exact WORKER command `cd '<worktree>' && <verify_cmd>` (a Cwd, if sent, must be the worktree); the plain verify_cmd is denied", async t => {
+// one approved command is the unit's VERIFY LAUNCHER, which runs `cd '<worktree>' && <verify_cmd>` in the verify jail
+// (credential isolation, src/agy/verify-jail.mjs). The plain verify_cmd, and the earlier cd-prefixed form that ran it as
+// agy's own child, are denied.
+test("run_command: only the unit's exact WORKER command, its verify launcher <control_dir>/pantheon-verify (a Cwd, if sent, must be the worktree); the plain verify_cmd and the cd-prefixed script are denied", async t => {
   const { wt, ctl, ws, log, hook } = await setup(t);
-  const wv = `cd '${ws.worktree}' && node --test tests/a.test.mjs`;
+  const wv = join(ws.control_dir, "pantheon-verify"), script = `cd '${ws.worktree}' && node --test tests/a.test.mjs`;
   assert.equal(ws.worker_verify_cmd, wv);
-  assert.deepEqual([JSON.parse(readFileSync(ws.jail, "utf8")).worker_verify_cmd, JSON.parse(readFileSync(ws.jail, "utf8")).schema], [wv, "pantheon.agy-jail/v3"]);
+  const jail = JSON.parse(readFileSync(ws.jail, "utf8"));
+  assert.deepEqual([jail.worker_verify_cmd, jail.worker_verify_script, jail.schema], [wv, script, "pantheon.agy-jail/v4"]);
+  const vp = JSON.parse(readFileSync(join(ws.control_dir, "verify.json"), "utf8"));
+  assert.deepEqual([vp.schema, vp.worktree, vp.script, vp.control_dir], ["pantheon.verify-jail/v1", ws.worktree, script, ws.control_dir]);
   const want = [
+    [{ CommandLine: script }, "deny"],
     [{ CommandLine: wv, WaitMsBeforeAsync: 5000, toolSummary: "Verify unit" }, "auto_approve"],
     [{ CommandLine: `  ${wv}\n` }, "auto_approve"],
     [{ CommandLine: wv, Cwd: wt }, "auto_approve"],

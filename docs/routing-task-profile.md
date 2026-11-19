@@ -440,7 +440,7 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 
 **Containment, three layers.**
 
-1. **Before a write:** a `PreToolUse` hook (`pantheon/src/agy/jail-hook.mjs`) denies any write outside the unit's owned paths, into `.git` or `.agents`, or through a symlink that leaves the worktree. It approves `run_command` only for the exact `verify_cmd`, and MCP only for `ask_subagent`.
+1. **Before a write:** a `PreToolUse` hook (`pantheon/src/agy/jail-hook.mjs`) denies any write outside the unit's owned paths, into `.git` or `.agents`, or through a symlink that leaves the worktree. It approves `run_command` only for the unit's verify launcher (which runs `verify_cmd` in the verify jail; see [Credential isolation](#credential-isolation-2026-11-19)), and MCP only for `ask_subagent`.
 2. **The process:** `bwrap` mounts the filesystem read-only, except the worktree, the CLI's state directory and the control directory's `run/`. The main repository's `.git` is read-only, so the worker cannot commit or move refs. The network is not cut, since the CLI must reach Google. Without a working `bwrap` the turn refuses to run unless explicitly allowed.
 3. **After the turn:** the existing git-based jail, unchanged.
 
@@ -465,7 +465,7 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 - The `--print` session loaded the workspace hook ("loaded 1 named hooks from 1 hooks.json file(s)"). Its workspace was the control directory plus the worktree (`--add-dir`), and each hook ran with cwd `<control dir>/.agents`.
 - A write outside the owned paths was denied by the owned-path check before it happened. The owned write was approved and landed.
 - The subagent tool is named `mcp_pantheon-subagents_ask_subagent`. It reached the mock over the Unix socket inside the jail.
-- The exact `cd '<worktree>' && <verify_cmd>` ran and reported exit code 0.
+- The exact `cd '<worktree>' && <verify_cmd>` ran and reported exit code 0. (Since 2026-11-19 that command is denied: the worker runs the unit's verify launcher instead, see [Credential isolation](#credential-isolation-2026-11-19).)
 - No host path the jail could write changed. Two SQLite sidecars of the host's own `conversation_summaries.db` appeared in a directory the jail could not see; a long-running host `agy` process was present, but the writer was not established.
 - Contracts learned on the way, each now a regression fixture:
   - the CLI's state lives in `~/.gemini/antigravity-cli`;
@@ -480,3 +480,70 @@ Not yet exercised:
 - the lazy `call_mcp_tool` path (the CLI called the tool directly);
 - a real Grok subagent;
 - a full lifecycle item through the pipeline.
+
+## Credential isolation (2026-11-19)
+
+Owner direction: worker-controlled code must not be able to obtain or disclose a credential, nor reach unrelated host resources. Per-unit scoping and the subagent call bound are safeguards, not isolation. The enforcing module is `pantheon/src/agy/verify-jail.mjs`; its header states the same invariant.
+
+**Who holds credentials, and who does not.**
+
+- *Credential-bearing (trusted):* the controller (provider keys, the checkpoint seal key, every unit's A2A token), the A2A shim inside it, the agy CLI (the Antigravity OAuth state: the per-run scratch copy of `~/.gemini/antigravity-cli`, token included), and the stdio MCP relay `a2a-mcp-server.mjs` (it reads the unit's A2A token).
+- *Untrusted:* every process started from worker-controlled content, that is the unit's `verify_cmd` and anything it runs (scripts, tests, package hooks, children, daemons). This holds whether the worker's `run_command` started it or the controller's `runVerify` did. Worker-controlled code must not read the OAuth token either.
+
+**The invariant.** Untrusted code runs only through a verify launcher, in a fresh bwrap jail. From inside it, it cannot reach any credential, any host file outside a small allowlist, or any network:
+
+| Channel | What the verify jail does |
+|---|---|
+| Environment | A clean allowlist (`verifyEnvOf`): `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `LC_*`, `TERM` and `TZ`, plus what `PANTHEON_VERIFY_ENV_PASS` names, with no exceptions for secrets: no secret-named variable, and no `PANTHEON_`, `AGY_`, `ANTIGRAVITY_`, `GEMINI_`, `GOOGLE_`, `OPENAI_`, `ANTHROPIC_`, `XAI_` or `FAKE_AGY_` variable. There is no network, so no proxy variable passes, and neither does any value carrying a `user:password`. `PATH` is the jail's own (the node toolchain plus the system dirs). `HOME=/tmp/home`, `TMPDIR=/tmp`, `GIT_CONFIG_NOSYSTEM=1`. |
+| Filesystem | An allowlist base like `board/acceptance.mjs`. The jail starts from an empty root and gets: `/usr` and the `/bin`, `/sbin`, `/lib*` dirs or links; from `/etc` only the certificate stores (never `/etc/ssl/private`), the loader cache and config, `alternatives`, timezone, `nsswitch.conf`, `shells`, `protocols`, `services` and `os-release`, plus a generated minimal `passwd`, `group` and `hosts`; the node toolchain's prefix; its own `/proc`, `/dev` and `/tmp`; the unit's worktree (read-write); and the worktree's git dirs (read-only). Git keeps working. Every git config in those dirs is replaced by a generated one (`sanitizedGitConfig`) that keeps only plain `core` and `extensions` keys: no remote, credential helper, include, url rewrite, `hooksPath`, `fsmonitor` or `sshCommand`. `FETCH_HEAD`, `logs/`, `remotes/`, `branches/` and `modules/` are hidden too, because a remote URL with a token can sit in any of them. Nothing else of the host exists in the jail: no home (`~/.gemini` and the OAuth token, `~/.ssh`, …), no `/opt` beyond the node prefix, no `/var`, `/srv`, `/mnt` or `/run`. The unit's control dir (`mcp_config.json`, the token file `a2a.token`, the A2A socket, `run/` with the OAuth scratch copy), its sibling control dirs, the socket dir, the agy state dirs, the Gemini layout and the caller's list (the pipeline names its run dir, the checkpoints and their seal key) are hidden again if a bound path contains them. A bind inside one of them, or inside a home's secret dirs, is refused. |
+| Inherited descriptors | Only 0, 1 and 2 reach the script. bwrap passes inherited fds through (observed with bubblewrap 0.9.0). The launcher is a node process, which marks inherited fds close-on-exec at startup (observed on node 24.22), and `closeInheritedFds` closes any left open. |
+| `/proc` of credential-bearing processes | `--unshare-pid` with a fresh `/proc`: agy, the relay and the controller are not visible, so their `environ`, `cmdline`, `fd`, `mem` and `root` cannot be opened, and they cannot be signalled or traced. Also `--unshare-ipc`, `--unshare-uts`, `--cap-drop ALL` and `--new-session`. |
+| Network and sockets | There is no network: `--unshare-net` leaves only the jail's own loopback. The host's loopback services, the LAN, the metadata address 169.254.169.254 and the host's abstract Unix sockets (they belong to the host's network namespace) are unreachable. No path socket exists in the jail outside the worktree. A policy that asks for network (`network: true`) is refused with `BAD_POLICY`, never granted. In this container `/run/sandbox-telemetry/ingest.sock` was reachable before the allowlist base. |
+
+The verify run is bounded and can be cancelled (round 2, assignment 3, finding 9). `runVerify` takes the stage's `signal` and its `deadline`, the stage's hard end, which `runPipeline({deadline})` passes on and `ophanim/operate/stages.mjs` sets from the stage's elapsed budget.
+
+- Abort or timeout kills the launcher's process group, and the jail dies with it, background children included.
+- An exec failsafe resolves the run even when a stray process holds the pipes.
+- A run stopped this way FAILED and records `aborted` or `timed_out`.
+- A run whose deadline has already passed is not started.
+- The worker's `--print-timeout` is the caller's timeout, capped at the time left before the deadline minus the kill grace (`printTimeoutOf`). If no time is left, the turn is not started (`DEADLINE`).
+
+The launcher fails closed. If bwrap cannot start the jail, it exits 125 and the script never runs. The only exception is a policy with `allow_unjailed: true`, which still gets the clean environment and closed descriptors and is recorded as such.
+
+**The design.**
+
+- **The worker's one command is the launcher.** `prepareWorkerWorkspace` writes `<control dir>/verify.json` (the policy) and `<control dir>/pantheon-verify`, a wrapper that takes no arguments and runs `node verify-jail.mjs verify.json`. `jail.json`'s `worker_verify_cmd` is that path. The hook approves `run_command` only for a verify launcher in the unit's own control dir (`isVerifyLauncher`). The earlier `cd '<worktree>' && <verify_cmd>` is denied, because it ran as agy's child with agy's environment, descriptors, `/proc` and view of the OAuth state and MCP config. `prepareWorkerJail` adds the Gemini layout, the state dirs and the socket directory to `verify.json` before the CLI starts. The control dir is read-only to the worker.
+- **The controller's `runVerify` uses the same launcher** (`node verify-jail.mjs --inline <policy>`), in its own process group and with a clean environment. The pipeline hides its run dir (every unit's control dir and the other worktrees), the checkpoints and the seal key. It binds back only the unit's worktree.
+- **The review runner's agy reviewer uses the same launchers** (`src/review-runner/agy.mjs`, `cli-common.mjs` `allowedCommands({launcherDir})`). Its allowed commands are `<control dir>/pantheon-test <files>`, which runs `node --test <files>` with the files checked again by the launcher, and `<control dir>/pantheon-suite-<proof|pantheon|all>`, each with its own policy (`verify-test.json`, `verify-suite-<name>.json`). The harness lists them. The hook (`decideReviewCommand`) approves only launchers in the review's own control dir, and the earlier `cd '<worktree>' && node --test …` and `cd … && npm test` forms are denied. Code under review therefore cannot reach the reviewer agy's OAuth copy. Inside that jail, a repository test that needs `/var/tmp`, the network or its own bwrap may skip; the harness's sandbox note tells the reviewer to report that as `cannot tell`.
+- **The A2A token is in no environment and no config.** `prepareWorkerWorkspace` writes it to `<control dir>/a2a.token` (mode 0600). `mcp_config.json` names `PANTHEON_A2A_TOKEN_FILE`; agy 1.5.10's `mcp list` was observed to print a server's configured credential. `workerEnvOf` drops every secret-named extra, the token included, and the turn adapter no longer passes it. The relay reads the file once at start and authenticates every call with it. The shim still requires the bearer token and still enforces the unit's role allowlist and call and byte bounds.
+- **Is the token still needed?** Only the relay and agy, both credential-bearing, can reach the socket, so the token is now defence in depth. It covers any agy tool path the hook does not know and a run with `allowUnsandboxed`. It is kept.
+
+**Evidence** (`pantheon/tests/verify-jail-credential-isolation.test.mjs`, real bwrap, synthetic credentials, fixture under `/var/tmp` so that no jail's `/tmp` tmpfs hides it by accident):
+
+- A probe in the worktree looks for the dummy A2A token, OAuth token, `OPENAI_API_KEY`, SSH key, gh token, a sibling unit's token and the seal key, plus two new plants: a token in the repository's remote URL (`.git/config`, `FETCH_HEAD`) and a dummy secret in a host file under `/etc`, `/opt` and `/srv`.
+- The probe checks its env; every readable file under the homes, `/tmp`, `/var/tmp`, `/var`, `/run`, `/dev/shm`, `/mnt`, `/srv`, `/etc` and `/opt`; its descriptors; `/proc/<pid>/{environ,cmdline,fd,root}` of every visible process; and every socket it finds.
+- It also tries a TCP listener on the host's loopback, an abstract Unix socket bound on the host, and 169.254.169.254:80.
+- It finds nothing when run through agy's `run_command`. In that run the fake agy holds fd 9 on the token file and runs a long-lived process with the token in its env and argv.
+- It finds nothing through the controller's `runVerify`. The controller there has the key in its env and fd 3 open on the token file, while a relay-like process and the live shim socket are present.
+- It finds nothing when the launcher is started from a shell that holds fd 9 and has the keys in its env.
+- Run unjailed, the same probe finds every credential, by env, file, fd, `/proc` and socket. That includes the remote-URL token in `.git/config` and the `/etc|/opt|/srv` plants, and it connects to the host loopback listener and the abstract socket.
+- Inside the jail, git status, log and diff still work on the worktree; `git remote` is empty and no config beyond `core`/`extensions` is listed.
+- In the same worker turn, `ask_subagent` answers twice through the relay. The third call is refused at the unit's bound (`CALLS_EXHAUSTED`), and a forbidden role is denied by the hook. The relay with a wrong token file gets 401, a missing file gets "not configured", and neither reaches a subagent turn.
+- Mutations fail these tests: no PID namespace, the control dir not hidden, the launcher passing its own env through, no `--unshare-net`, a `--ro-bind / /` base, and the repository's git config not replaced.
+- The review runner's launcher (`pantheon/tests/review-runner-cli-units.test.mjs`, real bwrap) runs a test file under review. That file cannot read the reviewer's OAuth copy, the control dir or the metadata address. The launcher refuses a `..` file argument by itself (exit 125).
+- In the subscription runner's agy test, the fake agy's `run_command` of `<ctl>/pantheon-test …` completes through the hook and the nested jail.
+
+**Remaining exposure.** Closed since the first version: the shared network (now `--unshare-net`), host files outside the hidden roots (now an allowlist base with a sanitized git config), and the review runner's agy reviewer (now the launchers).
+
+1. **agy's own tool processes other than `run_command`.** The CLI may run helpers of its own: the MCP servers it launches, and its `bin/agentapi` shell injection. They run in agy's jail with agy's view, which is the credential-bearing domain. Only the relay is configured, and the hook denies every other tool. An undocumented tool that executes worker-chosen content without passing the hook would bypass the verify jail. *Bounded plan:* the live probe (`scripts/agy-worker-probe.mjs`) records every tool step. Add a check that no process in agy's jail other than agy, the relay and the launcher ran, by listing `/proc` of the jail from a sidecar during the turn.
+2. **What the allowlist itself exposes.** `/usr` whole (no secrets by convention, but a site might put one under `/usr/local/etc`), the certificate stores, the main repository's objects and refs (the worker's own repository), and `extra_ro` (the review runner's TELOS root for `test:proof`). *Bounded plan:* if a site keeps secrets under `/usr/local`, list `/usr/local/etc` as a hidden path in the policies.
+3. **No network means no package install inside a verify run.** A `verify_cmd` that needs the network fails. That is deliberate: the policy refuses `network` instead of granting it. A unit that truly needs dependencies must have them in the worktree or the toolchain before the turn.
+4. **The review runner's codex and grok transports** still run the reviewed tests in their own CLI's sandbox, codex's or grok's bwrap. The CLI's own login state is near them. These are not the agy paths the owner named. *Bounded plan:* pass `launcherDir` to `allowedCommands` for them too, and allow only the launcher paths in their permission profiles (codex `run_tests`; grok `Bash(<ctl>/pantheon-test *)`).
+5. **Same-uid processes outside both jails.** Verify code cannot see them (PID namespace). A controller crash leaves the token file in a 0600 file under the run dir, which the next run removes.
+
+**Spawn sites** (every `spawn`, `exec`, `execFile` or `spawnSync` in `pantheon/src` and `ophanim/operate`).
+
+- Through a verify launcher, all worker- or review-controlled code: the worker's `run_command` (hook: the launcher only); `pipeline/review.mjs` `runVerify`; `ophanim/operate/stages.mjs` validate (acceptance and regression commands); the review runner's agy reviewer (`pantheon-test`, `pantheon-suite-*`).
+- Already isolated by its own allowlist jail: `board/acceptance.mjs` (`--unshare-all`, `/usr` only, `--clearenv`).
+- Trusted programs on trusted input, not worker code: `git.mjs` `git`, `board/operate.mjs`, `operate/context.mjs`, `evidence-recovery.mjs`, `live-run.mjs` (git, the child entry), `board/run-item.mjs` (the python seat), `seat/conformance.mjs` (`--help`), `agy/quota.mjs` and the preflight subcommands, the `sandbox.mjs` probe, `review-runner/index.mjs` git, and `agy-cli.mjs` launching agy itself (credential-bearing, in its own jail).
+- Worker-adjacent with their own sandbox, not the verify launcher: the review runner's codex and grok transports (`review-runner/sandbox.mjs`, `cli-common.mjs`). They run the reviewed tests in codex's own sandbox, with the network cut by codex's proxy, or in grok's bwrap jail, with a scrubbed env, and they hold their own CLI login. Routing them through the launcher is the same change as for agy: point `allowedCommands` at a `launcherDir`.

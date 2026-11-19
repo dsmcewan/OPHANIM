@@ -128,11 +128,13 @@ const FINAL = new Set(["approved", "returned", "blocked", "refused", "failed", "
  *   limits   overrides of DEFAULT_LIMITS
  *   dir      where pipeline.json, the unit patches, the worktrees and the per-unit control directories go
  *   checkpoints  {dir}: where approved units' checkpoints persist across runs of the same item (optional)
+ *   deadline the stage's hard end (epoch ms; optional): caps every verify_cmd run and every worker turn's --print-timeout
+ *            at what is left of it (independent review round 2, assignment 3 (Google gemini-4-carbon, manual), finding 9)
  *
  * Returns the run record. status: "completed" (every unit approved and merged), "incomplete" (some unit was not),
  * "refused" (the plan or the run's inputs were refused; nothing ran) or "failed".
  */
-export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null, onCharge = null }) {
+export async function runPipeline({ repo, base, plan, seats, turns, limits = {}, dir, signal = null, planner = null, run_id = null, sameModel = undefined, checkpoints = null, onCharge = null, deadline = null }) {
   const lim = { ...DEFAULT_LIMITS, ...limits };
   await mkdir(dir, { recursive: true });
   const run = {
@@ -177,6 +179,10 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     try { ckKey = checkpointKey({ dir: checkpoints.dir, key: checkpoints.key ?? null, file: checkpoints.keyFile ?? null }); }
     catch (e) { return refuse([{ code: "INPUT", unit_id: null, message: `checkpoints: ${String(e?.message ?? e)}` }]); }
   }
+  // The VERIFY JAIL of every verify_cmd the controller runs (review.mjs runVerify; src/agy/verify-jail.mjs) also hides
+  // this run's dir (every unit's control dir: A2A token, MCP config, OAuth scratch copy; the other units' worktrees) and
+  // the checkpoints with their seal key; the unit's own worktree is bound back.
+  const verifyJail = { ...(lim.verify_jail ?? {}), hide: [...(lim.verify_jail?.hide ?? []), dir, ...(run.checkpoints ? [checkpoints.dir, checkpoints.keyFile ?? `${String(checkpoints.dir).replace(/[/\\]+$/, "")}.seal-key`] : [])].map(p => resolve(String(p))) };
   const v = validateWorkUnits(plan);
   if (!v.ok) return refuse(v.refusals);
   const units = v.units, byId = new Map(units.map(u => [u.unit_id, u]));
@@ -399,7 +405,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         for (;;) {
           const seat = iLadder[state.implementer_level];
           a = await runImplementer({ unit: frozen(), worktree: path, seat, ladder: iLadder, turn: T.implementer, a2a: { socket: shim.socket, token: shim.token, roles: [...shim.roles] },
-            attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH });
+            attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH, verify_jail: verifyJail, deadline });
           // The lane was refused for quota and its metered failover was USED but its answer refused (API_FILES_REFUSED:
           // prose, malformed JSON, a path outside the unit): that is still the quota-exhausted lane failing, not the
           // implementer's work being refused. It steps the ladder like a quota refusal and spends no review revision
@@ -466,7 +472,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
             state = { ...state, reviewer_level: level };
           }
           review = await runReviewer({ unit: clone(unit), worktree: path, base_commit: wt.base_commit, checkpoint, seat: rLadder[level], turn: T.reviewer,
-            dispatch: { rubric: [...u.dispatch.rubric], rubric_hash: u.dispatch.rubric_hash }, limits: lim, pinned: level === 0, level, attempt: n, signal, sameModel });
+            dispatch: { rubric: [...u.dispatch.rubric], rubric_hash: u.dispatch.rubric_hash }, limits: lim, pinned: level === 0, level, attempt: n, signal, sameModel, verify_jail: verifyJail, deadline });
           // ADMISSION, by the model that answered: an answer served by an excluded identity is not a review.
           if (review.served_model && !["rubric_mismatch", "diff_too_large", "not_admitted"].includes(review.status)) {
             const why = reviewerRefusal({ vendor: review.vendor, model: review.model, served_model: review.served_model },
@@ -561,7 +567,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const tree = (await git(path, ["write-tree"])).trim();
       if (tree !== got.record.tree) return reject(`the checkpoint's patch applied on the unit's base yields tree ${tree}, not the recorded ${got.record.tree}`);
       // Ground truth, re-run: the unit's own verify_cmd on the rebuilt tree. A checkpoint is evidence to re-check.
-      const verify = await runVerify({ worktree: path, verify_cmd: planned.verify_cmd, timeout_ms: lim.verify_timeout_ms, max_output_bytes: lim.verify_output_bytes });
+      const verify = await runVerify({ worktree: path, verify_cmd: planned.verify_cmd, timeout_ms: lim.verify_timeout_ms, max_output_bytes: lim.verify_output_bytes, jail: verifyJail, signal, deadline });
       u.resume_verify = { cmd: verify.cmd, exit_code: verify.exit_code, timed_out: verify.timed_out, digest: verify.digest, duration_ms: verify.duration_ms };
       if (!verify.passed) return reject(`the unit's verify_cmd fails on the checkpoint's tree (exit ${verify.exit_code}${verify.timed_out ? ", timed out" : ""}): ground truth wins over the recorded approval`);
       // The approval, authenticated: the seal under this controller's key, the review re-hashed and bound to this patch,

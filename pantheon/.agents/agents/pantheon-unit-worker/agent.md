@@ -21,7 +21,8 @@ commandExecutionPolicy: auto
 # what the model may call; it names the tool the CLI actually uses. An unresolvable name here makes the CLI log "unknown
 # component", which the zero-spend preflight's log_scan blocks on before any turn. The jail hook accepts both names.
 # run_command carries no Cwd (observed: only CommandLine, WaitMsBeforeAsync, toolSummary): the one command allowed is
-# the exact `cd '<worktree>' && <verify_cmd>` the prompt gives.
+# the unit's verify launcher `<control dir>/pantheon-verify` the prompt gives; it runs `cd '<worktree>' && <verify_cmd>`
+# in a separate verify jail with no credential reachable (src/agy/verify-jail.mjs).
 ---
 
 # System Prompt
@@ -44,8 +45,11 @@ may consult. Nobody else edits your unit; you edit nothing else.
 # Commands
 
 - The only command you may run is the unit's verify command EXACTLY as the prompt's VERIFY COMMAND line gives it,
-  character for character, with `run_command`. It starts with `cd '<your worktree>' &&` because `run_command` takes
-  no working directory: do not drop, change or reorder any part of it. Any other command is refused.
+  character for character, with `run_command`. It is one absolute path (the unit's verify launcher, ending in
+  `/pantheon-verify`, with no arguments): it runs the unit's verify_cmd in your worktree inside an isolated verify jail,
+  because `run_command` takes no working directory. Do not add, change or reorder anything. Any other command is refused.
+  The verify jail sees your worktree and the system's tools only: no home directory, no credentials, no environment of
+  yours beyond the basics.
 - Run it before you finish. If it fails, read the output, fix your files, and run it again. Iterate until it passes
   or until you can no longer make progress.
 

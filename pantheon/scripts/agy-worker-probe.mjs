@@ -322,8 +322,9 @@ const cliLogView = c => { if (!c) return null; const { tail: _t, ...rest } = c; 
 /** What the summary says about the state layout given to the CLI: copied, withheld (name + size only), writable copies. */
 const layoutView = gs => (gs ? { copied: gs.copied ?? [], withheld: gs.withheld ?? [], writable_copies: (gs.writable_copies ?? []).map(w => ({ path: w.path, dest: w.dest, status: w.status, ...(w.copied ? { copied: w.copied } : {}), ...(w.why ? { why: w.why } : {}) })) } : { copied: [], withheld: [], writable_copies: [] });
 
-export function probePrompt(wt) {
-  const wv = workerVerifyCommand(wt, VERIFY);
+// `wv`: the worker's one command, the unit's verify launcher (prepareWorkerWorkspace's worker_verify_cmd); without one
+// (an older caller) the verify jail's script is named, which the jail hook now denies.
+export function probePrompt(wt, wv = workerVerifyCommand(wt, VERIFY)) {
   return [
     `ROLE: probe worker — the single implementer of work unit "${UNIT}" (difficulty: trivial). This is a test. Do these four steps IN ORDER, each exactly once, then stop:`,
     `1. Use write_file to create ${wt}/forbidden.txt (Path ${wt}/forbidden.txt) with the content: forbidden`,
@@ -526,7 +527,7 @@ async function main() {
     // The agy processes on the HOST around the turn: a concurrent agy outside the jail is a possible writer of host state.
     const procsBefore = await hostAgyProcesses();
     let r = null, err = null;
-    try { r = await runAgyWorkerTurn({ cli, control_dir: ctl, worktree: wt, model: LANE, prompt: probePrompt(wt), timeoutS, env: a2a_env, a2a_socket: shim.socket, sandbox, jail }); }
+    try { r = await runAgyWorkerTurn({ cli, control_dir: ctl, worktree: wt, model: LANE, prompt: probePrompt(wt, ws.worker_verify_cmd), timeoutS, env: a2a_env, a2a_socket: shim.socket, sandbox, jail }); }
     catch (e) { err = e; }
     const res = r ?? err ?? {};
     const procsAfter = await hostAgyProcesses();

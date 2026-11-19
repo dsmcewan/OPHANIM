@@ -111,10 +111,11 @@ test("the pure handler: notifications get no answer; a socket that is gone is a 
   assert.equal(seen[0].payload.method, "message/send");
 });
 
-test("the relay script imports no file-system or child-process module and writes nothing but protocol to stdout", () => {
+test("the relay script imports only readFileSync from node:fs (its token file) and no child-process module, and writes nothing but protocol to stdout", () => {
   const src = readFileSync(MCP_SERVER_PATH, "utf8");
   assert.ok(src.startsWith("#!/usr/bin/env node\n"));
   const imports = [...src.matchAll(/^\s*import\s[^;]*?from\s*["']([^"']+)["']/gm)].map(m => m[1]).sort();
-  assert.deepEqual(imports, ["node:http", "node:readline", "node:url"]);
-  assert.doesNotMatch(src, /\bimport\s*\(|\brequire\s*\(|node:fs|node:child_process|\bspawn\b|console\.log/);
+  assert.deepEqual(imports, ["node:fs", "node:http", "node:readline", "node:url"]);
+  assert.match(src, /^import \{ readFileSync \} from "node:fs";$/m, "only readFileSync");
+  assert.doesNotMatch(src, /\bimport\s*\(|\brequire\s*\(|node:fs\/|node:child_process|\bspawn\b|console\.log|writeFile|appendFile|unlink|mkdir|createWriteStream/);
 });
