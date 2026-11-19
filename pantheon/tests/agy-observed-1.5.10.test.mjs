@@ -62,21 +62,24 @@ test("the observed direct MCP call mcp_pantheon-subagents_ask_subagent {question
   assert.deepEqual(decide(u.policy, u.payloads[2]), { decision: "auto_approve", reason: "pantheon-subagents/ask_subagent role probe-helper (direct)" });
 });
 
-test("the observed run_command {CommandLine, WaitMsBeforeAsync, toolSummary} with the PLAIN verify_cmd -> DENY now; the exact cd-prefixed worker command -> auto_approve", async t => {
+test("the observed run_command {CommandLine, WaitMsBeforeAsync, toolSummary} with the PLAIN verify_cmd -> DENY now; the cd-prefixed script -> DENY (credential isolation); the unit's verify launcher -> auto_approve", async t => {
   const u = await unit(t);
   const plain = u.payloads[3];
   assert.deepEqual(Object.keys(plain.toolCall.args).sort(), ["CommandLine", "WaitMsBeforeAsync", "toolSummary"], "observed: no Cwd");
   const d = decide(u.policy, plain);
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /only the unit's verify_cmd may run, exactly as the worker command/);
-  const wv = workerVerifyCommand(u.wt, OBS.verify_cmd);
-  assert.equal(wv, `cd '${u.wt}' && node -e "process.exit(0)"`);
+  const script = workerVerifyCommand(u.wt, OBS.verify_cmd);
+  assert.equal(script, `cd '${u.wt}' && node -e "process.exit(0)"`);
+  // The worker's command is the unit's verify launcher, which runs that script in the verify jail (src/agy/verify-jail.mjs).
+  const wv = join(u.ctl, "pantheon-verify");
   assert.equal(u.ws.worker_verify_cmd, wv, "jail.json carries the same string");
-  assert.equal(JSON.parse(readFileSync(u.ws.jail, "utf8")).worker_verify_cmd, wv);
+  assert.deepEqual([JSON.parse(readFileSync(u.ws.jail, "utf8")).worker_verify_cmd, JSON.parse(readFileSync(u.ws.jail, "utf8")).worker_verify_script], [wv, script]);
   const withCmd = cmd => ({ ...plain, toolCall: { ...plain.toolCall, args: { ...plain.toolCall.args, CommandLine: cmd } } });
+  assert.equal(decide(u.policy, withCmd(script)).decision, "deny", "the cd-prefixed script would run as agy's own child: denied");
   assert.equal(decide(u.policy, withCmd(wv)).decision, "auto_approve");
   assert.equal(decide(u.policy, withCmd(`  ${wv}\n`)).decision, "auto_approve", "trimmed");
-  for (const bad of [`${wv}; rm -rf /`, `cd ${u.wt} && node -e "process.exit(0)"`, `cd '${u.wt}/..' && node -e "process.exit(0)"`, `cd '${u.wt}' &&  node -e "process.exit(0)"`]) {
+  for (const bad of [`${wv}; rm -rf /`, `${wv} x`, `sh ${wv}`, `cd ${u.wt} && node -e "process.exit(0)"`, `cd '${u.wt}/..' && node -e "process.exit(0)"`, `cd '${u.wt}' &&  node -e "process.exit(0)"`]) {
     assert.equal(decide(u.policy, withCmd(bad)).decision, "deny", bad);
   }
   // A Cwd, if one is ever sent, must still be the worktree.
@@ -95,7 +98,7 @@ test("the probe's step reader on the observed steps: ACTIVE never counts; run_co
   assert.match(calls[3].error, /failed to write agentapi script: .*read-only file system/);
   assert.deepEqual(toolCallsOf([{ tool_name: "run_command", state: "ACTIVE" }]).map(c => c.ran), [false], "ACTIVE alone never ran");
 
-  const wv = workerVerifyCommand(u.wt, OBS.verify_cmd);
+  const wv = u.ws.worker_verify_cmd;
   const run = { ...u.payloads[3], toolCall: { ...u.payloads[3].toolCall, args: { ...u.payloads[3].toolCall.args, CommandLine: wv } } };
   const rows = rowsOf(u.policy, [u.payloads[0], u.payloads[1], u.payloads[2], run]);
   const base = { rows, worktree: u.wt, workerVerify: wv, forbiddenAbsent: true, allowedContent: "probe-ok\n", shimCalls: [{ role: "probe-helper", status: "answered" }] };

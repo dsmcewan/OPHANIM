@@ -96,11 +96,16 @@ test("the hook process itself, through the review workspace's wrapper, decides w
   assert.deepEqual(log, ["auto_approve", "deny"]);
 });
 
-test("a worker policy (no run_command_policy) keeps the worker rule: only `cd '<wt>' && <verify_cmd>`", () => {
-  const policy = { worktree: "/w", owned_paths: ["a/**"], roles: [], verify_cmd: "npm test", worker_verify_cmd: "cd '/w' && npm test" };
-  assert.equal(decide(policy, { toolCall: { name: "run_command", args: { CommandLine: "cd '/w' && npm test" } } }).decision, "auto_approve");
+test("a worker policy (no run_command_policy) keeps the worker rule: only the unit's verify launcher, never a cd-prefixed command", () => {
+  const policy = { worktree: "/w", control_dir: "/c", owned_paths: ["a/**"], roles: [], verify_cmd: "npm test", worker_verify_cmd: "/c/pantheon-verify" };
+  assert.equal(decide(policy, { toolCall: { name: "run_command", args: { CommandLine: "/c/pantheon-verify" } } }).decision, "auto_approve");
+  assert.equal(decide(policy, { toolCall: { name: "run_command", args: { CommandLine: "cd '/w' && npm test" } } }).decision, "deny");
   assert.equal(decide(policy, { toolCall: { name: "run_command", args: { CommandLine: "cd '/w' && node --test a.test.mjs" } } }).decision, "deny");
-  assert.equal(decide({ ...policy, run_command_policy: { kind: "other" } }, { toolCall: { name: "run_command", args: { CommandLine: "cd '/w' && npm test" } } }).decision, "deny");
+  assert.equal(decide({ ...policy, run_command_policy: { kind: "other" } }, { toolCall: { name: "run_command", args: { CommandLine: "/c/pantheon-verify" } } }).decision, "deny");
+  // A policy whose worker command is not a verify launcher (an older jail.json) allows no command at all.
+  const old = { ...policy, worker_verify_cmd: "cd '/w' && npm test" };
+  assert.equal(decide(old, { toolCall: { name: "run_command", args: { CommandLine: "cd '/w' && npm test" } } }).decision, "deny");
+  assert.equal(decide({ ...policy, worker_verify_cmd: "/elsewhere/pantheon-verify" }, { toolCall: { name: "run_command", args: { CommandLine: "/elsewhere/pantheon-verify" } } }).decision, "deny", "a launcher outside the unit's control dir");
 });
 
 test("the review card: named pantheon-reviewer-agent, its tools resolve on agy 1.5.10, and the read-only variant drops the write tools", async () => {

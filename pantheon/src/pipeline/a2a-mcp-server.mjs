@@ -8,10 +8,12 @@
 //
 // Launched as `node a2a-mcp-server.mjs`, configured as
 //   {"mcpServers":{"pantheon-subagents":{"command":"node","args":["<abs path>/a2a-mcp-server.mjs"],
-//     "env":{"PANTHEON_A2A_SOCKET":"...","PANTHEON_A2A_TOKEN":"...","PANTHEON_A2A_ROLES":"a,b","PANTHEON_UNIT_ID":"..."}}}}
+//     "env":{"PANTHEON_A2A_SOCKET":"...","PANTHEON_A2A_TOKEN_FILE":"<control_dir>/a2a.token","PANTHEON_A2A_ROLES":"a,b","PANTHEON_UNIT_ID":"..."}}}}
 // Environment (all required but ROLES, which may be empty: then every call is refused):
 //   PANTHEON_A2A_SOCKET   the shim's Unix socket path
-//   PANTHEON_A2A_TOKEN    the unit's bearer token
+//   PANTHEON_A2A_TOKEN_FILE  the file holding the unit's bearer token (the pipeline's form: the token is in no env and in
+//                         no config; CREDENTIAL ISOLATION, src/agy/verify-jail.mjs), read once at start
+//   PANTHEON_A2A_TOKEN    the bearer token itself (tests and older callers; the file wins when both are set)
 //   PANTHEON_A2A_ROLES    comma-separated allowed subagent roles (the tool's `role` enum)
 //   PANTHEON_UNIT_ID      the unit id the shim serves
 //   PANTHEON_A2A_TIMEOUT_MS  optional, per call (default 600000)
@@ -19,9 +21,11 @@
 // Protocol: MCP 2025-06-18 over newline-delimited JSON-RPC 2.0. Served: initialize, notifications/initialized,
 // ping, tools/list, tools/call. Anything else with an id is -32601; other notifications are ignored.
 //
-// Must never: write anything but protocol messages to stdout (diagnostics go to stderr); touch the filesystem or
-// start a process (this module imports no file-system or child-process module, and a test reads it to keep it so);
-// forward anything but one message/send per tools/call; reveal the token in a reply.
+// Must never: write anything but protocol messages to stdout (diagnostics go to stderr); touch the filesystem beyond
+// reading its token file once, or start a process (this module imports only readFileSync from node:fs and no
+// child-process module, and a test reads it to keep it so); forward anything but one message/send per tools/call;
+// reveal the token in a reply.
+import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
@@ -83,7 +87,7 @@ export function mcpHandler({ socket, token, roles = [], unitId, request = socket
     if (extra.length) return toolError(`unknown argument(s): ${extra.sort().join(", ")}; the tool takes {role, question}`);
     if (!str(args.role) || !str(args.question)) return toolError("role and question are non-empty strings");
     if (!allowed.includes(args.role)) return toolError(`subagent role "${args.role}" is not allowed for this unit (${allowed.join(", ") || "none"})`);
-    if (!str(socket) || !str(token) || !str(unitId)) return toolError("the relay is not configured (PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_UNIT_ID)");
+    if (!str(socket) || !str(token) || !str(unitId)) return toolError("the relay is not configured (PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN_FILE, PANTHEON_UNIT_ID)");
     calls += 1;
     const payload = { jsonrpc: "2.0", id: calls, method: "message/send",
       params: { message: { role: "user", messageId: `mcp-${calls}`, parts: [{ kind: "text", text: args.question }], metadata: { subagent_role: args.role, unit_id: unitId } } } };
@@ -115,11 +119,18 @@ export function mcpHandler({ socket, token, roles = [], unitId, request = socket
   };
 }
 
+/** The relay's bearer token: the content of PANTHEON_A2A_TOKEN_FILE (trimmed) when set and readable, else PANTHEON_A2A_TOKEN. */
+export function relayToken(env = process.env, read = f => readFileSync(f, "utf8")) {
+  if (str(env.PANTHEON_A2A_TOKEN_FILE)) { try { return String(read(env.PANTHEON_A2A_TOKEN_FILE)).trim() || null; } catch { return null; } }
+  return str(env.PANTHEON_A2A_TOKEN) ? env.PANTHEON_A2A_TOKEN : null;
+}
+
 /** Run the stdio server: one JSON-RPC message per line in, one per line out. */
 export function serveStdio({ input = process.stdin, output = process.stdout, env = process.env, log = m => process.stderr.write(`pantheon-subagents: ${m}\n`) } = {}) {
-  const handle = mcpHandler({ socket: env.PANTHEON_A2A_SOCKET, token: env.PANTHEON_A2A_TOKEN, roles: env.PANTHEON_A2A_ROLES ?? "", unitId: env.PANTHEON_UNIT_ID,
+  const token = relayToken(env);
+  const handle = mcpHandler({ socket: env.PANTHEON_A2A_SOCKET, token, roles: env.PANTHEON_A2A_ROLES ?? "", unitId: env.PANTHEON_UNIT_ID,
     timeout_ms: Number(env.PANTHEON_A2A_TIMEOUT_MS) > 0 ? Number(env.PANTHEON_A2A_TIMEOUT_MS) : 600000 });
-  if (!str(env.PANTHEON_A2A_SOCKET) || !str(env.PANTHEON_A2A_TOKEN) || !str(env.PANTHEON_UNIT_ID)) log("PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN or PANTHEON_UNIT_ID is not set: every tool call will be refused");
+  if (!str(env.PANTHEON_A2A_SOCKET) || !str(token) || !str(env.PANTHEON_UNIT_ID)) log("PANTHEON_A2A_SOCKET, the token (PANTHEON_A2A_TOKEN_FILE / PANTHEON_A2A_TOKEN) or PANTHEON_UNIT_ID is not set: every tool call will be refused");
   const send = m => { if (m) output.write(JSON.stringify(m) + "\n"); };
   const pending = new Set();
   const rl = createInterface({ input, crlfDelay: Infinity });

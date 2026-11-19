@@ -199,7 +199,7 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
    * {a2a: {url, token}} are still read; without a control_dir a temporary one (outside the worktree) is used and removed.
    */
   const implementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
-    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null }) => {
+    mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null, verify_hide = [] }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
     if (!laneParts(model)) throw fail("NOT_A_LANE", `the pipeline implementer runs on an Antigravity lane, and ${vendor}/${model} is not one (config/lanes.json)`);
     const cli = agy.cli ?? process.env.PANTHEON_AGY_CLI ?? join(homedir(), ".local", "bin", "agy");
@@ -210,14 +210,17 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       PANTHEON_A2A_SOCKET: env?.PANTHEON_A2A_SOCKET ?? a2a?.socket, PANTHEON_A2A_TOKEN: env?.PANTHEON_A2A_TOKEN ?? a2a?.token,
       PANTHEON_A2A_ROLES: env?.PANTHEON_A2A_ROLES ?? (roles.length ? roles.join(",") : undefined), PANTHEON_UNIT_ID: env?.PANTHEON_UNIT_ID ?? unit_id ?? undefined,
     }).filter(([, v]) => v !== undefined && v !== null));
-    const childEnv = { ...env, ...a2a_env, ...(a2a?.url ? { PANTHEON_A2A_URL: a2a.url, PANTHEON_A2A_TOKEN: a2a.token } : {}) };
+    // The CLI's env carries the A2A endpoint's non-secret part only: the token goes to the relay's token file
+    // (prepareWorkerWorkspace), never into agy's environment (CREDENTIAL ISOLATION, src/agy/verify-jail.mjs).
+    const { PANTHEON_A2A_TOKEN: _token, ...childEnv } = { ...env, ...a2a_env, ...(a2a?.url ? { PANTHEON_A2A_URL: a2a.url } : {}) };
 
     let made = null;
     try {
       const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-agy-control-")));
-      await prepareWorkerWorkspace({ control_dir: ctl, worktree: cwd, unit_id: unit_id ?? a2a_env.PANTHEON_UNIT_ID ?? null, owned_paths: owned ?? [], verify_cmd, roles, mcp_server, a2a_env });
+      await prepareWorkerWorkspace({ control_dir: ctl, worktree: cwd, unit_id: unit_id ?? a2a_env.PANTHEON_UNIT_ID ?? null, owned_paths: owned ?? [], verify_cmd, roles, mcp_server, a2a_env,
+        verify_hide: Array.isArray(verify_hide) ? verify_hide : [] });
       // base_env: the ALLOWLISTED controller env, never process.env whole (independent review round 2, assignment 4,
-      // question 7); childEnv (the unit's own A2A env) stays an explicit extra, a provider API key never passes.
+      // question 7); childEnv (the unit's non-secret A2A env) is an explicit extra; no key or token ever passes.
       const r = await lane({ cli, control_dir: ctl, worktree: cwd, model, prompt, timeoutS, env: childEnv, base_env: workerEnv(), sandbox, a2a_socket: a2a_env.PANTHEON_A2A_SOCKET ?? null, ...(signal ? { signal } : {}) });
       return { text: r.text ?? "", served_model: model, served_model_source: "input", transport: "agy-cli", requested_model: model,
         response_id: r.response_id ?? null, tool_calls: r.tool_calls ?? null, subagent_calls: r.subagent_calls ?? null, summary: r.summary ?? null,

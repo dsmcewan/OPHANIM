@@ -23,15 +23,22 @@ async function unit(t) {
   const ws = await prepareWorkerWorkspace({ control_dir: ctl, worktree: wt, unit_id: "probe", owned_paths: OBS.owned_paths, verify_cmd: OBS.verify_cmd, roles: OBS.roles,
     mcp_server: MCP_SERVER_PATH, a2a_env: { PANTHEON_A2A_SOCKET: join(ctl, "a2a.sock"), PANTHEON_A2A_TOKEN: "t", PANTHEON_A2A_ROLES: OBS.roles.join(","), PANTHEON_UNIT_ID: "probe" } });
   const map = { "<wt>": wt, "<ctl>": ws.control_dir };
-  return { wt, policy: loadPolicy(ws.jail), payloads: fill(OBS.hook_payloads, map), steps: fill(OBS.tool_steps, map), decisions: fill(OBS.hook_decisions, map) };
+  return { wt, ws, policy: loadPolicy(ws.jail), payloads: fill(OBS.hook_payloads, map), steps: fill(OBS.tool_steps, map), decisions: fill(OBS.hook_decisions, map) };
 }
 
-test("the hook reproduces the four decisions it made on the real passing turn", async t => {
+test("the hook reproduces the first three decisions it made on the real passing turn; the fourth (the cd-prefixed verify command, run as agy's own child) is DENIED since credential isolation, and the unit's verify launcher in its place is approved", async t => {
   const u = await unit(t);
   const got = u.payloads.map(p => { const d = decide(u.policy, p); return [p.toolCall.name, d.decision, d.reason]; });
-  assert.deepEqual(got, u.decisions.map(d => [d.tool, d.decision, d.reason]));
-  // The worker ran exactly the controller's directory-setting verify command.
+  assert.deepEqual(got.slice(0, 3), u.decisions.slice(0, 3).map(d => [d.tool, d.decision, d.reason]));
+  // The worker ran exactly the controller's directory-setting verify command (7ca325c's contract) ...
   assert.equal(u.payloads[3].toolCall.args.CommandLine, workerVerifyCommand(u.wt, OBS.verify_cmd));
+  assert.equal(u.decisions[3].decision, "auto_approve", "approved at 7ca325c");
+  // ... which now runs only inside the verify jail: the same payload is denied, and with the launcher it is approved.
+  assert.equal(got[3][1], "deny");
+  assert.match(got[3][2], /only the unit's verify_cmd may run, exactly as the worker command/);
+  const p = u.payloads[3], launcher = u.ws.worker_verify_cmd;
+  assert.equal(launcher, join(u.ws.control_dir, "pantheon-verify"));
+  assert.equal(decide(u.policy, { ...p, toolCall: { ...p.toolCall, args: { ...p.toolCall.args, CommandLine: launcher } } }).decision, "auto_approve");
 });
 
 test("the probe's step reader reaches the observed verdict from the real tool steps: all four action checks pass, exit 0 read from the output", async t => {

@@ -54,6 +54,7 @@ import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PRO
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
+import {VERIFY_JAIL_MODULE, VERIFY_JAIL_SCHEMA, verifyEnvOf} from '../../pantheon/src/agy/verify-jail.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
@@ -1362,12 +1363,17 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       fs.rmSync(tarFile, {force: true});
       if (ext.exit !== 0) throw new Error(`the checkout of ${commit} could not be extracted${ext.killedFor ? ` (${ext.killedFor})` : ''}: ${String(ext.stderr).slice(0, 300)}`);
       const cwd = path.join(clean, path.relative(top, repo));
+      // The commands run WORKER-WRITTEN code (the implemented commit): only in the VERIFY JAIL (credential isolation,
+      // pantheon/src/agy/verify-jail.mjs): a clean env, the homes and /run hidden, the work ledger and this stage's state
+      // hidden, only the clean checkout writable.
+      const jail = cmd => JSON.stringify({schema: VERIFY_JAIL_SCHEMA, worktree: clean, cwd, script: cmd,
+        hide: [ctx.work?.root, stateDir ?? (ctx.work?.root ? path.join(path.dirname(ctx.work.root), 'operate') : null)].filter(p => typeof p === 'string' && path.isAbsolute(p))});
       const run = async (kind, id, cmd) => {
         let exit = 0, out, stopped = null;
         if (ctx.signal?.aborted || leftMs() <= 0) { exit = 1; out = ''; stopped = 'not run: the stage\'s elapsed budget was spent before this command started'; }
         else {
           let r;
-          try { r = await proc('sh', ['-c', cmd], {cwd}); } catch (e) { r = {exit: null, stdout: '', stderr: String(e?.message ?? e), killedFor: 'spawn'}; }
+          try { r = await proc(process.execPath, [VERIFY_JAIL_MODULE, '--inline', jail(cmd)], {cwd, env: verifyEnvOf(process.env).env}); } catch (e) { r = {exit: null, stdout: '', stderr: String(e?.message ?? e), killedFor: 'spawn'}; }
           exit = r.exit === null ? 1 : r.exit;
           out = r.exit === 0 ? r.stdout : `${r.stdout ?? ''}${r.stderr ?? ''}`;
           if (r.killedFor) stopped = `stopped (${r.killedFor})`;

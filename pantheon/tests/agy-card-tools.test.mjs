@@ -25,8 +25,10 @@ test("the card's text no longer tells the worker to use call_mcp_tool or the dep
   assert.doesNotMatch(body, /"ServerName"|through the built-in `call_mcp_tool`/, "no call_mcp_tool instructions");
   assert.match(body, /`write_file` with `Path` and `Content`/); assert.match(body, /`replace_file_content`/);
   assert.doesNotMatch(body, /`write_to_file`/, "the worker is told the observed tool name");
-  assert.doesNotMatch(body, /\(`Cwd`\) set to the worktree/, "run_command has no Cwd: the worker runs the exact cd-prefixed command");
-  assert.match(body, /cd '<your worktree>' &&/);
+  assert.doesNotMatch(body, /\(`Cwd`\) set to the worktree/, "run_command has no Cwd: the worker runs the exact verify launcher");
+  // Credential isolation: the worker's one command is the unit's verify launcher, not a cd-prefixed command.
+  assert.match(body, /ending in\s+`\/pantheon-verify`/);
+  assert.doesNotMatch(body, /cd '<your worktree>' &&/);
   assert.match(card.slice(0, card.indexOf("\n---\n", 4)), /# write_file REPLACES write_to_file \(observed on agy 1\.5\.10/, "the decision and its reason are recorded in the frontmatter");
   assert.match(body, /`ask_subagent` that the configured MCP server\s+`pantheon-subagents` provides/);
   assert.match(body, /No native subagents/);

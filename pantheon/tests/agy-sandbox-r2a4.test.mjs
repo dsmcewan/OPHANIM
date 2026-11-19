@@ -60,8 +60,11 @@ test("question 7: workerEnv is an allowlist: OPENAI/ANTHROPIC/XAI keys and any s
     assert.ok(dropped.includes(k), k);
   }
   assert.deepEqual([env.PATH, env.HOME, env.LANG, env.TERM, env.TMPDIR, env.LC_ALL, env.AGY_FOO, env.ANTIGRAVITY_BAR, env.FAKE_AGY_X, env.EXTRA_ONE], ["/usr/bin", "/h", "C.UTF-8", "xterm", "/t", "C", "1", "2", "f", "e"]);
-  // The unit's own A2A env is the caller's explicit choice and passes (see workerEnv's CHOICE note).
-  assert.deepEqual([env.PANTHEON_A2A_SOCKET, env.PANTHEON_UNIT_ID, env.PANTHEON_A2A_TOKEN, env.ANTIGRAVITY_AGY_CLEANUP, env.AGY_CLI_DISABLE_AUTO_UPDATE], ["/s", "a", "a2a-unit-token-0000", "all", "true"]);
+  // The unit's non-secret A2A env is the caller's explicit choice and passes; its TOKEN never does (credential
+  // isolation, owner direction 2026-11-19: the relay reads it from its token file).
+  assert.deepEqual([env.PANTHEON_A2A_SOCKET, env.PANTHEON_UNIT_ID, env.PANTHEON_A2A_TOKEN, env.ANTIGRAVITY_AGY_CLEANUP, env.AGY_CLI_DISABLE_AUTO_UPDATE], ["/s", "a", undefined, "all", "true"]);
+  assert.ok(dropped.includes("PANTHEON_A2A_TOKEN"));
+  assert.ok(!JSON.stringify(env).includes("a2a-unit-token"), "no A2A token value in the env");
   assert.ok(!JSON.stringify(env).includes("dummy"), "no provider credential value in the env");
   // The default base is process.env, filtered the same way.
   process.env.OPENAI_API_KEY_R2A4_PROBE = "sk-should-not-pass";
@@ -130,14 +133,14 @@ test("question 7: the A2A token echoed by the worker is redacted from stderr_tai
   await prepareWorkerWorkspace({ control_dir: ctl, worktree: wt, unit_id: "a", owned_paths: ["src/a/**"], verify_cmd: "true", roles: ["math"], mcp_server: MCP_SERVER_PATH,
     a2a_env: { PANTHEON_A2A_SOCKET: join(ctl, "a2a.sock"), PANTHEON_A2A_TOKEN: token, PANTHEON_A2A_ROLES: "math", PANTHEON_UNIT_ID: "a" } });
   await withFakeAgy(f.fx, async agy => {
-    agy.agyWorker(`tok=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".agents/mcp_config.json","utf8")).mcpServers["pantheon-subagents"].env.PANTHEON_A2A_TOKEN)')
+    agy.agyWorker(`tok=$(node -e 'process.stdout.write(require("fs").readFileSync(JSON.parse(require("fs").readFileSync(".agents/mcp_config.json","utf8")).mcpServers["pantheon-subagents"].env.PANTHEON_A2A_TOKEN_FILE,"utf8").trim())')
 echo "leaked $tok" >&2
 mkdir -p "$dir/src/a"; agy_write "src/a/$tok.txt" "x" || true
 reply="{\\"unit_id\\":\\"a\\",\\"status\\":\\"done\\",\\"notes\\":\\"$tok\\"}"
 `);
     const r = await runAgyWorkerTurn({ cli: process.env.PANTHEON_AGY_CLI, control_dir: ctl, worktree: wt, model: "gemini-4-hydrogen-medium", prompt: "PATHS YOU OWN\n- src/a/**\nDo not commit", timeoutS: 60,
       env: { PANTHEON_A2A_TOKEN: token }, sandbox: { agy_state_dirs: [f.fx] } });
-    assert.ok(existsSync(join(wt, "src", "a", `${token}.txt`)), "the worker really used the token (the fake read it from the MCP config)");
+    assert.ok(existsSync(join(wt, "src", "a", `${token}.txt`)), "the worker really used the token (the fake, a credential-bearing agy, read it from the token file its MCP config names)");
     for (const [k, v] of Object.entries({ stderr_tail: r.stderr_tail, tool_steps: r.tool_steps, jail_log: r.jail_log, text: r.text, summary: r.summary, launch: r.launch, cli_log: r.cli_log })) {
       assert.ok(!JSON.stringify(v ?? null).includes(token), `${k} carries the A2A token`);
     }
@@ -175,7 +178,7 @@ test("question 8: another unit's control dir (its MCP config with the bearer tok
   const { argv, hidden, binds } = bwrapArgs({ worktree: f.units.a.wt, control_dir: f.units.a.ctl });
   assert.deepEqual([hidden.mode, hidden.paths], ["parent", [join(f.root, "run", "control")]]);
   assert.ok(binds.some(b => b.mode === "tmpfs" && b.path === join(f.root, "run", "control")));
-  const other = join(f.units.b.ctl, ".agents", "mcp_config.json"), mine = join(f.units.a.ctl, ".agents", "hooks.json");
+  const other = join(f.units.b.ctl, "a2a.token"), mine = join(f.units.a.ctl, ".agents", "hooks.json");
   const r = await run([...argv, "sh", "-c", `cat '${other}' 2>/dev/null && echo OTHER-READ; ls '${join(f.root, "run", "control")}'; cat '${mine}' >/dev/null && echo MINE-READ; ls '${f.units.a.wt}' >/dev/null && echo WT-OK`]);
   assert.equal(r.code, 0, r.err);
   assert.doesNotMatch(r.out, /OTHER-READ|token-of-unit-b/, "unit b's MCP config (and token) is not readable from unit a's jail");

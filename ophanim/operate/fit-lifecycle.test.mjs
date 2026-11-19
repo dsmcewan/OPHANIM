@@ -167,10 +167,12 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
     assert.deepEqual(branches(repo, 'pantheon/*').filter(b => !b.includes('/pipeline/')).sort(), ['pantheon/fresh', 'pantheon/ticketed']);
     assert.equal(fs.readFileSync(path.join(repo, 'alpha.mjs'), 'utf8'), 'export const ok = false;\n');
     assert.equal(git(repo, 'worktree', 'list').trim().split('\n').length, 1);
-    // Every implementer turn was the fake agy CLI on its lane, with the worktree and the A2A endpoint; no metered API.
+    // Every implementer turn was the fake agy CLI on its lane, with the worktree and the A2A socket; no metered API. The
+    // A2A TOKEN is NOT in the CLI's environment (credential isolation, owner direction 2026-11-19: the relay reads it
+    // from the unit's token file; pantheon/src/agy/verify-jail.mjs).
     const launched = ctx.agyContext();
     assert.deepEqual(launched.map(a => a.model).sort(), ITEMS.flatMap(() => ['gemini-4-carbon-high', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-medium']).sort());
-    for (const a of launched) assert.deepEqual([a.agent, a.a2a_socket, a.a2a_token, a.google_key], ['pantheon-unit-worker', true, true, false]);
+    for (const a of launched) assert.deepEqual([a.agent, a.a2a_socket, a.a2a_token, a.google_key], ['pantheon-unit-worker', true, false, false]);
     assert.equal(calls.length, 0, 'no SDK client was used: the metered Gemini API was never called');
     // The single-turn seats: one dispatcher and one pinned review per unit, one subagent answer per item.
     const kinds = k => turn.log.filter(l => l.kind === k);

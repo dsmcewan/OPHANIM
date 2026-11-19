@@ -40,7 +40,8 @@ import { fileURLToPath } from "node:url";
 import { CAPABILITIES, clone, sha256, str } from "./util.mjs";
 import { matchesOwned } from "./paths.mjs";
 import { git } from "./git.mjs";
-import { workerVerifyCommand, workerVerifyPromptLines } from "../agy/workspace.mjs";
+import { workerVerifyPromptLines } from "../agy/workspace.mjs";
+import { VERIFY_LAUNCHER_NAME } from "../agy/jail-hook.mjs";
 
 /** Absolute path of the stdio MCP relay the implementer's agent launches to reach the unit's subagent shim. */
 export const MCP_SERVER_PATH = fileURLToPath(new URL("./a2a-mcp-server.mjs", import.meta.url));
@@ -56,10 +57,11 @@ export function laneFailureOf(e) {
 }
 
 /**
- * The implementer's prompt. `worker_verify` (optional) is the exact command the worker may run
- * (workerVerifyCommand(<real worktree>, unit.verify_cmd): `cd '<worktree>' && <verify_cmd>`); observed on agy 1.5.10
- * (2026-11-18), run_command carries no working directory, so the worker gets the one command that sets its own, and the
- * jail hook approves exactly that string. The GROUND TRUTH line stays the plain verify_cmd: the controller's own run.
+ * The implementer's prompt. `worker_verify` (optional) is the exact command the worker may run: the unit's VERIFY
+ * LAUNCHER <real control_dir>/pantheon-verify, which runs `cd '<worktree>' && <verify_cmd>` in the verify jail
+ * (src/agy/verify-jail.mjs: no credential is reachable from the code the command runs). Observed on agy 1.5.10
+ * (2026-11-18), run_command carries no working directory; the jail hook approves exactly that string. The GROUND TRUTH
+ * line stays the plain verify_cmd: the controller's own run (in the same kind of jail).
  */
 export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, findings = [], worker_verify = null }) {
   const subs = unit.allowed_subagents ?? [];
@@ -248,16 +250,18 @@ export async function checkpointWrites({ worktree, message }) {
  *   turn(<THE CALL CONTRACT in the header>) -> {text, served_model, served_model_source?, quota_failover?}
  *   a2a       {socket, token, roles} of the unit's subagent shim, or null
  *   control_dir  the unit's controller-owned directory (outside the worktree); mcp_server the relay's path
+ *   verify_jail  {hide}: what the unit's verify jail hides beyond its defaults (passed to the turn as verify_hide)
  *   findings  the findings this attempt must address (empty on the first)
  *   rubric    the frozen rubric (default unit.rubric); checkpoint: the commit the attempt starts from (default HEAD)
  */
-export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH }) {
+export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH, verify_jail = null }) {
   const start = checkpoint ?? (await git(worktree, ["rev-parse", "HEAD"])).trim();
   const level = ladder.findIndex(s => s.vendor === seat.vendor && s.model === seat.model);
   const rec = { n: attempt, role: "implementer", standing: "author", authored: true, vendor: seat.vendor, model: seat.model, level: level < 0 ? null : level, requested_model: seat.model, served_model: null, served_model_source: null,
     status: "failed", code: null, why: null, findings_in: findings.length, changed: [], violations: [], scratch_discarded: [], started_from: start, checkpoint: start, text_digest: null };
-  // The worker's command cds into the REAL worktree: prepareWorkerWorkspace writes the same string into jail.json.
-  const worker_verify = typeof unit.verify_cmd === "string" && unit.verify_cmd.trim() ? workerVerifyCommand(await realpath(worktree), unit.verify_cmd) : null;
+  // The worker's command is the unit's verify launcher in the REAL control dir: prepareWorkerWorkspace writes it there
+  // and the same string into jail.json. Without a control dir (an older caller) the prompt names no command.
+  const worker_verify = typeof unit.verify_cmd === "string" && unit.verify_cmd.trim() && control_dir ? join(await realpath(control_dir), VERIFY_LAUNCHER_NAME) : null;
   const prompt = IMPLEMENTER_PROMPT({ unit, rubric, a2a, attempt, findings, worker_verify });
   rec.prompt_digest = sha256(a2a ? prompt.split(a2a.token).join("<token>") : prompt);   // the digest must not depend on the secret
   // A tracked symlink that already leaves the worktree makes the jail unenforceable: a write THROUGH it lands outside
@@ -274,7 +278,7 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
       a2a: a2a ? { socket: a2a.socket, token: a2a.token, roles, url: null } : null,
       env: a2a ? { PANTHEON_A2A_SOCKET: a2a.socket, PANTHEON_A2A_TOKEN: a2a.token, PANTHEON_A2A_ROLES: roles.join(","), PANTHEON_UNIT_ID: unit.unit_id } : {},
       sandbox: { ...CAPABILITIES.implementer, owned_paths: [...unit.owned_paths] }, owned_paths: [...unit.owned_paths], verify_cmd: unit.verify_cmd,
-      control_dir, mcp_server, role: "implementer", unit_id: unit.unit_id, attempt });
+      control_dir, mcp_server, role: "implementer", unit_id: unit.unit_id, attempt, ...(verify_jail?.hide?.length ? { verify_hide: [...verify_jail.hide] } : {}) });
   } catch (e) {
     await discardWrites({ worktree, checkpoint: start });
     if (e?.quota_failover) rec.quota_failover = clone(e.quota_failover);

@@ -7,7 +7,7 @@
 //                       (no long-run heuristic: paths and code in hook payloads and tool steps stay readable)
 //   redactStrong        redactSecrets + the patterns + every 24+ run of token characters (for CLI output)
 //   redactDeep          redactKnown over every string of a JSON value (objects and arrays rebuilt, keys kept)
-//   controlDirSecrets   the SECRETISH env values of <control_dir>/.agents/mcp_config.json (the A2A bearer token)
+//   controlDirSecrets   the A2A bearer token: <control_dir>/a2a.token, the token files and SECRETISH env of mcp_config.json
 //
 // Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7: hook logs kept raw payloads,
 // worker records kept raw stderr tails and tool info, and final JSON summaries were returned unredacted.
@@ -66,11 +66,20 @@ export function redactStrong(text, env = {}) {
   return out;
 }
 
-/** The SECRETISH env values of the control dir's MCP configuration (the A2A bearer token); [] when unreadable. */
+/**
+ * The control dir's secrets: the SECRETISH env values of its MCP configuration, the content of every token FILE that
+ * configuration names (PANTHEON_A2A_TOKEN_FILE) and of <control_dir>/a2a.token (the A2A bearer token); [] when unreadable.
+ */
 export function controlDirSecrets(control_dir) {
   if (typeof control_dir !== "string" || !control_dir) return [];
+  const read = f => { try { return readFileSync(f, "utf8").trim(); } catch { return null; } };
+  const vals = [read(join(control_dir, "a2a.token"))];
   try {
     const servers = JSON.parse(readFileSync(join(control_dir, ".agents", "mcp_config.json"), "utf8"))?.mcpServers ?? {};
-    return secretValues({}, Object.values(servers).flatMap(s => Object.entries(isObj(s?.env) ? s.env : {}).filter(([k, v]) => SECRETISH.test(k) && typeof v === "string").map(([, v]) => v)));
-  } catch { return []; }
+    for (const s of Object.values(servers)) for (const [k, v] of Object.entries(isObj(s?.env) ? s.env : {})) {
+      if (typeof v !== "string") continue;
+      if (/_TOKEN_FILE$/.test(k)) vals.push(read(v)); else if (SECRETISH.test(k)) vals.push(v);
+    }
+  } catch { /* no config */ }
+  return secretValues({}, vals.filter(Boolean));
 }

@@ -56,7 +56,9 @@ test("the implementer runs as the unit worker through the agy CLI in the bwrap j
     const ctx = agy.agyContext();
     assert.deepEqual(ctx.map(c => [c.agent, c.model, c.mode, c.cleanup]).sort(), Array(2).fill(["pantheon-unit-worker", "gemini-4-hydrogen-medium", "accept-edits", "all"]));
     assert.deepEqual(ctx.map(c => c.dir).sort(), ["a", "b"].map(id => join(env.dir, "worktrees", id)));
-    for (const c of ctx) assert.deepEqual([c.a2a_socket, c.a2a_token, c.google_key, c.dangerous], [true, true, false, false], "the A2A socket in the environment; no Google API key");
+    // CREDENTIAL ISOLATION (owner direction 2026-11-19): the A2A token is NOT in the CLI's environment (the relay reads
+    // its token file); the socket path is.
+    for (const c of ctx) assert.deepEqual([c.a2a_socket, c.a2a_token, c.google_key, c.dangerous], [true, false, false, false], "the A2A socket in the environment; no A2A token and no Google API key");
     for (const c of ctx) assert.deepEqual([c.sandbox, c.log_file], [false, join(env.dir, "control", c.dir.split("/").at(-1), "run", "agy.log")], "no --sandbox inside bwrap; the CLI log in the unit's writable run dir");
     // From the controller's control dir, in the jail; the hook approved each write before it happened.
     for (const s of spans) {
@@ -86,9 +88,10 @@ test("the implementer runs as the unit worker through the agy CLI in the bwrap j
 });
 
 // run_command carries no Cwd (observed on agy 1.5.10, 2026-11-18): the implementer prompt gives the worker the ONE
-// command `cd '<real worktree>' && <verify_cmd>`, jail.json approves exactly that string, and the plain verify_cmd is
-// denied. The controller's own Stage-5 verify_cmd run in the worktree is unchanged.
-test("the implementer prompt's VERIFY COMMAND is the exact cd-prefixed worker command jail.json approves; the worker runs it without a Cwd; the plain verify_cmd is denied", async t => {
+// command, the unit's verify launcher <real control dir>/pantheon-verify (it runs `cd '<real worktree>' && <verify_cmd>`
+// in the verify jail), jail.json approves exactly that string, and the plain verify_cmd is denied. The controller's own
+// Stage-5 verify_cmd runs through the same launcher.
+test("the implementer prompt's VERIFY COMMAND is the unit's verify launcher jail.json approves; the worker runs it without a Cwd; the plain verify_cmd is denied", async t => {
   const env = await fixture(t);
   await withFakeAgy(env.root, async agy => {
     agy.agyWorker(WORKER + 'agy_run "$verify" && exit 8\nagy_verify || exit 7\n');
@@ -99,7 +102,8 @@ test("the implementer prompt's VERIFY COMMAND is the exact cd-prefixed worker co
     const jail = JSON.parse(readFileSync(join(env.dir, "control", "a", "jail.json"), "utf8"));
     const wt = jail.worktree, plain = unit("a").verify_cmd;   // the worktree itself is removed after integration
     assert.equal(wt, join(realpathSync(env.dir), "worktrees", "a"), "the REAL worktree path");
-    const wv = `cd '${wt}' && ${plain}`;
+    const wv = join(realpathSync(env.dir), "control", "a", "pantheon-verify");
+    assert.equal(jail.worker_verify_script, `cd '${wt}' && ${plain}`, "the script the verify jail runs");
     assert.match(prompts[0], new RegExp(`^VERIFY COMMAND .*\\n  ${wv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
     assert.match(prompts[0], new RegExp(`^GROUND TRUTH.*\\n  ${plain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), "the controller's ground truth stays the plain command");
     assert.deepEqual([jail.verify_cmd, jail.worker_verify_cmd], [plain, wv]);

@@ -29,11 +29,13 @@
 //       unit's owned_paths (pipeline/paths.mjs matchesOwned) both as written and as resolved; else deny.
 //   run_command
 //       auto_approve ONLY when args.CommandLine (trimmed) equals the unit's WORKER verify command exactly -- the policy's
-//       worker_verify_cmd, i.e. workerVerifyCommand(worktree, verify_cmd) = `cd '<worktree>' && <verify_cmd>` -- and
-//       args.Cwd, if given, resolves to the worktree; else deny. (OBSERVED on agy 1.5.10, 2026-11-18: the run_command
-//       payload carries only {CommandLine, WaitMsBeforeAsync, toolSummary}: there is no Cwd to request, so the one
-//       command the worker may run sets its own directory. The plain verify_cmd is DENIED: it would run wherever the
-//       CLI happens to run commands.)
+//       worker_verify_cmd, which must be the unit's VERIFY LAUNCHER <control_dir>/pantheon-verify (isVerifyLauncher; a
+//       policy naming anything else, or nothing, allows no command) -- and args.Cwd, if given, resolves to the worktree;
+//       else deny. The launcher (src/agy/verify-jail.mjs) runs `cd '<worktree>' && <verify_cmd>` in a fresh verify jail
+//       with no credential reachable (the CREDENTIAL-ISOLATION INVARIANT, in that module's header). (OBSERVED on agy
+//       1.5.10, 2026-11-18: the run_command payload carries only {CommandLine, WaitMsBeforeAsync, toolSummary}: there is
+//       no Cwd to request. The plain verify_cmd, and the earlier `cd '<worktree>' && <verify_cmd>`, are DENIED: they
+//       would run as agy's child, with agy's environment, descriptors and view of the OAuth state and the MCP config.)
 //   run_command under a REVIEW policy (jail.json carries `run_command_policy`; absent -> the worker rule above, unchanged)
 //       {kind: "node-test", allowed_files_glob: [...], files: [...] | null, max_files, suites: {<name>: <exact command>}}:
 //       auto_approve ONLY a CommandLine (trimmed) that equals one of `suites`' commands exactly, or that is exactly
@@ -77,9 +79,17 @@ export const WRITE_PATH_KEYS = Object.freeze(["Path", "TargetFile", "AbsolutePat
 /** Single-quote a word for a POSIX shell (always quoted: the result is compared byte for byte). */
 export const shQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 /**
- * THE ONE COMMAND A WORKER MAY RUN: `cd '<worktree>' && <verify_cmd>` (verify_cmd trimmed). run_command has no Cwd
- * (observed on agy 1.5.10), so the command sets its own directory. The same string goes into the prompt and jail.json.
+ * THE SCRIPT THE VERIFY JAIL RUNS for a worker: `cd '<worktree>' && <verify_cmd>` (verify_cmd trimmed). run_command has
+ * no Cwd (observed on agy 1.5.10), so the script sets its own directory. It is no longer the worker's command: that is
+ * the unit's verify launcher (VERIFY_LAUNCHER_NAME, src/agy/verify-jail.mjs), which runs this script in the verify jail.
  */
+export const VERIFY_LAUNCHER_NAME = "pantheon-verify";
+/** Is `cmd` a verify launcher path (absolute, plain characters, named pantheon-verify, in `control_dir` when given)? */
+export function isVerifyLauncher(cmd, control_dir = null) {
+  if (typeof cmd !== "string" || !/^\/[A-Za-z0-9_./@%+=:,-]+$/.test(cmd) || cmd.split("/").includes("..") || cmd.split("/").includes(".")) return false;
+  if (cmd.split("/").pop() !== VERIFY_LAUNCHER_NAME) return false;
+  return !control_dir || dirname(cmd) === control_dir;
+}
 export function workerVerifyCommand(worktree, verify_cmd) {
   if (typeof worktree !== "string" || !isAbsolute(worktree)) throw Object.assign(new Error(`workerVerifyCommand: the worktree must be an absolute path, not ${JSON.stringify(worktree)}`), { code: "BAD_INPUT" });
   if (typeof verify_cmd !== "string" || !verify_cmd.trim()) return null;
@@ -278,8 +288,10 @@ export function decideCommand(policy, args) {
   const cmd = typeof args?.CommandLine === "string" ? args.CommandLine.trim() : null;
   if (!cmd) return deny("run_command names no CommandLine");
   if (typeof policy.verify_cmd !== "string" || !policy.verify_cmd.trim()) return deny("this unit allows no command (no verify_cmd)");
-  // The worker command as written into jail.json (a policy without one: derived from the real worktree, the same way).
-  const want = typeof policy.worker_verify_cmd === "string" && policy.worker_verify_cmd.trim() ? policy.worker_verify_cmd.trim() : workerVerifyCommand(policy.worktree, policy.verify_cmd);
+  // The worker command as written into jail.json: the unit's verify launcher, nothing else (credential isolation: the
+  // verify_cmd runs only inside the verify jail, never as agy's own child).
+  const want = typeof policy.worker_verify_cmd === "string" ? policy.worker_verify_cmd.trim() : "";
+  if (!isVerifyLauncher(want, typeof policy.control_dir === "string" ? policy.control_dir : null)) return deny(`this unit's policy names no verify launcher (${JSON.stringify(want || null)}): worker-controlled code runs only in the verify jail, so no command is allowed`);
   if (cmd !== want) return deny(`only the unit's verify_cmd may run, exactly as the worker command ${JSON.stringify(want)}, not ${JSON.stringify(cmd)}`);
   if (args.Cwd !== undefined && args.Cwd !== null && args.Cwd !== "") {
     if (typeof args.Cwd !== "string" || !isAbsolute(args.Cwd)) return deny(`Cwd ${JSON.stringify(args.Cwd)} is not an absolute path`);

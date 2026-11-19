@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runAgyWorkerTurn, AGY_CLEANUP, workerArgv, assertWorkerArgv } from "../src/board/agy-cli.mjs";
-import { prepareWorkerWorkspace, workerVerifyCommand, workerVerifyPromptLines } from "../src/agy/workspace.mjs";
+import { prepareWorkerWorkspace, workerVerifyPromptLines } from "../src/agy/workspace.mjs";
 import { bwrapArgs, sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
@@ -20,11 +20,13 @@ const LANE = "gemini-4-hydrogen-medium";
 const have = await sandboxAvailable("bwrap");
 const needBwrap = { skip: have.ok ? false : `bwrap unavailable: ${have.why}` };
 
-// The prompt carries the worker's ONE command (`cd '<worktree>' && <verify>`: run_command has no Cwd, observed on agy
-// 1.5.10) in its VERIFY COMMAND section, as the pipeline's implementer prompt does; GROUND TRUTH stays the plain command.
-const PROMPT = (unit, owned, verify, wt) => [`ROLE: node-esm-library-engineer — the single implementer of work unit "${unit}" (difficulty: medium).`, "",
+// The prompt carries the worker's ONE command (the unit's verify launcher <control_dir>/pantheon-verify, which runs
+// `cd '<worktree>' && <verify>` in the verify jail: run_command has no Cwd, observed on agy 1.5.10) in its VERIFY COMMAND
+// section, as the pipeline's implementer prompt does; GROUND TRUTH stays the plain command.
+const launcher = ctl => join(ctl, "pantheon-verify");
+const PROMPT = (unit, owned, verify, ctl) => [`ROLE: node-esm-library-engineer — the single implementer of work unit "${unit}" (difficulty: medium).`, "",
   "PATHS YOU OWN (the only paths you may create, change or delete):", ...owned.map(p => `- ${p}`), "Do not commit, do not move HEAD.", "",
-  ...workerVerifyPromptLines(workerVerifyCommand(wt, verify)),
+  ...workerVerifyPromptLines(launcher(ctl)),
   "GROUND TRUTH: the controller will run this command in your worktree after you finish; its exit code decides, not your report:", `  ${verify}`, "Run it yourself before you stop."].join("\n");
 
 /** A repo, a linked worktree per unit and a control dir per unit (outside the worktree), under one temp root. */
@@ -48,7 +50,7 @@ const verifyOf = u => `test -f src/${u}/impl.mjs`;
 async function prepared(f, u, extra = {}) {
   const { wt, ctl } = f.units[u];
   await prepareWorkerWorkspace({ control_dir: ctl, worktree: wt, unit_id: u, owned_paths: [`src/${u}/**`], verify_cmd: verifyOf(u), ...extra });
-  return { cli: process.env.PANTHEON_AGY_CLI, control_dir: ctl, worktree: wt, model: LANE, prompt: PROMPT(u, [`src/${u}/**`], verifyOf(u), wt), timeoutS: 60, sandbox: sandbox(f.fx) };
+  return { cli: process.env.PANTHEON_AGY_CLI, control_dir: ctl, worktree: wt, model: LANE, prompt: PROMPT(u, [`src/${u}/**`], verifyOf(u), ctl), timeoutS: 60, sandbox: sandbox(f.fx) };
 }
 
 test("(a) under real bwrap the worker writes only owned files; a write outside them is denied by the PreToolUse hook BEFORE it happens", needBwrap, async t => {
@@ -77,8 +79,8 @@ reply=''
       assert.ok(by(p).length > 0 && by(p).every(d => d === "deny"), `${p}: ${by(p)}`);
     }
     assert.match(pre.find(l => l.args.Path === join(wt, "README.md")).reason, /not one of the unit's owned paths/);
-    // The ONE approved command is the cd-prefixed worker command; the fake sends it without a Cwd, as agy 1.5.10 does.
-    assert.ok(pre.some(l => l.tool === "run_command" && l.decision === "auto_approve" && l.args.CommandLine === workerVerifyCommand(wt, verifyOf("a")) && !("Cwd" in l.args)));
+    // The ONE approved command is the unit's verify launcher; the fake sends it without a Cwd, as agy 1.5.10 does.
+    assert.ok(pre.some(l => l.tool === "run_command" && l.decision === "auto_approve" && l.args.CommandLine === launcher(ctl) && !("Cwd" in l.args)));
     assert.ok(!r.jail_log.some(l => l.event !== "PreToolUse"), "no PostToolUse hook any more: the PreToolUse log is the audit");
     assert.ok(pre.every(l => l.cwd === join(ctl, ".agents") && typeof l.raw === "string" && l.payload?.toolCall), "every raw payload is logged; the hook ran in .agents/");
     // Every tool step of the stream is captured, denied ones included.
@@ -89,7 +91,7 @@ reply=''
     assert.match(r.tool_steps[3].tool_info.error.message, /^tool call denied by pre-tool hook: README\.md is not one of the unit's owned paths/);
     assert.deepEqual([r.tool_calls, r.tools], [2, ["write_file", "run_command"]], "only DONE steps count as tool calls");
     // The worker's strict JSON summary is parsed when it is the whole final message.
-    assert.deepEqual([r.summary.unit_id, r.summary.status, r.summary.changed_paths, r.summary.verify], ["a", "done", ["src/a/impl.mjs"], { cmd: workerVerifyCommand(wt, verifyOf("a")), exit_code: 0 }]);
+    assert.deepEqual([r.summary.unit_id, r.summary.status, r.summary.changed_paths, r.summary.verify], ["a", "done", ["src/a/impl.mjs"], { cmd: launcher(ctl), exit_code: 0 }]);
     assert.equal((await sh("git status --porcelain", wt)).trim(), "?? src/", "only the owned file changed");
   });
 });
@@ -167,7 +169,7 @@ async function implementerTurn(f, { api = async () => ({ text: JSON.stringify({ 
   const calls = [];
   const turns = pipelineTurns({ turn: async () => ({ text: "" }), agy: { sandbox: sandbox(f.fx), api: async a => { calls.push(a); return api(a); } } });
   const { wt, ctl } = f.units.a;
-  const go = () => turns.implementer({ vendor: "agy_google", model: LANE, prompt: PROMPT("a", ["src/a/**"], verifyOf("a"), wt), cwd: wt, control_dir: ctl, owned_paths: ["src/a/**"], verify_cmd: verifyOf("a"),
+  const go = () => turns.implementer({ vendor: "agy_google", model: LANE, prompt: PROMPT("a", ["src/a/**"], verifyOf("a"), ctl), cwd: wt, control_dir: ctl, owned_paths: ["src/a/**"], verify_cmd: verifyOf("a"),
     unit_id: "a", env: {}, attempt: 1 });
   return { calls, go };
 }

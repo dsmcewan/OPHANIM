@@ -3,7 +3,11 @@
 // The agy process runs with cwd = control_dir (its "project root") and the unit's worktree added with --add-dir, so
 // the workspace files the CLI reads from the project root are the controller's, read-only to the worker under bwrap:
 //   <control_dir>/.agents/agents/pantheon-unit-worker/agent.md   the role card (copied from the template)
-//   <control_dir>/.agents/mcp_config.json                        the stdio MCP relay to the unit's A2A socket
+//   <control_dir>/.agents/mcp_config.json                        the stdio MCP relay to the unit's A2A socket (it names the
+//                                                                token FILE, never the token)
+//   <control_dir>/a2a.token                                      the unit's A2A bearer token (mode 0600), read by the relay
+//   <control_dir>/pantheon-verify, verify.json                   the VERIFY LAUNCHER (the worker's one command) and its policy
+//                                                                (src/agy/verify-jail.mjs: the credential-isolation boundary)
 //   <control_dir>/.agents/hooks.json                             the PreToolUse jail hook (no PostToolUse hook)
 //   <control_dir>/pantheon-jail-hook                             the hook's executable wrapper (the hook command)
 //   <control_dir>/jail.json                                      the unit's policy, read by the hook
@@ -22,13 +26,14 @@
 // mcp_config.json: our stdio server with `tools.ask_subagent.eager = true` (OWNER-STATED: MCP tools are lazy-loaded
 // through `call_mcp_tool` by default; eager asks for the tool to be loaded directly). The hook handles both forms.
 //
-// Must never: write inside the worktree; put a secret anywhere but the MCP server's env (the A2A token is there,
-// as the relay needs it).
-import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
+// Must never: write inside the worktree; put a secret anywhere but the token file (not the MCP config, whose content
+// agy's `mcp list` was observed to print, and not any environment: CREDENTIAL ISOLATION, src/agy/verify-jail.mjs).
+import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HARD_DENY, MCP_NAMES, MCP_SERVER, MCP_TOOL, MCP_WRAPPER, READ_TOOLS, WRAPPER_TIMEOUT_S, WRITE_PATH_KEYS, WRITE_TOOLS, workerVerifyCommand } from "./jail-hook.mjs";
+import { VERIFY_LAUNCHER_NAME, VERIFY_POLICY_NAME, writeVerifyLauncher } from "./verify-jail.mjs";
 
 export { workerVerifyCommand } from "./jail-hook.mjs";
 
@@ -39,6 +44,9 @@ export const JAIL_HOOK = join(HERE, "jail-hook.mjs");
 export const HOOK_NAME = "pantheon-jail";
 export const HOOK_WRAPPER = "pantheon-jail-hook";
 export const HOOK_TIMEOUT_S = 30;
+/** The unit's A2A bearer token, in the control dir (mode 0600): the relay reads it; it is in no config and no env. */
+export const A2A_TOKEN_FILE = "a2a.token";
+export const JAIL_POLICY_SCHEMA = "pantheon.agy-jail/v4";
 const inside = (root, p) => p === root || p.startsWith(root + sep);
 const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
 /** Quote a word for a POSIX shell only when it needs it. */
@@ -86,12 +94,12 @@ export function validateCardTools(tools) {
 /** The heading of the prompt's VERIFY COMMAND section (the fixture's fake agy reads the next line as the command). */
 export const VERIFY_COMMAND_HEADING = "VERIFY COMMAND";
 /**
- * The prompt lines that give the worker its ONE command (workerVerifyCommand: `cd '<worktree>' && <verify_cmd>`), the
+ * The prompt lines that give the worker its ONE command (the unit's verify launcher, <control_dir>/pantheon-verify), the
  * exact string jail.json approves. Used by the pipeline's implementer prompt and the probe's. [] when there is none.
  */
 export function workerVerifyPromptLines(cmd) {
   if (typeof cmd !== "string" || !cmd.trim()) return [];
-  return [`${VERIFY_COMMAND_HEADING} (run it with run_command EXACTLY as written, character for character: it changes into your worktree itself, because run_command takes no working directory; any other command is refused):`,
+  return [`${VERIFY_COMMAND_HEADING} (run it with run_command EXACTLY as written, character for character: it runs the unit's verify_cmd in your worktree inside an isolated verify jail, because run_command takes no working directory; any other command is refused):`,
     `  ${cmd.trim()}`];
 }
 
@@ -156,12 +164,15 @@ export function hookWrapper({ node = process.execPath, hook = JAIL_HOOK, policy,
 
 /**
  * Write the unit's agy workspace into `control_dir`. Returns the paths written (and `worker_verify_cmd`: the exact
- * command the worker may run, or null without a verify_cmd).
- *   a2a_env  {PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_A2A_ROLES, PANTHEON_UNIT_ID} for the MCP relay
+ * command the worker may run -- the verify launcher -- or null without a verify_cmd; `a2a_token`: the token file).
+ *   a2a_env  {PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_A2A_ROLES, PANTHEON_UNIT_ID} for the MCP relay (the
+ *            token is written to the token file; the relay's env gets PANTHEON_A2A_TOKEN_FILE instead)
+ *   verify_hide  more absolute paths the unit's verify jail hides (the pipeline: its run dir, the checkpoints and their
+ *            seal key; src/agy/verify-jail.mjs)
  *   mcp_server  the absolute path of the stdio MCP relay (pipeline/a2a-mcp-server.mjs); null -> no MCP server
  */
 export async function prepareWorkerWorkspace({ control_dir, worktree, unit_id, owned_paths, verify_cmd = null, roles = [], mcp_server = null, a2a_env = {},
-  card = CARD_TEMPLATE, hook = JAIL_HOOK, node = process.execPath }) {
+  card = CARD_TEMPLATE, hook = JAIL_HOOK, node = process.execPath, verify_hide = [] }) {
   if (!control_dir || !worktree) throw Object.assign(new Error("prepareWorkerWorkspace: pass control_dir and worktree"), { code: "NO_WORKSPACE" });
   if (!Array.isArray(owned_paths) || !owned_paths.length) throw Object.assign(new Error("prepareWorkerWorkspace: the unit owns no paths"), { code: "NO_OWNED_PATHS" });
   await mkdir(control_dir, { recursive: true });
@@ -174,14 +185,28 @@ export async function prepareWorkerWorkspace({ control_dir, worktree, unit_id, o
   await mkdir(cardDir, { recursive: true });
   await mkdir(run, { recursive: true });
   await copyFile(card, paths.card);
-  const servers = mcp_server ? { [MCP_SERVER]: { command: node, args: [mcp_server], env: { ...a2a_env }, tools: { [MCP_TOOL]: { eager: true } } } } : {};
+  // THE A2A TOKEN goes into a file only the relay reads (mode 0600, in the control dir: read-only to agy's jail, hidden in
+  // the verify jail); the MCP config names the FILE. Neither agy's environment nor its MCP config carries the token
+  // (CREDENTIAL ISOLATION: src/agy/verify-jail.mjs; observed on agy 1.5.10: `agy mcp list` printed a server's
+  // configured credential).
+  const { PANTHEON_A2A_TOKEN: token, ...relayEnv } = a2a_env ?? {};
+  paths.a2a_token = join(ctl, A2A_TOKEN_FILE);
+  await rm(paths.a2a_token, { force: true });
+  if (typeof token === "string" && token) { await writeFile(paths.a2a_token, token + "\n", { mode: 0o600 }); await chmod(paths.a2a_token, 0o600); relayEnv.PANTHEON_A2A_TOKEN_FILE = paths.a2a_token; }
+  const servers = mcp_server ? { [MCP_SERVER]: { command: node, args: [mcp_server], env: relayEnv, tools: { [MCP_TOOL]: { eager: true } } } } : {};
   await writeFile(paths.mcp_config, JSON.stringify({ mcpServers: servers }, null, 2) + "\n");
   const verify = typeof verify_cmd === "string" && verify_cmd.trim() ? verify_cmd.trim() : null;
-  // The ONE command the worker may run (run_command has no Cwd: observed on agy 1.5.10): it cds into the REAL worktree.
-  // The prompt carries the same string (pipeline/implement.mjs, scripts/agy-worker-probe.mjs: workerVerifyCommand).
-  paths.worker_verify_cmd = verify ? workerVerifyCommand(wt, verify) : null;
-  const policy = { schema: "pantheon.agy-jail/v3", unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
-    owned_paths: [...owned_paths], verify_cmd: verify, worker_verify_cmd: paths.worker_verify_cmd, write_path_keys: [...WRITE_PATH_KEYS],
+  // The ONE command the worker may run: the unit's VERIFY LAUNCHER (<control_dir>/pantheon-verify, no arguments), which
+  // runs `cd '<real worktree>' && <verify_cmd>` (workerVerifyCommand; run_command has no Cwd: observed on agy 1.5.10) in
+  // the verify jail. The prompt carries the same string (pipeline/implement.mjs, scripts/agy-worker-probe.mjs).
+  paths.verify_launcher = join(ctl, VERIFY_LAUNCHER_NAME); paths.verify_policy = join(ctl, VERIFY_POLICY_NAME);
+  paths.worker_verify_script = verify ? workerVerifyCommand(wt, verify) : null;
+  await rm(paths.verify_launcher, { force: true }); await rm(paths.verify_policy, { force: true });
+  const sockDir = typeof relayEnv.PANTHEON_A2A_SOCKET === "string" && isAbsolute(relayEnv.PANTHEON_A2A_SOCKET) ? dirname(resolve(relayEnv.PANTHEON_A2A_SOCKET)) : null;
+  paths.worker_verify_cmd = verify ? writeVerifyLauncher({ control_dir: ctl, worktree: wt, script: paths.worker_verify_script, node,
+    hide: [...(sockDir && !inside(ctl, real(sockDir)) ? [real(sockDir)] : []), ...verify_hide.filter(p => typeof p === "string" && isAbsolute(p))] }).command : null;
+  const policy = { schema: JAIL_POLICY_SCHEMA, unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, log: paths.jail_log,
+    owned_paths: [...owned_paths], verify_cmd: verify, worker_verify_cmd: paths.worker_verify_cmd, worker_verify_script: paths.worker_verify_script, write_path_keys: [...WRITE_PATH_KEYS],
     roles: [...roles], mcp: { server: MCP_SERVER, tool: MCP_TOOL, wrapper: MCP_WRAPPER, accepted_names: [...MCP_NAMES], enabled: Boolean(mcp_server), eager: Boolean(mcp_server) },
     hard_deny: [...HARD_DENY], write_tools: [...WRITE_TOOLS], read_tools: [...READ_TOOLS] };
   await writeFile(paths.jail, JSON.stringify(policy, null, 2) + "\n");

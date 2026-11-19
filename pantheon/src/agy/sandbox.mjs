@@ -173,7 +173,7 @@ export function bwrapArgs({ worktree, control_dir, agy_state_dirs = [], extra_ro
   return { argv, binds, git, hidden: { mode: hide.mode, paths: hide.paths, why: hide.why } };
 }
 
-const CONTROL_MARKS = ["jail.json", "pantheon-jail-hook", "a2a.sock", join(".agents", "mcp_config.json"), join(".agents", "hooks.json")];
+const CONTROL_MARKS = ["jail.json", "pantheon-jail-hook", "a2a.sock", "a2a.token", "pantheon-verify", "verify.json", join(".agents", "mcp_config.json"), join(".agents", "hooks.json")];
 const looksLikeControlDir = d => CONTROL_MARKS.some(m => { try { lstatSync(join(d, m)); return true; } catch { return false; } });
 /**
  * Which host paths to cover with an empty tmpfs so this unit's jail cannot see the OTHER units' control dirs.
