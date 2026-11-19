@@ -1,0 +1,102 @@
+{
+  "schema": "ophanim.self-audit-seal/v1",
+  "assignment": 3,
+  "candidate_commit": "af0dc3012688703ccac0f6de31836822a3279eae",
+  "assessment": {
+    "path": "self-audit/round3/assignment-3/assessment.md",
+    "sha256": "0aa2aee292f940bb79dc50c891fed0041471712c1c4faee19800be4818248873",
+    "bytes": 27516
+  },
+  "reproductions": [
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q1-runopenitem-hops.test.mjs",
+      "sha256": "cf7a6b451106acfc20098a7588404ab4797b1c2f72bac8f46e4c0f99bf0765a6"
+    },
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q1-throw-counts-full-budget.test.mjs",
+      "sha256": "35a64ab4c7cf8a807b15be156e67720b8b4065633bf9437c07f21918bd64da99"
+    },
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q10-runjson-acceptance-before-verification.test.mjs",
+      "sha256": "47904eb8d22efdf9d491e56a0589497d4e2d0aa73d7e0110c142b7ddabc3c806"
+    },
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q3-crossprocess-worktree-race.mjs",
+      "sha256": "5d73d68eea66dca66799fe0fa74de356eee710d6951c146df64c8720de86750e"
+    },
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q3-crossprocess-worktree-race.test.mjs",
+      "sha256": "ae64946cd6a97c59682053c5da6b4ad0e51c039e01bef53175f2c6b6ae642fd4"
+    },
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q8-lifecycle-orphan-integration-branch.test.mjs",
+      "sha256": "7ccc126565f88c37b1470293bc4ca9a5d5bc4e7ffc9b4e33abb92748458ac691"
+    },
+    {
+      "path": "self-audit/round3/assignment-3/reproductions/sa3-q9-runopenitem-lane-ignores-signal.test.mjs",
+      "sha256": "1f6f10fc6a547f3410319cf6399e26ede838db63793596ffa8ec4063f1cb8a57"
+    }
+  ],
+  "assessor": {
+    "lab": "Anthropic",
+    "role": "self-audit by the coordinating lab (a subagent of the coordinating session); NOT independent",
+    "model_identity": "withheld from repository artifacts by session policy; recorded in the session reply to the owner"
+  },
+  "assessment_completed_at": "2026-11-19T07:59:45Z",
+  "assessment_completed_at_source": "file modification time of the delivered assessment (UTC)",
+  "sealed_at": "2026-11-19T08:04:50Z",
+  "findings": [
+    {
+      "question": 1,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 1. Call budgets: does not hold"
+    },
+    {
+      "question": 2,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 2. Budget stops: does not hold (minor)"
+    },
+    {
+      "question": 3,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 3. Concurrency: does not hold (cross-process repository operations)"
+    },
+    {
+      "question": 4,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 4. Leases: holds for ledger records, with one exception"
+    },
+    {
+      "question": 5,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 5. Retries and the lane ladder: holds"
+    },
+    {
+      "question": 6,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 6. Metered failover off: holds for the live run, with residuals"
+    },
+    {
+      "question": 7,
+      "verdict": "HOLDS",
+      "heading_verbatim": "## 7. Checkpoints: holds"
+    },
+    {
+      "question": 8,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 8. Process restart: does not hold"
+    },
+    {
+      "question": 9,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 9. Timeouts: does not hold (argo/legacy lane turns)"
+    },
+    {
+      "question": 10,
+      "verdict": "DOES NOT HOLD",
+      "heading_verbatim": "## 10. Run record: does not hold"
+    }
+  ],
+  "blind_status": "verified: no round-3 independent findings, transcripts or intermediate outputs had been received by, uploaded to, or committed in reach of the coordinating session at sealing time",
+  "immutability": "This assessment is sealed as written. Corrections or later discoveries must be separate, later-timestamped records; the prospective comparison uses only this sealed text."
+}
