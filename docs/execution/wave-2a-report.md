@@ -1,0 +1,68 @@
+# Wave 2, sub-wave 2a report
+
+Base `bce84eb`, with the ownership manifest at `docs/execution/wave-2-ownership.json`. The frozen candidate `af0dc30` and the sealed self-audits (`449ca42`) are unchanged. No independent round-3 findings reached this work.
+
+## Contributions and acceptance checks
+
+| Agent | Branch, commit | Ownership | Regression evidence | Mutations |
+|---|---|---|---|---|
+| 2, identity | `wave2/identity` `9198ef4` | All files owned. `pipeline/index.mjs` edits stay in the lineage and Stage 5 regions (adding `stage5_excluded`); none touch worktree, lock or charging code. One new non-test tool file, `ophanim/operate/wave2-identity.mutate.mjs`, is outside the listed globs; it is recorded as a dependency-map note. | 17 tests fail with the `bce84eb` sources restored. Three pass there by design: they only kill mutations of code that was already correct. | 22 recorded, each failing at least one test, on a 106-of-106 green baseline. Runner exits non-zero on a target that doesn't apply exactly once or on a survivor. Checked by the coordinator in `summary.json`. |
+| 3a, reliability | `wave2/reliability` `72303b2` | All files owned. Neither `stages.mjs` nor `pipeline/index.mjs` was touched; the needed change there is saved as `docs/execution/wave-2b-needed.patch`. | Pantheon: 11 of 11 fail on `bce84eb`. Ophanim: 7 fail and 1 is cancelled, timing out because the base has no interrupt. All 4 self-audit reproductions now fail. | 25 recorded, 25 killed (checked by the coordinator in `mutations.json`). |
+
+The two agents changed no file in common.
+
+## Integrated result
+
+Integration branch `wave2a/integration`. Agent 2 was merged first, then Agent 3a, then the real-bwrap baseline update (adding Agent 3a's two new suites, with no remaining drift), the register and this report. Results under Node 24.22.1 with bwrap working. Every exit code was read directly.
+
+| Suite | Tests | Fail | Cancelled | Skipped |
+|---|---|---|---|---|
+| `test:proof` | 371 | 0 | 0 | 0 |
+| model-client / ledger / pantheon | 62 / 47 / 1425 | 0 | 0 | 0 |
+| `test:gates:self` | 19 | 0 | 0 | 0 |
+| `test:gates` (run mode) | all five suites | PASS | | |
+
+Lint (report-only): 105 findings, none in wave-2 test files.
+
+## Status by entry
+
+| Entry | Status |
+|---|---|
+| L-001 (owner decision A + B) | **Repaired.** No dispatcher text reaches any prompt, record or dossier view. The dispatcher's requested and served models are a contributor to the revised plan. |
+| L-002 (owner decision) | **Repaired under the model rule. Qualified under the lab rule**: only the corrections apply there. |
+| L-201 every retrieval round admitted | **Class covered.** |
+| L-202 planner rounds as contributors | **Repaired.** |
+| L-203 served-model marker kept | **Class covered.** |
+| L-204 ledger enforcement | **Qualified.** Unpinned CLI callers remain (L-117). |
+| L-205 mutation survivors | **Repaired.** M1 to M10 are all killed. |
+| L-107 change-review citations | **Qualified.** They are bound to versions but not re-checked on reuse (L-115). |
+| L-114 labless filter | **Repaired.** |
+| L-301 per-request charging | **Qualified.** The stage meter and pipeline admission await the 2b patch. |
+| L-302 zero-call exception | **Repaired.** |
+| L-305 interrupted live run | **Repaired for the live run.** The service and CLI don't wire it yet (L-121). |
+| L-306 stop signal on the board's agy paths | **Class covered.** |
+| L-307 acceptance before verification | **Repaired.** |
+| L-308 budget-stop classification | **Qualified.** The validator label awaits the 2b patch. |
+| L-407 board seat command execution | **Repaired.** |
+| L-410 SDK seat environment | **Repaired.** |
+
+## Capacity effect of the owner decisions (recomputed on the integrated selector)
+
+- **Validator, clean path (84 combinations, 78 with a panel).** Before, the validator was one of the change reviewers in 78 of 78. Now it never is. It comes from a fourth lab in 60, and is pending in 0.
+- **With earlier finders `grok-4.7` and `sonnet`:** the validator is pending in 4 of 78.
+- **L-001 on the revised plan panel.** Its OpenAI seat moves to a shared-lab Anthropic seat. It still has three labs.
+- **L-001 on the change panel.** 30 of 324 combinations change, and 24 become REVIEW_CAPACITY_PENDING.
+- **Combined.** Without L-001, the fourth-lab preference would have made the returning dispatcher the validator in 90 of 324 cases. L-001 removes all 90.
+
+## New caveats
+
+L-115 to L-125 in the register. The main ones:
+- **L-115:** citation re-check on reuse, in `gates.mjs`.
+- **L-117:** unpinned lab-rule cycles from the CLI and `practice/compare`.
+- **L-120:** the board in-run checker under the lab rule.
+- **L-121:** the service and CLI don't pass `interrupt`.
+- **L-123:** the reviewer's verify run can write the worktree.
+
+## Next
+
+Sub-wave 2b (L-303, L-304, and the saved patch finishing L-301 and L-308). It starts on this integrated commit. One agent owns the worktree, lock, recovery and charging regions of `pipeline/index.mjs`, plus `git.mjs`. It also owns the meter and `BUDGET_STOP` regions of `stages.mjs`, now that agent 2's work is merged.
