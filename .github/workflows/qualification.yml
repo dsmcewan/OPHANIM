@@ -28,10 +28,58 @@ jobs:
       - name: npm run test:proof
         shell: bash
         run: npm run test:proof 2>&1 | tee "$RUNNER_TEMP/test-proof.log"
+      - name: npm run test:gates:self
+        if: always()
+        shell: bash
+        run: npm run test:gates:self 2>&1 | tee "$RUNNER_TEMP/test-gates-self.log"
       - name: Verification summary
         if: always()
         run: >-
           node ophanim/public/ci-summary.mjs
           "npm test=$RUNNER_TEMP/npm-test.log"
           "test:proof=$RUNNER_TEMP/test-proof.log"
+          "test:gates:self=$RUNNER_TEMP/test-gates-self.log"
           >> "$GITHUB_STEP_SUMMARY"
+      # The test gate (scripts/test-gates/check.mjs, L-503). A suite FAILS on cancelled > 0 (node:test counts a
+      # timed-out test or a cut-off file as cancelled, not fail), on a missing summary, and on any skip in a real-bwrap
+      # suite while `bwrap --ro-bind / / true` works here; where bwrap does not work those skips are UNVERIFIED, which
+      # also fails this job (CI installs bubblewrap above, so it must work). The bwrap probe is recorded in the JSON.
+      - name: Test gate on this run's logs (cancelled, missing, real-bwrap skips)
+        if: always()
+        shell: bash
+        run: |
+          status=0
+          node scripts/test-gates/check.mjs logs \
+            "npm test=$RUNNER_TEMP/npm-test.log" \
+            "test:proof=$RUNNER_TEMP/test-proof.log" \
+            "test:gates:self=$RUNNER_TEMP/test-gates-self.log" \
+            --json "$RUNNER_TEMP/test-gate-logs.json" --report "$RUNNER_TEMP/test-gate-logs.md" || status=$?
+          cat "$RUNNER_TEMP/test-gate-logs.md" >> "$GITHUB_STEP_SUMMARY" || true
+          exit $status
+      # The text logs do not name a skipped test's file; this re-runs only the real-bwrap suites with a per-file
+      # event reporter so every skip and cancellation there is attributed exactly.
+      - name: Test gate, real-bwrap suites re-run with per-file attribution
+        if: always()
+        shell: bash
+        run: |
+          status=0
+          npm run test:gates -- --only real-bwrap \
+            --json "$RUNNER_TEMP/test-gate-real-bwrap.json" --report "$RUNNER_TEMP/test-gate-real-bwrap.md" \
+            --out "$RUNNER_TEMP/test-gate-real-bwrap" || status=$?
+          cat "$RUNNER_TEMP/test-gate-real-bwrap.md" >> "$GITHUB_STEP_SUMMARY" || true
+          exit $status
+      - name: Test lint (report-only; never fails the job)
+        if: always()
+        shell: bash
+        run: npm run --silent test:lint -- --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the gate records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gate-records
+          path: |
+            ${{ runner.temp }}/test-gate-*.json
+            ${{ runner.temp }}/test-gate-*.md
+            ${{ runner.temp }}/test-lint.json
+            ${{ runner.temp }}/test-gate-real-bwrap/
+          if-no-files-found: warn

@@ -1,0 +1,22 @@
+✔ first (1.344717ms)
+✔ passes (0.932813ms)
+﹣ skips (0.176963ms) # bwrap unavailable: nope
+
+Interrupted while running:
+
+⚠ pending.test.mjs (pending.test.mjs:1:1)
+✖ pending.test.mjs (6308.16138ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 6325.426863
+
+✖ failing tests:
+
+test at pending.test.mjs:1:1
+✖ pending.test.mjs (6308.16138ms)
+  'Promise resolution is still pending but the event loop has already resolved'

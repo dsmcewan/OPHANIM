@@ -1,0 +1,21 @@
+✔ first (0.859665ms)
+✔ passes (0.881352ms)
+﹣ skips (0.163091ms) # bwrap unavailable: nope
+✖ slow (301.295125ms)
+▶ parent
+  ✔ child not awaited (100.544359ms)
+✔ parent (101.399775ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 5098.16728
+
+✖ failing tests:
+
+test at pending2.test.mjs:2:1
+✖ slow (301.295125ms)
+  'test timed out after 300ms'

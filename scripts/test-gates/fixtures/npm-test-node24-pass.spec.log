@@ -1,0 +1,142 @@
+> ophanim@0.1.0 test
+> npm --prefix packages/model-client test && npm --prefix packages/ledger test && npm --prefix pantheon test -- --test-concurrency=2
+> @argo/model-client@0.1.0 test
+> node --test tests/*.test.mjs
+✔ a two-million-token provider count is consulted and refused on Fable, Sol and every other uncovered model; within-window passes (6.064464ms)
+✔ output headroom is reserved: an uncapped providerDefaults request reserves the documented output limit (1.091107ms)
+✔ without a supported count the qualified upper-bound estimate refuses an over-window history before generation (25.465138ms)
+✔ the Anthropic provider count is used when the SDK supports it, over system, tools and history (2.624487ms)
+✔ an unknown window is not admitted, and each refusal names its reason (1.429473ms)
+✔ independent processes cannot lose distinct pool updates (194.450676ms)
+✔ an older successful call cannot clear a newer refusal for the same pool (7.975972ms)
+✔ a retry rereads a refusal extended by another pool writer (7.881413ms)
+✔ a pool can retry successfully after its own cooldown expires (5.345336ms)
+✔ Google full count keeps tool and safety options at the serialized request root (49.517155ms)
+✔ Google root options trigger a full count without system instructions or tools (4.086133ms)
+✔ Google count normalizes system instruction Part arrays like the pinned SDK (8.867625ms)
+✔ Google count normalizes lowercase and nullable response schemas like the pinned SDK (2.945558ms)
+✔ Google count normalizes function declaration schemas and JSON schema aliases like the pinned SDK (3.571428ms)
+✔ Google count follows the response JSON Schema alias when no tools snapshot the config (2.928125ms)
+✔ ambiguous Google response schema aliases with tools fail before either HTTP request (2.135298ms)
+✔ Google schema normalization fails before count or generation HTTP for conflicting schema forms (0.820649ms)
+✔ Google normalized count also matches the streaming serializer (10.331984ms)
+✔ explicit Google budgets retain short caller limits instead of increasing generation allowance (2.903662ms)
+✔ explicit output policy requires a positive safe integer cap on every provider surface (2.286034ms)
+✔ explicit caps normalize supported aliases without leaking local policy to provider requests (0.77592ms)
+✔ omitted and long-decode policies retain the existing default and legacy-cap behavior (0.663277ms)
+✔ unknown output policies and caps beyond the model limit fail before generation (1.155364ms)
+✔ combined-context accounting reserves the explicit output cap and rejects overflow (0.783963ms)
+✔ single-turn generation sends explicit small caps through all provider transports (3.582768ms)
+✔ generation preflight follows token counting and can prevent provider invocation (4.116359ms)
+✔ text-only presentation refuses unsupported content on every response surface (2.93736ms)
+✔ ordinary tool-capable callers retain their existing response behavior (0.568296ms)
+✔ presentation options are validated before provider invocation (0.385899ms)
+✔ a moved Responses model sends no effort and no output cap unless asked (3.702672ms)
+✔ a moved Messages model needs an explicit max_tokens and sends no effort unless asked (0.901451ms)
+✔ the long-decode frontier models keep their policy (0.419335ms)
+✔ strict consumers can use every public root export and request/router subpaths (2640.921687ms)
+✔ existing Node require consumers can still load the public request and router subpaths (3.291211ms)
+✔ the frontier client passes a documented reasoning.context through instead of stripping it (2.238559ms)
+✔ without a request, no undocumented mode is sent, and xAI never receives the field (0.419011ms)
+✔ the effective mode is what the response reports (1.105591ms)
+✔ Fable removes every rejected sampling/thinking/forced-tool field without mutating caller data (2.731833ms)
+✔ reserved transport identity and invalid effort cannot be overridden through extra (2.363026ms)
+✔ Carbon/Argon raise old combined budgets and reject impossible thinking levels (0.670517ms)
+✔ Astra token guard counts the complete request and rejects at 250000 before generation (1.801153ms)
+✔ Google combined input plus requested thinking/output cannot exceed the unified window (0.454049ms)
+✔ Grok replay preserves encrypted reasoning/tool item order and applies a scoped cache key (0.60748ms)
+✔ compaction requests a summary, retains its signed block unchanged, and carries the beta forward (1.634201ms)
+✔ cross-provider legacy output fields normalize and unknown parameters never reach an API (0.473599ms)
+✔ compaction preserves required authentication betas and refuses an unresolved tool turn (0.564407ms)
+✔ Google caller config cannot replace counted contents, cache scope or protected budgets at serialization (0.589478ms)
+✔ 400 and auth failures are terminal on first call and after a retryable error (41.0371ms)
+✔ quota refusal advances only to a separately configured pool and returns actual identity (1.136733ms)
+✔ Retry-After is not truncated into an early same-pool retry (0.758617ms)
+✔ cancellation and deadlines bound hung injected transports without starting another seat (26.439442ms)
+✔ Messages: only end_turn, tool_use and stop_sequence are successful stops; max_tokens is truncation (2.1436ms)
+✔ Responses: only status completed is complete; incomplete, failed and in-progress are not (0.382101ms)
+✔ GenAI: only STOP is complete, and a blocked prompt never is (0.650016ms)
+✔ exchange() refuses a Messages turn truncated by max_tokens, unary and streaming (1.353674ms)
+✔ a streamed Messages turn keeps the input tokens message_start reported, beside the output message_delta reported (4.487503ms)
+✔ a truncated streamed Messages turn still reports the usage it consumed (0.508148ms)
+✔ Google continuation hops: each hop is its own billed request, so usage is summed across hops, not overwritten (0.61678ms)
+✔ Google streaming: within one hop the last chunk is cumulative; across hops usage is summed (0.534386ms)
+✔ a streamed Responses turn that ends incomplete keeps the usage on its terminal event (0.683862ms)
+✔ Google unary and continuation hops preserve signed part boundaries exactly (2.476296ms)
+✔ Google streaming preserves signed parts and continuation hop boundaries (1.305966ms)
+ℹ tests 62
+ℹ suites 0
+ℹ pass 62
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3349.323805
+> @argo/ledger@0.1.0 test
+> node --test tests/*.test.mjs
+# append median: entry 10-19 3.893 ms, entry 1000-1009 3.687 ms (x0.95); uncached at 1015: 34.767 ms
+✔ SY5: append time for entry 1000 is within a small constant factor of entry 10 (3324.306055ms)
+✔ SY5: an external edit after caching is still caught, even with the mtime put back (32.39413ms)
+✔ SY5: another writer's append is verified, and the cache follows it (17.119642ms)
+✔ SY5: on the cached path the frontier still re-derives, and its payloads and the authority's are re-hashed (36.897307ms)
+✔ SY5: a lock left by a writer that died on this host is broken, logged, and the append goes ahead (60.353951ms)
+✔ SY5: a live holder is waited for with backoff, then refused; an old lock from elsewhere is broken (365.116826ms)
+✔ SY5: a holder whose lock was broken does not remove the next holder's lock (7.132879ms)
+✔ canonical JSON: sorted keys and the digests recorded before the move (2.884021ms)
+✔ canonical JSON refuses what is not plain finite JSON (1.243014ms)
+✔ the committed status ledger, written before the move, verifies against its pinned genesis (264.874899ms)
+✔ edge policy: what every form accepts, and how it writes it (0.521474ms)
+✔ edge policy: the two key orders, and the only -0 difference (0.496297ms)
+✔ edge policy: every form refuses what is not plain JSON, loudly and with the path (2.731951ms)
+✔ entries from several authors chain, and every one re-derives on verify (22.944838ms)
+✔ an entry that does not re-derive is refused before it is written (9.409503ms)
+✔ the registry is closed, and a kind names who may author it (11.238348ms)
+✔ an entry is signed by its own author: a key cannot write as another seat (11.610764ms)
+✔ a citation must point earlier in the chain (7.699942ms)
+✔ editing, reordering, deleting or truncating anything is caught on verify (30.321465ms)
+✔ checkpoints let verification resume, while any edit before them is still caught (36.454932ms)
+✔ an append refuses to extend a ledger that no longer verifies (5.813838ms)
+✔ K2: a ledger is trusted only through the genesis the reader pinned (6.276084ms)
+✔ K2: only an operator changes the authority, and a revoked key signs nothing after it (15.339857ms)
+✔ view.entries() lists only the entries before the one being checked, in chain order (14.73917ms)
+✔ RU2: an authority entry before a checkpoint is verified, so a forger cannot name itself orderer (9.106617ms)
+✔ ME1: the orderer cannot author an entry in a seat's name (4.764716ms)
+✔ L2: a seat that co-signs its own entry without the orderer key is refused (15.181331ms)
+✔ L3: the orderer cannot fork: a validly co-signed entry on the wrong parent is refused (20.325058ms)
+✔ L5: a checkpoint that does not commit to the chain before it is refused (21.470109ms)
+✔ a reader checks a declared domain it does not supply structurally, reports it, and never appends it (37.505235ms)
+✔ a forged foreign entry is refused structurally: an altered payload, a forged signature, an unknown author (19.259421ms)
+✔ the registry stays closed: an undeclared kind, an incomplete composition and a kind in two domains are refused (21.196027ms)
+✔ a declaration applies from its entry on, and a kind can report a part it could not re-derive (18.853333ms)
+✔ the ledger home declares a composition's domains: in genesis, and before the first entry of one added later (26.614325ms)
+✔ first use creates the ledger, pins its genesis and holds the keys owner-only, outside the chain (21.928558ms)
+✔ a home is refused when it is not the pinned one, has lost its anchor, or its keys are exposed or swapped (13.274622ms)
+✔ rotateKey revokes an admitted key and admits a new one; earlier entries still verify (33.719071ms)
+✔ the key store refuses to overwrite a held key except by explicit rotation (1.436314ms)
+✔ a proposal is made against the latest status without any key, and is well formed or refused (27.796501ms)
+✔ apply records the status with evidence using keys it only reads; a stale proposal is refused (50.704045ms)
+✔ apply refuses a cited ledger it is told about but cannot find (14.523255ms)
+✔ the evidence field is optional, validated when present, and statuses without it are unchanged (25.316558ms)
+✔ a reader never creates a status ledger it was pointed at by mistake (0.74687ms)
+✔ statuses chain per item and the board is the latest of each (43.841644ms)
+✔ the standing rule: a hold names something outside the work, or an unresolved dependency (39.552608ms)
+✔ the board can be verified by anyone and changed only by a key holder; edits are caught (13.5839ms)
+✔ owner_role is optional, and when present names a chair or decision-authority (20.106711ms)
+ℹ tests 47
+ℹ suites 0
+ℹ pass 47
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3945.247352
+> pantheon@0.0.0 test
+> node --test --test-concurrency=2
+ℹ tests 1395
+ℹ suites 10
+ℹ pass 1395
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 193774.656995
