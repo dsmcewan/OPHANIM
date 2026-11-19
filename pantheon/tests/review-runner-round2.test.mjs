@@ -145,8 +145,10 @@ test("detectWsl: the kernel release or WSL_DISTRO_NAME; the launcher is the oper
   assert.deepEqual(detectWsl({ env: {}, osrelease: "6.18.44-fc-v653" }), { wsl: false, evidence: [] });
   const l = codexOuterLauncher({ bwrap: "/usr/bin/bwrap", codex: "/n/vendor/bin/codex", writable: ["/h/.cache/ophanim-review/run-x", "/h/.codex"], readOnly: ["/n/vendor/bin"] });
   // The operator's launch (findings-1-openai-77480d6/operator-launch.json), with codex in place of the whole runner.
-  assert.deepEqual(l.argv.slice(0, 13), ["/usr/bin/bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp"]);
-  assert.deepEqual(l.argv.slice(-2), ["--", "/n/vendor/bin/codex"]);
+  // The whole argv: the fixed head, then each bind parent-first with the flag that makes it writable or read-only, then codex.
+  assert.deepEqual(l.argv, ["/usr/bin/bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp",
+    "--bind", "/h/.codex", "/h/.codex", "--ro-bind", "/n/vendor/bin", "/n/vendor/bin", "--bind", "/h/.cache/ophanim-review/run-x", "/h/.cache/ophanim-review/run-x",
+    "--", "/n/vendor/bin/codex"]);
   assert.deepEqual(l.writable, ["/h/.codex", "/h/.cache/ophanim-review/run-x"]);
   assert.match(l.script, /^#!\/bin\/sh\n.*\nexec '\/usr\/bin\/bwrap' '--die-with-parent' .* '--' '\/n\/vendor\/bin\/codex' "\$@"\n$/s);
   assert.throws(() => codexOuterLauncher({ bwrap: "bwrap", codex: "/c", writable: [] }), /not an absolute path/);
@@ -170,6 +172,11 @@ test("on WSL (detected, or --codex-outer-runtime on) codex and every preflight r
   assert.equal(r.plan.preflight.checks.permission_profile.ok, true, "the exact-profile check passes through the launcher");
   assert.equal(r.sdk[0].codexPathOverride, o.launcher, "the SDK spawns the launcher");
   assert.ok(!r.sdk[0].env_names.includes("WSL_INTEROP"));
+  // The outer launcher's whole argv: the fixed head, codex's directory read-only, the run dir, the scratch TMPDIR and
+  // CODEX_HOME writable (parent-first), then codex and the placeholder for the arguments the SDK passes.
+  const runDir = join(r.plan.worktree.path, ".."), codexHome = join(f.home, ".codex");
+  assert.deepEqual(o.argv, [o.argv[0], "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp",
+    "--ro-bind", f.bin, f.bin, "--bind", runDir, runDir, "--bind", r.plan.scratch_tmp.path, r.plan.scratch_tmp.path, "--bind", codexHome, codexHome, "--", f.clis.codex, "<codex arguments>"]);
   assert.deepEqual(r.plan.argv.slice(0, 13), [o.argv[0], "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp"]);
   assert.ok(o.writable.includes(r.plan.scratch_tmp.path) && o.writable.some(p => p.endsWith("/.codex")));
   const h = headerOf(await r.read("findings-2-openai.md"));

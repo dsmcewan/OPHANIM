@@ -157,11 +157,21 @@ test("identity: an Antigravity lane and its metered API failover are one model",
     const keys = contributorKeys([{ vendor: "agy_google", model: lane }]);
     assert.match(candidateRefusal({ vendor: "agy_google", model: api }, keys), /contributed to the change under review/);
   }
-  // Every lane in a ladder has an API failover of the same identity, where the registry has an id for its base.
+  // Every lane in a ladder has an API failover of the same identity, where the registry has an id for its base; where it
+  // has none, none. Which case a lane is in is read from the registry, so a lane that loses (or wrongly gains) its
+  // failover fails here instead of being skipped.
+  const withFailover = [];
   for (const d of D) for (const s of IMPLEMENTER_LADDERS[d]) {
+    const base = resolveModel(s.vendor, s.model).id.split("/")[1];
+    const apiId = registryModels().some(r => r.vendor === s.vendor && r.model === base);
     const spare = quotaFailoverFor(s.model);
-    if (spare) assert.equal(resolveModel(spare.vendor, spare.model).id, resolveModel(s.vendor, s.model).id);
+    if (apiId) {
+      assert.ok(spare, `${s.model}: the registry has an API id for ${base}, so the lane has a quota failover`);
+      assert.equal(resolveModel(spare.vendor, spare.model).id, resolveModel(s.vendor, s.model).id);
+      withFailover.push(s.model);
+    } else assert.equal(spare, null, `${s.model}: the registry has no API id for ${base}, so no failover`);
   }
+  assert.ok(withFailover.length > 0, "the ladders hold lanes with a failover: the identity check above ran");
 });
 
 test("gemini-4-hydrogen is seated; both Orchestrator ids stay undeclared", () => {

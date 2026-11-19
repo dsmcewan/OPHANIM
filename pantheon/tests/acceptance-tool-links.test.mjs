@@ -34,7 +34,8 @@ test("the sandbox resolves this host's /usr/bin/python3 however it is linked", a
   catch { return t.skip("no /usr/bin/python3 on this host"); }
   t.diagnostic(`/usr/bin/python3 -> ${link ?? "(regular file)"}`);
   if (link?.startsWith("/etc/alternatives/")) {
-    assert.deepEqual(toolLinkBinds().slice(0, 3), ["--ro-bind", "/etc/alternatives", "/etc/alternatives"]);
+    // The whole list: the alternatives bind, read-only, and nothing else (an extra bind past it is a widened sandbox).
+    assert.deepEqual(toolLinkBinds(), ["--ro-bind", "/etc/alternatives", "/etc/alternatives"]);
   }
   const worktree = mkdtempSync(join(tmpdir(), "pantheon-toollinks-run-"));
   try {

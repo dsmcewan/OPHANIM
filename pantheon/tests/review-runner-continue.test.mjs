@@ -178,7 +178,6 @@ test("codex: a failed run is continued by resuming its own thread (the SDK's res
   assert.match(r2.out.err, /coverage gate: no test ran although the testing limit allows tests: the codex transport runs no test/);
   assert.equal(r2.plan.continue.method, "codex-sdk-resume");
   assert.equal(r2.plan.continue.thread_id, t1.cli.thread_id);
-  assert.deepEqual(r2.plan.argv.slice(-3, -1), ["resume", t1.cli.thread_id], "the SDK puts resume after the exec-level --cd/--sandbox");
   const ran = r2.sdk.find(c => c.kind === "run");
   assert.equal(ran.resume_id, t1.cli.thread_id);
   assert.deepEqual([ran.thread_options.workingDirectory, "sandboxMode" in ran.thread_options, ran.thread_options.approvalPolicy], [r2.plan.worktree.path, false, "never"]);
@@ -188,6 +187,11 @@ test("codex: a failed run is continued by resuming its own thread (the SDK's res
   assert.deepEqual(r2.plan.preflight.checks.permission_profile.cwd, r2.plan.worktree.path);
   assert.notEqual(t1.argv[t1.argv.indexOf("--cd") + 1], r2.plan.worktree.path, "the earlier worktree is gone; the resumed thread works in the rebuilt one");
   const prompt = await readFile(promptFile, "utf8");
+  // The plan's whole argv: this run's exec-level flags (the permission profile as the SDK was given it, the NEW worktree,
+  // approval never), then resume of the earlier thread, then the stdin marker naming the digest of the prompt the SDK sent.
+  assert.deepEqual(r2.plan.argv, [f.clis.codex, "exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', ...made.config_overrides.flatMap(c => ["--config", c]),
+    "--model", "gpt-6-astra", "--cd", r2.plan.worktree.path, "--skip-git-repo-check", "--config", 'approval_policy="never"', "resume", t1.cli.thread_id, `(stdin: <prompt sha256:${sha(prompt)}>)`],
+  "the SDK puts resume after the exec-level --cd/--sandbox");
   assert.ok(prompt.startsWith(CLI_CONTINUE_NOTE), "a resumed thread gets the continuation note, then the same prompt");
   assert.ok(!prompt.includes(APPENDIX_BEGIN), "no replayed appendix: the thread has its own history");
   const md = await readFile(join(f.outDir, "findings-2-openai.md"), "utf8");
@@ -257,7 +261,12 @@ test("agy: an incomplete run keeps its conversation state; --continue passes --c
   const r2 = await sub(f, { n: 1, args: ["--agy-cli", cli, "--continue", join(f.outDir, "findings-1-google.transcript.json")], env: { ...env, FAKE_AGY_WORKER: second } });
   assert.equal(r2.code, EXIT.complete, r2.out.err);
   assert.equal(r2.plan.continue.method, "agy --conversation");
-  assert.deepEqual(r2.plan.argv.slice(r2.plan.argv.indexOf("--conversation"), r2.plan.argv.indexOf("--conversation") + 2), ["--conversation", "conv-1"]);
+  // The whole argv of the continued run: the earlier conversation resumed, and every other flag as on a first run (the
+  // slash commands still disabled, the new worktree, the prompt only by its digest).
+  const wt2 = r2.plan.worktree.path;
+  assert.deepEqual(r2.plan.argv, ["<bwrap jail prefix>", cli, "--agent", "pantheon-reviewer-agent", "--conversation", "conv-1", "--model", "gemini-4-carbon-high", "--mode=accept-edits",
+    "--add-dir", wt2, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", `${r2.plan.print_timeout_s}s`,
+    "--log-file", join(wt2, "..", "control", "run", "agy.log"), "--print", `<prompt sha256:${r2.plan.prompt.sha256}>`]);
   assert.equal((await readFile(join(fx, "agy.log.resume"), "utf8")).trim(), "conv-1 state-restored tests-restored");
   const h = header(await readFile(join(f.outDir, "findings-1-google.md"), "utf8"));
   assert.match(h, /- continuation_method: agy --conversation \(conversation `conv-1`, state restored\)/);

@@ -82,10 +82,14 @@ for (const form of ["direct", "wrapped"]) {
     const dirsBefore = probeDirs();
     // An AMBIENT agy (as on the owner's machine, 2026-11-19): a process named agy that is not this test's, running
     // throughout. The probe lists it (it is a host-wide listing), and the test must not count it as its own.
+    // The decoy is this Node binary under the name agy (ps lists it as <decoyDir>/agy), so it runs on every host the
+    // suite runs on: the ambient-process check below is made on every run, never skipped for want of a binary.
     const decoyDir = realpathSync(mkdtempSync(join(tmpdir(), "pantheon-ambient-agy-")));
-    symlinkSync("/usr/bin/sleep", join(decoyDir, "agy"));
-    const decoy = existsSync("/usr/bin/sleep") ? spawn(join(decoyDir, "agy"), ["300"], { stdio: "ignore" }) : null;
-    t.after(() => { decoy?.kill("SIGKILL"); rmSync(decoyDir, { recursive: true, force: true }); });
+    symlinkSync(process.execPath, join(decoyDir, "agy"));
+    const decoy = spawn(join(decoyDir, "agy"), ["-e", "setTimeout(() => {}, 300_000)"], { stdio: "ignore" });
+    let decoyError = null;
+    decoy.on("error", e => { decoyError = e; });
+    t.after(() => { decoy.kill("SIGKILL"); rmSync(decoyDir, { recursive: true, force: true }); });
     const r = await probe(s, { FAKE_PROBE_MCP: form, FAKE_AGY_GEMINI_WRITES: form === "direct" ? "1" : "refresh" });
     assert.deepEqual(r.summary.aborted, null, JSON.stringify(r.summary.aborted));
     const o = r.summary;
@@ -183,7 +187,8 @@ for (const form of ["direct", "wrapped"]) {
     assert.deepEqual(o.gemini_state.host_changes, []);
     for (const k of ["before", "after"]) assert.ok(Array.isArray(o.gemini_state.host_agy_processes[k].processes), `ps ran ${k} the turn`);
     assert.deepEqual([ownAgy(s, o.gemini_state.host_agy_processes.before), ownAgy(s, o.gemini_state.host_agy_processes.after)], [[], []], "none of this test's agy processes outlived its command");
-    if (decoy) assert.ok(o.gemini_state.host_agy_processes.before.processes.some(p => p.pid === decoy.pid), "the ambient agy was listed (host-wide) and did not fail the test");
+    assert.ok(Number.isInteger(decoy.pid) && decoyError === null, `the ambient agy decoy is running: ${decoyError?.message ?? `pid ${decoy.pid}`}`);
+    assert.ok(o.gemini_state.host_agy_processes.before.processes.some(p => p.pid === decoy.pid), "the ambient agy was listed (host-wide) and did not fail the test");
     assert.deepEqual(w.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.changed]),
       [["antigravity-oauth-token", false], ["installation_id", false], ["jetbox_summaries_proto.pb.<rand>.tmp", true], ["settings.json", false]]);
     assert.deepEqual(w.writable_copies, { "config/projects": [{ path: "default-cli-project.json", size: 2, copied: true, changed: true }] }, "the preflight's project write landed in the copy");
