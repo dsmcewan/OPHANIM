@@ -67,7 +67,7 @@ test("a fabricated checkpoint (shape-valid digests, a reviewer that never review
   const plan = [unit("a")], checkpoints = { dir: join(env.root, "checkpoints") };
   const go = name => runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats(), turns: scripted({ plan }).turns, dir: join(env.root, name), run_id: name, checkpoints, planner: PLANNER });
   const base = (await sh("git rev-parse HEAD", env.repo)).trim(), tree = (await sh("git rev-parse HEAD^{tree}", env.repo)).trim();
-  const forged = { unit_key: unitKey({ unit: plan[0], base_commit: base }), unit_id: "a", base_commit: base, unit_base_commit: base, commit: base, tree, upstream: [],
+  const forged = { unit_key: unitKey({ unit: plan[0], base_commit: base, plan }), unit_id: "a", base_commit: base, unit_base_commit: base, commit: base, tree, upstream: [],
     review_digest: "sha256:" + "0".repeat(64), rubric_hash: "sha256:" + "1".repeat(64), reviewer: { vendor: "invented", model: "never-reviewed", served_model: null },
     verify: { cmd: plan[0].verify_cmd, exit_code: 0 }, contributions: [{ kind: "work", role: "implementer", vendor: "invented", model: "never-wrote", served_model: null }] };
   // Written by someone without the controller's checkpoint key (any key but this run's).
@@ -86,7 +86,7 @@ test("a fabricated checkpoint (shape-valid digests, a reviewer that never review
   writeFileSync(file, JSON.stringify({ ...swapped, seal: checkpoint.sealOf(swapped, key) }, null, 2));
   const two = await go("two");
   assert.equal(two.units.a.resumed, false);
-  assert.match(two.units.a.checkpoint_rejected?.why ?? "", /reviewer openai\/gpt-0-never-seated is not on the unit's reviewer ladder/);
+  assert.match(two.units.a.checkpoint_rejected?.why ?? "", /reviewer openai\/gpt-0-never-seated is not on the unit's reviewer ladder|asked as gpt-0-never-seated and served by gpt-6-luna: this run's identity rule refuses it/);
   // The genuine checkpoint two wrote resumes.
   const three = await go("three");
   assert.deepEqual([three.units.a.resumed, three.provider_calls.total], [true, 0]);

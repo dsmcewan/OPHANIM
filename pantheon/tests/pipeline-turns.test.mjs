@@ -162,7 +162,11 @@ test("meteredFailover: false -- a proven QUOTA refusal is NOT answered by the me
     assert.equal(at.code, "QUOTA_EXHAUSTED");
     assert.ok(at.lane_failures.every(f => f.cause === "quota"));
     assert.deepEqual([at.quota_failover.used, at.quota_failover.disabled], [false, true]);
-    assert.deepEqual(agy.agy().map(a => a.model), ladder, "each subscription lane was tried once; none fell over to the API");
+    // The ladder is one base model's thinking levels, and Antigravity's quota is the base model's: after its quota
+    // refusal the same model's other levels are not launched (independent review round 2, assignment 3 (Google
+    // gemini-4-carbon, manual, 77480d6), finding 5.1); the ladder is exhausted and nothing fell over to the API.
+    assert.deepEqual(agy.agy().map(a => a.model), [ladder[0]], "the quota-refused base model was tried once; none fell over to the API");
+    assert.deepEqual(out.units.a.escalations.filter(e => e.kind === "lane_failover"), [], "no rung on another base model was left");
   });
 });
 

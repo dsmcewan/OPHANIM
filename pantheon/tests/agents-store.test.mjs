@@ -133,6 +133,6 @@ test("the cap exception is per MODEL, not per role -- the store cannot diverge f
 test("the agy_google reviewer resolves toolless:false while the xai reviewer does not", () => {
   // Same role, two labs, opposite preambles -- this is the pair that proves the merge is real
   // rather than a role-level constant wearing a vendor's name.
-  assert.equal(getAgent("reviewer@agy_google/gemini-3.6-flash").tuning.toolless, false);
+  assert.equal(getAgent("reviewer@agy_google/gemini-3.8-flash-high").tuning.toolless, false);
   assert.equal(getAgent("reviewer@xai/grok-4.7").tuning.toolless, true);
 });

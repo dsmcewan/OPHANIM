@@ -237,7 +237,12 @@ test('CONFIRMED with metered_gemini_failover: false: a quota refusal on every la
     assert.ok(rec.blockers.some(b => b.blocker?.code === 'PIPELINE_UNITS_UNRESOLVED'));
     const attempts = rec.served_identities.filter(s => s.source === 'pipeline.json' && s.role === 'implementer');
     assert.ok(attempts.length && attempts.every(a => a.quota_failover?.used === false && a.quota_failover.disabled === true), JSON.stringify(attempts));
-    assert.deepEqual(modelTurns(repo).map(l => l.split(' ')[1]), implementerPath('easy').map(s => s.model), 'each subscription lane once, then blocked');
+    // Each subscription BASE MODEL once, then blocked: after a quota refusal the same base model's other thinking levels
+    // share its quota and are not launched (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
+    // 77480d6), finding 5.1).
+    const seenBase = new Set();
+    const bases = implementerPath('easy').map(s => s.model).filter(m => { const b = m.replace(/-(low|medium|high|xhigh)$/, ''); return !seenBase.has(b) && seenBase.add(b); });
+    assert.deepEqual(modelTurns(repo).map(l => l.split(' ')[1]), bases, 'each subscription base model once, then blocked');
     assert.match(rec.acceptance.reasons[0], /did not reach its outcome/);
     assert.equal(rec.verification.ok, true);
   });

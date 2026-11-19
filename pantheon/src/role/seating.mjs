@@ -284,7 +284,11 @@ export const SEATING = {
         "harness has actually called and had answer (2026-09-27)" },
     // The isolation tail: if the implementer is ever seated on xai, grok cannot review its own lab.
     // These are RESEATS, not lesser reviewers -- the chair has to have somewhere to go.
-    { vendor: "agy_google", model: modelId("google", "gemini-3.6-flash"), band: "easy", basis: "ISOLATION",
+    // An Antigravity seat names a DECLARED LANE (config/lanes.json): gemini-3.6-flash has none, so seated here it was
+    // served by the metered Gemini API even with the metered failover off (independent review round 2, assignment 3
+    // (Google gemini-4-carbon, manual, 77480d6), finding 6). Every agy_google seat of this table names a lane, or an
+    // API id that has one (tests/reliability-r2-a3.test.mjs).
+    { vendor: "agy_google", model: AGY_GEMINI_HIGH, band: "easy", basis: "ISOLATION",
       why: "the reseat when the implementer holds the xai lab; a reviewer may never share the maker's" },
     { vendor: "anthropic", tier: "default", basis: "ISOLATION",
       why: "last reseat, same reason: what disqualifies a reviewer is the lab it shares, never its size" },
@@ -311,7 +315,8 @@ export const SEATING = {
         "participate, so this order is a starting point that assertJudgeEligible overrides" },
     { vendor: "openai", tier: "strong", basis: "ISOLATION",
       why: "same rule: eligible only when openai produced none of what is being judged" },
-    { vendor: "agy_google", tier: "default", basis: "ISOLATION",
+    // A lane, not the router's tier default: gemini-3.6-flash has no Antigravity lane (finding 6, above).
+    { vendor: "agy_google", model: AGY_GEMINI_HIGH, basis: "ISOLATION",
       why: "same rule; a cheap judge is acceptable because judging reads rather than produces" },
     { vendor: "xai", tier: "default", basis: "ISOLATION",
       why: "same rule; last resort, and if every vendor participated there is no clean judge at all" },

@@ -75,7 +75,7 @@ test('the service runs ticks until stopped, writes its status and log, ticks onl
     assert.equal(calls.length, 3, 'the cap holds across restarts');
     const st = JSON.parse(fs.readFileSync(path.join(config.stateDir, 'service-status.json'), 'utf8'));
     assert.equal(st.state, 'stopped');
-    assert.equal(fs.existsSync(path.join(config.stateDir, 'service.lock')), false, 'the lock is released on stop');
+    assert.equal(fs.existsSync(path.join(config.workRoot, 'service.lock')), false, 'the lock is released on stop');
   } finally { s.done(); }
 });
 

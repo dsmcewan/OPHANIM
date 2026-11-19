@@ -108,7 +108,13 @@ test("argo was re-pinned 2026-11-17 when its Google seats went through Antigravi
   // RE-PINNED AGAIN the same day, from sha256:ab6ad2bd...2969, when the unbanded Antigravity Gemini fallbacks
   // were appended to the planner and implementer ladders (owner direction: "seat Carbon and the other Gemini
   // ids through Antigravity"). They trail every candidate list below and lead none.
-  assert.equal(selectionPolicy("legacy").hash, "sha256:87225451d514070ffba7a5468174b8230aa3343988a58a73fc748f83b9208df9");
+  // RE-PINNED 2026-11-19, from sha256:87225451...8df9, when the reviewer reseat and the judge's Google seat moved from
+  // gemini-3.6-flash (no Antigravity lane: served by the metered Gemini API even with the metered failover off) to the
+  // gemini-3.8-flash-high lane (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+  // finding 6). The legacy policy hashes the seating tables.
+  assert.equal(selectionPolicy("legacy").hash, "sha256:0000f574015cf50f5ebcd93e7284df2581412546035a516296a49c4a2724d7e3");
+  assert.notEqual(selectionPolicy("legacy").hash, "sha256:87225451d514070ffba7a5468174b8230aa3343988a58a73fc748f83b9208df9",
+    "the legacy policy that seated gemini-3.6-flash is a different policy and must not be reported under the same hash");
   assert.notEqual(selectionPolicy("legacy").hash, "sha256:ab6ad2bdb11347f3b79d188a78219e35c898c6db92eb4599e2a8f503f7ae2969",
     "the legacy policy from before the Antigravity Gemini fallbacks is a different policy and must not be reported under the same hash");
   assert.notEqual(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d",

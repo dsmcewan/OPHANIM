@@ -24,11 +24,14 @@ export async function liveTurn({ label = "cycle-review", meteredFailover = true 
   const clients = new Map();
   // `extra` carries per-seat request options (e.g. reasoning.context for an OpenAI reviewer); only OpenAI receives it.
   // `signal` aborts the in-flight request (a stage stopped at its elapsed budget does not wait for it).
-  const api = async ({ vendor, model, prompt, extra = null, signal = undefined }) => {
+  const api = async ({ vendor, model, prompt, extra = null, signal = undefined, charge = null }) => {
     if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
     signal?.throwIfAborted();
     const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-${label}`,
-      ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}) });
+      ...(vendor === "openai" && extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
+      // Every billed request after the turn's first (a continuation hop, a compaction) is charged before it is sent;
+      // a refused charge refuses it (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.1).
+      ...(typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     // sendTurn's served_model is the model named by the provider's own response: marked "provider" (a pipeline seat
     // labels a served name with no source "unknown", pipeline/turns.mjs).

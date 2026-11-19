@@ -18,7 +18,7 @@
 
 - **`limits.total_provider_calls` is required.** It caps every provider call the work ledger records over its lifetime, failed and resumed attempts included, across restarts. Usage that was not recorded counts at the claim's full budget.
 - **The other limits** are per tick, with the same meanings as for `tick`: `stage_provider_calls`, `iterations`, `elapsed_ms`, `stage_attempts` and `concurrency`.
-- **One instance per work ledger.** A lock file holds the pid and host.
+- **One instance per work ledger.** A lock file in the work ledger's root (`<work_ledger>/service.lock`, whatever the `state_dir`) holds the pid and host.
   - A second service is refused.
   - A dead process's lock on this host is taken over, and the takeover is logged.
   - A lock held from another host is refused.

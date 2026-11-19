@@ -64,7 +64,17 @@ export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra 
   const isLane = transport === "agy-cli";
   const sig = signal ? { signal } : {};
   const viaLane = isLane ? { vendor, model } : vendor === "agy_google" && transport === "api" && laneLevels(model).length ? laneFor(model, seat?.effort ?? null) : null;
-  if (!viaLane) return api({ vendor, model, prompt, seat, extra, ...sig });
+  // A Gemini seat with NO declared lane can only be answered by the metered API. With the metered failover off that is
+  // refused, never called: the caller's budget allows no metered Gemini spend, and the seat stays unanswered (its stage
+  // pending, with this reason) rather than silently spending it (independent review round 2, assignment 3 (Google
+  // gemini-4-carbon, manual, 77480d6), finding 6).
+  if (!viaLane && failover === false && vendor === "agy_google") {
+    throw Object.assign(new Error(`agy_google/${model} has no declared Antigravity lane (config/lanes.json), and the metered Gemini API is disabled for this run (metered failover off): the seat is not called`),
+      { code: "AGY_NO_LANE", quota_failover: { used: false, disabled: true, lanes: [], rule: "metered Gemini API failover disabled by the caller" } });
+  }
+  // `charge` reaches the API seat too: every billed request after the turn's first is admitted by it (finding 1.1).
+  const ch = typeof charge === "function" ? { charge } : {};
+  if (!viaLane) return api({ vendor, model, prompt, seat, extra, ...sig, ...ch });
   const spare = isLane ? quotaFailoverFor(model) : { vendor, model, effort: seat?.effort ?? null };
   try {
     const r = await lane({ vendor: viaLane.vendor, model: viaLane.model, prompt, seat, ...sig });
@@ -81,7 +91,7 @@ export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra 
     } catch (refusal) {
       throw Object.assign(e, { quota_failover: { used: false, refused: String(refusal?.message ?? refusal).slice(0, 300), lanes: [viaLane.model], rule: QUOTA_FAILOVER_RULE, after } });
     }
-    const r = await api({ vendor: spare.vendor, model: spare.model, prompt, seat, ...sig });
+    const r = await api({ vendor: spare.vendor, model: spare.model, prompt, seat, ...sig, ...ch });
     return { ...r, transport: "api", requested_model: model,
       quota_failover: { used: true, base: spare.model, lanes: [viaLane.model], rule: QUOTA_FAILOVER_RULE,
         after } };
