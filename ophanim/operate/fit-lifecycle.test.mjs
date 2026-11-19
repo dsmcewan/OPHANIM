@@ -23,7 +23,7 @@ import {applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
 import {tick} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
-import {makeExecutors, implementerPath, REVIEW_INDEPENDENCE} from './stages.mjs';
+import {makeExecutors, implementerPath, mayDelegate, REVIEW_INDEPENDENCE} from './stages.mjs';
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
 import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer} from '../../pantheon/src/route/frontier.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
@@ -212,6 +212,15 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
     for (const l of kinds('unit-review')) assert.deepEqual(l.extra, {reasoning: {context: 'all_turns'}});
     assert.ok(reconcile({repo, statusRoot: f.statusRoot, workLedger: w}).items.every(i => i.gate.gate === 'complete'));
   });
+});
+
+test('a native subagent is predicted as a contributor only where the unit\'s starting implementer may delegate: a ceiling above none AND a specialist type the unit allows', () => {
+  const u = (difficulty, allowed_subagents) => UNIT('x', {difficulty, allowed_subagents});
+  assert.equal(mayDelegate(u('hard', ['code-explorer'])), true, 'Carbon (8) with an allowed type');
+  assert.equal(mayDelegate(u('medium', ['test-constructor'])), true, 'Neon (4) with an allowed type');
+  assert.equal(mayDelegate(u('easy', ['code-explorer'])), false, 'a Hydrogen implementer delegates to none');
+  assert.equal(mayDelegate(u('hard', [])), false, 'the unit allows none');
+  assert.equal(mayDelegate(u('hard', ['api-designer'])), false, 'a name that is not a specialist type the controller pins is no subagent');
 });
 
 const FINDING = 'export ok as a frozen constant; a comment must say why';

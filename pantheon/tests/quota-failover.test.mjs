@@ -177,6 +177,22 @@ test("fit through the real dispatcher: the Google implementer is the Gemini API 
   });
 });
 
+test("fit through the real dispatcher: a seat that names the SDK transport was seated by hand and is refused before any call; no lane and no API turn stands in for it", async () => {
+  // The selector never hands this board an SDK seat (it gives the matrix's model as one Gemini API turn, above). A seat
+  // that still names the transport came from a caller. Running it down the lane path would start the agy CLI under the
+  // name of the SDK transport, the very substitution the migration forbids.
+  await withDispatch(async ({ spec, opts, calls, agy }) => {
+    const r = await runOpenItem(spec("fitSdkByHand", { difficulty: "hard" }), opts({ profile: "fit",
+      seatOverrides: { implementer: seat("agy_google", "gemini-4-carbon", { transport: "antigravity-sdk" }) } }));
+    assert.equal(r.shipped, false);
+    assert.equal(r.error.stage, "work");
+    assert.match(r.error.message, /seat of the Antigravity SDK transport.*the per-file board does not run it\. Nothing is run in its place/);
+    assert.equal(runJson(r).turns.filter(t => t.purpose === "work").length, 0, "no work turn is on the record");
+    assert.deepEqual(agy().filter(a => a.agent === "pantheon-implementer"), [], "no agy CLI lane was started under the SDK transport's name");
+    assert.deepEqual(calls.filter(c => WORK.test(c.prompt)), [], "and no API turn wrote the work in its place");
+  });
+});
+
 test("a single-turn seat: lane first; the API only as the lane's quota failover, and it says so", async () => {
   const asked = [];
   const api = async ({ vendor, model }) => { asked.push(`api:${vendor}/${model}`); return { text: "from api", response_id: "r1", served_model: model }; };

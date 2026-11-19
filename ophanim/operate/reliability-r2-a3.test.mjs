@@ -65,7 +65,7 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   // Unit a's implementer is an Antigravity SDK seat (Carbon), whose session was admitted one native code-explorer
   // subagent (owner direction 2026-11-19): the receipt is that subagent, as the controller's governor recorded it.
   const CARBON = {vendor: 'agy_google', model: 'gemini-4-carbon', transport: 'antigravity-sdk', effort: 'high'};
-  const plan1 = [unit('a', {difficulty: 'hard', allowed_subagents: ['code-explorer']}), unit('b')];
+  const plan1 = [unit('a', {difficulty: 'hard', allowed_subagents: ['code-explorer', 'dependency-analyst']}), unit('b')];
   const base = seats();
   const hardSeats = seats({dispatcher: u => ({vendor: 'openai', model: u.difficulty === 'hard' ? 'gpt-6-astra' : 'gpt-6-luna'}),
     implementer: u => (u.unit_id === 'a' ? {seat: {...CARBON}, ladder: [{...CARBON}]} : base.implementer(u)), reviewerLadder: d => [d]});
@@ -76,6 +76,8 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
     assert.equal(g.admit({call_id: 'call-1', trajectory_id: 'root', args: {Subagents: [{TypeName: 'code-explorer', Role: 'caller finder', Prompt: prompt}]}}).allow, true);
     g.observe({event: 'child_started', trajectory_id: 'child-1', parent_trajectory_id: 'root', prompt});
     for (const state of ['RUNNING', 'FULLY_IDLE']) g.observe({event: 'trajectory_state', trajectory_id: 'child-1', parent_trajectory_id: 'root', depth: 1, state});
+    // A second specialist was ADMITTED but never started (the runtime reported no child for it): admitted is not ran.
+    assert.equal(g.admit({call_id: 'call-2', trajectory_id: 'root', args: {Subagents: [{TypeName: 'dependency-analyst', Role: 'edges', Prompt: 'Trace what imports the unit\'s module and report each edge with its path.'}]}}).allow, true);
     return {subagents: {...g.record(), blocked: null}, gateway: {served_models: {'gemini-4-carbon': ['gemini-4-carbon'], 'gemini-4-hydrogen': ['gemini-4-hydrogen']}}};
   };
   const write = async args => {
@@ -94,8 +96,10 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   const stageOf = name => [{hash: 'sha256:' + '2'.repeat(64), stage: 'implement', status: 'passed', outputs: {run: {kind: 'pipeline', dir: path.join(env.root, name), record: path.join(env.root, name, 'pipeline.json')}}}];
   const fresh = subagentReceipt(stageOf('r1'), REQUIRED);
   assert.deepEqual([fresh.met, fresh.calls[0].type, fresh.calls[0].implementer, fresh.calls[0].from_checkpoint], [true, 'code-explorer', 'gemini-4-carbon', undefined], JSON.stringify(fresh));
-  // Another type, or another model, is not that receipt.
+  // Another type is not that receipt, and neither is a specialist that was admitted but never started.
   assert.equal(subagentReceipt(stageOf('r1'), {...REQUIRED, type: 'test-constructor'}).met, false);
+  const unstarted = subagentReceipt(stageOf('r1'), {...REQUIRED, type: 'dependency-analyst'});
+  assert.deepEqual([unstarted.met, unstarted.counted, unstarted.all_calls_recorded.filter(c => c.type === 'dependency-analyst').map(c => c.started)], [false, 0, [false]]);
 
   // 7.3: the same plan again: unit a resumes, and its subagent is still on the accepted record.
   const s2 = scripted({plan: plan1, implement: write});

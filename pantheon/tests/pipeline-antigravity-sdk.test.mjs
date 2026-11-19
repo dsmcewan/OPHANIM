@@ -58,9 +58,9 @@ function governed(args, spawned = []) {
   });
   return { ...g.record(), blocked: null };
 }
-const gatewayOf = (args, { root = 0, subs = 0, served = args.seat.model, stop = null } = {}) => ({ root: { model: args.seat.model }, subagents: { model: "gemini-4-hydrogen", ceiling: subs ? 8 : 0 },
+const gatewayOf = (args, { root = 0, subs = 0, served = args.seat.model, subServed = ["gemini-4-hydrogen"], stop = null } = {}) => ({ root: { model: args.seat.model }, subagents: { model: "gemini-4-hydrogen", ceiling: subs ? 8 : 0 },
   totals: { received: root + subs, forwarded: root + subs, refused: 0, by_class: { root, subagent: subs, aux: 0 } }, sessions: [], subagent_sessions: 0,
-  served_models: { ...(root ? { [args.seat.model]: [served] } : {}), ...(subs ? { "gemini-4-hydrogen": ["gemini-4-hydrogen"] } : {}) }, budget_refusals: 0, stop, aborted: null, refusals: [] });
+  served_models: { ...(root ? { [args.seat.model]: [served] } : {}), ...(subs ? { "gemini-4-hydrogen": [...subServed] } : {}) }, budget_refusals: 0, stop, aborted: null, refusals: [] });
 const TOOL_LOG = [
   { n: 1, at: "t", tool: "view_file", who: "implementer", allow: true, code: null, reason: "a read inside the worktree" },
   { n: 2, at: "t", tool: "invoke_subagent", who: "implementer", allow: true, code: null, reason: "1 Hydrogen subagent(s) admitted (1 of 8 live)" },
@@ -73,7 +73,7 @@ const TOOL_LOG = [
  * A session that ended well, as runAntigravitySdkTurn runs one: every billed request is admitted before it is "sent"
  * (the gateway's `admit`; a refusal ends the session as PROVIDER_LIMIT), the files are written, the result returned.
  */
-async function session(args, { root = 1, spawned = [], perSubagent = 1, files = null, served = args.seat.model, source = "provider", tool_log = [], extra = {} } = {}) {
+async function session(args, { root = 1, spawned = [], perSubagent = 1, files = null, served = args.seat.model, subServed = ["gemini-4-hydrogen"], source = "provider", tool_log = [], extra = {} } = {}) {
   const subagents = governed(args, spawned);
   let n = 0;
   const bill = async (cls, type = null) => {
@@ -86,7 +86,7 @@ async function session(args, { root = 1, spawned = [], perSubagent = 1, files = 
   for (const [p, t] of Object.entries(files ?? { [`src/${args.unit.unit_id}/impl.mjs`]: "export const ok = true;\n" })) await write(args.worktree, p, t);
   const subs = subagents.instances.length * perSubagent;
   return { text: "done", structured_output: null, stop_reason: "UNSPECIFIED", served_model: served, served_model_source: source, transport: "antigravity-sdk", requested_model: args.seat.model, effort: args.seat.effort ?? null,
-    conversation_id: "conv-1", tool_calls: tool_log.length, subagents, usage: { total_token_count: 100 * (root + subs) }, trajectory_usages: null, gateway: gatewayOf(args, { root, subs, served }),
+    conversation_id: "conv-1", tool_calls: tool_log.length, subagents, usage: { total_token_count: 100 * (root + subs) }, trajectory_usages: null, gateway: gatewayOf(args, { root, subs, served, subServed }),
     availability: [{ model: args.seat.model, at: "t", available: true, status: 200, kind: null, limits: { input_token_limit: 1048576, output_token_limit: 65536 }, name: `models/${args.seat.model}`, why: null }],
     tool_log, capabilities: { trajectory_events: true, define_subagent_disabled: true }, runtime: RUNTIME, sandbox: { enabled: false, why: "disabled by the caller" }, launch: null, duration_s: 1.5, ...extra };
 }
@@ -197,8 +197,35 @@ test("the session's subagents are on the attempt record, and are subtask contrib
   assert.deepEqual(r.disk().units.a.attempts[0].session.subagents, s);
 });
 
+test("every name the provider answered under is a contributor identity, for the implementer and for its subagents: an undeclared one is never folded into the model asked for, and it leaves no reviewer eligible", async t => {
+  const rows = r => r.out.contributions.filter(c => c.kind !== "plan").map(c => [c.kind, c.role, c.model, c.served_model, c.served_model_source]);
+  const stage5 = r => [r.u.status, r.u.code, /a contributor's identity is unresolved \(([^)]+)\): no reviewer can be shown not to be it/.exec(r.u.reason)?.[1]];
+  // One request of the implementer's session was answered under a name the identity policy does not declare. The
+  // declared name stays the attempt's served model; the other is a `work` row of its own.
+  const mixed = await pipeline(t, args => session(args, { root: 2, extra: { provider_model_version: ["gemini-4-carbon-exp-0611"] } }));
+  assert.deepEqual(rows(mixed), [
+    ["work", "implementer", "gemini-4-carbon", "gemini-4-carbon", "provider"],
+    ["work", "implementer", "gemini-4-carbon", "gemini-4-carbon-exp-0611", "provider"]]);
+  assert.deepEqual(stage5(mixed), ["blocked", "STAGE5_CAPACITY", "gemini-4-carbon-exp-0611"], "the unit's work is kept and no reviewer is seated on a guess");
+  // A subagent's requests were answered under two names, one of them undeclared: a `subtask` row for each.
+  const child = await pipeline(t, args => session(args, { spawned: [{ type: "code-explorer" }], perSubagent: 2, subServed: ["gemini-4-hydrogen", "gemini-4-hydrogen-exp-0611"] }));
+  assert.deepEqual(rows(child), [
+    ["subtask", "subagent:code-explorer", "gemini-4-hydrogen", "gemini-4-hydrogen", "provider"],
+    ["subtask", "subagent:code-explorer", "gemini-4-hydrogen", "gemini-4-hydrogen-exp-0611", "provider"],
+    ["work", "implementer", "gemini-4-carbon", "gemini-4-carbon", "provider"]]);
+  assert.deepEqual(stage5(child), ["blocked", "STAGE5_CAPACITY", "gemini-4-hydrogen-exp-0611"]);
+  // Two declared names of one model (a dated snapshot beside the base name) are two rows of one identity: nothing blocks.
+  const dated = await pipeline(t, args => session(args, { spawned: [{ type: "code-explorer" }], perSubagent: 2, subServed: ["gemini-4-hydrogen", "gemini-4-hydrogen-20261101"] }));
+  assert.equal(dated.u.status, "approved", dated.u.reason);
+  assert.deepEqual(rows(dated).filter(x => x[0] === "subtask").map(x => x[3]), ["gemini-4-hydrogen", "gemini-4-hydrogen-20261101"]);
+  // A subagent the provider named nothing for: the pinned model is the contributor, with no served name invented.
+  const unnamed = await pipeline(t, args => session(args, { spawned: [{ type: "code-explorer" }], subServed: [] }));
+  assert.equal(unnamed.u.status, "approved", unnamed.u.reason);
+  assert.deepEqual(rows(unnamed).filter(x => x[0] === "subtask"), [["subtask", "subagent:code-explorer", "gemini-4-hydrogen", null, undefined]]);
+});
+
 test("the session's evidence is on the attempt: gateway, availability, usage, runtime, jail, and the tool decisions with their log file", async t => {
-  const r = await pipeline(t, args => session(args, { tool_log: TOOL_LOG, spawned: [{ type: "code-explorer" }], extra: { provider_model_version: ["gemini-4-carbon-exp-0611"], tool_log_dropped: 2 } }));
+  const r = await pipeline(t, args => session(args, { tool_log: TOOL_LOG, spawned: [{ type: "code-explorer" }], served: "gemini-4-carbon-exp-0611", extra: { provider_model_version: ["gemini-4-carbon-exp-0611"], tool_log_dropped: 2 } }));
   const x = r.u.attempts[0].session;
   assert.deepEqual([x.stop_reason, x.conversation_id, x.duration_s, x.usage.total_token_count], ["UNSPECIFIED", "conv-1", 1.5, 200]);
   assert.deepEqual(x.gateway.totals.by_class, { root: 1, subagent: 1, aux: 0 });

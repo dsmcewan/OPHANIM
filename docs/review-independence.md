@@ -378,3 +378,33 @@ Each regression test below failed with the sources of `bce84eb` put back. The L-
 | L-205. Surviving mutations | M1, M2, M5, M9, M10 survived: the fixture always answered as the model asked, unmarked. | `scriptedTurn(..., {serve})` (`SERVE.dated`, `SERVE.marked`, `SERVE.substitute`) drives served-not-requested names through the production paths; `ophanim/operate/wave2-identity.mutate.mjs` applies each of 22 mutations (the self-audit's M1-M10, re-targeted, and M11-M22 on this wave's code) to a disposable copy (exiting non-zero unless each applies exactly once and is killed). | the runner and the tests it lists |
 | L-107. Unbound change-review citations | Change reviewers' `[source: ...]` citations were free text. | Plan and change review briefs ask for `"sources"` per finding; each cited source is bound to the view and version that reviewer was given (its own investigation log; marked "dossier only" when the review was recorded in an earlier attempt) on the finding rows and in `outputs.citations`. Re-checking them before a reused review is the gate's, not done here. | `ophanim/operate/wave2-identity.test.mjs` (finder rows) |
 | L-001, L-002 | See "Decision 6 extended" and "2. Validator capacity" above. | | `ophanim/operate/wave2-identity.test.mjs`, `validator-identity.test.mjs`, `independence.test.mjs`, `stages.test.mjs`, `pantheon/tests/pipeline-dispatch.test.mjs`, `pipeline-stage5-wave2.test.mjs` |
+
+## Native Hydrogen subagents are implementation contributors (owner direction 2026-11-19)
+
+> "Google's internal Hydrogen subagents are implementation contributors, not independent reviewers. Preserve: OpenAI dispatch and pinned in-run review according to existing contracts; Grok/xAI as an eligible independent adversarial review laboratory; the existing cross-lab review requirements; contributor exclusion and model identity verification; independent validation and deterministic acceptance gates. Do not spend Grok on routine Google implementation delegation when native Hydrogen specialists can perform that work."
+
+The `fit` implementer is now an Antigravity SDK session on the Gemini API, and its subagents are its own, on `gemini-4-hydrogen` (`docs/routing-task-profile.md`, "The Google implementer on the Antigravity SDK transport"). Nothing in the identity policy, the panel rules or the ledger kinds changed. What changed is who contributes.
+
+**What is recorded as a contributor** (`pantheon/src/pipeline/record.mjs` `contributionsOf`)
+
+- `work`: each implementer attempt whose writes were kept, by the model asked and the name the provider answered under. If part of a session was answered under a name the identity policy does not declare, that name is a `work` row of its own.
+- `subtask`: the native subagents of such an attempt, on `agy_google/gemini-4-hydrogen`: one row per unit and per name the provider answered a subagent request under, with the specialist types that ran (`role: "subagent:code-explorer+test-constructor"`). With no name recorded there is one row and no served name. The subagents of an attempt that failed or was discarded are not contributors, as its implementer is not.
+- A unit resumed from its checkpoint restores these rows (`from_checkpoint: true`) and its subagent receipts (`native_subagents`).
+- Before any work, the capacity check predicts a native subagent contributor only for a unit whose starting implementer may delegate (a ceiling above none and an allowed specialist type; `ophanim/operate/stages.mjs` `mayDelegate`).
+
+**What follows for each judgment**
+
+- **Stage 5** is unchanged: the unit's dispatcher model, pinned, escalating only inside OpenAI. A unit's authoring contributors, native subagents included, are excluded from its Stage 5 ladder by identity (`stage5Keys`).
+- **The three-lab change review and the validator** exclude every row above, by canonical identity, at selection and again at admission, as for any contributor. The three-lab floor is not lowered and nothing falls back.
+- **An undeclared provider name is never guessed.** The SDK transport records the provider's own statement of who answered. A name the policy does not declare leaves no reviewer eligible, exactly as it does for every other API seat: the unit blocks at its Stage 5 seat (`STAGE5_CAPACITY`) with the work kept. A request answered under another *declared* model fails the session (`SERVED_MISMATCH`) before any of it counts.
+- **xAI is no longer a contributor of Google-implemented work.** The earlier `fit` subagent row spent `grok-4.6` or `grok-4.7` on delegation, which made that model a contributor whenever an answer was returned. Those seats are not asked now, so both Grok models stay eligible for the change panel and the validator. The cost moves to Google: when a Carbon or Neon implementer delegates, `gemini-4-hydrogen` contributes beside the implementer's model, so a Google seat on the panel must be a third Google model.
+- **The dispatcher exception** (Decisions 5 and 6) is untouched.
+
+**Shown by tests** (scripted seats and a scripted provider; nothing here is a live model's behaviour)
+
+- `pantheon/tests/pipeline-antigravity-sdk.test.mjs`: the rows above, including an undeclared name for the implementer and for a subagent (each blocks Stage 5), two declared names of one model (nothing blocks), and a subagent the provider named nothing for.
+- `ophanim/operate/fit-lifecycle.test.mjs`: a `fit` item whose hard unit delegates to a native `code-explorer`; `gemini-4-hydrogen` and the three implementer models are contributors, every contributor resolves, an xAI model sits on the change panel, and no Grok seat was asked during implementation.
+- `ophanim/operate/wave2-identity.test.mjs` (L-205): a native subagent answered under a dated snapshot name; the asked and the served name are both excluded, and an xAI model reviews.
+- `ophanim/operate/sdk-intake.mutate.mjs`: mutations that drop the native subagents from the contributors, drop an undeclared implementer name, or drop a subagent answered under two names are each killed.
+
+**Not shown.** The name Google's API reports for these models has not been observed (register L-701). If it is not a declared name or a dated snapshot of one, every live `fit` unit will block at Stage 5 with that name in the reason, until the identity policy declares it (register L-705).

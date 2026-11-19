@@ -24,6 +24,8 @@
 //
 // Inputs: {repo, statusRoot, keys?, prompt, provenance: {source, author, received_at, session?, channel?}, title?,
 // depends_on?}. Outputs: {item, prompt_sha256, record, created, authorized, status_entry, why?}.
+// authorizePrompt({repo, statusRoot, keys?, item, title?, depends_on?}) is the same registration for a prompt that is
+// already recorded: the candidate's own text and provenance, named by its identity.
 // Must never: create a status ledger; sign anything with a key it was not given; alter the prompt's text; treat a
 // record, a flag or a provenance field as authorization; dispatch anything (the scheduler does).
 import fs from 'node:fs';
@@ -176,4 +178,23 @@ export function registerPrompt({repo, statusRoot, keys = null, prompt, provenanc
     if (!/no operator or orderer key is held here/.test(String(e?.message ?? e))) throw e;
     return {...out, authorized: false, status_entry: null, why: `${String(e.message)}: the prompt is recorded as an intake candidate and is not work until the owner registers it with the status keys`};
   }
+}
+
+/**
+ * Authorize a prompt that is already RECORDED, by its identity: a candidate, registered where no owner key was held.
+ * The text and the provenance are the record's own, so nothing is typed again and the record is not rewritten. It is
+ * the same registration as registerPrompt, and the owner's keys decide it in the same way: without them the prompt
+ * stays a candidate ({authorized: false}).
+ * Refused (PROMPT_REFUSED), and nothing is signed: no readable record under that identity; a record filed under an
+ * identity its own text and provenance do not make. A file dropped into the tree under a name of its author's choosing
+ * is not that item, however consistent it is with itself.
+ */
+export function authorizePrompt({repo, statusRoot, keys = null, item, title = null, depends_on = [], now = undefined}) {
+  if (!str(repo) || !str(statusRoot)) refuse('authorizePrompt: pass the repository and the status ledger');
+  if (!ID.test(item ?? '')) refuse('authorize names a prompt item id (as `prompt` printed it)');
+  const rec = readPromptRecord({repo, item});
+  if (rec.why) refuse(rec.why);
+  const made = promptIdentity({prompt: rec.prompt, provenance: rec.provenance}).item;
+  if (made !== item) refuse(`the prompt record ${recordPath(item)}: ${item} is not the identity of its own text and provenance (that is ${made}); a record is not authorized under a name it was only filed under`);
+  return registerPrompt({repo, statusRoot, keys, prompt: rec.prompt, provenance: rec.provenance, title, depends_on, ...(now ? {now} : {})});
 }

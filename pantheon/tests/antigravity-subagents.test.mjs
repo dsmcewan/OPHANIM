@@ -62,18 +62,37 @@ test("a Hydrogen implementer delegates to no subagent by default", () => {
   assert.equal(g.record().rejections[0].code, "SUBAGENT_NOT_ALLOWED");
 });
 
+// The runtime starts child `i` with the assignment the (i + 1)th admitted subagent was given: that is how a trajectory
+// is bound to its instance, and only a bound instance carries a state.
+const start = (g, i) => g.observe({ event: "child_started", trajectory_id: `child-${i}`, parent_trajectory_id: ROOT, prompt: entry(i + 1).Prompt });
+const state = (g, i, name) => g.observe({ event: "trajectory_state", trajectory_id: `child-${i}`, parent_trajectory_id: ROOT, depth: 1, state: name });
+
 test("an idle subagent still holds its slot: the runtime lets its parent wake it without a controller checkpoint", () => {
   const g = gov(NEON);
   assert.equal(ask(g, 4).allow, true);
   // All four ran and went idle. A slot freed here would let four more start and the first four be woken: eight at once.
-  for (let i = 0; i < 4; i++) g.observe({ event: "trajectory_state", trajectory_id: `child-${i}`, parent_trajectory_id: ROOT, depth: 1, state: "RUNNING" });
-  for (let i = 0; i < 4; i++) g.observe({ event: "trajectory_state", trajectory_id: `child-${i}`, parent_trajectory_id: ROOT, depth: 1, state: "FULLY_IDLE" });
+  for (let i = 0; i < 4; i++) { start(g, i); state(g, i, "RUNNING"); }
+  for (let i = 0; i < 4; i++) state(g, i, "FULLY_IDLE");
+  assert.deepEqual(g.record().instances.map(i => i.status), ["idle", "idle", "idle", "idle"], "each child is bound to its admitted subagent: the governor knows all four are idle");
   const r = ask(g, 1);
   assert.deepEqual([r.allow, r.code], [false, "SUBAGENT_LIMIT"], "idle is not terminated: the slot is held for the session");
   const rec = g.record();
   assert.equal(rec.peak_active, 4);
   assert.equal(rec.active, 0);
   assert.equal(rec.live, 4);
+});
+
+test("a cancelled subagent does not free its slot either: the gateway's count of child sessions never shrinks, so a freed slot would admit a subagent the wire then refuses", () => {
+  const g = gov(NEON);
+  assert.equal(ask(g, 4).allow, true);
+  for (let i = 0; i < 4; i++) { start(g, i); state(g, i, "RUNNING"); }
+  state(g, 0, "CANCELLED");
+  const r = ask(g, 1);
+  assert.deepEqual([r.allow, r.code], [false, "SUBAGENT_LIMIT"], "a slot is held from admission to the end of the implementer session");
+  const rec = g.record();
+  assert.equal(rec.instances[0].status, "cancelled", "the cancellation itself is on the record");
+  assert.deepEqual([rec.live, rec.admitted_total, rec.peak_live, rec.active], [4, 4, 4, 3]);
+  assert.deepEqual(rec.rejections.map(x => [x.code, x.live, x.ceiling]), [["SUBAGENT_LIMIT", 4, 4]]);
 });
 
 test("a subagent type the controller did not pin to Hydrogen is rejected: it would run as a clone of the implementer", () => {

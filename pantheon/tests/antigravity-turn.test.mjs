@@ -179,7 +179,7 @@ test("every billed request is admitted before the provider sees it, by class; a 
   assert.equal(r.gateway.sessions.find(s => s.class === "subagent").type, "code-explorer");
 });
 
-test("the provider's own statement of the model that answered is what the turn records; another model is a refusal, an unknown name is kept as evidence only", async t => {
+test("the provider's own statement of the model that answered is what the turn records; another model is a refusal; a name the identity policy does not declare is recorded as it stands, never replaced by the model asked for", async t => {
   const a = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: "gemini-4-carbon-20261101" }) });
   const ra = await a.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);
   assert.deepEqual([ra.served_model, ra.served_model_source, ra.requested_model], ["gemini-4-carbon-20261101", "provider", "gemini-4-carbon"]);
@@ -189,7 +189,17 @@ test("the provider's own statement of the model that answered is what the turn r
 
   const c = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: "carbon-internal-build-7" }) });
   const rc = await c.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);
-  assert.deepEqual([rc.served_model, rc.served_model_source, rc.provider_model_version], ["gemini-4-carbon", "input", ["carbon-internal-build-7"]]);
+  // The provider said who answered, in a name the policy cannot resolve. Recording the model ASKED in its place would
+  // hide that name from every later independence check (review/identity.mjs: an unresolved contributor leaves no
+  // reviewer eligible), which is what every other API seat's record lets that check see.
+  assert.deepEqual([rc.served_model, rc.served_model_source, rc.provider_model_version], ["carbon-internal-build-7", "provider", ["carbon-internal-build-7"]]);
+
+  // Two requests of one session, one answered under the declared name and one under an undeclared one: the declared
+  // name is the served model, and the undeclared one is still on the result for the record's contribution rows.
+  let n = 0;
+  const e = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: ++n === 1 ? "gemini-4-carbon" : "carbon-internal-build-7" }) });
+  const re = await e.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { request: { model: "gemini-4-carbon", as: "root" } }]);
+  assert.deepEqual([re.served_model, re.served_model_source, re.provider_model_version], ["gemini-4-carbon", "provider", ["carbon-internal-build-7"]]);
 
   const d = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: null }) });
   const rd = await d.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);

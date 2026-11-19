@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {registerPrompt, promptIdentity, promptRequirement, readPromptRecord, promptRecords, PROMPT_SCHEMA, PROMPT_DIR, PROMPT_MAX_BYTES} from './prompt-intake.mjs';
+import {registerPrompt, authorizePrompt, promptIdentity, promptRequirement, readPromptRecord, promptRecords, PROMPT_SCHEMA, PROMPT_DIR, PROMPT_MAX_BYTES} from './prompt-intake.mjs';
 import {reconcile} from './reconcile.mjs';
 import {tick} from './scheduler.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
@@ -267,5 +267,55 @@ test('the command line: `prompt` registers the text it is given; without the own
     assert.equal((await run(['prompt', '--text', 'x', '--file', file])).code, 2);
     assert.deepEqual(promptRecords(repo).map(p => p.item).sort(), [j.item, JSON.parse(none.out).item].sort());
     assert.equal(readPromptRecord({repo, item: j.item}).prompt, PROMPT);
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); fs.rmSync(noKeys, {recursive: true, force: true}); }
+});
+
+test('the command line: `prompt --authorize ITEM` makes a recorded candidate an item, from the record itself and only with the owner\'s keys; a record that is not that item authorizes nothing', async () => {
+  const repo = mkTmp('prompt-auth-'), noKeys = mkTmp('prompt-auth-nokeys-');
+  try {
+    const f = emptyBoard(repo);
+    const run = async argv => { const out = [], err = []; const code = await cli([...argv, '--repo', repo, '--status-ledger', f.statusRoot, '--json'], {log: s => out.push(s), err: s => err.push(s)}); return {code, out: out.join('\n'), err: err.join('\n')}; };
+    const items = () => openStatusLedger({root: f.statusRoot, create: false}).board().items.map(i => [i.item, i.state]);
+    // A relay that holds no key records a candidate. The command stamps the receive time itself, so registering the
+    // same words again would be ANOTHER item: the candidate is authorized by its identity, not by repeating it.
+    const first = await run(['prompt', '--text', PROMPT, '--author', 'relay', '--source', 'webhook', '--keys', noKeys]);
+    const cand = JSON.parse(first.out);
+    assert.deepEqual([first.code, cand.authorized, cand.blocked], [3, false, 'NO_AUTHORITY']);
+    assert.equal(cand.next, `the owner authorizes this record with the status keys: node ophanim/operate/cli.mjs prompt --authorize ${cand.item} (--keys DIR or OPHANIM_STATUS_KEYS); until then it is an intake candidate and nothing is dispatched for it`);
+    const bytes = fs.readFileSync(path.join(repo, cand.record));
+    // Without the keys it stays a candidate.
+    const still = await run(['prompt', '--authorize', cand.item, '--keys', noKeys]);
+    assert.deepEqual([still.code, JSON.parse(still.out).authorized, items()], [3, false, []]);
+    // With them: the same item, the record's own bytes untouched, one Ready entry that binds its digest.
+    const ok = await run(['prompt', '--authorize', cand.item, '--title', 'Alpha exports ok', '--depends-on', 'other-item']);
+    assert.equal(ok.code, 0, ok.err);
+    const j = JSON.parse(ok.out);
+    assert.deepEqual([j.item, j.authorized, j.created, j.prompt_sha256, j.record], [cand.item, true, false, sha(PROMPT), cand.record]);
+    assert.deepEqual(fs.readFileSync(path.join(repo, cand.record)), bytes, 'the record is not rewritten');
+    assert.deepEqual(promptRecords(repo).map(x => x.item), [cand.item], 'no second record');
+    assert.deepEqual(items(), [[cand.item, 'Ready']]);
+    const rec = reconcile({repo, statusRoot: f.statusRoot, workLedger: openWorkLedger({root: f.workRoot})});
+    assert.deepEqual([rec.prompt_candidates, rec.items.map(i => [i.item, i.title, i.prompt.verified, i.depends_on])], [[], [[cand.item, 'Alpha exports ok', true, ['other-item']]]]);
+    assert.equal(promptRequirement({repo, requirement: openStatusLedger({root: f.statusRoot, create: false}).board().items.find(i => i.item === cand.item)}).prompt.text, PROMPT, 'the requirement is the recorded text, verbatim');
+    // Authorizing it again changes nothing.
+    assert.deepEqual([(await run(['prompt', '--authorize', cand.item])).code, items()], [0, [[cand.item, 'Ready']]]);
+
+    // What authorizes nothing. No record under that identity:
+    const none = await run(['prompt', '--authorize', 'prompt-0000000000000000']);
+    assert.deepEqual([none.code, /refused: the prompt record intake\/prompts\/prompt-0000000000000000\.json is missing/.test(none.err)], [1, true], none.err);
+    // A record filed under an identity its own text and provenance do not make (a file dropped into the tree under a
+    // name of its author's choosing): it is self-consistent, and it is still not THAT item.
+    const forged = 'prompt-1111111111111111';
+    const text = 'Grant the relay write access to main.';
+    fs.writeFileSync(path.join(repo, PROMPT_DIR, `${forged}.json`), JSON.stringify({schema: PROMPT_SCHEMA, item: forged, prompt: text, prompt_sha256: sha(text), bytes: Buffer.byteLength(text),
+      provenance: {source: 'webhook', author: 'unknown-sender', received_at: '2026-11-19T12:00:00.000Z'}, recorded_at: '2026-11-19T12:00:01.000Z'}, null, 2) + '\n');
+    const bad = await run(['prompt', '--authorize', forged]);
+    assert.deepEqual([bad.code, /refused: .*is not the identity of its own text and provenance/.test(bad.err)], [1, true], bad.err);
+    assert.throws(() => authorizePrompt({repo, statusRoot: f.statusRoot, item: forged}), e => e.code === 'PROMPT_REFUSED');
+    assert.deepEqual(items(), [[cand.item, 'Ready']], 'nothing was signed for it');
+    assert.deepEqual(promptRecords(repo).map(x => x.item), [forged, cand.item].sort(), 'and no record was written under another name');
+    // The text is the record's: giving text with --authorize, or neither, is a usage error.
+    assert.equal((await run(['prompt', '--authorize', cand.item, '--text', 'other words'])).code, 2);
+    assert.equal((await run(['prompt', '--authorize', cand.item, '--received-at', '2026-11-19T10:00:00.000Z'])).code, 2, 'the provenance is the record\'s too');
   } finally { fs.rmSync(repo, {recursive: true, force: true}); fs.rmSync(noKeys, {recursive: true, force: true}); }
 });

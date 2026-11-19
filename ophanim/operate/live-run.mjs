@@ -5,7 +5,7 @@
 //   node ophanim/operate/live-run.mjs --manifest FILE --confirm-spend "<item>@<first 7 of candidate_commit>"
 //   [--repo DIR]  the checkout (default: this one)
 //
-// THE MANIFEST (schema ophanim.live-run/v1; ophanim/operate/live-run.example.json) is filled in by the owner. Every
+// THE MANIFEST (schema ophanim.live-run/v2; ophanim/operate/live-run.example.json) is filled in by the owner. Every
 // field is required unless marked, unknown keys are refused, and no limit has a default: a null is refused.
 //   item                 the status item id                candidate_commit   40-hex; must be HEAD, tracked files clean
 //   profile: "fit"       independence: "model"             (anything else is refused by this launcher)

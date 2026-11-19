@@ -34,16 +34,19 @@ const units = run => Object.values(run?.units ?? {});
  * The AUTHORING contributions of a run, and nothing else:
  *   plan      the planner that wrote the work units (a planner the run does not name is listed with null vendor and
  *             model: review/identity.mjs then reports it unresolved and no reviewer qualifies, which is the truth);
- *   work      every implementer attempt whose writes passed the jail and reached the unit's worktree;
+ *   work      every implementer attempt whose writes passed the jail and reached the unit's worktree, and one more
+ *             row for every other name the provider answered a request of that attempt's session under which the
+ *             identity policy does not declare (attempts[].session.provider_model_version);
  *   subtask   every subagent call whose answer was returned to the implementer (the A2A relay of a lane unit), and
  *             every NATIVE subagent an SDK implementer session admitted, when that attempt's writes were kept
  *             (attempts[].session.subagents.instances; owner direction 2026-11-19: Google's Hydrogen specialists are
  *             implementation contributors, never independent reviewers). A native subagent shares its attempt's fate:
  *             the subagents of an attempt that failed or was discarded wrote nothing that was kept, as its implementer
- *             did not. Its identity is the pinned subagent model, and the name the provider answered under where the
- *             transport's gateway recorded exactly one for it. ONE row per unit and model names every specialist type
- *             that ran ("subagent:code-explorer+test-constructor"): rows are de-duplicated by model, and each instance
- *             is on its attempt's record;
+ *             did not. Its identity is the pinned subagent model and EVERY name the provider answered a subagent
+ *             request under (the transport's gateway records them): one row per unit, model and served name, each
+ *             naming every specialist type that ran ("subagent:code-explorer+test-constructor"); each instance is on
+ *             its attempt's record. A name the identity policy does not declare is a row like any other, so no
+ *             reviewer is eligible while it stands. With no name recorded there is one row and no served name;
  *   critique  every reviewer whose finding was fed to an implementer revision.
  * A unit RESUMED from a checkpoint made none of these calls in this run: its lineage is the one the checkpoint recorded
  * when the unit was approved (checkpoint.mjs), restored here, so reusing approved work never drops its authors
@@ -59,10 +62,13 @@ export function contributionsOf(run) {
     const native = new Map();   // vendor, model, served name -> the specialist types that ran under it
     for (const a of u.attempts ?? []) if (a.status === "written") {
       out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: a.served_model ?? null, ...src(a) });
+      for (const name of a.session?.provider_model_version ?? []) if (name !== a.served_model) out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: name, served_model_source: "provider" });
       for (const i of a.session?.subagents?.instances ?? []) {
-        const named = a.session?.gateway?.served_models?.[i.model] ?? [], served = named.length === 1 ? named[0] : null;
-        const k = [a.vendor, i.model, served ?? ""].join("\u0000");
-        (native.get(k) ?? native.set(k, { vendor: a.vendor, model: i.model, served, types: new Set() }).get(k)).types.add(i.type);
+        const named = a.session?.gateway?.served_models?.[i.model] ?? [];
+        for (const served of named.length ? named : [null]) {
+          const k = [a.vendor, i.model, served ?? ""].join("\u0000");
+          (native.get(k) ?? native.set(k, { vendor: a.vendor, model: i.model, served, types: new Set() }).get(k)).types.add(i.type);
+        }
       }
     }
     for (const n of native.values()) out.push({ kind: "subtask", unit_id: u.unit_id, role: `subagent:${[...n.types].sort().join("+")}`, vendor: n.vendor, model: n.model, served_model: n.served, ...(n.served ? { served_model_source: "provider" } : {}) });

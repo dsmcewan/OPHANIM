@@ -27,10 +27,13 @@
 // WHAT THE RESULT CARRIES: {text, structured_output, stop_reason, served_model, served_model_source,
 // provider_model_version, transport: "antigravity-sdk", requested_model, effort, subagents (the governor's record),
 // usage, gateway (requests by class, sessions, served models, availability), tool_log, runtime, sandbox, launch}.
-// served_model is the PROVIDER's statement (the response's modelVersion, seen by the gateway) when it resolves to the
-// model asked for; a name that does not resolve is kept as provider_model_version and the pinned input model is
-// recorded with served_model_source "input", never as the provider's statement. A request the provider answered under
-// ANOTHER known model -- the implementer's, or a subagent's -- fails the session (lane_failure, SERVED_MISMATCH).
+// served_model is the PROVIDER's statement (the response's modelVersion, seen by the gateway), as it stands: a name
+// that resolves to the model asked for, else a name the identity policy does not declare (source "provider" in both
+// cases; every undeclared name is also listed in provider_model_version). The model ASKED is never recorded in an
+// undeclared name's place: the record's independence checks must see what the provider said (review/identity.mjs: an
+// unresolved contributor leaves no reviewer eligible), as they do for every other API seat. Only when the provider
+// named nothing is the pinned input recorded, marked served_model_source "input". A request the provider answered
+// under ANOTHER known model -- the implementer's, or a subagent's -- fails the session (lane_failure, SERVED_MISMATCH).
 //
 // FAILURES (thrown; each carries what was recorded up to it: .subagents, .gateway, .tool_log, .usage):
 //   code "quota_exhausted"     the provider refused for quota (HTTP 429): the pipeline steps the ladder
@@ -393,9 +396,10 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
     }
     const same = resolved.find(r => r.id?.known && asked?.known && r.id.id === asked.id);
     const unresolved = resolved.filter(r => !r.id?.known).map(r => r.name);
+    const stated = same?.name ?? unresolved[0] ?? null;   // what the provider said, declared or not; null: it named nothing
     record.usage = final.usage ?? null;
     return { text: typeof final.text === "string" ? final.text : "", structured_output: final.structured_output ?? null, stop_reason: final.stop_reason ?? "UNSPECIFIED",
-      served_model: same ? same.name : model, served_model_source: same ? "provider" : "input", ...(unresolved.length ? { provider_model_version: unresolved } : {}),
+      served_model: stated ?? model, served_model_source: stated ? "provider" : "input", ...(unresolved.length ? { provider_model_version: unresolved } : {}),
       transport: SDK_TRANSPORT, requested_model: model, effort, conversation_id: final.conversation_id ?? record.conversation_id ?? null, tool_calls: final.tool_calls ?? tool_log.length,
       subagents: record.subagents, usage: record.usage, trajectory_usages: final.trajectory_usages ?? null, gateway: g, availability: record.availability, tool_log, ...(record.tool_log_dropped ? { tool_log_dropped: record.tool_log_dropped } : {}),
       capabilities: final.capabilities ?? record.capabilities ?? null, runtime: record.runtime, sandbox: record.sandbox, launch: record.launch, duration_s: final.duration_s ?? null };

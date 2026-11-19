@@ -16,10 +16,13 @@
 //     defined has no pin. The SDK's pre-tool hook does fire for invoke_subagent, with the type name: so admission is
 //     decided THERE, by type name, and a type this controller did not pin is refused (code SUBAGENT_TYPE_NOT_PINNED);
 //   - send_message wakes an idle child, again with no hook and no policy, and ending a child with manage_subagents
-//     emits no event. So "idle" is not "ended": a slot is held from admission to the end of the implementer session.
-//     LIVE <= ceiling is what is enforced; ACTIVE <= LIVE follows. (The model gateway refuses, on the wire, a request
-//     for any model that is not the implementer's or the pinned subagent model, and any child session past the
-//     ceiling: the second line, independent of this one.)
+//     emits no event. So "idle" is not "ended", and no state the controller observes proves a child cannot run again
+//     (a CANCELLED child included: whether the runtime lets its parent wake it is not observed). A slot is therefore
+//     held from admission to the end of the implementer session: LIVE counts every subagent admitted in the session.
+//     LIVE <= ceiling is what is enforced; ACTIVE <= LIVE follows. This is STRICTER than "concurrently active": an
+//     implementer reuses an idle subagent (send_message) rather than replacing it. (The model gateway refuses, on the
+//     wire, a request for any model that is not the implementer's or the pinned subagent model, and any child session
+//     past the ceiling; its count of child sessions never shrinks either: the second line, independent of this one.)
 //
 // THE RECORD (record()): {model, ceiling, implementer, admitted_total, live, active, peak_live, peak_active,
 //   instances: [{id, type, role, scope, tools, model, call_id, admitted_at, prompt_digest, prompt_bytes, status,
@@ -59,7 +62,6 @@ export const subagentTypesRefusal = names => {
   return unknown.length ? `unknown specialist type(s): ${unknown.join(", ")} (known: ${SUBAGENT_TYPE_NAMES.join(", ")})` : null;
 };
 
-const TERMINAL = new Set(["CANCELLED"]);
 const STATUS_OF = { RUNNING: "running", FULLY_IDLE: "idle", CANCELLED: "cancelled", WAITING_FOR_TASKS: "waiting", WAITING_FOR_SUBAGENTS: "waiting" };
 const stateName = s => String(s ?? "").replace(/^STATE_/, "");
 
@@ -78,7 +80,8 @@ export function subagentGovernor({ implementer, unit_id = null, allowed_types = 
   const instances = [], rejections = [], trajectories = new Map();   // trajectory_id -> {parent, depth, states, instance}
   let root = null, peakLive = 0, peakActive = 0;
 
-  const live = () => instances.filter(i => !TERMINAL.has(i.last_state)).length;
+  // Every subagent admitted in this session holds its slot until the session ends (see the header): no state frees one.
+  const live = () => instances.length;
   const activeNow = () => [...trajectories.values()].filter(t => t.depth > 0 && t.states.at(-1)?.state === "RUNNING").length;
   const reject = (code, reason, ctx) => {
     rejections.push({ at: now(), code, why: reason, asked: ctx.asked ?? 0, live: live(), ceiling, call_id: ctx.call_id ?? null, trajectory_id: ctx.trajectory_id ?? null });
@@ -105,7 +108,7 @@ export function subagentGovernor({ implementer, unit_id = null, allowed_types = 
     const admitted = list.map(e => {
       const t = SUBAGENT_TYPES[e.TypeName];
       const inst = { id: `sa-${instances.length + 1}`, type: t.name, role: e.Role.trim().slice(0, 120), scope: { ...t.scope }, tools: [...t.tools], model: SUBAGENT_MODEL, call_id, admitted_at: now(),
-        prompt_digest: sha(e.Prompt), prompt_bytes: Buffer.byteLength(e.Prompt), bind_key: sha(e.Prompt.trim()), status: "admitted", trajectory_id: null, states: [], last_state: null, usage: null, output: null, error: null };
+        prompt_digest: sha(e.Prompt), prompt_bytes: Buffer.byteLength(e.Prompt), bind_key: sha(e.Prompt.trim()), status: "admitted", trajectory_id: null, states: [], usage: null, output: null, error: null };
       instances.push(inst);
       return inst;
     });
@@ -150,7 +153,6 @@ export function subagentGovernor({ implementer, unit_id = null, allowed_types = 
   }
   function apply(inst, state, ev, at = null) {
     inst.states.push({ state, at: at ?? now() });
-    inst.last_state = state;
     inst.status = str(ev.error) ? "errored" : STATUS_OF[state] ?? inst.status;
     if (str(ev.error)) inst.error = ev.error.slice(0, 300);
   }
@@ -166,7 +168,7 @@ export function subagentGovernor({ implementer, unit_id = null, allowed_types = 
     live, active: activeNow,
     record: () => ({ model: SUBAGENT_MODEL, ceiling, implementer: { vendor: implementer.vendor ?? null, model: implementer.model }, unit_id, allowed_types: [...allowed], ...(ignored.length ? { ignored_types: ignored } : {}),
       admitted_total: instances.length, live: live(), active: activeNow(), peak_live: peakLive, peak_active: peakActive,
-      instances: instances.map(({ last_state, bind_key, ...i }) => ({ ...i, scope: { ...i.scope }, tools: [...i.tools], states: i.states.map(s => ({ ...s })), usage: i.usage ? { ...i.usage } : null, output: i.output ? { ...i.output } : null })),
+      instances: instances.map(({ bind_key, ...i }) => ({ ...i, scope: { ...i.scope }, tools: [...i.tools], states: i.states.map(s => ({ ...s })), usage: i.usage ? { ...i.usage } : null, output: i.output ? { ...i.output } : null })),
       rejections: rejections.map(r => ({ ...r })),
       unbound_trajectories: [...trajectories.values()].filter(t => t.trajectory_id !== root && !t.instance).map(t => ({ trajectory_id: t.trajectory_id, parent: t.parent, depth: t.depth, states: t.states.map(s => ({ ...s })) })) }),
   };

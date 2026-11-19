@@ -14,6 +14,10 @@
 //       owner's status keys are --keys or OPHANIM_STATUS_KEYS (default <status ledger>/keys). WITHOUT them the prompt is
 //       recorded as an intake CANDIDATE and nothing is dispatched for it (exit 3, NO_AUTHORITY): text relayed by a
 //       process that holds no owner key is data, never work. No provider is called.
+//   node ophanim/operate/cli.mjs prompt --authorize ITEM [--title LINE] [--depends-on a,b] [--keys DIR] [--json]
+//       Authorize a prompt that is already recorded (a candidate), by the identity `prompt` printed for it. The text
+//       and the provenance are the record's own: neither is given again. It needs the owner's status keys like any
+//       registration; a record that is missing, or filed under an identity its own text does not make, is refused.
 //   node ophanim/operate/cli.mjs tick  [limits] [--item ID] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--turn MODULE] [--clients MODULE] [--json]
 //   node ophanim/operate/cli.mjs watch [limits] [--item ID] [--interval S] [--once] [same as tick]
 //       Run the scheduler (scheduler.mjs) with the stage executors of ophanim/operate/stages.mjs `makeExecutors`
@@ -68,7 +72,7 @@ import {openWorkLedger, STAGES} from './work-ledger.mjs';
 import {reconcile, MARKER} from './reconcile.mjs';
 import {tick, watch, releaseInterrupted, DEFAULT_LIMITS} from './scheduler.mjs';
 import {readIssuesFile, fetchIssues} from './issues.mjs';
-import {registerPrompt} from './prompt-intake.mjs';
+import {registerPrompt, authorizePrompt} from './prompt-intake.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '../..');
@@ -397,17 +401,29 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
     if (verb === 'prompt') {
       // Register one user prompt (the header; prompt-intake.mjs). No provider call, and no work ledger is needed: the
       // scheduler records the intake when it next runs.
-      if ((opts.text === undefined) === (opts.file === undefined)) usage('prompt needs the text: --text TEXT or --file FILE (exactly one)');
-      const text = opts.text ?? fs.readFileSync(path.resolve(opts.file), 'utf8');
-      const author = opts.author ?? env.USER ?? env.LOGNAME;
-      if (!author) usage('prompt needs --author NAME (who submitted it)');
-      const provenance = {source: opts.source ?? 'cli', author, received_at: opts['received-at'] ?? new Date().toISOString(),
-        ...(opts.session ? {session: opts.session} : {}), ...(opts.channel ? {channel: opts.channel} : {})};
       const keysFlag = opts.keys ?? env.OPHANIM_STATUS_KEYS ?? null;
-      const r = registerPrompt({repo: paths.repo, statusRoot: paths.statusRoot, keys: keysFlag ? path.resolve(keysFlag) : null, prompt: text, provenance, title: opts.title ?? null,
-        depends_on: opts['depends-on'] ? opts['depends-on'].split(',').map(x => x.trim()).filter(Boolean) : []});
+      const common = {repo: paths.repo, statusRoot: paths.statusRoot, keys: keysFlag ? path.resolve(keysFlag) : null, title: opts.title ?? null,
+        depends_on: opts['depends-on'] ? opts['depends-on'].split(',').map(x => x.trim()).filter(Boolean) : []};
+      let r;
+      if (opts.authorize !== undefined) {
+        // A recorded candidate, by its identity: its text and its provenance are the record's, never given again.
+        for (const k of ['text', 'file', 'author', 'source', 'received-at', 'session', 'channel']) {
+          if (opts[k] !== undefined) usage(`prompt --authorize ITEM takes the recorded prompt and its recorded provenance: --${k} is not given with it`);
+        }
+        r = authorizePrompt({...common, item: opts.authorize});
+      } else {
+        if ((opts.text === undefined) === (opts.file === undefined)) usage('prompt needs the text: --text TEXT or --file FILE (exactly one), or --authorize ITEM for a prompt already recorded');
+        const text = opts.text ?? fs.readFileSync(path.resolve(opts.file), 'utf8');
+        const author = opts.author ?? env.USER ?? env.LOGNAME;
+        if (!author) usage('prompt needs --author NAME (who submitted it)');
+        const provenance = {source: opts.source ?? 'cli', author, received_at: opts['received-at'] ?? new Date().toISOString(),
+          ...(opts.session ? {session: opts.session} : {}), ...(opts.channel ? {channel: opts.channel} : {})};
+        r = registerPrompt({...common, prompt: text, provenance});
+      }
+      // The receive time is part of a prompt's identity and this command stamps it, so registering the same words again
+      // is another item: a candidate is authorized by ITS identity.
       const out = r.authorized ? {...r, next: 'the scheduler plans it: node ophanim/operate/cli.mjs tick (or watch, or serve)'}
-        : {...r, blocked: 'NO_AUTHORITY', next: 'register it again with the owner\'s status keys (--keys DIR or OPHANIM_STATUS_KEYS): until then it is an intake candidate and nothing is dispatched for it'};
+        : {...r, blocked: 'NO_AUTHORITY', next: `the owner authorizes this record with the status keys: node ophanim/operate/cli.mjs prompt --authorize ${r.item} (--keys DIR or OPHANIM_STATUS_KEYS); until then it is an intake candidate and nothing is dispatched for it`};
       log(opts.json ? JSON.stringify(out, null, 2) : [`${out.item}: ${r.authorized ? 'registered as a Ready item (unplanned)' : 'recorded as an intake CANDIDATE (NO_AUTHORITY)'}`,
         `  prompt  ${r.record} (${r.prompt_sha256}${r.created ? '' : '; already recorded'})`, ...(r.authorized ? [`  status  ${r.status_entry}`] : [`  why     ${r.why}`]), `  next    ${out.next}`].join('\n'));
       return r.authorized ? 0 : 3;
