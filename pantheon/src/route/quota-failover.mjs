@@ -16,6 +16,27 @@ import { laneParts } from "./fit-matrix.mjs";
 
 export const cooldownKeyOf = c => (c.transport === "agy-cli" ? `agy_cli_oauth:${laneParts(c.model)?.base ?? c.model}` : c.pool);
 
+// METERED GEMINI AT THE POINT OF SPEND (L-504 invariant 4, L-124). With the metered Gemini failover OFF (the live-run
+// manifest's billing.metered_gemini_failover: false, carried as meteredFailover / METERED_FAILOVER) NO seat makes a
+// metered Google call: not the quota failover of a lane (skipped in the walk below), and not any other Google-billed seat
+// either -- an operator's or a ticket pin's Gemini API seat (agy_google over the API: sdk/adapter.mjs's genai client,
+// billed to GEMINI_API_KEY), or the python Antigravity SDK seat (scripts/agy-seat.py, billed to GEMINI_API_KEY or
+// Vertex). The seat refuses itself immediately before the billed request or spawn, before it is admitted or charged,
+// whatever key the environment holds: withholding the key upstream (ophanim/operate/live-run.mjs "not-used") is not what
+// protects it. The Antigravity CLI lanes are the subscription (OAuth) and are never refused here.
+/** The vendors whose API seat is billed to the metered Gemini key (sdk/adapter.mjs ADAPTERS: key_env GEMINI_API_KEY). */
+export const METERED_GEMINI_VENDORS = Object.freeze(["agy_google"]);
+export const METERED_GEMINI_DISABLED = "METERED_GEMINI_DISABLED";
+export const METERED_GEMINI_RULE = "metered Gemini spend disabled by the caller (meteredFailover: false): no Google-billed seat is called";
+/** Is a call on `vendor` over `transport` ("api": the vendor SDK; "sdk": the python Antigravity SDK seat) a metered Gemini call? */
+export const isMeteredGemini = ({ vendor, transport = "api" }) => METERED_GEMINI_VENDORS.includes(vendor) && (transport === "api" || transport === "sdk");
+/** The refusal of a metered Gemini call with the failover off: code METERED_GEMINI_DISABLED, nothing was sent or charged. */
+export function meteredGeminiRefusal({ vendor, model, purpose = null, transport = "api" }) {
+  const via = transport === "sdk" ? "the python Antigravity SDK seat (API key or Vertex billed)" : "the metered Gemini API";
+  return Object.assign(new Error(`${vendor}/${model}${purpose ? ` (${purpose})` : ""} would be served by ${via}, and metered Gemini spend is disabled for this run (meteredFailover: false): the seat is refused before it is admitted, charged or called`),
+    { code: METERED_GEMINI_DISABLED, provider_requests: 0, transport, quota_failover: { used: false, disabled: true, lanes: [], rule: METERED_GEMINI_RULE } });
+}
+
 //
 // `meteredFailover: false` (the caller's budget allows no metered Gemini spend): a `quota_failover` candidate is never
 // reached, even after its lane's quota refusal; it is skipped (onSkip says why) and the walk goes on past it. The

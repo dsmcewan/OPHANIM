@@ -224,11 +224,13 @@ function fakePython(dir) {
   const file = join(dir, "fake-python");
   writeFileSync(file, `#!/bin/sh
 env > "${join(dir, "sdk-env.txt")}"
-out=""; prev=""
-for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
+out=""; model=""; prev=""
+for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; [ "$prev" = "--model" ] && model="$a"; prev="$a"; done
 if [ -n "$FAKE_SDK_HANG" ]; then sleep 60; fi
 printf 'VERDICT: approve\\n' > "$out/response.md"
-printf '{"ok":true,"conversation_id":"fake-sdk","usage":{"input_tokens":1,"output_tokens":1}}\\n'
+# The envelope names the model the seat ran, as scripts/agy-seat.py's does ("model": its --model); the board compares it
+# with the model asked for before it reads the answer (L-504 invariant 3).
+printf '{"ok":true,"model":"%s","conversation_id":"fake-sdk","usage":{"input_tokens":1,"output_tokens":1}}\\n' "$model"
 `, { mode: 0o755 });
   return file;
 }
