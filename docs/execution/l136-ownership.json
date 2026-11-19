@@ -1,0 +1,18 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "L-136",
+  "base_commit": "83a63ae",
+  "authorization": "owner, 2026-11-19: L-136 approved (configurable metered Gemini failover, default OFF; one central policy across seven entry points); primary Gemini API execution gets its own setting gemini_api_primary, default off",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**"],
+  "dependencies": ["single agent: one central policy; no concurrent owner of any file"],
+  "subwaves": {"L136": {"agent-l136-billing": {"branch": "l136/billing-policy", "base_commit": "83a63ae", "findings": ["L-136", "L-124 (extended: primary vs fallback split)"],
+    "files": ["pantheon/src/route/quota-failover.mjs", "pantheon/src/sdk/**", "pantheon/src/pipeline/turns.mjs", "pantheon/src/board/run-item.mjs", "pantheon/src/board/agy-cli.mjs",
+              "pantheon/bin/pantheon-board.mjs", "pantheon/bin/pantheon-compare.mjs", "pantheon/bin/pantheon-review-cycle.mjs", "pantheon/src/review-runner/**", "pantheon/scripts/run-review.mjs",
+              "ophanim/operate/cli.mjs", "ophanim/operate/service.mjs", "ophanim/operate/scheduler.mjs", "ophanim/operate/stages.mjs", "ophanim/operate/live-run.mjs", "ophanim/operate/work-ledger.mjs",
+              "docs/operate-service.md", "docs/routing-task-profile.md", "docs/billing-policy.md",
+              "pantheon/tests/**", "ophanim/operate/*.test.mjs", "ophanim/operate/*.mutate.mjs", "ophanim/operate/test-fixtures.mjs", "packages/model-client/**"],
+    "new_files": ["docs/billing-policy.md", "pantheon/tests/l136-*.test.mjs", "ophanim/operate/l136-*.test.mjs", "pantheon/tests/l136-billing.mutate.mjs"],
+    "region_limits": {"production files": "only the billing-policy resolution, propagation and point-of-spend enforcement, and the board's reviewer/scout default transport; the jail, env allowlist, credential isolation, identity and evidence logic are not changed",
+                      "existing tests": "only to opt in explicitly where a test exercises metered failover or primary Gemini spend under the old default; no assertion weakened"}}}}
+}
