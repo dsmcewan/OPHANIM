@@ -4,6 +4,7 @@
   "gated": [
     "ophanim/operate/live-run.test.mjs",
     "ophanim/operate/reliability-r3-a3.test.mjs",
+    "ophanim/operate/reliability-wave2b.test.mjs",
     "pantheon/tests/agy-layout-bisect.test.mjs",
     "pantheon/tests/agy-preflight.test.mjs",
     "pantheon/tests/agy-sandbox-r2a4.test.mjs",
