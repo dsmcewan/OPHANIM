@@ -276,6 +276,41 @@ test("C the python SDK seat (board reviewer, transport sdk): a reported model ot
   });
 });
 
+// ---- L-504 INVARIANT 2 on the board's contributor rows (patch 3b-identity-1, routed to this branch) -------------------
+// A slot's contributors carry the model ASKED and the model that SERVED each turn whose text reached its bytes: the work
+// rows, and the critique rows of a reviewer whose findings reached a revision. A turn whose provider NAMED NO serving model
+// is carried as unknown (served_model null, served_model_source "unnamed"), never as served by the model asked; a named one
+// is kept. Driven through runOpenItem as the lifecycle drives it (escalation protocol v2): an API implementer, an API
+// reviewer that requests changes on the passing work, and the RESUME that runs the revision with its findings.
+test("invariant 2: the board's work and critique contributor rows carry an unnamed serving model as unknown, and keep a named one", async t => {
+  const overrides = { implementer: seat("openai", "gpt-6-astra"), reviewer: seat("xai", "grok-4.7") };
+  /** Run the item, then resume it for the revision the review asked for; returns the slot's contributor rows. */
+  async function reviewedRevision(served) {
+    const dir = join(fx.root, `board-${++boards}`); mkdirSync(dir);
+    let reviews = 0;
+    // The in-run reviewer (grok-4.7) asks for changes on its first review; every other verdict keeps the fixture's default.
+    const review = ({ model }) => (model === "grok-4.7" && ++reviews === 1 ? "the export must be frozen\nVERDICT: request_changes" : null);
+    const makeClientFor = scriptedClients([], undefined, undefined, review, served);
+    const spec = { key: `wave3-inv2-${boards}`, repo_root: dir, title: "fixture", goal: "fixture goal", question: "q", copy: [], acceptance_cmd: "true", slot: "code", path: "code.mjs" };
+    const opts = { makeClientFor, scouts: ["xai"], planTitle: "ticket", seatOverrides: overrides, cooldown: openCooldownStore(join(dir, "cooldowns")), ledger: false, escalation: "pantheon.escalation/v2" };
+    await runOpenItem(spec, { ...opts, dir: join(dir, "board") });
+    await runOpenItem(spec, { ...opts, resume: join(dir, "board") });
+    const run = JSON.parse(readFileSync(join(dir, "board", "run.json"), "utf8"));
+    return (run.files ?? []).flatMap(f => f.contributors ?? []).map(({ purpose, vendor, model, served_model, served_model_source }) => ({ purpose, vendor, model, served_model, served_model_source }));
+  }
+  await t.test("no serving model named: the work and critique rows say unknown (null, \"unnamed\")", async () => {
+    const got = await reviewedRevision(() => null);
+    assert.deepEqual(got.filter(r => r.purpose === "work"), [{ purpose: "work", vendor: "openai", model: "gpt-6-astra", served_model: null, served_model_source: "unnamed" }], JSON.stringify(got));
+    assert.deepEqual(got.filter(r => r.purpose === "critique"), [{ purpose: "critique", vendor: "xai", model: "grok-4.7", served_model: null, served_model_source: "unnamed" }], JSON.stringify(got));
+  });
+  await t.test("a serving model named by the provider is kept on both rows", async () => {
+    const snapshot = model => `${model}-20261101`;
+    const got = await reviewedRevision((vendor, model) => snapshot(model));
+    assert.deepEqual(got.filter(r => r.purpose === "work").map(r => [r.model, r.served_model, r.served_model_source]), [["gpt-6-astra", snapshot("gpt-6-astra"), undefined]], JSON.stringify(got));
+    assert.deepEqual(got.filter(r => r.purpose === "critique").map(r => [r.model, r.served_model, r.served_model_source]), [["grok-4.7", snapshot("grok-4.7"), undefined]], JSON.stringify(got));
+  });
+});
+
 // ---- B1: the pipeline's implementer --------------------------------------------------------------------------------
 const H0 = { vendor: "agy_google", model: "gemini-4-hydrogen-medium" }, ARGON = { vendor: "agy_google", model: "gemini-4-argon-high" };
 function scriptedSingle() {

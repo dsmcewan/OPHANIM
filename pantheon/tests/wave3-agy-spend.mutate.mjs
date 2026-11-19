@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // MUTATION RUNNER for L-504 invariants 3 (the Antigravity model guard) and 4 (no metered Gemini spend with the failover
-// off), and L-124 (the point-of-spend guard of the python SDK seat): wave 3, sub-wave 3B-1. Every mutation re-introduces
+// off), L-124 (the point-of-spend guard of the python SDK seat), and invariant 2 on the board's contributor rows (an
+// unnamed serving model stays unknown; patch 3b-identity-1): wave 3, sub-wave 3B-1. Every mutation re-introduces
 // a plausible regression of one enumerated path, on a DISPOSABLE COPY of this tree (never the tree itself); the two suites
 // of this work run there, and the mutation is undone.
 //
@@ -46,6 +47,16 @@ export const MUTATIONS = [
     edits: [one(RUN, 'provider_requests: laneCharged,\n          ...(e?.identity ? { identity: e.identity } : {}) });', 'provider_requests: laneCharged });')]},
   {id: 'G10', path: 'A2/C/B the board', what: 'run.error drops the refusal\'s code and identities (the base record)',
     edits: [one(RUN, ', ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.identity ? { identity: e.identity } : {}) };', ' };')]},
+  // ---- invariant 2 on the board's contributor rows (patch 3b-identity-1): an unnamed serving model stays unknown --------
+  {id: 'I1', path: 'board critique contributor row', what: 'a reviewer turn that named no serving model is recorded with served_model omitted (reads as the model asked)',
+    edits: [one(RUN, '...(sm && sm !== r.model ? { served_model: sm } : !sm ? { served_model: null, served_model_source: "unnamed" } : {}) };', '...(sm && sm !== r.model ? { served_model: sm } : {}) };')]},
+  {id: 'I2', path: 'board work contributor row', what: 'a work turn that named no serving model is recorded with served_model omitted (reads as the model asked)',
+    edits: [one(RUN, '...(typeof workServed === "string" && workServed.trim() ? (workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) : { served_model: null, served_model_source: "unnamed" }) };',
+      '...(workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) };')]},
+  {id: 'I3', path: 'board critique contributor row', what: 'a serving model the reviewer\'s provider named is dropped from the row',
+    edits: [one(RUN, '...(sm && sm !== r.model ? { served_model: sm } : !sm ?', '...(false ? { served_model: sm } : !sm ?')]},
+  {id: 'I4', path: 'board work contributor row', what: 'a serving model the worker\'s provider named is dropped from the row',
+    edits: [one(RUN, '...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),', '')]},
   // ---- invariant 4 / L-124: no metered Gemini call with the failover off, per seat and path -------------------------
   {id: 'S1', path: 'L/P liveTurn -> laneFirstTurn, a lane quota refusal', what: 'laneFirstTurn ignores failover: false and asks the metered API',
     edits: [one('pantheon/src/sdk/agy-turn.mjs', '    if (failover === false) {\n', '    if (false) {\n')]},

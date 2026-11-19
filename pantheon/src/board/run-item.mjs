@@ -1317,7 +1317,9 @@ export async function runOpenItem(spec, opts = {}) {
               for (const r of c.pendingRevision.reviewers ?? []) {
                 const served = Array.isArray(r.served_models) && r.served_models.length ? r.served_models : [null];
                 for (const sm of served) {
-                  const row = { purpose: "critique", vendor: r.vendor, model: r.model, ...(sm && sm !== r.model ? { served_model: sm } : {}) };
+                  // A reviewer turn that named no serving model is recorded as exactly that (served_model: null, "unnamed"):
+                  // with the field omitted the row read as served by the model asked (wave 3, L-504 invariant 2).
+                  const row = { purpose: "critique", vendor: r.vendor, model: r.model, ...(sm && sm !== r.model ? { served_model: sm } : !sm ? { served_model: null, served_model_source: "unnamed" } : {}) };
                   if (!(c.contributors ??= []).some(x => x.purpose === "critique" && x.vendor === row.vendor && x.model === row.model && (x.served_model ?? null) === (row.served_model ?? null))) {
                     c.contributors.push({ ...row, slot: c.sl.slot, revision_input: true, via: CRITIQUE_VIA });
                   }
@@ -1344,7 +1346,8 @@ export async function runOpenItem(spec, opts = {}) {
             const workServed = ledgerTurns.get(p.prompt)?.served_model ?? workRec?.served_model ?? null;
             const workRow = { purpose: "work", vendor: made.seat.vendor, model: made.seat.model,
               ...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),
-              ...(workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) };
+              // No serving model named: recorded as unknown ("unnamed"), never as the model asked (wave 3, L-504 invariant 2).
+              ...(typeof workServed === "string" && workServed.trim() ? (workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) : { served_model: null, served_model_source: "unnamed" }) };
             if (!(c.contributors ??= []).some(x => (x.purpose ?? "work") === "work" && x.vendor === workRow.vendor && x.model === workRow.model && (x.served_model ?? null) === (workRow.served_model ?? null))) {
               c.contributors.push({ ...workRow, slot: c.sl.slot });
             }
