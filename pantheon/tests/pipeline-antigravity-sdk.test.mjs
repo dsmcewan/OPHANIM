@@ -337,6 +337,13 @@ test("an approved unit's checkpoint carries its subagent lineage, and a run resu
   assert.equal(second.u.resumed, true);
   assert.equal(second.calls.length, 0);
   assert.deepEqual(second.out.contributions.filter(c => c.kind === "subtask").map(c => [c.role, c.vendor, c.model, c.from_checkpoint]), [["subagent:test-constructor", "agy_google", "gemini-4-hydrogen", true]]);
+  // The receipts themselves are sealed with the approval and restored, marked: who the implementer was, which
+  // specialists it was admitted, on which model, and what the provider answered under.
+  const restored = second.u.checkpoint.native_subagents;
+  assert.deepEqual(restored.map(x => [x.attempt, x.implementer.model, x.implementer.effort, x.from_checkpoint, x.served_models["gemini-4-hydrogen"]]), [[1, "gemini-4-carbon", "high", true, ["gemini-4-hydrogen"]]]);
+  assert.deepEqual(restored[0].subagents.instances.map(i => [i.id, i.type, i.model, i.status]), [["sa-1", "test-constructor", "gemini-4-hydrogen", "idle"]]);
+  assert.deepEqual(restored[0].subagents, first.u.attempts[0].session.subagents, "exactly what the approving run recorded");
+  assert.deepEqual(second.u.attempts, [], "the resumed unit made no attempt of its own: nothing is counted twice");
 });
 
 test("the real session inside the pipeline: gateway, governor and decisions against a scripted bridge and provider", async t => {

@@ -23,6 +23,10 @@
 //   finding was fed to a revision. A resumed unit restores it, so the models that shaped the reused patch stay
 //   contributors for the later three-lab review and the validator (independent review, assignment 2, questions 6 and 8).
 //   A v1 checkpoint (written before the lineage was kept) is not resumed: the unit runs again.
+//   `native_subagents` (2026-11-19; optional, absent on a checkpoint written before it): for a unit an Antigravity SDK
+//   implementer wrote, per attempt whose writes were kept, {attempt, implementer: {vendor, model, effort},
+//   served_models, subagents (the governor's record: every specialist admitted, its type, scope, tools, model, digests,
+//   states and usage, and every rejection)}. Sealed with the rest; a resumed unit restores it marked from_checkpoint.
 //
 // A checkpoint is EVIDENCE TO RE-CHECK, never a verdict to trust: checkpointRefusal() refuses one whose schema,
 // key, unit, base, verdict or upstream (unit set, keys and trees) differ from the current run, and whose patch bytes

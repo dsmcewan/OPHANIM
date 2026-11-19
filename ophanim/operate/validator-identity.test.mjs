@@ -84,10 +84,10 @@ test('4. after a rejected answer the next eligible seat is asked; the accepted r
 // repeated, every call is charged once, and that reviewer model is a contributor excluded from the three-lab change
 // review and from validating. The resumed-run form of this test is kept for `argo` in revision-reassessment.test.mjs.)
 test('an in-run code-review finding is followed by a code revision: the finding reaches the worker in the same run, and that reviewer model is excluded from the change review', async () => {
-  await withDispatch(async ({dir: repo, makeClientFor, calls, agy, agyWorker}) => {
+  await withDispatch(async ({dir: repo, makeClientFor, calls, agy, sdk, agyWorker}) => {
     const FINDING = 'export ok as a frozen constant; a comment must say why';
-    // Under the fit matrix the worker is an Antigravity lane (the fake CLI, writing in the unit's worktree): it revises
-    // when its prompt carries the finding.
+    // Under the fit matrix the worker is an Antigravity SDK session (the fixture's scripted worker, writing in the
+    // unit's worktree): it revises when its prompt carries the finding.
     agyWorker(`case "$prompt" in *"${FINDING}"*) : >> "$FAKE_AGY_LOG.told"; printf '// frozen: the importer reads it lazily\\nexport const ok = true;\\n' > "$dir/alpha.mjs" ;; *) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;; esac\n`);
     const f = fixture(repo, [{item: 'inrun'}]);
     // The in-run reviewer (Stage 5, pinned to the dispatcher's model) requests changes of the first, passing revision.
@@ -99,8 +99,9 @@ test('an in-run code-review finding is followed by a code revision: the finding 
     // The rejection is answered by a revision inside the run: one implement stage, which ships.
     assert.deepEqual(seq(w(), 'inrun'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
     const [, impl, rev, val] = w().stages('inrun');
-    const built = agy().filter(a => a.agent === 'pantheon-unit-worker').length;
+    const built = sdk().filter(a => a.agent === 'sdk-implementer').length;
     assert.equal(built, 2, 'one first build and one revision: the work was not repeated');
+    assert.deepEqual(agy(), [], 'no agy CLI process was launched');
     assert.ok(fs.existsSync(path.join(repo, 'agy.log.told')), 'the finding reached the worker\'s revision prompt');
     const inRun = turn.log.filter(l => ['dispatcher', 'unit-review', 'subagent'].includes(l.kind)).length;
     assert.equal(impl.usage.provider_calls, calls.length + built + inRun, 'no call is charged twice or dropped');

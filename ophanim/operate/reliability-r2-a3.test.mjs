@@ -16,7 +16,8 @@ import {subagentReceipt, LIVE_RUN_SCHEMA, validateManifest, statusLedgerState, i
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
 import {runPipeline, unitKey} from '../../pantheon/src/pipeline/index.mjs';
-import {tempRepo, seats, unit, scripted, write as writeUnitFile, PLANNER, ask} from '../../pantheon/tests/fixtures/pipeline-stages.mjs';
+import {tempRepo, seats, unit, scripted, write as writeUnitFile, PLANNER} from '../../pantheon/tests/fixtures/pipeline-stages.mjs';
+import {subagentGovernor} from '../../pantheon/src/antigravity/subagents.mjs';
 
 const hook = (ctx, h) => { ctx.implement(h.implement); ctx.review(h.review); ctx.serve(h.serve); };
 
@@ -61,13 +62,25 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   const env = await tempRepo();
   t.after(env.cleanup);
   const checkpoints = {dir: path.join(env.root, 'checkpoints')};
-  const plan1 = [unit('a', {difficulty: 'hard', allowed_subagents: ['api-designer']}), unit('b')];
+  // Unit a's implementer is an Antigravity SDK seat (Carbon), whose session was admitted one native code-explorer
+  // subagent (owner direction 2026-11-19): the receipt is that subagent, as the controller's governor recorded it.
+  const CARBON = {vendor: 'agy_google', model: 'gemini-4-carbon', transport: 'antigravity-sdk', effort: 'high'};
+  const plan1 = [unit('a', {difficulty: 'hard', allowed_subagents: ['code-explorer']}), unit('b')];
+  const base = seats();
   const hardSeats = seats({dispatcher: u => ({vendor: 'openai', model: u.difficulty === 'hard' ? 'gpt-6-astra' : 'gpt-6-luna'}),
-    subagent: () => ({vendor: 'xai', model: 'grok-4.7'}), reviewerLadder: d => [d]});
+    implementer: u => (u.unit_id === 'a' ? {seat: {...CARBON}, ladder: [{...CARBON}]} : base.implementer(u)), reviewerLadder: d => [d]});
+  const sessionOf = args => {
+    const g = subagentGovernor({implementer: {vendor: args.vendor, model: args.model}, unit_id: args.unit_id, allowed_types: args.allowed_subagents});
+    const prompt = 'Find every caller of the unit\'s export and list them with file paths.';
+    g.observe({event: 'trajectory_state', trajectory_id: 'root', parent_trajectory_id: '', depth: 0, state: 'RUNNING'});
+    assert.equal(g.admit({call_id: 'call-1', trajectory_id: 'root', args: {Subagents: [{TypeName: 'code-explorer', Role: 'caller finder', Prompt: prompt}]}}).allow, true);
+    g.observe({event: 'child_started', trajectory_id: 'child-1', parent_trajectory_id: 'root', prompt});
+    for (const state of ['RUNNING', 'FULLY_IDLE']) g.observe({event: 'trajectory_state', trajectory_id: 'child-1', parent_trajectory_id: 'root', depth: 1, state});
+    return {subagents: {...g.record(), blocked: null}, gateway: {served_models: {'gemini-4-carbon': ['gemini-4-carbon'], 'gemini-4-hydrogen': ['gemini-4-hydrogen']}}};
+  };
   const write = async args => {
-    if (args.unit_id === 'a') await ask(args.a2a, {role: 'api-designer', unit_id: 'a', text: 'design?'});
     await writeUnitFile(args.cwd, `src/${args.unit_id}/impl.mjs`, 'export const v = 1;\n');
-    return 'done';
+    return args.unit_id === 'a' ? {text: 'done', served_model: args.model, served_model_source: 'provider', session: sessionOf(args)} : 'done';
   };
   const s1 = scripted({plan: plan1, implement: async args => {
     if (args.unit_id === 'b') throw Object.assign(new Error('lane down'), {code: 'lane_failure', kind: 'exit'});
@@ -77,15 +90,22 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   const run1 = await run(plan1, s1.turns, 'r1');
   assert.equal(run1.units.a.status, 'approved');
 
-  // 7.3: the same plan again: unit a resumes, and its subagent call is still on the accepted record.
+  const REQUIRED = {type: 'code-explorer', model: 'gemini-4-hydrogen', min_calls: 1};
+  const stageOf = name => [{hash: 'sha256:' + '2'.repeat(64), stage: 'implement', status: 'passed', outputs: {run: {kind: 'pipeline', dir: path.join(env.root, name), record: path.join(env.root, name, 'pipeline.json')}}}];
+  const fresh = subagentReceipt(stageOf('r1'), REQUIRED);
+  assert.deepEqual([fresh.met, fresh.calls[0].type, fresh.calls[0].implementer, fresh.calls[0].from_checkpoint], [true, 'code-explorer', 'gemini-4-carbon', undefined], JSON.stringify(fresh));
+  // Another type, or another model, is not that receipt.
+  assert.equal(subagentReceipt(stageOf('r1'), {...REQUIRED, type: 'test-constructor'}).met, false);
+
+  // 7.3: the same plan again: unit a resumes, and its subagent is still on the accepted record.
   const s2 = scripted({plan: plan1, implement: write});
   const run2 = await run(plan1, s2.turns, 'r2');
   assert.equal(run2.units.a.resumed, true);
-  assert.equal(s2.calls.filter(c => c.role === 'subagent').length, 0, 'no subagent call was made in the resuming run');
-  const stages = [{hash: 'sha256:' + '2'.repeat(64), stage: 'implement', status: 'passed', outputs: {run: {kind: 'pipeline', dir: path.join(env.root, 'r2'), record: path.join(env.root, 'r2', 'pipeline.json')}}}];
-  const receipt = subagentReceipt(stages, {role: 'api-designer', model: 'grok-4.7', min_calls: 1});
+  assert.equal(s2.calls.filter(c => c.role === 'implementer' && c.unit_id === 'a').length, 0, 'no implementer session was started for the resumed unit');
+  const receipt = subagentReceipt(stageOf('r2'), REQUIRED);
   assert.equal(receipt.met, true, JSON.stringify(receipt));
   assert.equal(receipt.calls[0].from_checkpoint, true);
+  assert.deepEqual(run2.contributions.filter(c => c.kind === 'subtask').map(c => [c.model, c.from_checkpoint]), [['gemini-4-hydrogen', true]], 'and it is still a contributor of the resumed unit');
   assert.equal(run2.units.a.checkpoint.review.verdict, 'approve', 'the sealed Stage 5 review is restored with the unit');
 
   // 7.1: a plan that adds a sibling is a different input to the cohesion judgment: a's key changes, a is dispatched again.
@@ -265,8 +285,8 @@ test('finding 10: run.json lists a reviewer\'s stage-budget stop, verifies an op
   const manifest = (name, over = {}) => validateManifest({schema: LIVE_RUN_SCHEMA, item: 'rec-item', candidate_commit: head, profile: 'fit', independence: 'model',
     limits: {total_provider_calls: 30, stage_provider_calls: 4, revisions: 1, stage_attempts: 1, elapsed_ms: 60_000,
       pipeline: {max_provider_calls: 4, max_revisions: 1, max_concurrent_units: 1, verify_timeout_ms: 10_000}},
-    billing: {scope: 'test', metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
-    credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
+    billing: {scope: 'test', gemini_api_implementer: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
+    credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
   const run = (m, turn, d) => runConfirmed({manifest: m, digest: 'sha256:' + d.repeat(64), file: path.join(root, `${d}.json`)}, {ok: true}, statusLedgerState(m.ledgers.status_root),
     inspectWorkRoot(m.ledgers.work_root, m.item), {repo, seats: {turn, makeClientFor: () => ({})},
       makeExecutorsImpl: opts => makeExecutors({...opts, seating: FIVE.seating, facts: FIVE.facts, agy: {run: async () => { throw new Error('stop'); }}})});

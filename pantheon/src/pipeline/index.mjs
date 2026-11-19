@@ -601,7 +601,12 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         // The unit's subagent call receipts, sealed with the approval: a resumed unit restores them, so a run that
         // requires a subagent consultation still finds it on the record (independent review round 2, assignment 3
         // (Google gemini-4-carbon, manual, 77480d6), finding 7.3).
-        a2a_calls: clone(u.a2a.calls ?? []) } });
+        a2a_calls: clone(u.a2a.calls ?? []),
+        // ...and an SDK implementer's NATIVE subagents, per attempt whose writes were kept: who the implementer was,
+        // the governor's whole record (each specialist's identity, type, scope, tools, digests, states and usage, and
+        // every rejection) and the names the provider answered under. A resumed unit restores them the same way.
+        native_subagents: (u.attempts ?? []).filter(a => a.status === "written" && a.session?.subagents).map(a => ({ attempt: a.n, implementer: { vendor: a.vendor, model: a.model, effort: a.effort ?? null },
+          served_models: clone(a.session.gateway?.served_models ?? {}), subagents: clone(a.session.subagents) })) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
       run.checkpoints.written.push(u.unit_id);
     } catch (e) { u.checkpoint = { written: false, why: String(e?.message ?? e) }; }
@@ -661,7 +666,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           // the subagent calls made for it, each marked as coming from the checkpoint. u.reviews and u.a2a.calls stay
           // this run's own calls (none), so nothing is counted twice as this run's provider calls or contributions.
           review: clone(got.record.review),
-          a2a_calls: (got.record.a2a_calls ?? []).map(c => ({ ...clone(c), from_checkpoint: true })) } });
+          a2a_calls: (got.record.a2a_calls ?? []).map(c => ({ ...clone(c), from_checkpoint: true })),
+          native_subagents: (got.record.native_subagents ?? []).map(x => ({ ...clone(x), from_checkpoint: true })) } });
       run.checkpoints.resumed.push(u.unit_id);
       finish(u, "approved");
       ok = true;

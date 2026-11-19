@@ -48,6 +48,24 @@ const usageOf = u => (u && typeof u === "object" ? Object.fromEntries(Object.ent
   candidates_token_count: u.candidatesTokenCount, thoughts_token_count: u.thoughtsTokenCount, total_token_count: u.totalTokenCount }).filter(([, v]) => Number.isFinite(v))) : null);
 const addUsage = (a, b) => { const out = { ...(a ?? {}) }; for (const [k, v] of Object.entries(b ?? {})) out[k] = (out[k] ?? 0) + v; return out; };
 
+/**
+ * Ask the provider whether it serves `model` (GET /v1beta/models/<model>) with `apiKey`. Not a billed call.
+ * Returns {model, at, available, status, kind, limits, name, why, provider_status?}; never throws.
+ */
+export async function providerAvailability({ upstream = SDK_CONFIG.api.base_url, apiKey, keyHeader = SDK_CONFIG.api.key_header, model, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+  const out = { model, at: new Date().toISOString(), available: false, status: null, kind: null, limits: null, name: null, why: null };
+  try {
+    const r = await fetchImpl(`${String(upstream).replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(model)}`, { headers: { [keyHeader]: apiKey }, signal: AbortSignal.timeout(timeoutMs) });
+    out.status = r.status;
+    const j = await r.json().catch(() => null);
+    if (r.status === 200) {
+      Object.assign(out, { available: true, name: j?.name ?? null, limits: { input_token_limit: j?.inputTokenLimit ?? null, output_token_limit: j?.outputTokenLimit ?? null, thinking: j?.thinking ?? null,
+        supported_generation_methods: Array.isArray(j?.supportedGenerationMethods) ? j.supportedGenerationMethods : null } });
+    } else Object.assign(out, { kind: stopKindOf(r.status), why: String(j?.error?.message ?? `HTTP ${r.status}`).slice(0, 300), provider_status: j?.error?.status ?? null });
+  } catch (e) { Object.assign(out, { kind: "provider_error", why: String(e?.message ?? e).slice(0, 300) }); }
+  return out;
+}
+
 export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, apiKey, keyHeader = SDK_CONFIG.api.key_header, root, subagents = { model: null, ceiling: 0, markers: {} }, admit = () => {},
   signal = null, fetchImpl = fetch, requestTimeoutMs = 10 * 60_000, port = 0 } = {}) {
   if (!str(apiKey)) throw Object.assign(new Error(`the model gateway needs the Gemini API key (${SDK_CONFIG.api.key_env}); it is held by the controller only`), { code: "NO_API_KEY" });
@@ -167,18 +185,9 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
   const onSignal = () => abort(signal?.reason?.message ?? "the caller's signal aborted");
   if (signal?.aborted) onSignal(); else signal?.addEventListener("abort", onSignal, { once: true });
 
-  /** Ask the provider whether it serves `model` (GET /v1beta/models/<model>), with the controller's key. Not a billed call. */
+  /** Ask the provider whether it serves `model`, with the controller's key (providerAvailability). Recorded. */
   async function availability(model) {
-    const out = { model, at: new Date().toISOString(), available: false, status: null, kind: null, limits: null, name: null, why: null };
-    try {
-      const r = await fetchImpl(`${base}/v1beta/models/${encodeURIComponent(model)}`, { headers: { [keyHeader]: apiKey }, signal: AbortSignal.timeout(30_000) });
-      out.status = r.status;
-      const j = await r.json().catch(() => null);
-      if (r.status === 200) {
-        Object.assign(out, { available: true, name: j?.name ?? null, limits: { input_token_limit: j?.inputTokenLimit ?? null, output_token_limit: j?.outputTokenLimit ?? null, thinking: j?.thinking ?? null,
-          supported_generation_methods: Array.isArray(j?.supportedGenerationMethods) ? j.supportedGenerationMethods : null } });
-      } else Object.assign(out, { kind: stopKindOf(r.status), why: String(j?.error?.message ?? `HTTP ${r.status}`).slice(0, 300), provider_status: j?.error?.status ?? null });
-    } catch (e) { Object.assign(out, { kind: "provider_error", why: String(e?.message ?? e).slice(0, 300) }); }
+    const out = await providerAvailability({ upstream: base, apiKey, keyHeader, model, fetchImpl });
     availabilityLog.push(out);
     return out;
   }

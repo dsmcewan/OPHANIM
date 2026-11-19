@@ -640,8 +640,10 @@ process.exit(0);
 export function fakeSdkSession(dir) {
   writeFileSync(join(dir, "fake-sdk-session.mjs"), FAKE_SDK_SESSION);
   const launcher = join(dir, "fake-antigravity-python");
-  // Started as `<python> <bridge>`: the bridge argument is ignored, and the relay runs in its place.
-  writeFileSync(launcher, `#!/bin/sh\nhere=$(cd "$(dirname "$0")" && pwd)\nexec ${JSON.stringify(process.execPath)} "$here/fake-sdk-session.mjs"\n`, { mode: 0o755 });
+  // Started as `<python> <bridge>`: the bridge argument is ignored, and the relay runs in its place. `<python> <bridge>
+  // --identity` (the launcher's zero-spend preflight) prints the identity the real bridge would, for the qualified SDK.
+  const identity = JSON.stringify({ python: "fixture", executable: launcher, sdk: { module: "google.antigravity", status: "installed", distribution: "google-antigravity", version: "0.1.24", path: "/fixture" }, harness: { path: "/fixture/localharness", bytes: 1, sha256: "sha256:fixture" } });
+  writeFileSync(launcher, `#!/bin/sh\nhere=$(cd "$(dirname "$0")" && pwd)\ncase " $* " in *" --identity "*) printf '%s\\n' '${identity}'; exit 0 ;; esac\nexec ${JSON.stringify(process.execPath)} "$here/fake-sdk-session.mjs"\n`, { mode: 0o755 });
   return launcher;
 }
 
@@ -665,8 +667,12 @@ function runSdkWorker({ dir, unit, model, prompt, effort = null }) {
   });
 }
 
-/** Answer Gemini API requests in this process while a fixture is active (see the header). Returns {sessions, unavailable, restore}. */
-function installFakeGemini({ served }) {
+/**
+ * Answer Gemini API requests IN THIS PROCESS (see the header): {sessions, unavailable, restore}. withDispatch installs it
+ * for its own process; a test that runs the lifecycle in a CHILD process calls this there (the child inherits the
+ * fixture's environment, not its wrapped fetch).
+ */
+export function installScriptedGemini({ served = () => null } = {}) {
   const real = globalThis.fetch, sessions = [], unavailable = new Set();
   const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
   const sse = (model, text) => new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text }] }, finishReason: "STOP", index: 0 }], usageMetadata: GOOGLE_USAGE,
@@ -718,7 +724,7 @@ export async function withDispatch(fn) {
   let review = () => null;
   let served = () => null;
   const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call), call => review(call), (vendor, model) => served(vendor, model));
-  const gemini = installFakeGemini({ served: (vendor, model) => served(vendor, model) });
+  const gemini = installScriptedGemini({ served: (vendor, model) => served(vendor, model) });
   let n = 0;
   const lines = file => existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
   const agy = () => lines(agyLog);

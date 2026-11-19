@@ -19,8 +19,8 @@ import {digest} from '../../packages/ledger/canonical.mjs';
 const mkTmp = prefix => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 const APPROVE = '```json\n{"verdict":"approve","findings":[]}\n```';
 const manifestFor = ({root, f, item, head, name, limits, over = {}}) => LR.validateManifest({schema: LR.LIVE_RUN_SCHEMA, item, candidate_commit: head, profile: 'fit', independence: 'model',
-  limits, billing: {scope: 'test', metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
-  credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
+  limits, billing: {scope: 'test', gemini_api_implementer: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
+  credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
 const confirmed = (root, m, turn, d, extra = {}) => LR.runConfirmed({manifest: m, digest: 'sha256:' + d.repeat(64), file: path.join(root, `${d}.json`)}, {ok: true},
   LR.statusLedgerState(m.ledgers.status_root), LR.inspectWorkRoot(m.ledgers.work_root, m.item),
   {repo: extra.repo, seats: {turn, makeClientFor: () => ({})}, makeExecutorsImpl: extra.makeExecutorsImpl ?? (opts => makeExecutors({...opts, seating: FIVE.seating, facts: FIVE.facts}))});

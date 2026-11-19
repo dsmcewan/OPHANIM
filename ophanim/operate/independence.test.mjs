@@ -62,7 +62,7 @@ test('four real labs: an item without a ticket and one with an existing ticket c
       // The Stage 2 dispatcher (OpenAI) is excluded too, as an arbiter (Decision 6, owner 2026-11-19).
       const keys = contributorKeys(impl.contributions);
       assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'openai']);
-      assert.deepEqual(impl.contributions.filter(c => c.purpose === 'work').map(c => `${c.vendor}/${c.model}`), ['agy_google/gemini-4-hydrogen-medium']);
+      assert.deepEqual(impl.contributions.filter(c => c.purpose === 'work').map(c => `${c.vendor}/${c.model}`), ['agy_google/gemini-4-hydrogen']);
       const cr = reviewers(rev);
       assert.equal(new Set(cr.map(t => t.lab)).size, 3);
       for (const t of cr) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
