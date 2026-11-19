@@ -1,0 +1,61 @@
+{
+  "checked_at": "2026-11-19T03:02:52.765820+00:00",
+  "OPHANIM_commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "TELOS_root": "/home/colchis/Projects/TELOS",
+  "TELOS_head": "0c9b539ddbb08e1464603faf786e0d5cdfc33fb8",
+  "TELOS_tracked_changes": [
+    {
+      "path": "docs/institutional-memory/examples/reader-iliad-correct.json",
+      "bytes": 1231,
+      "sha256": "7c04be300d1e8a5fef36f919e147d51230130026de9ff28fa5643381418eedcc"
+    },
+    {
+      "path": "docs/institutional-memory/iliad/INVARIANTS.json",
+      "bytes": 2728,
+      "sha256": "cf68fd2e05a56cab95ae20ed260e5189abf4152cce994d185e15e8eb515a1a98"
+    },
+    {
+      "path": "docs/institutional-memory/iliad/comprehension-queries.json",
+      "bytes": 4212,
+      "sha256": "828ac3085b6de814d95a22893ae93043a60b1efb939ba4cd05dbae959eca1f32"
+    },
+    {
+      "path": "docs/institutional-memory/iliad/workflow/workflow.json",
+      "bytes": 5303,
+      "sha256": "bcc1b7fa0cca2e2bc04fcf5cfeda3e0702bc380390481fdc7d1f713016e0473d"
+    },
+    {
+      "path": "docs/institutional-memory/verify-contracts.mjs",
+      "bytes": 65042,
+      "sha256": "32f2dd1c406ba3e8d026a9de6bf3219e478267afd7af4b0b6b679d763a6dad08"
+    },
+    {
+      "path": "narcissus/flagship/src/evidence-ledger.json",
+      "bytes": 3278,
+      "sha256": "7d4c56d752984c9d248efe74a6830c95f177747e3268971fc84c4d0ea9605599"
+    }
+  ],
+  "TELOS_modified_by_setup": false,
+  "checkouts": [
+    {
+      "review_id": "agy-a3-dry",
+      "head": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+      "tracked_source_unchanged": true
+    },
+    {
+      "review_id": "grok-a2",
+      "head": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+      "tracked_source_unchanged": true
+    },
+    {
+      "review_id": "sol-a1",
+      "head": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+      "tracked_source_unchanged": true
+    },
+    {
+      "review_id": "astra-a4",
+      "head": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+      "tracked_source_unchanged": true
+    }
+  ]
+}

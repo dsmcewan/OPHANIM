@@ -1,0 +1,20 @@
+{
+  "exit_code": 0,
+  "permissions": {
+    "sources": [
+      "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/home-grok-a2/.grok/config.toml (config)"
+    ],
+    "loaded": 6,
+    "skipped": [],
+    "mcpServerAllowlist": [],
+    "mcpLockdownSources": [],
+    "mcpManagedServersOnly": "off",
+    "marketplaceAllowlist": [],
+    "marketplaceLockdownSources": [],
+    "managedMarketplaces": [],
+    "managedSettingsPath": "/etc/claude-code/managed-settings.json",
+    "managedSettingsExists": false,
+    "managedSettingsActive": false,
+    "claudeBypassLockAdvisory": false
+  }
+}

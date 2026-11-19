@@ -1,0 +1,127 @@
+{
+  "method": "native SDK session tool requests; conversation and reasoning messages excluded",
+  "native_sources": [
+    {
+      "name": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "sha256": "3d4d6d68c0b6471ef1ac0907dab243db8779fcf89b858c6b1596786b730c2484",
+      "bytes": 1110305
+    }
+  ],
+  "malformed_records": 0,
+  "tool_requests": [
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 16,
+      "timestamp": "2026-11-19T03:12:56.730Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"rg --files -g AGENTS.md -g '*test.mjs' ophanim/operate; git status --short; git rev-parse HEAD\",\"max_output_tokens\":6000}));\ntext(await tools.exec_command({cmd:\"cat ophanim/operate/gates.mjs ophanim/operate/reconcile.mjs\",\"max_output_tokens\":15000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 22,
+      "timestamp": "2026-11-19T03:13:01.291Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"rg --files -g AGENTS.md; cat ophanim/operate/lifecycle-evidence-review.test.mjs\",\"max_output_tokens\":17000}));\ntext(await tools.exec_command({cmd:\"rg -n 'handoff|upstream|work_units|evidence|planner|difficulty|proposal|apply|verify' ophanim/operate/stages.mjs\",\"max_output_tokens\":9000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 30,
+      "timestamp": "2026-11-19T03:13:06.993Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"cat ophanim/operate/scheduler.mjs\",\"max_output_tokens\":16000}));\ntext(await tools.exec_command({cmd:\"cat ophanim/operate/evidence-recovery.mjs\",\"max_output_tokens\":14000}));\ntext(await tools.exec_command({cmd:\"rg -n '^export|versionOf|partial|complete|continu|contain|realpath|budget|subarray|slice|range' ophanim/operate/context.mjs; rg -n 'handoffRefusal|recordStage|verify' ophanim/operate/work-ledger.mjs\",\"max_output_tokens\":7000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 39,
+      "timestamp": "2026-11-19T03:13:15.540Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test ophanim/operate/stages.test.mjs ophanim/operate/scheduler.test.mjs ophanim/operate/context.test.mjs ophanim/operate/context-bounds.test.mjs ophanim/operate/evidence-recovery.test.mjs ophanim/operate/revision-reassessment.test.mjs ophanim/operate/planner-tier.test.mjs ophanim/operate/fit-lifecycle.test.mjs ophanim/operate/lifecycle-evidence-review.test.mjs\",\"yield_time_ms\":1000,\"max_output_tokens\":3000}));\ntext(await tools.exec_command({cmd:\"sed -n '285,328p' ophanim/operate/work-ledger.mjs; sed -n '448,468p' ophanim/operate/stages.mjs; sed -n '1,115p' ophanim/operate/evidence-recovery.mjs; sed -n '250,266p' ophanim/operate/context.mjs\",\"max_output_tokens\":8000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 46,
+      "timestamp": "2026-11-19T03:13:21.950Z",
+      "name": "exec",
+      "input": "text(await tools.write_stdin({session_id:22708,chars:\"\",\"yield_time_ms\":1000,\"max_output_tokens\":4000}));\ntext(await tools.exec_command({cmd:\"sed -n '90,250p' ophanim/operate/context.mjs; sed -n '610,739p' ophanim/operate/stages.mjs; cat docs/context-and-evidence.md\",\"max_output_tokens\":12000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 56,
+      "timestamp": "2026-11-19T03:13:38.014Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"cat ophanim/operate/test-fixtures.mjs; sed -n '277,335p' ophanim/operate/context.mjs; sed -n '610,645p' ophanim/operate/stages.mjs; sed -n '1,100p' ophanim/operate/fit-lifecycle.test.mjs; sed -n '1338,1379p' ophanim/operate/stages.mjs\",\"max_output_tokens\":13000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 63,
+      "timestamp": "2026-11-19T03:13:43.005Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"cat pantheon/AGENTS.md; cat ophanim/operate/planner-tier.test.mjs; sed -n '1,110p' ophanim/operate/stages.mjs; sed -n '328,340p' ophanim/operate/work-ledger.mjs; sed -n '290,330p' ophanim/operate/scheduler.mjs\",\"max_output_tokens\":6500}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 70,
+      "timestamp": "2026-11-19T03:13:47.162Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"sed -n '260,310p' ophanim/operate/scheduler.mjs; rg -n 'requiresUnits|needsUnits|validatePlan' ophanim/operate/stages.mjs; cat .git; sed -n '350,401p' ophanim/operate/context.mjs\",\"max_output_tokens\":4000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 77,
+      "timestamp": "2026-11-19T03:13:54.199Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"sed -n '738,765p' ophanim/operate/stages.mjs; sed -n '1100,1136p' ophanim/operate/stages.mjs; sed -n '160,209p' ophanim/operate/context.mjs; sed -n '195,245p' ophanim/operate/stages.mjs\",\"max_output_tokens\":4000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 84,
+      "timestamp": "2026-11-19T03:13:59.095Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"sed -n '146,166p' ophanim/operate/context.mjs; rg -n 'test\\\\(' ophanim/operate/lifecycle-evidence-review.test.mjs; cat docs/reviews/2026-11-17-orchestration/ASSESSMENT.md\",\"max_output_tokens\":6000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 91,
+      "timestamp": "2026-11-19T03:14:36.321Z",
+      "name": "exec",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/home-sol-a1/.cache/ophanim-review/ophanim-review-GYMWnA/worktree/.review-tests/lifecycle-independent.test.mjs\\n+import {test} from 'node:test';\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import os from 'node:os';\\n+import path from 'node:path';\\n+import {makeRetriever, buildDossier} from '../ophanim/operate/context.mjs';\\n+import {planValidity, requirementOf} from '../ophanim/operate/gates.mjs';\\n+import {tick, watch} from '../ophanim/operate/scheduler.mjs';\\n+import {reconcile} from '../ophanim/operate/reconcile.mjs';\\n+import {openWorkLedger} from '../ophanim/operate/work-ledger.mjs';\\n+import {makeExecutors} from '../ophanim/operate/stages.mjs';\\n+import {withDispatch} from '../pantheon/tests/fixtures/dispatch.mjs';\\n+import {fixture, scriptedTurn, planFor, json, LIMITS, FIVE} from '../ophanim/operate/test-fixtures.mjs';\\n+\\n+test('issue title/state changes alter shown bytes without altering their version', () => {\\n+  const issues = [{number: 1, title: 'old title', state: 'open', body: 'unchanged body'}];\\n+  const r = makeRetriever({repo: process.cwd(), statusRoot: '.', issues});\\n+  const a = r.run({op: 'issue', number: 1});\\n+  issues[0].title = 'new title'; issues[0].state = 'closed';\\n+  const b = r.run({op: 'issue', number: 1});\\n+  assert.equal(a.ok, true); assert.equal(b.ok, true);\\n+  assert.notEqual(a.text, b.text);\\n+  assert.equal(a.version, b.version, 'BUG: changed bytes retain the same version');\\n+});\\n+\\n+test('a cited derived relations view changes but its approved plan remains reusable', async () => {\\n+  await withDispatch(async ctx => {\\n+    const repo = ctx.dir;\\n+    const f = fixture(repo, [{item: 'target'}]);\\n+    const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, {\\n+      evidence: [{ref: 'status:target#relations', why: 'no downstream work depends on this item'}],\\n+    }))});\\n+    const ex = makeExecutors({repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir});\\n+    await tick({repo, ...f, executors: {plan: ex.plan}, limits: LIMITS});\\n+    const w = openWorkLedger({root: f.workRoot});\\n+    const p = w.stages('target')[0];\\n+    assert.equal(p.status, 'passed');\\n+    const before = buildDossier({repo, statusRoot: f.statusRoot, item: 'target'}).entries.find(e => e.source === 'status:target#relations');\\n+    f.S.set({item: 'consumer', title: 'new consumer', state: 'Ready', basis: 'depends on target', checked: '2026-11-18', depends_on: ['target']});\\n+    const after = buildDossier({repo, statusRoot: f.statusRoot, item: 'target'}).entries.find(e => e.source === 'status:target#relations');\\n+    assert.notEqual(before.version, after.version);\\n+    assert.equal(reconcile({repo, statusRoot: f.statusRoot, workLedger: w}).items.find(i => i.item === 'target').gate.gate, 'implement', 'BUG: a cited changed view does not stale the plan');\\n+  });\\n+});\\n+\\n+test('watch never wakes an evidence-blocked plan when only the missing evidence appears', async () => {\\n+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'a1-watch-'));\\n+  try {\\n+    const f = fixture(repo, [{item: 'target'}]);\\n+    let calls = 0;\\n+    const plan = async () => {\\n+      calls++;\\n+      const d = buildDossier({repo, statusRoot: f.statusRoot, item: 'target'});\\n+      return {status: 'blocked', outputs: {context: {dossier: {stable: d.stable}}}, team: [], contributions: [], findings: [], usage: {provider_calls: 0},\\n+        blocker: {code: 'EVIDENCE_INSUFFICIENT', what: 'missing notes.md', role: 'lead@orch', resume_when: 'notes appear'}, next: {stage: 'plan', why: 'need evidence'}};\\n+    };\\n+    const state = {last: null};\\n+    const args = {repo, ...f, state, once: true, executors: {plan}, limits: LIMITS};\\n+    assert.equal((await watch(args)).length, 1);\\n+    fs.writeFileSync(path.join(repo, 'notes.md'), 'new evidence');\\n+    const w = openWorkLedger({root: f.workRoot});\\n+    assert.equal(reconcile({repo, statusRoot: f.statusRoot, workLedger: w}).items[0].gate.gate, 'plan', 'explicit reconciliation sees the new evidence');\\n+    assert.equal((await watch(args)).length, 0, 'BUG: watch does not reconcile the changed evidence');\\n+    assert.equal(calls, 1);\\n+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }\\n+});\\n+\\n+test('diagnose implementation fixture failure without live providers', async () => {\\n+  await withDispatch(async ctx => {\\n+    const repo = ctx.dir;\\n+    const f = fixture(repo, [{item: 'target'}]);\\n+    const ex = makeExecutors({repo, makeClientFor: ctx.makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, profile: 'argo', ...FIVE});\\n+    await tick({repo, ...f, executors: {plan: ex.plan, implement: ex.implement}, limits: {...LIMITS, iterations: 2}});\\n+    const w = openWorkLedger({root: f.workRoot});\\n+    console.log('IMPLEMENT DIAGNOSTIC', JSON.stringify(w.stages('target').map(s => ({stage: s.stage, status: s.status, outputs: s.stage === 'implement' ? s.outputs : undefined}))));\\n+  });\\n+});\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test .review-tests/lifecycle-independent.test.mjs\",\"yield_time_ms\":1000,\"max_output_tokens\":3500}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 99,
+      "timestamp": "2026-11-19T03:14:54.347Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"sed -n '527,575p' ophanim/operate/stages.mjs; nl -ba ophanim/operate/gates.mjs | head -n 85; nl -ba ophanim/operate/scheduler.mjs | sed -n '80,95p'; nl -ba ophanim/operate/context.mjs | sed -n '185,197p'; nl -ba ophanim/operate/context.mjs | sed -n '248,260p'; cat ophanim/operate/reassess.mjs\",\"max_output_tokens\":6500}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 106,
+      "timestamp": "2026-11-19T03:15:02.693Z",
+      "name": "exec",
+      "input": "const r = await tools.exec_command({cmd:\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test ophanim/operate/scheduler.test.mjs ophanim/operate/planner-tier.test.mjs ophanim/operate/context-bounds.test.mjs\",\"yield_time_ms\":1000,\"max_output_tokens\":2000});text(r);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 115,
+      "timestamp": "2026-11-19T03:15:11.582Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"nl -ba ophanim/operate/stages.mjs | sed -n '674,730p'; nl -ba ophanim/operate/gates.mjs | sed -n '102,138p'; nl -ba ophanim/operate/gates.mjs | sed -n '184,230p'; nl -ba ophanim/operate/work-ledger.mjs | sed -n '175,215p'; nl -ba ophanim/operate/evidence-recovery.mjs | tail -n 40; rg -n 'checkEvidenceLedgers|applyProposal' packages/ledger/status.mjs; rg -n '^test' ophanim/operate/scheduler.test.mjs; nl -ba .review-tests/lifecycle-independent.test.mjs | head -n 100\",\"max_output_tokens\":6500}));\ntext(await tools.write_stdin({session_id:12548,chars:\"\",\"yield_time_ms\":1000,\"max_output_tokens\":2500}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 122,
+      "timestamp": "2026-11-19T03:15:33.195Z",
+      "name": "exec",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/home-sol-a1/.cache/ophanim-review/ophanim-review-GYMWnA/worktree/.review-tests/lifecycle-independent.test.mjs\\n@@\\n-import {planValidity, requirementOf} from '../ophanim/operate/gates.mjs';\\n+import {earliestGate, requirementDigest} from '../ophanim/operate/gates.mjs';\\n@@\\n-import {openWorkLedger} from '../ophanim/operate/work-ledger.mjs';\\n+import {openWorkLedger, outputsDigest} from '../ophanim/operate/work-ledger.mjs';\\n@@\\n test('issue title/state changes alter shown bytes without altering their version', () => {\\n@@\\n });\\n+\\n+test('a disqualified review removes downstream reuse and only flags a Resolved item', () => {\\n+  const item = {item: 'target', title: 'requirement', basis: 'required behavior', state: 'Ready', entry: 'entry'};\\n+  const stages = [];\\n+  for (const stage of ['plan', 'implement', 'review', 'validate', 'outcome']) {\\n+    const prev = stages.at(-1);\\n+    stages.push({stage, hash: stage, status: 'passed', identity: {item: item.item, requirement: requirementDigest(item)},\\n+      handoff: {from: prev?.hash ?? null}, inputs: {upstream: prev ? outputsDigest(prev.outputs) : null},\\n+      outputs: stage === 'plan' ? {deps: {}, evidence: []} : stage === 'review' ? {cycle: 'bad-cycle'} : {stage}});\\n+  }\\n+  const args = {item, history: [item], depStatus: () => null, stages, reassessments: [{hash: 'reassessment', cycle: 'bad-cycle', findings: [{why: 'disqualified reviewer'}]}]};\\n+  const active = earliestGate(args);\\n+  assert.equal(active.gate, 'review');\\n+  assert.deepEqual(Object.keys(active.reuse), ['plan', 'implement']);\\n+  const resolved = {...item, state: 'Resolved', evidence: {ticket: 'ticket', commit: 'commit', review: {cycle: 'bad-cycle', close_entry: 'close', outcome: 'verified', reviewers: ['a', 'b', 'c'].map(lab => ({lab}))}}};\\n+  assert.equal(earliestGate({...args, item: resolved}).gate, 'reverification-needed');\\n+  assert.equal(resolved.state, 'Resolved');\\n+});\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test .review-tests/lifecycle-independent.test.mjs\",\"yield_time_ms\":1000,\"max_output_tokens\":1500}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-50-01a1f1ca-ebb2-7d71-9e0a-33da4e215da0.jsonl",
+      "line": 130,
+      "timestamp": "2026-11-19T03:15:40.687Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"rg -n 'inputSignature|watch\\\\(|signature|evidence|tick\\\\(' ophanim/operate/service.mjs; nl -ba ophanim/operate/context.mjs | sed -n '482,531p'; nl -ba ophanim/operate/work-ledger.mjs | sed -n '228,267p'; nl -ba ophanim/operate/stages.mjs | sed -n '474,487p'\",\"max_output_tokens\":3600}));\n"
+    }
+  ],
+  "coverage_note": "Records tool requests, not an OS trace of transitive file reads.",
+  "potential_findings_references": []
+}

@@ -1,0 +1,15 @@
+{
+  "review_id": "sol-a1",
+  "applied_at": "2026-11-19T03:11:37.872249+00:00",
+  "reason": "On this WSL host, the unmodified permission profile fails during the Codex AGENTS helper: bwrap cannot mkdir /run/WSL under denied /run. A private outer runtime /run removes that host interop mount before Codex starts.",
+  "outer": {
+    "root": "read-only host mount",
+    "run": "private tmpfs",
+    "tmp": "private tmpfs",
+    "persistent_writes": "only this task base"
+  },
+  "codex_sdk_and_binary": "0.170.0; original lockfile defaults, no alternate binary used",
+  "inner_permission_profile_changed": false,
+  "reviewed_source_changed": false,
+  "WSL_INTEROP_removed_from_parent_environment": true
+}

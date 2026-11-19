@@ -1,0 +1,14 @@
+{
+  "assignment": 3,
+  "reviewer": "google:gemini-4-carbon",
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "runner_status": "complete",
+  "coverage_status": "source inspection blocked",
+  "all_ten_questions_cannot_tell": true,
+  "denied_source_reads": 8,
+  "cause": "Installed agy runtime advertises read_file; the unit-worker PreToolUse hook rejects that tool as not allowed.",
+  "observed_reason": "tool read_file is not allowed for a unit worker",
+  "code_review_can_be_relied_on_as_complete": false,
+  "source_report_unchanged": true,
+  "scope_note": "The report includes observations from sanctioned existing test commands; it does not establish the ten execution-reliability properties by source inspection."
+}

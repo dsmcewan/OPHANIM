@@ -1,0 +1,38 @@
+{
+  "review_id": "astra-a4",
+  "assignment": 4,
+  "lab": "OpenAI",
+  "requested_model": "gpt-6-astra",
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "status": "complete",
+  "stop_reason": "final answer",
+  "transport": "codex-sdk",
+  "default_reviewer": {
+    "lab": "OpenAI",
+    "vendor": "openai",
+    "model": "gpt-6.1-sol"
+  },
+  "reviewer_override": true,
+  "started_at": "2026-11-19T03:12:53.695Z",
+  "ended_at": "2026-11-19T03:15:37.498Z",
+  "worktree_check": {
+    "changed": [],
+    "violations": [],
+    "limits": [
+      "a change inside a directory git already listed as ignored before the run (e.g. node_modules/) is not seen",
+      "only the worktree is checked: a CLI's own sandbox decides what it could write elsewhere"
+    ]
+  },
+  "grok_permissions": null,
+  "reproduction_files": [],
+  "continuation_chain": [],
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/astra-a4/docs/reviews/2026-11-18-independent-review/findings-4-openai.transcript.json",
+  "source_report": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/astra-a4/docs/reviews/2026-11-18-independent-review/findings-4-openai.md",
+  "folder": "/home/colchis/Projects/OPHANIM-review-handoff-77480d6-20261118T215738-0500/assignment-4-openai",
+  "zip": "/home/colchis/Projects/OPHANIM-review-handoff-77480d6-20261118T215738-0500/assignment-4-openai.zip",
+  "private_runtime_namespace": true,
+  "original_transcript_sha256": "c2760e19381d576a7d2cc2bb9c11db9e5ea71cd859b71497f4c6caaa54671d86",
+  "delivered_transcript_sha256": "c2760e19381d576a7d2cc2bb9c11db9e5ea71cd859b71497f4c6caaa54671d86",
+  "header_hash_verified": true,
+  "token_prefix_redactions": 0
+}

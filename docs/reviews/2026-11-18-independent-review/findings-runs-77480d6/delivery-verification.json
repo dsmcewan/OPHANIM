@@ -1,0 +1,50 @@
+{
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "reviews": [
+    {
+      "assignment": 1,
+      "lab": "OpenAI",
+      "requested_model": "gpt-6.1-sol",
+      "runner_status": "complete",
+      "coverage_status": "see reviewer findings for individual question limits",
+      "verified_files": 8,
+      "zip_verified": true,
+      "known_profile_credential_scan": "clear",
+      "zip_sha256": "0cb3c13d30a9aff77e2c3ad3cf4576196fe8d0a95e7c48848228796c0cab92c3"
+    },
+    {
+      "assignment": 2,
+      "lab": "xAI",
+      "requested_model": "grok-4.7",
+      "runner_status": "complete",
+      "coverage_status": "see reviewer findings for individual question limits",
+      "verified_files": 11,
+      "zip_verified": true,
+      "known_profile_credential_scan": "clear",
+      "zip_sha256": "6031b358f2d4eca42e760c55d2808ecdf9b091aefdddb93a1fb69aa256ab4f63"
+    },
+    {
+      "assignment": 3,
+      "lab": "Google",
+      "requested_model": "gemini-4-carbon",
+      "runner_status": "complete",
+      "coverage_status": "source inspection blocked",
+      "verified_files": 6,
+      "zip_verified": true,
+      "known_profile_credential_scan": "clear",
+      "zip_sha256": "a9aba40f98458e820a30b73b49a391e90bb2302ffa6d7b40563fdb7ab4f27281"
+    },
+    {
+      "assignment": 4,
+      "lab": "OpenAI",
+      "requested_model": "gpt-6-astra",
+      "runner_status": "complete",
+      "coverage_status": "see reviewer findings for individual question limits",
+      "verified_files": 7,
+      "zip_verified": true,
+      "known_profile_credential_scan": "clear",
+      "zip_sha256": "579bbf54230b9e9da8d8da9436551380bd23725185f10fd38bf92e473dc6ea68"
+    }
+  ],
+  "operator_receipts_known_profile_credential_scan": "clear"
+}
