@@ -279,7 +279,12 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       const resumeId = method === "codex-sdk-resume" ? resume.t.cli.thread_id : null;
       plan.codex_outer_runtime = outer;
       plan.scratch_tmp = scratchRec;
-      Object.assign(plan, { argv: [...(outer.applied ? outer.argv.slice(0, -1) : []), ...sdkSpawnArgv({ binary: cli, sdkOptions, threadOptions, resumeId }), `(stdin: ${promptRef})`], cwd: null,
+      // The command that runs. Without the outer runtime the SDK spawns codex itself: its argv. With it, the SDK spawns the
+      // launcher, which execs `bwrap ... -- <codex> "$@"`: the outer argv up to and including codex (its last item, the
+      // "<codex arguments>" placeholder, dropped), then the SDK's arguments WITHOUT its own binary, so codex is named once,
+      // as the launcher names it. (Appending the SDK's whole argv named codex twice, in the plan and the transcript.)
+      const sdkArgv = sdkSpawnArgv({ binary: cli, sdkOptions, threadOptions, resumeId });
+      Object.assign(plan, { argv: [...(outer.applied ? [...outer.argv.slice(0, -1), ...sdkArgv.slice(1)] : sdkArgv), `(stdin: ${promptRef})`], cwd: null,
         argv_note: `the argv ${CODEX_SDK_PACKAGE} builds from these options (dist/index.js:178-247) and spawns itself; the prompt is written to the CLI's stdin`,
         sdk_options: { env: "the scrubbed environment (names under env.passed); the SDK adds CODEX_INTERNAL_ORIGINATOR_OVERRIDE", codexPathOverride: launcher, ...(sdkOptions.config ? { config: sdkOptions.config } : {}), configOverrides: sdkOptions.configOverrides, apiKey: "never passed", baseUrl: "never passed" },
         thread_options: threadOptions, ...(resumeId ? { resume_thread_id: resumeId } : {}),
