@@ -20,9 +20,11 @@ test('4. a validator answer served by a contributor, or by an unresolved model, 
   await withDispatch(async ({dir: repo, makeClientFor, serve}) => {
     serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'val'}]);
-    // Whatever seat is asked: the Google route answers as a model nobody declares, and xai answers as grok-4.7.
+    // Whatever seat is asked: an OpenAI seat answers as gpt-6-luna (the easy unit's dispatcher, a Decision 6 arbiter), any
+    // other as a model nobody declares. (Owner decision L-002 (2026-11-19): the change reviewers -- grok-4.6 among them --
+    // are not asked at all, and a lab off the review panel, OpenAI here, is asked first.)
     const turn = scriptedTurn({'plan-review': xaiFinds(),
-      validator: ({vendor}) => ({text: ACCEPT, served_model: vendor === 'xai' ? 'grok-4.7' : 'unreleased-model-x'})});
+      validator: ({vendor}) => ({text: ACCEPT, served_model: vendor === 'openai' ? 'gpt-6-luna' : 'unreleased-model-x'})});
     const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: {...LIMITS, stage_attempts: 1}});
     const w = openWorkLedger({root: f.workRoot});
@@ -36,10 +38,14 @@ test('4. a validator answer served by a contributor, or by an unresolved model, 
     assert.match(lost.why, /the model that answered is unresolved/);
     assert.equal(lost.verdict, 'accept');
     assert.match(lost.reply_sha, /^sha256:/);
-    // The fallback seat: grok-4.6 was asked, grok-4.7 (the plan-review finder) answered.
-    const sib = rej.find(x => x.vendor === 'xai');
-    assert.deepEqual([sib.model, sib.served_model], ['grok-4.6', 'grok-4.7']);
-    assert.match(sib.why, /xai\/grok-4\.7 contributed to the change under review/);
+    // The first seat: gpt-6-sol was asked (a lab outside the panel), gpt-6-luna (an arbiter of the change) answered.
+    const sib = rej.find(x => x.vendor === 'openai');
+    assert.deepEqual([sib.model, sib.served_model], ['gpt-6-sol', 'gpt-6-luna']);
+    assert.match(sib.why, /openai\/gpt-6-luna contributed to the change under review/);
+    // No seat that reviewed the passing change review was asked (owner decision L-002, 2026-11-19).
+    const reviewed = w.stages('val').find(s => s.stage === 'review').team.map(t => `${t.vendor}/${t.model}`);
+    assert.equal(reviewed.length, 3);
+    assert.deepEqual(rej.filter(x => reviewed.includes(`${x.vendor}/${x.model}`)), []);
     assert.ok(!w.stages('val').some(s => s.stage === 'outcome'));
     assert.equal(new Set(rej.map(x => `${x.vendor}/${x.model}`)).size, rej.length, 'a seat whose answer was rejected is not asked again');
   });

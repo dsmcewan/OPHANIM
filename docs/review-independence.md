@@ -22,7 +22,7 @@ With four labs, the old pairing left room for one contributing lab at most. A mo
 - **Sessions and retries.** Identity has no session in it.
 - **Requested and served.** A turn excludes the model it asked for and the model that answered.
 
-**Unresolved names are never guessed.** A name the rules do not declare has no identity and no lab; its lab is not inferred from the route. A direct vendor can only serve its own lab's models, so any other pairing is unresolved too.
+**Unresolved names are never guessed.** A name the rules do not declare has no identity and no lab; its lab is not inferred from the route. A direct vendor can only serve its own lab's models, so any other pairing is unresolved too. (Under the lab rule this held only for v3 until wave 2: a lab-rule cycle took `labOf(vendor, served ?? model)`, so an undeclared name got its vendor's lab and any name on `agy_google` the Google lab. A lab-rule cycle the lifecycle or the board's coordinated review opens now pins the policy as `lab_identity` and resolves every lab under it; cycles recorded without it are checked as recorded. Self-audit round 3, assignment 2, L-1/L-204.)
 
 - **An unresolved contributor** means nobody can be shown not to be it. No panel qualifies and the review is pending until the name is declared.
 - **An unresolved reviewer** does not qualify. This applies to the model asked for and to the model that answered, and the two must be of the same lab. The response is kept on the ledger and the attempt is recorded as failed with the reason; it is not counted as a review.
@@ -48,7 +48,7 @@ Everything that decides "which model is this, and which lab made it" is one valu
 4. A seat that shares a lab with a contributor is marked `shared_lab`, with the contributing models of that lab. The cycle's close lists the shared labs (`shared_labs`), and the stage record carries them.
 5. Fewer than three labs with an eligible model: no panel. The review is `REVIEW_CAPACITY_PENDING` and the work is kept, as before.
 
-The contribution history is carried through revisions unchanged: the plan, the work, every critique whose findings reached a revision, and the contributions of any plan a revision revises.
+The contribution history is carried through revisions unchanged: the plan, the work, every critique whose findings reached a revision, and the contributions of any plan a revision revises. Since wave 2 (self-audit round 3, assignment 2, sealed `449ca42`; owner decision L-001, 2026-11-19) it also holds every model that served one of the planner's retrieval rounds (not only its final answer), and the dispatcher whose structured return of a unit reached a plan revision (`purpose: 'dispatcher-return'`).
 
 ## The ledger
 
@@ -60,19 +60,21 @@ The contribution history is carried through revisions unchanged: the plan, the w
 
 ## Activation
 
-Nothing opens a v3 cycle unless a caller asks:
+*Superseded on 2026-11-18 for `fit` (see "Activation for `fit`" below): the lifecycle's default profile, `fit`, runs under the model rule; the text below still describes the other profiles.*
+
+Outside `fit`, nothing opens a v3 cycle unless a caller asks:
 
 - `ophanim/operate/stages.mjs` exports `REVIEW_INDEPENDENCE = 'lab'`. The lifecycle uses the model rule only when that constant, or `makeExecutors({independence: 'model'})`, says so.
 - The execution service and the CLI take no option for it; a config key for it is refused as unknown.
 - Pantheon's board runs (`pantheon-board run`) still use the lab rule.
 
-To activate after review: set `REVIEW_INDEPENDENCE` to `'model'`. That is a one-line, owner-made change.
+For the other profiles, activating it is still the owner's one-line change of `REVIEW_INDEPENDENCE` to `'model'`.
 
 ## What the tests show
 
 All reviewers, validators and workers are scripted. No provider was called. These tests show identity resolution and enforcement; they do not evaluate any model, and nothing here shows that a same-lab reviewer judges independently in practice.
 
-The inventory is the real one: 5 Anthropic, 3 OpenAI, 2 xAI and 2 Google models in the seating tables. No synthetic lab is used and no panel is smaller than three.
+The inventory is the real one: the seating tables offer 3 Anthropic (`claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5`), 3 OpenAI (`gpt-6-sol`, `gpt-6-astra`, `gpt-6-luna`), 3 Google (`gemini-4-carbon`, `gemini-4-argon`, `gemini-3.8-flash`) and 2 xAI (`grok-4.7`, `grok-4.6`) reviewable identities (recomputed 2026-11-19 by resolving every seated name; `gpt-6.1-sol` and `gemini-4-hydrogen` are seated for work only). No synthetic lab is used and no panel is smaller than three.
 
 `pantheon/tests/review-model-independence.test.mjs`:
 
@@ -137,9 +139,12 @@ Starting commit `10cbd52` (the reviewed commit; the branch had not moved). Each 
 
 ### 2. Validator capacity
 
-The validator excludes the full contribution history: the plan, the work, every critique whose finding reached a revision, and the change reviewers. If no seat is left it waits.
+*Corrected 2026-11-19 (owner decision L-002; self-audit round 3, assignment 2, D-A). This section used to say the validator excluded "the change reviewers" and rested its capacity argument on that. The code did not: with equal exclusions the one-seat selector returned the change panel's first seat, so on the default tables the validator WAS one of the three approving reviewers (78 of 78 computed combinations), recorded `independent: true` and was told "You did not plan, write or review it". What follows is what the code now does.*
 
-**Reachability.** The exhausted state was reached only by the appendix's injected fixture, which supplies a contributor list naming every declared model. In a complete lifecycle I did not find a path to it: validation runs only after a passed change review, and a passed review means three labs each still had a non-contributing model at that point. The three reviewers then become contributors, and the cases I enumerated on the real inventory still leave at least one eligible validator model. This is an argument from the inventory and the stage order, backed by the lifecycle tests. It is not a proof over every sequence of revisions, so the capacity block is kept and tested at the boundary.
+- **Model rule (`fit`).** The validator excludes the full contribution history (the plan and every model that served one of the planner's turns, the work, every critique whose finding reached a revision, the Decision 6 arbiters, the dispatcher of any advisory return) AND every requested and served model of the reviewers of the PASSING change-review cycle. Those identities are read from that cycle's own reviews on its ledger, not from cycle membership elsewhere; reviewers of earlier cycles are excluded only when a finding of theirs reached a revision. They are excluded at seat selection and again at admission of the answer and of each of its retrieval rounds. Among the eligible models a lab outside the review panel is preferred (`reviewSeatsByModel({last})`); a same-lab sibling is used only when no fourth-lab model is eligible, and the record says so.
+- **What is recorded.** `outputs.validator.independence`: the rule, the validator's identities and lab, the passing cycle's reviewers (requested, served, lab, verdict) and where they were read from, the panel's labs, `also_change_reviewer`, `contributor`, `fourth_lab`, `shared_lab_with_reviewers`, `shared_lab_with_contributors`, and the scope in words. `independent` is computed (`!contributor && !also_change_reviewer`); it is no longer the constant `true`. The validator prompt's first line is true of the seat asked: "You did not plan, write or review it" only for a seat that did not review the change.
+- **Capacity.** When no eligible validator is left the stage is `REVIEW_CAPACITY_PENDING`: the commit, its tests and every answer are kept, the exclusions are recorded, and no excluded reviewer is asked instead. On the default tables (the brief's 78 clean-path combinations, recomputed against this selector) none goes pending and the validator comes from the fourth lab in 60; the 18 others take a same-lab sibling. Pending becomes reachable once earlier finders have used models up (4 of 78 with finders `grok-4.7` and `claude-sonnet-5`). This is a computed enumeration over a constructed grid, not a proof over every sequence of revisions; the pending path is tested at the boundary and through the lifecycle with a reviewer pool of exactly the three panel models.
+- **Lab rule (every other profile).** Only the corrections apply: the panel's three labs are exactly the labs that did not contribute, so a validator from a lab outside the panel never exists, and excluding the reviewers' labs would leave none. The validator may be, and on default tables is, one of the approving reviewers; the record says `also_change_reviewer: true`, `independent: false`, and the prompt tells it that it reviewed the change. Validation there is the controller's clean-checkout tests plus one approving reviewer's re-judgment against the requirement, not a fourth independent judgment.
 
 ### 3. Revision at the top of the dial
 
@@ -186,7 +191,7 @@ Owner direction, 2026-11-17, after the documentation and the owner's `agy models
 **Decision 2: the Antigravity output carries the required input model.**
 
 - The model is a required input of every Antigravity call. The transport now records it as the output's model: `served_model: <input model>`, with `served_model_source: "input"` on the run's turn and on the ledger turn.
-- The marker matters. It says the name is the pinned input, not a statement by the provider about that answer. A turn without the marker was named by its provider.
+- The marker matters. It says the name is the pinned input, not a statement by the provider about that answer. A turn without the marker was named by its provider. Since wave 2 the ledger enforces the vocabulary (self-audit round 3, assignment 2, L-3/L-204): a turn's `served_model_source` is `provider`, `input` (and then the served name IS the requested name), `unnamed` (no served name) or `unknown`; every producer in this repository writes one of these, so recorded ledgers verify as before. The validator's record, its rejected answers and its findings now keep the marker (D-E/L-203).
 - What supports it: the CLI lane compares the model the CLI reports at start-up with the one requested and fails on a mismatch, and headless mode fails on an unknown model instead of falling back. What it does not cover: subagents inside the turn.
 - The identity policy itself never fills in a model. An answer that reaches admission with no served model is still refused on every route.
 
@@ -213,7 +218,7 @@ Owner direction, 2026-11-17, after the documentation and the owner's `agy models
 
 **Versioning.** Cycles recorded under resolver 1 or 2 carry no `route_labs` and are checked without it. The `served_model_source` field is additive: turns recorded without it hash and verify as before. Escalation records cite the seating they were decided under, so removing seats does not change how recorded escalations verify.
 
-**Scope.** Only in-run turns use Antigravity. The single-turn seats (planner, plan reviewers, change reviewers, validator) call the provider APIs directly, including the Gemini API for `agy_google`, and are not affected by decision 2.
+**Scope.** *Superseded by decision 4 (below).* The single-turn seats (planner, plan reviewers, change reviewers, validator) on a Google seat run through Antigravity first (`laneFirstTurn`, `pantheon/src/sdk/agy-turn.mjs`), with the Gemini API only as the lane's quota failover, and decision 2's marker applies to them.
 
 **For the independent review.** Decision 2 relaxes "never substitute the requested identity" for one route, by the owner's decision. The reviewer should judge whether pinning plus a start-up check is enough for a reviewing seat, and whether the SDK lane, which has no start-up check in Pantheon, should be treated the same as the CLI lane.
 
@@ -227,7 +232,7 @@ Owner direction, 2026-11-17, after the documentation and the owner's `agy models
 
 ## Activation and the in-run checker
 
-`REVIEW_INDEPENDENCE` is still `'lab'`. Under the lab rule the run uses the lab rule as before. The only change that applies with the policy off is protocol v2 for lifecycle runs, and the requirement that a validator answer names its model.
+`REVIEW_INDEPENDENCE` is still `'lab'`, but since 2026-11-18 it governs only the profiles other than `fit` (`independenceFor`; "Activation for `fit`" below). Under the lab rule the run uses the lab rule as before; the changes that apply there are protocol v2 for lifecycle runs, the requirement that a validator answer names its model, and since wave 2 a lab identity pinned on every lab-rule cycle the lifecycle opens (below).
 
 ## Decision 5: the dispatcher is a non-authoring arbiter
 
@@ -258,7 +263,7 @@ Owner governance decision, 2026-11-17. Flagged for independent review. It applie
 **What is unchanged**
 
 - The coordinated three-lab change review runs after the pipeline, on three distinct labs, with every contributing model excluded.
-- The validator is still independent of every contribution, and its answer is admitted by the model that answered.
+- The validator is still independent of every contribution, and its answer is admitted by the model that answered. Under the model rule it is also not one of the passing change review's reviewers (owner decision L-002; "2. Validator capacity" above).
 - `REVIEW_INDEPENDENCE` is still `'lab'`. Under the lab rule a contributing reviewer's lab (OpenAI) is excluded from the later review, as before.
 
 **Shown by tests** (`ophanim/operate/fit-lifecycle.test.mjs`, scripted seats)
@@ -292,7 +297,19 @@ Owner decision, 2026-11-19, on independent review round 2, assignment 2 (xAI gro
 
 **Shown by tests**
 
-- `ophanim/operate/fit-lifecycle.test.mjs`: the pinned Stage 5 review approves each unit; the three dispatchers are excluded from the panel and the validator although each only approved; the three-lab panel still qualifies and the item reaches an outcome.
+- `ophanim/operate/fit-lifecycle.test.mjs`: the pinned Stage 5 review approves each unit; the three dispatchers are excluded from the panel and the validator although each only approved; the three-lab panel still qualifies and the item reaches an outcome. Since wave 2 the test runs on a reviewer pool in which, without the arbiter rows, `gpt-6-astra` (a dispatcher) WOULD be seated, and asserts that counterfactual: on the configured pool alone the check passed with Decision 6 removed (self-audit round 3, assignment 2, section 7).
+- `pantheon/tests/pipeline-stage5-wave2.test.mjs`: the rule "does not depend on which unit ran first" — unit b's ladder skips unit a's dispatcher seat although a is dispatched only after b ends (M5).
+
+### Decision 6 extended: the returning dispatcher (owner decision L-001, 2026-11-19)
+
+> "L-001: A + B. Preserve requested and served model identities, and complete contribution lineage. The returning dispatcher is recorded as a contributor to the revised plan. Treat structured dispatcher feedback as untrusted advisory data. Validate its schema and allowed operations, and require the planner to independently justify any revision. Do not weaken the three-lab floor or the independence requirements to avoid capacity-pending results. Record shared-lab participation explicitly. Follow-up: a returning dispatcher that also dispatches the revised unit keeps Decision 6's pinned Stage 5 review of its own unit only."
+
+- **Structured, untrusted.** A dispatcher that judges a unit not cohesive answers `return: {reason, moves}` (`pantheon.pipeline.dispatch/v2`): a reason code (`COUPLED_FILE_ELSEWHERE`, `SEVERAL_CHANGES`, `VERIFY_NEEDS_OTHER_UNIT`, `UNSPECIFIED`) and at most 16 moves, each a path one of the plan's units owns moved to another unit of the plan or to `new`. Anything else is refused at admission. Free `notes` is still accepted (a v1-shaped answer is not refused), but its text is never recorded or passed on: the record keeps its length and digest. The unit's reason, the returned finding's text and the line the planner reads are composed by the controller from the validated fields only, under the marker `ADVISORY (untrusted dispatcher data, validated fields only)`.
+- **Every judge's evidence.** The same holds for the work-ledger views every judging seat is given (the dossier's work view, `{"op":"work"}` and `{"op":"record"}`): a v1 record's dispatcher text is shown withheld, with its length and digest (`context.mjs withheld`).
+- **The planner justifies.** A revision must answer each advisory finding with `justification: {why, sources}`, its own reason resting on evidence it was given (`planRefusal`).
+- **Lineage.** The finding carries the dispatcher's requested and served model, marker and lab, so the revised plan records it as a contributor (`purpose: 'dispatcher-return'`); through the plan's contributions it is excluded from the revised plan's panel, the change panel and the validator, at selection and at admission. The plan record lists it in `advisory_returns`, with whether the panel shares its lab; the panel's shared labs are in `plan_review.shared_labs`.
+- **Stage 5.** The run that carries out the revised plan receives the returning dispatcher as `stage5_excluded`: every unit's Stage 5 rung excludes it except the unit it dispatches itself, whose pinned review it keeps (Decision 6).
+- **Capacity.** On default tables the revised plan's panel moves from `grok-4.7, gemini-3.8-flash, gpt-6-sol` to `grok-4.7, gemini-3.8-flash, <an Anthropic sibling of the planner>` when the dispatcher's lab, OpenAI, becomes a contributing lab: still three labs, one of them shared. The brief's 30 of 324 change-panel combinations that seated the old dispatcher now go to another model; 24 of them are `REVIEW_CAPACITY_PENDING` (each already needed `gpt-6-sol` as an earlier finder). Nothing falls back.
 - `ophanim/operate/independence-r2-a2.test.mjs`: requested and served identities excluded; a different OpenAI model seated; a resumed unit keeps its arbiter; no fallback when capacity is gone; a v3 cycle records the dispatcher and refuses an answer it served.
 - `pantheon/tests/pipeline-stage5-confined.test.mjs`: each unit's own dispatcher is pinned and approves it; unit b's ladder skips unit a's dispatcher model; a ladder exhausted by exclusions blocks on capacity; an answer served by another unit's dispatcher is not admitted.
 
@@ -307,7 +324,7 @@ Points worth another lab's attention:
 5. **Inside a Pantheon run** under default routing there are two in-run reviewer candidates.
 5a. **Antigravity turns are admitted on the input model** (marked `served_model_source: "input"`), Gemini only. Is that enough for a reviewing seat, on both lanes?
 6. **Protocol v2 lets one model revise up to four times** on critiques alone. Is that bound right, and should it apply outside the lifecycle?
-7. **Validator capacity** was not shown reachable in a complete lifecycle; the argument is above and is not a proof.
+7. **Validator capacity.** Since owner decision L-002 the validator excludes the approving change reviewers under the model rule; when that leaves no eligible model it waits (tested through the lifecycle). How often that happens is a computed enumeration over a constructed grid ("2. Validator capacity" above), not a proof.
 8. **After a reassessment** the re-review is automatic for active work. A Resolved item waits for the owner.
 
 ## Activation for `fit` (owner direction 2026-11-18)
@@ -347,3 +364,17 @@ Independent review round 2, assignment 2 (xAI grok-4.7). Each regression test be
 | Q3. Re-ask not admitted | The board in-run re-ask's verdict came from a second turn whose serving model was never checked, and the review cited the first turn. | The re-ask is admitted on its own serving model (`reviewerRefusal` under the model rule; same lab under the lab rule). A refused re-ask supplies no verdict and no text: the slot fails closed. An admitted re-ask that gives the verdict is the turn the review cites. | `pantheon/tests/independence-r2-a2.test.mjs` |
 | Q5. Raw `openCycle` below the floor | A new v2 cycle opened with `reviewers: 1` and no `required_reviewers` closed `verified` on one lab. | `openCycle` records `required_reviewers: 3` on a new v2/v3 cycle and refuses a new v1 cycle of fewer than three reviewers. Cycles recorded without the field verify as recorded; a recorder made with `historical: true` (tests only; never the system's recorder) writes that shape. | `pantheon/tests/independence-r2-a2.test.mjs`, `pantheon/tests/cycle-review-labs.test.mjs` |
 | Q7. Dispatcher exception width | The omission from `contributionsOf` was global: the dispatcher's model could sit on the three-lab panel or be the validator. | Decision 6 (owner, 2026-11-19), above. Under the lab rule the `fit` lifecycle tests now need a second synthetic lab (`SIX`), since the dispatcher's lab is excluded. | `ophanim/operate/independence-r2-a2.test.mjs`, `ophanim/operate/fit-lifecycle.test.mjs` |
+
+## Corrections in wave 2 (self-audit round 3, assignment 2, sealed `449ca42`; owner decisions L-001 and L-002, 2026-11-19)
+
+Each regression test below failed with the sources of `bce84eb` put back. The L-205 tests that only kill mutations (M1/M9 through a substituted subagent, M5, M9 through `reviewCycle`) pass on `bce84eb` by design: the code they protect was already right, and no test noticed when it was removed.
+
+| Item | On `bce84eb` | Now | Test |
+|---|---|---|---|
+| L-201 (D-C). Retrieval rounds not admitted | `investigate()` admitted only the last answer; an earlier round answered by the planner or by an unnamed model put its request text into the prompt the admitted answer was given. | Every earlier round is admitted on the model that served it before its requests run: by the cycle's own rule for plan and change reviewers (`answerRefusal`, handed to the turn), by the validator's `servedRefusal` for the validator. A refused round fails the seat's attempt (cycle reviewers) or is a rejected answer (validator). Admitted rounds are recorded on the cycle ledger as `cycle-review-round` turns chained before the answer, and the ledger re-admits each (`roundRefusal`); every investigation log names the server of each call (`turns`). | `ophanim/operate/wave2-identity.test.mjs`, `pantheon/tests/ledger-wave2-identity.test.mjs` |
+| L-202 (D-D). Planner rounds | A round served by another model was no contributor and could sit on the plan's or the change's panel. | Each round's server is a plan contributor; the accepted answer's rounds are author turns of the plan cycle (`plan-round`), so cold review sees them; the plan panel is chosen again on what the answer added. | `ophanim/operate/wave2-identity.test.mjs` |
+| L-203 (D-E). Validator marker | The validator record, its rejected answers and findings dropped `served_model_source`. | Kept on all three, and on every finder row (`withServed`), the review team and the checkpoint's dispatch. | `ophanim/operate/wave2-identity.test.mjs` |
+| L-204 (L-1, L-2, L-3). Ledger holes | Under the lab rule a lab came from the route or vendor; the three-lab floor was the recorder's only; any marker was accepted. | A lab-rule cycle the lifecycle or the board's coordinated review opens pins `lab_identity` (the identity policy, digest-bound): every lab is resolved under it and an unresolved or cross-lab answer counts for none; such a cycle must record `required_reviewers` (the kind refuses it otherwise), and a scope never returns to an unfloored or unpinned cycle. The turn kind enforces the marker vocabulary. Cycles recorded without the fields verify as before. Not covered: a caller that opens a lab-rule cycle without `lab_identity` (the review-cycle CLI, practice comparison) still writes the old shape. | `pantheon/tests/ledger-wave2-identity.test.mjs` |
+| L-205. Surviving mutations | M1, M2, M5, M9, M10 survived: the fixture always answered as the model asked, unmarked. | `scriptedTurn(..., {serve})` (`SERVE.dated`, `SERVE.marked`, `SERVE.substitute`) drives served-not-requested names through the production paths; `ophanim/operate/wave2-identity.mutate.mjs` applies each of 22 mutations (the self-audit's M1-M10, re-targeted, and M11-M22 on this wave's code) to a disposable copy (exiting non-zero unless each applies exactly once and is killed). | the runner and the tests it lists |
+| L-107. Unbound change-review citations | Change reviewers' `[source: ...]` citations were free text. | Plan and change review briefs ask for `"sources"` per finding; each cited source is bound to the view and version that reviewer was given (its own investigation log; marked "dossier only" when the review was recorded in an earlier attempt) on the finding rows and in `outputs.citations`. Re-checking them before a reused review is the gate's, not done here. | `ophanim/operate/wave2-identity.test.mjs` (finder rows) |
+| L-001, L-002 | See "Decision 6 extended" and "2. Validator capacity" above. | | `ophanim/operate/wave2-identity.test.mjs`, `validator-identity.test.mjs`, `independence.test.mjs`, `stages.test.mjs`, `pantheon/tests/pipeline-dispatch.test.mjs`, `pipeline-stage5-wave2.test.mjs` |

@@ -103,6 +103,29 @@ export function resolveModel(vendor, model, policy = currentPolicy()) {
 /** Kept name: the identity of a model (see resolveModel). */
 export const modelIdentity = resolveModel;
 
+/**
+ * `policy` with VENDORS THE CALLER DECLARES OUTRIGHT: each {vendor, model} row whose vendor the policy does not know
+ * (not a declared vendor, not a route) declares that vendor as its own lab and the model as that lab's. A vendor the
+ * policy already knows is never re-declared, and nothing is inferred for a known vendor's undeclared model (it stays
+ * unresolved). Used for a reviewer pool the caller injects with its own seat facts (a test's synthetic lab): the
+ * declaration is then written into the policy a cycle records, never inferred when the ledger is verified.
+ * Returns `policy` itself when nothing is declared (self-audit round 3, assignment 2 (sealed 449ca42), L-1/L-204).
+ */
+export function withDeclaredVendors(policy, rows = []) {
+  const known = v => Object.hasOwn(policy.vendor_lab, v) || policy.routes.includes(v);
+  const add = rows.filter(r => str(r?.vendor) && str(r?.model) && !known(r.vendor));
+  if (!add.length) return policy;
+  const vendor_lab = { ...policy.vendor_lab }, model_lab = { ...policy.model_lab };
+  for (const r of add) {
+    vendor_lab[r.vendor] = r.vendor;
+    const b = baseOf(r.model, policy);
+    if (model_lab[b] && model_lab[b] !== r.vendor) throw new Error(`identity policy: ${b} is declared for ${model_lab[b]} and for ${r.vendor}`);
+    model_lab[b] = r.vendor;
+  }
+  const sort = o => Object.fromEntries(Object.entries(o).sort());
+  return Object.freeze({ ...policy, vendor_lab: sort(vendor_lab), model_lab: sort(model_lab) });
+}
+
 /** Why a seat on `vendor` may not be seated for a model of `lab` under `policy` (resolver 3: route_labs), or null. */
 function routeRefusal(vendor, lab, policy) {
   const allowed = policy.route_labs?.[vendor];
@@ -168,6 +191,24 @@ export function reviewerIdentity(answer, policy = currentPolicy()) {
   if (!served.known) return { code: "UNRESOLVED", why: `the model that answered is unresolved: ${served.why}` };
   if (served.lab !== asked.lab) return { code: "LAB_MISMATCH", why: `${asked.id} was asked and ${served.id} answered: a review counts for one lab` };
   return { lab: served.lab, ids: [...new Set([asked.id, served.id])] };
+}
+
+/**
+ * THE MARKER VOCABULARY (self-audit round 3, assignment 2 (sealed 449ca42), L-3/L-204). What a turn may say about the
+ * name in `served_model`: "provider" (the provider named the model in its response), "input" (the transport names
+ * none, and the required input model is recorded: it must then BE the requested name), "unnamed" (no serving model
+ * was named: `served_model` is null) and "unknown" (a name with no statement of where it came from). Every producer
+ * in this repository writes one of these; a turn without the field was named by its provider.
+ */
+export const SERVED_SOURCES = Object.freeze(["provider", "input", "unnamed", "unknown"]);
+/** Why a {requested_model, served_model, served_model_source} triple is not a consistent statement, or null. */
+export function servedSourceRefusal({ requested_model, served_model, served_model_source }) {
+  if (served_model_source === undefined || served_model_source === null) return null;
+  if (!SERVED_SOURCES.includes(served_model_source)) return `served_model_source "${served_model_source}" is not one of ${SERVED_SOURCES.join(", ")}`;
+  if (served_model_source === "unnamed") return served_model === null || served_model === undefined ? null : 'a turn marked "unnamed" names no serving model';
+  if (!str(served_model)) return `a turn marked "${served_model_source}" names its serving model`;
+  if (served_model_source === "input" && served_model !== requested_model) return `a turn marked "input" records the required input model as served, and ${served_model} is not the requested ${requested_model}`;
+  return null;
 }
 
 /** Why an ANSWER may not count as a review of work with contributor `keys` ({models, labs, unresolved?}), or null. */

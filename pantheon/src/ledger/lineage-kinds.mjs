@@ -10,7 +10,7 @@
 //     (`seat:<seat_id>#<occupancy_gen>`), admitted to the ledger by an operator's authority entry. A
 //     forged turn or review needs that seat's private key, not a secret every seat shares.
 import {createHash} from 'node:crypto';
-import {reviewerRefusal, reviewerIdentity, resolveModel, policyRefusal, policyDigest} from '../review/identity.mjs';
+import {reviewerRefusal, reviewerIdentity, resolveModel, policyRefusal, policyDigest, servedSourceRefusal} from '../review/identity.mjs';
 import {labOf} from '../config/models.mjs';
 import {promptSha, replySha} from '../context/chain.mjs';
 import {generateSigner, AUTHORITY} from '../../../packages/ledger/chain.mjs';
@@ -49,6 +49,51 @@ function lineageOf(view, hashes) {
   return out;
 }
 
+/**
+ * THE LAB A REVIEW OF A LAB-RULE CYCLE COUNTS FOR. A cycle that records `lab_identity` (every lab-rule cycle the
+ * lifecycle opens since self-audit round 3, assignment 2 (sealed 449ca42), L-1/L-204) resolves the reviewer's lab under
+ * that pinned policy: the asked and the answering model must resolve, to one lab, and an unnamed answer does not count.
+ * A lab-rule cycle without it (every one recorded before) keeps `labOf(vendor, served ?? model)`, exactly as recorded.
+ * Returns {lab} or {why}.
+ */
+export function labRuleLab(c, {vendor, model, served_model = null}) {
+  if (!c?.lab_identity) return {lab: labOf(vendor, served_model ?? model)};
+  const who = reviewerIdentity({vendor, model, served_model}, c.lab_identity.rules);
+  return who.why ? {why: who.why} : {lab: who.lab};
+}
+/**
+ * WHO ANSWERED EVERY ROUND (self-audit round 3, assignment 2 (sealed 449ca42), L-201). A reviewer that retrieved
+ * evidence before its verdict answered the cycle in several turns: each earlier round is recorded as a turn of the same
+ * seat citing the cycle (`purpose: "cycle-review-round"`), chained before the answering turn. Each is admitted by the same
+ * rule as the answer: under v3 by its asked and served identity (not a contributing model), under the lab rule by its
+ * lab (the review's lab, and not an authoring lab). Cycles recorded before rounds were recorded have none: vacuous.
+ */
+export function roundTurnsOf(view, answerTurn, cycle) {
+  const out = [];
+  for (let h = answerTurn; h;) {
+    const t = view.entry(h);
+    const prev = (t?.derived_from ?? []).find(x => view.entry(x)?.kind === 'turn');
+    const q = prev ? view.payload(prev) : null;
+    if (!q || q.purpose !== 'cycle-review-round' || !view.entry(prev).derived_from.includes(cycle) || view.entry(prev).author.key_id !== t.author.key_id) break;
+    out.push({hash: prev, payload: q});
+    h = prev;
+  }
+  return out.reverse();
+}
+export function roundRefusal(c, r, lab) {
+  const answer = {vendor: r.seat?.vendor, model: r.requested_model, served_model: r.served_model ?? null};
+  if (c.contract === 'pantheon.cycle/v3') {
+    const why = reviewerRefusal(answer, {models: c.author_models, labs: c.excluded_labs}, c.identity_policy.rules);
+    if (why) return `a retrieval round of this review: ${why}`;
+    const theirs = reviewerIdentity(answer, c.identity_policy.rules).lab;
+    return theirs === lab ? null : `a retrieval round of this review was answered from the ${theirs} lab, not the ${lab} lab the review counts for`;
+  }
+  const got = labRuleLab(c, answer);
+  if (got.why) return `a retrieval round of this review: ${got.why}`;
+  if (c.author_labs.includes(got.lab)) return `a retrieval round of this review was answered by the ${got.lab} lab, which authored the change`;
+  return got.lab === lab ? null : `a retrieval round of this review was answered from the ${got.lab} lab, not the ${lab} lab the review counts for`;
+}
+
 // A review of a cycle (cycle-kinds.mjs): never by the lab that authored the change, answered by a turn of
 // the same seat that was given exactly the cycle's prompt, one review per lab, and none once it is closed.
 function cycleReview(e, view, cycle, lab) {
@@ -66,6 +111,11 @@ function cycleReview(e, view, cycle, lab) {
   if ((a.response_id ?? null) !== (p.response_id ?? null) || a.requested_model !== p.model || (a.served_model ?? null) !== (p.served_model ?? null)) {
     return 'the review does not name its answering turn\'s response and model';
   }
+  for (const r of roundTurnsOf(view, p.turn, cycle)) {
+    if (r.payload.requested_model !== p.model) return 'a retrieval round of this review was asked of another model';
+    const why = roundRefusal(c, r.payload, lab);
+    if (why) return why;
+  }
   const hs = view.entries();
   if (hs.some(h => view.entry(h).kind === 'cycle.close' && view.entry(h).derived_from.includes(cycle))) return 'the cycle is closed';
   for (const h of hs) {
@@ -73,7 +123,7 @@ function cycleReview(e, view, cycle, lab) {
     if (x.kind === 'review' && x.derived_from.includes(cycle)) {
       const q = view.payload(h);
       const theirs = c.contract === 'pantheon.cycle/v3' ? reviewerIdentity({vendor: q.seat.vendor, model: q.model, served_model: q.served_model ?? null}, c.identity_policy.rules).lab
-        : labOf(q.seat.vendor, q.served_model ?? q.model);
+        : labRuleLab(c, {vendor: q.seat.vendor, model: q.model, served_model: q.served_model ?? null}).lab;
       if (theirs === lab) return `the ${lab} lab has already reviewed this cycle`;
     }
   }
@@ -86,7 +136,11 @@ export function lineageKinds() {
       // Only the seat occupancy that made the turn signs it.
       authors: () => true,
       validate: p => (seatShape(p?.seat) && typeof p.requested_model === 'string' && typeof p.reply === 'string' && typeof p.reply_sha === 'string'
-        && (p.served_model === null || typeof p.served_model === 'string') && exchangeShape(p) ? null : 'a turn names its seat, requested and served model, and reply'),
+        && (p.served_model === null || typeof p.served_model === 'string') && exchangeShape(p)
+        // The marker is one of the vocabulary's and consistent with the names (self-audit round 3, assignment 2 (sealed
+        // 449ca42), L-3/L-204): "input" only for the requested name itself, "unnamed" only without a name. Every turn any
+        // producer in this repository has written satisfies it, so recorded ledgers verify as before.
+        ? servedSourceRefusal(p) : 'a turn names its seat, requested and served model, and reply'),
       rederive: (e, view) => {
         const p = e.payload;
         if (e.author.key_id !== seatKeyId(p.seat)) return `signed by ${e.author.key_id}, not by the seat that answered (${seatKeyId(p.seat)})`;
@@ -127,7 +181,11 @@ export function lineageKinds() {
         const pinned = own ? own.rules : v3 ? view.payload(cycles[0]).identity_policy.rules : null;
         const who = v3 ? reviewerIdentity({vendor: p.seat.vendor, model: p.model, served_model: p.served_model ?? null}, pinned) : null;
         if (who?.why) return who.why;
-        const lab = v3 ? who.lab : labOf(p.seat.vendor, p.served_model ?? p.model);
+        // A lab-rule cycle that pins its lab identity (L-204) resolves the reviewer's lab, and every lineage name, under it.
+        const labPinned = !v3 && cycles.length === 1 ? view.payload(cycles[0])?.lab_identity?.rules ?? null : null;
+        const labWho = labPinned ? labRuleLab(view.payload(cycles[0]), {vendor: p.seat.vendor, model: p.model, served_model: p.served_model ?? null}) : null;
+        if (labWho?.why) return labWho.why;
+        const lab = v3 ? who.lab : labWho ? labWho.lab : labOf(p.seat.vendor, p.served_model ?? p.model);
         for (const {entry, payload: t} of lineageOf(view, e.derived_from)) {
           if (entry.author.key_id === e.author.key_id) return 'a seat may not review its own turn';
           // Cold review. Under v1 and v2 (and for any review outside a cycle) no reviewer's LAB is in the lineage of what
@@ -140,6 +198,13 @@ export function lineageKinds() {
               if (lost) return `a model in the lineage of what it reviews is unresolved (${lost.why})`;
               const same = who.ids.find(i => theirs.some(x => x.id === i));
               if (same) return `${same} is in the lineage of what it reviews`;
+            } else if (labPinned) {
+              // Both names of a lineage turn, each resolved under the pinned policy (never `served ?? requested` alone).
+              for (const m of [t.requested_model, t.served_model].filter(Boolean)) {
+                const x = resolveModel(t.seat.vendor, m, labPinned);
+                if (!x.known) return `a model in the lineage of what it reviews is unresolved (${x.why})`;
+                if (x.lab === lab) return `the ${lab} lab is in the lineage of what it reviews`;
+              }
             } else if (labOf(t.seat.vendor, t.served_model ?? t.requested_model) === lab) return `the ${lab} lab is in the lineage of what it reviews`;
           }
           if (mine && lineageKey(t.seat.vendor, t.response_id) === mine) return 'the review response is part of the lineage it reviews';

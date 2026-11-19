@@ -104,7 +104,7 @@ test('four real labs: an item without a ticket and one with an existing ticket c
   });
 });
 
-test('four real labs, repeated revisions: contributions come to span all four labs and each later panel is still three labs of models that never contributed', async () => {
+test('four real labs, repeated revisions: contributions accumulate across the revisions and each later panel is still three labs of models that never contributed; each validator is taken from the lab outside its review panel', async () => {
   await withDispatch(async ({dir: repo, makeClientFor, implement, serve}) => {
     serve((_vendor, model) => model);   // the scripted providers report the model they served
     const f = fixture(repo, [{item: 'cyc'}]);
@@ -144,9 +144,18 @@ test('four real labs, repeated revisions: contributions come to span all four la
     const finder = plan1.contributions.find(c => c.purpose === 'plan-review');
     assert.equal(finder.lab, 'xai');
     assert.ok(!reviewers(plan1).map(idOf).includes(idOf(finder)), 'the finder\'s model is not on the revision\'s panel');
-    // By the second cycle the history holds a planner, a plan-review finder, an implementer and a validator: all four labs.
+    // By the second cycle the history holds a planner, a plan-review finder, an implementer and a validator. Owner decision
+    // L-002 (2026-11-19): the first validator is not one of the three approving change reviewers but a model of the lab
+    // outside the panel (OpenAI, gpt-6-sol), so that lab -- the implementer's -- contributes again and Google does not.
     const history = contributorKeys(impl2.contributions);
-    assert.deepEqual(history.contributing_labs, REAL_LABS, JSON.stringify(impl2.contributions.map(c => [c.purpose, c.lab, c.model])));
+    assert.deepEqual(history.contributing_labs, ['anthropic', 'openai', 'xai'], JSON.stringify(impl2.contributions.map(c => [c.purpose, c.lab, c.model])));
+    const rev1 = w.stages('cyc')[2];
+    for (const [rv, val] of [[rev1, val1], [rev2, val2]]) {
+      const panel = reviewers(rv), ind = val.outputs.validator.independence;
+      assert.ok(!panel.map(idOf).includes(idOf(val.outputs.validator)), 'the validator approved the change it validates');
+      assert.deepEqual([ind.also_change_reviewer, ind.fourth_lab, ind.change_reviewers_from], [false, true, 'cycle ledger']);
+      assert.deepEqual(ind.change_reviewers.map(r => `${r.vendor}/${r.model}`).sort(), panel.map(t => `${t.vendor}/${t.model}`).sort());
+    }
     assert.ok(history.models.includes(idOf(val1.outputs.validator)) && history.models.includes(idOf(finder)) && history.models.includes(idOf(plan1.outputs.planner)), 'the full contribution history is kept through the revisions');
     for (const rec of [plan2, rev2]) {
       const panel = reviewers(rec);
@@ -154,7 +163,7 @@ test('four real labs, repeated revisions: contributions come to span all four la
       assert.ok(panel.every(t => REAL_LABS.includes(t.lab)));
       for (const t of panel) assert.ok(!contributorKeys(rec.stage === 'plan' ? plan2.contributions : impl2.contributions).models.includes(idOf(t)), `${rec.stage}: ${idOf(t)} contributed earlier`);
     }
-    assert.equal(rev2.outputs.shared_labs.length, 3, 'with all four labs contributing, every seat shares a lab with a contributor, and each is recorded');
+    assert.deepEqual([...rev2.outputs.shared_labs].sort(), ['anthropic', 'xai'], 'every seat that shares a lab with a contributor is recorded');
     assert.ok(!history.models.includes(idOf(val2.outputs.validator)));
     assert.notEqual(idOf(val2.outputs.validator), idOf(val1.outputs.validator));
   });

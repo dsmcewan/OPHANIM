@@ -37,7 +37,7 @@ import { TOKEN_TIERS } from "../config/tiers.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
 import { openPantheonLedger } from "../ledger/system.mjs";
 import { reviewCycle, reviewSeats, reviewSeatsByModel } from "../ledger/review-cycle.mjs";
-import { contributorKeys } from "../review/identity.mjs";
+import { contributorKeys, currentPolicy } from "../review/identity.mjs";
 import { carriesPractice } from "../ledger/practice-kinds.mjs";
 import { closeClaim, REQUIRED_REVIEW_LABS } from "../ledger/cycle-kinds.mjs";
 import { evaluate, automaticAssessment, defaultEvidenceStore } from "../practice/evaluate.mjs";
@@ -184,7 +184,9 @@ export function seatTeam({ pools = [], overrides = {}, spec = null, profile = "a
  * independence requirement; do not drop the planner's contribution or weaken the scope). When the configured pool
  * cannot supply n labs outside the contributors, the result is pending, with no seats, and says why.
  */
-export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined, independence = "lab", policy = undefined }) {
+// `labPolicy` (lab rule only): the identity a lab-rule cycle pins (cycle-kinds.mjs lab_identity); candidate labs are then
+// resolved under it, never taken from the vendor (self-audit round 3, assignment 2 (sealed 449ca42), L-204).
+export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n = 3, seating = undefined, facts = undefined, independence = "lab", policy = undefined, labPolicy = null }) {
   const full = scope ?? { kind: "change", contributions: [...planLabs.map(lab => ({ purpose: "plan", lab })), ...workLabs.map(lab => ({ purpose: "work", lab }))],
     author_labs: [...new Set([...workLabs, ...planLabs])].sort() };
   const base = { author_labs: full.author_labs, planner_excluded: true, scope: full };
@@ -207,7 +209,7 @@ export function cycleReviewers({ scope = null, planLabs = [], workLabs = [], n =
     }
   }
   try {
-    return { ...base, seats: reviewSeats({ n, avoidLabs: full.author_labs, ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) }) };
+    return { ...base, seats: reviewSeats({ n, avoidLabs: full.author_labs, policy: labPolicy, ...(seating ? { seating } : {}), ...(facts ? { facts } : {}) }) };
   } catch (e) {
     if (e.code !== "NO_SEATS") throw e;
     return { ...base, seats: null, pending: { code: "REVIEW_CAPACITY_PENDING", need: n,
@@ -637,7 +639,8 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
   progress({ event: "committed", branch: branchName, commit: head });
 
   // The review cycle over base..head, on the run's ledger.
-  const chosen = cycleReviewers({ scope: changeScope(run), n });
+  // The board's coordinated review pins its lab identity on the cycle (L-204): every lab is resolved, never taken from a route.
+  const chosen = cycleReviewers({ scope: changeScope(run), n, labPolicy: currentPolicy() });
   // This run's contributing turns on the ledger (plan and work: the reviewed scope's lineage), recorded after the run
   // started, by the seats run.json names. Cited by the cycle, so its reviews are cold over that lineage.
   const authorSeats = new Set([...planTurns.map(t => `${t.vendor}-plan@${t.model}`), ...workTurns.map(t => `${t.vendor}-work@${t.model}`)]);
@@ -654,7 +657,7 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
     progress({ event: "review.pending", code: chosen.pending.code, why: chosen.pending.why });
     return { bundle, dir: bundleDir, proposal: null, why: `${chosen.pending.code}: ${chosen.pending.why}` };
   }
-  const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns },
+  const r = await reviewCycle({ ledger: rec, change: { scope, base, head, diff, files: changed, author_labs: chosen.author_labs, author_turns: authorTurns, lab_identity: currentPolicy() },
     seats: chosen.seats, turn: boundedTurn(turn, bundle.provider_calls), n, policy: runPolicy(run) ?? undefined, required_reviewers: REQUIRED_REVIEW_LABS });
   bundle.review = { ledger: ledgerRoot, ledger_anchor: sys.anchor, scope, review_scope: chosen.scope, cycle: r.cycle, author_labs: chosen.author_labs,
     planner_excluded: chosen.planner_excluded, author_turns: authorTurns,
@@ -726,7 +729,7 @@ export async function resumeBoardItem({ repo, dir, item = null, turn, statusRoot
       fail("the run's run.json is missing or is not the one the bundle names: the run's reviewers cannot be re-derived");
     }
     const run = JSON.parse(readFileSync(bundle.run.run_json, "utf8"));
-    const chosen = cycleReviewers({ scope: changeScope(run), n: state.cycle.reviewers });
+    const chosen = cycleReviewers({ scope: changeScope(run), n: state.cycle.reviewers, labPolicy: state.cycle.lab_identity?.rules ?? null });
     if (chosen.pending) fail(`${chosen.pending.code}: ${chosen.pending.why}`);
     if ([...chosen.author_labs].sort().join() !== [...bundle.review.author_labs].sort().join()) fail("the run's author labs do not re-derive the bundle's");
     const git = gitIn(gitTop(repo));
