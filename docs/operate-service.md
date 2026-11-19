@@ -16,7 +16,8 @@
 
 ## Bounds
 
-- **`limits.total_provider_calls` is required.** It caps every provider call the work ledger records over its lifetime, failed and resumed attempts included, across restarts. Usage that was not recorded counts at the claim's full budget.
+- **`limits.total_provider_calls` is required.** It caps every provider call the work ledger records over its lifetime, failed and resumed attempts included, across restarts. A provider call is one billed request, as defined in [What one provider call is](routing-task-profile.md#what-one-provider-call-is): each is charged on the work ledger before it is sent.
+- **A stage that throws** is recorded with what it was charged, 0 included. Usage counts at the claim's full budget only when it is genuinely unknown: the executor says it made calls outside the charge. Before this, a stage that threw having made no call consumed its whole stage budget (self-audit round 3, assignment 3, L-302).
 - **The other limits** are per tick, with the same meanings as for `tick`: `stage_provider_calls`, `iterations`, `elapsed_ms`, `stage_attempts` and `concurrency`.
 - **One instance per work ledger.** A lock file in the work ledger's root (`<work_ledger>/service.lock`, whatever the `state_dir`) holds the pid and host.
   - A second service is refused.
@@ -45,7 +46,11 @@ Ledgers written before version 2 keep verifying. A key is compared, never re-der
 
 ## Stopping
 
-SIGTERM or SIGINT stops the service between ticks. If the process is killed during a stage, that stage's claim lease expires. The next start then releases it as `expired` and resumes from the last recorded stage. No completed stage is repeated.
+SIGTERM or SIGINT stops the service between ticks; a stage in flight finishes first.
+
+If the process is **killed** during a stage (SIGKILL, a power loss), that stage's claim stays held **until its lease ends**: `lease_ms`, 30 minutes by default. Nothing can claim the item before then; the lease is the fence that keeps two holders from running one stage. The item shows gate `claimed`. Once the lease has ended, the next tick releases the claim as `expired` and resumes from the last recorded stage. No completed stage is repeated. A restart does not shorten the wait.
+
+`tick` takes an optional `interrupt` signal (self-audit round 3, assignment 3, L-305). When it fires, the stage in flight is stopped and its claim is released as `interrupted`, with no stage record: the late result is not a handoff, and the calls charged under it stay counted. The next tick resumes at once. The live-run launcher uses it on SIGINT, SIGTERM and SIGHUP (see `ophanim/operate/live-run.mjs`). The service does not pass one yet, so its stop still waits for the stage.
 
 ## Evidence recovery for Resolved items
 

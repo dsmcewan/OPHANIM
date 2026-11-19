@@ -71,6 +71,8 @@ export const WORK_SCHEMA = 'ophanim.work/v1';
 // the approved acceptance criteria. `outcome` records the unsigned status transition for the owner.
 export const STAGES = Object.freeze(['plan', 'implement', 'review', 'validate', 'outcome']);
 export const STAGE_STATUS = Object.freeze(['passed', 'returned', 'failed', 'pending', 'blocked']);
+/** The reservation refusal's own prefix: produced by the claim's re-derivation, mapped to code PROVIDER_CALL_BUDGET by claim(). */
+export const RESERVE_REFUSAL = 'PROVIDER_CALL_BUDGET:';
 export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed', 'blocked', 'interrupted', 'expired']);
 export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket']);
 export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
@@ -196,7 +198,7 @@ function kinds({operators}) {
         }
         if (p.reserve !== undefined) {
           const used = usedBefore(view, at), left = p.reserve.total_provider_calls - used;
-          if (left < p.budget.provider_calls) return `PROVIDER_CALL_BUDGET: ${left} of ${p.reserve.total_provider_calls} provider call(s) left (used or reserved by other claims: ${used}); this stage reserves ${p.budget.provider_calls}`;
+          if (left < p.budget.provider_calls) return `${RESERVE_REFUSAL} ${left} of ${p.reserve.total_provider_calls} provider call(s) left (used or reserved by other claims: ${used}); this stage reserves ${p.budget.provider_calls}`;
         }
         return null;
       },
@@ -386,8 +388,15 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
         try { append('work.release', {item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: released before a new claim', at}, [c.hash]); }
         catch (e) { if (!/already released/.test(e.message)) throw e; }
       }
-      return append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget, fence: 1,
-        ...(total_provider_calls !== undefined ? {reserve: {total_provider_calls}} : {})});
+      // A refusal of the reservation is given its CODE here, at its producer (self-audit round 3, assignment 3 (sealed
+      // bb1287a), L-308): the scheduler classifies the stop by `code` PROVIDER_CALL_BUDGET, never by the message.
+      try {
+        return append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget, fence: 1,
+          ...(total_provider_calls !== undefined ? {reserve: {total_provider_calls}} : {})});
+      } catch (e) {
+        if (total_provider_calls !== undefined && String(e?.message ?? '').includes(RESERVE_REFUSAL)) { try { e.code = 'PROVIDER_CALL_BUDGET'; } catch { /* frozen */ } }
+        throw e;
+      }
     },
     release: ({claim, item, stage, outcome, why, at = new Date().toISOString()}) => append('work.release', {item, stage, outcome, why, at}, [claim]),
     /** Record a stage's result under its claim; `from` is the stage record it received (verified on append). */

@@ -50,8 +50,16 @@
 // ledger re-verified and its files compared -- by a CHILD node process (verify-run.mjs), whose verdict is the one
 // recorded (the in-process check is kept beside it as `in_process`). run.json is written FIRST and that child verifies
 // it too (its body, against the ledgers, by digest) and every pipeline.json against its stage's recorded digest; the
-// verification and the acceptance are then added to it. The outcome proposal stays UNSIGNED; the launcher prints the exact
-// `packages/ledger/status.mjs apply` command the owner would run and never runs it.
+// verification and the acceptance are then added to it. Until then run.json says the acceptance is PENDING ({met: false,
+// state: 'pending'}): a launcher killed while the verifier runs leaves an unaccepted record (L-307). The outcome proposal
+// stays UNSIGNED; the launcher prints the exact `packages/ledger/status.mjs apply` command the owner would run and never
+// runs it.
+//
+// STOPPING (self-audit round 3, assignment 3 (sealed bb1287a), L-305). SIGINT, SIGTERM or SIGHUP stops the stage in flight,
+// releases its claim as `interrupted` and writes run.json (exit 3); a restart resumes at once. A stage that does not stop
+// within INTERRUPT_GRACE_MS (or a second signal) has its claim released by the launcher, which exits 128 + the signal. Only
+// a SIGKILL leaves the claim held for its whole lease (elapsed_ms + grace); the restart is then refused, naming the claim,
+// its holder and when its lease ends (CLAIM_HELD).
 //
 // Exit codes: 0 plan ok, or the run reached its outcome with every acceptance criterion met; 1 refused (manifest,
 // commit, credentials, preflight, ledgers, confirm string); 2 usage; 3 the run stopped without acceptance (budget,
@@ -65,7 +73,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
-import {tick, spent} from './scheduler.mjs';
+import {tick, spent, releaseInterrupted, STOP_CODES} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {openWorkReadOnly} from './cli.mjs';
 import {makeExecutors, implementerPath} from './stages.mjs';
@@ -386,8 +394,11 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
       try {
         const rec = reconcile({repo, statusRoot: m.ledgers.status_root, workLedger: work?.work ?? null, issues: null});
         const g = rec.items.find(i => i.item === m.item).gate;
-        gate = {gate: g.gate, reason: g.reason ?? null, mode: g.mode ?? null, status: it.state, blocker: g.blocker ?? null, runnable: STAGES.includes(g.gate)};
-        if (!gate.runnable) add(`item "${m.item}" is at gate "${g.gate}" (${g.reason ?? 'no reason given'}): nothing to dispatch`);
+        // A claim held by a run that was killed (L-305): named, with its holder and the end of its lease, not only "claimed".
+        const held = g.gate === 'claimed' && work?.work ? heldClaim(work.work, m.item) : null;
+        gate = {gate: g.gate, reason: g.reason ?? null, mode: g.mode ?? null, status: it.state, blocker: g.blocker ?? null, runnable: STAGES.includes(g.gate), ...(held ? {held} : {})};
+        if (held) add(held.why);
+        else if (!gate.runnable) add(`item "${m.item}" is at gate "${g.gate}" (${g.reason ?? 'no reason given'}): nothing to dispatch`);
       } catch (e) { add(`reconcile failed: ${e.message}`); }
       try { seats = predictedSeats({repo, item: m.item}); } catch (e) { add(`the seats could not be predicted: ${e.message}`); }
     }
@@ -469,19 +480,56 @@ const stageRow = s => ({hash: s.hash, stage: s.stage, attempt: s.attempt, status
   outputs_keys: Object.keys(s.outputs ?? {}).sort(), evidence: pick(s.outputs ?? {}, ['context', 'dossier', 'evidence', 'tests', 'acceptance', 'checks', 'regression', 'verdict', 'criteria', 'review_scope', 'labs', 'cycle']),
   findings: (s.findings ?? []).map(f => pick(f, ['id', 'severity', 'cause', 'unit', 'code', 'text', 'vendor', 'model', 'lab'])), usage: s.usage, next: s.next, blocker: s.blocker ?? null,
   team: s.team ?? [], contributions: s.contributions ?? []});
-/** Budget stops: what a tick, a stage or a pipeline run recorded as a limit reached. */
-function budgetStops(ticks, stages, launcher) {
+/**
+ * Budget stops: what a tick, a stage or a pipeline run recorded as a limit reached, CLASSIFIED BY CODE, never by the words
+ * of a reason (self-audit round 3, assignment 3 (sealed bb1287a), L-308: a /budget/i regex on next.why listed every
+ * elapsed stop as a provider budget stop and missed a validator that ran out of its budget). Each entry names its `kind`
+ * (provider_calls | elapsed | iterations), the `code` it was read from, and where:
+ *   tick      the tick's structured stop (scheduler.mjs `stop.code`: PROVIDER_CALL_BUDGET, ELAPSED_LIMIT, STAGE_ELAPSED,
+ *             ITERATIONS_LIMIT; INTERRUPTED is not a budget stop: it is in `blockers`)
+ *   stage     a blocker code STAGE_PROVIDER_CALLS or STAGE_ELAPSED, an elapsed stop on the record (outputs.stopped), a
+ *             result over its budget (outputs.over_budget: STAGE_BUDGET_EXCEEDED), a pipeline's own bound
+ *             (outputs.budget_stop.code), or a stage the scheduler charged its WHOLE budget that did not pass
+ *             (usage.budget_exhausted: the meter refuses the call past it, whatever the stage's own reason says)
+ *   pipeline  pipeline turns refused at the provider-call limit (outputs.run.provider_calls.refused_at_limit)
+ *   launcher  this launcher's own stops (each carries its kind and code)
+ */
+const TICK_STOP_KIND = {[STOP_CODES.BUDGET]: 'provider_calls', [STOP_CODES.ELAPSED]: 'elapsed', [STOP_CODES.STAGE_ELAPSED]: 'elapsed', [STOP_CODES.ITERATIONS]: 'iterations'};
+export function budgetStops(ticks, stages, launcher = []) {
   const out = [...launcher];
-  for (const [n, t] of ticks.entries()) if (t.stopped) out.push({source: 'tick', tick: n, why: t.stopped});
+  for (const [n, t] of ticks.entries()) {
+    const kind = TICK_STOP_KIND[t.stop?.code];
+    if (kind) out.push({source: 'tick', tick: n, kind, code: t.stop.code, why: t.stop.why});
+  }
   for (const s of stages) {
-    if (/PROVIDER_CALL_LIMIT|provider-call budget|budget/i.test(s.next?.why ?? '')) out.push({source: 'stage', stage: s.stage, attempt: s.attempt, record: s.hash, why: s.next.why});
-    // A stop recorded only on the BLOCKER: a plan or review whose reviewer seat hit the stage's provider-call budget
-    // ends pending with next.why 'plan review incomplete' (independent review round 2, assignment 3 (Google
-    // gemini-4-carbon, manual, 77480d6), finding 10.2).
-    else if (/PROVIDER_CALL_LIMIT|provider-call budget/i.test(s.blocker?.what ?? '')) out.push({source: 'stage', stage: s.stage, attempt: s.attempt, record: s.hash, why: s.blocker.what});
-    if (s.outputs?.run?.provider_calls?.refused_at_limit > 0) out.push({source: 'pipeline', stage: s.stage, record: s.hash, why: `${s.outputs.run.provider_calls.refused_at_limit} pipeline turn(s) refused at the provider-call limit`});
+    const at = {source: 'stage', stage: s.stage, attempt: s.attempt, record: s.hash};
+    const codes = [];
+    if (s.blocker?.code === 'STAGE_PROVIDER_CALLS') codes.push({kind: 'provider_calls', code: 'STAGE_PROVIDER_CALLS', why: s.blocker.what});
+    if (s.outputs?.over_budget) codes.push({kind: 'provider_calls', code: 'STAGE_BUDGET_EXCEEDED', why: s.next?.why ?? null});
+    if (s.outputs?.budget_stop?.code) codes.push({kind: 'provider_calls', code: s.outputs.budget_stop.code, why: s.next?.why ?? null});
+    if (!codes.some(c => c.kind === 'provider_calls') && s.usage?.budget_exhausted && s.status !== 'passed') {
+      const b = s.usage.budget_exhausted;
+      codes.push({kind: 'provider_calls', code: b.code ?? 'STAGE_PROVIDER_CALLS', why: `the stage was charged its whole provider-call budget (${b.charged} of ${b.budget}) and ended ${s.status}: ${s.next?.why ?? s.blocker?.what ?? 'no reason recorded'}`});
+    }
+    if (s.blocker?.code === 'STAGE_ELAPSED' || s.outputs?.stopped?.code === 'STAGE_ELAPSED') codes.push({kind: 'elapsed', code: 'STAGE_ELAPSED', why: s.blocker?.what ?? s.next?.why ?? null});
+    for (const c of codes) out.push({...at, ...c});
+    if (s.outputs?.run?.provider_calls?.refused_at_limit > 0) out.push({source: 'pipeline', stage: s.stage, record: s.hash, kind: 'provider_calls', code: 'PROVIDER_CALL_LIMIT', why: `${s.outputs.run.provider_calls.refused_at_limit} pipeline turn(s) refused at the provider-call limit`});
   }
   return out;
+}
+/**
+ * THE HELD CLAIM (self-audit round 3, assignment 3 (sealed bb1287a), L-305): the item's live claim at `now`, when this
+ * launcher finds one it did not take: a run that was killed without releasing it (SIGKILL, a power loss; a clean stop
+ * releases it). The record names it -- stage, attempt, holder, when it was leased and when the lease ends -- since the
+ * item cannot be dispatched before that (the work ledger's fence: no duplicate execution).
+ */
+export function heldClaim(work, item, now = Date.now()) {
+  const c = work.activeClaim(item, now);
+  if (!c) return null;
+  const until = Date.parse(c.leased_at) + c.lease_ms;
+  return {source: 'launcher', code: 'CLAIM_HELD', claim: c.hash, item, stage: c.stage, attempt: c.attempt, holder: c.holder, leased_at: c.leased_at,
+    lease_until: new Date(until).toISOString(), wait_ms: Math.max(0, until - now),
+    why: `CLAIM_HELD: "${item}" ${c.stage} (attempt ${c.attempt}) is claimed by ${c.holder} until ${new Date(until).toISOString()}: a run stopped without releasing its claim (killed, not interrupted); the item resumes from its last recorded stage once that lease ends, and nothing can be dispatched before`};
 }
 /** Re-open every ledger read-only, as a fresh reader, and verify it. */
 // `runFile` (optional): the run.json this verification is of. Its BODY (everything but `verification`) is checked against
@@ -598,12 +646,15 @@ async function liveSeats({meteredFailover}) {
   return {turn: await live.liveTurn({label: 'live-run', meteredFailover}), makeClientFor: await live.liveClients()};
 }
 const tickRow = t => ({dispatched: t.dispatched, skipped: t.skipped, blocked: t.blocked, intake: t.intake.length, recovery: t.recovery, released_expired: t.released_expired,
-  stopped: t.stopped, spent: t.spent, scope: t.scope ?? null});
+  stopped: t.stopped, stop: t.stop ?? null, interrupted: t.interrupted ?? [], spent: t.spent, scope: t.scope ?? null});
 
 // `startedAt` (ms): when the run's elapsed bound started counting. main() passes the time before the preflight, so the
 // preflight's probes come out of the same elapsed_ms (independent review round 2, assignment 3 (Google gemini-4-carbon,
 // manual, 77480d6), finding 9: buildPlan ran before `started`). Default now.
-export async function runConfirmed({manifest: m, digest: manifestDigest, file}, plan, status, workInfo, {repo, seats = null, progress = () => {}, makeExecutorsImpl = makeExecutors, startedAt = Date.now()}) {
+// `interrupt` (an AbortSignal, optional): the launcher's own stop (main() aborts it on SIGINT, SIGTERM or SIGHUP): the
+// stage in flight is stopped, its claim released as `interrupted` (scheduler.mjs tick), and the run is recorded as stopped
+// (L-305), so a restart resumes at once instead of waiting out the lease.
+export async function runConfirmed({manifest: m, digest: manifestDigest, file}, plan, status, workInfo, {repo, seats = null, progress = () => {}, makeExecutorsImpl = makeExecutors, startedAt = Date.now(), interrupt = null}) {
   const L = m.limits, started = startedAt, deadline = started + L.elapsed_ms;
   fs.mkdirSync(m.out_dir, {recursive: true});
   const work = workInfo.state === 'resumable' ? openWorkLedger({root: m.ledgers.work_root, create: false}) : createWorkRoot(m.ledgers.work_root, {item: m.item, manifestDigest});
@@ -618,23 +669,29 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).
   const limits = {total_provider_calls: L.total_provider_calls, stage_provider_calls: L.stage_provider_calls, stage_attempts: L.stage_attempts, concurrency: 1,
     lease_ms: L.elapsed_ms + Math.min(60_000, Math.ceil(L.elapsed_ms / 9))};
-  const ticks = [], launcherStops = [];
+  const ticks = [], launcherStops = [], launcherBlockers = [];
   const maxTicks = STAGES.length * L.stage_attempts * 2;
   const gateOf = () => reconcile({repo, statusRoot: m.ledgers.status_root, workLedger: work, issues: null}).items.find(i => i.item === m.item).gate;
   let gate = gateOf();
+  // A claim this launcher did not take blocks the item until its lease ends: named, with its expiry (L-305).
+  const noteHeld = () => { const h = gate.gate === 'claimed' ? heldClaim(work, m.item) : null; if (h && !launcherBlockers.some(b => b.claim === h.claim)) { launcherBlockers.push(h); note({event: 'claim.held', ...h}); } };
+  noteHeld();
   for (let n = 0; n < maxTicks && STAGES.includes(gate.gate); n++) {
+    if (interrupt?.aborted) break;
     const left = deadline - Date.now();
-    if (left <= 0) { launcherStops.push({source: 'launcher', why: `elapsed limit ${L.elapsed_ms} ms reached`}); break; }
+    if (left <= 0) { launcherStops.push({source: 'launcher', kind: 'elapsed', code: 'ELAPSED_LIMIT', why: `elapsed limit ${L.elapsed_ms} ms reached`}); break; }
     const sp = spent(work), spentNow = sp.calls + sp.reserved;   // a live claim (another holder) reserves its budget
     if (L.total_provider_calls - spentNow < L.stage_provider_calls) {
-      launcherStops.push({source: 'launcher', why: `provider-call budget: ${L.total_provider_calls - spentNow} left of ${L.total_provider_calls}, a stage needs up to ${L.stage_provider_calls}`});
+      launcherStops.push({source: 'launcher', kind: 'provider_calls', code: 'PROVIDER_CALL_BUDGET', why: `provider-call budget: ${L.total_provider_calls - spentNow} left of ${L.total_provider_calls}, a stage needs up to ${L.stage_provider_calls}`});
       break;
     }
     note({event: 'tick', n, gate: gate.gate});
-    const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note});
+    const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note,
+      ...(interrupt ? {interrupt} : {})});
     ticks.push(tickRow(t));
     gate = gateOf();
-    if (!t.dispatched.length) break;
+    if (t.interrupted.length || interrupt?.aborted) break;
+    if (!t.dispatched.length) { noteHeld(); break; }
     // A stage stopped at a DETERMINISTIC bound (the pipeline's own max_provider_calls, with no unit approved in the
     // attempt) is not retried: the next attempt would stop at the same place (independent review round 2, assignment 3
     // (Google gemini-4-carbon, manual, 77480d6), finding 2.2).
@@ -642,31 +699,40 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
     const lastRec = last ? work.stages(m.item).find(x => x.hash === last.record) : null;
     if (lastRec?.outputs?.budget_stop?.deterministic) {
       const b = lastRec.outputs.budget_stop;
-      launcherStops.push({source: 'launcher', stage: lastRec.stage, record: lastRec.hash, code: b.code,
+      launcherStops.push({source: 'launcher', kind: 'provider_calls', stage: lastRec.stage, record: lastRec.hash, code: b.code,
         why: `${lastRec.stage} stopped at the pipeline's own bound of ${b.bound} provider call(s) (${b.made} made, ${b.refused} refused; the stage budget is ${b.stage_budget}) with no unit approved: a retry would stop at the same bound, so it is not retried`});
       break;
     }
   }
-  if (STAGES.includes(gate.gate) && ticks.length >= maxTicks) launcherStops.push({source: 'launcher', why: `tick limit ${maxTicks} reached`});
+  if (STAGES.includes(gate.gate) && ticks.length >= maxTicks) launcherStops.push({source: 'launcher', kind: 'iterations', code: 'TICK_LIMIT', why: `tick limit ${maxTicks} reached`});
+  if (interrupt?.aborted) launcherBlockers.push({source: 'launcher', code: 'INTERRUPTED', why: `INTERRUPTED: ${interrupt.reason?.message ?? 'the launcher was stopped'}; the stage in flight was stopped and its claim released (interrupted), so the run resumes at the next start`,
+    released: ticks.flatMap(t => t.interrupted ?? []).map(x => ({claim: x.claim, stage: x.stage, attempt: x.attempt, charged: x.charged, released: x.released}))});
   const stages = work.stages(m.item);
   const outcome = [...stages].reverse().find(x => x.stage === 'outcome' && x.status === 'passed') ?? null;
   const receipt = subagentReceipt(stages, m.require_subagent);
   const reasons = [];
   if (gate.gate !== 'awaiting-owner' || !outcome) reasons.push(`the item did not reach its outcome: gate "${gate.gate}"${gate.reason ? ` (${gate.reason})` : ''}`);
+  for (const b of launcherBlockers) reasons.push(b.why);
   if (!receipt.met) reasons.push(`require_subagent not met: ${receipt.why}`);
   const proposal = outcome ? {path: outcome.outputs.proposal_path, digest: outcome.outputs.proposal_digest, file_sha256: outcome.outputs.proposal_file_sha256, to: outcome.outputs.to, signed: false,
     apply_command: `OPHANIM_STATUS_LEDGER='${m.ledgers.status_root}' node packages/ledger/status.mjs apply '${outcome.outputs.proposal_path}' --keys "$OPHANIM_STATUS_KEYS"`,
     note: 'UNSIGNED. The launcher never applies it: the owner runs the command above, with the owner\'s status keys, after checking the record.'} : null;
   const blockers = [...ticks.flatMap(t => t.blocked.filter(b => b.item === m.item).map(b => ({source: 'tick', ...b}))), ...stages.filter(x => x.blocker).map(x => ({source: 'stage', stage: x.stage, attempt: x.attempt, record: x.hash, blocker: x.blocker})),
     // The gate the run ended on, when it is blocked: a loop that exits without ticking on it left it out (finding 10.3).
-    ...(gate.blocker ? [{source: 'final_gate', gate: gate.gate, blocker: gate.blocker}] : [])];
+    ...(gate.blocker ? [{source: 'final_gate', gate: gate.gate, blocker: gate.blocker}] : []),
+    // The launcher's own: a claim held by a run that was killed (with its expiry), an interrupted run (L-305).
+    ...launcherBlockers];
   const record = {schema: RECORD_SCHEMA, at: new Date().toISOString(), started_at: new Date(started).toISOString(), elapsed_ms: Date.now() - started,
     manifest: {file, digest: manifestDigest}, item: m.item, candidate_commit: m.candidate_commit, plan,
     work_ledger: {root: m.ledgers.work_root, anchor: work.anchor, created: workInfo.state !== 'resumable', marker: path.join(m.ledgers.work_root, WORK_MARKER)},
     limits: L, billing: m.billing, spent: spent(work), ticks, stages: stages.map(stageRow), budget_stops: budgetStops(ticks, stages, launcherStops), blockers,
     served_identities: servedIdentities(stages), subagent_receipt: receipt, pipelines: pipelinesOf(stages),
     final_gate: {gate: gate.gate, reason: gate.reason ?? null, blocker: gate.blocker ?? null}, verification: null, proposal,
-    acceptance: {met: !reasons.length, reasons}, progress: progressFile};
+    // NOT ACCEPTED UNTIL VERIFIED (self-audit round 3, assignment 3 (sealed bb1287a), L-307): the record written before the
+    // child verifier runs says the acceptance is PENDING. A launcher killed while the verifier runs leaves this record:
+    // unaccepted, and saying why. Only the record rewritten with the child's verdict carries `met: true`.
+    acceptance: {met: false, state: 'pending', pending: 'VERIFICATION_PENDING: the fresh verification (verify-run.mjs, a child process) has not returned; this record is not accepted',
+      reasons: [...reasons, 'VERIFICATION_PENDING: the fresh verification has not returned']}, progress: progressFile};
   // THE RECORD IS WRITTEN FIRST, THEN VERIFIED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
   // 77480d6), finding 10.1): the child verifies run.json itself (its body, everything but `verification`, against the
   // ledgers and by digest) and every pipeline.json against the digest its stage recorded; it ran before run.json existed.
@@ -701,7 +767,17 @@ export function parseArgs(argv) {
  * The launcher. `seats` ({turn, makeClientFor}) replaces the live seats (tests only: the command line always uses the
  * live ones). Returns the exit code.
  */
-export async function main(argv = process.argv.slice(2), {log = console.log, err = console.error, env = process.env, seats = null, makeExecutorsImpl} = {}) {
+// THE LAUNCHER'S OWN STOP (self-audit round 3, assignment 3 (sealed bb1287a), L-305). A confirmed run installs handlers for
+// SIGINT, SIGTERM and SIGHUP (`signals`, default these three on `proc` = process): the first aborts the run's `interrupt`
+// (the stage in flight is stopped, its claim released `interrupted`, the record written: runConfirmed); if the run has not
+// finished INTERRUPT_GRACE_MS later, or a second signal arrives, every claim this launcher took and still holds is released
+// `interrupted` directly on the work ledger and the process exits 128 + the signal's number (`exit`). Only a SIGKILL (or a
+// power loss) leaves a claim held; the next start names it with its expiry (heldClaim). The lease fence is unchanged: a
+// released claim records and charges nothing, so an executor still running after the release cannot hand work on.
+export const INTERRUPT_GRACE_MS = 10_000;
+const SIGNAL_NUMBERS = Object.freeze({SIGHUP: 1, SIGINT: 2, SIGTERM: 15});
+export async function main(argv = process.argv.slice(2), {log = console.log, err = console.error, env = process.env, seats = null, makeExecutorsImpl,
+  proc = process, signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], exit = code => process.exit(code), graceMs = INTERRUPT_GRACE_MS} = {}) {
   let opts;
   try { opts = parseArgs(argv); } catch (e) { err(`${e.message}\nusage: live-run.mjs --manifest FILE [--dry-run] [--confirm-spend "<item>@<commit7>"] [--repo DIR]`); return 2; }
   const repo = path.resolve(opts.repo ?? REPO_ROOT);
@@ -719,7 +795,32 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
   try { built = await buildPlan(loaded, {repo, env, mode, ...(mode === 'confirmed' ? {deadline: startedAt + loaded.manifest.limits.elapsed_ms} : {})}); }
   catch (e) { log(JSON.stringify({schema: PLAN_SCHEMA, ok: false, refused: 'plan', refusals: [e.message], provider_calls: 0}, null, 2)); return 1; }
   if (mode === 'dry-run' || built.refusals.length) { log(JSON.stringify(built.plan, null, 2)); return built.refusals.length ? 1 : 0; }
-  const r = await runConfirmed(loaded, built.plan, built.status, built.work, {repo, seats, makeExecutorsImpl, startedAt, progress: e => err(JSON.stringify(e))});
+  const ac = new AbortController(), held = new Map();
+  let grace = null;
+  const hardStop = sig => {
+    const why = `${sig} received and the run did not stop within ${graceMs} ms (or a second signal arrived): released by the launcher on exit`;
+    let released = [];
+    try {
+      const work = openWorkLedger({root: loaded.manifest.ledgers.work_root, create: false});
+      released = [...held].map(([claim, h]) => ({claim, ...h, released: releaseInterrupted(work, {claim, item: h.item, stage: h.stage, why})}));
+    } catch (e) { err(JSON.stringify({event: 'interrupt.release-failed', why: String(e?.message ?? e).slice(0, 300)})); }
+    try { fs.appendFileSync(path.join(loaded.manifest.out_dir, 'progress.jsonl'), JSON.stringify({at: new Date().toISOString(), event: 'interrupt.exit', signal: sig, released}) + '\n'); } catch { /* the exit goes on */ }
+    exit(128 + (SIGNAL_NUMBERS[sig] ?? 0));
+  };
+  const onSignal = sig => {
+    if (ac.signal.aborted) { clearTimeout(grace); hardStop(sig); return; }
+    ac.abort(Object.assign(new Error(`${sig} received: the launcher was stopped`), {code: 'INTERRUPTED', signal: sig}));
+    grace = setTimeout(() => hardStop(sig), graceMs);   // NOT unref'd: a run that does not stop must still reach the hard stop
+  };
+  const handlers = signals.map(sig => [sig, () => onSignal(sig)]);
+  for (const [sig, h] of handlers) proc.on(sig, h);
+  const track = e => {
+    if (e?.event === 'dispatch' && e.claim) held.set(e.claim, {item: e.item, stage: e.stage, lease_until: e.lease_until ?? null});
+    err(JSON.stringify(e));
+  };
+  let r;
+  try { r = await runConfirmed(loaded, built.plan, built.status, built.work, {repo, seats, makeExecutorsImpl, startedAt, progress: track, interrupt: ac.signal}); }
+  finally { clearTimeout(grace); for (const [sig, h] of handlers) proc.off(sig, h); }
   log(JSON.stringify({schema: RECORD_SCHEMA, run: r.file, code: r.code, acceptance: r.record.acceptance, final_gate: r.record.final_gate, spent: r.record.spent,
     budget_stops: r.record.budget_stops, verification_ok: r.record.verification.ok,
     proposal: r.record.proposal ? {path: r.record.proposal.path, signed: false, apply_command: r.record.proposal.apply_command} : null}, null, 2));

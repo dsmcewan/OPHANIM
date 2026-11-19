@@ -2,7 +2,7 @@
 // API-key transport and cannot consume an OAuth refresh token renamed to GEMINI_API_KEY.
 import { spawnPromise } from "./spawn.mjs";
 import { existsSync, readFileSync } from "node:fs";
-import { copyFile as copyFileP, mkdtemp as mkdtempP, rm as rmP } from "node:fs/promises";
+import { copyFile as copyFileP, mkdtemp as mkdtempP, rm as rmP, writeFile as writeFileP } from "node:fs/promises";
 import { tmpdir as tmpdirOf } from "node:os";
 import { join } from "node:path";
 import { parseUsageEnvelope, quotaEvidence, scopeQuota } from "../agy/quota.mjs";
@@ -51,8 +51,25 @@ const refused = (message, run, result) => {
 // `base_env` (optional) replaces process.env as the allowlist's source; `sandbox` is prepareWorkerJail's (bwrap,
 // agy_state_dirs, home, ...; `allowUnsandboxed: true` is the only way to run without bwrap, and is recorded); `signal`
 // cancels the child's process group. The result adds {jail_log, tool_steps, tool_drift, launch, sandbox} to the earlier fields (a thrown failure carries them too).
+// `charge` (optional): the caller's charge for this provider call. It is called AFTER the jail is built and BEFORE the
+// CLI is spawned (self-audit round 3, assignment 3 (sealed bb1287a), L-301, per the wave-1 dependency note): a turn that
+// fails before the spawn (a missing card, no bwrap, a refused argument) is charged nothing, and a throw refuses the call
+// (nothing is spawned). Every thrown failure says whether the call was made: `provider_requests` 0 before the spawn, 1
+// after it.
+// `verify` (optional) {cmd, hide?}: THE SEAT'S ONE COMMAND (self-audit round 3, assignment 3 (sealed bb1287a), L-407: the
+// board's reviewer and scout lost command execution with the single-turn jail). `cmd` (the ticket's acceptance command,
+// in the safe form of jail-hook.mjs verifyCmdProblem) is written as a VERIFY LAUNCHER into the control dir
+// (src/agy/verify-jail.mjs writeVerifyLauncher: `cd '<worktree>' && <cmd>` in a fresh verify jail -- no credential, no
+// network, no host path outside its allowlist, the control dir and the Gemini state hidden) and the jail policy names it,
+// so the PreToolUse hook approves exactly that launcher and denies every other command. The prompt is told its path.
+// The result's `verify` says whether it was offered (and why not).
 export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, timeoutS,
-  schemaPath = null, onEvent = () => {}, env: extraEnv = null, signal = undefined, base_env = null, sandbox = {} }) {
+  schemaPath = null, onEvent = () => {}, env: extraEnv = null, signal = undefined, base_env = null, sandbox = {}, charge = null, verify = null }) {
+  const before = e => { if (e && typeof e === "object" && e.provider_requests === undefined) { try { e.provider_requests = 0; } catch { /* frozen */ } } return e; };
+  try { return await cliTurn({ cli, repo, worktree, role, model, prompt, timeoutS, schemaPath, onEvent, extraEnv, signal, base_env, sandbox, charge, verify }); }
+  catch (e) { throw before(e); }
+}
+async function cliTurn({ cli, repo, worktree, role, model, prompt, timeoutS, schemaPath, onEvent, extraEnv, signal, base_env, sandbox, charge, verify }) {
   if (!/^[a-z][a-z-]*$/.test(role)) throw new Error(`agy CLI invalid role ${role}`);
   const agent = `pantheon-${role}`;
   const cardPath = join(repo, ".agents", "agents", agent, "agent.md");
@@ -71,21 +88,59 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
     const ws = await prepareSingleTurnWorkspace({ control_dir, worktree: resolveOf(worktree), agent, card: cardPath, agents_dir: join(repo, ".agents", "agents") });
     let schema = null;
     if (schemaPath) { schema = join(ws.paths.control_dir, "schema.json"); await copyFileP(schemaPath, schema); }
-    const base = workerArgv({ model, worktree: ws.paths.worktree, prompt, timeoutS, log_file: ws.paths.agy_log, agent });
+    // The verify launcher, BEFORE the jail is built: prepareWorkerJail adds the Gemini state layout and the agy state dirs to
+    // its policy's hidden paths (extendVerifyPolicy).
+    const offered = verify ? await offerVerifyLauncher(ws, verify) : null;
+    const turnPrompt = offered?.offered ? `${prompt}\n\n${verifyLauncherLines(offered)}` : prompt;
+    const base = workerArgv({ model, worktree: ws.paths.worktree, prompt: turnPrompt, timeoutS, log_file: ws.paths.agy_log, agent });
     const at = base.lastIndexOf("--print");
     const args = [...base.slice(0, at), ...(schema ? ["--json-schema", schema] : []), ...base.slice(at)];
     const jail = await prepareWorkerJail({ cli, control_dir: ws.paths.control_dir, worktree: ws.paths.worktree, env, sandbox });
     gstate = jail.gstate;
     const cmd = jail.prefix.length ? jail.prefix[0] : cli;
     const argv = assertWorkerArgv(jail.prefix.length ? [...jail.prefix.slice(1), cli, ...args] : args);
-    const launch = { cmd, args: argv.map(a => (a === prompt ? "<prompt>" : a)), cwd: ws.paths.control_dir, env_policy: "allowlist", env_names: Object.keys(env).sort(),
-      env_dropped_count: envDropped.length, env_stripped: envDropped.filter(k => ENV_SECRETISH.test(k) || PROVIDER_KEY.test(k)).sort() };
-    return await singleTurnIn({ cmd, argv, cwd: ws.paths.control_dir, env, agent, model, timeoutS, onEvent, signal, control_dir: ws.paths.control_dir, launch, sandboxRec: jail.sandboxRec });
+    const launch = { cmd, args: argv.map(a => (a === turnPrompt ? "<prompt>" : a)), cwd: ws.paths.control_dir, env_policy: "allowlist", env_names: Object.keys(env).sort(),
+      env_dropped_count: envDropped.length, env_stripped: envDropped.filter(k => ENV_SECRETISH.test(k) || PROVIDER_KEY.test(k)).sort(),
+      ...(offered ? { verify: offered.offered ? { offered: true, command: offered.command, cmd: offered.cmd } : { offered: false, why: offered.why } } : {}) };
+    // THE CHARGE, at the point of spend: the jail is built, nothing is spawned yet (L-301).
+    stopIfAborted(signal);
+    if (typeof charge === "function") await charge();
+    stopIfAborted(signal);
+    const r = await singleTurnIn({ cmd, argv, cwd: ws.paths.control_dir, env, agent, model, timeoutS, onEvent, signal, control_dir: ws.paths.control_dir, launch, sandboxRec: jail.sandboxRec })
+      .catch(e => { throw Object.assign(e, { provider_requests: 1 }); });
+    return { ...r, provider_requests: 1, ...(offered ? { verify: launch.verify } : {}) };
   } finally {
     await dropGeminiState(gstate).catch(() => null);   // the scratch holds the OAuth token: never left behind
     await rmP(control_dir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/** A stop before the spawn: a fresh error (never the caller's shared abort reason), code ABORTED, no provider request made. */
+function stopIfAborted(signal) {
+  if (signal?.aborted) throw Object.assign(new Error(`agy CLI turn was cancelled before it started: ${signal.reason?.message ?? "the caller stopped it"}`), { code: "ABORTED", provider_requests: 0 });
+}
+/**
+ * Offer a single-turn seat its ONE command (runAgyCliTurn's `verify`): the verify launcher in the control dir, named in the
+ * jail policy as the seat's worker command (jail-hook.mjs decideCommand approves exactly it). The control dir is
+ * read-only to the jailed CLI, so neither the launcher nor its policy can be changed by the seat. {offered, command, cmd}
+ * or {offered: false, why} (a command outside the safe form is not offered: every command stays denied).
+ */
+async function offerVerifyLauncher(ws, verify) {
+  const cmd = typeof verify?.cmd === "string" ? verify.cmd.trim() : "";
+  if (!cmd) return { offered: false, why: "no command was given" };
+  let script;
+  try { script = workerVerifyCommand(ws.paths.worktree, cmd); }
+  catch (e) { return { offered: false, why: String(e?.message ?? e).slice(0, 300) }; }
+  const hide = (Array.isArray(verify.hide) ? verify.hide : []).filter(p => typeof p === "string" && isAbsolute(p));
+  const { command } = writeVerifyLauncher({ control_dir: ws.paths.control_dir, worktree: ws.paths.worktree, script, hide });
+  const policy = { ...ws.policy, verify_cmd: cmd, worker_verify_cmd: command, worker_verify_script: script };
+  await writeFileP(ws.paths.jail, JSON.stringify(policy, null, 2) + "\n");
+  return { offered: true, command, cmd };
+}
+const verifyLauncherLines = ({ command, cmd }) => [
+  "ACCEPTANCE COMMAND (your one command): run exactly this path with run_command, with no arguments and no Cwd:",
+  `  ${command}`,
+  `It runs \`${cmd}\` in the tree under review, inside a verify jail (no network, no credentials, only the tree). Every other command is denied. Quote what it printed and its exit code.`].join("\n");
 
 /** The rest of runAgyCliTurn, inside its jail (the caller drops the state and the control dir). */
 async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEvent, signal, control_dir, launch, sandboxRec }) {
@@ -186,7 +241,8 @@ import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
-import { extendVerifyPolicy } from "../agy/verify-jail.mjs";
+import { extendVerifyPolicy, writeVerifyLauncher } from "../agy/verify-jail.mjs";
+import { workerVerifyCommand } from "../agy/jail-hook.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
 import { MCP_SERVER as MCP_SERVER_NAME, toolDrift } from "../agy/jail-hook.mjs";
 import { SECRETISH, controlDirSecrets, redactDeep, redactExact, redactStrong, secretValues } from "../agy/redact.mjs";
@@ -256,6 +312,22 @@ export function workerEnvOf(extra = {}, base = null) {
   // AGY_CLI_DISABLE_AUTO_UPDATE (documented: troubleshooting page): no self-update in the middle of a unit.
   Object.assign(env, { [AGY_CLEANUP.name]: AGY_CLEANUP.value, AGY_CLI_DISABLE_AUTO_UPDATE: "true" });
   return { env, dropped: [...new Set(dropped)].sort() };
+}
+// THE PYTHON SDK SEAT'S ENVIRONMENT (board/run-item.mjs, PANTHEON_AGY_TRANSPORT=sdk; self-audit round 3, assignment 3 (sealed
+// bb1287a), L-410: it was spawned with the whole process.env, so OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY and every
+// other secret of the controller reached a non-default seat process). It is the worker's allowlist (workerEnvAllows: no
+// secret-named variable) plus EXACTLY the credential this transport is billed with and its Vertex settings
+// (AGY_SDK_CREDENTIALS), and nothing else: no other provider key, no PANTHEON_* switch but what PANTHEON_AGY_ENV_PASS lists.
+export const AGY_SDK_CREDENTIALS = Object.freeze(["GEMINI_API_KEY", "PANTHEON_AGY_VERTEX_PROJECT", "PANTHEON_AGY_VERTEX_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]);
+/** {env, dropped: [names], credentials: [names passed]} for the python SDK seat (never a value in the names). */
+export function agySdkEnvOf(base = process.env) {
+  const pass = base.PANTHEON_AGY_ENV_PASS ?? process.env.PANTHEON_AGY_ENV_PASS ?? "";
+  const env = {}, dropped = [];
+  for (const [k, v] of Object.entries(base ?? {})) {
+    if (v === undefined) continue;
+    if (AGY_SDK_CREDENTIALS.includes(k) || workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k);
+  }
+  return { env, dropped: dropped.sort(), credentials: AGY_SDK_CREDENTIALS.filter(k => env[k] !== undefined) };
 }
 // `base` (optional): the environment to start from instead of process.env (the review runner passes an already
 // scrubbed one); it is filtered through the allowlist either way.
@@ -668,8 +740,22 @@ async function turnCliLog({ logDir, before, log_file, stderr, env }) {
  * state; a thrown failure carries the same evidence fields. `jail` (optional): a prepareWorkerJail() result to run in
  * (then `gemini_scratch` is null: the caller owns and drops the state).
  */
+// `charge` (optional): the caller's charge for this provider call (one worker session), called AFTER the jail is built and
+// BEFORE the CLI is spawned; a throw refuses it and nothing is spawned. A thrown failure carries `provider_requests` (0:
+// not spawned, 1: spawned) (self-audit round 3, assignment 3 (sealed bb1287a), L-301).
 export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prompt, timeoutS = 1800, graceS = 15, env: extraEnv = {}, base_env = null, signal = undefined,
-  sandbox = {}, onEvent = () => {}, a2a_socket = null, jail = null, agent = WORKER_AGENT, conversation = null }) {
+  sandbox = {}, onEvent = () => {}, a2a_socket = null, jail = null, agent = WORKER_AGENT, conversation = null, charge = null }) {
+  let spawned = false;
+  try {
+    const r = await workerTurn({ cli, control_dir, worktree, model, prompt, timeoutS, graceS, extraEnv, base_env, signal, sandbox, onEvent, a2a_socket, jail, agent, conversation,
+      charge: async () => { stopIfAborted(signal); if (typeof charge === "function") await charge(); stopIfAborted(signal); spawned = true; } });
+    return { ...r, provider_requests: 1 };
+  } catch (e) {
+    if (e && typeof e === "object") { try { e.provider_requests = spawned ? 1 : 0; } catch { /* frozen */ } }
+    throw e;
+  }
+}
+async function workerTurn({ cli, control_dir, worktree, model, prompt, timeoutS, graceS, extraEnv, base_env, signal, sandbox, onEvent, a2a_socket, jail, agent, conversation, charge }) {
   if (!cli || !control_dir || !worktree || !model || typeof prompt !== "string") throw Object.assign(new Error("runAgyWorkerTurn: pass cli, control_dir, worktree, model and prompt"), { code: "BAD_INPUT" });
   const cardPath = join(control_dir, ".agents", "agents", agent, "agent.md");
   if (!existsSync(cardPath)) throw Object.assign(new Error(`agy worker: role card ${cardPath} missing (prepareWorkerWorkspace first)`), { code: "NO_WORKSPACE" });
@@ -696,6 +782,7 @@ export async function runAgyWorkerTurn({ cli, control_dir, worktree, model, prom
     return droppedState;
   };
   try {
+    await charge();   // the point of spend: the jail is built, nothing is spawned yet
     return await workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS, extraEnv, signal, onEvent, agent, log_file, args, env, envDropped, secrets, prefix, sandboxRec, gstate, dropState });
   } finally {
     await dropState();

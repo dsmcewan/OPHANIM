@@ -4,8 +4,9 @@
 // `watch` runs a tick whenever the inputs change (the status ledger head, the work ledger head, the tickets, the
 // published issues), so new work and dependency changes reach dispatch on their own.
 //
-// Bounds, declared before dispatch and enforced across the whole tick: total provider calls (recorded usage;
-// a stage whose usage is unknown counts at its claim's budget, never as zero; calls CHARGED on the ledger before they
+// Bounds, declared before dispatch and enforced across the whole tick: total provider calls (recorded usage; a stage that
+// throws is recorded with what it was charged (L-302); a stage whose usage is unknown counts at its claim's budget, never
+// as zero; calls CHARGED on the ledger before they
 // were made, work.spend, count even when their stage never recorded; a live claim RESERVES the rest of its stage
 // budget, so concurrent stages cannot both start on one remainder), iterations (stage attempts),
 // elapsed time, retries per item and stage, and concurrency. A duplicate claim is refused by the work ledger
@@ -116,14 +117,30 @@ export function inputSignature({repo, statusRoot, workRoot, issues = null, bundl
 // `only` (an item id, optional): the ITEM SELECTOR. Intake, expired-claim release and evidence recovery still run for
 // every item (bookkeeping, no provider call), but only that item is dispatched; every other runnable item is listed in
 // `skipped` with why "outside the --item scope". Without it every runnable item is queued, as before.
+// `interrupt` (an AbortSignal, optional): THE LAUNCHER'S OWN STOP (a SIGINT/SIGTERM/SIGHUP of the process that runs the
+// tick; self-audit round 3, assignment 3 (sealed bb1287a), L-305). When it fires, the stage in flight is stopped (its
+// signal aborts, code INTERRUPTED) and, when the executor returns, its claim is RELEASED as `interrupted` with no stage
+// record: the late result is not a handoff, the charges made under it stay counted (spent()), and the item resumes from
+// its last recorded stage at the next start instead of waiting out the whole lease. No further stage is dispatched. The
+// claim in flight is announced on `progress` ({event: 'dispatch', claim, lease_until}), so a launcher whose executor does
+// not return can release it itself (releaseInterrupted). Fencing is unchanged: a released claim records and charges nothing.
+// THE STOP IS STRUCTURED (L-308): `stopped` (text, as before) is accompanied by `stop` {code, why}, code one of STOP_CODES.
+export const STOP_CODES = Object.freeze({ITERATIONS: 'ITERATIONS_LIMIT', ELAPSED: 'ELAPSED_LIMIT', BUDGET: 'PROVIDER_CALL_BUDGET', STAGE_ELAPSED: 'STAGE_ELAPSED', INTERRUPTED: 'INTERRUPTED'});
+/** Release `claim` as `interrupted` (the launcher was stopped), unless already released. Returns true when this call released it. */
+export function releaseInterrupted(work, {claim, item, stage, why, at = new Date().toISOString()}) {
+  if (work.released(claim)) return false;
+  try { work.release({claim, item, stage, outcome: 'interrupted', why: `INTERRUPTED: ${why}`.slice(0, 600), at}); return true; }
+  catch (e) { if (e?.code === 'LEDGER_REFUSED' && /that claim is already released/.test(String(e.message))) return false; throw e; }
+}
 export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDir = null, executors = {}, limits = {}, holder = 'controller',
-  clock = () => Date.now(), progress = () => {}, only = null}) {
+  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null}) {
   if (only !== null && (typeof only !== 'string' || !only)) fail('tick: `only` names one status item id', 'USAGE');
   const L = {...DEFAULT_LIMITS, ...limits};
   const started = clock();
   const work = openWorkLedger({root: workRoot});
   const capacity = capacityOf(executors);
-  const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null};
+  const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null, stop: null, interrupted: []};
+  const stopWith = (code, why) => { if (log.stopped === null) { log.stopped = why; log.stop = {code, why}; } };
   // Interrupted work: a claim past its lease is released as expired; its item resumes from its last valid stage.
   // BOOKKEEPING UNDER A RACE (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
   // finding 3.2b). Each of these entries is unique on the work ledger, checked under its append lock (one release per
@@ -178,8 +195,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const runItem = async item => {
     let collided = null;
     for (;;) {
-      if (iterations >= L.iterations) { log.stopped ??= `iterations limit ${L.iterations} reached`; return; }
-      if (clock() - started > L.elapsed_ms) { log.stopped ??= `elapsed limit ${L.elapsed_ms} ms reached`; return; }
+      if (interrupt?.aborted) { stopWith(STOP_CODES.INTERRUPTED, `interrupted: ${interrupt.reason?.message ?? 'the launcher was stopped'}`); return; }
+      if (iterations >= L.iterations) { stopWith(STOP_CODES.ITERATIONS, `iterations limit ${L.iterations} reached`); return; }
+      if (clock() - started > L.elapsed_ms) { stopWith(STOP_CODES.ELAPSED, `elapsed limit ${L.elapsed_ms} ms reached`); return; }
       rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
       const gate = rec.items.find(i => i.item === item).gate;
       if (!STAGES.includes(gate.gate)) { if (gate.blocker) log.blocked.push({item, gate: gate.gate, blocker: gate.blocker}); return; }
@@ -193,7 +211,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         log.blocked.push({item, gate: gate.gate, blocker: {what: `${attempts} attempts of ${gate.gate} on the same inputs`, role: 'lead@orch', resume_when: 'an input changes, or the owner raises the retry limit'}});
         return;
       }
-      if (budgetLeft() < L.stage_provider_calls) { log.stopped ??= `provider-call budget: ${budgetLeft()} left of ${L.total_provider_calls}, a stage needs up to ${L.stage_provider_calls}`; return; }
+      if (budgetLeft() < L.stage_provider_calls) { stopWith(STOP_CODES.BUDGET, `provider-call budget: ${budgetLeft()} left of ${L.total_provider_calls}, a stage needs up to ${L.stage_provider_calls}`); return; }
       const exec = executors[gate.gate];
       if (typeof exec !== 'function') { log.skipped.push({item, gate: gate.gate, why: `no executor for ${gate.gate}`}); return; }
       const upstream = verifyHandoff(work, gate);
@@ -212,7 +230,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       // Missing authority is a block on the whole tick, never a quiet skip of one item.
       catch (e) {
         if (e.code === 'NO_AUTHORITY') throw e;
-        if (/PROVIDER_CALL_BUDGET/.test(e.message)) { log.stopped ??= `provider-call budget: ${e.message.slice(0, 300)}`; return; }
+        if (e.code === 'PROVIDER_CALL_BUDGET') { stopWith(STOP_CODES.BUDGET, `provider-call budget: ${e.message.slice(0, 300)}`); return; }
         // "Already completed for these exact inputs": another holder completed this very attempt between this tick's read
         // and its claim (reconciliation reports a standing collision as a block before any claim). Read again once; the
         // same refusal twice is reported as a block with its reason, never a silent skip (self-audit round 3,
@@ -227,7 +245,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         log.skipped.push({item, gate: gate.gate, why: e.message}); return;
       }
       iterations++;
-      progress({event: 'dispatch', item, stage: gate.gate, attempt, mode: gate.mode ?? null});
+      progress({event: 'dispatch', item, stage: gate.gate, attempt, mode: gate.mode ?? null, claim, lease_until: new Date(clock() + L.lease_ms).toISOString()});
       // CHARGE BEFORE THE CALL: an executor calls ctx.charge(n) before it makes n provider calls. The charge is signed
       // onto the work ledger (work.spend) first, so a call that leaves the process is counted even if the process dies
       // before the stage record. A charge over the stage budget, after the stage's deadline, or under a claim that
@@ -237,6 +255,8 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(Object.assign(new Error(`STAGE_ELAPSED: the stage's elapsed budget of ${budget.elapsed_ms} ms is spent`), {code: 'STAGE_ELAPSED'})), budget.elapsed_ms);
       timer.unref?.();
+      const onInterrupt = () => ac.abort(Object.assign(new Error(`INTERRUPTED: ${interrupt.reason?.message ?? 'the launcher was stopped'}`), {code: 'INTERRUPTED'}));
+      if (interrupt?.aborted) onInterrupt(); else interrupt?.addEventListener('abort', onInterrupt, {once: true});
       let charged = 0, refusedCharges = 0;
       const charge = (n = 1) => {
         if (!(Number.isInteger(n) && n >= 1)) fail('charge(n): n is a positive integer', 'USAGE');
@@ -253,9 +273,30 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const fence = () => { const why = work.leaseRefusal(claim, new Date(clock()).toISOString()); if (why) fail(why, 'LEASE_FENCED'); };
       try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, claim}); }
       catch (e) {
-        result = {status: 'failed', outputs: {error: String(e.message).slice(0, 300)}, team: [], contributions: [], findings: [], usage: {provider_calls: e.provider_calls ?? (charged || null)},
+        // THE ACTUAL SPEND (self-audit round 3, assignment 3 (sealed bb1287a), L-302): every provider call is charged on the
+        // work ledger before it is made (the executor contract above), so `charged` IS what this attempt spent, 0 included;
+        // an executor that reports more (e.provider_calls) is believed. Unknown (null, then counted at the claim's whole
+        // budget by spent()) only when the executor says it cannot know (e.provider_calls_unknown: calls made outside charge).
+        const reported = Number.isInteger(e?.provider_calls) && e.provider_calls >= 0 ? e.provider_calls : null;
+        const calls = e?.provider_calls_unknown === true ? null : Math.max(reported ?? 0, charged);
+        result = {status: 'failed', outputs: {error: String(e.message).slice(0, 300)}, team: [], contributions: [], findings: [],
+          usage: {provider_calls: calls, basis: calls === null ? 'unknown: the executor made calls outside the charge' : reported !== null && reported > charged ? 'reported by the executor' : 'charged on the work ledger before each call'},
           next: {stage: gate.gate, why: `the ${gate.gate} executor failed: ${String(e.message).slice(0, 200)}`}};
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer); interrupt?.removeEventListener('abort', onInterrupt); }
+      // THE LAUNCHER WAS STOPPED (L-305): no stage record, the claim released as `interrupted` (see the header).
+      if (ac.signal.aborted && ac.signal.reason?.code === 'INTERRUPTED') {
+        const at = new Date(clock()).toISOString();
+        const released = releaseInterrupted(work, {claim, item, stage: gate.gate, at,
+          why: `${ac.signal.reason.message.replace(/^INTERRUPTED: /, '')}; the ${gate.gate} stage (attempt ${attempt}) was stopped before its result was recorded (it reported ${result.status}); ${charged} provider call(s) charged under it stay counted`});
+        log.interrupted.push({item, stage: gate.gate, attempt, claim, charged, status_reported: result.status, released, at});
+        stopWith(STOP_CODES.INTERRUPTED, `interrupted: ${ac.signal.reason.message}`);
+        progress({event: 'interrupted', item, stage: gate.gate, claim, released});
+        return;
+      }
+      // THE BUDGET, STRUCTURALLY (L-308): a stage that was charged its whole provider-call budget ran out of it (every call
+      // is charged before it is made, and a meter refuses the call past the budget), whatever words its result uses. The
+      // record says so in `usage.budget_exhausted` (with what was charged), for a reader that classifies stops by code.
+      if (charged >= budget.provider_calls) result = {...result, usage: {...(result.usage ?? {provider_calls: null}), budget_exhausted: {code: 'STAGE_PROVIDER_CALLS', charged, budget: budget.provider_calls, refused_charges: refusedCharges}}};
       // A result that reports more calls than its stage budget is not a pass: recorded failed, with the reason named.
       const reported = result.usage?.provider_calls;
       if (Number.isInteger(reported) && reported > budget.provider_calls) {
@@ -282,7 +323,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
           result = {...result, status: 'pending', next: {stage: gate.gate, why},
             blocker: {code: 'STAGE_ELAPSED', transient: true, what: why, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, by a tick with elapsed budget left'}};
         }
-        log.stopped ??= `stage elapsed limit ${budget.elapsed_ms} ms reached (${item} ${gate.gate})`;
+        stopWith(STOP_CODES.STAGE_ELAPSED, `stage elapsed limit ${budget.elapsed_ms} ms reached (${item} ${gate.gate})`);
       }
       const identity = {item, requirement: 'sha256:' + digest({item: gate.requirement.item, title: gate.requirement.title, basis: gate.requirement.basis}),
         ...(result.identity?.ticket ?? upstream?.identity.ticket ? {ticket: result.identity?.ticket ?? upstream.identity.ticket} : {})};

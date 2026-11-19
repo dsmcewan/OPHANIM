@@ -24,7 +24,10 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cardOf = role => (role === "planner" ? "planner" : "reviewer");
 
 // `signal` (optional) cancels the CLI's process group: a stage stopped at its elapsed budget does not wait for the turn.
-export async function agySingleTurn({ vendor, model, prompt, seat = null, timeoutS = 900, signal = undefined }) {
+// `charge` (optional): the caller's charge for this provider call, made inside runAgyCliTurn BETWEEN its jail build and
+// its spawn, so a turn that fails before the CLI is started is charged nothing; a throw refuses the call (self-audit
+// round 3, assignment 3 (sealed bb1287a), L-301).
+export async function agySingleTurn({ vendor, model, prompt, seat = null, timeoutS = 900, signal = undefined, charge = null }) {
   const made = resolveModel(vendor, model);
   if (!made?.known || made.lab !== "google") {
     throw Object.assign(new Error(`the Antigravity transport serves Gemini models only: ${model} is ${made?.known ? `a ${made.lab} model` : "not a declared model"}`), { code: "AGY_GEMINI_ONLY" });
@@ -34,7 +37,8 @@ export async function agySingleTurn({ vendor, model, prompt, seat = null, timeou
   const empty = mkdtempSync(join(tmpdir(), "pantheon-agy-turn-"));
   try {
     signal?.throwIfAborted();
-    const r = await runAgyCliTurn({ cli, repo: REPO, worktree: empty, role: cardOf(seat?.role), model, prompt, timeoutS, ...(signal ? { signal } : {}) });
+    const r = await runAgyCliTurn({ cli, repo: REPO, worktree: empty, role: cardOf(seat?.role), model, prompt, timeoutS, ...(signal ? { signal } : {}),
+      ...(typeof charge === "function" ? { charge: () => charge({ kind: "lane" }) } : {}) });
     return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: model, served_model_source: "input" };
   } finally { rmSync(empty, { recursive: true, force: true }); }
 }
@@ -59,7 +63,11 @@ export async function agySingleTurn({ vendor, model, prompt, seat = null, timeou
 // is thrown, marked quota_failover {used: false, refused}) and the API is not called. `signal` is passed to the lane
 // and to the API, and an aborted signal refuses the failover the same way (independent review, assignment 3 (OpenAI
 // gpt-6-astra extra review, 09d490f), questions 1 and 9).
-export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null, signal = undefined, charge = null }, { lane, api, failover = true }) {
+// `admitRequest` (optional; live.mjs, the second charge contract): nothing was charged before the turn; every provider call
+// is admitted at its point of spend -- the lane's (passed to `lane` as `charge`, called between the jail build and the
+// spawn), the API's first and further requests, and the failover (admitted here, before the API is asked, with kind
+// "failover"; the API then charges only its further requests). It replaces `charge` when given.
+export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null, signal = undefined, charge = null, admitRequest = null }, { lane, api, failover = true }) {
   const transport = seatTransport(vendor, model);
   const isLane = transport === "agy-cli";
   const sig = signal ? { signal } : {};
@@ -73,11 +81,12 @@ export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra 
       { code: "AGY_NO_LANE", quota_failover: { used: false, disabled: true, lanes: [], rule: "metered Gemini API failover disabled by the caller" } });
   }
   // `charge` reaches the API seat too: every billed request after the turn's first is admitted by it (finding 1.1).
-  const ch = typeof charge === "function" ? { charge } : {};
-  if (!viaLane) return api({ vendor, model, prompt, seat, extra, ...sig, ...ch });
+  const admits = typeof admitRequest === "function";
+  const ch = admits ? { charge: () => admitRequest({ kind: "continuation" }) } : typeof charge === "function" ? { charge } : {};
+  if (!viaLane) return api({ vendor, model, prompt, seat, extra, ...sig, ...(admits ? { admitRequest } : ch) });
   const spare = isLane ? quotaFailoverFor(model) : { vendor, model, effort: seat?.effort ?? null };
   try {
-    const r = await lane({ vendor: viaLane.vendor, model: viaLane.model, prompt, seat, ...sig });
+    const r = await lane({ vendor: viaLane.vendor, model: viaLane.model, prompt, seat, ...sig, ...(admits ? { charge: admitRequest } : {}) });
     return { ...r, transport: "agy-cli", requested_model: model };
   } catch (e) {
     if (!spare || !classifyFailure(e).quota) throw e;
@@ -87,7 +96,8 @@ export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra 
     }
     try {
       signal?.throwIfAborted();
-      if (typeof charge === "function") charge();
+      if (admits) admitRequest({ kind: "failover" });
+      else if (typeof charge === "function") charge();
     } catch (refusal) {
       throw Object.assign(e, { quota_failover: { used: false, refused: String(refusal?.message ?? refusal).slice(0, 300), lanes: [viaLane.model], rule: QUOTA_FAILOVER_RULE, after } });
     }
