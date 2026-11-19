@@ -233,6 +233,99 @@ test(`${REF}, question 5: a resumed review records the dossier its seats were sh
   });
 });
 
+// A plan cycle left open by a transient reviewer failure: the first plan-review seat of `failLab` fails once, the
+// stage pends with the cycle open, and the next tick resumes it. `finding` (if given) is what that lab's review adds.
+const resumablePlan = ({failLab = 'xai', finding = null, planner} = {}) => {
+  let failOnce = true;
+  return scriptedTurn({
+    ...(planner ? {planner} : {}),
+    'plan-review': ({vendor}) => {
+      if (vendor !== failLab) return APPROVE;
+      if (failOnce) { failOnce = false; throw new Error('503 transient failure'); }
+      return finding ? json({verdict: 'approve', findings: [finding]}) : APPROVE;
+    },
+  });
+};
+// The planner retrieves notes.md (which is not in the dossier) before it answers.
+const retrievingPlanner = ({prompt}) => (/## Retrieved \(round/.test(prompt) ? json(planFor(prompt)) : json({requests: [{op: 'file', path: 'notes.md'}]}));
+const NOTES_FINDING = {severity: 'minor', file: null, line: null, claim: 'the plan should mention the release note [source: notes.md]', reproduction: null};
+
+test(`${REF}, question 5: a resumed PLAN review records the dossier its seats were shown (the one bound with its brief), not a rebuilt one`, async () => {
+  await withDispatch(async ctx => {
+    const {dir: repo, makeClientFor} = ctx;
+    ctx.serve((_v, m) => m);
+    const f = fixture(repo, [{item: 'resume-plan'}]);
+    const turn = resumablePlan();
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, profile: 'argo', independence: 'model'});
+    let now = Date.parse('2026-11-18T00:00:00Z');
+    assert.deepEqual(stagesOf(await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS, clock: () => now})), ['plan:pending']);
+    const pending = openWorkLedger({root: f.workRoot}).stages('resume-plan')[0];
+    // HEAD moves on (an unrelated commit): a dossier built now would name another head.
+    fs.writeFileSync(path.join(repo, 'unrelated.txt'), 'unrelated\n');
+    git(repo, 'add', 'unrelated.txt'); git(repo, 'commit', '-q', '-m', 'unrelated');
+    now += 20 * 60_000;
+    assert.deepEqual(stagesOf(await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS, clock: () => now})), ['plan:passed']);
+    const passed = openWorkLedger({root: f.workRoot}).stages('resume-plan').find(s => s.status === 'passed');
+    assert.equal(passed.outputs.plan_review.cycle, pending.outputs.cycle, 'the open cycle was resumed');
+    assert.equal(turn.log.filter(l => l.kind === 'planner').length, 1, 'the plan was not re-planned');
+    assert.equal(passed.outputs.context.dossier.head, pending.outputs.context.dossier.head, 'the dossier recorded names the head the reviewers were shown');
+    assert.equal(passed.outputs.context.dossier.digest, pending.outputs.context.dossier.digest, 'the dossier recorded is the one the bound brief was made with');
+  });
+});
+
+test(`${REF}, question 6: a resumed plan counts delivery against the accepted planner's own investigation, restored from the attempt that opened the cycle`, async () => {
+  await withDispatch(async ctx => {
+    const {dir: repo, makeClientFor} = ctx;
+    ctx.serve((_v, m) => m);
+    fs.writeFileSync(path.join(repo, 'notes.md'), 'a release note, unrelated to any file\n');
+    const f = fixture(repo, [{item: 'resume-log'}]);
+    const turn = resumablePlan({finding: NOTES_FINDING, planner: retrievingPlanner});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, profile: 'argo', independence: 'model'});
+    let now = Date.parse('2026-11-18T00:00:00Z');
+    assert.deepEqual(stagesOf(await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS, clock: () => now})), ['plan:pending']);
+    const pending = openWorkLedger({root: f.workRoot}).stages('resume-log')[0];
+    assert.ok(!pending.outputs.context.dossier.entries.some(e => e.source === 'file:notes.md'), 'notes.md is not in the dossier: only the planner\'s retrieval delivered it');
+    assert.ok(pending.outputs.context.investigations.some(x => x.role === 'planner' && x.requests.some(r => r.ok && r.source === 'file:notes.md')), 'the accepted planner retrieved notes.md');
+    now += 20 * 60_000;
+    assert.deepEqual(stagesOf(await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS, clock: () => now})), ['plan:passed']);
+    const passed = openWorkLedger({root: f.workRoot}).stages('resume-log').find(s => s.status === 'passed');
+    assert.equal(passed.outputs.plan_review.cycle, pending.outputs.cycle);
+    const row = passed.outputs.plan_review.unresolved.find(x => x.file === 'notes.md');
+    assert.ok(row, 'the resumed review\'s finding about notes.md is carried');
+    assert.equal(row.cause, 'evidence-delivered', `notes.md reached the planner (it retrieved it): ${row.why}`);
+    assert.ok(passed.outputs.context.author_log?.requests.some(r => r.ok && r.source === 'file:notes.md'), 'the resumed record carries the accepted planner\'s investigation');
+    assert.equal(passed.outputs.context.author_delivery, undefined, 'the delivery is known');
+    assert.deepEqual(passed.outputs.context.unresolved, pending.outputs.context.unresolved);
+  });
+});
+
+test(`${REF}, question 6: a resumed plan whose opening record lacks the planner's investigation marks the delivery unknown, never complete from the dossier alone`, async () => {
+  await withDispatch(async ctx => {
+    const {dir: repo, makeClientFor} = ctx;
+    ctx.serve((_v, m) => m);
+    fs.writeFileSync(path.join(repo, 'notes.md'), 'a release note, unrelated to any file\n');
+    const f = fixture(repo, [{item: 'resume-nolog'}]);
+    const turn = resumablePlan({finding: NOTES_FINDING, planner: retrievingPlanner});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, profile: 'argo', independence: 'model'});
+    // The opening attempt's record as an older executor wrote it: no author log, no planner investigation.
+    const older = async c => {
+      const r = await ex.plan(c);
+      const {author_log: _a, ...context} = r.outputs.context;
+      return {...r, outputs: {...r.outputs, context: {...context, investigations: context.investigations.filter(x => x.role !== 'planner')}}};
+    };
+    let now = Date.parse('2026-11-18T00:00:00Z');
+    assert.deepEqual(stagesOf(await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: older}, limits: LIMITS, clock: () => now})), ['plan:pending']);
+    now += 20 * 60_000;
+    assert.deepEqual(stagesOf(await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan: ex.plan}, limits: LIMITS, clock: () => now})), ['plan:passed']);
+    const passed = openWorkLedger({root: f.workRoot}).stages('resume-nolog').find(s => s.status === 'passed');
+    assert.equal(passed.outputs.context.author_delivery?.known, false, 'what the accepted planner was given is recorded as unknown');
+    assert.equal(passed.outputs.context.author_delivery.complete, false);
+    const row = passed.outputs.plan_review.unresolved.find(x => x.file === 'notes.md');
+    assert.ok(row);
+    assert.equal(row.cause, 'undetermined', `the record cannot say notes.md never reached the planner: ${row.why}`);
+  });
+});
+
 test(`${REF}, question 5: evidence recovery searches again when cited ledger objects are repaired, and re-checks a recovered proposal when its sources change`, async () => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor} = ctx;
