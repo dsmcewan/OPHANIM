@@ -21,6 +21,7 @@ import {readServiceConfig, runService, SERVICE_CONFIG_SCHEMA} from './service.mj
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {SEATING} from '../../pantheon/src/role/seating.mjs';
+import {labOf} from '../../pantheon/src/config/models.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
 import {fixture, scriptedTurn, planFor, json, git, TICKET, LIMITS, SIX, APPROVE, ACCEPT, stagesOf} from './test-fixtures.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
@@ -447,6 +448,56 @@ test(`${SA}, Q1: an implement stage pending on review capacity is dispatched aga
     assert.deepEqual(stagesOf(r3), ['implement:passed']);
     const passed = w.stages('later').filter(s => s.stage === 'implement').at(-1);
     assert.equal(passed.handoff.from, pending.handoff.from, 'the same approved plan is implemented');
+    assert.notEqual(passed.inputs.route, pending.inputs.route, 'a wake is a new attempt identity');
+  });
+});
+
+test(`${SA}, Q1: a change review pending on capacity is dispatched again when the reviewer pool grows (the later-stage wake through review), not before`, async () => {
+  await withDispatch(async ({dir: repo, makeClientFor}) => {
+    const f = fixture(repo, [{item: 'rev-cap'}]);
+    const turn = scriptedTurn();
+    const six = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    // The four configured labs for the review only: the planner's and the implementers' labs contributed, so no three
+    // review labs are left (see SYNTH in test-fixtures.mjs).
+    const four = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17'});
+    const r1 = await tick({repo, ...f, executors: {plan: six.plan, implement: six.implement, review: four.review}, limits: LIMITS});
+    assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:pending']);
+    const w = openWorkLedger({root: f.workRoot});
+    const pending = w.stages('rev-cap').at(-1);
+    assert.equal(pending.blocker.code, 'REVIEW_CAPACITY_PENDING');
+    assert.equal(pending.blocker.capacity, four.review.capacity(), 'the pool it was judged on is recorded');
+    assert.deepEqual(stagesOf(await tick({repo, ...f, executors: {review: four.review}, limits: LIMITS})), [], 'the same pool is not re-asked');
+    const r3 = await tick({repo, ...f, executors: {review: six.review}, limits: LIMITS});
+    assert.deepEqual(stagesOf(r3), ['review:passed']);
+    const passed = w.stages('rev-cap').at(-1);
+    assert.equal(passed.handoff.from, pending.handoff.from, 'the same implementation is reviewed');
+    assert.notEqual(passed.inputs.route, pending.inputs.route, 'a wake is a new attempt identity');
+  });
+});
+
+test(`${SA}, Q1: a validation pending on capacity (no eligible validator) is dispatched again when the reviewer pool grows (the later-stage wake through validate), not before`, async () => {
+  await withDispatch(async ({dir: repo, makeClientFor}) => {
+    const f = fixture(repo, [{item: 'val-cap'}]);
+    const turn = scriptedTurn();
+    const six = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const r1 = await tick({repo, ...f, executors: {plan: six.plan, implement: six.implement, review: six.review}, limits: LIMITS});
+    assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:passed']);
+    const w = openWorkLedger({root: f.workRoot});
+    // A pool whose every seat, in every role's table (the validator is sought in all of them), is of a lab that
+    // contributed to the work: no validator is eligible.
+    const contributed = new Set((w.stages('val-cap').find(s => s.stage === 'implement').outputs.contributions ?? []).map(c => c.lab).filter(Boolean));
+    const shortSeating = Object.fromEntries(Object.entries(SIX.seating).map(([role, rows]) => [role, Array.isArray(rows) ? rows.filter(r => contributed.has(labOf(r.vendor, r.model))) : rows]));
+    const short = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', seating: shortSeating, facts: SIX.facts});
+    assert.deepEqual(stagesOf(await tick({repo, ...f, executors: {validate: short.validate}, limits: LIMITS})), ['validate:pending']);
+    const pending = w.stages('val-cap').at(-1);
+    assert.equal(pending.blocker.code, 'REVIEW_CAPACITY_PENDING');
+    assert.match(pending.blocker.what, /no eligible validator/);
+    assert.equal(turn.log.filter(l => l.kind === 'validator').length, 0, 'no validator was asked');
+    assert.deepEqual(stagesOf(await tick({repo, ...f, executors: {validate: short.validate}, limits: LIMITS})), [], 'the same pool is not re-asked');
+    const r3 = await tick({repo, ...f, executors: {validate: six.validate}, limits: LIMITS});
+    assert.deepEqual(stagesOf(r3), ['validate:passed']);
+    const passed = w.stages('val-cap').at(-1);
+    assert.equal(passed.handoff.from, pending.handoff.from, 'the same review is validated');
     assert.notEqual(passed.inputs.route, pending.inputs.route, 'a wake is a new attempt identity');
   });
 });
