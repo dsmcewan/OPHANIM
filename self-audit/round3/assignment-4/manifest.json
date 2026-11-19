@@ -1,0 +1,78 @@
+{
+  "schema": "ophanim.self-audit-seal/v1",
+  "assignment": 4,
+  "candidate_commit": "af0dc3012688703ccac0f6de31836822a3279eae",
+  "assessment": {
+    "path": "self-audit/round3/assignment-4/assessment.md",
+    "sha256": "b6bfe54ca94dd5331cde9afd1f50ef0b771d15afa34307fe82d6139571bbc123",
+    "bytes": 19475
+  },
+  "reproductions": [
+    {
+      "path": "self-audit/round3/assignment-4/reproductions/hook-decide-probes.mjs",
+      "sha256": "de63ec43357bfa5c455b3d936e49cc04bd668e7f01abc59e4df20df776bc0713"
+    }
+  ],
+  "assessor": {
+    "lab": "Anthropic",
+    "role": "self-audit by the coordinating lab (a subagent of the coordinating session); NOT independent",
+    "model_identity": "withheld from repository artifacts by session policy; recorded in the session reply to the owner"
+  },
+  "assessment_completed_at": "2026-11-19T07:53:24Z",
+  "assessment_completed_at_source": "file modification time of the delivered assessment (UTC)",
+  "sealed_at": "2026-11-19T08:04:47Z",
+  "findings": [
+    {
+      "question": 1,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 1. Hook fail-closed — **holds** (for every failure mode the module controls)."
+    },
+    {
+      "question": 2,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 2. Write paths — **holds**."
+    },
+    {
+      "question": 3,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 3. Commands — **holds** (string-exact admission; content contained by the jail, as designed)."
+    },
+    {
+      "question": 4,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 4. MCP — **holds**."
+    },
+    {
+      "question": 5,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 5. Writable surface — **holds for the intended set; residual is agy's read-only view of the whole host**."
+    },
+    {
+      "question": 6,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 6. Post-turn jail — **holds**."
+    },
+    {
+      "question": 7,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 7. Credentials — **holds for the worker/verify path; one residual on the subagent-over-agy path**."
+    },
+    {
+      "question": 8,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 8. Network — **holds for untrusted code; agy's own egress is unrestricted by design**."
+    },
+    {
+      "question": 9,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 9. Forbidden flags — **holds for every worker/review launch; residual on the planner/subagent path**."
+    },
+    {
+      "question": 10,
+      "verdict": "HOLDS",
+      "heading_verbatim": "### 10. Host changes — **holds** (and the module is honest about its limit)."
+    }
+  ],
+  "blind_status": "verified: no round-3 independent findings, transcripts or intermediate outputs had been received by, uploaded to, or committed in reach of the coordinating session at sealing time",
+  "immutability": "This assessment is sealed as written. Corrections or later discoveries must be separate, later-timestamped records; the prospective comparison uses only this sealed text."
+}
