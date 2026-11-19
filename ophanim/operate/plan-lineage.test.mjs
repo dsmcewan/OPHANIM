@@ -8,7 +8,7 @@ import {makeExecutors} from './stages.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {contributorKeys, candidateRefusal} from '../../pantheon/src/review/identity.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
-import {fixture, APPROVE, ACCEPT, json, planFor, scriptedTurn, LIMITS, FIVE, stagesOf} from './test-fixtures.mjs';
+import {fixture, APPROVE, ACCEPT, json, planFor, scriptedTurn, LIMITS, FIVE, SIX, stagesOf} from './test-fixtures.mjs';
 
 // Independent review, assignment 1 (Google, 09d490f), question 3: plan v1 drew a finding from an xAI plan reviewer and
 // was revised; one reviewer of v2 failed transiently, so the stage was pending with v2's cycle open. The retry resumed
@@ -66,7 +66,7 @@ test('a revised plan keeps the previous planner as a contributor, also when the 
       validator: () => (++judged > 1 ? ACCEPT
         : json({verdict: 'plan_defect', reasons: ['criterion a1 does not test that alpha.mjs keeps its other exports'], criteria: [{id: 'a1', met: true, why: 'passes, but is inadequate'}]})),
     });
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, ...FIVE});
+    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const stages = openWorkLedger({root: f.workRoot}).stages('plan-defect');
     const plans = stages.filter(s => s.stage === 'plan' && s.status === 'passed');

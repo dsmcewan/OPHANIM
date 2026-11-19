@@ -173,7 +173,12 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
       ...(typeof charge === "function" ? { charge } : {}) });
     // The served model is passed on exactly as the transport named it; a judging seat with none is refused upstream.
-    return { text: r?.text ?? "", served_model: r?.served_model ?? null, served_model_source: r?.served_model_source ?? (r?.served_model ? "provider" : null), response_id: r?.response_id ?? null };
+    // Its SOURCE is the transport's own report, passed on as given: "provider" only when the transport said the provider
+    // named it (sdk/live.mjs liveTurn does, from the response), "input" when the transport substituted the model it was
+    // asked for. A served name that arrives with no source is not labelled a provider statement: it is "unknown" (the
+    // caller may have substituted it) (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
+    const named = typeof r?.served_model === "string" && r.served_model.trim() !== "";
+    return { text: r?.text ?? "", served_model: r?.served_model ?? null, served_model_source: r?.served_model_source ?? (named ? "unknown" : null), response_id: r?.response_id ?? null };
   };
 
   /** The metered Gemini API of a lane's base model: one unary answer, by default through makeClientFor + sendTurn. */
@@ -183,7 +188,8 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
     const r = await sendTurn({ client: makeClientFor(vendor), vendor, model, prompt, label: "pipeline-implementer-quota-failover", onEvent: () => {},   // streamed: whole files can be long
       ...(effort ? { effort } : {}), ...(signal ? { signal } : {}) });
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
-    return { text: r.text ?? "", served_model: r.served_model ?? null, response_id: r.response_id ?? null };
+    // sendTurn's served_model is the model the provider's response named.
+    return { text: r.text ?? "", served_model: r.served_model ?? null, served_model_source: str(r.served_model) ? "provider" : null, response_id: r.response_id ?? null };
   });
 
   /**
@@ -248,7 +254,7 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
       let written;
       try { written = await writeApiFiles({ cwd, files: parsed.value.files, owned }); } catch (err) { throw Object.assign(err, { quota_failover }); }
       return { text: `the adapter wrote ${written.length} file(s) from the API answer: ${written.join(", ")}`, served_model: str(r?.served_model) ? r.served_model : null,
-        served_model_source: str(r?.served_model) ? "provider" : null, transport: "api", requested_model: model, response_id: r?.response_id ?? null, quota_failover, written };
+        served_model_source: r?.served_model_source ?? (str(r?.served_model) ? "unknown" : null), transport: "api", requested_model: model, response_id: r?.response_id ?? null, quota_failover, written };
     } finally {
       if (made) await rm(made, { recursive: true, force: true }).catch(() => {});
     }

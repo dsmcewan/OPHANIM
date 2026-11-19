@@ -9,6 +9,13 @@
 // code takes the owner's answer (it is not) and keeps the two lists apart so either answer can be evaluated from a
 // recorded run: contributionsOf(run) is the owner's rule; [...contributionsOf(run), ...arbitersOf(run)] the stricter one.
 //
+// OWNER DECISION 2026-11-19 (Decision 6, docs/review-independence.md): the exception is SCOPED to the pinned Stage 5
+// review of the dispatcher's own unit (and that unit's bounded revision sequence). The dispatcher stays a non-authoring
+// arbiter -- it is still absent from contributionsOf -- but its requested and serving identities, as arbitersOf lists
+// them, are EXCLUDED from the later three-lab change review and from the validator of any change its rubric governed
+// (ophanim/operate/stages.mjs adds them as `purpose: 'arbiter'` rows). "Permission to judge whether one's own rubric
+// was followed does not grant independence to judge whether that rubric was sufficient."
+//
 // THE NUANCE. A Stage 5 reviewer whose FINDING was fed to an implementer revision has shaped the work: it IS a
 // `critique` contributor for any later, separate review (the existing rule of this repository). Inside the pipeline
 // it nevertheless STAYS the pinned Stage 5 reviewer of that unit (the owner pins it); the unit record says so with
@@ -51,13 +58,24 @@ export function contributionsOf(run) {
   return sorted(out);
 }
 
-/** The NON-AUTHORING arbiters of a run: each unit's admitted Stage 2 dispatcher turn, with the rubric it froze. */
+/**
+ * The NON-AUTHORING arbiters of a run: each unit's admitted Stage 2 dispatcher turn, with the rubric it froze. A unit
+ * RESUMED from a checkpoint made no dispatcher call in this run: its arbiter is the dispatch the sealed checkpoint
+ * recorded (the rubric that governed the reused patch), marked `from_checkpoint` (owner decision 2026-11-19).
+ */
 export function arbitersOf(run) {
   const out = [];
+  const src = x => (x?.served_model_source ? { served_model_source: x.served_model_source } : {});
   for (const u of units(run)) {
     const d = u.dispatch;
-    if (!d || !d.served_model) continue;   // a dispatcher turn that was never admitted arbitrated nothing
-    out.push({ kind: "arbiter", unit_id: u.unit_id, role: "dispatcher", standing: "arbiter", authored: false, vendor: d.vendor, model: d.model, served_model: d.served_model, rubric_hash: d.rubric_hash });
+    if (d && d.served_model) {   // a dispatcher turn that was never admitted arbitrated nothing
+      out.push({ kind: "arbiter", unit_id: u.unit_id, role: "dispatcher", standing: "arbiter", authored: false, vendor: d.vendor, model: d.model, served_model: d.served_model, ...src(d), rubric_hash: d.rubric_hash });
+    }
+    const c = u.resumed ? u.checkpoint?.dispatch : null;
+    if (c && (c.vendor || c.model)) {
+      out.push({ kind: "arbiter", unit_id: u.unit_id, role: "dispatcher", standing: "arbiter", authored: false, vendor: c.vendor ?? null, model: c.model ?? null,
+        served_model: c.served_model ?? null, ...src(c), rubric_hash: c.rubric_hash ?? null, from_checkpoint: true });
+    }
   }
   return sorted(out);
 }
