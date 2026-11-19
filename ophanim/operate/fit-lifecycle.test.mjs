@@ -310,6 +310,33 @@ test('LIFECYCLE, default routing (fit): a write outside the unit\'s owned paths 
   });
 });
 
+test('LIFECYCLE, default routing (fit): with metered Gemini spend disabled and the implementer\'s own billing not authorized by name, the implement stage is blocked by name before anything is asked of the provider', async () => {
+  // L-504 invariant 4 at the SDK seat (pantheon/src/pipeline/turns.mjs): an SDK session is a metered Google call.
+  await withDispatch(async ctx => {
+    const {dir: repo, makeClientFor} = ctx;
+    const f = fixture(repo, [{item: 'off'}, {item: 'named'}]);
+    const run = async (item, over) => {
+      const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, meteredFailover: false, ...over});
+      await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: item});
+      return openWorkLedger({root: f.workRoot}).stages(item);
+    };
+    const off = await run('off', {});
+    assert.deepEqual(off.map(s => `${s.stage}:${s.status}`), ['plan:passed', 'implement:blocked']);
+    const impl = off[1];
+    assert.equal(impl.blocker.code, 'IMPLEMENTER_TRANSPORT');
+    assert.deepEqual(impl.outputs.transport_blocker, {codes: ['METERED_GEMINI_DISABLED'], units: ['alpha']});
+    assert.match(impl.blocker.what, /metered Gemini spend is disabled for this run/);
+    assert.match(impl.blocker.resume_when, /allows metered Gemini spend, or authorizes the SDK implementer's Gemini API billing by name/);
+    assert.deepEqual(ctx.sdk(), [], 'no request reached the provider');
+    assert.deepEqual(ctx.agy().filter(a => a.agent !== 'pantheon-reviewer'), [], 'and no agy CLI lane stood in for the implementer');
+    assert.equal(recordOf(impl).provider_calls.by_role.implementer ?? 0, 0, 'nothing was charged for it');
+    // Authorized by name, with the switch still off: the implementer runs (the live run's combination).
+    const named = await run('named', {antigravity: {geminiApi: true}});
+    assert.deepEqual(named.map(s => `${s.stage}:${s.status}`), DONE);
+    assert.deepEqual(ctx.sdk().map(x => [x.agent, x.unit]), [['sdk-implementer', 'alpha']]);
+  });
+});
+
 test('LIFECYCLE, default routing (fit): a plan whose units overlap without an order is returned to the planner by the controller; the revised units run to an outcome', async () => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor} = ctx;

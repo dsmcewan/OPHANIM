@@ -154,6 +154,7 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
       if (buf) scan(buf.trimEnd());
       if (!res.destroyed) res.end();
       if (up.status === 200) {
+        rec.answered = true;   // the provider's 200, read to its end: an ANSWER, named or not (the model guard reads this)
         if (rec.verb !== "streamGenerateContent") { try { const j = JSON.parse(all); if (str(j.modelVersion)) rec.served_model = j.modelVersion; rec.usage = usageOf(j.usageMetadata); } catch { /* not JSON: nothing is recorded */ } }
         if (rec.usage) s.usage = addUsage(s.usage, rec.usage);
         if (rec.served_model && !s.served_models.includes(rec.served_model)) s.served_models.push(rec.served_model);
@@ -195,11 +196,17 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
   return {
     url: `http://127.0.0.1:${server.address().port}`, token, availability, abort,
     record: () => {
-      const served = {};
-      for (const r of requests) if (r.forwarded && r.served_model) (served[r.model] ??= []).includes(r.served_model) || served[r.model].push(r.served_model);
+      // By model asked: every name the provider answered under, and how many ANSWERS carried no name at all. And by the
+      // specialist TYPE of the subagent whose request it answered: which specialist the provider answered, and as what.
+      const served = {}, unnamed = {}, byType = {};
+      const add = (into, k, name) => { (into[k] ??= []).includes(name) || into[k].push(name); };
+      for (const r of requests) if (r.forwarded) {
+        if (r.served_model) { add(served, r.model, r.served_model); if (r.class === "subagent" && r.type) add(byType, r.type, r.served_model); }
+        else if (r.answered) unnamed[r.model] = (unnamed[r.model] ?? 0) + 1;
+      }
       return { root: { model: root.model }, subagents: { model: sub.model, ceiling: sub.ceiling }, requests: requests.map(r => ({ ...r })),
         sessions: [...sessions.values()].map(s => ({ ...s, usage: s.usage ? { ...s.usage } : null, served_models: [...s.served_models], errors: s.errors.map(e => ({ ...e })) })),
-        subagent_sessions: [...sessions.values()].filter(s => s.class === "subagent").length, served_models: served,
+        subagent_sessions: [...sessions.values()].filter(s => s.class === "subagent").length, served_models: served, served_by_type: byType, unnamed,
         totals: { received: requests.length, forwarded: requests.filter(r => r.forwarded).length, refused: requests.filter(r => r.refusal).length, by_class: { ...counts } },
         budget_refusals: budgetRefusals, stop: stop ? { ...stop } : null, aborted, availability: availabilityLog.map(a => ({ ...a })) };
     },

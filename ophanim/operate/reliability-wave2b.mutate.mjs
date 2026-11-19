@@ -64,7 +64,7 @@ export const MUTATIONS = [
   {id: 'C3', what: 'the first call is charged up front again (58c02d3), then admitted at spend too', file: IDX,
     from: '    const admitRequest = ({ kind } = {}) => take(', to: '    admit(role); admitted += 1; const admitRequest = ({ kind } = {}) => take('},
   {id: 'C4', what: 'a metered failover is counted as the seat\'s own role', file: IDX,
-    from: 'kind === "failover" ? "metered_failover" : role);', to: 'role);'},
+    from: 'kind === "failover" ? "metered_failover" : kind === "subagent"', to: 'kind === "subagent"'},
   {id: 'C5', what: 'the older charge() no longer admits the turn\'s own first call', file: IDX,
     from: 'const charge = what => { if (admitted === 0) take(role); take(', to: 'const charge = what => { take('},
   // ---- L-301 / L-308: the stage meter

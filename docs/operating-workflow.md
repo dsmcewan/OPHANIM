@@ -189,9 +189,10 @@ never writes the status ledger.
      `null` in the example and must be chosen: a null is refused. The limits bound **calls, not dollars**; an
      implementer session is charged one call per model request it makes, and so is each of its subagents;
    - `billing`: `scope`, `gemini_api_implementer` (must be `true`: the Google implementer is an Antigravity SDK session
-     billed on the Gemini API with `GEMINI_API_KEY`, and a manifest that does not say so is refused),
-     `metered_gemini_failover` (governs only a single-turn Gemini seat on an Antigravity lane, a reviewer or the
-     validator; false: its lane's quota refusal is not answered by the metered API), `note`;
+     billed on the Gemini API with `GEMINI_API_KEY`; this is the by-name authorization of that transport's own
+     billing, and a manifest without it is refused), `metered_gemini_failover` (the switch every other Google-billed
+     seat follows; false: none is called, so a lane's quota refusal is not answered by the metered API), `note`. Both
+     are enforced where the money would be spent, never by withholding the key;
    - `require_subagent` (optional): `{type, model: "gemini-4-hydrogen", min_calls}`, where `type` is a specialist type
      (`code-explorer`, `dependency-analyst`, `context-retriever`, `test-constructor`, `bounded-implementer`), when a
      native subagent is part of acceptance: the run is not accepted unless that many subagents of that type were

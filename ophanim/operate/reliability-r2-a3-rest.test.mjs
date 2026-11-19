@@ -226,7 +226,10 @@ test('finding 6: a validator refused for quota with the metered failover off is 
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'q'}]);
     const turn = scriptedTurn({validator: () => { throw Object.assign(new Error('agy: 429 RESOURCE_EXHAUSTED'), {status: 429, code: 'quota_exhausted', quota_failover: {used: false, disabled: true, lanes: ['x']}}); }});
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', meteredFailover: false, ...SIX});
+    // The live run's combination since 2026-11-19: metered Gemini spend OFF for every Google-billed seat, and the SDK
+    // implementer's own Gemini API billing authorized by name (without it the implement stage is refused: the stage's
+    // own test is in fit-lifecycle.test.mjs). The validator's lane refusal is what this test is about.
+    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', meteredFailover: false, antigravity: {geminiApi: true}, ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const val = openWorkLedger({root: f.workRoot}).stages('q').find(s => s.stage === 'validate');
     assert.ok(val, 'the item reached validate');

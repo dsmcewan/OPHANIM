@@ -481,7 +481,6 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           if (wholeModel) while (nextLevel < iLadder.length && baseOf(iLadder[nextLevel]) === baseOf(seat)) nextLevel++;
           const down = nextLevel < iLadder.length;
           lane_failures.push({ vendor: seat.vendor, model: seat.model, ...(seat.effort !== undefined ? { effort: seat.effort } : {}), level: state.implementer_level, kind: a.lane_failure.kind, cause: a.lane_failure.cause, why: a.why, retry: retried,
-            ...(a.lane_failure.served_mismatch ? { served_mismatch: clone(a.lane_failure.served_mismatch) } : {}),
             next: signal?.aborted ? "aborted" : again ? "same_lane" : down ? "next_rung" : "exhausted" });
           if (signal?.aborted) break;
           if (again) { retried = true; continue; }
@@ -505,7 +504,9 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           // A fault of the transport that no rung can cure (implement.mjs TRANSPORT_BLOCKERS): the unit blocks with
           // that code. No other rung is tried and no revision is spent on it.
           if (a.transport_blocker) { u.code = a.code; return finish(u, "blocked", a.why); }
-          if (a.code === "PROVIDER_LIMIT" || a.code === "TURN_FAILED" && signal?.aborted) return finish(u, "blocked", a.why);
+          // A model-guard refusal (L-504 invariant 3) ends the unit: another attempt would spend a revision and a provider call
+          // on a CLI that has just reported a model other than the one asked for.
+          if (a.code === "PROVIDER_LIMIT" || a.code === "AGY_MODEL_MISMATCH" || a.code === "TURN_FAILED" && signal?.aborted) return finish(u, "blocked", a.why);
           event = "attempt_refused"; findings = [a.why];
           u.findings.push({ attempt: n, source: "controller", code: a.code, findings: [a.why] });
         } else {
@@ -548,7 +549,10 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
           const stops = review.status === "not_admitted" || review.status === "diff_too_large";
           if (stops && review.feedback.length) u.findings.push({ attempt: n, source: "controller", code: review.code, findings: review.feedback });
           if (!stops && review.status !== "approved" && review.status !== "rubric_mismatch") {
-            u.findings.push({ attempt: n, source: review.status === "request_changes" ? "reviewer" : "controller", code: review.status, vendor: review.vendor, model: review.model, findings: review.feedback });
+            // The reviewer by the model asked AND the model that answered, with the marker (wave 3, L-504 invariant 2: the
+            // finding kept the asked seat only, so every projection of it lost the served identity).
+            u.findings.push({ attempt: n, source: review.status === "request_changes" ? "reviewer" : "controller", code: review.status, vendor: review.vendor, model: review.model,
+              requested_model: review.requested_model ?? review.model, served_model: review.served_model ?? null, ...(review.served_model_source ? { served_model_source: review.served_model_source } : {}), findings: review.feedback });
           }
           await save();
           if (review.status === "approved") break;
@@ -591,7 +595,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const d = u.dispatch;
       const rec = await writeCheckpoint({ dir: run.checkpoints.dir, patch, key: ckKey, record: {
         unit_key: u.unit_key, unit_id: u.unit_id, rubric_hash: u.dispatch.rubric_hash, base_commit: run.base.commit, unit_base_commit, upstream,
-        commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model },
+        commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model, ...(rv.served_model_source ? { served_model_source: rv.served_model_source } : {}) },
         verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest }, review_digest: digestOf(clone(rv)),
         // The approval itself, to re-derive on resume (checkpoint.mjs approvalRefusal).
         review: clone(rv), dispatch: { vendor: d.vendor, model: d.model, served_model: d.served_model ?? null, ...(d.served_model_source ? { served_model_source: d.served_model_source } : {}),
@@ -606,7 +610,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         // the governor's whole record (each specialist's identity, type, scope, tools, digests, states and usage, and
         // every rejection) and the names the provider answered under. A resumed unit restores them the same way.
         native_subagents: (u.attempts ?? []).filter(a => a.status === "written" && a.session?.subagents).map(a => ({ attempt: a.n, implementer: { vendor: a.vendor, model: a.model, effort: a.effort ?? null },
-          served_models: clone(a.session.gateway?.served_models ?? {}), subagents: clone(a.session.subagents) })) } });
+          served_models: clone(a.session.gateway?.served_models ?? {}), ...(a.session.gateway?.served_by_type ? { served_by_type: clone(a.session.gateway.served_by_type) } : {}), subagents: clone(a.session.subagents) })) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
       run.checkpoints.written.push(u.unit_id);
     } catch (e) { u.checkpoint = { written: false, why: String(e?.message ?? e) }; }

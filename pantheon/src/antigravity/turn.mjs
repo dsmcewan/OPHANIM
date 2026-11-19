@@ -24,16 +24,22 @@
 //   invoke_subagent              the governor's admission (type pinned to Hydrogen, ceiling, assignment, no override).
 // The post-turn write jail of the pipeline (implement.mjs inspectWrites) still judges the worktree from disk.
 //
-// WHAT THE RESULT CARRIES: {text, structured_output, stop_reason, served_model, served_model_source,
-// provider_model_version, transport: "antigravity-sdk", requested_model, effort, subagents (the governor's record),
+// WHAT THE RESULT CARRIES: {text, structured_output, stop_reason, served_model, served_model_source: "provider",
+// transport: "antigravity-sdk", requested_model, effort, subagents (the governor's record),
 // usage, gateway (requests by class, sessions, served models, availability), tool_log, runtime, sandbox, launch}.
-// served_model is the PROVIDER's statement (the response's modelVersion, seen by the gateway), as it stands: a name
-// that resolves to the model asked for, else a name the identity policy does not declare (source "provider" in both
-// cases; every undeclared name is also listed in provider_model_version). The model ASKED is never recorded in an
-// undeclared name's place: the record's independence checks must see what the provider said (review/identity.mjs: an
-// unresolved contributor leaves no reviewer eligible), as they do for every other API seat. Only when the provider
-// named nothing is the pinned input recorded, marked served_model_source "input". A request the provider answered
-// under ANOTHER known model -- the implementer's, or a subagent's -- fails the session (lane_failure, SERVED_MISMATCH).
+// served_model is the PROVIDER's statement (the response's modelVersion, seen by the gateway), and a result exists
+// only when that statement is the model asked for.
+//
+// THE MODEL GUARD (register L-504 invariant 3, which board/agy-cli.mjs states for the CLI; this is the same rule at this
+// transport's entry point). Every request the provider ANSWERED -- the implementer's, and each subagent's -- is checked
+// on the name it was answered under, BEFORE any result of the session is acted on: its answer, its failure
+// classification, its quota refusal (the ladder step it would cause). The name must resolve, under the identity policy,
+// to the model that request asked for. An answer under another declared model, under a name the policy does not declare
+// (it cannot be shown to be the model asked), or under no name at all refuses the session with code AGY_MODEL_MISMATCH
+// and BOTH identities (`identity: {requested, reported}`). The code carries no status: it is neither a quota refusal nor a
+// lane failure, so no ladder steps to another model on it and the unit blocks (pipeline/implement.mjs, index.mjs). The
+// model asked is never recorded in the place of a name the provider did not give. A session in which the provider
+// answered nothing keeps its own classification: there is no identity to compare.
 //
 // FAILURES (thrown; each carries what was recorded up to it: .subagents, .gateway, .tool_log, .usage):
 //   code "quota_exhausted"     the provider refused for quota (HTTP 429): the pipeline steps the ladder
@@ -362,12 +368,31 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
     await gw.close().catch(() => {});
   }
 
+  // ---- the model guard (the header): {agent, asked, reported, why} -> the refusal, with both identities
+  function mismatch({ agent, asked, reported, why }) {
+    return fail("AGY_MODEL_MISMATCH", `Antigravity SDK identity mismatch: expected ${agent}/${asked}, got ${agent}/${reported ?? "none"} (${why}); no result of this session is acted on (answer, failure, quota refusal)`,
+      { identity: { requested: { agent, model: asked }, reported: { agent, model: reported } } });
+  }
+  /** The refusal for the first answered request whose name is not the model it asked for, or null. */
+  function guardRefusal(g) {
+    const check = (agent, asked) => {
+      const want = resolveModel(SDK_VENDOR, asked);
+      const wrong = (g?.served_models?.[asked] ?? []).map(n => ({ name: n, id: resolveModel(SDK_VENDOR, n) })).find(r => !(r.id?.known && want?.known && r.id.id === want.id));
+      if (wrong) return mismatch({ agent, asked, reported: wrong.name, why: wrong.id?.known ? "the provider answered as another model" : "the provider answered under a name the identity policy does not declare, which cannot be shown to be the model asked" });
+      return (g?.unnamed?.[asked] ?? 0) > 0 ? mismatch({ agent, asked, reported: null, why: "the provider answered without naming a model" }) : null;
+    };
+    return check("implementer", model) ?? (model !== SUBAGENT_MODEL ? check("subagent", SUBAGENT_MODEL) : null);
+  }
+
   // ---- the result, judged against what the controller itself saw
   function finish({ final, exited, stderr }) {
     const g = record.gateway, stopped = g?.stop ?? null;
     const redact = s => String(s ?? "").split(gw.token).join("<token>").split(apiKey).join("<key>");
     const tail = redact(stderr).trim().split("\n").slice(-6).join(" | ").slice(0, 800);
     if (signal?.aborted) throw fail("ABORTED", `the implementer session was stopped: ${signal.reason?.message ?? "aborted"}`);
+    // THE MODEL GUARD, first (the header): nothing below acts on a session another model answered in.
+    const refused = guardRefusal(g);
+    if (refused) throw refused;
     const ok = final?.ok === true;
     // The gateway's own record decides what kind of stop this was: it saw the provider's status, not a sentence about it.
     if (!ok || stopped) {
@@ -381,25 +406,13 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
         throw laneFailure(kind, `the Antigravity SDK session on ${model} failed (${final?.error?.kind ?? "no result"}): ${why}${tail ? `; stderr: ${tail}` : ""}`.slice(0, 1500), { exit: exited, ...(stopped ? { status: stopped.status } : {}) });
       }
     }
-    // WHO ANSWERED. The provider's statement, per request, as the gateway recorded it.
-    const servedNames = g?.served_models?.[model] ?? [];
-    const asked = resolveModel(SDK_VENDOR, model);
-    const resolved = servedNames.map(n => ({ name: n, id: resolveModel(SDK_VENDOR, n) }));
-    const other = resolved.find(r => r.id?.known && asked?.known && r.id.id !== asked.id);
-    if (other) throw laneFailure("exit", `SERVED_MISMATCH: ${model} was asked and the provider answered as ${other.name}: the session's work is not taken as ${model}'s`, { served_mismatch: { asked: model, served: other.name } });
-    // ...AND FOR ITS SUBAGENTS. A child's request the provider answered under another known model was not the pinned
-    // subagent model's work, whatever the request named: the session fails the same way.
-    if (model !== SUBAGENT_MODEL) {
-      const pinned = resolveModel(SDK_VENDOR, SUBAGENT_MODEL);
-      const stray = (g?.served_models?.[SUBAGENT_MODEL] ?? []).map(n => ({ name: n, id: resolveModel(SDK_VENDOR, n) })).find(r => r.id?.known && pinned?.known && r.id.id !== pinned.id);
-      if (stray) throw laneFailure("exit", `SERVED_MISMATCH: a subagent request for ${SUBAGENT_MODEL} was answered as ${stray.name}: the session's work is not taken as ${model}'s with ${SUBAGENT_MODEL} subagents`, { served_mismatch: { asked: SUBAGENT_MODEL, served: stray.name, class: "subagent" } });
-    }
-    const same = resolved.find(r => r.id?.known && asked?.known && r.id.id === asked.id);
-    const unresolved = resolved.filter(r => !r.id?.known).map(r => r.name);
-    const stated = same?.name ?? unresolved[0] ?? null;   // what the provider said, declared or not; null: it named nothing
+    // WHO ANSWERED. The guard above passed every name the provider gave. A session that ended with an answer and for
+    // which the provider named no model at all is refused the same way: there is no statement to record as served.
+    const names = g?.served_models?.[model] ?? [];
+    if (!names.length) throw mismatch({ agent: "implementer", asked: model, reported: null, why: "the session ended with an answer and the provider named no model for any request of it" });
     record.usage = final.usage ?? null;
     return { text: typeof final.text === "string" ? final.text : "", structured_output: final.structured_output ?? null, stop_reason: final.stop_reason ?? "UNSPECIFIED",
-      served_model: stated ?? model, served_model_source: stated ? "provider" : "input", ...(unresolved.length ? { provider_model_version: unresolved } : {}),
+      served_model: names[0], served_model_source: "provider",
       transport: SDK_TRANSPORT, requested_model: model, effort, conversation_id: final.conversation_id ?? record.conversation_id ?? null, tool_calls: final.tool_calls ?? tool_log.length,
       subagents: record.subagents, usage: record.usage, trajectory_usages: final.trajectory_usages ?? null, gateway: g, availability: record.availability, tool_log, ...(record.tool_log_dropped ? { tool_log_dropped: record.tool_log_dropped } : {}),
       capabilities: final.capabilities ?? record.capabilities ?? null, runtime: record.runtime, sandbox: record.sandbox, launch: record.launch, duration_s: final.duration_s ?? null };
@@ -408,6 +421,6 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
 
 /** The gateway's record without the per-request rows a pipeline record does not need twice: totals, sessions, stops. */
 function summarise(g) {
-  return { root: g.root, subagents: g.subagents, totals: g.totals, sessions: g.sessions, subagent_sessions: g.subagent_sessions, served_models: g.served_models, budget_refusals: g.budget_refusals, stop: g.stop, aborted: g.aborted,
+  return { root: g.root, subagents: g.subagents, totals: g.totals, sessions: g.sessions, subagent_sessions: g.subagent_sessions, served_models: g.served_models, served_by_type: g.served_by_type ?? {}, unnamed: g.unnamed ?? {}, budget_refusals: g.budget_refusals, stop: g.stop, aborted: g.aborted,
     refusals: g.requests.filter(r => r.refusal).map(r => ({ seq: r.seq, at: r.at, class: r.class, type: r.type, model: r.model, status: r.status, refusal: r.refusal })) };
 }

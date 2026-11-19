@@ -26,6 +26,7 @@ import { runPipeline } from "../src/pipeline/index.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { IMPLEMENTER_PROMPT, laneFailureOf } from "../src/pipeline/implement.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
+import { contributorKeys } from "../src/review/identity.mjs";
 import { tempRepo, seats, unit, scripted, write, reject, approve, RUBRIC, PLANNER } from "./fixtures/pipeline-stages.mjs";
 import { startFakeGemini, text } from "./fixtures/fake-gemini.mjs";
 
@@ -99,12 +100,12 @@ const quota = args => sdkError("quota_exhausted", `${args.seat.model} was refuse
 
 // ---------------------------------------------------------------------------------- the pipeline around it
 const PLAN = () => [unit("a", { difficulty: "hard", allowed_subagents: ["code-explorer", "test-constructor"] })];
-async function pipeline(t, script, { plan = PLAN(), ladder = HARD, limits = {}, review = null, checkpoints = null, onCharge = null, env = null, antigravity = {} } = {}) {
+async function pipeline(t, script, { plan = PLAN(), ladder = HARD, limits = {}, review = null, checkpoints = null, onCharge = null, env = null, antigravity = {}, agy = {} } = {}) {
   if (!env) { env = await tempRepo(); t.after(env.cleanup); }
   const calls = [], cli = [], subagentSeats = [];
   const turns = pipelineTurns({
     turn: async () => { throw new Error("no single-turn seat goes through pipelineTurns in this test"); },
-    agy: { run: async a => { cli.push(a); throw new Error("the agy CLI must not be started for an SDK seat"); } },
+    agy: { run: async a => { cli.push(a); throw new Error("the agy CLI must not be started for an SDK seat"); }, ...agy },
     antigravity: { run: async a => { calls.push(a); return script(a, calls.length); }, ...antigravity },
   });
   const s = scripted({ plan, ...(review ? { review } : {}) });
@@ -197,42 +198,30 @@ test("the session's subagents are on the attempt record, and are subtask contrib
   assert.deepEqual(r.disk().units.a.attempts[0].session.subagents, s);
 });
 
-test("every name the provider answered under is a contributor identity, for the implementer and for its subagents: an undeclared one is never folded into the model asked for, and it leaves no reviewer eligible", async t => {
-  const rows = r => r.out.contributions.filter(c => c.kind !== "plan").map(c => [c.kind, c.role, c.model, c.served_model, c.served_model_source]);
-  const stage5 = r => [r.u.status, r.u.code, /a contributor's identity is unresolved \(([^)]+)\): no reviewer can be shown not to be it/.exec(r.u.reason)?.[1]];
-  // One request of the implementer's session was answered under a name the identity policy does not declare. The
-  // declared name stays the attempt's served model; the other is a `work` row of its own.
-  const mixed = await pipeline(t, args => session(args, { root: 2, extra: { provider_model_version: ["gemini-4-carbon-exp-0611"] } }));
-  assert.deepEqual(rows(mixed), [
-    ["work", "implementer", "gemini-4-carbon", "gemini-4-carbon", "provider"],
-    ["work", "implementer", "gemini-4-carbon", "gemini-4-carbon-exp-0611", "provider"]]);
-  assert.deepEqual(stage5(mixed), ["blocked", "STAGE5_CAPACITY", "gemini-4-carbon-exp-0611"], "the unit's work is kept and no reviewer is seated on a guess");
-  // A subagent's requests were answered under two names, one of them undeclared: a `subtask` row for each.
-  const child = await pipeline(t, args => session(args, { spawned: [{ type: "code-explorer" }], perSubagent: 2, subServed: ["gemini-4-hydrogen", "gemini-4-hydrogen-exp-0611"] }));
-  assert.deepEqual(rows(child), [
-    ["subtask", "subagent:code-explorer", "gemini-4-hydrogen", "gemini-4-hydrogen", "provider"],
-    ["subtask", "subagent:code-explorer", "gemini-4-hydrogen", "gemini-4-hydrogen-exp-0611", "provider"],
-    ["work", "implementer", "gemini-4-carbon", "gemini-4-carbon", "provider"]]);
-  assert.deepEqual(stage5(child), ["blocked", "STAGE5_CAPACITY", "gemini-4-hydrogen-exp-0611"]);
-  // Two declared names of one model (a dated snapshot beside the base name) are two rows of one identity: nothing blocks.
+test("the subagents' contributor rows carry every name the provider answered them under; a subagent that was never answered is carried as unnamed, never as the model asked", async t => {
+  const rows = r => r.out.contributions.filter(c => c.kind === "subtask").map(c => [c.role, c.model, c.served_model, c.served_model_source]);
+  // Two declared names of one model (a dated snapshot beside the base name): two rows of one identity, and nothing blocks.
   const dated = await pipeline(t, args => session(args, { spawned: [{ type: "code-explorer" }], perSubagent: 2, subServed: ["gemini-4-hydrogen", "gemini-4-hydrogen-20261101"] }));
   assert.equal(dated.u.status, "approved", dated.u.reason);
-  assert.deepEqual(rows(dated).filter(x => x[0] === "subtask").map(x => x[3]), ["gemini-4-hydrogen", "gemini-4-hydrogen-20261101"]);
-  // A subagent the provider named nothing for: the pinned model is the contributor, with no served name invented.
+  assert.deepEqual(rows(dated), [["subagent:code-explorer", "gemini-4-hydrogen", "gemini-4-hydrogen", "provider"], ["subagent:code-explorer", "gemini-4-hydrogen", "gemini-4-hydrogen-20261101", "provider"]]);
+  // Admitted, and no request of it was answered: the pinned model is the contributor, its served model unknown (the
+  // marker the identity rows use for that, review/identity.mjs SERVED_SOURCES), with no name invented for it.
   const unnamed = await pipeline(t, args => session(args, { spawned: [{ type: "code-explorer" }], subServed: [] }));
   assert.equal(unnamed.u.status, "approved", unnamed.u.reason);
-  assert.deepEqual(rows(unnamed).filter(x => x[0] === "subtask"), [["subtask", "subagent:code-explorer", "gemini-4-hydrogen", null, undefined]]);
+  assert.deepEqual(rows(unnamed), [["subagent:code-explorer", "gemini-4-hydrogen", null, "unnamed"]]);
+  assert.deepEqual(contributorKeys(unnamed.out.contributions).unresolved, []);
+  assert.ok(contributorKeys(unnamed.out.contributions).models.includes("google/gemini-4-hydrogen"), "the pinned model is excluded from review all the same");
 });
 
 test("the session's evidence is on the attempt: gateway, availability, usage, runtime, jail, and the tool decisions with their log file", async t => {
-  const r = await pipeline(t, args => session(args, { tool_log: TOOL_LOG, spawned: [{ type: "code-explorer" }], served: "gemini-4-carbon-exp-0611", extra: { provider_model_version: ["gemini-4-carbon-exp-0611"], tool_log_dropped: 2 } }));
+  const r = await pipeline(t, args => session(args, { tool_log: TOOL_LOG, spawned: [{ type: "code-explorer" }], extra: { tool_log_dropped: 2 } }));
   const x = r.u.attempts[0].session;
   assert.deepEqual([x.stop_reason, x.conversation_id, x.duration_s, x.usage.total_token_count], ["UNSPECIFIED", "conv-1", 1.5, 200]);
   assert.deepEqual(x.gateway.totals.by_class, { root: 1, subagent: 1, aux: 0 });
   assert.deepEqual(x.availability.map(a => [a.model, a.available, a.status]), [["gemini-4-carbon", true, 200]]);
   assert.deepEqual(x.runtime.sdk, RUNTIME.sdk);
   assert.deepEqual(x.jail, { enabled: false, why: "disabled by the caller" });
-  assert.deepEqual(x.provider_model_version, ["gemini-4-carbon-exp-0611"]);
+  assert.deepEqual([x.gateway.served_models, x.gateway.unnamed ?? {}], [{ "gemini-4-carbon": ["gemini-4-carbon"], "gemini-4-hydrogen": ["gemini-4-hydrogen"] }, {}], "who answered, by the provider's own names");
   assert.ok(x.timeout_s > 0);
   const d = x.tool_decisions;
   assert.deepEqual([d.total, d.allowed, d.denied, d.dropped], [5, 3, 2, 2]);
@@ -307,10 +296,43 @@ test("a transport failure is retried once on the same rung, then the ladder step
   assert.deepEqual(r.u.escalations.map(e => [e.kind, e.cause, rung(e.from), rung(e.to)]), [["lane_failover", "lane", "gemini-4-carbon@high", "gemini-4-hydrogen@xhigh"]]);
 });
 
-test("a provider that answers as another model fails the attempt as a transport failure: the work is not taken as the model asked for", async t => {
-  const r = await pipeline(t, (args, n) => { if (n === 1) throw laneError("exit", { served_mismatch: { asked: "gemini-4-carbon", served: "gemini-4-argon" } }); return session(args); }, { limits: { max_revisions: 0 } });
-  assert.equal(r.u.status, "approved", r.u.reason);
-  assert.deepEqual(r.u.attempts[0].lane_failures.map(f => [f.kind, f.next, f.served_mismatch]), [["exit", "same_lane", { asked: "gemini-4-carbon", served: "gemini-4-argon" }]]);
+test("the model guard blocks the unit: a session refused with AGY_MODEL_MISMATCH is not retried, steps no rung and spends no revision; both identities and the session's evidence are on the record", async t => {
+  const identity = { requested: { agent: "implementer", model: "gemini-4-carbon" }, reported: { agent: "implementer", model: "gemini-4-argon" } };
+  const r = await pipeline(t, args => { throw sdkError("AGY_MODEL_MISMATCH", "Antigravity SDK identity mismatch: expected implementer/gemini-4-carbon, got implementer/gemini-4-argon (the provider answered as another model); no result of this session is acted on (answer, failure, quota refusal)",
+    { identity, subagents: governed(args, [{ type: "code-explorer" }]), gateway: gatewayOf(args, { root: 1, subs: 1, served: "gemini-4-argon" }), tool_log: [], usage: null, runtime: RUNTIME, availability: [] }); });
+  assert.equal(r.u.status, "blocked");
+  assert.match(r.u.reason, /refused by the model guard: Antigravity SDK identity mismatch: expected implementer\/gemini-4-carbon, got implementer\/gemini-4-argon/);
+  assert.equal(r.calls.length, 1, "not retried on the same rung, and no other rung is asked: it would spend on a transport that just answered as another model");
+  assert.deepEqual(r.u.attempts.map(a => [a.status, a.code, a.identity, a.lane_failures.length]), [["failed", "AGY_MODEL_MISMATCH", identity, 0]]);
+  assert.deepEqual(r.u.escalations, []);
+  assert.deepEqual(r.u.attempts[0].session.gateway.served_models["gemini-4-carbon"], ["gemini-4-argon"], "what the gateway saw is kept");
+  assert.equal(r.u.attempts[0].session.subagents.admitted_total, 1);
+  assert.deepEqual(r.out.contributions.filter(c => c.kind !== "plan"), [], "nothing of the refused session is a contribution");
+  assert.equal(r.s.calls.filter(c => c.role === "reviewer").length, 0, "and nothing of it reached a reviewer");
+});
+
+test("NO METERED GEMINI SPEND WITH THE SWITCH OFF (L-504 invariant 4), at the SDK seat: the implementer refuses itself before any request, spawn or charge, and runs with the switch off only when its own Gemini API billing was authorized by name", async t => {
+  // The switch off and nothing else said. An SDK session is a metered Google call from its first request, so it is not started.
+  const off = await pipeline(t, args => session(args), { agy: { meteredFailover: false } });
+  assert.equal(off.calls.length, 0, "the transport was not entered: no gateway, no bridge, no request");
+  assert.deepEqual([off.u.status, off.u.code], ["blocked", "METERED_GEMINI_DISABLED"]);
+  assert.match(off.u.reason, /agy_google\/gemini-4-carbon \(implementer\) would be served by the Antigravity SDK transport \(the Gemini API, billed to its key\), and metered Gemini spend is disabled for this run/);
+  assert.deepEqual(off.u.attempts.map(a => [a.status, a.code, a.lane_failures.length]), [["failed", "METERED_GEMINI_DISABLED", 0]]);
+  assert.deepEqual(off.u.escalations, [], "no other rung is tried: every rung of this ladder is the Gemini API");
+  assert.equal(off.out.provider_calls.by_role.implementer ?? 0, 0, "nothing was charged for it");
+  assert.equal(off.cli.length, 0, "and no agy CLI lane stood in");
+  // The implementer's own billing authorized BY NAME, the switch still off for every other Google-billed seat
+  // (ophanim/operate/live-run.mjs: billing.gemini_api_implementer true beside metered_gemini_failover false).
+  const named = await pipeline(t, args => session(args), { agy: { meteredFailover: false }, antigravity: { geminiApi: true } });
+  assert.deepEqual([named.u.status, named.calls.length], ["approved", 1], named.u.reason);
+  // Refused by name, whatever the switch says.
+  const denied = await pipeline(t, args => session(args), { antigravity: { geminiApi: false } });
+  assert.deepEqual([denied.calls.length, denied.u.status, denied.u.code], [0, "blocked", "METERED_GEMINI_DISABLED"]);
+  // Nothing said at all: the owner's routing runs (the switch defaults to on, as on every other path).
+  const dflt = await pipeline(t, args => session(args));
+  assert.deepEqual([dflt.u.status, dflt.calls.length], ["approved", 1]);
+  // The authorization is a boolean, or absent: a truthy string is not an authorization.
+  assert.throws(() => pipelineTurns({ turn: async () => ({}), antigravity: { geminiApi: "yes" } }), /antigravity\.geminiApi is true or false/);
 });
 
 for (const [code, more] of [["CREDENTIAL_REFUSED", { status: 403 }], ["NO_API_KEY", {}], ["SANDBOX_UNAVAILABLE", {}], ["SDK_VERSION", {}]]) {

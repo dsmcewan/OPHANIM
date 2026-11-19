@@ -616,8 +616,9 @@ export async function runBoardItem({ repo, item, statusRoot = defaultStatusRoot(
       // What the selector chose per role (run.json `seating`, run-item.mjs seatingOf).
       profile: run?.profile ?? null, seating: run?.seating ?? [],
       tests: run?.acceptance ? { cmd: run.acceptance.cmd, exit: run.acceptance.exit } : null,
-      seats: [...new Map((run?.turns ?? []).map(t => [`${t.purpose}|${t.vendor}|${t.model}`, { purpose: t.purpose, vendor: t.vendor, model: t.model,
-        served_model: t.served_model ?? null, lab: labOf(t.vendor, t.served_model ?? t.model) }])).values()] },
+      // One row per seat AND served identity: a seat served by two models (or under two markers) keeps both (wave 3, L-504).
+      seats: [...new Map((run?.turns ?? []).map(t => [`${t.purpose}|${t.vendor}|${t.model}|${t.served_model ?? ""}|${t.served_model_source ?? ""}`, { purpose: t.purpose, vendor: t.vendor, model: t.model,
+        served_model: t.served_model ?? null, ...(t.served_model_source ? { served_model_source: t.served_model_source } : {}), lab: labOf(t.vendor, t.served_model ?? t.model) }])).values()] },
     review: null, proposal: null, pair: pairSummary,
     provider_calls: { limit: runOpts.maxProviderCalls ?? null, basis: "run", pipeline: providerCallsOf(run?.attempts ?? []), review: 0,
       made: providerCallsOf(run?.attempts ?? []), refused: run?.provider_calls?.refused ? [run.provider_calls.refused] : [] },
@@ -692,7 +693,7 @@ function boundedTurn(turn, calls) {
   };
 }
 
-const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.model, served_model: x.served_model, lab: x.lab, review: x.review, verdict: x.verdict,
+const bundleReviews = reviews => reviews.map(x => ({ vendor: x.vendor, model: x.model, served_model: x.served_model, ...(x.served_model_source ? { served_model_source: x.served_model_source } : {}), lab: x.lab, review: x.review, verdict: x.verdict,
   findings: x.findings.map(f => ({ finding: f.hash, severity: f.severity, file: f.file, line: f.line, claim: f.claim, reproduction: f.reproduction })) }));
 
 /**
@@ -794,9 +795,12 @@ export function proposeFromBundle({ dir, statusRoot, anchor = null, acceptUnveri
     bundle.review.outcome = sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === state.close)).outcome;
   }
   bundle.review.resolutions = state.findings.map(f => ({ finding: f.hash, resolution: rec.cycleState(bundle.review.cycle).resolutions.get(f.hash)?.payload ?? null }));
-  const reviewers = state.reviews.map(x => ({ vendor: x.seat.vendor, lab: x.lab, review: x.hash })).map(x => {
+  // Each reviewer by the model asked, the model that answered, the marker of where that name came from (read from the
+  // review's own answering turn on the cycle ledger: deriveCycle) and the lab the review counts for. The marker was
+  // dropped here (wave 3, L-504 invariant 2); status.mjs checkReview re-reads it from the cited ledger.
+  const reviewers = state.reviews.map(x => ({ vendor: x.seat.vendor, lab: x.lab, review: x.hash, source: x.served_model_source ?? null })).map(x => {
     const p = sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === x.review));
-    return { vendor: x.vendor, model: p.model, served_model: p.served_model ?? null, lab: x.lab };
+    return { vendor: x.vendor, model: p.model, served_model: p.served_model ?? null, ...(x.source ? { served_model_source: x.source } : {}), lab: x.lab };
   });
   const evidence = {
     run: { ledger_anchor: bundle.run.ledger_anchor, ledger_head: bundle.run.ledger_head, run_json_digest: bundle.run.run_json_digest,

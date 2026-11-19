@@ -199,8 +199,15 @@ function runRefusal(r) {
   if (!(r.gate_entry === null || SHA.test(r.gate_entry ?? ''))) return 'evidence.run.gate_entry is a ledger entry hash or null';
   return null;
 }
-const reviewerShape = x => plain(x) && only(x, ['vendor', 'model', 'served_model', 'lab']) && str(x.vendor) && str(x.model)
-  && (x.served_model === null || str(x.served_model)) && str(x.lab);
+// The marker of where a reviewer's served name came from (pantheon review/identity.mjs SERVED_SOURCES): optional, so
+// every status entry recorded before it verifies as recorded; when present it is one of the vocabulary and consistent
+// with the names (wave 3, L-504 invariant 2: the evidence dropped it). "unnamed": no served name; "input": the served name
+// is the required input model, so it IS the model asked; "provider" and "unknown": a served name.
+const SERVED_SOURCES = ['provider', 'input', 'unnamed', 'unknown'];
+const markerOk = x => x.served_model_source === undefined || (SERVED_SOURCES.includes(x.served_model_source)
+  && (x.served_model_source === 'unnamed' ? x.served_model === null : str(x.served_model) && (x.served_model_source !== 'input' || x.served_model === x.model)));
+const reviewerShape = x => plain(x) && only(x, ['vendor', 'model', 'served_model', 'served_model_source', 'lab']) && str(x.vendor) && str(x.model)
+  && (x.served_model === null || str(x.served_model)) && str(x.lab) && markerOk(x);
 function reviewRefusal(r) {
   if (!plain(r) || !only(r, ['cycle_ledger_anchor', 'cycle', 'close_entry', 'outcome', 'reviewers'])) {
     return 'evidence.review names {cycle_ledger_anchor, cycle, close_entry, outcome, reviewers}';
@@ -211,7 +218,7 @@ function reviewRefusal(r) {
     return 'evidence.review names a close entry with its outcome (verified or unverified), or neither while the cycle is open';
   }
   if (!Array.isArray(r.reviewers) || !r.reviewers.length || !r.reviewers.every(reviewerShape)) {
-    return 'evidence.review lists its reviewers as {vendor, model, served_model, lab}';
+    return 'evidence.review lists its reviewers as {vendor, model, served_model, served_model_source?, lab} (a marker of the vocabulary, consistent with the names)';
   }
   if (new Set(r.reviewers.map(x => x.lab)).size !== r.reviewers.length) return 'evidence.review: two reviewers share a lab';
   return null;
@@ -341,6 +348,12 @@ function checkReview(cyc, review, {item, commit}) {
   const recorded = cyc.entries().filter(h => cyc.entry(h).kind === 'review' && cyc.entry(h).derived_from.includes(review.cycle))
     .map(h => cyc.payload(h)).map(r => key({vendor: r.seat.vendor, model: r.model, served_model: r.served_model})).sort();
   if (canonical(recorded) !== canonical(review.reviewers.map(key).sort())) fail('the reviewers the proposal names are not the reviews recorded on the cycle');
+  // A reviewer's marker, when the proposal states one, is the one its review's answering turn recorded (wave 3, L-504).
+  for (const r of review.reviewers.filter(x => x.served_model_source !== undefined)) {
+    const h = cyc.entries().find(e => cyc.entry(e).kind === 'review' && cyc.entry(e).derived_from.includes(review.cycle) && key({vendor: cyc.payload(e).seat.vendor, model: cyc.payload(e).model, served_model: cyc.payload(e).served_model}) === key(r));
+    const turn = h && cyc.payload(h).turn ? cyc.payload(cyc.payload(h).turn) : null;
+    if ((turn?.served_model_source ?? null) !== r.served_model_source) fail(`the reviewer ${r.vendor}/${r.model}'s served-model marker is ${r.served_model_source}, and its review's answering turn records ${turn?.served_model_source ?? 'none'}`);
+  }
 }
 
 /** Re-check the ledgers, run.json and ticket a proposal cites, where its `locations` say they are. Throws on any mismatch. */

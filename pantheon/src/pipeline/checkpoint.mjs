@@ -25,8 +25,10 @@
 //   A v1 checkpoint (written before the lineage was kept) is not resumed: the unit runs again.
 //   `native_subagents` (2026-11-19; optional, absent on a checkpoint written before it): for a unit an Antigravity SDK
 //   implementer wrote, per attempt whose writes were kept, {attempt, implementer: {vendor, model, effort},
-//   served_models, subagents (the governor's record: every specialist admitted, its type, scope, tools, model, digests,
-//   states and usage, and every rejection)}. Sealed with the rest; a resumed unit restores it marked from_checkpoint.
+//   served_models, served_by_type?, subagents (the governor's record: every specialist admitted, its type, scope,
+//   tools, model, digests, states and usage, and every rejection)}. served_models and served_by_type are what the
+//   gateway saw: the names the provider answered under, by model asked and by specialist type. Sealed with the rest; a
+//   resumed unit restores it marked from_checkpoint.
 //
 // A checkpoint is EVIDENCE TO RE-CHECK, never a verdict to trust: checkpointRefusal() refuses one whose schema,
 // key, unit, base, verdict or upstream (unit set, keys and trees) differ from the current run, and whose patch bytes
@@ -195,6 +197,11 @@ export function approvalRefusal({ record }, { key, unit, rubricHash, sameModel =
   // gemini-4-carbon, manual, 77480d6), finding 7.2): the identity rule (`sameModel`: was the judging seat served by the
   // model asked for) and the review's diff bound. A resumed approval is admitted only as a fresh one would be.
   if (typeof sameModel === "function") {
+    // An UNKNOWN served model is not the model asked (wave 3, L-504 invariant 2): a fresh judging answer that names no
+    // serving model is never admitted (util.mjs admit, NO_SERVED_MODEL), so neither is a recorded one. The check below
+    // read only a named served model, and a dispatch or review recorded with none passed it.
+    if (!str(d.served_model)) return `the checkpoint's dispatcher (${d.model}) names no serving model: a judging answer is admitted only on the model that answered`;
+    if (!str(rv.served_model)) return `the checkpoint's reviewer (${rv.model}) names no serving model: a judging answer is admitted only on the model that answered`;
     if (str(d.served_model) && !sameModel(d.model, d.served_model)) return `the checkpoint's dispatcher was asked as ${d.model} and served by ${d.served_model}: this run's identity rule refuses it`;
     if (str(rv.served_model) && !sameModel(rv.model, rv.served_model)) return `the checkpoint's reviewer was asked as ${rv.model} and served by ${rv.served_model}: this run's identity rule refuses it`;
   }

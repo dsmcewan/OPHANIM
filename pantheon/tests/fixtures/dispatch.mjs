@@ -29,6 +29,8 @@
 //                 to the unit's first owned path. The worker asks for a
 //                 native subagent with `sdk_subagent <type> "<assignment>"`; the relay then puts each request to the
 //                 controller (invoke_subagent), and an admitted one makes its own request on the subagent model.
+//                 `sdk_subagent_unasked <type> "<assignment>"` is admitted the same way and then never asked: no
+//                 request of it reaches the provider.
 // The switches are the lane's, by MODEL name: agyQuota (HTTP 429 RESOURCE_EXHAUSTED), agyFail (HTTP 500), agyQuotaOnce,
 // agyHang; `sdkUnavailable([...models])` makes the provider answer 404 for those models; `serve(f)` names the model
 // that answered. `sdk()` lists what the provider saw: [{agent: "sdk-implementer" | "sdk-subagent:<type>", model, unit}].
@@ -621,6 +623,7 @@ for (const sub of plan.subagents ?? []) {
   const d = await decided;
   const spec = (start.subagents ?? []).find(x => x.name === sub.type);
   if (!d.allow || !spec) continue;
+  if (sub.unasked) continue;   // admitted by the controller, and the implementer never gave it its task
   const child = "child-" + id;
   out({ type: "event", event: "child_started", trajectory_id: child, parent_trajectory_id: ROOT, prompt_key: sha(String(sub.assignment).trim()) });
   state(child, "RUNNING", ROOT, 1);
@@ -653,6 +656,8 @@ function runSdkWorker({ dir, unit, model, prompt, effort = null }) {
   const first = (/PATHS YOU OWN[^\n]*\n((?:- .*\n)+)/.exec(prompt)?.[1] ?? "").split("\n")[0].replace(/^- /, "");
   const script = [
     `sdk_subagent() { printf '%s\\t%s\\n' "$1" "$2" >> "$SDK_SUBAGENTS"; }`,
+    // Admitted and never asked: the controller holds its slot and no request of it reaches the provider.
+    `sdk_subagent_unasked() { printf 'unasked:%s\\t%s\\n' "$1" "$2" >> "$SDK_SUBAGENTS"; }`,
     `agy_ask() { echo "agy_ask: an Antigravity SDK implementer has no A2A relay; its subagents are its own (sdk_subagent <type> <assignment>)" >&2; return 1; }`,
     process.env.FAKE_AGY_WORKER ? `. "$FAKE_AGY_WORKER"` : `mkdir -p "$(dirname "$dir/$first")" && printf 'export const ok = true;\\n' > "$dir/$first"`,
   ].join("\n");
@@ -663,7 +668,8 @@ function runSdkWorker({ dir, unit, model, prompt, effort = null }) {
     c.stderr.on("data", d => { err += d; });
     c.on("error", e => done({ exit: 127, stderr: String(e?.message ?? e), subagents: [], note: "" }));
     c.on("close", code => done({ exit: code ?? 1, stderr: err.slice(-300), note: "done",
-      subagents: existsSync(asked) ? readFileSync(asked, "utf8").split("\n").filter(Boolean).map(l => { const [type, ...rest] = l.split("\t"); return { type, assignment: rest.join("\t") }; }) : [] }));
+      subagents: existsSync(asked) ? readFileSync(asked, "utf8").split("\n").filter(Boolean).map(l => { const [type, ...rest] = l.split("\t"), unasked = type.startsWith("unasked:");
+        return { type: unasked ? type.slice(8) : type, assignment: rest.join("\t"), ...(unasked ? { unasked: true } : {}) }; }) : [] }));
   });
 }
 

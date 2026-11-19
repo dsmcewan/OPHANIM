@@ -21,7 +21,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {openStatusLedger, checkEvidenceLedgers} from '../../packages/ledger/status.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
-import {buildDossier, makeRetriever} from './context.mjs';
+import {buildDossier, makeRetriever, admitFile} from './context.mjs';
 import {earliestGate, completionEvidence, attemptInputs, requirementOf} from './gates.mjs';
 import {promptBinding, promptRequirement, promptRecords} from './prompt-intake.mjs';
 import {sourcesDigest, bundlesOf} from './evidence-recovery.mjs';
@@ -62,10 +62,28 @@ export function retainedRuns(dir) {
   return out;
 }
 
-/** The current sha256 of a repository path, or null. */
-export const bytesOfRepo = repo => p => {
-  const f = path.resolve(repo, p);
-  return fs.existsSync(f) && fs.statSync(f).isFile() ? 'sha256:' + createHash('sha256').update(fs.readFileSync(f)).digest('hex') : null;
+/**
+ * The present identity of a repository path AS THE RETRIEVER'S `file` OP WOULD SERVE IT (context.mjs, THE VERSION
+ * CONTRACT; register L-504, invariant 1): the sha256 of its raw bytes -- the version that op records -- when the op admits
+ * the path (context.mjs admitFile); `refused:<sha256>` when the bytes are there but the op would now refuse them (newly
+ * excluded by .gitignore, reached through a link out of the repository, inside git's own directory); null when there is
+ * no file. So a cited file whose bytes are unchanged but which the op would no longer deliver is a change, never
+ * "unchanged" (it compared the bytes behind the path only), and a file bound without being delivered (a plan's copy file,
+ * stages.mjs) is bound and re-checked by the same identity. One admission check per path per closure.
+ */
+export const bytesOfRepo = repo => {
+  const seen = new Map();
+  return p => {
+    if (seen.has(p)) return seen.get(p);
+    const f = typeof p === 'string' && p ? path.resolve(repo, p) : null;
+    let id = null;
+    if (f && fs.existsSync(f) && fs.statSync(f).isFile()) {
+      const raw = 'sha256:' + createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+      id = admitFile(repo, p).error ? `refused:${raw}` : raw;
+    }
+    seen.set(p, id);
+    return id;
+  };
 };
 
 /**

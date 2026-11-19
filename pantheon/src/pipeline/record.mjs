@@ -26,7 +26,9 @@
 //
 // Must never: list an arbiter as a contributor, or drop a reviewer whose finding reached a revision.
 
-const key = c => [c.kind, c.unit_id ?? "", c.vendor ?? "", c.model ?? "", c.served_model ?? ""].join("\u0000");
+// The key is every identity field a row carries: two calls of one model served under two markers stay two rows, so no
+// served_model_source is dropped by de-duplication (wave 3, L-504 invariant 2). `model` is the name asked (the seat).
+const key = c => [c.kind, c.unit_id ?? "", c.vendor ?? "", c.model ?? "", c.served_model ?? "", c.served_model_source ?? ""].join("\u0000");
 const sorted = list => [...new Map(list.map(c => [key(c), c])).values()].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 const units = run => Object.values(run?.units ?? {});
 
@@ -34,19 +36,18 @@ const units = run => Object.values(run?.units ?? {});
  * The AUTHORING contributions of a run, and nothing else:
  *   plan      the planner that wrote the work units (a planner the run does not name is listed with null vendor and
  *             model: review/identity.mjs then reports it unresolved and no reviewer qualifies, which is the truth);
- *   work      every implementer attempt whose writes passed the jail and reached the unit's worktree, and one more
- *             row for every other name the provider answered a request of that attempt's session under which the
- *             identity policy does not declare (attempts[].session.provider_model_version);
+ *   work      every implementer attempt whose writes passed the jail and reached the unit's worktree;
  *   subtask   every subagent call whose answer was returned to the implementer (the A2A relay of a lane unit), and
  *             every NATIVE subagent an SDK implementer session admitted, when that attempt's writes were kept
  *             (attempts[].session.subagents.instances; owner direction 2026-11-19: Google's Hydrogen specialists are
  *             implementation contributors, never independent reviewers). A native subagent shares its attempt's fate:
  *             the subagents of an attempt that failed or was discarded wrote nothing that was kept, as its implementer
  *             did not. Its identity is the pinned subagent model and EVERY name the provider answered a subagent
- *             request under (the transport's gateway records them): one row per unit, model and served name, each
- *             naming every specialist type that ran ("subagent:code-explorer+test-constructor"); each instance is on
- *             its attempt's record. A name the identity policy does not declare is a row like any other, so no
- *             reviewer is eligible while it stands. With no name recorded there is one row and no served name;
+ *             request under (the transport's gateway records them; its model guard has already refused any session
+ *             in which one of them was not that model): one row per unit, model and served name, each naming every
+ *             specialist type that ran ("subagent:code-explorer+test-constructor"); each instance is on its attempt's
+ *             record. A subagent that was admitted and never answered is one row with no served name, marked
+ *             "unnamed": its served model is unknown, never the model asked (L-504 invariant 2);
  *   critique  every reviewer whose finding was fed to an implementer revision.
  * A unit RESUMED from a checkpoint made none of these calls in this run: its lineage is the one the checkpoint recorded
  * when the unit was approved (checkpoint.mjs), restored here, so reusing approved work never drops its authors
@@ -62,7 +63,6 @@ export function contributionsOf(run) {
     const native = new Map();   // vendor, model, served name -> the specialist types that ran under it
     for (const a of u.attempts ?? []) if (a.status === "written") {
       out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: a.served_model ?? null, ...src(a) });
-      for (const name of a.session?.provider_model_version ?? []) if (name !== a.served_model) out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: name, served_model_source: "provider" });
       for (const i of a.session?.subagents?.instances ?? []) {
         const named = a.session?.gateway?.served_models?.[i.model] ?? [];
         for (const served of named.length ? named : [null]) {
@@ -71,7 +71,7 @@ export function contributionsOf(run) {
         }
       }
     }
-    for (const n of native.values()) out.push({ kind: "subtask", unit_id: u.unit_id, role: `subagent:${[...n.types].sort().join("+")}`, vendor: n.vendor, model: n.model, served_model: n.served, ...(n.served ? { served_model_source: "provider" } : {}) });
+    for (const n of native.values()) out.push({ kind: "subtask", unit_id: u.unit_id, role: `subagent:${[...n.types].sort().join("+")}`, vendor: n.vendor, model: n.model, served_model: n.served, served_model_source: n.served ? "provider" : "unnamed" });
     for (const c of u.a2a?.calls ?? []) if (c.status === "answered") out.push({ kind: "subtask", unit_id: u.unit_id, role: `subagent:${c.role}`, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, ...src(c) });
     for (const r of u.reviews ?? []) if (r.fed_revision) out.push({ kind: "critique", unit_id: u.unit_id, role: "reviewer", vendor: r.vendor, model: r.model, served_model: r.served_model ?? null, ...src(r) });
     if (u.resumed) for (const c of u.checkpoint?.contributions ?? []) {

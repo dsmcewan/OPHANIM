@@ -201,6 +201,24 @@ export function reviewerIdentity(answer, policy = currentPolicy()) {
  * in this repository writes one of these; a turn without the field was named by its provider.
  */
 export const SERVED_SOURCES = Object.freeze(["provider", "input", "unnamed", "unknown"]);
+/**
+ * THE IDENTITY A ROW STATES (wave 3, register L-504 invariant 2: model identity preserved through every projection).
+ * Two row shapes carry a model's identity through the projections, and this is the one reader of both:
+ *   answer rows    (pipeline records, finder and reviewer rows) `model` is the name ASKED; `served_model` the name that
+ *                  answered (null: none was named), omitted on a finder row when it is the asked name.
+ *   contribution rows (stages.mjs, review/scope.mjs) `model` is the name that ANSWERED when one was named, else the
+ *                  name asked with `served_model_source: "unnamed"`; `requested_model` is the name asked when it differs.
+ * Both agree on: requested = requested_model ?? model; served = served_model when the row has the field, else null
+ * for an "unnamed" row, else model. `served_model_source` is the transport's marker (SERVED_SOURCES; absent on rows
+ * recorded before it, and on a name a provider gave). An unknown served model is null, never the requested name.
+ * Returns {vendor, requested_model, served_model, served_model_source, lab}.
+ */
+export function identityOf(row) {
+  const served = Object.hasOwn(row ?? {}, "served_model") ? row.served_model ?? null : row?.served_model_source === "unnamed" ? null : row?.model ?? null;
+  return { vendor: row?.vendor ?? null, requested_model: row?.requested_model ?? row?.model ?? null, served_model: served,
+    served_model_source: row?.served_model_source ?? null, lab: row?.lab ?? null };
+}
+
 /** Why a {requested_model, served_model, served_model_source} triple is not a consistent statement, or null. */
 export function servedSourceRefusal({ requested_model, served_model, served_model_source }) {
   if (served_model_source === undefined || served_model_source === null) return null;

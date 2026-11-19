@@ -32,7 +32,10 @@ async function setup(t, { decide = () => ({ parts: [text("ok")] }), models = ALL
   t.after(async () => { await upstream.close(); await env.cleanup(); });
   const unit = { unit_id: "u1", owned_paths: ["src/u1/**"], verify_cmd: "test -f src/u1/impl.mjs", allowed_subagents: ["code-explorer", "test-constructor"] };
   const admitted = [];
-  const run = (seat, steps, over = {}) => runAntigravitySdkTurn({ seat, prompt: fake(steps), worktree: env.repo, control_dir, unit, apiKey: KEY, upstream: upstream.url, python: process.execPath, bridge: FAKE_BRIDGE,
+  // A real session asks its model before it ends with an answer, and the model guard refuses an answer no provider
+  // statement stands behind. A script that makes no request of its own is given that one request first (`asks`).
+  const asks = (seat, steps) => { if (steps.some(x => x.request)) return steps; const lead = steps[0]?.identity ? 1 : 0; return [...steps.slice(0, lead), { request: { model: seat.model, as: "root" } }, ...steps.slice(lead)]; };
+  const run = (seat, steps, { bare = false, ...over } = {}) => runAntigravitySdkTurn({ seat, prompt: fake(bare ? steps : asks(seat, steps)), worktree: env.repo, control_dir, unit, apiKey: KEY, upstream: upstream.url, python: process.execPath, bridge: FAKE_BRIDGE,
     sandbox: { enabled: false, allowUnsandboxed: true }, admit: info => { admitted.push(info); }, timeoutS: 20, graceS: 1, ...over });
   const note = r => JSON.parse(r.text);
   return { env, upstream, control_dir, unit, run, note, admitted };
@@ -179,48 +182,81 @@ test("every billed request is admitted before the provider sees it, by class; a 
   assert.equal(r.gateway.sessions.find(s => s.class === "subagent").type, "code-explorer");
 });
 
-test("the provider's own statement of the model that answered is what the turn records; another model is a refusal; a name the identity policy does not declare is recorded as it stands, never replaced by the model asked for", async t => {
+// THE MODEL GUARD (L-504 invariant 3), at this transport's entry point. Every ANSWERED request is checked on the name the
+// provider answered under, BEFORE any result of the session is acted on: its answer, its failure classification, its
+// quota refusal. The refusal is AGY_MODEL_MISMATCH with both identities, the code every Antigravity entry point uses.
+const guard = (requested, reported, agent = "implementer") => e => {
+  assert.equal(e.code, "AGY_MODEL_MISMATCH", e.message);
+  assert.deepEqual(e.identity, { requested: { agent, model: requested }, reported: { agent, model: reported } });
+  assert.equal(e.transport, "antigravity-sdk");
+  assert.ok(e.gateway && e.subagents, "what the session recorded up to the refusal is kept");
+  assert.equal(e.status, undefined, "no status: no caller reads it as a quota refusal or as retryable");
+  return true;
+};
+
+test("the model guard: the provider's own statement is what the turn records; an answer under another model, under a name the identity policy does not declare, or under no name at all is refused with both identities", async t => {
+  const one = [{ request: { model: "gemini-4-carbon", as: "root" } }];
+  // A dated snapshot of the model asked for IS that model, and the name recorded is the provider's.
   const a = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: "gemini-4-carbon-20261101" }) });
-  const ra = await a.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);
+  const ra = await a.run(CARBON, one);
   assert.deepEqual([ra.served_model, ra.served_model_source, ra.requested_model], ["gemini-4-carbon-20261101", "provider", "gemini-4-carbon"]);
+  assert.equal("provider_model_version" in ra, false);
 
+  // Another declared model.
   const b = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: "gemini-4-argon" }) });
-  await assert.rejects(b.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]), e => e.code === "lane_failure" && /SERVED_MISMATCH: gemini-4-carbon was asked and the provider answered as gemini-4-argon/.test(e.message) && e.served_mismatch.served === "gemini-4-argon");
-
+  await assert.rejects(b.run(CARBON, one), guard("gemini-4-carbon", "gemini-4-argon"));
+  // A name the policy does not declare cannot be shown to be the model asked: it is not recorded as that model.
   const c = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: "carbon-internal-build-7" }) });
-  const rc = await c.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);
-  // The provider said who answered, in a name the policy cannot resolve. Recording the model ASKED in its place would
-  // hide that name from every later independence check (review/identity.mjs: an unresolved contributor leaves no
-  // reviewer eligible), which is what every other API seat's record lets that check see.
-  assert.deepEqual([rc.served_model, rc.served_model_source, rc.provider_model_version], ["carbon-internal-build-7", "provider", ["carbon-internal-build-7"]]);
-
-  // Two requests of one session, one answered under the declared name and one under an undeclared one: the declared
-  // name is the served model, and the undeclared one is still on the result for the record's contribution rows.
-  let n = 0;
-  const e = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: ++n === 1 ? "gemini-4-carbon" : "carbon-internal-build-7" }) });
-  const re = await e.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { request: { model: "gemini-4-carbon", as: "root" } }]);
-  assert.deepEqual([re.served_model, re.served_model_source, re.provider_model_version], ["gemini-4-carbon", "provider", ["carbon-internal-build-7"]]);
-
+  await assert.rejects(c.run(CARBON, one), guard("gemini-4-carbon", "carbon-internal-build-7"));
+  // No name at all: the model asked is never stamped in its place.
   const d = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: null }) });
-  const rd = await d.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);
-  assert.deepEqual([rd.served_model, rd.served_model_source], ["gemini-4-carbon", "input"], "no statement from the provider: the pinned input, marked as such");
+  await assert.rejects(d.run(CARBON, one), guard("gemini-4-carbon", null));
+  // One request of two answered under another name: the session is refused whole.
+  let n = 0;
+  const e = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: ++n === 1 ? "gemini-4-carbon" : "gemini-4-hydrogen" }) });
+  await assert.rejects(e.run(CARBON, [...one, ...one]), guard("gemini-4-carbon", "gemini-4-hydrogen"));
 });
 
-test("a subagent request the provider answers under another model fails the session: its work is not taken as Hydrogen's", async t => {
+test("the model guard: a session that ends with an answer although the provider answered no request of it is refused; there is no statement to record as served", async t => {
+  // A runtime that returned text without one answered model request (`bare`: the script makes none).
+  const { run, upstream } = await setup(t);
+  await assert.rejects(run(CARBON, [{ hook: { tool: "finish", args: { summary: "done" } } }], { bare: true }), guard("gemini-4-carbon", null));
+  assert.deepEqual(upstream.requests.filter(x => x.verb), [], "nothing was asked of the provider");
+});
+
+test("the model guard comes first: a quota refusal or a failure that follows an answer from another model is not acted on as quota or as a transport failure", async t => {
+  // The first request is answered as Argon; the second is refused for quota. Stepping the ladder, or cooling the model's
+  // quota, on that refusal would act on the result of a session another model served.
+  let n = 0;
+  const q = await setup(t, { decide: () => (++n === 1 ? { parts: [text("ok")], modelVersion: "gemini-4-argon" } : QUOTA) });
+  await assert.rejects(q.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { request: { model: "gemini-4-carbon", as: "root" } }, { result: { ok: false, message: "model unreachable: Error 429" } }]),
+    guard("gemini-4-carbon", "gemini-4-argon"));
+  // The session itself failing after such an answer: still the guard, not a lane failure the ladder would retry.
+  const f = await setup(t, { decide: () => ({ parts: [text("ok")], modelVersion: "gemini-4-argon" }) });
+  await assert.rejects(f.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { result: { ok: false, message: "the stream broke" } }]), guard("gemini-4-carbon", "gemini-4-argon"));
+  // A session the provider answered NOTHING in keeps its own classification: there is no identity to compare.
+  const only = await setup(t, { decide: () => QUOTA });
+  await assert.rejects(only.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { result: { ok: false, message: "model unreachable: Error 429" } }]), x => x.code === "quota_exhausted");
+});
+
+test("the model guard covers the subagents: a child's request answered under another model, an undeclared name or no name refuses the session; its work is not taken as Hydrogen's", async t => {
   const ask = "List every caller of the unit's exported function, with file paths.";
   const steps = [
     { request: { model: "gemini-4-carbon", as: "root" } },
     { hook: { tool: "invoke_subagent", args: { Subagents: [{ TypeName: "code-explorer", Role: "caller finder", Prompt: ask }] } } },
     { request: { model: "gemini-4-hydrogen", as: "code-explorer", session: "s1" } },
   ];
-  const answeredAs = name => ({ model }) => ({ parts: [text("ok")], ...(model === "gemini-4-hydrogen" ? { modelVersion: name } : {}) });
-  const a = await setup(t, { decide: answeredAs("gemini-4-carbon") });
-  await assert.rejects(a.run(CARBON, steps), e => e.code === "lane_failure" && e.kind === "exit" && /SERVED_MISMATCH: a subagent request for gemini-4-hydrogen was answered as gemini-4-carbon/.test(e.message)
-    && e.served_mismatch.asked === "gemini-4-hydrogen" && e.served_mismatch.served === "gemini-4-carbon" && e.subagents.admitted_total === 1);
+  const answeredAs = name => ({ model }) => ({ parts: [text("ok")], modelVersion: model === "gemini-4-hydrogen" ? name : model });
+  for (const reported of ["gemini-4-carbon", "gemini-4-hydrogen-exp-0611", null]) {
+    const a = await setup(t, { decide: answeredAs(reported) });
+    await assert.rejects(a.run(CARBON, steps), e => guard("gemini-4-hydrogen", reported, "subagent")(e) && e.subagents.admitted_total === 1);
+  }
   // A dated snapshot of the pinned model is the pinned model.
   const b = await setup(t, { decide: answeredAs("gemini-4-hydrogen-20261101") });
   const rb = await b.run(CARBON, steps);
   assert.deepEqual(rb.gateway.served_models["gemini-4-hydrogen"], ["gemini-4-hydrogen-20261101"]);
+  assert.deepEqual(rb.gateway.served_by_type, { "code-explorer": ["gemini-4-hydrogen-20261101"] }, "and by the specialist type whose request it answered");
+  assert.deepEqual(rb.gateway.unnamed, {}, "every answered request was named");
 });
 
 test("a quota refusal by the provider is a quota failure with the record kept; the run's own bound is PROVIDER_LIMIT", async t => {

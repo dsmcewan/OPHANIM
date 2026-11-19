@@ -18,9 +18,10 @@
 //                         fit run is an Antigravity SDK session billed on the Gemini API (GEMINI_API_KEY); every model
 //                         request of it, and of each of its native subagents, is one provider call. A manifest that
 //                         does not say so is refused: the run cannot implement without that spend.
-//                         metered_gemini_failover governs only the SINGLE-TURN Gemini seats that go through an
-//                         Antigravity lane (a reviewer, the validator): false, a proven quota refusal of such a lane is
-//                         not answered by the metered API
+//                         That field is the BY-NAME authorization of that transport's own billing, and of nothing else.
+//                         metered_gemini_failover is the switch EVERY OTHER Google-billed seat follows (L-504 invariant
+//                         4): false, none is called -- a lane's proven quota refusal is not answered by the metered API,
+//                         and a Gemini seat with no lane is refused. Both are enforced at the point of spend
 //   require_subagent     (optional) {type: a specialist type, model: gemini-4-hydrogen, min_calls >= 1}: the run is NOT
 //                         accepted unless that many NATIVE subagents of that type, admitted by the controller and
 //                         answered by the provider under that model, are recorded in an implementer session whose
@@ -179,7 +180,7 @@ export function validateManifest(m, {baseDir = process.cwd()} = {}) {
   if (keys(m.billing, 'billing', ['scope', 'gemini_api_implementer', 'metered_gemini_failover', 'note'])) {
     if (!str(m.billing.scope)) why.push('billing.scope is the owner\'s text naming what may be billed');
     if (m.billing.gemini_api_implementer !== true) why.push('billing.gemini_api_implementer is true: the Google implementer of a fit run is an Antigravity SDK session billed on the Gemini API (GEMINI_API_KEY), and this run cannot implement without that spend');
-    if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether a quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API');
+    if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether any Google-billed seat other than the SDK implementer may be called (false: a lane\'s quota refusal is not answered by the metered Gemini API)');
     if (typeof m.billing.note !== 'string') why.push('billing.note is a string (empty when there is nothing to add)');
   }
   if (m.require_subagent !== undefined && keys(m.require_subagent, 'require_subagent', ['type', 'model', 'min_calls'])) {
@@ -516,12 +517,16 @@ const pick = (o, keys) => Object.fromEntries(keys.filter(k => o?.[k] !== undefin
 /** Every pipeline record an implement stage names. */
 const pipelinesOf = stages => stages.filter(s => s.stage === 'implement' && s.outputs?.run?.kind === 'pipeline')
   .map(s => ({stage_record: s.hash, attempt: s.attempt, status: s.status, dir: s.outputs.run.dir, record: s.outputs.run.record, run_json: s.outputs.run.run_json ?? null, ledger: s.outputs.run.ledger ?? null}));
-/** The served identities: every stage team row, and every seat of every pipeline record, with what served it. */
+/**
+ * The served identities: every stage team row, and every seat of every pipeline record, with what served it. Each row
+ * keeps the name asked, the name that answered AND the marker of where that name came from (`served_model_source`;
+ * wave 3, L-504 invariant 2: the team rows and the validator's record lost it here).
+ */
 export function servedIdentities(stages) {
   const out = [];
   for (const s of stages) {
-    for (const t of s.team ?? []) if (t.vendor || t.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: 'stage team', ...pick(t, ['role', 'vendor', 'model', 'lab', 'served_model', 'requested_model', 'standing', 'authored', 'shared_lab'])});
-    for (const k of ['planner', 'validator']) if (s.outputs?.[k]?.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: `outputs.${k}`, role: k, ...pick(s.outputs[k], ['vendor', 'model', 'lab', 'served_model'])});
+    for (const t of s.team ?? []) if (t.vendor || t.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: 'stage team', ...pick(t, ['role', 'vendor', 'model', 'lab', 'served_model', 'requested_model', 'served_model_source', 'standing', 'authored', 'shared_lab'])});
+    for (const k of ['planner', 'validator']) if (s.outputs?.[k]?.model) out.push({stage: s.stage, attempt: s.attempt, record: s.hash, source: `outputs.${k}`, role: k, ...pick(s.outputs[k], ['vendor', 'model', 'lab', 'served_model', 'requested_model', 'served_model_source'])});
   }
   for (const p of pipelinesOf(stages)) {
     const r = readJson(p.record);
@@ -533,7 +538,7 @@ export function servedIdentities(stages) {
       for (const v of u.reviews ?? []) out.push(row('unit-reviewer', v));
       for (const c of u.a2a?.calls ?? []) out.push({...row('subagent', c), subagent_role: c.role});
       // An SDK implementer's native subagents: the pinned model asked, and the name the provider answered under.
-      for (const n of nativeSubagentsOfUnit(u)) out.push({...row('subagent', {vendor: n.vendor, model: n.model, served_model: n.served_model, served_model_source: n.served_model ? 'provider' : null, status: n.status}),
+      for (const n of nativeSubagentsOfUnit(u)) out.push({...row('subagent', {vendor: n.vendor, model: n.model, served_model: n.served_model, served_model_source: n.served_model_source, status: n.status}),
         subagent_type: n.type, native: true, implementer: n.implementer, ...(n.from_checkpoint ? {from_checkpoint: true} : {})});
       // A resumed unit's seats, from its sealed checkpoint (finding 7.3, above).
       if (u.resumed && u.checkpoint) {
@@ -548,18 +553,22 @@ export function servedIdentities(stages) {
 /**
  * Every native subagent a unit's implementer sessions were admitted, with the session it belonged to: the attempts of
  * this run whose writes were kept, and -- for a unit resumed from a checkpoint -- the ones sealed with its approval.
- * `served_model` is the one name the provider answered under for the subagent model in that session (null when it
- * named none, or more than one).
+ * `served_model` is the one name the provider answered that specialist under (null when it answered none of its
+ * requests, or under more than one name); `served_names` is every such name. Each row carries its vendor, the model asked, the
+ * model that answered and the marker (wave 3, L-504 invariant 2): "provider", or "unnamed" for a subagent no request
+ * of which was answered, whose served model is unknown and is never the model asked.
  */
 export function nativeSubagentsOfUnit(u) {
-  const rows = (attempt, implementer, vendor, served_models, subagents, extra = {}) => (subagents?.instances ?? []).map(i => {
-    const named = served_models?.[i.model] ?? [];
+  // The names the provider answered THIS specialist under: by its type where the gateway recorded that (served_by_type),
+  // else, on a record made before it did, by the subagent model for the whole session.
+  const rows = (attempt, implementer, vendor, gateway, subagents, extra = {}) => (subagents?.instances ?? []).map(i => {
+    const named = (gateway?.served_by_type ? gateway.served_by_type[i.type] : gateway?.served_models?.[i.model]) ?? [];
     return {unit: u.unit_id, attempt, implementer, vendor, id: i.id, type: i.type, model: i.model, status: i.status, started: Boolean(i.trajectory_id), output_digest: i.output?.digest ?? null,
-      served_model: named.length === 1 ? named[0] : null, served_names: named, ...extra};
+      served_model: named.length === 1 ? named[0] : null, served_model_source: named.length ? 'provider' : 'unnamed', served_names: named, ...extra};
   });
   return [
-    ...(u.attempts ?? []).filter(a => a.status === 'written' && a.session?.subagents).flatMap(a => rows(a.n, a.model, a.vendor, a.session.gateway?.served_models, a.session.subagents)),
-    ...(u.resumed ? (u.checkpoint?.native_subagents ?? []).flatMap(x => rows(x.attempt, x.implementer?.model ?? null, x.implementer?.vendor ?? null, x.served_models, x.subagents, {from_checkpoint: true})) : []),
+    ...(u.attempts ?? []).filter(a => a.status === 'written' && a.session?.subagents).flatMap(a => rows(a.n, a.model, a.vendor, a.session.gateway, a.session.subagents)),
+    ...(u.resumed ? (u.checkpoint?.native_subagents ?? []).flatMap(x => rows(x.attempt, x.implementer?.model ?? null, x.implementer?.vendor ?? null, x, x.subagents, {from_checkpoint: true})) : []),
   ];
 }
 const sameModel = (a, b) => { const x = resolveModel(SDK_CONFIG.vendor, a), y = resolveModel(SDK_CONFIG.vendor, b); return x?.known && y?.known ? x.id === y.id : a === b; };
@@ -763,11 +772,16 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const work = workInfo.state === 'resumable' ? openWorkLedger({root: m.ledgers.work_root, create: false}) : createWorkRoot(m.ledgers.work_root, {item: m.item, manifestDigest});
   const progressFile = path.join(m.out_dir, 'progress.jsonl');
   const note = e => { fs.appendFileSync(progressFile, JSON.stringify({at: new Date().toISOString(), ...e}) + '\n'); progress(e); };
-  // GEMINI_API_KEY stays in this process: the implementer's model gateway holds it (it is never given to a worker). The
-  // single-turn Gemini seats' use of the metered API is governed by meteredFailover below, not by withholding the key.
+  // GEMINI_API_KEY stays in this process: the implementer's model gateway holds it (it is never given to a worker).
+  // TWO AUTHORIZATIONS, each enforced at the point of spend (L-504 invariant 4), never by withholding the key:
+  //   billing.metered_gemini_failover  the switch every Google-billed seat follows (meteredFailover): false, none is called
+  //   billing.gemini_api_implementer   the by-name authorization of the SDK implementer's own Gemini API billing
+  //                                    (validated true above: a fit run cannot implement without it). It covers that
+  //                                    transport and nothing else, so the implementer runs with the switch off.
   const s = seats ?? await liveSeats({meteredFailover: m.billing.metered_gemini_failover});
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
-    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, meteredFailover: m.billing.metered_gemini_failover, progress: note});
+    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, meteredFailover: m.billing.metered_gemini_failover,
+    antigravity: {geminiApi: m.billing.gemini_api_implementer === true}, progress: note});
   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
   // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).

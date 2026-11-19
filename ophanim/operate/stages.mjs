@@ -25,9 +25,10 @@
 // statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
 // tests inject a synthetic pool with both), pipelineLimits (overrides of the pipeline's DEFAULT_LIMITS under `fit`; the
 // provider-call bound is the stage budget, or a lower max_provider_calls given here), meteredFailover (default true; false:
-// a Gemini lane's quota refusal in the pipeline is never answered by the metered Gemini API, pipeline/turns.mjs),
+// no Google-billed seat of the pipeline is called, the SDK implementer included unless it is authorized by name below),
 // antigravity (options of the pipeline's Google implementer transport, the Antigravity SDK session: pipeline/turns.mjs
-// `antigravity`; none is needed: the transport reads GEMINI_API_KEY and PANTHEON_ANTIGRAVITY_PYTHON itself)}. Every stage
+// `antigravity`; none is needed: the transport reads GEMINI_API_KEY and PANTHEON_ANTIGRAVITY_PYTHON itself. Its
+// `geminiApi: true` authorizes that transport's own Gemini API billing by name, so it runs with meteredFailover false)}. Every stage
 // stays within ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -46,7 +47,7 @@ import {cidOf} from '../../pantheon/src/board/canon.mjs';
 import {openBoard} from '../../pantheon/src/board/index.mjs';
 import {ticketRuntimeRefusal, ticketContainmentRefusal, normalizeSlots} from '../../pantheon/src/board/ticket-safety.mjs';
 import {reviewCycle, reviewSeats, reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
-import {resolveModel, reviewerRefusal, reviewerIdentity, contributorKeys, currentPolicy, withDeclaredVendors} from '../../pantheon/src/review/identity.mjs';
+import {resolveModel, reviewerRefusal, reviewerIdentity, contributorKeys, currentPolicy, withDeclaredVendors, identityOf} from '../../pantheon/src/review/identity.mjs';
 import {CYCLE_CONTRACT_V3} from '../../pantheon/src/ledger/practice-kinds.mjs';
 import {REVIEW_BRIEF, deriveCycle, ledgerView} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
@@ -377,9 +378,26 @@ function chainOf(work, rec) {
 }
 // The key keeps every identity a row names: a turn asked as one model and served by another (`requested_model`) is a
 // different row from a turn asked and served as the served model, so the asked identity is never dropped (independent
-// review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6).
-export const dedupe = rows => [...new Map(rows.map(r => [`${r.purpose}|${r.vendor}|${r.model}|${r.requested_model ?? ''}|${r.lab}`, r])).values()];
+// review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6). It keeps the SERVED name and the marker too (wave 3,
+// L-504 invariant 2): a finder, critique or dispatcher-return row is the asked name with `served_model` beside it, so two
+// rows of one asked model served by two names (or under two markers) were one row, and one served identity was dropped.
+export const dedupe = rows => [...new Map(rows.map(r => [`${r.purpose}|${r.vendor}|${r.model}|${r.requested_model ?? ''}|${r.lab}|${Object.hasOwn(r, 'served_model') ? r.served_model ?? 'null' : ''}|${r.served_model_source ?? ''}`, r])).values()];
 const labsOfContribs = rows => [...new Set(rows.map(r => r.lab).filter(Boolean))].sort();
+/**
+ * THE MARKER OF A CONTRIBUTION ROW projected from an answer record ({model: asked, served_model, served_model_source}):
+ * the transport's marker when a served name was given; "unnamed" when none was (wave 3, L-504 invariant 2). A
+ * contribution row's `model` is the served name when one was named, else the name asked: without the marker an unnamed
+ * answer read as served by the model asked (review/identity.mjs identityOf reads the row back).
+ */
+const markerOf = a => (a.served_model ? (a.served_model_source ? {served_model_source: a.served_model_source} : {}) : {served_model_source: 'unnamed'});
+/**
+ * A TEAM ROW projected from an answer record: the seat asked (`model`), the name that answered (`served_model`, null when
+ * none was named, then marked "unnamed") and the marker, and the lab of the model that answered (of the seat when none
+ * was named). The implement stage's team kept only the seat for its implementers, subagents and unit reviewers, and the
+ * served name without the asked one for its dispatchers (wave 3, L-504 invariant 2). A team row feeds no decision.
+ */
+const answered = x => ({vendor: x.vendor ?? null, model: x.model ?? null, served_model: x.served_model ?? null, ...markerOf(x), lab: labOf(x.vendor, x.served_model ?? x.model)});
+const teamKey = r => `${r.role}|${r.vendor}|${r.model}|${r.served_model ?? ''}|${r.served_model_source ?? ''}|${r.authored ?? ''}|${r.fed_revision ?? ''}`;
 /**
  * DECISION 6 (owner, 2026-11-19; docs/review-independence.md). The rows that exclude a run's dispatchers (record.mjs
  * arbitersOf) from later independent judgment: one per distinct identity, `purpose: 'arbiter'`, the served model as
@@ -391,7 +409,7 @@ export function arbiterExclusions(arbiters = []) {
   for (const a of arbiters) {
     const model = a.served_model ?? a.model;
     const row = {purpose: 'arbiter', vendor: a.vendor, model, ...(a.served_model && a.model && a.served_model !== a.model ? {requested_model: a.model} : {}),
-      ...(a.served_model_source ? {served_model_source: a.served_model_source} : {}), lab: labOf(a.vendor, model)};
+      ...markerOf(a), lab: labOf(a.vendor, model)};
     const k = JSON.stringify(row);
     rows.set(k, {row, units: [...new Set([...(rows.get(k)?.units ?? []), a.unit_id])]});
   }
@@ -811,8 +829,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // finders and a served-model override are not re-derivable from a fresh planner seat (independent review,
       // assignment 1, question 3). Restored from that attempt's stage record, and from the cycle's own contributors.
       const opened = [...ctx.work.stages(item)].reverse().find(s => s.stage === 'plan' && s.outputs?.cycle === open.hash);
-      contributions.push(...(opened?.contributions ?? []), ...(st.cycle.contributors ?? []).map(c => ({purpose: 'plan-lineage', vendor: c.vendor, model: c.model,
-        lab: c.model ? labOf(c.vendor, c.model) : c.lab ?? null, via: `recorded on the open plan cycle ${open.hash.slice(0, 19)}`})));
+      // A contributor row the cycle recorded with its identity (which name was asked, which answered, the marker) is
+      // restored with it (wave 3, L-504 invariant 2: only the name was kept), in the contribution-row shape: `model` the
+      // name that answered when one was named (review/identity.mjs identityOf).
+      contributions.push(...(opened?.contributions ?? []), ...(st.cycle.contributors ?? []).map(c => {
+        const stated = c.requested_model !== undefined || c.served_model !== undefined;
+        const model = stated ? c.served_model ?? c.requested_model : c.model;
+        return {purpose: 'plan-lineage', vendor: c.vendor, model, ...(stated && c.served_model && c.requested_model !== c.served_model ? {requested_model: c.requested_model} : {}),
+          ...(stated ? markerOf(c) : {}), lab: model ? labOf(c.vendor, model) : c.lab ?? null, via: `recorded on the open plan cycle ${open.hash.slice(0, 19)}`};
+      }));
       contributions.splice(0, contributions.length, ...dedupe(contributions));
       // The evidence of the version under review is what ITS reviewers and author were given (questions 5 and 6): the
       // dossier bound with the cycle's brief (else the one the opening attempt recorded), and the accepted planner's own
@@ -860,8 +885,17 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           // (sealed 449ca42), L-202: a round served by another model was no contributor and sat on the plan's own panel).
           const served = [...r.rounds.map(x => ({...x, via: 'served a retrieval round of the planner\'s turn'})), ...(reply ? [{served_model: reply.served_model, served_model_source: reply.served_model_source, via: 'served the planner\'s turn'}] : [])];
           for (const x of served) {
-            if (!x.served_model || x.served_model === planner.model || contributions.some(c => c.purpose === 'plan' && c.model === x.served_model)) continue;
-            contributions.push({purpose: 'plan', vendor: planner.vendor, model: x.served_model, ...(x.served_model_source ? {served_model_source: x.served_model_source} : {}), lab: labOf(planner.vendor, x.served_model), via: x.via});
+            // Each served identity with the name it was asked as and its marker (wave 3, L-504 invariant 2): a served row
+            // kept no requested_model, a marked answer of the asked name ("input") dropped its marker, and an answer that
+            // named no serving model left no trace on the contributions. The planner's seat row takes the marker of an
+            // answer by its own name; a second marker, or an unnamed answer, is a row of its own.
+            const row = {purpose: 'plan', vendor: planner.vendor, model: x.served_model || planner.model, ...(x.served_model && x.served_model !== planner.model ? {requested_model: planner.model} : {}),
+              ...markerOf(x), lab: labOf(planner.vendor, x.served_model || planner.model), via: x.via};
+            const same = c => c.purpose === 'plan' && c.vendor === row.vendor && c.model === row.model && (c.requested_model ?? null) === (row.requested_model ?? null);
+            if (contributions.some(c => same(c) && (c.served_model_source ?? null) === (row.served_model_source ?? null))) continue;
+            const seatAt = row.served_model_source && row.served_model_source !== 'unnamed' ? contributions.findIndex(c => same(c) && c.served_model_source === undefined) : -1;
+            if (seatAt >= 0) contributions.splice(seatAt, 1, {...contributions[seatAt], served_model_source: row.served_model_source});
+            else if (row.served_model_source || row.requested_model) contributions.push(row);
           }
         } catch (e) { refused.push({version: v, try: k + 1, why: [`the planner call failed: ${e.message}`]}); continue; }
         if (!reply) { refused.push({version: v, try: k + 1, why: [`no plan within the investigation bounds (${inv.limit_reached})`]}); continue; }
@@ -1125,7 +1159,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const run = fs.existsSync(runFile) ? JSON.parse(fs.readFileSync(runFile, 'utf8')) : null;
     // This attempt's own calls: a resumed run's record also holds the calls of the attempt it resumes.
     const calls = Math.max(0, providerCallsOf(run?.attempts ?? []) - callsBefore);
-    const team = [...new Map((run?.turns ?? []).map(x => [`${x.purpose}|${x.vendor}|${x.model}`, {role: x.purpose, vendor: x.vendor, model: x.served_model ?? x.model, lab: labOf(x.vendor, x.served_model ?? x.model)}])).values()];
+    const team = [...new Map((run?.turns ?? []).map(x => ({role: x.purpose, ...answered(x)})).map(r => [teamKey(r), r])).values()];
     if (!res.shipped) {
       // THE REJECTED WORK AND ITS FINDINGS ARE KEPT. The board (the bytes, the reviewers' findings, the escalation
       // decisions) stays where it is, and the record names every in-run finding met so far on this plan, with the
@@ -1298,10 +1332,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // grok-4.7, 09d490f), question 8).
       const reviewRows = u => (u.reviews ?? []).filter(r => r && ['request_changes', 'approve_refused'].includes(r.status) && Array.isArray(r.feedback) && r.feedback.length
         && !(u.findings ?? []).some(f => f.attempt === (r.n ?? null) && f.code === r.status))
-        .map(r => ({attempt: r.n ?? null, source: r.status === 'request_changes' ? 'reviewer' : 'controller', code: r.status, vendor: r.vendor ?? null, model: r.model ?? null, findings: r.feedback}));
+        .map(r => ({attempt: r.n ?? null, source: r.status === 'request_changes' ? 'reviewer' : 'controller', code: r.status, vendor: r.vendor ?? null, model: r.model ?? null,
+          served_model: r.served_model ?? null, ...(r.served_model_source ? {served_model_source: r.served_model_source} : {}), findings: r.feedback}));
+      // A carried finding keeps its reviewer's served name and marker (wave 3, L-504 invariant 2: they were dropped).
       const rows = Object.values(rec.units ?? {}).flatMap(u => [...(u.findings ?? []), ...reviewRows(u)].flatMap(f => (f.findings ?? []).map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller',
         unit: u.unit_id, attempt: f.attempt, code: f.code ?? null, text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null,
-        lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null, carried_from: {run_id: rec.run_id ?? null, record: path.join(d, 'pipeline.json'), attempt: marker.attempt}}))));
+        ...(f.source === 'reviewer' ? withServed(f) : {}), lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.served_model ?? f.model) : null, carried_from: {run_id: rec.run_id ?? null, record: path.join(d, 'pipeline.json'), attempt: marker.attempt}}))));
       carriedRuns.push({dir: d, run_id: rec.run_id ?? null, attempt: marker.attempt, status: rec.status ?? null, findings: rows.length});
       carriedFindings.push(...rows);
     }
@@ -1352,7 +1388,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         planner: {vendor: planRec.outputs.planner.vendor, model: planRec.outputs.planner.model},
         // A dispatcher whose advisory return reached the plan this run carries out keeps Decision 6's pinned Stage 5 review
         // of its OWN unit only (owner decision L-001 follow-up, 2026-11-19): every other unit's Stage 5 excludes it.
-        stage5_excluded: contributions.filter(c => c.purpose === 'dispatcher-return').map(c => ({vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, requested_model: c.requested_model ?? null})),
+        // Each as an answer row of the run record (`model` the name asked, `served_model` the name that answered), read
+        // with identityOf: a finder row omits `served_model` when it is the asked name, and this projection turned that into
+        // `served_model: null`, an unknown served model (wave 3, L-504 invariant 2); the marker is kept as well.
+        stage5_excluded: contributions.filter(c => c.purpose === 'dispatcher-return').map(c => {
+          const i = identityOf(c);
+          return {vendor: c.vendor, model: i.requested_model, served_model: i.served_model, requested_model: i.requested_model, ...(i.served_model_source ? {served_model_source: i.served_model_source} : {})};
+        }),
         // The stage's provider-call budget bounds every turn of every role in the run; a caller cannot raise it here
         // (a lower pipelineLimits.max_provider_calls is kept: the stricter bound wins).
         limits: {...pipelineLimits, max_provider_calls: Math.min(ctx.budget.provider_calls, pipelineLimits.max_provider_calls ?? Infinity)}});
@@ -1371,7 +1413,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     for (const c of contributionsOf(run).filter(c => c.kind !== 'plan')) {
       const model = c.served_model ?? c.model;
       const row = {purpose: c.kind, vendor: c.vendor, model, ...(c.served_model && c.model && c.served_model !== c.model ? {requested_model: c.model} : {}),
-        ...(c.served_model_source ? {served_model_source: c.served_model_source} : {}), lab: labOf(c.vendor, model)};
+        ...markerOf(c), lab: labOf(c.vendor, model)};
       const k = JSON.stringify(row);
       authored.set(k, {row, role: c.role, units: [...new Set([...(authored.get(k)?.units ?? []), c.unit_id])]});
     }
@@ -1387,15 +1429,17 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const all = dedupe([...contributions, ...work, ...arbiterRows]);
     const team = [...new Map([
       // Non-authoring: on the team, not among the contributions.
-      ...arbiters.map(a => ({role: 'dispatcher', vendor: a.vendor, model: a.served_model ?? a.model, lab: labOf(a.vendor, a.model), standing: 'arbiter', authored: false})),
+      ...arbiters.map(a => ({role: 'dispatcher', ...answered(a), standing: 'arbiter', authored: false})),
       ...unitsOut.flatMap(u => [
-        ...(u.attempts ?? []).map(a => ({role: 'implementer', vendor: a.vendor, model: a.model, lab: labOf(a.vendor, a.model), authored: a.status === 'written'})),
-        ...(u.a2a?.calls ?? []).filter(c => c.vendor && c.model).map(c => ({role: 'subagent', vendor: c.vendor, model: c.model, lab: labOf(c.vendor, c.model), authored: c.status === 'answered'})),
-        // An SDK implementer's native subagents: on the team under the attempt's vendor; authors when the attempt's writes were kept.
-        ...(u.attempts ?? []).flatMap(a => (a.session?.subagents?.instances ?? []).map(i => ({role: 'subagent', vendor: a.vendor, model: i.model, lab: labOf(a.vendor, i.model), authored: a.status === 'written', native: true}))),
-        ...(u.reviews ?? []).map(r => ({role: 'unit-reviewer', vendor: r.vendor, model: r.model, lab: labOf(r.vendor, r.model), pinned_to_dispatcher: r.pinned_to_dispatcher, authored: false, fed_revision: Boolean(r.fed_revision)})),
+        ...(u.attempts ?? []).map(a => ({role: 'implementer', ...answered(a), authored: a.status === 'written'})),
+        ...(u.a2a?.calls ?? []).filter(c => c.vendor && c.model).map(c => ({role: 'subagent', ...answered(c), authored: c.status === 'answered'})),
+        // An SDK implementer's native subagents: on the team under the attempt's vendor, by the pinned model and each
+        // name the provider answered a subagent request under; authors when the attempt's writes were kept.
+        ...(u.attempts ?? []).flatMap(a => (a.session?.subagents?.instances ?? []).flatMap(i => { const named = a.session?.gateway?.served_models?.[i.model] ?? [];
+          return (named.length ? named : [null]).map(served => ({role: 'subagent', ...answered({vendor: a.vendor, model: i.model, served_model: served, ...(served ? {served_model_source: 'provider'} : {})}), authored: a.status === 'written', native: true})); })),
+        ...(u.reviews ?? []).map(r => ({role: 'unit-reviewer', ...answered(r), pinned_to_dispatcher: r.pinned_to_dispatcher, authored: false, fed_revision: Boolean(r.fed_revision)})),
       ]),
-    ].map(r => [`${r.role}|${r.vendor}|${r.model}|${r.authored}|${r.fed_revision ?? ''}`, r])).values()];
+    ].map(r => [teamKey(r), r])).values()];
     const branchOf = run.integration?.branch ?? null;
     // The pipeline record is named BY DIGEST on every stage record that cites it, so a fresh verifier can check that what
     // run.json's served identities and subagent receipt are read from is the record this stage saw (finding 10.1).
@@ -1408,7 +1452,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // Every finding the run kept (the Stage 5 reviewers' and the controller's own: write jail, ground truth), by unit.
     const findings = [...carriedFindings, ...unitsOut.flatMap(u => (u.findings ?? []).flatMap(f => f.findings.map(text => ({severity: 'block', cause: f.source === 'reviewer' ? 'in-run-review' : 'in-run-controller', unit: u.unit_id, attempt: f.attempt, code: f.code ?? null,
       text, vendor: f.source === 'reviewer' ? f.vendor ?? null : null, model: f.source === 'reviewer' ? f.model ?? null : null,
-      ...(f.source === 'reviewer' && f.served_model && f.served_model !== f.model ? {served_model: f.served_model} : {}), lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.model) : null}))))]
+      // The Stage 5 reviewer's served name and marker (the pipeline's finding now carries them: wave 3, L-504 invariant 2),
+      // and the lab of the model that answered.
+      ...(f.source === 'reviewer' ? withServed(f) : {}), lab: f.source === 'reviewer' && f.vendor ? labOf(f.vendor, f.served_model ?? f.model) : null}))))]
       .map((f, i) => ({id: `unit-${i + 1}`, ...f}));
 
     if (run.status !== 'completed') {
@@ -1466,7 +1512,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         const codes = [...new Set(noTransport.map(u => u.code))].sort();
         return result('blocked', {outputs: {...kept, transport_blocker: {codes, units: noTransport.map(u => u.unit_id)}}, team, contributions: all, findings, usage: usage(calls),
           blocker: {code: 'IMPLEMENTER_TRANSPORT', what: `IMPLEMENTER_TRANSPORT: the Antigravity SDK transport could not run (${codes.join(', ')}): ${String(noTransport[0].reason).slice(0, 300)}; the run record is kept (${recordFile})`,
-            role: 'lead@orch', resume_when: 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable'},
+            role: 'lead@orch', resume_when: codes.includes('METERED_GEMINI_DISABLED')
+              ? 'the run allows metered Gemini spend, or authorizes the SDK implementer\'s Gemini API billing by name (makeExecutors antigravity.geminiApi; the live-run manifest\'s billing.gemini_api_implementer)'
+              : 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable'},
           next: {stage: 'implement', why: `the implementer transport could not run: ${codes.join(', ')}`}});
       }
       if (stuck.length) {

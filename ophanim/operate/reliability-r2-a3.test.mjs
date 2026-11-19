@@ -65,7 +65,7 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   // Unit a's implementer is an Antigravity SDK seat (Carbon), whose session was admitted one native code-explorer
   // subagent (owner direction 2026-11-19): the receipt is that subagent, as the controller's governor recorded it.
   const CARBON = {vendor: 'agy_google', model: 'gemini-4-carbon', transport: 'antigravity-sdk', effort: 'high'};
-  const plan1 = [unit('a', {difficulty: 'hard', allowed_subagents: ['code-explorer', 'dependency-analyst']}), unit('b')];
+  const plan1 = [unit('a', {difficulty: 'hard', allowed_subagents: ['code-explorer', 'dependency-analyst', 'context-retriever']}), unit('b')];
   const base = seats();
   const hardSeats = seats({dispatcher: u => ({vendor: 'openai', model: u.difficulty === 'hard' ? 'gpt-6-astra' : 'gpt-6-luna'}),
     implementer: u => (u.unit_id === 'a' ? {seat: {...CARBON}, ladder: [{...CARBON}]} : base.implementer(u)), reviewerLadder: d => [d]});
@@ -78,7 +78,13 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
     for (const state of ['RUNNING', 'FULLY_IDLE']) g.observe({event: 'trajectory_state', trajectory_id: 'child-1', parent_trajectory_id: 'root', depth: 1, state});
     // A second specialist was ADMITTED but never started (the runtime reported no child for it): admitted is not ran.
     assert.equal(g.admit({call_id: 'call-2', trajectory_id: 'root', args: {Subagents: [{TypeName: 'dependency-analyst', Role: 'edges', Prompt: 'Trace what imports the unit\'s module and report each edge with its path.'}]}}).allow, true);
-    return {subagents: {...g.record(), blocked: null}, gateway: {served_models: {'gemini-4-carbon': ['gemini-4-carbon'], 'gemini-4-hydrogen': ['gemini-4-hydrogen']}}};
+    // A third STARTED, and the provider answered no request of it (its one request failed): started is not answered.
+    const asked = 'Fetch the unit\'s README section on exports and quote it with its path.';
+    assert.equal(g.admit({call_id: 'call-3', trajectory_id: 'root', args: {Subagents: [{TypeName: 'context-retriever', Role: 'readme', Prompt: asked}]}}).allow, true);
+    g.observe({event: 'child_started', trajectory_id: 'child-3', parent_trajectory_id: 'root', prompt: asked});
+    g.observe({event: 'trajectory_state', trajectory_id: 'child-3', parent_trajectory_id: 'root', depth: 1, state: 'RUNNING'});
+    // What the gateway saw on the wire: the names the provider answered under, by model asked and by specialist type.
+    return {subagents: {...g.record(), blocked: null}, gateway: {served_models: {'gemini-4-carbon': ['gemini-4-carbon'], 'gemini-4-hydrogen': ['gemini-4-hydrogen']}, served_by_type: {'code-explorer': ['gemini-4-hydrogen']}}};
   };
   const write = async args => {
     await writeUnitFile(args.cwd, `src/${args.unit_id}/impl.mjs`, 'export const v = 1;\n');
@@ -100,6 +106,9 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   assert.equal(subagentReceipt(stageOf('r1'), {...REQUIRED, type: 'test-constructor'}).met, false);
   const unstarted = subagentReceipt(stageOf('r1'), {...REQUIRED, type: 'dependency-analyst'});
   assert.deepEqual([unstarted.met, unstarted.counted, unstarted.all_calls_recorded.filter(c => c.type === 'dependency-analyst').map(c => c.started)], [false, 0, [false]]);
+  // Nor is one that started and was never answered: the code-explorer's answer under the same subagent model is not its answer.
+  const unanswered = subagentReceipt(stageOf('r1'), {...REQUIRED, type: 'context-retriever'});
+  assert.deepEqual([unanswered.met, unanswered.counted, unanswered.all_calls_recorded.filter(c => c.type === 'context-retriever').map(c => [c.started, c.served_model, c.served_model_source])], [false, 0, [[true, null, 'unnamed']]]);
 
   // 7.3: the same plan again: unit a resumes, and its subagent is still on the accepted record.
   const s2 = scripted({plan: plan1, implement: write});
@@ -109,6 +118,7 @@ test('finding 7: a resumed unit keeps its subagent receipts, a changed sibling r
   const receipt = subagentReceipt(stageOf('r2'), REQUIRED);
   assert.equal(receipt.met, true, JSON.stringify(receipt));
   assert.equal(receipt.calls[0].from_checkpoint, true);
+  assert.equal(subagentReceipt(stageOf('r2'), {...REQUIRED, type: 'context-retriever'}).counted, 0, 'the sealed checkpoint keeps which specialist was answered: the unanswered one is still no receipt after a resume');
   assert.deepEqual(run2.contributions.filter(c => c.kind === 'subtask').map(c => [c.model, c.from_checkpoint]), [['gemini-4-hydrogen', true]], 'and it is still a contributor of the resumed unit');
   assert.equal(run2.units.a.checkpoint.review.verdict, 'approve', 'the sealed Stage 5 review is restored with the unit');
 

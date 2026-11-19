@@ -60,8 +60,12 @@ export const MCP_SERVER_PATH = fileURLToPath(new URL("./a2a-mcp-server.mjs", imp
 /** The kinds of a non-quota lane failure an implementer transport may throw (code "lane_failure"). */
 export const LANE_FAILURE_KINDS = Object.freeze(["timeout", "exit", "stream", "spawn"]);
 
-/** The faults of the SDK transport that no rung of a ladder can cure: the unit blocks on them. */
-export const TRANSPORT_BLOCKERS = Object.freeze(["CREDENTIAL_REFUSED", "NO_API_KEY", "SANDBOX_UNAVAILABLE", "SDK_VERSION", "SDK_UNAVAILABLE"]);
+/**
+ * The faults of the SDK transport that no rung of a ladder can cure: the unit blocks on them. METERED_GEMINI_DISABLED is
+ * the seat's own refusal with metered Gemini spend off (route/quota-failover.mjs): every rung of the transport is billed
+ * the same way, and no lane is seated in its place.
+ */
+export const TRANSPORT_BLOCKERS = Object.freeze(["CREDENTIAL_REFUSED", "NO_API_KEY", "SANDBOX_UNAVAILABLE", "SDK_VERSION", "SDK_UNAVAILABLE", "METERED_GEMINI_DISABLED"]);
 /** The blocker code a thrown error of the SDK transport names (TRANSPORT_BLOCKERS), or null. */
 export function transportBlockerOf(e) {
   if (e?.transport !== SDK_TRANSPORT) return null;
@@ -330,7 +334,10 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
     if (blocker) return Object.assign(rec, { code: blocker, transport_blocker: true, why: `the implementer transport cannot run (${blocker}): ${String(e?.message ?? e).slice(0, 500)}` });
     const lane = laneFailureOf(e);
     if (lane) return Object.assign(rec, { code: lane.cause === "quota" ? "QUOTA_EXHAUSTED" : lane.cause === "model_unavailable" ? "MODEL_UNAVAILABLE" : "LANE_FAILURE",
-      lane_failure: { ...lane, ...(e?.served_mismatch ? { served_mismatch: clone(e.served_mismatch) } : {}) }, why: `the implementer lane ${seat.model} failed (${lane.kind}): ${lane.why}` });
+      lane_failure: lane, why: `the implementer lane ${seat.model} failed (${lane.kind}): ${lane.why}` });
+    // THE MODEL GUARD (L-504 invariant 3; board/agy-cli.mjs AGY_MODEL_MISMATCH): the lane's CLI started on another agent or
+    // model. Kept under its own code with both identities (not TURN_FAILED), never a lane failure: no ladder step.
+    if (e?.code === "AGY_MODEL_MISMATCH") return Object.assign(rec, { code: "AGY_MODEL_MISMATCH", identity: e.identity ?? null, why: `the implementer lane ${seat.model} was refused by the model guard: ${String(e?.message ?? e)}` });
     return Object.assign(rec, { code: e?.code === "PROVIDER_LIMIT" ? "PROVIDER_LIMIT" : "TURN_FAILED", why: `the implementer turn failed: ${String(e?.message ?? e)}` });
   }
   rec.text_digest = typeof out?.text === "string" ? sha256(out.text) : null;
