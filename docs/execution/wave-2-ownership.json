@@ -1,0 +1,51 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": 2,
+  "base_commit": "bce84eb",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**"],
+  "subwaves": {
+    "2a": {
+      "agent-2-identity": {
+        "branch": "wave2/identity",
+        "files": ["ophanim/operate/stages.mjs", "ophanim/operate/context.mjs", "ophanim/operate/test-fixtures.mjs",
+                  "pantheon/src/pipeline/index.mjs", "pantheon/src/pipeline/dispatch.mjs", "pantheon/src/pipeline/work-units.mjs", "pantheon/src/pipeline/record.mjs", "pantheon/src/pipeline/review.mjs",
+                  "pantheon/src/ledger/**", "pantheon/src/review/**", "pantheon/src/board/operate.mjs",
+                  "docs/review-independence.md",
+                  "ophanim/operate/{independence,plan-lineage,validator-identity,fit-lifecycle,stages,lifecycle-evidence-review}*.test.mjs (existing ones it must change, plus new wave2-identity tests)",
+                  "pantheon/tests/{independence,review-*,ledger-*,cycle-*,pipeline-dispatch,pipeline-work-units,pipeline-review,pipeline-resume,pipeline-stage5}*.test.mjs"],
+        "region_limits": {
+          "pantheon/src/pipeline/index.mjs": "dispatch result handling, unit reasons, contribution/arbiter lineage, Stage 5 selection/admission; NOT worktree add/remove/prune, repoMutex, recoverOrphanWorktrees, charging/admission of provider calls (subwave 2b, agent 3)",
+                  "ophanim/operate/stages.mjs": "all regions; agent 3a may not edit it"
+        }
+      },
+      "agent-3a-reliability": {
+        "branch": "wave2/reliability",
+        "files": ["pantheon/src/board/run-item.mjs", "pantheon/src/sdk/**", "pantheon/src/board/agy-cli.mjs", "pantheon/src/pipeline/turns.mjs",
+                  "packages/model-client/**", "ophanim/operate/scheduler.mjs", "ophanim/operate/work-ledger.mjs", "ophanim/operate/live-run.mjs", "ophanim/operate/verify-run.mjs",
+                  "docs/operate-service.md", "docs/routing-task-profile.md (sections other than credential isolation)",
+                  "ophanim/operate/{scheduler,live-run,exec-reliability,reliability}*.test.mjs (existing it must change, plus new)",
+                  "pantheon/tests/{reliability,frontier-board,quota-failover,pipeline-turns,stream,adapter,live,run-item,board-*}*.test.mjs",
+                  "packages/model-client/**/*.test.mjs"],
+        "interface_rules": [
+          "may not edit ophanim/operate/stages.mjs or pantheon/src/pipeline/index.mjs; a needed change there is reported for subwave 2b",
+          "turn functions keep their exported signatures; new behaviour comes through optional parameters",
+          "agy-cli.mjs: per-request charge hook goes inside runAgyCliTurn between the jail build and the spawn (wave 1 dependency note); the jail, env allowlist and flag checks from wave 1 must not be weakened",
+          "scheduler/live-run read stage outputs and contribution records additively; they must not depend on fields agent 2 is changing"
+        ]
+      }
+    },
+    "2b": {
+      "agent-3b-repo-lock": {
+        "starts_after": "2a integrated and verified",
+        "files": ["pantheon/src/pipeline/index.mjs (worktree/lock/recovery/charging regions)", "pantheon/src/pipeline/git.mjs", "pantheon/src/pipeline/dispatch.mjs (releaseWorktree only)"],
+        "findings": ["L-303", "L-304"]
+      }
+    }
+  },
+  "cross_agent_interfaces": [
+    "agent 2 changes contribution/arbiter/validator records (additive fields); consumers live-run.mjs subagentReceipt and scheduler (agent 3a) must not rely on them",
+    "agent 3a adds per-request charging inside turns; agent 2's admission of retrieval rounds (investigate) must count each round through the existing meter in stages.mjs, which agent 2 owns",
+    "both build claims only through attemptInputs/sameAttempt (wave 1)"
+  ]
+}
