@@ -430,6 +430,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     if (!fs.existsSync(f)) fs.writeFileSync(f, JSON.stringify({...dossier, entries: dossier.entries.map(({text: _t, ...e}) => e)}) + '\n');
     try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return dossier; }
   };
+  /** The dossier bound beside a brief, or null when none was bound (a resume never binds a rebuilt one). */
+  const readBoundDossier = (ctx, key) => {
+    const f = path.join(dirOf(ctx, 'briefs'), `${createHash('sha256').update(key).digest('hex').slice(0, 24)}.dossier.json`);
+    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+  };
   /**
    * The receiving executor's own check of its handoff (the scheduler checks it before dispatch; a direct caller is
    * checked here): `ctx.upstream` is a record of THIS item on the work ledger and the whole chain under it re-derives
@@ -486,14 +491,29 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         blocker: pendingCapacity(`the configured reviewer pool offers fewer than ${n} labs outside the planner's (${planner.lab}); nothing was planned`, {stage: 'plan'}),
         next: {stage: 'plan', why: 'plan review capacity is short'}});
     }
-    const {dossier, retriever} = evidenceFor(ctx);
+    // `built` is the dossier a planner answering in THIS attempt is shown. `dossier` is the one the version under review
+    // was made and reviewed with: `built` for a version planned now, and for a resumed cycle the dossier bound with its
+    // brief when it opened (independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 5).
+    const {dossier: built, retriever} = evidenceFor(ctx);
+    let dossier = built;
     const investigations = Object.assign([], {dossier});
     // What the planner was given only in part stays an unresolved gap on the record, with the request that continues it.
     // It is what the planner that wrote the CURRENT version was given: that answer's own investigation, never the
     // retrievals of a refused try or an earlier version, whose prompts the author of this one never saw (question 6).
-    let authorLog = null;
+    // A resumed cycle restores it from the attempt that opened the cycle; when that record does not have it, what the
+    // author was given beyond the dossier is unknown, and the record says so instead of counting the dossier alone.
+    let authorLog = null, authorUnknown = null;
     const plannerGot = () => deliveryOf(dossier, authorLog ?? {requests: []});
-    const ctxOut = () => ({dossier: dossierRecord(dossier), investigations: [...investigations], unresolved: gapsOf(plannerGot())});
+    const ctxOut = () => ({dossier: dossierRecord(dossier), investigations: [...investigations], unresolved: gapsOf(plannerGot()),
+      ...(authorLog ? {author_log: authorLog} : {}),
+      ...(authorUnknown ? {author_delivery: {known: false, complete: false, why: authorUnknown}} : {})});
+    // The cause of a finding as far as the record can tell: with the author's own investigation unknown, a source the
+    // dossier did not deliver in full may have been retrieved, so the record cannot say it was not delivered.
+    const authorCause = (file, got, doc) => {
+      const c = causeOf(file, got, doc);
+      return authorUnknown && ['evidence-not-delivered', 'evidence-partly-delivered'].includes(c.cause)
+        ? {cause: 'undetermined', why: `${c.why}, as far as the record shows; what the accepted planner was given is not fully on record (${authorUnknown})`} : c;
+    };
     // The plan ledger is the REQUIREMENT's: an open cycle is resumed only for the requirement it was opened for. A changed
     // requirement is planned afresh on its own ledger, never finished on the old plan (question 1).
     const planLedger = dirOf(ctx, `plan-ledger-${digest({item, title: gate.requirement?.title ?? null, basis: gate.requirement?.basis ?? null}).slice(0, 16)}`);
@@ -525,6 +545,22 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       contributions.push(...(opened?.contributions ?? []), ...(st.cycle.contributors ?? []).map(c => ({purpose: 'plan-lineage', vendor: c.vendor, model: c.model,
         lab: c.model ? labOf(c.vendor, c.model) : c.lab ?? null, via: `recorded on the open plan cycle ${open.hash.slice(0, 19)}`})));
       contributions.splice(0, contributions.length, ...dedupe(contributions));
+      // The evidence of the version under review is what ITS reviewers and author were given (questions 5 and 6): the
+      // dossier bound with the cycle's brief (else the one the opening attempt recorded), and the accepted planner's own
+      // investigation as that attempt recorded it.
+      const sameDoc = opened?.outputs?.plan_digest === 'sha256:' + digest(resume.doc);
+      const recordedDossier = sameDoc && plain(opened.outputs.context?.dossier) ? {...opened.outputs.context.dossier,
+        entries: (opened.outputs.context.dossier.entries ?? []).map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, coverage: {complete: e.complete !== false}}))} : null;
+      const servedDossier = readBoundDossier(ctx, `plan|${resume.base}|${resume.head}`) ?? recordedDossier;
+      if (servedDossier) dossier = servedDossier;
+      const recorded = sameDoc ? opened.outputs.context ?? {} : {};
+      const lastPlanner = (recorded.investigations ?? []).filter(x => x.role === 'planner').at(-1);
+      authorLog = recorded.author_log ?? (lastPlanner ? {requests: lastPlanner.requests ?? []} : null);
+      if (!authorLog) authorUnknown = !opened ? `no stage record of the attempt that opened plan cycle ${open.hash.slice(0, 19)}`
+        : !sameDoc ? `the record of the attempt that opened plan cycle ${open.hash.slice(0, 19)} is of another plan version`
+        : `the record of the attempt that opened plan cycle ${open.hash.slice(0, 19)} does not carry the planner's investigation`;
+      if (!servedDossier) authorUnknown ??= `no dossier is bound to plan cycle ${open.hash.slice(0, 19)}; the dossier recorded is rebuilt`;
+      investigations.dossier = dossier;
     }
     for (let v = 1; v <= PLAN_VERSIONS; v++) {
       // 1. The planner writes the plan; a malformed answer is refused and retried within budget.
@@ -533,13 +569,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       for (let k = 0; k < PLANNER_TRIES && !doc; k++) {
         if (m.left() < 1 + n) return stop(`stage budget: ${m.left()} provider call(s) left, a plan and its review need ${1 + n}`);
         const first = plannerPrompt({mode, requirement: gate.requirement, deps, ticket: ticket?.ticket ?? null, previous: prevDoc, findings,
-          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier, limits: INV, units: needsUnits});
+          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier: built, limits: INV, units: needsUnits});
         let reply, prompt = first, inv = null;
         try {
           // The planner investigates before it answers: each retrieval round is a counted call, and the review's calls are kept in reserve.
           const r = await investigate({prompt: first, retriever, canAsk: () => m.left() > n + 1, ask: p => m.turn({vendor: planner.vendor, model: planner.model, prompt: p, seat: {...planner, role: 'planner'}})});
           reply = r.reply; prompt = r.prompt; inv = r.log;
-          investigations.push({role: 'planner', ...seatOf(planner), version: v, try: k + 1, ...r.log, unresolved: gapsOf(deliveryOf(dossier, r.log))});
+          investigations.push({role: 'planner', ...seatOf(planner), version: v, try: k + 1, ...r.log, unresolved: gapsOf(deliveryOf(built, r.log))});
           // The model that actually answered is a contributor too, when it is not the one asked for.
           if (reply?.served_model && reply.served_model !== planner.model && !contributions.some(c => c.purpose === 'plan' && c.model === reply.served_model)) {
             contributions.push({purpose: 'plan', vendor: planner.vendor, model: reply.served_model, ...(reply.served_model_source ? {served_model_source: reply.served_model_source} : {}), lab: labOf(planner.vendor, reply.served_model), via: 'served the planner\'s turn'});
@@ -557,14 +593,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
               role: 'lead@orch', resume_when: `the evidence changes (${needed.join('; ') || 'the missing records become retrievable'}), or the owner raises the investigation limits`},
             next: {stage: 'plan', why: 'the evidence does not yet support a plan'}});
         }
-        const delivered = deliveryOf(dossier, inv);
+        const delivered = deliveryOf(built, inv);
         const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional'});
         progress({event: 'plan.answer', item, version: v, try: k + 1, refused: why.length});
         if (why.length) { refused.push({version: v, try: k + 1, why}); continue; }
         turnHash = rec.recordTurn({seat: {seat_id: `${planner.vendor}-plan@${planner.model}`, vendor: planner.vendor, mode: 'operate-plan', occupancy_gen: 1},
           requested_model: planner.model, served_model: reply.served_model ?? null, served_model_source: reply.served_model_source ?? null, response_id: reply.response_id ?? null, reply: text, purpose: 'plan', prompt});
         const bytesOf = bytesOfRepo(repo);
-        authorLog = inv;
+        // This version's author and reviewers are given `built`: it is the dossier on the record from here on.
+        authorLog = inv; authorUnknown = null; dossier = built; investigations.dossier = built;
         // Every source the plan rests on, bound to the bytes the planner was GIVEN (got.version, the digest of the
         // delivered view), not to the disk after the turn: the cited evidence, the sources of each examined
         // investigation, the relevance it used, and the copy files the work reads (a copy file never delivered is
@@ -613,11 +650,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           branch, message: `plan ${item} v${doc.version.n} (${planDigest})\n\nOphanim-Plan: ${planDigest}\n`});
       }
       const diff = G(['diff', '--no-color', base, head]);
+      // The dossier the brief is made with is bound beside it, so a resumed cycle records what its seats were shown.
+      if (!resume) boundDossier(ctx, `plan|${base}|${head}`, built);
       const r = await reviewCycle({ledger: rec, resume: Boolean(resume), change: {scope, base, head, diff, files: [file], author_labs: resume?.author_labs ?? labsOfContribs(contributions),
         author_turns: resume?.author_turns ?? [turnHash], ...(resume ? {} : independenceOf(dedupe(contributions), corrected))}, seats: planSeats, n,
         // The reviewers get the evidence itself, not only the planner's account of it, and may retrieve more.
         turn: investigatingTurn(m, retriever, investigations, 'plan-reviewer'),
-        brief: boundBrief(ctx, `plan|${base}|${head}`, () => [PLAN_BRIEF, '', renderDossier(dossier), '',
+        brief: boundBrief(ctx, `plan|${base}|${head}`, () => [PLAN_BRIEF, '', renderDossier(built), '',
           `## What the planner retrieved beyond the dossier: ${(authorLog?.requests ?? []).map(q => `${JSON.stringify(q.request)} -> ${q.ok ? 'delivered' : `FAILED ${q.error}`}`).join('; ') || '(nothing)'}`,
           '', RETRIEVAL_HELP(INV)].join('\n'))});
       resume = null;
@@ -633,7 +672,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       }
       // Each finding with what the record shows about its cause: did the source it is about ever reach the planner?
       const authorGot = plannerGot();
-      const rows = findingRows(state).map(f => ({...f, ...causeOf(f.file, authorGot, doc)}));
+      const rows = findingRows(state).map(f => ({...f, ...authorCause(f.file, authorGot, doc)}));
       const blocking = rows.filter(f => BLOCKING.has(f.severity));
       const changes = state.reviews.some(x => x.verdict === 'request_changes');
       if (!blocking.length && !changes) {
