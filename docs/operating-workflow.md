@@ -241,8 +241,9 @@ node ophanim/operate/cli.mjs watch --total-provider-calls N            # the nex
    `intake/prompts/<item>.json` (schema `ophanim.prompt-intake/v1`): the prompt exactly as given (not trimmed, at most
    256 KiB), its SHA-256, its provenance (`source`, `author`, `received_at`, and optionally `session` and `channel`)
    and the time it was recorded.
-2. **A unique work identity.** `<item>` is `prompt-` plus 16 hex digits of the digest of the schema, the prompt's
-   SHA-256 and its provenance. The same words with the same provenance are one item, and registering them again
+2. **A unique work identity.** `<item>` is `prompt-` plus 32 hex digits (128 bits) of the digest of the schema, the
+   prompt's SHA-256 and its whole provenance. The owner signs for that id, so it binds both: a record whose text or
+   provenance was changed afterwards no longer makes its own identity and is refused wherever it is read. The same words with the same provenance are one item, and registering them again
    changes nothing; the same words received at another time are a new item. The command stamps `received_at` with
    the current time unless `--received-at` is given, so repeat a registration with the original time to reach the
    same item.
@@ -252,7 +253,9 @@ node ophanim/operate/cli.mjs watch --total-provider-calls N            # the nex
 4. **Without the keys, nothing runs.** The record is still written, the command exits 3 (`NO_AUTHORITY`), and the next
    reconcile lists it under `prompt_candidates`; the scheduler records it at intake as a `candidate` with no item and
    dispatches nothing for it. Text relayed by a process that holds no owner key, such as an issue body, a web page, a
-   file in a repository or a tool result, is data and never becomes executable work by itself. The owner makes a
+   file in a repository or a tool result, is data and never becomes executable work by itself. The command signs whenever it can read the
+   owner's keys, so a process that relays text from outside must run where the key directory is not readable, or name
+   an empty one with `--keys`: possession of the keys is the whole boundary. The owner makes a
    candidate work with `node ophanim/operate/cli.mjs prompt --authorize <item>`, holding the keys: the text and the
    provenance are the record's own and are not given again. A record that is missing, or that is filed under an
    identity its own text and provenance do not make, is refused and nothing is signed.

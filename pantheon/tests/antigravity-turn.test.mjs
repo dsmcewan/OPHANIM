@@ -185,6 +185,50 @@ test("every billed request is admitted before the provider sees it, by class; a 
   assert.equal(r.gateway.sessions.find(s => s.class === "subagent").type, "code-explorer");
 });
 
+// EXACTLY THE DECLARED NAMES. The runtime reads other spellings of a declared argument name (observed on SDK 0.1.24, and
+// shown against the installed SDK in antigravity-sdk-contract.test.mjs), so a call the controller approves on
+// `CommandLine` could run what its `commandline` says. Each row is a call that must be refused whole, whatever else it carries.
+test("a tool call is decided on exactly the argument names the tool declares: another spelling, an unknown key, or a nested one refuses the whole call", async t => {
+  const { env, control_dir, run, note } = await setup(t);
+  const W = p => join(env.repo, p), launcher = join(control_dir, "pantheon-verify");
+  const sub = { TypeName: "code-explorer", Role: "Explorer", Prompt: assignment(1) };
+  const refused = [
+    ["run_command", { CommandLine: launcher, Cwd: env.repo, commandline: "cat /etc/passwd" }, "commandline"],
+    ["run_command", { commandLine: "cat /etc/passwd", CommandLine: launcher, Cwd: env.repo }, "commandLine"],
+    ["run_command", { CommandLine: launcher, Cwd: env.repo, command_line: "id" }, "command_line"],
+    ["run_command", { CommandLine: launcher, cwd: "/" }, "cwd"],
+    ["invoke_subagent", { Subagents: [sub], subagents: [sub, sub, sub] }, "subagents"],
+    ["invoke_subagent", { Subagents: [{ ...sub, workspace: "branch" }] }, "workspace"],
+    ["invoke_subagent", { Subagents: [{ ...sub, model: "pro" }] }, "model"],
+    ["invoke_subagent", { Subagents: [{ ...sub, typeName: "anything" }] }, "typeName"],
+    ["create_file", { TargetFile: W("src/u1/a.mjs"), CodeContent: "x", targetfile: "/etc/hosts" }, "targetfile"],
+    ["create_file", { TargetFile: W("src/u1/a.mjs"), CodeContent: "x", ArtifactMetadata: { Summary: "s", summary: "t" } }, "summary"],
+    ["edit_file", { TargetFile: W("src/u1/keep.mjs"), ReplacementContent: "x", targetFile: W("README.md") }, "targetFile"],
+    ["view_file", { AbsolutePath: W("README.md"), absolutepath: "/etc/passwd" }, "absolutepath"],
+    ["list_directory", { DirectoryPath: env.repo, directoryPath: "/" }, "directoryPath"],
+    ["search_directory", { SearchPath: env.repo, Query: "x", searchpath: "/etc" }, "searchpath"],
+    ["find_file", { SearchDirectory: env.repo, Pattern: "*", searchDirectory: "/" }, "searchDirectory"],
+  ];
+  // The same tools with their declared names only (and the two names every tool declares) are decided as before.
+  const judged = [
+    ["view_file", { AbsolutePath: W("README.md"), StartLine: 1, EndLine: 2, toolAction: "read", toolSummary: "read" }, true, null],
+    ["create_file", { TargetFile: W("src/u1/a.mjs"), CodeContent: "x", Overwrite: false, Description: "d", ArtifactMetadata: { Summary: "s", UserFacing: false } }, true, null],
+    ["run_command", { CommandLine: launcher, Cwd: env.repo, WaitMsBeforeAsync: 1000, RunPersistent: false, RequestedTerminalID: "" }, true, null],
+    // The verify launcher runs once: a persistent terminal, or the terminal of an earlier command, is refused.
+    ["run_command", { CommandLine: launcher, Cwd: env.repo, RunPersistent: true }, false, "COMMAND_REFUSED"],
+    ["run_command", { CommandLine: launcher, Cwd: env.repo, RequestedTerminalID: "term-1" }, false, "COMMAND_REFUSED"],
+  ];
+  const r = await run(CARBON, [...refused, ...judged].map(([tool, args]) => ({ hook: { tool, args } })));
+  const rows = note(r).decisions;
+  for (const [i, [tool, , key]] of refused.entries()) {
+    assert.equal(rows[i].allow, false, `${tool} with ${key} was allowed`);
+    assert.match(rows[i].message, new RegExp(`^ARGS_UNDECLARED: ${tool} carries the argument "${key}"`), `${tool} ${key}: ${rows[i].message}`);
+  }
+  // The whole log: every refusal above under its code, then the judged calls as decided.
+  assert.deepEqual(r.tool_log.map(x => [x.tool, x.allow, x.code]), [...refused.map(([tool]) => [tool, false, "ARGS_UNDECLARED"]), ...judged.map(([tool, , allow, code]) => [tool, allow, code])]);
+  assert.equal(r.subagents.admitted_total, 0, "no subagent was admitted through a call that was refused whole");
+});
+
 // THE MODEL GUARD (L-504 invariant 3), at this transport's entry point. Every ANSWERED request is checked on the name the
 // provider answered under, BEFORE any result of the session is acted on: its answer, its failure classification, its
 // quota refusal. The refusal is AGY_MODEL_MISMATCH with both identities, the code every Antigravity entry point uses.

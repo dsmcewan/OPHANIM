@@ -49,11 +49,21 @@ const usageOf = u => (u && typeof u === "object" ? Object.fromEntries(Object.ent
 const addUsage = (a, b) => { const out = { ...(a ?? {}) }; for (const [k, v] of Object.entries(b ?? {})) out[k] = (out[k] ?? 0) + v; return out; };
 
 /**
+ * Why `apiKey` cannot be sent as a header value, or null. A key with a line break, a space or a non-ASCII character (a
+ * pasted key) is rejected by the HTTP layer with the VALUE in its error text: it is refused here, unsent and unquoted.
+ */
+export const keyRefusal = apiKey => (typeof apiKey !== "string" || apiKey === "" ? "no key was given"
+  : /[^\x21-\x7e]/.test(apiKey) ? "it contains whitespace, a control character or a non-ASCII character (a pasted line break?)" : null);
+const withoutKey = (text, apiKey) => (typeof apiKey === "string" && apiKey ? String(text).split(apiKey).join("<key>") : String(text));
+
+/**
  * Ask the provider whether it serves `model` (GET /v1beta/models/<model>) with `apiKey`. Not a billed call.
  * Returns {model, at, available, status, kind, limits, name, why, provider_status?}; never throws.
  */
 export async function providerAvailability({ upstream = SDK_CONFIG.api.base_url, apiKey, keyHeader = SDK_CONFIG.api.key_header, model, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
   const out = { model, at: new Date().toISOString(), available: false, status: null, kind: null, limits: null, name: null, why: null };
+  const bad = keyRefusal(apiKey);
+  if (bad) return { ...out, kind: "auth", why: `the key is not usable as a key (${bad}): it was not sent` };
   try {
     const r = await fetchImpl(`${String(upstream).replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(model)}`, { headers: { [keyHeader]: apiKey }, signal: AbortSignal.timeout(timeoutMs) });
     out.status = r.status;
@@ -62,12 +72,15 @@ export async function providerAvailability({ upstream = SDK_CONFIG.api.base_url,
       Object.assign(out, { available: true, name: j?.name ?? null, limits: { input_token_limit: j?.inputTokenLimit ?? null, output_token_limit: j?.outputTokenLimit ?? null, thinking: j?.thinking ?? null,
         supported_generation_methods: Array.isArray(j?.supportedGenerationMethods) ? j.supportedGenerationMethods : null } });
     } else Object.assign(out, { kind: stopKindOf(r.status), why: String(j?.error?.message ?? `HTTP ${r.status}`).slice(0, 300), provider_status: j?.error?.status ?? null });
-  } catch (e) { Object.assign(out, { kind: "provider_error", why: String(e?.message ?? e).slice(0, 300) }); }
+  } catch (e) { Object.assign(out, { kind: "provider_error", why: withoutKey(e?.message ?? e, apiKey).slice(0, 300) }); }
   return out;
 }
 
+/** Rows kept for callers without the session token (each further one is counted only). */
+const MAX_UNAUTHORIZED_ROWS = 20;
 export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, apiKey, keyHeader = SDK_CONFIG.api.key_header, root, subagents = { model: null, ceiling: 0, markers: {} }, admit = () => {},
   signal = null, fetchImpl = fetch, requestTimeoutMs = 10 * 60_000, port = 0 } = {}) {
+  { const bad = keyRefusal(apiKey); if (bad) throw Object.assign(new Error(`the gateway was given a key that is not usable as a key (${bad}); it was not sent anywhere`), { code: "NO_API_KEY" }); }
   if (!str(apiKey)) throw Object.assign(new Error(`the model gateway needs the Gemini API key (${SDK_CONFIG.api.key_env}); it is held by the controller only`), { code: "NO_API_KEY" });
   if (!str(root?.model) || !str(root?.marker)) throw new Error("startModelGateway: pass root {model, marker}");
   const base = String(upstream).replace(/\/+$/, "");
@@ -76,7 +89,7 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
   const want = Buffer.from(token);
   const verbs = new Set(SDK_CONFIG.api.generation_verbs);
   const requests = [], sessions = new Map(), availabilityLog = [], inflight = new Set(), counts = { root: 0, subagent: 0, aux: 0 };
-  let stop = null, aborted = null, budgetRefusals = 0, closed = false;
+  let stop = null, aborted = null, budgetRefusals = 0, closed = false, unauthorized = 0;
 
   const allowedModel = m => m === root.model || (sub.ceiling > 0 && str(sub.model) && m === sub.model);
   const send = (res, status, body) => { if (res.destroyed || res.headersSent) return; const s = JSON.stringify(body); res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(s) }); res.end(s); };
@@ -95,12 +108,21 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
     const done = () => { rec.ms = Date.now() - t0; };
     // The caller holds this session's token, or it is not served.
     const got = Buffer.from(String(req.headers[keyHeader] ?? ""));
-    if (got.length !== want.length || !timingSafeEqual(got, want)) { req.resume(); refuse(res, rec, 401, GATEWAY_REFUSALS.UNAUTHORIZED, "this gateway serves the one SDK session it was started for", "UNAUTHENTICATED"); return done(); }
+    if (got.length !== want.length || !timingSafeEqual(got, want)) {
+      req.resume(); refuse(res, rec, 401, GATEWAY_REFUSALS.UNAUTHORIZED, "this gateway serves the one SDK session it was started for", "UNAUTHENTICATED");
+      // Anyone on the host can reach a loopback port: such callers are COUNTED, and only the first rows are kept.
+      if (++unauthorized > MAX_UNAUTHORIZED_ROWS) requests.splice(requests.indexOf(rec), 1);
+      return done();
+    }
     if (aborted) { req.resume(); refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${aborted}`, "UNAVAILABLE"); return done(); }
     if (req.method !== "POST" || !m || !verbs.has(m[2])) { req.resume(); refuse(res, rec, 404, GATEWAY_REFUSALS.PATH, `only POST /v1beta/models/<model>:${[...verbs].join("|")} is served`, "NOT_FOUND"); return done(); }
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > MAX_BODY) { req.destroy(); refuse(res, rec, 413, GATEWAY_REFUSALS.TOO_LARGE, `the request is over ${MAX_BODY} bytes`); return done(); } chunks.push(c); }
     const raw = Buffer.concat(chunks);
+    // THE STOP IS CHECKED AGAIN wherever this handler waited (independent review 2026-11-19: it was checked on arrival
+    // only, so a request whose body was still arriving, or whose admission was pending, was forwarded after the stop).
+    const stopped = () => (aborted ?? (closed ? "the gateway closed" : null));
+    if (stopped()) { refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
     let body = null; try { body = JSON.parse(raw.toString("utf8")); } catch { body = null; }
     const model = m[1], system = JSON.stringify(body?.systemInstruction ?? "");
     const type = Object.entries(sub.markers).find(([, mark]) => str(mark) && system.includes(mark))?.[0] ?? null;
@@ -124,6 +146,9 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
       refuse(res, rec, 429, GATEWAY_REFUSALS.BUDGET, String(e?.message ?? e).slice(0, 300), "RESOURCE_EXHAUSTED");
       return done();
     }
+    // Admitted (and charged), and the session was stopped meanwhile: the charge stands on the caller's record, and the
+    // request is still not sent.
+    if (stopped()) { refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
     counts[rec.class] += 1;
     const s = sessions.get(key) ?? sessions.set(key, { session: rec.session, class: rec.class, type, model, requests: 0, usage: null, served_models: [], errors: [] }).get(key);
     s.requests += 1;
@@ -206,7 +231,7 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
       }
       return { root: { model: root.model }, subagents: { model: sub.model, ceiling: sub.ceiling }, requests: requests.map(r => ({ ...r })),
         sessions: [...sessions.values()].map(s => ({ ...s, usage: s.usage ? { ...s.usage } : null, served_models: [...s.served_models], errors: s.errors.map(e => ({ ...e })) })),
-        subagent_sessions: [...sessions.values()].filter(s => s.class === "subagent").length, served_models: served, served_by_type: byType, unnamed,
+        subagent_sessions: [...sessions.values()].filter(s => s.class === "subagent").length, served_models: served, served_by_type: byType, unnamed, unauthorized,
         totals: { received: requests.length, forwarded: requests.filter(r => r.forwarded).length, refused: requests.filter(r => r.refusal).length, by_class: { ...counts } },
         budget_refusals: budgetRefusals, stop: stop ? { ...stop } : null, aborted, availability: availabilityLog.map(a => ({ ...a })) };
     },

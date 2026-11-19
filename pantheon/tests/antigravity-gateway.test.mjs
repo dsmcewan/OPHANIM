@@ -3,7 +3,7 @@
 // Each test names the defect it would catch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startModelGateway, GATEWAY_REFUSALS } from "../src/antigravity/gateway.mjs";
+import { startModelGateway, providerAvailability, GATEWAY_REFUSALS } from "../src/antigravity/gateway.mjs";
 import { startFakeGemini, text, QUOTA, notFound } from "./fixtures/fake-gemini.mjs";
 
 const KEY = "REAL-KEY-synthetic-0123456789";
@@ -165,6 +165,46 @@ test("aborting the gateway cuts a request in flight, and nothing is forwarded af
   assert.ok(after === "closed" || after === 503, "an aborted gateway forwards nothing more");
   assert.equal(upstream.requests.length, 1);
   assert.equal(gw.record().aborted, "the stage was stopped");
+});
+
+test("a stop that arrives while a request is still being admitted is honoured: the request is not forwarded after an abort, nor after a close", async t => {
+  // Independent review, 2026-11-19: the stop was checked once, on arrival. A request already past that check (its body
+  // being read, its admission pending) was admitted and forwarded after the stop.
+  for (const stopWith of ["abort", "close"]) {
+    let release, entered;
+    const pending = new Promise(r => { release = r; }), inAdmit = new Promise(r => { entered = r; });
+    const { upstream, gw, post } = await setup(t, { admit: async () => { entered(); await pending; } });
+    const sent = post("gemini-4-carbon", body(ROOT.marker)).then(r => r.status, () => "connection cut");
+    await inAdmit;                                  // the request is past the arrival check, waiting on its charge
+    const closing = stopWith === "abort" ? (gw.abort("stopped by the caller"), null) : gw.close();
+    release();
+    const status = await sent;
+    await closing;
+    assert.ok(status === 503 || status === "connection cut", `${stopWith}: the request was answered ${status}`);
+    assert.deepEqual(upstream.requests.filter(x => x.verb), [], `${stopWith}: nothing reached the provider after the stop`);
+    assert.equal(gw.record().totals.forwarded, 0, stopWith);
+  }
+});
+
+test("callers without the session token cannot grow the record without bound: they are counted, and a bounded number of rows is kept", async t => {
+  const { upstream, gw, post } = await setup(t);
+  for (let i = 0; i < 60; i++) assert.equal((await post("gemini-4-carbon", body(ROOT.marker), { token: `wrong-${i}` })).status, 401);
+  const rec = gw.record();
+  assert.equal(rec.unauthorized, 60, "every one is counted");
+  assert.ok(rec.requests.filter(r => r.refusal === GATEWAY_REFUSALS.UNAUTHORIZED).length <= 20, "and at most twenty rows are kept for them");
+  assert.deepEqual(upstream.requests, []);
+  // The session itself is still served and recorded.
+  assert.equal((await post("gemini-4-carbon", body(ROOT.marker))).status, 200);
+  assert.equal(gw.record().totals.forwarded, 1);
+});
+
+test("a key that is not a clean header value is refused before it is sent, and its text is in no message", async t => {
+  // A pasted key with a line break: the HTTP layer rejects the header and quotes the value in its error.
+  const BAD = "SYNTH-KEY-first-line\nsecond-line";
+  await assert.rejects(startModelGateway({ upstream: "http://127.0.0.1:9", apiKey: BAD, root: ROOT, subagents: SUBS }), e => e.code === "NO_API_KEY" && !e.message.includes("SYNTH-KEY") && /not usable as a key/.test(e.message));
+  const a = await providerAvailability({ upstream: "http://127.0.0.1:9", apiKey: BAD, model: "gemini-4-carbon" });
+  assert.deepEqual([a.available, a.kind, a.status], [false, "auth", null]);
+  assert.ok(!JSON.stringify(a).includes("SYNTH-KEY"), "the key's text is not in the availability record");
 });
 
 test("only the generation calls of an allowed model are served: any other path or verb is refused", async t => {

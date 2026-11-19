@@ -201,6 +201,77 @@ contract("the implementer's one command is the unit's verify launcher, run in th
   assert.match(results, /exit code: 0|Exit code: 0|exited with code 0|"exitCode":0|Exit Code: 0/i, "the verify launcher ran and passed");
 }, { needsBwrap: true });
 
+// THE RUNTIME READS OTHER SPELLINGS OF A DECLARED ARGUMENT NAME (found by an independent review, 2026-11-19, on SDK
+// 0.1.24: `commandline` and `commandLine` are read as CommandLine, `subagents` as Subagents, `workspace` as Workspace).
+// A controller that judges `CommandLine` and lets `commandline` through has approved a call it never saw. So a call is
+// decided only on EXACTLY the names the tool declares: any other key refuses the whole call, before the runtime acts.
+contract("a tool call is decided on exactly the argument names the tool declares: a second spelling of CommandLine does not run a command the controller never judged", async t => {
+  const s = await session(t, { decide: ({ body }) => {
+    const n = responsesIn(body), launcher = join(s.control_dir, "pantheon-verify");
+    if (n === 0) return { parts: [fc("write_to_file", { TargetFile: `${s.env.repo}/src/u1/impl.mjs`, CodeContent: "export const id = 'u1';\n", Overwrite: false, Description: "the unit" })] };
+    // The approved command in the declared name, another command in a spelling the runtime also reads; both orders.
+    if (n === 1) return { parts: [fc("run_command", { CommandLine: launcher, Cwd: s.env.repo, WaitMsBeforeAsync: 5000, commandline: "cat /etc/passwd" })] };
+    if (n === 2) return { parts: [fc("run_command", { commandLine: "cat /etc/passwd", CommandLine: launcher, Cwd: s.env.repo, WaitMsBeforeAsync: 5000 })] };
+    // A persistent terminal is not the one-shot verify launcher either.
+    if (n === 3) return { parts: [fc("run_command", { CommandLine: launcher, Cwd: s.env.repo, WaitMsBeforeAsync: 5000, RunPersistent: true })] };
+    if (n === 4) return { parts: [fc("run_command", { CommandLine: launcher, Cwd: s.env.repo, WaitMsBeforeAsync: 10000 })] };
+    return { parts: [text("done")] };
+  } });
+  const r = await s.run();
+  assert.deepEqual(r.tool_log.filter(x => x.tool === "run_command").map(x => [x.allow, x.code]), [[false, "ARGS_UNDECLARED"], [false, "ARGS_UNDECLARED"], [false, "COMMAND_REFUSED"], [true, null]]);
+  const results = JSON.stringify(s.gen().at(-1).body.contents);
+  assert.ok(!/root:x:0:0/.test(results), "no command ran under a spelling the controller did not judge");
+  assert.match(results, /exit code: 0|Exit code: 0|exited with code 0|"exitCode":0|Exit Code: 0/i, "the verify launcher, asked for by its declared names alone, ran and passed");
+}, { needsBwrap: true });
+
+contract("the subagent governor cannot be shown one list and the runtime another: a second spelling of Subagents, or of an entry's field, refuses the whole call and no child runs", async t => {
+  const s = await session(t, { decide: ({ body, system }) => {
+    if (isChild(system)) return { parts: [text("a child's answer")] };
+    const n = responsesIn(body);
+    // One admitted entry in the declared name, nine in a spelling the runtime also reads (Carbon's ceiling is 8).
+    if (n === 0) return { parts: [fc("invoke_subagent", { Subagents: subs(1), subagents: subs(9) })] };
+    // A branched workspace under a spelling of Workspace, which the governor refuses under its declared name.
+    if (n === 1) return { parts: [fc("invoke_subagent", { Subagents: subs(1, { workspace: "branch" }) })] };
+    return { parts: [text("done")] };
+  } });
+  const r = await s.run();
+  assert.deepEqual(r.tool_log.filter(x => x.tool === "invoke_subagent").map(x => [x.allow, x.code]), [[false, "ARGS_UNDECLARED"], [false, "ARGS_UNDECLARED"]]);
+  assert.deepEqual([r.subagents.admitted_total, r.subagents.peak_live, r.subagents.peak_active, r.subagents.unbound_trajectories.length], [0, 0, 0, 0], "nothing was admitted and nothing ran unadmitted");
+  assert.equal(r.gateway.subagent_sessions, 0, "no child session reached the provider");
+  assert.equal(s.gen().filter(x => isChild(x.system)).length, 0);
+}, { needsBwrap: true });
+
+contract("the controller's table of declared argument names is what the installed runtime declares, tool for tool; three declared tools run with NO hook", async t => {
+  const T = { toolAction: "probe", toolSummary: "probe" };
+  const unhooked = [["manage_task", { Action: "list", ...T }], ["send_message", { Recipient: "nobody", Message: "hello", ...T }], ["manage_subagents", { Action: "list", ...T }]];
+  const s = await session(t, { decide: ({ body, system }) => {
+    if (isChild(system)) return { parts: [text("a child's answer")] };
+    const n = responsesIn(body);
+    return n < unhooked.length ? { parts: [fc(...unhooked[n])] } : { parts: [text("done")] };
+  } });
+  const r = await s.run();
+  const table = SDK_CONFIG.tools;
+  const decls = (s.gen()[0].body.tools ?? []).flatMap(x => x.functionDeclarations ?? x.function_declarations ?? []);
+  const schemaOf = d => d.parameters ?? d.parametersJsonSchema ?? {};
+  const names = schema => Object.keys(schema?.properties ?? {}).sort();
+  const byDeclaredName = Object.fromEntries(Object.values(table.declared).map(spec => [spec.as, spec]));
+  // Every tool the runtime offers the model is one the controller decides, or one it lists as running without a hook.
+  // A tool an SDK upgrade adds fails here before any session trusts the table.
+  assert.deepEqual(decls.map(d => d.name).sort(), [...Object.keys(byDeclaredName), ...table.unhooked].sort());
+  for (const d of decls.filter(x => byDeclaredName[x.name])) {
+    const spec = byDeclaredName[d.name], schema = schemaOf(d);
+    assert.deepEqual(names(schema), [...Object.keys(spec.args), ...table.common].sort(), `${d.name}: the declared argument names`);
+    for (const [key, nested] of Object.entries(spec.args).filter(([, v]) => Array.isArray(v))) {
+      const inner = schema.properties[key];
+      assert.deepEqual(names(inner.items ?? inner), [...nested].sort(), `${d.name}.${key}: the declared names inside it`);
+    }
+  }
+  // OBSERVED, AND A LIMIT (register L-715): the runtime ran these three with no pre-tool hook, so the controller neither
+  // decided nor recorded them. If a later SDK hooks them, this fails and the decision table must take them in.
+  assert.deepEqual(r.tool_log.map(x => x.tool), [], "no decision was asked for manage_task, send_message or manage_subagents");
+  assert.equal(responsesIn(s.gen().at(-1).body), unhooked.length, "and the runtime answered each call to the model all the same");
+}, { needsBwrap: true });
+
 contract("a stop cuts a session with subagents in flight, and nothing of it keeps running", async t => {
   const s = await session(t, { decide: ({ body, system }) => {
     if (isChild(system)) return { parts: [text("late")], delayMs: 60000 };

@@ -59,7 +59,7 @@ import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PRO
 import {ceilingFor, SUBAGENT_MODEL, SUBAGENT_TYPES, SUBAGENT_TYPE_NAMES} from '../../pantheon/src/antigravity/subagents.mjs';
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
-import {promptRequirement, promptSection} from './prompt-intake.mjs';
+import {promptRequirement, promptSection, PROMPT_BASIS_PREFIX} from './prompt-intake.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
 import {VERIFY_JAIL_MODULE, VERIFY_JAIL_SCHEMA, launcherEnv} from '../../pantheon/src/agy/verify-jail.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
@@ -211,6 +211,9 @@ export function planRefusal(j, {shown = [], delivered = null, depends_on = [], m
   if (!Array.isArray(j.copy) || !j.copy.every(c => str(c))) why.push('copy lists the repository files the work reads');
   else if (repo) for (const c of j.copy) if (!fs.existsSync(path.join(repo, c))) why.push(`copy names ${c}, which is not in the repository`);
   if (!plain(j.proposes) || !['Resolved', 'Ready', 'In progress'].includes(j.proposes.state) || !str(j.proposes.basis)) why.push('proposes names {state: Resolved | Ready | In progress, basis}');
+  // The basis that binds a prompt record is written by the intake only (prompt-intake.mjs registerPrompt). A proposed
+  // basis in that form would be signed with the outcome and then read as the binding of a record the plan chose.
+  else if (j.proposes.basis.trimStart().startsWith(PROMPT_BASIS_PREFIX)) why.push('proposes.basis may not take the form of a prompt intake\'s basis: that form is written only when the owner registers a prompt');
   const L = j.limits;
   if (!plain(L) || !(Number.isInteger(L.provider_calls) && L.provider_calls > 0) || !(Number.isInteger(L.revisions) && L.revisions >= 1 && L.revisions <= 5)
     || !(Number.isInteger(L.elapsed_ms) && L.elapsed_ms > 0)) why.push('limits names {provider_calls > 0, revisions 1..5, elapsed_ms > 0}');

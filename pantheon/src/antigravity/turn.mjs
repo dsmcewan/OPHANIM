@@ -13,6 +13,9 @@
 //                   charge, the model allow-list, the ceiling on the wire) and stops the session.
 //
 // TOOL DECISIONS (fail closed: a tool this table does not name is denied, and the denial is on the record).
+//   EVERY CALL, FIRST           it carries exactly the argument names its tool declares (config.mjs undeclaredArg). The
+//                                runtime also reads other spellings of a declared name, so any other key refuses the
+//                                whole call (ARGS_UNDECLARED): nothing is decided on a name the runtime may not act on.
 //   finish                       allowed (the SDK's structured-output tool)
 //   view_file, list_directory,   every path argument resolves inside the unit's WORKTREE and outside the control dir
 //   search_directory, find_file  (agy/jail-hook.mjs decideRead: the same rule the CLI worker had)
@@ -21,8 +24,11 @@
 //                                controller cannot attribute to an admitted subagent, may not write at all.
 //   run_command                  the implementer only, and only the unit's VERIFY LAUNCHER (decideCommand): the unit's
 //                                verify_cmd in the verify jail, where no credential, host file or network is reachable.
+//                                Once: not in a persistent terminal, nor in the terminal of an earlier command.
 //   invoke_subagent              the governor's admission (type pinned to Hydrogen, ceiling, assignment, no override).
 // The post-turn write jail of the pipeline (implement.mjs inspectWrites) still judges the worktree from disk.
+// NOT DECIDED HERE: the runtime runs manage_task, manage_subagents and send_message with no pre-tool hook (observed on
+// SDK 0.1.24; config tools.unhooked, register L-715). The controller is not asked about them and records nothing.
 //
 // WHAT THE RESULT CARRIES: {text, structured_output, stop_reason, served_model, served_model_source: "provider",
 // transport: "antigravity-sdk", requested_model, effort, subagents (the governor's record),
@@ -62,9 +68,9 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, SDK_THINKING } from "./config.mjs";
+import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, SDK_THINKING, undeclaredArg } from "./config.mjs";
 import { subagentGovernor, SUBAGENT_MODEL, SUBAGENT_TYPES, SUBAGENT_MAX_DEPTH, ceilingFor } from "./subagents.mjs";
-import { startModelGateway } from "./gateway.mjs";
+import { startModelGateway, keyRefusal } from "./gateway.mjs";
 import { bwrapArgs, sandboxAvailable } from "../agy/sandbox.mjs";
 import { decideWrite, decideRead, decideCommand, writePathArgsOf, workerVerifyCommand, VERIFY_LAUNCHER_NAME } from "../agy/jail-hook.mjs";
 import { writeVerifyLauncher, HOME_SECRET_DIRS } from "../agy/verify-jail.mjs";
@@ -151,7 +157,11 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
     const a = args !== null && typeof args === "object" && !Array.isArray(args) ? args : {};
     if (server_name) return dec(false, "TOOL_NOT_ALLOWED", `MCP tool ${server_name}/${name} is not served to this session`, { who });
     if (name === "finish") return dec(true, null, "the structured-output tool", { who });
-    if (name === "invoke_subagent" || name === "start_subagent") {
+    // EXACTLY THE DECLARED NAMES, before any decision reads one (config.mjs undeclaredArg): the runtime also reads other
+    // spellings of a declared name, so a call carrying any other key is refused whole.
+    const undeclared = undeclaredArg(name, a);
+    if (undeclared) return dec(false, "ARGS_UNDECLARED", undeclared, { who });
+    if (name === "invoke_subagent") {
       const r = governor.admit({ call_id, trajectory_id, args: a });
       return dec(r.allow, r.code, r.reason, { who, ...(r.allow ? { admitted: r.admitted } : {}) });
     }
@@ -173,6 +183,11 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
     }
     if (name === "run_command") {
       if (child) return dec(false, "SUBAGENT_SCOPE", "a subagent runs no command: the implementer runs the unit's verify command", { who });
+      // ONE SHOT. A persistent terminal, or the terminal of an earlier command, outlives the launcher, and the runtime
+      // has tools the controller is given no hook for (config tools.unhooked: manage_task takes an Input).
+      if (a.RunPersistent === true || (a.RequestedTerminalID !== undefined && a.RequestedTerminalID !== null && a.RequestedTerminalID !== "")) {
+        return dec(false, "COMMAND_REFUSED", "the unit's verify launcher runs once: not in a persistent terminal, and not in the terminal of an earlier command", { who });
+      }
       const d = decideCommand(policy, a);
       return dec(d.decision === "auto_approve", d.decision === "auto_approve" ? null : "COMMAND_REFUSED", d.reason, { who });
     }
@@ -222,6 +237,7 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   if (effort !== null && !SDK_THINKING.includes(effort)) throw fail("BAD_SEAT", `effort "${effort}" is not a thinking level the SDK accepts (${SDK_THINKING.join(", ")})`);
   if (!str(prompt)) throw fail("BAD_INPUT", "runAntigravitySdkTurn: pass the unit prompt");
   if (!str(apiKey)) throw fail("NO_API_KEY", `the Antigravity SDK transport needs ${SDK_CONFIG.api.key_env} (the Gemini API; no subscription login is used)`);
+  { const bad = keyRefusal(apiKey); if (bad) throw fail("NO_API_KEY", `${SDK_CONFIG.api.key_env} is not usable as a key (${bad}); it was not sent anywhere`); }
   if (signal?.aborted) throw fail("ABORTED", "the run was aborted before the implementer session started");
   if (python.includes("/") && !existsSync(python)) throw laneFailure("spawn", `the Antigravity SDK's python is absent at ${python} (set PANTHEON_ANTIGRAVITY_PYTHON to the venv that has google-antigravity ${SDK_CONFIG.sdk.version})`, { sdk_unavailable: true });
   if (!existsSync(bridge)) throw laneFailure("spawn", `the bridge script is absent at ${bridge}`, { sdk_unavailable: true });

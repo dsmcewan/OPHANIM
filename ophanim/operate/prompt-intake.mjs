@@ -60,16 +60,22 @@ export function provenanceRefusal(p) {
   return null;
 }
 
-/** The work identity of one submission: {item, prompt_sha256}. Pure. */
+/**
+ * The work identity of one submission: {item, prompt_sha256}. Pure. 128 bits of the digest of the text's digest and the
+ * WHOLE provenance: the item id the owner signs for therefore binds both, and a record is the signed one only while it
+ * still makes that identity (recordRefusal).
+ */
 export function promptIdentity({prompt, provenance}) {
   const prompt_sha256 = sha256(prompt);
-  return {item: 'prompt-' + digest({schema: PROMPT_SCHEMA, prompt_sha256, provenance}).slice(0, 16), prompt_sha256};
+  return {item: 'prompt-' + digest({schema: PROMPT_SCHEMA, prompt_sha256, provenance}).slice(0, 32), prompt_sha256};
 }
 
 /** The basis the owner signs for a prompt item: it names the record and binds its digest. */
 export const promptBasis = ({record, prompt_sha256, provenance}) =>
   `Authorized prompt intake: the owner's prompt, verbatim at ${record} (${prompt_sha256}), received ${provenance.received_at} from ${provenance.author} via ${provenance.source}. The planner derives the ticket and the work units.`;
 const BASIS = /^Authorized prompt intake: the owner's prompt, verbatim at (intake\/prompts\/([a-z0-9][a-z0-9.-]{0,63})\.json) \((sha256:[0-9a-f]{64})\),/;
+/** The opening words of that basis. Reserved: only registerPrompt writes a basis that begins with them (stages.mjs planRefusal). */
+export const PROMPT_BASIS_PREFIX = 'Authorized prompt intake:';
 /** What a signed basis binds: {record, item, sha256}, or null when it is not a prompt item's basis. */
 export function promptBinding(basis) {
   const m = BASIS.exec(String(basis ?? ''));
@@ -83,7 +89,12 @@ function recordRefusal(rec, item) {
   if (typeof rec.prompt !== 'string') return 'the record carries no prompt text';
   if (rec.prompt_sha256 !== sha256(rec.prompt)) return 'the record\'s text does not hash to the digest it states';
   const why = provenanceRefusal(rec.provenance);
-  return why ? `the record's ${why}` : null;
+  if (why) return `the record's ${why}`;
+  // THE PROVENANCE IS BOUND TOO (independent review 2026-11-19). The owner signed for the item id, which is the
+  // identity of the text AND the provenance; the planner is shown both. A record whose provenance was rewritten keeps
+  // its text's digest and no longer makes its own identity.
+  const made = promptIdentity({prompt: rec.prompt, provenance: rec.provenance}).item;
+  return made === item ? null : `${item} is not the identity of its own text and provenance (that is ${made}); a record is not read under a name it was only filed under`;
 }
 
 /** The prompt record of `item`, as written: the parsed record, or {why} when it is absent or unreadable. */
@@ -185,16 +196,14 @@ export function registerPrompt({repo, statusRoot, keys = null, prompt, provenanc
  * The text and the provenance are the record's own, so nothing is typed again and the record is not rewritten. It is
  * the same registration as registerPrompt, and the owner's keys decide it in the same way: without them the prompt
  * stays a candidate ({authorized: false}).
- * Refused (PROMPT_REFUSED), and nothing is signed: no readable record under that identity; a record filed under an
- * identity its own text and provenance do not make. A file dropped into the tree under a name of its author's choosing
- * is not that item, however consistent it is with itself.
+ * Refused (PROMPT_REFUSED), and nothing is signed: no readable record under that identity, which includes a record filed
+ * under an identity its own text and provenance do not make (readPromptRecord). A file dropped into the tree under a
+ * name of its author's choosing is not that item, however consistent it is with itself.
  */
 export function authorizePrompt({repo, statusRoot, keys = null, item, title = null, depends_on = [], now = undefined}) {
   if (!str(repo) || !str(statusRoot)) refuse('authorizePrompt: pass the repository and the status ledger');
   if (!ID.test(item ?? '')) refuse('authorize names a prompt item id (as `prompt` printed it)');
   const rec = readPromptRecord({repo, item});
   if (rec.why) refuse(rec.why);
-  const made = promptIdentity({prompt: rec.prompt, provenance: rec.provenance}).item;
-  if (made !== item) refuse(`the prompt record ${recordPath(item)}: ${item} is not the identity of its own text and provenance (that is ${made}); a record is not authorized under a name it was only filed under`);
   return registerPrompt({repo, statusRoot, keys, prompt: rec.prompt, provenance: rec.provenance, title, depends_on, ...(now ? {now} : {})});
 }

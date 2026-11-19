@@ -44,6 +44,22 @@
       "note": "named by the owner on 2026-11-19 as the medium Google implementer. No context window, output ceiling or thinking level of it is recorded in this repository: the vendor page was not readable from the session that added it, and no key that Google accepts was available to read the model resource. The transport asks the provider for the model (GET /v1beta/models/gemini-4-neon) before its first use in a run and records what it answers; a model the provider does not serve is reported as MODEL_UNAVAILABLE and is never substituted silently."
     }
   },
+  "tools": {
+    "basis": "observed on SDK 0.1.24 (2026-11-19): the names the runtime DECLARES to the provider for each tool, and the name the SDK's pre-tool hook reports for it. The runtime also reads other spellings of a declared argument name (commandline and commandLine as CommandLine; subagents as Subagents; workspace as Workspace), so the controller decides a call only on exactly these names: any other key refuses the whole call. pantheon/tests/antigravity-sdk-contract.test.mjs compares this table with what the installed runtime declares.",
+    "common": ["toolAction", "toolSummary"],
+    "declared": {
+      "view_file": { "as": "view_file", "args": { "AbsolutePath": null, "ContentOffset": null, "EndLine": null, "StartLine": null } },
+      "list_directory": { "as": "list_dir", "args": { "DirectoryPath": null } },
+      "search_directory": { "as": "grep_search", "args": { "CaseInsensitive": null, "Includes": null, "IsRegex": null, "MatchPerLine": null, "Query": null, "SearchPath": null } },
+      "find_file": { "as": "find_by_name", "args": { "Excludes": null, "Extensions": null, "FullPath": null, "MaxDepth": null, "Pattern": null, "SearchDirectory": null, "Type": null } },
+      "create_file": { "as": "write_to_file", "args": { "Append": null, "ArtifactMetadata": ["RequestFeedback", "Summary", "UserFacing"], "CodeContent": null, "Description": null, "Overwrite": null, "TargetFile": null } },
+      "edit_file": { "as": "replace_file_content", "args": { "AllowMultiple": null, "Description": null, "EndLine": null, "Instruction": null, "ReplacementContent": null, "StartLine": null, "TargetContent": null, "TargetFile": null, "TargetLintErrorIds": null } },
+      "run_command": { "as": "run_command", "args": { "CommandLine": null, "Cwd": null, "NotificationTimeoutSeconds": null, "RequestedTerminalID": null, "RunPersistent": null, "WaitMsBeforeAsync": null } },
+      "invoke_subagent": { "as": "invoke_subagent", "args": { "Subagents": ["Model", "Prompt", "Role", "TypeName", "Workspace"] } }
+    },
+    "unhooked": ["manage_subagents", "manage_task", "send_message"],
+    "unhooked_note": "observed on SDK 0.1.24: the runtime declares these three tools and runs them with NO pre-tool hook, so the controller neither decides nor records a call of them (register L-715)."
+  },
   "subagents": {
     "model": "gemini-4-hydrogen",
     "ceilings": { "gemini-4-carbon": 8, "gemini-4-neon": 4, "gemini-4-hydrogen": 0 },
