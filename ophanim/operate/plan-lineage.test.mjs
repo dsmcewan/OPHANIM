@@ -37,7 +37,8 @@ test('resuming an open plan-review cycle keeps the earlier plan-review finders i
 
     now += 20 * 60_000;
     const r2 = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, clock: () => now});
-    assert.equal(stagesOf(r2)[0], 'plan:passed');
+    // The resumed plan passes and the work goes on through a change review and validation: the panels below exist.
+    assert.deepEqual(stagesOf(r2), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
     const w = openWorkLedger({root: f.workRoot});
     const passed = w.stages('plan-lineage').find(s => s.stage === 'plan' && s.status === 'passed');
     assert.equal(passed.outputs.plan.answers.length, 1, 'the approved v2 answers the xai finding');
@@ -47,7 +48,8 @@ test('resuming an open plan-review cycle keeps the earlier plan-review finders i
     const keys = contributorKeys(passed.contributions);
     assert.ok(candidateRefusal({vendor: finder.vendor, model: finder.model}, keys), `${finder.model} is eligible downstream after the resume`);
     const rev = w.stages('plan-lineage').find(s => s.stage === 'review' && s.status === 'passed');
-    if (rev) assert.ok(rev.outputs.author_models.includes(`xai/${finder.model}`), 'the review cycle excludes the plan-review finder');
+    assert.ok(rev, 'a change review passed: its panel is the later panel checked here');
+    assert.ok(rev.outputs.author_models.includes(`xai/${finder.model}`), 'the review cycle excludes the plan-review finder');
   });
 });
 

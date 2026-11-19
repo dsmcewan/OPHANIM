@@ -223,6 +223,7 @@ test(`${SA}, Q1/Q7: a gate that re-routes on an unchanged routing basis is repor
     // A plan that rests on a view nothing here can re-read (an issue, with no issue snapshot): it is stale the moment
     // it passes, for a reason that does not change. Re-planning it once is right; a second time on the same state is not.
     let made = 0;
+    // test-lint: allow scripted-terminal-status -- the stub plan, the INPUT: the test asserts how often the service dispatches it (made) and that the re-route is blocked ATTEMPT_IDENTITY_COLLISION, not this plan's own outcome
     const plan = async () => { made++; return {status: 'passed', outputs: {deps: {}, evidence: [{ref: 'issue:9', source: 'issue:9', version: 'sha256:' + '9'.repeat(64), request: {op: 'issue', number: 9}}]},
       team: [], contributions: [], findings: [], usage: {provider_calls: 1}, next: {stage: 'implement', why: 'ok'}}; };
     const config = readServiceConfig(file);
@@ -378,6 +379,7 @@ test(`${SA}, Q2: the ledger keeps the ticket identity across a handoff; a record
     w.release({claim: c1, item: 'x', stage: 'plan', outcome: 'completed', why: 'ok'});
     const inputs = {upstream: outputsDigest({p: 1})};
     const c2 = w.claim({item: 'x', stage: 'implement', attempt: 1, inputs, holder: 'h', budget});
+    // test-lint: allow scripted-terminal-status -- the implement records offered to the ledger, the INPUT: the test asserts recordStage refuses the two that name another ticket and verifies the one that keeps it
     const rec = id => ({claim: c2, from: plan, stage: 'implement', attempt: 1, status: 'passed', identity: id, inputs, outputs: {i: 1}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, next: null});
     assert.throws(() => w.recordStage(rec({...identity, ticket: {path: 'tickets/x.json', digest: 'sha256:' + 'c'.repeat(64)}})), /keeps the ticket identity/);
     assert.throws(() => w.recordStage(rec({item: 'x', requirement: req})), /keeps the ticket identity/);
@@ -419,6 +421,7 @@ test(`${SA}, Q2: a revision returned to planning revises the plan its chain rest
     assert.ok(p1 && p2 && p2.status === 'passed');
     fs.writeFileSync(path.join(repo, 'verify.mjs'), v0);   // p2 is stale again, p1 valid: the chain rests on p1
     let returned = false;
+    // test-lint: allow scripted-terminal-status -- the stub implement, the INPUT that returns the work to planning once: the test asserts which plan the revision revises (p3 of p1), not this stage's status
     const implement = async () => { if (returned) return {status: 'passed', outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, next: {stage: 'review', why: 'ok'}};
       returned = true;
       return {status: 'returned', outputs: {}, team: [], contributions: [], findings: [{id: 'f1', severity: 'block', text: 'the plan misses a case'}], usage: {provider_calls: 0}, next: {stage: 'plan', why: 'the plan misses a case'}}; };

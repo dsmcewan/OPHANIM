@@ -91,13 +91,14 @@ test('recovery preserves and refuses malformed, conflicting signed history and r
     }
     if (variant==='packet-conflict') edit(packetFile,packets=>{packets[0].decision='reject';});
     fs.writeFileSync(proposalFile,prefix);
-    const packetBytes=fs.readFileSync(packetFile);
+    // The history on disk as the refused recovery finds it (the whole file, as for the packets), its byte oracle.
+    const proposalBytes=fs.readFileSync(proposalFile),packetBytes=fs.readFileSync(packetFile);
     fs.unlinkSync(proof.paths.ledger);
     fs.unlinkSync(path.join(root,'governance','accepted',hash(request.obligation.id)+'.json'));
     const refused=await (await createGovernance({root})).verifyCandidate(request);
     assert.equal(refused.ok,false,variant);
     if (variant==='signed-conflict') assert.match(refused.reason,/prefix differs/);
-    assert.equal(fs.readFileSync(proposalFile,'utf8'),prefix,variant+' history must be preserved');
+    assert.deepEqual(fs.readFileSync(proposalFile),proposalBytes,variant+' history must be preserved');
     assert.deepEqual(fs.readFileSync(packetFile),packetBytes,variant+' packets must be preserved');
     assert.equal(fs.existsSync(proof.paths.ledger),false);
   }

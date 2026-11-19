@@ -51,6 +51,7 @@ test("L-502: a tool step that finished more often than the hook approved it is U
     { tool_name: "mcp_pantheon-subagents_ask_subagent", state: "DONE" }];
   const log = [{ tool: "view_file", decision: "auto_approve" }, { tool: "run_command", decision: "auto_approve" }, { tool: "run_command", decision: "deny" }, { tool: "call_mcp_tool", decision: "auto_approve" }];
   assert.deepEqual(unhookedSteps(steps, log), [{ tool: "run_command", done: 2, approved: 1 }]);
+  // test-lint: allow truncated-sequence -- steps.slice(0, 2) builds the INPUT, the two steps the hook approved once each; unhookedSteps' whole result is compared, to []
   assert.deepEqual(unhookedSteps(steps.slice(0, 2), log), []);
 });
 

@@ -27,7 +27,7 @@ test("a request is forwarded with the controller's key; the runtime's token neve
   assert.equal(r.status, 200);
   const sse = await r.text();
   assert.match(sse, /^data: \{/);
-  assert.equal(JSON.parse(sse.slice(6)).candidates[0].content.parts[0].text, "ok", "the provider's answer is passed through");
+  assert.equal(JSON.parse(sse.replace(/^data: /, "")).candidates[0].content.parts[0].text, "ok", "the provider's answer is passed through");
   assert.equal(upstream.requests.length, 1);
   assert.equal(upstream.requests[0].headers["x-goog-api-key"], KEY, "the provider is asked with the controller's key");
   assert.ok(!JSON.stringify(upstream.requests[0].headers).includes(gw.token), "the session token stays between the runtime and the gateway");

@@ -29,14 +29,17 @@ async function unit(t) {
 test("the hook reproduces the first three decisions it made on the real passing turn; the fourth (the cd-prefixed verify command, run as agy's own child) is DENIED since credential isolation, and the unit's verify launcher in its place is approved", async t => {
   const u = await unit(t);
   const got = u.payloads.map(p => { const d = decide(u.policy, p); return [p.toolCall.name, d.decision, d.reason]; });
-  assert.deepEqual(got.slice(0, 3), u.decisions.slice(0, 3).map(d => [d.tool, d.decision, d.reason]));
+  const p = u.payloads[3], launcher = u.ws.worker_verify_cmd;
+  // Every decision, the length included: the first three exactly as recorded at 7ca325c, the fourth payload now denied.
+  const recorded = u.decisions.map(d => [d.tool, d.decision, d.reason]);
+  assert.deepEqual(got, recorded.with(3, ["run_command", "deny",
+    `only the unit's verify_cmd may run, exactly as the worker command ${JSON.stringify(launcher)}, not ${JSON.stringify(p.toolCall.args.CommandLine)}`]));
   // The worker ran exactly the controller's directory-setting verify command (7ca325c's contract) ...
   assert.equal(u.payloads[3].toolCall.args.CommandLine, workerVerifyCommand(u.wt, OBS.verify_cmd));
   assert.equal(u.decisions[3].decision, "auto_approve", "approved at 7ca325c");
   // ... which now runs only inside the verify jail: the same payload is denied, and with the launcher it is approved.
   assert.equal(got[3][1], "deny");
   assert.match(got[3][2], /only the unit's verify_cmd may run, exactly as the worker command/);
-  const p = u.payloads[3], launcher = u.ws.worker_verify_cmd;
   assert.equal(launcher, join(u.ws.control_dir, "pantheon-verify"));
   assert.equal(decide(u.policy, { ...p, toolCall: { ...p.toolCall, args: { ...p.toolCall.args, CommandLine: launcher } } }).decision, "auto_approve");
 });

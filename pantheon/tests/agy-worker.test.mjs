@@ -258,9 +258,12 @@ test("(f) argv has --mode=accept-edits and no --dangerously-skip-permissions or 
   process.env.GEMINI_API_KEY = "must-not-reach-the-cli"; process.env.GOOGLE_API_KEY = "nor-this";
   t.after(() => { for (const [k, v] of [["GEMINI_API_KEY", before.g], ["GOOGLE_API_KEY", before.o]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
   await withFakeAgy(f.fx, async agy => {
-    const r = await runAgyWorkerTurn({ ...(await prepared(f, "a")), env: { GEMINI_API_KEY: "nor-via-env" } });
+    const turn = await prepared(f, "a");
+    const r = await runAgyWorkerTurn({ ...turn, env: { GEMINI_API_KEY: "nor-via-env" } });
+    assert.equal(r.launch.args.indexOf("--"), r.launch.args.lastIndexOf("--"), "one separator between the jail's argv and the CLI's");
     const inner = r.launch.args.slice(r.launch.args.indexOf("--") + 1);
-    assert.deepEqual(inner.slice(1), ["--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", "60s",
+    // test-lint: allow truncated-sequence -- inner is the WHOLE CLI argv after bwrap's "--" (binary included, nothing cut at its end); the jail argv before it is bwrapArgs', asserted item by item in agy-sandbox.test.mjs
+    assert.deepEqual(inner, [turn.cli, "--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", "60s",
       "--log-file", join(f.units.a.ctl, "run", "agy.log"), "--print", "<prompt>"]);
     assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /^fake-agy start agent=pantheon-unit-worker /m, "the CLI's --log-file landed in the writable run dir");
     assert.equal(r.launch.cmd, "bwrap");

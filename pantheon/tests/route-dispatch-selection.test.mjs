@@ -40,9 +40,10 @@ test("M1: easy and hard tickets through the real dispatcher (banded profile) req
     // Antigravity"). Later that day every live lane was given a cited window (owner direction: Antigravity lanes are
     // primary; lanes.json), so M7 now ADMITS them as fallbacks: they are no longer excluded for an unrecorded window.
     // They stay fallbacks here: each band's own rung answers, so no lane is launched.
-    const asked = (cs, re) => cs.filter(c => re.test(c.prompt)).map(c => `${c.vendor}/${c.model}`);
-    assert.deepEqual(asked(calls.slice(0, easyCalls), WORK), ["openai/gpt-6-luna"], "easy: Luna implements (easy band)");
-    assert.deepEqual(asked(calls.slice(easyCalls), WORK), ["openai/gpt-6-astra"], "hard: Astra implements (hard band)");
+    // Every work request of both tickets, in order, each labelled with the ticket that made it (the easy run made the
+    // first easyCalls calls of the log, the hard run the rest).
+    const asked = re => calls.flatMap((c, i) => (re.test(c.prompt) ? [`${i < easyCalls ? "easy" : "hard"}: ${c.vendor}/${c.model}`] : []));
+    assert.deepEqual(asked(WORK), ["easy: openai/gpt-6-luna", "hard: openai/gpt-6-astra"], "easy: Luna implements (easy band); hard: Astra implements (hard band)");
     assert.deepEqual(agy(), [], "no lane seat was launched: the Antigravity Gemini fallbacks are admitted fallbacks, and the band's own rung answered");
     // And why, on every turn: the band, the policy and its hash, and what was excluded (nothing: every lane has a cited window).
     const LANE_FALLBACKS = { plan: ["gemini-4-carbon-high"], work: ["gemini-4-carbon-high", "gemini-4-argon-high"] };
@@ -197,12 +198,12 @@ test("M3: resume continues the recorded seat -- model, pool and escalated effort
     const first = await runOpenItem(ticket, o);
     assert.equal(first.shipped, false);
     assert.deepEqual(workCalls(calls).map(c => `${c.model}@${c.pool}`), ["gpt-6-sol@openai_second"]);
-    const before = calls.length;
     // The resumed run is given no seat overrides at all: the recorded seat is what continues.
     const again = await runOpenItem(ticket, { ...o, resume: first.board, seatOverrides: SIDE });
     assert.equal(again.shipped, false);
-    const resumed = workCalls(calls.slice(before));
-    assert.deepEqual(resumed.map(c => [c.model, c.pool, c.poolConfig?.id, c.effort]), [["gpt-6-sol", "openai_second", "openai_second", "high"]],
+    // Every work call of both runs: the first run's one (above), then exactly one by the resumed run.
+    assert.deepEqual(workCalls(calls).map(c => [c.model, c.pool, c.poolConfig?.id, c.effort]),
+      [["gpt-6-sol", "openai_second", "openai_second", null], ["gpt-6-sol", "openai_second", "openai_second", "high"]],
       "resume ran the recorded slot seat at the effort the review's escalation decided");
   });
 });
@@ -245,15 +246,18 @@ test("M2: a plain resume never regenerates a stopped slot; lifting the stop is i
     const first = await runOpenItem(ticket, o);
     assert.equal(first.shipped, false);
     assert.equal(runJson(first).files[0].escalation.stopped?.action, "stop", "the review recorded stop for Astra");
-    let before = calls.length;
+    assert.deepEqual(workCalls(calls).map(c => `${c.model}@${c.effort ?? "default"}`), ["gpt-6-astra@default"], "the first run's one work call");
+    const before = calls.length;
     const plain = await runOpenItem(ticket, { ...o, resume: first.board });
     assert.equal(plain.shipped, false);
     assert.match(plain.error.message, /every slot recorded a terminal escalation stop/);
     assert.equal(calls.length, before, "zero further generation: no provider call at all");
-    before = calls.length;
     const retried = await runOpenItem(ticket, { ...o, resume: first.board, retryStopped: "operator: one same-seat repair" });
     assert.equal(retried.shipped, false);
-    assert.equal(workCalls(calls.slice(before)).length, 1, "the explicit retry is bounded by the resume's revision limit");
+    // Every work call of the test: the first run's one, none by the plain resume, then exactly one by the retry, on the
+    // stopped seat.
+    assert.deepEqual(workCalls(calls).map(c => `${c.model}@${c.effort ?? "default"}`), ["gpt-6-astra@default", "gpt-6-astra@default"],
+      "the explicit retry is bounded by the resume's revision limit");
     assert.deepEqual(runJson(retried).retries.map(r => [r.slot, r.action, r.reason]), [["code", "retry_stopped", "operator: one same-seat repair"]]);
     await assert.rejects(() => runOpenItem(ticket, { ...o, retryStopped: "x" }), /applies only to a resume/);
   });

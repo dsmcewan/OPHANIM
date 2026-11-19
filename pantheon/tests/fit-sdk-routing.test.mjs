@@ -62,6 +62,7 @@ test("the ladders: the owner's pick first, then the earlier ladder's base models
     for (const s of IMPLEMENTER_LADDERS[d]) {
       assert.equal(isSdkSeat(s), true, `${d}: ${s.model} is an SDK seat`);
       if (s.effort !== null) assert.ok(thinkingLevelsOf(s.model).includes(s.effort), `${s.model}: ${s.effort} is a recorded thinking level of it`);
+      else assert.deepEqual(thinkingLevelsOf(s.model), [], `${s.model}: a rung that sends no thinking level is a model with none recorded, never one whose level was dropped`);
     }
   }
 });

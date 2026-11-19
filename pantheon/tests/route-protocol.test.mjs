@@ -295,7 +295,8 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     const esc = entries.filter(e => e.kind === "escalation");
     assert.equal(esc.length, 1, "the one truncation decision is on the ledger");
     assert.deepEqual(ledger.payloadOf(esc[0]).decision.to.output, 32768);
-    assert.deepEqual(esc[0].derived_from.slice(0, 2), [recorder.inputs.facts, recorder.inputs.seating], "it cites the inputs it was decided under");
+    // The whole citation list: the inputs it was decided under and, as the first escalation of its work, nothing else.
+    assert.deepEqual(esc[0].derived_from, [recorder.inputs.facts, recorder.inputs.seating], "it cites the inputs it was decided under");
     const turns = entries.filter(e => e.kind === "turn").map(e => ledger.payloadOf(e));
     assert.ok(turns.some(t => t.purpose === "plan") && turns.some(t => t.purpose === "work") && turns.some(t => t.purpose === "critique"),
       "every model turn of the run is on the ledger, each signed by its own seat");

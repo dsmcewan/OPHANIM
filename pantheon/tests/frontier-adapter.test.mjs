@@ -52,6 +52,7 @@ test('Grok streamed encrypted output survives the next tool turn byte-for-byte',
   const first=await sendTurn({client,vendor:'xai',model:modelId('xai','grok-4.7'),prompt:'look',continuity:'replay',onEvent:()=>{}});
   const history=[...first.history,{type:'function_call_output',call_id:'tool1',output:'found'}];
   await sendTurn({client,vendor:'xai',model:modelId('xai','grok-4.7'),prompt:'continue',history,continuity:'replay',onEvent:()=>{}});
-  assert.deepEqual(requests[1].input.slice(0,-1),history);
+  // The whole input: the replayed history unchanged, then this turn's prompt as the one new user item.
+  assert.deepEqual(requests[1].input,[...history,{role:'user',content:'continue'}]);
   assert.ok(requests[1].include.includes('reasoning.encrypted_content'));
 });

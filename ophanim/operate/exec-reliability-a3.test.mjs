@@ -36,6 +36,7 @@ test('an elapsed abort is not a handoff: a late `passed` is recorded pending STA
     const r = await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, limits: {total_provider_calls: 10, stage_provider_calls: 2, elapsed_ms: 60_000, lease_ms: 1000, iterations: 5},
       executors: {
         plan: async ctx => { ctx.charge(); await new Promise(res => ctx.signal.addEventListener('abort', () => setTimeout(res, 20))); assert.equal(ctx.signal.aborted, true);
+          // test-lint: allow scripted-terminal-status -- this late 'passed' is the INPUT: the test asserts the scheduler records the plan pending STAGE_ELAPSED with status_reported 'passed' and starts no next stage
           return {status: 'passed', outputs: {late: true}, team: [], contributions: [], findings: [], usage: {provider_calls: 1}, next: {stage: 'implement', why: 'approved'}}; },
         implement: async ctx => { implemented++; ctx.charge(); return {status: 'failed', outputs: {}, usage: {provider_calls: 1}, next: {stage: 'implement', why: 'x'}}; },
       }});

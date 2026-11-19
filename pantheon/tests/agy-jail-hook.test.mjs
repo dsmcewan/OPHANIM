@@ -65,9 +65,9 @@ test("hooks.json: the owner-stated shape, no BOM, one PreToolUse group matching 
 test("write tools: an owned path is auto-approved; traversal, .git, .agents, unowned paths, relative and missing targets are denied", async t => {
   const { wt, ctl, log, hook } = await setup(t);
   const cases = [
-    ["write_to_file", { TargetFile: join(wt, "src/a/impl.mjs") }, "auto_approve"],
-    ["replace_file_content", { TargetFile: join(wt, "src/a/deep/x.mjs") }, "auto_approve"],
-    ["multi_replace_file_content", { TargetFile: join(wt, "docs/a.md") }, "auto_approve"],
+    ["write_to_file", { TargetFile: join(wt, "src/a/impl.mjs") }, "auto_approve", /^src\/a\/impl\.mjs is owned by unit a$/],
+    ["replace_file_content", { TargetFile: join(wt, "src/a/deep/x.mjs") }, "auto_approve", /^src\/a\/deep\/x\.mjs is owned by unit a$/],
+    ["multi_replace_file_content", { TargetFile: join(wt, "docs/a.md") }, "auto_approve", /^docs\/a\.md is owned by unit a$/],
     ["write_to_file", { TargetFile: join(wt, "docs/b.md") }, "deny", /not one of the unit's owned paths/],
     ["write_to_file", { TargetFile: join(wt, "src/b/impl.mjs") }, "deny", /not one of the unit's owned paths/],
     // A `..` (or `.`) component is refused AS WRITTEN, before normalisation (independent review round 2, assignment 4
@@ -82,15 +82,15 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
     ["write_to_file", { TargetFile: "src/a/impl.mjs" }, "deny", /not absolute/],
     ["write_to_file", {}, "deny", /names no target \(Path, TargetFile, AbsolutePath, File\)/],
     // write_file {Path, Content}: the tool agy 1.5.10 actually emitted (observed 2026-11-18); every check applies to Path.
-    ["write_file", { Path: join(wt, "src/a/impl.mjs"), Content: "x" }, "auto_approve"],
+    ["write_file", { Path: join(wt, "src/a/impl.mjs"), Content: "x" }, "auto_approve", /^src\/a\/impl\.mjs is owned by unit a$/],
     ["write_file", { Path: join(wt, "docs/b.md"), Content: "x" }, "deny", /not one of the unit's owned paths/],
     ["write_file", { Path: `${wt}/src/a/../../../outside/x`, Content: "x" }, "deny", /traversal is refused/],
     ["write_file", { Path: join(wt, ".git/config"), Content: "x" }, "deny", /inside \.git/],
     ["write_file", { Path: "src/a/impl.mjs", Content: "x" }, "deny", /Path "src\/a\/impl\.mjs" is not absolute/],
     ["write_file", { Content: "x" }, "deny", /names no target/],
     ["write_file", { Path: join(wt, "docs/b.md"), TargetFile: join(wt, "src/a/impl.mjs") }, "deny", /docs\/b\.md is not one of/],
-    ["replace_file_content", { Path: join(wt, "src/a/x.mjs") }, "auto_approve"],
-    ["write_to_file", { AbsolutePath: join(wt, "src/a/y.mjs") }, "auto_approve"],
+    ["replace_file_content", { Path: join(wt, "src/a/x.mjs") }, "auto_approve", /^src\/a\/x\.mjs is owned by unit a$/],
+    ["write_to_file", { AbsolutePath: join(wt, "src/a/y.mjs") }, "auto_approve", /^src\/a\/y\.mjs is owned by unit a$/],
     ["write_to_file", { File: join(wt, "src/b/y.mjs") }, "deny", /not one of the unit's owned paths/],
     ["write_to_file", { TargetFile: join(wt, "src/a") }, "deny", /directory/],
     // EVERY path argument is checked, and they must agree (independent review round 2, assignment 4 (OpenAI
@@ -99,26 +99,31 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
     ["write_file", { Path: join(wt, "src/a/x.mjs"), AbsolutePath: join(ctl, ".agents/hooks.json") }, "deny", /outside the unit's worktree/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), File: join(wt, ".git/config") }, "deny", /inside \.git/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: join(wt, "src/a/y.mjs") }, "deny", /name different files .*conflicting targets are refused/],
-    ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: join(wt, "src/a/x.mjs"), Content: "/etc/passwd" }, "auto_approve"],
+    ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: join(wt, "src/a/x.mjs"), Content: "/etc/passwd" }, "auto_approve", /^src\/a\/x\.mjs is owned by unit a$/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), DestinationPath: join(wt, "docs/b.md") }, "deny", /docs\/b\.md is not one of/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), Extra: { SourceFile: "/etc/shadow" } }, "deny", /outside the unit's worktree/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), Other: join(wt, "src/b/x.mjs") }, "deny", /src\/b\/x\.mjs is not one of/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), Where: "~/.bashrc" }, "deny", /not absolute/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFiles: [join(wt, "src/a/x.mjs"), join(wt, "README.md")] }, "deny", /README\.md is not one of/],
-    ["write_to_file", { TargetFile: join(wt, "src/a/z.mjs"), CodeContent: "/x", EmptyFile: false, ReplacementChunks: [{ TargetContent: "/a", ReplacementContent: "/b" }] }, "auto_approve"],
+    ["write_to_file", { TargetFile: join(wt, "src/a/z.mjs"), CodeContent: "/x", EmptyFile: false, ReplacementChunks: [{ TargetContent: "/a", ReplacementContent: "/b" }] }, "auto_approve", /^src\/a\/z\.mjs is owned by unit a$/],
     ["write_file", { Path: join(wt, "src/a/x.mjs"), TargetFile: 7 }, "deny", /TargetFile is not a path/],
   ];
+  // Every case names the reason it expects, an approval as well as a denial (the reason is what jail.log records), so
+  // the reason is matched on every case: a case without one fails here instead of going unchecked.
   for (const [name, args, want, why] of cases) {
     const d = await hook(call(name, args));
     assert.equal(d.decision, want, `${name} ${JSON.stringify(args)}: ${d.reason}`);
-    if (why) assert.match(d.reason, why);
+    assert.ok(why instanceof RegExp, `${name} ${JSON.stringify(args)}: the case names its expected reason`);
+    assert.match(d.reason, why);
   }
   const rows = log();
   assert.equal(rows.length, cases.length, "one log line per invocation");
   assert.deepEqual(rows.map(r => r.decision), cases.map(c => c[2]));
   assert.equal(rows[0].args.TargetFile, join(wt, "src/a/impl.mjs"));
   // The raw stdin is logged verbatim, with the parsed payload; the hook ran in .agents/ (owner-stated).
+  // test-lint: allow truncated-sequence -- cases[0].slice(0, 2) is the case's [name, args], spread into call() to rebuild the payload sent; the whole raw stdin line is compared
   assert.equal(rows[0].raw, JSON.stringify(call(...cases[0].slice(0, 2))));
+  // test-lint: allow truncated-sequence -- cases[0].slice(0, 2) is the case's [name, args], spread into call() to rebuild the payload sent; the whole parsed payload is compared
   assert.deepEqual(rows[0].payload, call(...cases[0].slice(0, 2)));
   assert.equal(rows[0].cwd, join(ctl, ".agents"));
 });

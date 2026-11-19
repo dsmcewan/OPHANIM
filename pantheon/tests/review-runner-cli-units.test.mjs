@@ -163,7 +163,8 @@ test("codex thread options and the argv the SDK builds: no --sandbox (the permis
   const a = sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4 });
   assert.deepEqual(a, ["/b/codex", "exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', ...prof.overrides.flatMap(c => ["--config", c]),
     "--model", "gpt-6.1-sol", "--cd", "/w", "--skip-git-repo-check", "--config", 'approval_policy="never"']);
-  assert.deepEqual(sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4, resumeId: "01a1f0fe-d28f" }).slice(-2), ["resume", "01a1f0fe-d28f"]);
+  // The whole resume argv: every exec-level flag of the new turn (the permission profile, approval never) and then resume.
+  assert.deepEqual(sdkSpawnArgv({ binary: "/b/codex", sdkOptions, threadOptions: t4, resumeId: "01a1f0fe-d28f" }), [...a, "resume", "01a1f0fe-d28f"]);
   assert.ok(!a.some(x => /--sandbox|danger-full-access|bypass|full-auto|yolo/.test(x)));
   for (const bad of ['sandbox_mode="workspace-write"', "sandbox_workspace_write.network_access=true", 'default_permissions=":danger-full-access"'])
     assert.throws(() => codexSdkOptions({ env: {}, binary: "/b", configOverrides: [bad] }), /refused/, bad);

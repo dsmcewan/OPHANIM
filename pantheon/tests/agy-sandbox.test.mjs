@@ -39,8 +39,10 @@ test("bwrapArgs: the read-only host, the writable worktree/run/state dirs, the r
   assert.equal(g.git_dir, join(repo, ".git", "worktrees", "a"));
   const { argv, binds } = bwrapArgs({ worktree: wt, control_dir: ctl, agy_state_dirs: [state] });
   // --unshare-pid and --new-session: independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 5.
-  assert.deepEqual(argv.slice(0, 13), ["bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]);
-  assert.deepEqual(argv.slice(-3), ["--chdir", ctl, "--"]);
+  // The whole argv: the fixed head, every bind with the flag that makes it read-only or writable, in order, the chdir.
+  assert.deepEqual(argv, ["bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+    "--bind", state, state, "--bind", wt, wt, "--ro-bind", ctl, ctl, "--bind", join(ctl, "run"), join(ctl, "run"), "--ro-bind", join(repo, ".git"), join(repo, ".git"),
+    "--chdir", ctl, "--"]);
   assert.ok(!argv.includes("--unshare-net") && !argv.includes("--unshare-all"), "the network is not unshared: the CLI must reach Google");
   assert.deepEqual(binds, [{ mode: "rw", path: state }, { mode: "rw", path: wt }, { mode: "ro", path: ctl }, { mode: "rw", path: join(ctl, "run") }, { mode: "ro", path: join(repo, ".git") }]);
 });
@@ -154,7 +156,7 @@ function fakeHome(root) {
 }
 
 test("~/.gemini (a FAKE home): read-only inside; ~/.gemini/antigravity-cli is a per-run scratch COPY of the ALLOWLISTED top-level files only (history, summaries and databases withheld), its state subdirs (log/ included) empty and writable, an unknown subdir read-only; ~/.gemini/config/projects a writable copy; the host is unchanged and nothing is created under HOME", { skip: have.ok ? false : `bwrap unavailable: ${have.why}` }, async t => {
-  const { root, wt, ctl } = await layout(t);
+  const { root, repo, wt, ctl } = await layout(t);
   const { home, g, c, proj } = fakeHome(root);
   const before = snapshot(home);
   const st = await geminiState({ home, run_dir: join(ctl, "run") });
@@ -185,10 +187,13 @@ test("~/.gemini (a FAKE home): read-only inside; ~/.gemini/antigravity-cli is a 
   const { argv, binds } = bwrapArgs({ worktree: wt, control_dir: ctl, gemini_state: st, extra_ro: [join(root, "probe"), home] });
   // Parent-first: ~/.gemini ro, then the scratch rw over antigravity-cli and the projects copy rw over config/projects,
   // then the host's unknown subdirs ro over their mount points inside the scratch; the main .git read-only bind last.
+  // The whole argv, every bind in order (bin/helpers, the extra read-only binds and the .git bind included).
+  const ro = p => ["--ro-bind", p, p], rw = (src, dest = src) => ["--bind", src, dest], cliDir = join(g, "antigravity-cli");
+  assert.deepEqual(argv, ["bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+    ...ro(join(root, "probe")), ...ro(home), ...ro(g), ...rw(st.scratch_cli, cliDir), ...rw(wt), ...ro(ctl), ...ro(join(cliDir, "plugins")), ...rw(projCopy, proj), ...rw(join(ctl, "run")),
+    ...ro(join(cliDir, "bin", "helpers")), ...ro(join(proj, "nested")), ...ro(join(repo, ".git")), "--chdir", ctl, "--"]);
   const at = p => argv.lastIndexOf(p);
   const [i, j, k, l, n] = [at(g), at(c), at(join(c, "plugins")), at(proj), at(join(proj, "nested"))];
-  assert.deepEqual([argv.slice(i - 2, i + 1), argv.slice(j - 2, j + 1), argv.slice(k - 2, k + 1), argv.slice(l - 2, l + 1), argv.slice(n - 2, n + 1)],
-    [["--ro-bind", g, g], ["--bind", st.scratch_cli, c], ["--ro-bind", join(c, "plugins"), join(c, "plugins")], ["--bind", projCopy, proj], ["--ro-bind", join(proj, "nested"), join(proj, "nested")]]);
   assert.ok(i < j && j < k && j < l && l < n);
   assert.ok(!argv.some(a => a.includes("/.gemini/antigravity/")), "the old antigravity/ layout is gone");
   assert.equal(binds.at(-1).mode, "ro");

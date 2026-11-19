@@ -154,13 +154,22 @@ test("identity: an Antigravity lane and its metered API failover are one model",
     const keys = contributorKeys([{ vendor: "agy_google", model: lane }]);
     assert.match(candidateRefusal({ vendor: "agy_google", model: api }, keys), /contributed to the change under review/);
   }
-  // Every live lane has an API failover of the same identity, where the registry has an id for its base.
-  let checked = 0;
+  // Every live lane has an API failover of the same identity, where the registry has an id for its base; where it has
+  // none, none. Which case a lane is in is read from the registry, so a lane that loses (or wrongly gains) its failover
+  // fails here instead of being skipped. The lanes are read from the lane table: since 2026-11-19 the implementer
+  // ladders hold SDK seats, which are the Gemini API itself and have no failover (fit-sdk-routing.test.mjs).
+  const withFailover = [];
   for (const [name, l] of Object.entries(LANES.agy_cli).filter(([, l]) => !l.retired && l.base)) {
+    const base = resolveModel(l.vendor, name).id.split("/")[1];
+    const apiId = registryModels().some(r => r.vendor === l.vendor && r.model === base);
     const spare = quotaFailoverFor(name);
-    if (spare) { checked += 1; assert.equal(resolveModel(spare.vendor, spare.model).id, resolveModel(l.vendor, name).id, name); }
+    if (apiId) {
+      assert.ok(spare, `${name}: the registry has an API id for ${base}, so the lane has a quota failover`);
+      assert.equal(resolveModel(spare.vendor, spare.model).id, resolveModel(l.vendor, name).id);
+      withFailover.push(name);
+    } else assert.equal(spare, null, `${name}: the registry has no API id for ${base}, so no failover`);
   }
-  assert.ok(checked >= 10, "the carbon, argon and hydrogen lanes each have one");
+  assert.ok(withFailover.length >= 10, "the carbon, argon and hydrogen lanes each have one: the identity check above ran");
   // An SDK implementer seat and the lane of the same model are one identity too: the transport is not the model.
   assert.equal(resolveModel("agy_google", IMPLEMENTER_LADDERS.hard[0].model).id, resolveModel("agy_google", "gemini-4-carbon-high").id);
 });

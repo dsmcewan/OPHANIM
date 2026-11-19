@@ -143,6 +143,7 @@ function mkPair({ stakes = "normal", fit = {}, argo = {}, primary = "argo", coun
     assignment: { schema: ASSIGN_SCHEMA, arm: primary, basis: BASIS.hash, stakes, randomized: true } });
   const c = counterpartRun === undefined ? mkRun({ profile: other, stakes, kind: kindCounterpart, ...sides[other] }) : counterpartRun;
   const id = `pair-${p.key}`;
+  // test-lint: allow scripted-terminal-status -- mkPair builds evaluate()'s INPUT (a stored pair record), and its tests assert evaluate()'s statistics, never this status; every asserted "completed" is r.bundle.pair.status from a real runBoardItem pair run (the counterpart tests)
   return { schema: PAIR_SCHEMA, pair_id: id, status: "completed", stakes, ticket: { key: p.key, digest: `sha256:${p.key}` },
     primary: { profile: primary, run_digest: `sha256:p-${p.key}`, run: p },
     counterpart: { profile: other, run_digest: c ? `sha256:c-${p.key}` : null, dry: true, run: c, ...(c ? {} : { error: { message: "the counterpart threw before writing run.json" } }) },

@@ -135,7 +135,8 @@ for (const M of MODES) {
         const rows = p => impl.contributions.filter(c => c.purpose === p).map(who);
         // The producers. Unit alpha's Neon attempt was rejected once, and the unit stepped to the next rung of its path
         // (no thinking level of Neon is recorded to raise); unit c ran on Carbon. Each by the name asked and the provider's.
-        const ran = [...implementerPath('medium').slice(0, 2), implementerPath('hard')[0]].map(x => x.model);
+        const [neon, afterNeon] = implementerPath('medium'), [carbon] = implementerPath('hard');
+        const ran = [neon, afterNeon, carbon].map(x => x.model);
         assert.deepEqual(Object.values(U).flatMap(u => u.attempts.map(a => [a.model, a.served_model, a.served_model_source])).sort(), ran.map(m => [m, SDK(m), 'provider']).sort());
         assert.deepEqual(set(rows('work')), set(Object.values(U).flatMap(u => u.attempts.map(a => id(a.model, SDK(a.model), 'provider')))));
         assert.equal(U.c.attempts[0].session.subagents.instances.length, 2, 'the producer: two subagents were admitted and answered');

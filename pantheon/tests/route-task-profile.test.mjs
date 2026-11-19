@@ -203,8 +203,10 @@ test("fit fallbacks cross labs at the same class before stepping class, and neve
     }
     for (const cls of new Set(models.map(rank))) {
       const inClass = models.filter(c => rank(c) === cls), labs = new Set(inClass.map(c => labOf(c.vendor, c.model)));
-      const head = inClass.slice(0, labs.size).map(c => labOf(c.vendor, c.model));
-      assert.equal(new Set(head).size, labs.size, `${role}/${stakes}: one of each lab before a second from any (${inClass.map(c => c.model)})`);
+      // Where each lab first appears in the class: one of each lab before a second from any means the first appearances
+      // are exactly the class's first labs.size positions (the rest of the class may repeat a lab).
+      const firstAt = [...labs].map(lab => inClass.findIndex(c => labOf(c.vendor, c.model) === lab)).sort((a, b) => a - b);
+      assert.deepEqual(firstAt, [...labs].map((_, i) => i), `${role}/${stakes}: one of each lab before a second from any (${inClass.map(c => c.model)})`);
     }
     assert.ok(models.some(c => labOf(c.vendor, c.model) !== labOf(candidates[0].vendor, candidates[0].model)), "the fallback set reaches another lab");
   }

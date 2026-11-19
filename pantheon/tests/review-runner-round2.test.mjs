@@ -145,8 +145,10 @@ test("detectWsl: the kernel release or WSL_DISTRO_NAME; the launcher is the oper
   assert.deepEqual(detectWsl({ env: {}, osrelease: "6.18.44-fc-v653" }), { wsl: false, evidence: [] });
   const l = codexOuterLauncher({ bwrap: "/usr/bin/bwrap", codex: "/n/vendor/bin/codex", writable: ["/h/.cache/ophanim-review/run-x", "/h/.codex"], readOnly: ["/n/vendor/bin"] });
   // The operator's launch (findings-1-openai-77480d6/operator-launch.json), with codex in place of the whole runner.
-  assert.deepEqual(l.argv.slice(0, 13), ["/usr/bin/bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp"]);
-  assert.deepEqual(l.argv.slice(-2), ["--", "/n/vendor/bin/codex"]);
+  // The whole argv: the fixed head, then each bind parent-first with the flag that makes it writable or read-only, then codex.
+  assert.deepEqual(l.argv, ["/usr/bin/bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp",
+    "--bind", "/h/.codex", "/h/.codex", "--ro-bind", "/n/vendor/bin", "/n/vendor/bin", "--bind", "/h/.cache/ophanim-review/run-x", "/h/.cache/ophanim-review/run-x",
+    "--", "/n/vendor/bin/codex"]);
   assert.deepEqual(l.writable, ["/h/.codex", "/h/.cache/ophanim-review/run-x"]);
   assert.match(l.script, /^#!\/bin\/sh\n.*\nexec '\/usr\/bin\/bwrap' '--die-with-parent' .* '--' '\/n\/vendor\/bin\/codex' "\$@"\n$/s);
   assert.throws(() => codexOuterLauncher({ bwrap: "bwrap", codex: "/c", writable: [] }), /not an absolute path/);
@@ -170,11 +172,22 @@ test("on WSL (detected, or --codex-outer-runtime on) codex and every preflight r
   assert.equal(r.plan.preflight.checks.permission_profile.ok, true, "the exact-profile check passes through the launcher");
   assert.equal(r.sdk[0].codexPathOverride, o.launcher, "the SDK spawns the launcher");
   assert.ok(!r.sdk[0].env_names.includes("WSL_INTEROP"));
-  assert.deepEqual(r.plan.argv.slice(0, 13), [o.argv[0], "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp"]);
+  // The outer launcher's whole argv: the fixed head, codex's directory read-only, the run dir, the scratch TMPDIR and
+  // CODEX_HOME writable (parent-first), then codex and the placeholder for the arguments the SDK passes.
+  const runDir = join(r.plan.worktree.path, ".."), codexHome = join(f.home, ".codex");
+  assert.deepEqual(o.argv, [o.argv[0], "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run", "--tmpfs", "/tmp",
+    "--ro-bind", f.bin, f.bin, "--bind", runDir, runDir, "--bind", r.plan.scratch_tmp.path, r.plan.scratch_tmp.path, "--bind", codexHome, codexHome, "--", f.clis.codex, "<codex arguments>"]);
   assert.ok(o.writable.includes(r.plan.scratch_tmp.path) && o.writable.some(p => p.endsWith("/.codex")));
   const h = headerOf(await r.read("findings-2-openai.md"));
   assert.match(h, /^- codex_outer_runtime: an outer bwrap namespace around codex \(WSL: \/proc\/sys\/kernel\/osrelease is "5\.15\.167\.4-microsoft-standard-WSL2"\): host read-only, private \/run and \/tmp, writable only .*unchanged inner permission profile.*Cost: one more namespace level$/m);
   assert.match(h, /- sandbox: codex permission profile ophanim-review \(codex's own bubblewrap sandbox, inside the runner's outer WSL namespace/);
+  // The plan's whole argv records the command that runs: the outer launcher's argv with its placeholder replaced by the
+  // arguments the SDK passes (the launcher execs `bwrap ... -- codex "$@"`: codex ONCE, then exec ...), then the stdin
+  // marker. Fails while subscription.mjs appends sdkSpawnArgv's binary after an outer argv that already ends with codex.
+  const codexArgs = ["exec", "--experimental-json", "--config", 'forced_login_method="chatgpt"', ...r.sdk[0].config_overrides.flatMap(c => ["--config", c]),
+    "--model", "gpt-6-astra", "--cd", r.plan.worktree.path, "--skip-git-repo-check", "--config", 'approval_policy="never"'];
+  assert.deepEqual(r.plan.argv, [...o.argv.flatMap(a => (a === "<codex arguments>" ? codexArgs : [a])), `(stdin: <prompt sha256:${r.plan.prompt.sha256}>)`],
+    "the plan records the command the outer launcher runs, codex named once");
   // Forced off on WSL: recorded; forced on elsewhere: applied.
   r = await run(f, { n: 2, args: ["--dry-run", "--codex-outer-runtime", "off"], extra: { osRelease: "5.15.167.4-microsoft-standard-WSL2" } });
   assert.deepEqual([r.code, r.plan.codex_outer_runtime.applied, r.plan.codex_outer_runtime.wsl], [EXIT.complete, false, true]);

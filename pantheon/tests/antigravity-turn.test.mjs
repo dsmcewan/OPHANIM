@@ -71,7 +71,10 @@ test("every tool call is decided by the controller: owned writes and worktree re
   assert.match(d[7].message, /^COMMAND_REFUSED/);
   assert.match(d[9].message, /^TOOL_NOT_ALLOWED/);
   assert.match(d[11].message, /^TOOL_NOT_ALLOWED: MCP tool/);
-  assert.deepEqual(r.tool_log.map(x => [x.n, x.tool, x.allow, x.code]).slice(0, 3), [[1, "create_file", true, null], [2, "create_file", false, "WRITE_REFUSED"], [3, "edit_file", false, "WRITE_REFUSED"]]);
+  // The WHOLE log, one row per call above, in order: a decision that was made and not recorded, or recorded twice, fails here.
+  assert.deepEqual(r.tool_log.map(x => [x.n, x.tool, x.allow, x.code]), [[1, "create_file", true, null], [2, "create_file", false, "WRITE_REFUSED"], [3, "edit_file", false, "WRITE_REFUSED"],
+    [4, "view_file", true, null], [5, "view_file", false, "READ_OUTSIDE"], [6, "view_file", false, "READ_OUTSIDE"], [7, "run_command", false, "COMMAND_REFUSED"], [8, "run_command", true, null],
+    [9, "search_web", false, "TOOL_NOT_ALLOWED"], [10, "run_workflow", false, "TOOL_NOT_ALLOWED"], [11, "ask_subagent", false, "TOOL_NOT_ALLOWED"], [12, "finish", true, null]]);
   assert.ok(r.tool_log.every(x => x.who === "implementer"));
   assert.equal(r.transport, "antigravity-sdk");
 });
