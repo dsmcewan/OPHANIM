@@ -36,10 +36,10 @@ import { modelId, labOf, vendorsOfLab } from "../config/models.mjs";
 import { tokenCapFor } from "../agents/store.mjs";
 import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
 import { spawnPromise } from "./spawn.mjs";
-import { runAgyCliTurn, agySdkEnvOf } from "./agy-cli.mjs";
+import { runAgyCliTurn, agySdkEnvOf, agyModelMismatch } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
-import { routeSeats } from "../route/quota-failover.mjs";
+import { routeSeats, isMeteredGemini, meteredGeminiRefusal, METERED_GEMINI_DISABLED } from "../route/quota-failover.mjs";
 import { laneParts } from "../route/fit-matrix.mjs";
 import { currentPolicy as currentIdentityPolicy, policyDigest as identityPolicyDigest, contributorKeys, candidateRefusal, reviewerRefusal, resolveModel } from "../review/identity.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
@@ -132,6 +132,8 @@ function usageOf(raw) {
 // here is the same quota refusal the fallback acted on.
 function failureOutcome(e) {
   if (/^CONTEXT_|^INPUT_CEILING$/.test(String(e?.code ?? ""))) return "refused_preflight";
+  // A metered Gemini seat refused at its point of spend with the failover off (route/quota-failover.mjs): nothing was sent.
+  if (e?.code === METERED_GEMINI_DISABLED) return "refused_metered";
   const f = classifyFailure(e);
   return f.quota ? "quota" : f.retryable ? "transient" : "error";
 }
@@ -581,6 +583,16 @@ export async function runOpenItem(spec, opts = {}) {
         ...(verify ? { verify } : {}) });
       if (res.verify) progress({ event: "seat.verify", seat: "agy_google", model, detail: res.verify.offered ? `acceptance launcher offered: ${res.verify.command}` : `no command offered: ${res.verify.why}` });
     } else if (transport === "sdk") {
+      // THE POINT-OF-SPEND GUARD OF THE SDK SEAT (L-124; L-504 invariant 4). The python SDK seat is billed to
+      // GEMINI_API_KEY or to Vertex (PANTHEON_AGY_VERTEX_PROJECT) on every turn: it has no subscription mode. With the
+      // metered Gemini failover off it is refused HERE, before the venv and key checks, before it is admitted (charged)
+      // and before anything is spawned, whatever credential the environment holds (live-run's withholding of the key is
+      // not what protects it). The CLI transport above (the OAuth subscription) is never refused by this.
+      if (!METERED_FAILOVER && isMeteredGemini({ vendor: "agy_google", transport: "sdk" })) {
+        const refusal = meteredGeminiRefusal({ vendor: "agy_google", model, purpose, transport: "sdk" });
+        progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) });
+        throw refusal;
+      }
       const python = process.env.PANTHEON_AGY_PYTHON ?? join(homedir(), "Projects", "agentic-pipeline", "sdk", ".venv-antigravity", "bin", "python");
       if (!existsSync(python)) throw new Error(`agy seat: venv python absent at ${python} (set PANTHEON_AGY_PYTHON)`);
       if (!process.env.GEMINI_API_KEY && !process.env.PANTHEON_AGY_VERTEX_PROJECT) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (or set PANTHEON_AGY_VERTEX_PROJECT for Vertex ADC)");
@@ -597,10 +609,18 @@ export async function runOpenItem(spec, opts = {}) {
       signal?.throwIfAborted();
       await admit();
       const run = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });
-      if (run.killedFor === "cancelled") throw Object.assign(new Error("agy SDK seat was cancelled"), { code: "ABORTED", provider_requests: 1 });
       const last = (run.stdout ?? "").trim().split("\n").filter(Boolean).pop();
       let out = null;
       try { out = last ? JSON.parse(last) : null; } catch { /* malformed vendor envelope */ }
+      // THE MODEL GUARD OF THE SDK SEAT (L-504 invariant 3), before the stop, the exit status or the answer is read: the
+      // model the seat's envelope reports it ran (`served_model` when it names one, else the `model` agy-seat.py configured
+      // its Agent with) is compared with the model asked for. Another model, or a completed turn that reports none, fails
+      // closed with AGY_MODEL_MISMATCH and both identities; nothing of it is stamped as served.
+      const reported = typeof out?.served_model === "string" && out.served_model ? out.served_model : typeof out?.model === "string" && out.model ? out.model : null;
+      if ((reported !== null && reported !== model) || (reported === null && run.status === 0 && out?.ok === true)) {
+        throw agyModelMismatch({ requested: { agent: `pantheon-${role}`, model }, reported: { agent: typeof out?.role === "string" ? `pantheon-${out.role}` : null, model: reported } }, { transport: "agy-sdk", provider_requests: 1 });
+      }
+      if (run.killedFor === "cancelled") throw Object.assign(new Error("agy SDK seat was cancelled"), { code: "ABORTED", provider_requests: 1 });
       if (run.status !== 0 || !out?.ok) {
         const tail = (run.stderr ?? "").split("\n").filter(l => l && !l.startsWith("{")).slice(-3).join(" | ");
         throw new Error(`agy SDK seat exited ${run.status ?? run.signal}: ${out?.error ?? tail}`);
@@ -662,8 +682,10 @@ export async function runOpenItem(spec, opts = {}) {
       const admitLane = () => { admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose }); laneCharged = 1; };
       try { r = await agyTurn({ purpose, model, prompt, declared: transport, ...(signal ? { signal } : {}), admit: admitLane }); }
       catch (e) {
+        // An identity mismatch (L-504 invariant 3) is recorded with BOTH identities, the model asked for and the one reported.
         recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: failureOutcome(e),
-          status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200), usage: null, settings, ms: Date.now() - a0, provider_requests: laneCharged });
+          status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200), usage: null, settings, ms: Date.now() - a0, provider_requests: laneCharged,
+          ...(e?.identity ? { identity: e.identity } : {}) });
         progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e;
       }
       const ms = Date.now() - t0;
@@ -712,6 +734,17 @@ export async function runOpenItem(spec, opts = {}) {
     };
     const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...failover, ...extraFields });
     let turnAttempts = 0, settings = null;
+    // THE POINT-OF-SPEND GUARD OF A METERED GEMINI API SEAT (L-504 invariant 4): with the metered Gemini failover off, a
+    // Google-billed API seat -- a lane's quota failover the walk did not skip, an operator's or a ticket pin's Gemini API
+    // id, a re-asked seat -- is refused HERE, before it is admitted or charged and before its client is asked, whatever key
+    // the environment holds. Recorded as an attempt that made no provider request.
+    if (!METERED_FAILOVER && isMeteredGemini({ vendor, transport: transport ?? "api" })) {
+      const refusal = meteredGeminiRefusal({ vendor, model, purpose, transport: "api" });
+      recordAttempt(attemptOf({ outcome: failureOutcome(refusal), status: null, code: refusal.code, why: refusal.message.slice(0, 200), usage: null,
+        settings: { model, pool: pool ?? vendor, transport: transport ?? "api", effort: effort ?? null, max_output_tokens: null, output_budget_policy: null, basis: "requested" }, provider_requests: 0 }, Date.now()));
+      progress({ event: "turn.refused", seat: vendor, model, detail: refusal.message.slice(0, 300) });
+      throw refusal;
+    }
     for (;;) {
       // With a ledger, the seat's stored conversation is checked against the ledger's turn entries for
       // the same seat before it is continued (seat-sdk: LEDGER_MISMATCH), not only against itself.
@@ -1284,7 +1317,9 @@ export async function runOpenItem(spec, opts = {}) {
               for (const r of c.pendingRevision.reviewers ?? []) {
                 const served = Array.isArray(r.served_models) && r.served_models.length ? r.served_models : [null];
                 for (const sm of served) {
-                  const row = { purpose: "critique", vendor: r.vendor, model: r.model, ...(sm && sm !== r.model ? { served_model: sm } : {}) };
+                  // A reviewer turn that named no serving model is recorded as exactly that (served_model: null, "unnamed"):
+                  // with the field omitted the row read as served by the model asked (wave 3, L-504 invariant 2).
+                  const row = { purpose: "critique", vendor: r.vendor, model: r.model, ...(sm && sm !== r.model ? { served_model: sm } : !sm ? { served_model: null, served_model_source: "unnamed" } : {}) };
                   if (!(c.contributors ??= []).some(x => x.purpose === "critique" && x.vendor === row.vendor && x.model === row.model && (x.served_model ?? null) === (row.served_model ?? null))) {
                     c.contributors.push({ ...row, slot: c.sl.slot, revision_input: true, via: CRITIQUE_VIA });
                   }
@@ -1311,7 +1346,8 @@ export async function runOpenItem(spec, opts = {}) {
             const workServed = ledgerTurns.get(p.prompt)?.served_model ?? workRec?.served_model ?? null;
             const workRow = { purpose: "work", vendor: made.seat.vendor, model: made.seat.model,
               ...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),
-              ...(workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) };
+              // No serving model named: recorded as unknown ("unnamed"), never as the model asked (wave 3, L-504 invariant 2).
+              ...(typeof workServed === "string" && workServed.trim() ? (workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) : { served_model: null, served_model_source: "unnamed" }) };
             if (!(c.contributors ??= []).some(x => (x.purpose ?? "work") === "work" && x.vendor === workRow.vendor && x.model === workRow.model && (x.served_model ?? null) === (workRow.served_model ?? null))) {
               c.contributors.push({ ...workRow, slot: c.sl.slot });
             }
@@ -1718,7 +1754,8 @@ export async function runOpenItem(spec, opts = {}) {
     const msg = String(e?.message ?? e).slice(0, 400);
     try { progress({ event: "run.error", detail: msg }); } catch { /* nothing left to write with */ }
     try {
-      run.error = { stage, message: msg, at: new Date().toISOString() };
+      // The refusal's own code and, for an identity mismatch, both identities (L-504): the precise refusal is on the record.
+      run.error = { stage, message: msg, at: new Date().toISOString(), ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.identity ? { identity: e.identity } : {}) };
       if (recordAllowed) for (const file of run.files ?? []) {
         if (!file.bytes) continue;
         const out = join(outDir, "artifact-latest", file.path);

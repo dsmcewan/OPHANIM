@@ -25,6 +25,31 @@ const refused = (message, run, result) => {
     : new Error(`${message} (inspect local CLI diagnostics)`);
 };
 
+// THE MODEL GUARD (L-504, invariant 3). The model a turn ran on is checked against the model it was asked for BEFORE any
+// result of the turn is acted on: its answer, its failure classification (exit, timeout, stream), its quota refusal (a
+// quota refusal of ANOTHER model must never reach the metered failover of this one, nor the cooldown of this lane's quota
+// authority) and its success. The CLI's `init` event names the agent and the model it started with: when it is present and
+// either differs, the turn fails closed with code AGY_MODEL_MISMATCH and BOTH identities (`identity: {requested,
+// reported}`), whatever the process did after it. The code carries no `status`, so packages/model-client classifyFailure
+// reads it as neither quota nor retryable: no router moves on to a failover or another candidate, and no lane ladder
+// (pipeline/implement.mjs laneFailureOf: it is not `lane_failure`) steps to another model. A turn whose CLI named no
+// identity at all is refused with the same code (reported: none) where it would otherwise be accepted as an answer;
+// a failure without an `init` keeps its own classification (there is no identity to compare: the CLI started no turn it
+// named). The python SDK seat (board/run-item.mjs) applies the same check to the model its envelope reports.
+export const AGY_MODEL_MISMATCH = "AGY_MODEL_MISMATCH";
+/** {requested, reported} when `init` names an agent or model other than the ones asked for; null when it matches or is absent. */
+export function agyIdentityMismatch({ init, agent, model }) {
+  if (!init || typeof init !== "object") return null;
+  const reported = { agent: typeof init.agent === "string" ? init.agent : null, model: typeof init.model === "string" ? init.model : null };
+  return reported.agent === agent && reported.model === model ? null : { requested: { agent, model }, reported };
+}
+/** The AGY_MODEL_MISMATCH refusal for `identity` ({requested, reported}), with `more` (the turn's evidence) attached. */
+export function agyModelMismatch(identity, { transport = "agy-cli", ...more } = {}) {
+  const name = x => `${x?.agent ?? "none"}/${x?.model ?? "none"}`;
+  return Object.assign(new Error(`agy ${transport === "agy-sdk" ? "SDK seat" : "CLI"} identity mismatch: expected ${name(identity.requested)}, got ${name(identity.reported)}; no result of this turn is acted on (answer, failure, quota refusal)`),
+    { ...more, code: AGY_MODEL_MISMATCH, identity, transport });
+}
+
 // THE SINGLE-TURN SEAT (the planner, the plan and change reviewers, the validator and the A2A subagents through
 // sdk/agy-turn.mjs; the board's agy seat through board/run-item.mjs). SELF-AUDIT ROUND 3, ASSIGNMENT 4 (sealed fe2a612),
 // L-401: this launch ran the real CLI UNJAILED, with `{...process.env}` minus only the two Google keys (so OPENAI_API_KEY,
@@ -182,6 +207,10 @@ async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEve
   const jail_log = redactDeep(await readJailLog(control_dir), secrets);
   const tool_drift = { ...toolDriftCheck(advertisedTools({ initTools: init?.tools ?? null, stepNames: tool_steps.map(s => s.tool_name) })), unhooked: unhookedSteps(tool_steps, jail_log) };
   const evidence = { jail_log, tool_steps: redactDeep(tool_steps, secrets), tool_drift, launch, sandbox: sandboxRec };
+  // THE MODEL GUARD FIRST (L-504, invariant 3; see agyIdentityMismatch): before the stop, the exit status, the quota
+  // refusal or the answer is read.
+  const mismatch = agyIdentityMismatch({ init, agent, model });
+  if (mismatch) throw agyModelMismatch(mismatch, evidence);
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy CLI turn was cancelled"), { code: "ABORTED", ...evidence });
   if (run.killedFor === "timeout" || run.signal === "SIGTERM") throw Object.assign(new Error(`agy CLI timed out after ${timeoutS}s`), evidence);
   if (run.killedFor) throw Object.assign(new Error(`agy CLI stopped: ${run.killedFor}`), evidence);
@@ -192,8 +221,9 @@ async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEve
   // init echoes launch selection; it does not prove the CLI actually applied the role card.
   // The local frontmatter preflight above catches missing cards, while a live answered turn is
   // still needed before this transport can replace the SDK as the board default.
+  // A differing init was refused above, before anything else; here the CLI named no identity at all.
   if (init?.agent !== agent || init?.model !== model) {
-    throw Object.assign(new Error(`agy CLI identity mismatch: expected ${agent}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`), evidence);
+    throw agyModelMismatch({ requested: { agent, model }, reported: { agent: init?.agent ?? null, model: init?.model ?? null } }, evidence);
   }
   if (result?.status !== "SUCCESS") throw Object.assign(refused(`agy CLI status ${result?.status ?? "missing"}`, run, result), evidence);
   const text = typeof result.response === "string" ? result.response.trim() : "";
@@ -234,7 +264,9 @@ async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEve
 //   quota_exhausted  status 429, `quota: {matched, explicit}` (src/agy/quota.mjs): the caller probes and decides
 //   lane_failure     `kind`: timeout (print-timeout or the process timeout) | exit (non-zero exit, or result status
 //                    ERROR/INVALID/CANCELED/INTERRUPTED/other, or no completed turn) | stream (no result event, an
-//                    unparseable stream, an init identity mismatch) | spawn (the CLI or bwrap could not start it)
+//                    unparseable stream) | spawn (the CLI or bwrap could not start it)
+//   AGY_MODEL_MISMATCH  the CLI's init named another agent or model (checked FIRST, before every code above), or a result
+//                    came with no init at all: `identity: {requested, reported}`; never a lane_failure, never quota
 //   SANDBOX_UNAVAILABLE  bwrap is missing or fails its probe and `sandbox.allowUnsandboxed` is not true
 //   ABORTED          the signal fired
 import { lstat, open, readdir, readFile } from "node:fs/promises";
@@ -857,6 +889,11 @@ async function workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS,
     stderr_tail: redactStrong(redactExact(stderr.slice(-4000), secrets)),
     result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null,
     conversation_id: (typeof result?.conversation_id === "string" && result.conversation_id) || conversationId };
+  // THE MODEL GUARD FIRST (L-504, invariant 3; see agyIdentityMismatch): a worker whose CLI started on another agent or
+  // model fails closed before its stop, exit status, quota refusal (no probe, no metered failover) or answer is read.
+  // It is NOT a lane_failure: the pipeline's lane ladder never steps to another model on it.
+  const mismatch = agyIdentityMismatch({ init, agent, model });
+  if (mismatch) throw agyModelMismatch(mismatch, more);
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED", ...more });
   if (run.killedFor === "timeout") throw laneFailure("timeout", `agy CLI timed out after ${timeoutS}s (process killed)`, more);
   if (run.killedFor) throw laneFailure("stream", `agy CLI stopped: ${run.killedFor}`, more);
@@ -871,8 +908,9 @@ async function workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS,
     if (run.status !== 0) throw laneFailure("exit", `agy CLI exited ${run.status}; status ${result?.status ?? "missing"} (inspect local CLI diagnostics)`, { ...more, result_error: redactExact(typeof result?.error === "string" ? result.error.slice(0, 500) : result?.error?.message ?? "", secrets) || null });
   }
   if (!sawResult) throw laneFailure("stream", `agy CLI stream ended without a result event${unparseable ? ` (${unparseable} unparseable line(s))` : ""}`, more);
+  // A differing init was refused above, before anything else; here the CLI named no identity and still reported a result.
   if (init?.agent !== agent || init?.model !== model) {
-    throw laneFailure("stream", `agy CLI identity mismatch: expected ${agent}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`, { detail: "identity", ...more });
+    throw agyModelMismatch({ requested: { agent, model }, reported: { agent: init?.agent ?? null, model: init?.model ?? null } }, { detail: "identity", ...more });
   }
   if (result?.status !== "SUCCESS") throw laneFailure("exit", `agy CLI status ${result?.status ?? "missing"}${BAD_STATUS.has(result?.status) ? "" : " (unrecognised)"}`, more);
   // The answer and its JSON summary: only the exact known secrets are replaced (a model's prose is not pattern-guessed).

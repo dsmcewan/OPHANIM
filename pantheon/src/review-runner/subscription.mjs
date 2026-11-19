@@ -31,7 +31,7 @@ import { exportReviewCopy, REVIEW_COPY_KIND } from "./review-copy.mjs";
 import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane, writeReviewLaunchers } from "./agy.mjs";
 import { coverageGate, coverageHeaderLine, coverageOfAgy, coverageOfCodex, coverageOfGrok, gatedStatus, mergeCoverage, testsAllowedBy } from "./coverage.mjs";
 import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
-import { prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
+import { AGY_MODEL_MISMATCH, prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
 import { CLI_CONTINUE_NOTE, ContinueRefusal, captureReviewTests, cumulative, loadContinuation, ownTranscriptAppendix, preserveFiles, restoreReviewTests } from "./continue.mjs";
 
 // --continue in subscription mode: what each CLI documents about a headless resume, and what the runner does with it.
@@ -371,7 +371,8 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     const reviewTests = await captureReviewTests(wt).catch(e => ({ captured: false, why: e.message }));
     // agy: an incomplete run keeps its conversation state beside the transcript, for a later --continue.
     let agyState = null;
-    if (transport === "agy-cli" && r.status !== "complete" && agyJail?.gstate?.scratch_cli && r.record?.conversation_id) {
+    // (Not for an identity mismatch: another model's conversation is never kept to be resumed.)
+    if (transport === "agy-cli" && r.status !== "complete" && !r.identity_mismatch && agyJail?.gstate?.scratch_cli && r.record?.conversation_id) {
       const name = outPaths.findings.split(/[\\/]/).pop().replace(/\.md$/, ".agy-state"), dir = join(resolve(outPaths.findings, ".."), name);
       await rm(dir, { recursive: true, force: true }); await mkdir(dir, { recursive: true, mode: 0o700 });
       const saved = [];
@@ -398,7 +399,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}), argv: plan.argv, cwd: plan.cwd, env_names: plan.env.passed, env_removed: scrub.removed,
       prompt: plan.prompt, sandbox: plan.sandbox, review_copy: plan.review_copy, ...(plan.codex_outer_runtime ? { codex_outer_runtime: plan.codex_outer_runtime, scratch_tmp: plan.scratch_tmp } : {}),
       preflight: plan.preflight, limits: plan.limits, started_at: started.toISOString(), ended_at: ended.toISOString(),
-      status, stop_reason: stopReason, coverage, coverage_gate: gate, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
+      status, stop_reason: stopReason, ...(r.identity_mismatch ? { identity_mismatch: r.identity_mismatch } : {}), coverage, coverage_gate: gate, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
       worktree_check: { changed: check.changed, violations: check.violations, limits: check.limits }, worktree_kept: opts.keep ? wt : null,
       review_tests: reviewTests, ...(agyState ? { agy_state: agyState } : {}),
       ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method }, continued: method, ...(restored ? { restored_review_tests: restored.restored } : {}),
@@ -423,8 +424,11 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       `- requested_model: \`${row.model}\``,
       ...reviewerHeaderLines({ ...row, reviewer: row.reviewer_spec }),
       ...(lane ? [`- lane: \`${lane}\``] : []),
-      `- served_model: \`${lane ?? row.model}\``,
-      `- served_model_source: input (the CLI names no served model; this is the ${lane ? "lane" : "model"} the runner asked for)`,
+      // An identity mismatch (L-504 invariant 3) is never stamped with the lane as served: both identities are named.
+      ...(r.identity_mismatch ? [`- served_model: none (${AGY_MODEL_MISMATCH}: the CLI reported \`${r.identity_mismatch.reported?.agent ?? "none"}/${r.identity_mismatch.reported?.model ?? "none"}\`, \`${r.identity_mismatch.requested?.agent ?? "none"}/${r.identity_mismatch.requested?.model ?? "none"}\` was requested)`,
+        "- served_model_source: refused (the model guard failed: no result of the turn was used)"]
+        : [`- served_model: \`${lane ?? row.model}\``,
+          `- served_model_source: input (the CLI names no served model; this is the ${lane ? "lane" : "model"} the runner asked for)`]),
       `- sandbox: ${sandboxLine(transport, plan)}`,
       ...(transport === "codex-sdk" ? [`- codex_outer_runtime: ${outerLine(plan.codex_outer_runtime)}`, `- scratch_tmpdir: \`${plan.scratch_tmp.path}\` (${plan.scratch_tmp.bytes} bytes; at most ${plan.scratch_tmp.max_bytes} so the tests' Unix sockets fit ${plan.scratch_tmp.unix_socket_path_max} bytes)`] : []),
       ...(transport === "grok-cli" ? [`- grok_permissions: ${grokPermissionsLine(pre.checks?.permissions, pre.checks?.permissions_inspect)}`] : []),
@@ -554,6 +558,14 @@ async function runAgy({ cli, ws, wt, lane, prompt, timeoutS, graceS, childEnv, s
     return { status: "complete", stop_reason: "final answer", final_text: t.text, usage: t.usage ?? null, exit_code: t.exit_code ?? 0, record: await summarize(t) };
   } catch (e) {
     const rec = await summarize(e);
+    // THE MODEL GUARD (L-504 invariant 3; board/agy-cli.mjs agyIdentityMismatch): a CLI that started on another agent or
+    // model is REFUSED, recorded with both identities; the header names no served model for it (never the lane). Refused,
+    // not incomplete or failed: such a run is never continued (continue.mjs), so the other model's messages and tool
+    // results are never replayed to a reviewer as its own (`own` is emptied; the tool steps stay on the record).
+    if (e.code === AGY_MODEL_MISMATCH) {
+      return { status: "refused", stop_reason: redactStrong(`${AGY_MODEL_MISMATCH}: ${e.message}`, childEnv), final_text: null, usage: e.usage ?? null, exit_code: e.exit_code ?? null,
+        killed_for: null, identity_mismatch: e.identity ?? null, record: { ...rec, own: [], identity_mismatch: e.identity ?? null } };
+    }
     const why = e.code === "quota_exhausted" ? `Antigravity refused for quota (${e.quota?.matched ?? "quota"})` : e.kind === "timeout" ? `wall clock reached (${timeoutS + graceS} s) or the print timeout (${timeoutS} s): ${e.message}` : `${e.code ?? "error"}${e.kind ? `/${e.kind}` : ""}: ${e.message}`;
     return { status: "incomplete", stop_reason: redactStrong(why, childEnv), final_text: null, usage: e.usage ?? null, exit_code: e.exit_code ?? null, killed_for: e.kind === "timeout" ? "timeout" : null, record: rec };
   }
