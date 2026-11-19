@@ -13,6 +13,8 @@
 //                      the edit cancelled and stopReason "cancelled", exit 0)
 //   FAKE_CLI_WRITE     a worktree-relative path the model run writes (a policy probe)
 //   FAKE_CLI_PIDFILE   hang: the file the run writes its child's pid to (the timeout test checks it was killed)
+//   FAKE_CODEX_MARKER  a path; `codex --version` says whether it is visible (the WSL outer runtime hides the host /tmp)
+//   FAKE_GROK_INSPECT_LOADED  the count `grok inspect` reports (the shape of the owner's grok-permission-inspect.json; default 6)
 // The fake `codex exec` speaks the SDK's protocol (`exec --experimental-json ... [resume <id>]`, the prompt on stdin):
 // the one test that drives the REAL @openai/codex-sdk runs it. Every other codex run uses fakeCodexSdk below, an
 // injected stand-in for the SDK's Codex class driven by the same switches in the env it is given, plus:
@@ -39,7 +41,9 @@ const hang = () => {
 const FAKE_CODEX = String.raw`
 ${COMMON}
 log({ cli: "codex", argv, keys: ${KEYS}, cwd: process.cwd() });
-if (argv[0] === "--version") { console.log("codex-cli 9.9.9-fake"); process.exit(0); }
+// FAKE_CODEX_MARKER: a file the test made under the host /tmp; the version line says whether this process sees it (the WSL
+// outer runtime gives codex a private /tmp, so there it is absent).
+if (argv[0] === "--version") { console.log("codex-cli 9.9.9-fake" + (process.env.FAKE_CODEX_MARKER ? " marker=" + (fs.existsSync(process.env.FAKE_CODEX_MARKER) ? "visible" : "hidden") : "")); process.exit(0); }
 if (argv[0] === "login" && argv[1] === "status") {
   const l = process.env.FAKE_CODEX_LOGIN || "chatgpt";
   if (l === "chatgpt") { console.log("Logged in using ChatGPT"); process.exit(0); }
@@ -98,6 +102,8 @@ ${COMMON}
 const pi = argv.indexOf("-p");
 log({ cli: "grok", argv: argv.map((a, i) => (i === pi + 1 && pi >= 0 ? "<prompt " + a.length + ">" : a)), keys: ${KEYS}, cwd: process.cwd(), home: process.env.HOME });
 if (argv[0] === "--version") { console.log("grok 0.0.1-fake"); process.exit(0); }
+// The CLI's permission inspection in the shape the owner captured (grok-permission-inspect.json); FAKE_GROK_INSPECT_LOADED sets the count.
+if (argv[0] === "inspect") { const cfg = path.join(process.env.HOME, ".grok", "config.toml"); console.log(JSON.stringify({ permissions: { sources: fs.existsSync(cfg) ? [cfg + " (config)"] : [], loaded: Number(process.env.FAKE_GROK_INSPECT_LOADED ?? 6), skipped: [] } })); process.exit(0); }
 if (pi >= 0) {
   if (mode === "hang") return hang();
   if (mode === "needkey") { console.error("Error: not logged in. Set XAI_API_KEY or run grok to sign in."); process.exit(1); }

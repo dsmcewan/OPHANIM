@@ -4,15 +4,16 @@
 // child. One test drives the REAL @openai/codex-sdk against the fake codex binary.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main, EXIT } from "../src/review-runner/index.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
-import { fixtureRepo, fakeFetch, capture, deps, FAKE_KEY, sh, mkdtemp, cleanup } from "./review-runner-helper.mjs";
+import { fixtureRepo, fakeFetch, capture, deps, FAKE_KEY, sh, mkdtemp, cleanup, REAL_ROOT, REVIEW_DIR } from "./review-runner-helper.mjs";
 import { fakeCodexSdk, fakeReviewClis } from "./fixtures/review-clis.mjs";
+import { grokRecommendedAllow } from "../src/review-runner/grok.mjs";
 import { fakeAgy } from "./fixtures/dispatch.mjs";
 
 after(cleanup);
@@ -29,6 +30,13 @@ async function setup() {
   await mkdir(bin); await mkdir(home); await mkdir(outDir);
   const clis = fakeReviewClis(bin);
   return { repo: shared, base, bin, home, outDir, log, clis };
+}
+// A Grok browser-login stand-in plus the README's string-form permission profile (the preflight refuses a state dir
+// whose config.toml loads no allow rule: such a run is cancelled at its first tool call).
+const GROK_ALLOW = `[permission]\nallow = [${grokRecommendedAllow().map(r => JSON.stringify(r)).join(", ")}]\n`;
+async function grokLogin(f, config = GROK_ALLOW) {
+  await mkdir(join(f.home, ".grok"), { recursive: true }); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  if (config !== null) await writeFile(join(f.home, ".grok", "config.toml"), config);
 }
 const calls = async log => (existsSync(log) ? (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : []);
 
@@ -255,7 +263,7 @@ test("the wall clock aborts the SDK turn (its AbortSignal) and the run is incomp
 
 test("grok, assignment 3: inside bwrap -- worktree read-only, .review-tests writable, state dir a scratch copy; XAI_API_KEY scrubbed; coverage undocumented; unknowns printed", needBwrap, async () => {
   const f = await setup();
-  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  await grokLogin(f);
   const r = await run(f, { n: 3, args: ["--max-wall-s", "60"] });
   assert.equal(r.code, EXIT.complete, r.out.err);
   assert.deepEqual([r.plan.transport, r.plan.subscription_coverage, r.plan.unknowns.length > 0], ["grok-cli", "undocumented", true]);
@@ -280,7 +288,7 @@ test("grok refusals: no browser login state, or a CLI that asks for a key (never
   assert.equal(r.code, EXIT.refused);
   assert.match(r.out.err, /no Grok browser login found/);
   assert.equal((await calls(f.log)).filter(x => x.argv.includes("-p")).length, 0);
-  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  await grokLogin(f);
   r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "needkey" } });
   assert.equal(r.code, EXIT.refused);
   const h = headerOf(await r.read("findings-3-xai.md"));
@@ -290,7 +298,7 @@ test("grok refusals: no browser login state, or a CLI that asks for a key (never
 
 test("grok stream: an answer sent as incremental text chunks is the final text (tool output never is); a stream with no assistant text ends incomplete naming its last event types", needBwrap, async () => {
   const f = await setup();
-  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  await grokLogin(f);
   let r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "chunks" } });
   assert.equal(r.code, EXIT.complete, r.out.err);
   const md = await r.read("findings-3-xai.md");
@@ -308,29 +316,52 @@ test("grok stream: an answer sent as incremental text chunks is the final text (
 
 test("grok, the observed grok 1.0.44 shapes: text chunks after the last tool call are the answer (end_turn); stopReason cancelled with exit 0 is a failed run naming the permission profile; grok_permissions recorded", needBwrap, async () => {
   const f = await setup();
-  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  await grokLogin(f);
   let r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "native" } });
   assert.equal(r.code, EXIT.complete, r.out.err);
-  assert.deepEqual(r.plan.preflight.warnings, [`permissions: no ${join(f.home, ".grok", "config.toml")}: under the default "ask" profile a headless run cancels the tool calls no rule allows (observed 2026-11-19: an authorized .review-tests edit, stopReason cancelled); see the review README, "Grok permissions"`]);
+  assert.equal(r.plan.preflight.warnings, undefined, "the README's string-form profile: nothing missing");
   let md = await r.read("findings-3-xai.md");
   assert.match(bodyOf(md), /^# Findings \(fake grok, native\)\n\nPROBE \{/);
   assert.doesNotMatch(bodyOf(md), /Next I will write a test|NOT THE ANSWER/);
-  assert.ok(headerOf(md).includes('- grok_permissions: no config.toml in the state dir (the CLI\'s default profile, "ask")\n'));
+  assert.match(headerOf(md), /^- grok_permissions: config\.toml permission_mode unset \(default "ask"\); 35 string-form allow rule\(s\): `Read` `Grep` `Edit` `Bash\(cat \*\)`.*`Bash\(npm test\)`\n/m);
   let t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
   assert.deepEqual([t.cli.final_source, t.cli.cli_stop_reason, t.cli.num_turns], ["chunks", "end_turn", 3]);
-  // The owner's narrow rules are recorded (the runner writes none).
-  await writeFile(join(f.home, ".grok", "config.toml"), '[permission]\nrules = [\n  { action = "allow", tool = "Edit" },\n]\n');
+  // The owner's narrow rules are recorded (the runner writes none); the allowances they lack are named before the run.
+  await writeFile(join(f.home, ".grok", "config.toml"), '[permission]\nallow = ["Edit"]\n');
   r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "cancelled" } });
   assert.equal(r.code, EXIT.incomplete, r.out.err);
-  assert.equal(r.plan.preflight.warnings, undefined);
+  assert.match(r.plan.preflight.warnings.join("\n"), /34 recommended allowance\(s\) missing .*Read, Grep, Bash\(cat \*\)/);
   md = await r.read("findings-3-xai.md");
   const h = headerOf(md);
   assert.match(h, /- status: failed\n/);
   assert.match(h, /- stop_reason: grok ended its turn with stopReason "cancelled", not "end_turn" \(exit 0\): the review did not finish; 1 tool call\(s\) were cancelled \(search_replace: "User cancelled the execution for tool `search_replace`"\)\. This is most likely the Grok CLI's permission profile/);
-  assert.ok(h.includes('- grok_permissions: config.toml permission_mode unset (default "ask"); [permission] `rules = [` `{ action = "allow", tool = "Edit" },` `]` (1 allow rule(s))\n'), h);
+  assert.ok(h.includes('- grok_permissions: config.toml permission_mode unset (default "ask"); 1 string-form allow rule(s): `Edit`\n'), h);
   assert.equal(bodyOf(md), "", "no final message is written for a failed run");
   t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
   assert.deepEqual([t.status, t.exit_code, t.cli.cli_stop_reason, t.cli.cancelled_tools.map(c => c.tool)], ["failed", 0, "cancelled", ["search_replace"]]);
+});
+
+test("grok permission refusals (round 2, 77480d6): no config.toml, or only the structured `rules = [...]` array grok 1.0.44 loads as zero rules, is refused before any model turn; --grok-permissions-inspect runs the CLI's own count in the jail and refuses 0 loaded", needBwrap, async () => {
+  const f = await setup();
+  await grokLogin(f, null);
+  let r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "native" } });
+  assert.equal(r.code, EXIT.refused);
+  assert.match(r.out.err, /permissions: no .*config\.toml: under the default "ask" profile a headless run cancels every tool call/);
+  await writeFile(join(f.home, ".grok", "config.toml"), readFileSync(join(REAL_ROOT, REVIEW_DIR, "findings-runs-77480d6", "grok-effective-permission-profile.toml"), "utf8").replace(/^allow = .*$/m, ""));
+  r = await run(f, { n: 3, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "native" } });
+  assert.equal(r.code, EXIT.refused);
+  assert.match(r.out.err, /has no string-form \[permission\] allow rule \(it has 6 structured `rules = \[\.\.\.\]` allow rule\(s\), which grok 1\.0\.44 loaded as zero rules/);
+  assert.equal((await calls(f.log)).filter(x => x.argv.includes("-p")).length, 0, "no model turn");
+  // The CLI's own inspection, run in the jail against the scratch copy (it sees the copied config.toml).
+  await writeFile(join(f.home, ".grok", "config.toml"), GROK_ALLOW);
+  r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--dry-run", "--grok-permissions-inspect", "inspect --json"] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  const pi = r.plan.preflight.checks.permissions_inspect;
+  assert.deepEqual([pi.argv.slice(1), pi.ok, pi.loaded, pi.sources.length], [["inspect", "--json"], true, 6, 1]);
+  assert.match(r.plan.preflight.warnings.join(""), /loaded 6 rule\(s\), fewer than the 35 string-form rule\(s\)/);
+  r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--dry-run", "--grok-permissions-inspect", "inspect --json"], env: { FAKE_GROK_INSPECT_LOADED: "0" } });
+  assert.equal(r.code, EXIT.refused);
+  assert.match(r.out.err, /the Grok CLI reports 0 loaded permission rules/);
 });
 
 // ---- agy (assignment 1) with the fake agy under the real bwrap -------------------------------------------------
@@ -434,7 +465,7 @@ test("--reviewer on a codex run: the header and transcript record the substituti
 
 test("--reviewer xai:<model> on assignment 1: the grok CLI in the runner's jail; findings-1-xai", needBwrap, async () => {
   const f = await setup();
-  await mkdir(join(f.home, ".grok")); await writeFile(join(f.home, ".grok", "auth.json"), "{}");
+  await grokLogin(f);
   const r = await run(f, { n: 1, args: ["--max-wall-s", "60", "--dry-run", "--reviewer", "xai:grok-4.7"] });
   assert.equal(r.code, EXIT.complete, r.out.err);
   assert.deepEqual([r.plan.transport, r.plan.lab, r.plan.requested_model, r.plan.reviewer_override, r.plan.default_reviewer.lab], ["grok-cli", "xAI", "grok-4.7", true, "Google"]);

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {openPantheonLedger} from '../src/ledger/system.mjs';
 import {reviewCycle} from '../src/ledger/review-cycle.mjs';
-import {REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V1} from '../src/ledger/cycle-kinds.mjs';
+import {REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V1, cycleRecorder} from '../src/ledger/cycle-kinds.mjs';
 
 const C = n => String(n).repeat(40).slice(0, 40);
 const DIFF = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-1\n+2\n';
@@ -42,9 +42,11 @@ test('a cycle that records the requirement is refused with fewer reviewers, and 
 
 // A recorded cycle of one reviewer (as v1 and v2 cycles were opened before the requirement existed), written the way
 // such a ledger holds it: the cycle, the reviewer's turn and its review.
-function oneReviewerCycle(rec, scope, contract) {
+function oneReviewerCycle(rec, scope, contract, sys) {
   const prompt = 'review the change';
-  const cycle = rec.openCycle({scope, base: C('a'), head: C('b'), diff: DIFF, files: ['x'], prompt, reviewers: 1, author_labs: ['anthropic'], ...(contract ? {contract} : {})});
+  // The historical shape is written by a recorder made for that purpose; the system's recorder refuses it today.
+  const opener = sys ? cycleRecorder({ledger: sys.ledger, controller: sys.controller, order: sys.controller, historical: true}) : rec;
+  const cycle = opener.openCycle({scope, base: C('a'), head: C('b'), diff: DIFF, files: ['x'], prompt, reviewers: 1, author_labs: ['anthropic'], ...(contract ? {contract} : {})});
   const seat = {seat_id: 'xai-cycle-review@grok-4.7', vendor: 'xai', mode: 'cycle-review', occupancy_gen: 1};
   const reply = '```json\n{"verdict": "approve", "findings": []}\n```';
   const turn = rec.recordTurn({seat, requested_model: 'grok-4.7', served_model: 'grok-4.7', response_id: `hist_${scope}`, reply, purpose: 'cycle-review', prompt, cites: [cycle]});
@@ -53,11 +55,11 @@ function oneReviewerCycle(rec, scope, contract) {
 }
 
 test('cycles without the field keep their meaning: a recorded v2 or v1 cycle of one reviewer still re-derives and closes as before', () => withLedger(async (sys, rec) => {
-  const v2 = oneReviewerCycle(rec, 'v2-scope');
+  const v2 = oneReviewerCycle(rec, 'v2-scope', undefined, sys);
   assert.equal(sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === v2)).required_reviewers, undefined);
   assess(rec, v2);
   assert.equal(rec.closeCycle(v2).outcome, 'verified');
-  const v1 = oneReviewerCycle(rec, 'v1-scope', CYCLE_CONTRACT_V1);
+  const v1 = oneReviewerCycle(rec, 'v1-scope', CYCLE_CONTRACT_V1, sys);
   assert.equal(rec.closeCycle(v1).outcome, 'verified');
   assert.equal(sys.ledger.verify().ok, true);
 }));

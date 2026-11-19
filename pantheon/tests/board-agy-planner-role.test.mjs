@@ -132,7 +132,9 @@ test("reviewer=agy_google still respects PANTHEON_AGY_TRANSPORT (defaults to SDK
           // live network call this unit test must never make. Only reviewer is under test.
           planner: { vendor: "anthropic", model: "claude-fable-5-1", rank: 0, pool: "anthropic", band: null, basis: "OPERATOR", why: "keep this fixture scoped to reviewer" },
           implementer: { vendor: "openai", model: "gpt-6-astra", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "keep this fixture scoped to reviewer" },
-          reviewer: { vendor: "agy_google", model: "gemini-3.7-flash", rank: 0, pool: "agy_google", band: null, basis: "OPERATOR", why: "test reseat" },
+          // A declared Gemini model: the board refuses an undeclared name on Antigravity before any lane (independent
+          // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
+          reviewer: { vendor: "agy_google", model: "gemini-3.8-flash", rank: 0, pool: "agy_google", band: null, basis: "OPERATOR", why: "test reseat" },
         },
       });
       const sawSdkLaneFailure = /GEMINI_API_KEY|venv python absent/i.test(result.error?.message ?? "");

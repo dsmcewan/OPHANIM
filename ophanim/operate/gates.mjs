@@ -44,8 +44,9 @@ export function completionEvidence(status) {
 // The evidence a plan rests on (plan.outputs.evidence): every FILE it cites -- in `evidence`, in an examined
 // investigation's `sources`, and the `copy` files the work reads -- with the digest of the bytes the planner was
 // GIVEN (or, for a copy file it was not given, the bytes at approval); and every other cited VIEW (an issue, a status
-// history, a grep) with the version delivered and the request that names it. `versionOf(request)` re-reads such a view
-// now: undefined when it cannot be read here (the plan is then not judged on it), null when it is gone.
+// history, a grep, a view the dossier derived) with the version delivered and the request that names it.
+// `versionOf(request, {plan})` re-reads such a view now: null when it is gone, undefined when it cannot be read here --
+// which makes the plan stale, never valid by default (a work-ledger view alone is not judged).
 // (independent review, assignment 1, Google gemini-4-carbon, 09d490f, questions 1 and 5)
 export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => null, versionOf = null}) {
   const why = [];
@@ -57,9 +58,15 @@ export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => n
   if (planned && !ticket) why.push('the ticket the plan wrote is missing');
   for (const ev of plan.outputs.evidence ?? []) {
     if (ev.path) { if (ev.sha256 && bytesOf(ev.path) !== ev.sha256) why.push(`evidence ${ev.path} changed`); continue; }
-    if (!ev.request || ev.version === undefined || typeof versionOf !== 'function') continue;
-    const now = versionOf(ev.request);
-    if (now !== undefined && now !== ev.version) why.push(`evidence ${ev.source ?? ev.ref} changed`);
+    if (!ev.request || ev.version === undefined) continue;
+    // A work-ledger view is never "changed evidence": recording an attempt is not new evidence (context.mjs `stable`).
+    if (ev.request.op === 'work') continue;
+    // A cited view whose present version cannot be established here (no re-reader, a derived dossier view that cannot
+    // be rebuilt, an issue with no snapshot) is NOT presumed unchanged: the plan is stale until it can be re-checked
+    // (independent review round 2, assignment 1, OpenAI gpt-6.1-sol, 77480d6, questions 1 and 5).
+    const now = typeof versionOf === 'function' ? versionOf(ev.request, {plan}) : undefined;
+    if (now === undefined) why.push(`evidence ${ev.source ?? ev.ref} cannot be re-read here to confirm it is unchanged`);
+    else if (now !== ev.version) why.push(`evidence ${ev.source ?? ev.ref} changed`);
   }
   return {valid: why.length === 0, why};
 }

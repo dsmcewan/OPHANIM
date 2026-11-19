@@ -12,14 +12,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { grokPermissionConfig, grokStopFailure, parseGrokStream } from "../src/review-runner/grok.mjs";
+import { grokPermissionConfig, grokPermissionVerdict, grokRecommendedAllow, grokStopFailure, parseGrokInspect, parseGrokStream } from "../src/review-runner/grok.mjs";
+import { READ_ONLY_SHELL } from "../src/review-runner/cli-common.mjs";
 import { mkdtemp, cleanup } from "./review-runner-helper.mjs";
 
 test.after(cleanup);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FX = JSON.parse(readFileSync(join(HERE, "fixtures", "grok-1.0.44-observed-stream.json"), "utf8"));
-const RUN = join(HERE, "..", "..", "docs", "reviews", "2026-11-18-independent-review", "findings-3-xai-09d490f");
+const REVIEW = join(HERE, "..", "..", "docs", "reviews", "2026-11-18-independent-review");
+const RUN = join(REVIEW, "findings-3-xai-09d490f");
 const lines = evs => evs.map(e => JSON.stringify(e));
 
 test("fixture: the fixture holds no home path and no credential-looking value", () => {
@@ -48,7 +50,7 @@ test("observed leg 1 (cancelled): narration before a tool call is not a final te
   const why = grokStopFailure(r.stop_reason, r.cancelled_tools, FX.leg_1.exit_code);
   assert.match(why, /^grok ended its turn with stopReason "cancelled", not "end_turn" \(exit 0\): the review did not finish; 1 tool call\(s\) were cancelled \(search_replace: "User cancelled/);
   assert.match(why, /permission profile/);
-  assert.match(why, /\[permission\] allow rules/);
+  assert.match(why, /string-form allow rules \(`allow = \[\.\.\.\]` under \[permission\]\)/);
   assert.match(grokStopFailure("max_tokens", [], 0), /stopReason "max_tokens", not "end_turn".*permission profile/);
 });
 
@@ -76,16 +78,56 @@ test("the other stream shapes still parse (results, assistant messages, *_delta 
   assert.equal(parseGrokStream(['{"type":"result","result":"R"}', '{"type":"tool_call","toolName":"grep"}']).final_text, "R", "a result event stands");
 });
 
-test("grokPermissionConfig reads the [ui] permission mode and the [permission] lines of the state dir's config.toml, and never throws", async () => {
+test("grokPermissionConfig reads the [ui] permission mode and the [permission] section; only the STRING form counts as loaded rules (grok 1.0.44 loaded zero from structured rules); never throws", async () => {
   const d = await mkdtemp(join(tmpdir(), "rr-grok-perm-"));
-  assert.deepEqual(await grokPermissionConfig(d), { path: join(d, "config.toml"), present: false, permission_mode: null, rules: [], allow_rules: 0 });
+  assert.deepEqual(await grokPermissionConfig(d), { path: join(d, "config.toml"), present: false, permission_mode: null, rules: [], allow: [], deny: [], structured_rules: 0, structured_allow_rules: 0, allow_rules: 0 });
   await mkdir(join(d, "sub"));
   await writeFile(join(d, "config.toml"), [
     "# owner's config", "[ui]", 'permission_mode = "ask" # default', "[permission]", "rules = [",
     '  { action = "allow", tool = "Edit" },', '  { action = "allow", tool = "Bash", pattern = "node --test *" },', '  { action = "deny", tool = "Bash", pattern = "rm -rf *" },', "]",
     "[other]", 'api_key = "not-recorded"', ""].join("\n"));
-  const p = await grokPermissionConfig(d);
-  assert.deepEqual([p.present, p.permission_mode, p.allow_rules], [true, "permission_mode=ask", 2]);
+  let p = await grokPermissionConfig(d);
+  // The round-1 count (2 "allow" lines) was what the header showed while the CLI loaded zero rules.
+  assert.deepEqual([p.present, p.permission_mode, p.allow_rules, p.structured_rules, p.structured_allow_rules], [true, "permission_mode=ask", 0, 3, 2]);
   assert.deepEqual(p.rules, ["rules = [", '{ action = "allow", tool = "Edit" },', '{ action = "allow", tool = "Bash", pattern = "node --test *" },', '{ action = "deny", tool = "Bash", pattern = "rm -rf *" },', "]"]);
   assert.ok(!JSON.stringify(p).includes("not-recorded"), "only the [ui] mode and the [permission] section are read");
+  assert.match(grokPermissionVerdict(p).failed.join("\n"), /has no string-form \[permission\] allow rule \(it has 2 structured `rules = \[\.\.\.\]` allow rule\(s\), which grok 1.0.44 loaded as zero rules/);
+  // A multi-line string array, with a deny array.
+  await writeFile(join(d, "config.toml"), ['[permission]', 'allow = [', '  "Read",', "  'Grep',", '  "Bash(sed -n *)",', ']', 'deny = ["Bash(rm *)"]', ""].join("\n"));
+  p = await grokPermissionConfig(d);
+  assert.deepEqual([p.allow, p.deny, p.allow_rules, p.structured_rules], [["Read", "Grep", "Bash(sed -n *)"], ["Bash(rm *)"], 3, 0]);
+});
+
+test("the owner's round-2 Grok profile (77480d6): the six string-form rules count, the structured array does not; the missing read-only allowances that cancelled the first leg (wc, find) are named", async () => {
+  const d = await mkdtemp(join(tmpdir(), "rr-grok-perm-"));
+  await writeFile(join(d, "config.toml"), readFileSync(join(REVIEW, "findings-runs-77480d6", "grok-effective-permission-profile.toml"), "utf8"));
+  const p = await grokPermissionConfig(d);
+  const compat = JSON.parse(readFileSync(join(REVIEW, "findings-runs-77480d6", "grok-permission-cli-compatibility.json"), "utf8"));
+  assert.deepEqual(p.allow, compat.equivalent_allow_rules);
+  assert.deepEqual([p.allow_rules, p.structured_rules], [6, 6]);
+  const v = grokPermissionVerdict(p);
+  assert.deepEqual(v.failed, []);
+  assert.match(v.warnings[0], /also has 6 structured `rules = \[\.\.\.\]` rule\(s\); grok 1.0.44 loaded none/);
+  for (const r of ["Bash(wc *)", "Bash(find *)", "Bash(sed -n *)", "Bash(git log *)", "Bash(OPHANIM_TELOS_ROOT=* npm run test:proof)", "Bash(npm --prefix pantheon test)"]) assert.ok(v.warnings[1].includes(r), r);
+  // The CLI's own inspection, as the owner captured it: 6 loaded, none skipped -> no refusal; 0 loaded -> refusal.
+  const inspected = parseGrokInspect(readFileSync(join(REVIEW, "findings-runs-77480d6", "grok-permission-inspect.json"), "utf8"));
+  assert.deepEqual([inspected.ok, inspected.loaded, inspected.skipped], [true, 6, []]);
+  assert.deepEqual(grokPermissionVerdict(p, inspected).failed, []);
+  assert.match(grokPermissionVerdict(p, { ...inspected, loaded: 0 }).failed.join(""), /reports 0 loaded permission rules/);
+  assert.match(grokPermissionVerdict(p, parseGrokInspect("not json")).failed.join(""), /inspection could not be read \(the inspection output is not JSON\)/);
+});
+
+test("the README's Grok example is the string form, holds every recommended allowance, and no auto/always-approve mode", async () => {
+  const readme = readFileSync(join(REVIEW, "README.md"), "utf8");
+  const block = /Grok permissions[\s\S]*?```toml\n([\s\S]*?)```/.exec(readme)[1];
+  assert.doesNotMatch(block, /rules\s*=/, "the structured form grok 1.0.44 does not load is not the example");
+  const d = await mkdtemp(join(tmpdir(), "rr-grok-perm-"));
+  await writeFile(join(d, "config.toml"), block);
+  const p = await grokPermissionConfig(d);
+  assert.deepEqual(grokPermissionVerdict(p), { failed: [], warnings: [] });
+  assert.deepEqual([...p.allow].sort(), [...grokRecommendedAllow()].sort());
+  for (const c of READ_ONLY_SHELL) assert.ok(p.allow.includes(`Bash(${c} *)`), c);
+  // A mode that approves everything is a refusal.
+  await writeFile(join(d, "config.toml"), `[ui]\npermission_mode = "always-approve"\n${block}`);
+  assert.match(grokPermissionVerdict(await grokPermissionConfig(d)).failed.join(""), /sets permission_mode=always-approve/);
 });

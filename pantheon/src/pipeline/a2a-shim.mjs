@@ -128,7 +128,13 @@ export async function startA2AShim({ unit_id, allowed_subagents = [], seatFor, s
     const answer = Buffer.byteLength(out.text) > room ? Buffer.from(out.text).subarray(0, Math.max(room, 0)).toString("utf8") : out.text;
     const truncated = answer !== out.text;
     used_bytes += Buffer.byteLength(answer);
-    Object.assign(rec, { status: "answered", answer_bytes: Buffer.byteLength(answer), answer_digest: sha(answer), truncated, served_model: str(out.served_model) ? out.served_model : null, served_model_source: out.served_model_source ?? null });
+    // An answer whose turn named no serving model is recorded as exactly that (`served_model_source: "unnamed"`), not as
+    // a null that reads like "not recorded". The ASKED model is the contributor that identity rules then exclude
+    // (review/identity.mjs contributorKeys counts the requested name); nothing is inferred about who answered
+    // (independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6).
+    const servedName = str(out.served_model) ? out.served_model : null;
+    Object.assign(rec, { status: "answered", answer_bytes: Buffer.byteLength(answer), answer_digest: sha(answer), truncated, served_model: servedName,
+      served_model_source: servedName ? out.served_model_source ?? null : "unnamed" });
     record(rec);
     const data = { role, answer, model: seat.model, served_model: rec.served_model };
     return send(res, 200, { jsonrpc: "2.0", id, result: { kind: "message", role: "agent", messageId: randomBytes(8).toString("hex"), parts: [{ kind: "data", data }], metadata: { unit_id, subagent_role: role, truncated } } });

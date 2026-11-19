@@ -293,8 +293,28 @@ function chainOf(work, rec) {
   for (let r = rec; r; r = r.handoff?.from ? work.stages(r.identity.item).find(s => s.hash === r.handoff.from) : null) out[r.stage] ??= r;
   return out;
 }
-const dedupe = rows => [...new Map(rows.map(r => [`${r.purpose}|${r.vendor}|${r.model}|${r.lab}`, r])).values()];
+// The key keeps every identity a row names: a turn asked as one model and served by another (`requested_model`) is a
+// different row from a turn asked and served as the served model, so the asked identity is never dropped (independent
+// review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6).
+export const dedupe = rows => [...new Map(rows.map(r => [`${r.purpose}|${r.vendor}|${r.model}|${r.requested_model ?? ''}|${r.lab}`, r])).values()];
 const labsOfContribs = rows => [...new Set(rows.map(r => r.lab).filter(Boolean))].sort();
+/**
+ * DECISION 6 (owner, 2026-11-19; docs/review-independence.md). The rows that exclude a run's dispatchers (record.mjs
+ * arbitersOf) from later independent judgment: one per distinct identity, `purpose: 'arbiter'`, the served model as
+ * `model` and the asked one as `requested_model` when they differ, so contributorKeys counts both. The dispatcher is
+ * not reclassified as an author: these rows are exclusions, and contributionsOf still omits it.
+ */
+export function arbiterExclusions(arbiters = []) {
+  const rows = new Map();
+  for (const a of arbiters) {
+    const model = a.served_model ?? a.model;
+    const row = {purpose: 'arbiter', vendor: a.vendor, model, ...(a.served_model && a.model && a.served_model !== a.model ? {requested_model: a.model} : {}),
+      ...(a.served_model_source ? {served_model_source: a.served_model_source} : {}), lab: labOf(a.vendor, model)};
+    const k = JSON.stringify(row);
+    rows.set(k, {row, units: [...new Set([...(rows.get(k)?.units ?? []), a.unit_id])]});
+  }
+  return [...rows.values()].map(({row, units}) => ({...row, via: `pipeline dispatcher, unit(s) ${units.join(', ')}: its rubric governed the unit (a non-authoring arbiter, excluded from later independent judgment: Decision 6)`}));
+}
 /** The change scope plus every other recorded contribution: never narrowed to make a panel possible. */
 function fullScope(base, contributions) {
   const all = dedupe([...(base?.contributions ?? []), ...contributions]);
@@ -879,6 +899,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   // What is NOT relaxed: a Stage 5 reviewer whose FINDING was fed to an implementer revision IS a `critique`
   // contributor (the existing rule of this repository) and is excluded from the later three-lab review and from
   // validating; a Stage 5 reviewer that only approved is not a contributor.
+  // DECISION 6 (owner, 2026-11-19; docs/review-independence.md): the exception is SCOPED to the pinned Stage 5 review of
+  // the dispatcher's own unit, with that unit's bounded revision sequence. The dispatcher stays a non-authoring arbiter
+  // (still absent from contributionsOf), but its requested and serving identities are EXCLUDED from the later three-lab
+  // change review and from the validator whenever its rubric governed a unit of the change: `purpose: 'arbiter'` rows
+  // (arbiterExclusions) ride with this stage's contributions, are recorded as the cycle's contributors, and are checked
+  // at seat selection and at answer admission. A Stage 5 reviewer that is the dispatcher's model and only approved is
+  // therefore excluded later too. A different model of the same lab stays eligible; no capacity is pending, never a
+  // fallback. "Permission to judge whether one's own rubric was followed does not grant independence to judge whether
+  // that rubric was sufficient."
   // ============================================================================================================
   //
   // Stage 5 is the IN-RUN reviewer. It replaces neither the coordinated three-lab change review nor the validator:
@@ -894,8 +923,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // Review capacity BEFORE work. The predicted contributors are the matrix's: each unit's implementer (the lane the
     // matrix starts it on; its base model is what counts) and, where the unit allows subagents, its subagent model.
     // The dispatcher is an arbiter and is not predicted as a contributor (the decision above).
+    // The dispatcher is not a contributor, but it IS excluded from the later review and the validator (Decision 6,
+    // owner 2026-11-19), so the capacity check predicts it as an arbiter.
     const predicted = dedupe(v.units.flatMap(u => [{purpose: 'work', ...seatOf(IMPLEMENTER_LADDERS[u.difficulty][0])},
-      ...(u.allowed_subagents.length ? [{purpose: 'subtask', ...seatOf(fitMatrix('subagent', u.difficulty))}] : [])]));
+      ...(u.allowed_subagents.length ? [{purpose: 'subtask', ...seatOf(fitMatrix('subagent', u.difficulty))}] : []),
+      {purpose: 'arbiter', ...seatOf(fitMatrix('dispatcher', u.difficulty))}]));
     const cap = cycleReviewers({scope: fullScope(null, [...contributions, ...predicted]), n, ...pool, independence});
     if (cap.pending) {
       return result('pending', {outputs: {stage: 'before-work', predicted_contributors: cap.scope.contributions, ticket: ticketOut}, contributions,
@@ -995,8 +1027,14 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     const VIA = {work: 'wrote in the unit\'s worktree', subtask: 'answered the implementer as a subagent', critique: 'its Stage 5 finding was fed to an implementer revision'};
     const work = [...authored.values()].map(a => ({...a.row, via: `pipeline ${a.role}, unit(s) ${a.units.join(', ')}: ${VIA[a.row.purpose] ?? a.row.purpose}`}));
-    const all = dedupe([...contributions, ...work]);
     const arbiters = arbitersOf(run);
+    // DECISION 6 (owner, 2026-11-19): the dispatcher exception is confined to the pinned Stage 5 review of its own unit.
+    // Every dispatcher whose rubric governed a unit of this change is EXCLUDED, by its requested and its serving
+    // identity, from the coordinated three-lab change review and from the validator: these rows ride with the stage's
+    // contributions (purpose 'arbiter', not authored work) into the review scope, the cycle's recorded contributors and
+    // the validator's exclusion set, where they are checked at seat selection and again at answer admission.
+    const arbiterRows = arbiterExclusions(arbiters);
+    const all = dedupe([...contributions, ...work, ...arbiterRows]);
     const team = [...new Map([
       // Non-authoring: on the team, not among the contributions.
       ...arbiters.map(a => ({role: 'dispatcher', vendor: a.vendor, model: a.served_model ?? a.model, lab: labOf(a.vendor, a.model), standing: 'arbiter', authored: false})),

@@ -119,20 +119,23 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       assert.deepEqual(rec.units.c.a2a.calls.map(c => [c.role, c.status, named(c)]), [['api-designer', 'answered', named(fitMatrix('subagent', 'hard'))]]);
       assert.deepEqual([rec.units.a.a2a.calls.length, rec.units.b.a2a.calls.length], [0, 0]);
 
-      // ARBITERS vs CONTRIBUTIONS (owner governance decision 2026-11-17, flagged for independent review): the
-      // dispatcher is recorded as a non-authoring arbiter, and is NOT a contribution.
+      // ARBITERS vs CONTRIBUTIONS (owner governance decision 2026-11-17): the dispatcher is recorded as a non-authoring
+      // arbiter, and is NOT an authored contribution. DECISION 6 (owner, 2026-11-19): its identity rides with the
+      // stage's contributions as an `arbiter` exclusion, so the later three-lab review and the validator exclude it.
       assert.deepEqual(impl.outputs.arbiters.map(a => [a.unit_id, a.role, a.standing, a.authored, named(a)]),
         [['a', 'dispatcher', 'arbiter', false, 'openai/gpt-6-luna'], ['b', 'dispatcher', 'arbiter', false, 'openai/gpt-6.1-sol'], ['c', 'dispatcher', 'arbiter', false, 'openai/gpt-6-astra']]);
-      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['plan', `anthropic/${PLANNER[item]}`], ['subtask', 'xai/grok-4.7'],
+      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['arbiter', 'openai/gpt-6-astra'], ['arbiter', 'openai/gpt-6-luna'], ['arbiter', 'openai/gpt-6.1-sol'],
+        ['plan', `anthropic/${PLANNER[item]}`], ['subtask', 'xai/grok-4.7'],
         ['work', 'agy_google/gemini-4-carbon-high'], ['work', 'agy_google/gemini-4-hydrogen-high'], ['work', 'agy_google/gemini-4-hydrogen-medium']].sort());
-      assert.ok(!impl.contributions.some(c => c.vendor === 'openai'), 'no OpenAI model contributed: the dispatchers arbitrated and the pinned reviewers only approved');
+      assert.ok(!impl.contributions.some(c => c.vendor === 'openai' && c.purpose !== 'arbiter'), 'no OpenAI model AUTHORED anything: the dispatchers arbitrated and the pinned reviewers only approved');
       assert.deepEqual(impl.contributions, impl.outputs.contributions);
       const dispatchers = impl.team.filter(x => x.role === 'dispatcher');
       assert.equal(dispatchers.length, 3);
       for (const d of dispatchers) assert.deepEqual([d.standing, d.authored], ['arbiter', false]);
       const keys = contributorKeys(impl.contributions);
-      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'xai']);
-      assert.deepEqual(keys.models, [`anthropic/${PLANNER[item]}`, 'google/gemini-4-carbon', 'google/gemini-4-hydrogen', 'xai/grok-4.7']);
+      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'openai', 'xai']);
+      assert.deepEqual(keys.models, [`anthropic/${PLANNER[item]}`, 'google/gemini-4-carbon', 'google/gemini-4-hydrogen',
+        'openai/gpt-6-astra', 'openai/gpt-6-luna', 'openai/gpt-6.1-sol', 'xai/grok-4.7']);
 
       // INTEGRATION reaches the review as one commit on pantheon/<item>, parent = the base the run started from.
       assert.equal(git(repo, 'rev-parse', `${impl.outputs.commit}^`).trim(), impl.outputs.base);
@@ -142,12 +145,17 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       assert.deepEqual([rev.outputs.base, rev.outputs.commit, val.outputs.commit], [impl.outputs.base, impl.outputs.commit, impl.outputs.commit]);
 
       // THE COORDINATED THREE-LAB REVIEW AND THE VALIDATOR REMAIN, after the pipeline: three distinct labs, no
-      // contributing model. OpenAI did not contribute, so an OpenAI model is on the panel.
+      // contributing model, and no dispatcher (Decision 6): every dispatcher approved its own unit at Stage 5 and is still
+      // excluded. The panel still qualifies (labs that contributed nothing are seated first; a different OpenAI model
+      // stays eligible under model-level independence: ophanim/operate/independence-r2-a2.test.mjs).
       const panel = rev.team.filter(t => t.role === 'cycle-reviewer');
       assert.equal(panel.length, 3);
       assert.equal(new Set(panel.map(t => t.lab)).size, 3);
       for (const t of panel) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
-      assert.ok(panel.some(t => t.lab === 'openai'), `an OpenAI model is still eligible for the panel: ${panel.map(named).join(', ')}`);
+      // Independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7: before Decision 6 a dispatcher could be seated here.
+      for (const d of ['openai/gpt-6-astra', 'openai/gpt-6-luna', 'openai/gpt-6.1-sol']) {
+        assert.ok(!panel.some(t => idOf(t) === d) && idOf(val.outputs.validator) !== d, `the dispatcher ${d} judged its own rubric's sufficiency`);
+      }
       assert.deepEqual(rev.outputs.author_models, keys.models);
       assert.ok(!keys.models.includes(idOf(val.outputs.validator)));
       assert.equal(val.outputs.verdict, 'accept');
@@ -203,8 +211,8 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
       // The findings are kept on the stage record with the reviewer that made them.
       assert.deepEqual(impl.findings.map(x => [x.cause, x.vendor, x.model, x.unit, x.text]).filter(x => x[4] === FINDING), Array(2).fill(['in-run-review', 'openai', 'gpt-6-luna', 'alpha', FINDING]));
       // CONTRIBUTIONS: gpt-6-luna's finding fed a revision, so it IS a critique contributor; gpt-6.1-sol only approved
-      // and is not. The dispatcher (gpt-6-luna as an arbiter) is listed apart.
-      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['critique', 'openai/gpt-6-luna'], ['plan', `anthropic/${PLANNER[item]}`],
+      // and is not. The dispatcher (gpt-6-luna as an arbiter) is listed apart, and excluded as an arbiter (Decision 6).
+      assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['arbiter', 'openai/gpt-6-luna'], ['critique', 'openai/gpt-6-luna'], ['plan', `anthropic/${PLANNER[item]}`],
         ['work', 'agy_google/gemini-4-hydrogen-high'], ['work', 'agy_google/gemini-4-hydrogen-medium'], ['work', 'agy_google/gemini-4-hydrogen-xhigh']]);
       assert.deepEqual(impl.outputs.arbiters.map(named), ['openai/gpt-6-luna']);
       const keys = contributorKeys(impl.contributions);
@@ -244,8 +252,9 @@ test('LIFECYCLE, default routing (fit): a write outside the unit\'s owned paths 
       assert.match(impl.findings[0].text, /write jail: verify\.mjs \(OUTSIDE_OWNED\)/);
       assert.equal(impl.outputs.shipped, false);
       assert.ok(fs.existsSync(impl.outputs.run.record), 'the run record is kept');
-      // Nothing the refused attempts wrote is a contribution; nothing reached a branch of the item.
-      assert.deepEqual(impl.contributions.map(c => c.purpose), ['plan']);
+      // Nothing the refused attempts wrote is a contribution; nothing reached a branch of the item. The unit's dispatcher
+      // arbitrated it, and stays on the record as an exclusion (Decision 6).
+      assert.deepEqual(impl.contributions.map(c => c.purpose), ['plan', 'arbiter']);
       assert.deepEqual(branches(repo, `pantheon/${item}*`), []);
     }
     assert.equal(turn.log.filter(l => l.kind === 'unit-review').length, 0);
