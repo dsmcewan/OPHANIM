@@ -45,7 +45,7 @@
 // environment, argv or files; let a tool call run without a decision; forward a request the caller did not admit; treat
 // the model asked for as evidence of the model that answered; invoke the agy CLI.
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -203,7 +203,7 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   if (!existsSync(bridge)) throw laneFailure("spawn", `the bridge script is absent at ${bridge}`, { sdk_unavailable: true });
 
   const { policy, paths } = await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, owned_paths: unit.owned_paths ?? [], verify_cmd: unit.verify_cmd ?? null, verify_hide });
-  const box = { enabled: sandbox.enabled !== false, allowUnsandboxed: sandbox.allowUnsandboxed === true, bwrap: sandbox.bwrap ?? "bwrap" };
+  const box = { enabled: sandbox.enabled !== false, allowUnsandboxed: sandbox.allowUnsandboxed === true, bwrap: sandbox.bwrap ?? "bwrap", home: sandbox.home ?? null };
   const nonce = randomBytes(6).toString("hex");
   const rootMarker = `[pantheon-agent:${nonce}:implementer]`;
   let ceiling = ceilingFor(model);
@@ -224,20 +224,27 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
     } else {
       const keep = [process.execPath, resolve(HERE, ".."), real(dirname(python)), real(dirname(bridge))];
       const jail = bwrapArgs({ worktree: paths.worktree, control_dir: paths.control_dir, bwrap: box.bwrap, keep_visible: keep });
-      // The bridge needs nothing from the user's home: its credential-bearing directories are covered, unless a path
-      // the bridge itself runs from (its python) is inside one (recorded, then left visible).
-      const home = real(homedir()), hidden = [], visible = [];
-      const needed = [...keep, paths.worktree, paths.control_dir].map(real);
+      // THE USER'S HOME. The bridge needs no credential from it (the key is the gateway's), so every credential-bearing
+      // directory of the home (verify-jail.mjs HOME_SECRET_DIRS: .ssh, .gemini, .codex, .config, .local/share, ...) is
+      // covered with an empty tmpfs; a path the session itself runs from that lies inside one (the SDK's venv under
+      // ~/.local/share) is bound back read-only, alone. These go BEFORE the jail's own binds, which then override them.
+      const home = real(box.home ?? homedir()), hidden = [], kept = [], extra = [];
+      const needed = [...new Set([...keep, paths.worktree, paths.control_dir].map(real))];
       for (const d of HOME_SECRET_DIRS) {
         const p = join(home, d);
-        if (!existsSync(p) || inside("/tmp", p)) continue;
-        if (needed.some(n => inside(p, n) || inside(n, p))) { visible.push(p); continue; }
+        if (!existsSync(p) || inside("/tmp", p)) continue;   // under /tmp the jail already has a fresh tmpfs
+        let rp, st; try { rp = realpathSync(p); st = statSync(p); } catch { continue; }
+        if (rp !== p) { kept.push({ path: p, why: "a symlink: not covered" }); continue; }
+        if (needed.some(n => inside(n, p))) { kept.push({ path: p, why: "inside a path the session runs from" }); continue; }
+        if (st.isDirectory()) {
+          extra.push("--tmpfs", p);
+          for (const n of needed.filter(x => inside(p, x))) { extra.push("--ro-bind", n, n); kept.push({ path: n, why: `bound back read-only inside ${p}` }); }
+        } else extra.push("--ro-bind", "/dev/null", p);
         hidden.push(p);
       }
-      const at = jail.argv.lastIndexOf("--chdir");
-      const extra = hidden.flatMap(p => { try { return realpathSync(p) === p ? ["--tmpfs", p] : []; } catch { return []; } });
+      const at = jail.argv.indexOf("/tmp", jail.argv.indexOf("--tmpfs")) + 1;   // right after the base: --ro-bind / / --dev --proc --tmpfs /tmp
       argvPrefix = [...jail.argv.slice(0, at), ...extra, ...jail.argv.slice(at)];
-      sandboxRecord = { enabled: true, bwrap: box.bwrap, binds: jail.binds, hidden_control_dirs: jail.hidden, home_dirs_hidden: hidden, ...(visible.length ? { home_dirs_visible: visible } : {}), network: "shared with the host: the runtime reaches the controller's loopback gateway; it holds no credential" };
+      sandboxRecord = { enabled: true, bwrap: box.bwrap, binds: jail.binds, hidden_control_dirs: jail.hidden, home_dirs_hidden: hidden, ...(kept.length ? { home_paths_kept: kept } : {}), network: "shared with the host: the runtime reaches the controller's loopback gateway; it holds no credential" };
     }
   } else if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", "the implementer session is not started unjailed (sandbox.enabled is false and allowUnsandboxed is not set)");
   record.sandbox = sandboxRecord;

@@ -286,6 +286,26 @@ test("toolDecision never throws: a malformed call is a denial", () => {
   }
 });
 
+test("REAL JAIL: the home's credential-bearing directories are empty to the bridge, except the one path the session runs from", async t => {
+  const probe = await sandboxAvailable("bwrap");
+  if (!probe.ok) { t.skip(`UNVERIFIED: bwrap is not usable here (${probe.why})`); return; }
+  const { run, note } = await setup(t);
+  // A stand-in home outside /tmp: ssh and provider logins, the owner's status keys, and the "venv" the bridge runs from.
+  const home = join("/var/tmp", `pantheon-home-${process.pid}`);
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const files = { ssh: join(home, ".ssh", "id_ed25519"), codex: join(home, ".codex", "auth.json"), keys: join(home, ".local", "share", "ophanim", "status-ledger", "keys", "operator.json"), netrc: join(home, ".netrc"), plain: join(home, "notes.txt") };
+  for (const f of Object.values(files)) { mkdirSync(join(f, ".."), { recursive: true }); writeFileSync(f, "SECRET-synthetic\n"); }
+  const bridgeDir = join(home, ".local", "share", "pantheon", "bridge");
+  mkdirSync(bridgeDir, { recursive: true });
+  const bridge = join(bridgeDir, "fake-antigravity-bridge.mjs");
+  writeFileSync(bridge, readFileSync(FAKE_BRIDGE));
+  const r = await run(CARBON, [{ probe: { read: Object.values(files) } }], { sandbox: { enabled: true, home }, bridge });
+  const p = note(r).probes[0];
+  assert.deepEqual(p.can_read, { [files.ssh]: false, [files.codex]: false, [files.keys]: false, [files.netrc]: false, [files.plain]: true }, "only the home's ordinary files are visible");
+  assert.ok(r.sandbox.home_dirs_hidden.includes(join(home, ".local", "share")) && r.sandbox.home_dirs_hidden.includes(join(home, ".ssh")));
+  assert.deepEqual(r.sandbox.home_paths_kept.map(k => k.path), [bridgeDir], "the bridge's own directory is bound back, alone");
+});
+
 test("REAL JAIL: the bridge runs inside bwrap with the host read-only, its own PID namespace and a fresh /tmp, and still reaches the gateway", async t => {
   const probe = await sandboxAvailable("bwrap");
   if (!probe.ok) { t.skip(`UNVERIFIED: bwrap is not usable here (${probe.why})`); return; }
