@@ -121,7 +121,8 @@ export async function runReviewer({ unit, worktree, base_commit, checkpoint = "H
     status: "not_admitted", code: null, why: null, verdict: null, criteria: null, findings: [], feedback: [], fed_revision: false, rubric_hash: dispatch.rubric_hash, rubric_rehash: null,
     diff_digest: null, diff_bytes: null, verify: null, extra, turn_attempts: [] };
 
-  rec.rubric_rehash = rubricHash({ unit_id: unit.unit_id, owned_paths: unit.owned_paths, verify_cmd: unit.verify_cmd, invariants: unit.invariants, rubric: dispatch.rubric });
+  rec.rubric_rehash = rubricHash({ unit_id: unit.unit_id, owned_paths: unit.owned_paths, verify_cmd: unit.verify_cmd, invariants: unit.invariants, rubric: dispatch.rubric,
+    specialist_role: unit.specialist_role, difficulty: unit.difficulty });
   if (rec.rubric_rehash !== dispatch.rubric_hash) return Object.assign(rec, { status: "rubric_mismatch", code: "RUBRIC_HASH", why: `the rubric handed to review hashes to ${rec.rubric_rehash}, not the frozen ${dispatch.rubric_hash}: the unit, its commands or its rubric changed after dispatch` });
 
   const diff = await git(worktree, ["diff", "--binary", "--no-renames", "--no-color", "--no-ext-diff", base_commit, checkpoint]);

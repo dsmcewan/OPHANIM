@@ -74,7 +74,8 @@ test('three reviewers on three labs are recorded, each citing the cycle, and the
 test('a same-lab reviewer is refused: before the turn, by the served model, by a second review, and through the author lineage', () => withLedger(async (sys, rec) => {
   await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: scripted(),
     seats: [{vendor: 'xai', model: 'grok-4.7'}, {vendor: 'xai', model: 'grok-4.6'}, {vendor: 'openai', model: 'gpt-6-sol'}]}), /share a lab/);
-  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: scripted(), seats: [{vendor: 'anthropic', model: 'claude-sonnet-5'}]}), /authored the change/);
+  await assert.rejects(reviewCycle({ledger: rec, change: change(), turn: scripted(),
+    seats: [{vendor: 'anthropic', model: 'claude-sonnet-5'}, {vendor: 'xai', model: 'grok-4.7'}, {vendor: 'openai', model: 'gpt-6-sol'}]}), /authored the change/);
 
   // The agy seat asked for Gemini but was served a Claude model: the ledger judges the lab that answered.
   const r = await reviewCycle({ledger: rec, change: change(), turn: scripted({agy_google: {text: APPROVE, served_model: 'claude-sonnet-4-6'}})});

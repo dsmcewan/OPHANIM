@@ -355,7 +355,7 @@ test("cycle close: without a stated assessment the controller records the evalua
       // Nobody can promote it on this evidence: not the proposer's lab, and not another lab (synthetic).
       const rec = sysC.recorder();
       const later = await reviewCycle({ ledger: rec, change: { scope: "eval-promote", base: "a".repeat(40), head: "b".repeat(40),
-        diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-1\n+2\n", files: ["x"], author_labs: ["openai"] }, turn: approve, n: 1 });
+        diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-1\n+2\n", files: ["x"], author_labs: ["openai"] }, turn: approve });
       const promote = seat => rec.recordDisposition({ cycle: later.cycle, stage: "candidate", proposal, outcome: "promote", question: "promote fit?", measured: true,
         evidence: [{ kind: "ledger", hash: proposal }], by: seat, provenance: { by: { role: "check@review" }, method: "review" },
         conditions: { applicability: "fixture", rollback: "argo", reevaluate: "next cycle" } });

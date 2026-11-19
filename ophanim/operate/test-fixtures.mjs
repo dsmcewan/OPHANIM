@@ -96,7 +96,9 @@ export function scriptedTurn(over = {}) {
     const out = await (over[kind] ?? defaults[kind])({vendor, model, prompt, k, item: /"item":"([^"]+)"/.exec(prompt)?.[1] ?? null, unit, unit_id,
       ...(kind === 'unit-review' ? {rubric: rubricOf(prompt), passed: /\nRESULT: exited 0\n/.test(prompt)} : {})});
     const text = typeof out === 'string' ? out : out.text;
-    return {text, response_id: `t_${kind}_${log.length}`, served_model: typeof out === 'string' ? model : 'served_model' in out ? out.served_model : model};
+    // An override's served_model_source ("input": the transport recorded the requested model) is passed on as given.
+    return {text, response_id: `t_${kind}_${log.length}`, served_model: typeof out === 'string' ? model : 'served_model' in out ? out.served_model : model,
+      ...(typeof out === 'object' && out.served_model_source ? {served_model_source: out.served_model_source} : {})};
   };
   fn.log = log;
   return fn;

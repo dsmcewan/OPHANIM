@@ -30,15 +30,23 @@ const units = run => Object.values(run?.units ?? {});
  *   work      every implementer attempt whose writes passed the jail and reached the unit's worktree;
  *   subtask   every subagent call whose answer was returned to the implementer;
  *   critique  every reviewer whose finding was fed to an implementer revision.
+ * A unit RESUMED from a checkpoint made none of these calls in this run: its lineage is the one the checkpoint recorded
+ * when the unit was approved (checkpoint.mjs), restored here, so reusing approved work never drops its authors
+ * (independent review, assignment 2, questions 6 and 8). A row carries `served_model_source` when the transport marked
+ * the served name ("input": the pinned model, not a provider's statement about the answer).
  */
 export function contributionsOf(run) {
   const out = [];
   const p = run?.planner ?? null;
-  out.push({ kind: "plan", unit_id: null, role: "planner", vendor: p?.vendor ?? null, model: p?.model ?? null, served_model: p?.served_model ?? null });
+  const src = x => (x?.served_model_source ? { served_model_source: x.served_model_source } : {});
+  out.push({ kind: "plan", unit_id: null, role: "planner", vendor: p?.vendor ?? null, model: p?.model ?? null, served_model: p?.served_model ?? null, ...src(p) });
   for (const u of units(run)) {
-    for (const a of u.attempts ?? []) if (a.status === "written") out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: a.served_model ?? null });
-    for (const c of u.a2a?.calls ?? []) if (c.status === "answered") out.push({ kind: "subtask", unit_id: u.unit_id, role: `subagent:${c.role}`, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null });
-    for (const r of u.reviews ?? []) if (r.fed_revision) out.push({ kind: "critique", unit_id: u.unit_id, role: "reviewer", vendor: r.vendor, model: r.model, served_model: r.served_model ?? null });
+    for (const a of u.attempts ?? []) if (a.status === "written") out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: a.served_model ?? null, ...src(a) });
+    for (const c of u.a2a?.calls ?? []) if (c.status === "answered") out.push({ kind: "subtask", unit_id: u.unit_id, role: `subagent:${c.role}`, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, ...src(c) });
+    for (const r of u.reviews ?? []) if (r.fed_revision) out.push({ kind: "critique", unit_id: u.unit_id, role: "reviewer", vendor: r.vendor, model: r.model, served_model: r.served_model ?? null, ...src(r) });
+    if (u.resumed) for (const c of u.checkpoint?.contributions ?? []) {
+      out.push({ kind: c.kind, unit_id: u.unit_id, role: c.role, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, ...src(c), from_checkpoint: true });
+    }
   }
   return sorted(out);
 }

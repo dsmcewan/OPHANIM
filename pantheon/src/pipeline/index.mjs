@@ -386,7 +386,9 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const rec = await writeCheckpoint({ dir: run.checkpoints.dir, patch, record: {
         unit_key: u.unit_key, unit_id: u.unit_id, rubric_hash: u.dispatch.rubric_hash, base_commit: run.base.commit, unit_base_commit, upstream,
         commit: u.commit, tree: u.tree, reviewer: { vendor: rv.vendor, model: rv.model, served_model: rv.served_model },
-        verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest }, review_digest: digestOf(clone(rv)) } });
+        verify: { cmd: rv.verify.cmd, exit_code: rv.verify.exit_code, digest: rv.verify.digest }, review_digest: digestOf(clone(rv)),
+        // The unit's authoring lineage: restored on resume so its contributors stay excluded downstream (checkpoint.mjs).
+        contributions: contributionsOf({ units: { [u.unit_id]: u } }).filter(c => c.kind !== "plan").map(({ unit_id, ...c }) => c) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
       run.checkpoints.written.push(u.unit_id);
     } catch (e) { u.checkpoint = { written: false, why: String(e?.message ?? e) }; }
@@ -421,7 +423,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       patches.set(u.unit_id, got.patch);
       await writeFile(join(dir, "units", `${u.unit_id}.patch`), got.patch);
       Object.assign(u, { resumed: true, base_commit: wt.base_commit, commit: got.record.commit, tree, patch_digest: got.record.patch_digest,
-        checkpoint: { resumed_from: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, rubric_hash: got.record.rubric_hash, review_digest: got.record.review_digest, reviewer: clone(got.record.reviewer ?? null), verify: clone(got.record.verify ?? null), reverified: clone(u.resume_verify) } });
+        checkpoint: { resumed_from: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, rubric_hash: got.record.rubric_hash, review_digest: got.record.review_digest, reviewer: clone(got.record.reviewer ?? null), verify: clone(got.record.verify ?? null), reverified: clone(u.resume_verify),
+          contributions: clone(got.record.contributions) } });
       run.checkpoints.resumed.push(u.unit_id);
       finish(u, "approved");
       ok = true;

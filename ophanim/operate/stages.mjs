@@ -448,8 +448,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const team = [{role: 'planner', ...seatOf(planner)}];
     // Review capacity BEFORE work: the plan needs n reviewer labs outside the planner's.
     // Independence follows contributions (review/scope.mjs): a revision consumes the plan it revises and the findings
-    // it answers, so the labs behind those may not review it. A revised plan keeps the lineage of what it revises.
-    const inherited = mode === 'revise' ? [...(prevRec?.contributions ?? []).filter(c => c.purpose !== 'plan'),
+    // it answers, so the labs behind those may not review it. A revised plan keeps the lineage of what it revises,
+    // the previous planner included: the revision consumes its plan (independent review, assignment 2, question 6).
+    const inherited = mode === 'revise' ? [...(prevRec?.contributions ?? []),
       ...(gate.findings ?? []).filter(f => f.lab).map(f => ({purpose: 'critique', vendor: f.vendor ?? null, model: f.model ?? null, ...withServed(f), lab: f.lab, via: `finding ${String(f.id).slice(0, 19)} returned to planning reached the revised plan`}))] : [];
     let planSeats;
     const corrected = gate.rereview?.policy_rules ?? null;
@@ -485,6 +486,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       planSeats = st.cycle.contract === CYCLE_CONTRACT_V3
         ? reviewSeatsByModel({n, excluded: {models: st.cycle.author_models, labs: st.cycle.excluded_labs, contributing_labs: st.cycle.author_labs}, policy: st.cycle.identity_policy.rules, ...pool})
         : reviewSeats({n, avoidLabs: st.cycle.author_labs, ...pool});
+      // The lineage of the plan under review is what the attempt that opened this cycle recorded: earlier plan-review
+      // finders and a served-model override are not re-derivable from a fresh planner seat (independent review,
+      // assignment 1, question 3). Restored from that attempt's stage record, and from the cycle's own contributors.
+      const opened = [...ctx.work.stages(item)].reverse().find(s => s.stage === 'plan' && s.outputs?.cycle === open.hash);
+      contributions.push(...(opened?.contributions ?? []), ...(st.cycle.contributors ?? []).map(c => ({purpose: 'plan-lineage', vendor: c.vendor, model: c.model,
+        lab: c.model ? labOf(c.vendor, c.model) : c.lab ?? null, via: `recorded on the open plan cycle ${open.hash.slice(0, 19)}`})));
+      contributions.splice(0, contributions.length, ...dedupe(contributions));
     }
     for (let v = 1; v <= PLAN_VERSIONS; v++) {
       // 1. The planner writes the plan; a malformed answer is refused and retried within budget.
@@ -502,7 +510,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           investigations.push({role: 'planner', ...seatOf(planner), version: v, try: k + 1, ...r.log, unresolved: gapsOf(deliveryOf(dossier, r.log))});
           // The model that actually answered is a contributor too, when it is not the one asked for.
           if (reply?.served_model && reply.served_model !== planner.model && !contributions.some(c => c.purpose === 'plan' && c.model === reply.served_model)) {
-            contributions.push({purpose: 'plan', vendor: planner.vendor, model: reply.served_model, lab: labOf(planner.vendor, reply.served_model), via: 'served the planner\'s turn'});
+            contributions.push({purpose: 'plan', vendor: planner.vendor, model: reply.served_model, ...(reply.served_model_source ? {served_model_source: reply.served_model_source} : {}), lab: labOf(planner.vendor, reply.served_model), via: 'served the planner\'s turn'});
           }
         } catch (e) { refused.push({version: v, try: k + 1, why: [`the planner call failed: ${e.message}`]}); continue; }
         if (!reply) { refused.push({version: v, try: k + 1, why: [`no plan within the investigation bounds (${inv.limit_reached})`]}); continue; }
@@ -522,7 +530,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         progress({event: 'plan.answer', item, version: v, try: k + 1, refused: why.length});
         if (why.length) { refused.push({version: v, try: k + 1, why}); continue; }
         turnHash = rec.recordTurn({seat: {seat_id: `${planner.vendor}-plan@${planner.model}`, vendor: planner.vendor, mode: 'operate-plan', occupancy_gen: 1},
-          requested_model: planner.model, served_model: reply.served_model ?? null, response_id: reply.response_id ?? null, reply: text, purpose: 'plan', prompt});
+          requested_model: planner.model, served_model: reply.served_model ?? null, served_model_source: reply.served_model_source ?? null, response_id: reply.response_id ?? null, reply: text, purpose: 'plan', prompt});
         const bytesOf = bytesOfRepo(repo);
         doc = {schema: PLAN_SCHEMA, item, mode, requirement: gate.requirement, ...j,
           // Each citation with how it reached the planner (supplied, retrieved) and its version: a citation of
@@ -863,7 +871,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const authored = new Map();
     for (const c of contributionsOf(run).filter(c => c.kind !== 'plan')) {
       const model = c.served_model ?? c.model;
-      const row = {purpose: c.kind, vendor: c.vendor, model, ...(c.served_model && c.model && c.served_model !== c.model ? {requested_model: c.model} : {}), lab: labOf(c.vendor, model)};
+      const row = {purpose: c.kind, vendor: c.vendor, model, ...(c.served_model && c.model && c.served_model !== c.model ? {requested_model: c.model} : {}),
+        ...(c.served_model_source ? {served_model_source: c.served_model_source} : {}), lab: labOf(c.vendor, model)};
       const k = JSON.stringify(row);
       authored.set(k, {row, role: c.role, units: [...new Set([...(authored.get(k)?.units ?? []), c.unit_id])]});
     }

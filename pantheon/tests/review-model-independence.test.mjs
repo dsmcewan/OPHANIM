@@ -164,6 +164,35 @@ test('history is verified under the rule it was recorded under: a v2 cycle on th
   assert.equal(m.author_models, undefined, 'v3 fields passed to a v2 cycle are not recorded: its rule stays the lab rule');
 }));
 
+// Independent review, assignment 2 (OpenAI gpt-6-astra, 09d490f), questions 2 and 5: a signed v3 cycle took
+// `contributors` independently of `author_models` and `excluded_labs`. A cycle whose contributor was gpt-6-astra (a
+// declared model) or an unresolved name, opened with EMPTY exclusion arrays, admitted gpt-6-astra to its panel and
+// closed verified. The ledger now re-derives the exclusions from the recorded contributors.
+test('a v3 cycle\'s exclusions are re-derived from its contributors: an inconsistent or unresolved contribution record is refused', () => withLedger(async (sys, rec) => {
+  const open = (scope, extra) => rec.openCycle({scope, base: C('a'), head: C('b'), diff: DIFF, files: ['x'], prompt: 'review', contract: CYCLE_CONTRACT_V3, reviewers: 3, required_reviewers: 3,
+    author_labs: [], author_models: [], excluded_labs: [], identity_policy: currentPolicy(), ...extra});
+  // The reviewer's reproduction: a listed contributor, and an unresolved one, with empty exclusion arrays.
+  assert.throws(() => open('listed', {contributors: [{vendor: 'openai', model: 'gpt-6-astra'}]}), /author_models \(none\) are not the identities its contributors resolve to \(openai\/gpt-6-astra\)/);
+  assert.throws(() => open('unresolved', {contributors: [{vendor: 'openai', model: 'unlisted-review-model'}]}), /contributor identity is unresolved \(openai\/unlisted-review-model\)/);
+  // A contributor that names neither a model nor a lab is unresolved too.
+  assert.throws(() => open('nameless', {contributors: [{vendor: 'openai', model: null}]}), /contributor identity is unresolved/);
+  // The models match but the contributing lab is missing from author_labs (the shared-lab record would understate it).
+  assert.throws(() => open('labs', {author_models: ['openai/gpt-6-astra'], contributors: [{vendor: 'openai', model: 'gpt-6-astra'}]}), /author_labs omit openai/);
+  // A lab-only contribution excludes its lab, and the cycle must say so.
+  assert.throws(() => open('lab-only', {author_labs: ['xai'], contributors: [{vendor: null, model: null, lab: 'xai'}]}), /exclude the xai lab .* its excluded_labs do not/);
+  assert.equal(sys.ledger.read().filter(e => e.kind === 'cycle').length, 0, 'nothing was opened');
+  // Consistent records open, including through reviewCycle with a lab-only critique: its lab is recorded and re-derives.
+  const ok = await reviewCycle({ledger: rec, change: {scope: 'consistent', base: C('a'), head: C('b'), diff: DIFF, files: ['x'], independence: 'model',
+    contributions: [PLAN, WORK, {purpose: 'critique', vendor: null, model: null, lab: 'xai'}]}, turn: approve});
+  const c = sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === ok.cycle));
+  assert.deepEqual(c.excluded_labs, ['xai']);
+  assert.ok(c.contributors.some(x => x.model === null && x.lab === 'xai'), 'the lab-only contribution is recorded with its lab');
+  assert.ok(!ok.reviews.some(r => r.lab === 'xai') && !ok.reviews.some(r => r.model === 'gpt-6-astra'));
+  assess(rec, ok.cycle);
+  assert.equal(rec.closeCycle(ok.cycle).outcome, 'verified');
+  assert.equal(sys.ledger.verify().ok, true);
+}));
+
 test('cold review, by contract: with the author\'s turn cited, v3 refuses the model in the lineage and admits a sibling; v2 still refuses the whole lab', () => withLedger(async (sys, rec) => {
   const plannerTurn = (id, served = 'claude-fable-5-2') => rec.recordTurn({seat: {seat_id: `anthropic-plan-${id}@claude-fable-5-2`, vendor: 'anthropic', mode: 'plan', occupancy_gen: 1},
     requested_model: 'claude-fable-5-2', served_model: served, response_id: `plan_${id}`, reply: `a plan ${id}`, purpose: 'plan', prompt: 'p'});

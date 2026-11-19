@@ -40,12 +40,40 @@ test('a cycle that records the requirement is refused with fewer reviewers, and 
   assert.equal(sys.ledger.verify().ok, true);
 }));
 
-test('cycles without the field keep their meaning: a v2 or v1 cycle of one reviewer still opens and closes as before', () => withLedger(async (sys, rec) => {
-  const v2 = await reviewCycle({ledger: rec, change: change('v2-scope'), turn: approve, n: 1});
-  assert.equal(sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === v2.cycle)).required_reviewers, undefined);
-  assess(rec, v2.cycle);
-  assert.equal(rec.closeCycle(v2.cycle).outcome, 'verified');
-  const v1 = await reviewCycle({ledger: rec, change: change('v1-scope'), turn: approve, n: 1, contract: CYCLE_CONTRACT_V1});
-  assert.equal(rec.closeCycle(v1.cycle).outcome, 'verified');
+// A recorded cycle of one reviewer (as v1 and v2 cycles were opened before the requirement existed), written the way
+// such a ledger holds it: the cycle, the reviewer's turn and its review.
+function oneReviewerCycle(rec, scope, contract) {
+  const prompt = 'review the change';
+  const cycle = rec.openCycle({scope, base: C('a'), head: C('b'), diff: DIFF, files: ['x'], prompt, reviewers: 1, author_labs: ['anthropic'], ...(contract ? {contract} : {})});
+  const seat = {seat_id: 'xai-cycle-review@grok-4.7', vendor: 'xai', mode: 'cycle-review', occupancy_gen: 1};
+  const reply = '```json\n{"verdict": "approve", "findings": []}\n```';
+  const turn = rec.recordTurn({seat, requested_model: 'grok-4.7', served_model: 'grok-4.7', response_id: `hist_${scope}`, reply, purpose: 'cycle-review', prompt, cites: [cycle]});
+  rec.recordReview({seat, model: 'grok-4.7', served_model: 'grok-4.7', response_id: `hist_${scope}`, verdict: 'approve', targets: [cycle], turn});
+  return cycle;
+}
+
+test('cycles without the field keep their meaning: a recorded v2 or v1 cycle of one reviewer still re-derives and closes as before', () => withLedger(async (sys, rec) => {
+  const v2 = oneReviewerCycle(rec, 'v2-scope');
+  assert.equal(sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === v2)).required_reviewers, undefined);
+  assess(rec, v2);
+  assert.equal(rec.closeCycle(v2).outcome, 'verified');
+  const v1 = oneReviewerCycle(rec, 'v1-scope', CYCLE_CONTRACT_V1);
+  assert.equal(rec.closeCycle(v1).outcome, 'verified');
+  assert.equal(sys.ledger.verify().ok, true);
+}));
+
+// Independent review, assignment 2 (OpenAI gpt-6-astra, 09d490f), question 5: `reviewCycle` with n: 1 opened a NEW
+// default-contract (v2) cycle reviewed by one lab, and it closed verified. A newly opened cycle of any contract needs
+// three distinct labs; the default contract records the requirement so the ledger refuses a close on fewer.
+test('a newly opened cycle needs three labs, on every contract: n: 1 is refused before anything is opened', () => withLedger(async (sys, rec) => {
+  await assert.rejects(reviewCycle({ledger: rec, change: change('new-one-lab'), turn: approve, n: 1}), e => e.code === 'REVIEW_LABS_BELOW_REQUIRED');
+  await assert.rejects(reviewCycle({ledger: rec, change: change('new-one-lab-v1'), turn: approve, n: 1, contract: CYCLE_CONTRACT_V1}), e => e.code === 'REVIEW_LABS_BELOW_REQUIRED');
+  await assert.rejects(reviewCycle({ledger: rec, change: change('new-one-seat'), turn: approve, seats: [{vendor: 'xai', model: 'grok-4.7'}]}), e => e.code === 'REVIEW_LABS_BELOW_REQUIRED');
+  assert.equal(sys.ledger.read().filter(e => e.kind === 'cycle').length, 0, 'nothing was opened');
+  // The default contract now records the requirement, so the ledger itself holds the close to three labs.
+  const r = await reviewCycle({ledger: rec, change: change('new-three'), turn: approve});
+  assert.equal(sys.ledger.payloadOf(sys.ledger.read().find(e => sys.ledger.hashOf(e) === r.cycle)).required_reviewers, REQUIRED_REVIEW_LABS);
+  assess(rec, r.cycle);
+  assert.equal(rec.closeCycle(r.cycle).labs.length, 3);
   assert.equal(sys.ledger.verify().ok, true);
 }));

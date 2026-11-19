@@ -14,8 +14,15 @@
 //   {schema, unit_key, unit_id, verdict: "approve", rubric_hash, base_commit (the run's base), unit_base_commit (the
 //    unit's worktree base: base + upstream patches), upstream: [{unit_id, unit_key, tree}], commit, tree,
 //    patch_path (relative to checkpoints.dir), patch_digest, reviewer: {vendor, model, served_model},
-//    verify: {cmd, exit_code, digest}, review_digest (digest of the Stage 5 review record that approved it), recorded_at}
+//    verify: {cmd, exit_code, digest}, review_digest (digest of the Stage 5 review record that approved it),
+//    contributions: [{kind: work | subtask | critique, role, vendor, model, served_model, served_model_source?}],
+//    recorded_at}
 //   and the patch beside it at <hex>.patch. Both are written atomically (temp file + rename), patch first.
+//   `contributions` is the unit's AUTHORING LINEAGE as record.mjs contributionsOf projects it: every implementer whose
+//   writes reached the worktree, every subagent whose answer reached the implementer, and every Stage 5 reviewer whose
+//   finding was fed to a revision. A resumed unit restores it, so the models that shaped the reused patch stay
+//   contributors for the later three-lab review and the validator (independent review, assignment 2, questions 6 and 8).
+//   A v1 checkpoint (written before the lineage was kept) is not resumed: the unit runs again.
 //
 // A checkpoint is EVIDENCE TO RE-CHECK, never a verdict to trust: checkpointRefusal() refuses one whose schema,
 // key, unit, base, verdict or upstream (unit set, keys and trees) differ from the current run, and whose patch bytes
@@ -33,7 +40,8 @@ import { randomBytes } from "node:crypto";
 import { digestOf, isObject, sha256, str } from "./util.mjs";
 import { UNIT_KEYS } from "./work-units.mjs";
 
-export const CHECKPOINT_SCHEMA = "pantheon.unit-checkpoint/v1";
+export const CHECKPOINT_SCHEMA = "pantheon.unit-checkpoint/v2";
+export const CHECKPOINT_CONTRIBUTION_KINDS = Object.freeze(["work", "subtask", "critique"]);
 export const UNIT_KEY_SCHEMA = "pantheon.unit-key/v1";
 const hexOf = key => String(key).replace(/^sha256:/, "");
 
@@ -89,6 +97,10 @@ export function checkpointRefusal({ record, patch }, expect) {
   if (!str(record.tree) || !/^[0-9a-f]{40,64}$/.test(record.tree)) return "the checkpoint records no tree";
   if (!/^sha256:[0-9a-f]{64}$/.test(record.rubric_hash ?? "") || !/^sha256:[0-9a-f]{64}$/.test(record.review_digest ?? "")) return "the checkpoint does not bind its approval (rubric_hash and review_digest)";
   if (!isObject(record.verify) || record.verify.exit_code !== 0) return "the checkpoint records no passing verify";
+  const lineage = record.contributions;
+  if (!Array.isArray(lineage) || !lineage.every(c => isObject(c) && CHECKPOINT_CONTRIBUTION_KINDS.includes(c.kind) && str(c.role) && str(c.vendor) && str(c.model)
+    && (c.served_model === null || str(c.served_model)))) return "the checkpoint does not record the unit's contribution lineage [{kind, role, vendor, model, served_model}]";
+  if (!lineage.some(c => c.kind === "work")) return "the checkpoint records no implementer contribution: an approved patch was written by someone";
   if (expect.verify_cmd !== undefined && record.verify.cmd !== expect.verify_cmd) return "the checkpoint's verify command is not the unit's";
   if (typeof patch !== "string") return "the checkpoint's patch is missing";
   if (sha256(patch) !== record.patch_digest) return `the checkpoint's patch hashes to ${sha256(patch)}, not the recorded ${record.patch_digest}`;

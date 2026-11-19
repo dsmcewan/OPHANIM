@@ -3,8 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { runPipeline, unitKey, CHECKPOINT_SCHEMA } from "../src/pipeline/index.mjs";
-import { tempRepo, seats, unit, scripted, sh, write, PLANNER } from "./fixtures/pipeline-stages.mjs";
+import { runPipeline, unitKey, CHECKPOINT_SCHEMA, contributionsOf } from "../src/pipeline/index.mjs";
+import { contributorKeys, candidateRefusal } from "../src/review/identity.mjs";
+import { tempRepo, seats, unit, scripted, sh, write, PLANNER, ask, approve, reject, RUBRIC } from "./fixtures/pipeline-stages.mjs";
 
 const PLAN = [unit("a"), unit("b"), unit("c", { depends_on: ["a"], verify_cmd: "test -f src/a/impl.mjs && test -f src/c/impl.mjs" })];
 const laneError = () => Object.assign(new Error("lane down"), { code: "lane_failure", kind: "exit" });
@@ -28,7 +29,7 @@ test("run 2 resumes the approved units with zero provider calls, runs the one th
   assert.equal(files.some(f => f.endsWith(".tmp")), false);
   const cpA = JSON.parse(readFileSync(one.out.units.a.checkpoint.file, "utf8"));
   assert.equal(cpA.schema, CHECKPOINT_SCHEMA);
-  assert.deepEqual(Object.keys(cpA).sort(), ["base_commit", "commit", "patch_digest", "patch_path", "recorded_at", "review_digest", "reviewer", "rubric_hash", "schema", "tree", "unit_base_commit", "unit_id", "unit_key", "upstream", "verdict", "verify"].sort());
+  assert.deepEqual(Object.keys(cpA).sort(), ["base_commit", "commit", "contributions", "patch_digest", "patch_path", "recorded_at", "review_digest", "reviewer", "rubric_hash", "schema", "tree", "unit_base_commit", "unit_id", "unit_key", "upstream", "verdict", "verify"].sort());
   assert.deepEqual([cpA.unit_id, cpA.verdict, cpA.unit_key, cpA.tree, cpA.commit, cpA.verify.exit_code, cpA.reviewer.model], ["a", "approve", one.out.units.a.unit_key, one.out.units.a.tree, one.out.units.a.commit, 0, "gpt-6-luna"]);
   const cpC = JSON.parse(readFileSync(one.out.units.c.checkpoint.file, "utf8"));
   assert.deepEqual(cpC.upstream, [{ unit_id: "a", unit_key: one.out.units.a.unit_key, tree: one.out.units.a.tree }]);
@@ -90,4 +91,58 @@ test("a checkpoint whose upstream tree differs from this run's is not trusted", 
   assert.match(two.out.units.a.checkpoint_rejected.why, /names no patch file/);
   assert.match(two.out.units.c.checkpoint_rejected.why, /upstream units or their trees differ/);
   assert.equal(two.out.units.c.resumed, false); assert.equal(two.out.units.b.resumed, true);
+});
+
+// Independent review, assignment 2 (OpenAI gpt-6-astra, 09d490f), questions 6 and 8: a checkpoint kept the approval
+// and the patch but not who wrote it. A resumed unit had empty attempts, a2a calls and reviews, so contributionsOf
+// dropped its implementer, its subagent and the Stage 5 reviewer whose finding fed a revision, and each of those models
+// became eligible for the later three-lab review and the validator. The lineage is now kept and restored.
+test("a resumed unit keeps its authoring lineage: implementer, subagent and the critique reviewer stay contributors", async t => {
+  const env = await tempRepo(); t.after(env.cleanup);
+  const checkpoints = { dir: join(env.root, "checkpoints") };
+  const plan = [unit("a", { allowed_subagents: ["helper"] })];
+  const lineage = out => contributionsOf(out).filter(c => c.kind !== "plan").map(c => [c.kind, c.role, c.vendor, c.model]);
+  const runOnce = async (name, implement, review) => {
+    const s = scripted({ plan, implement, review });
+    return runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats(), turns: s.turns, dir: join(env.root, name), planner: PLANNER, run_id: name, checkpoints });
+  };
+  // Run 1: the implementer asks its subagent; the pinned reviewer rejects once (its finding is fed to a revision), then approves.
+  const one = await runOnce("run1", async args => {
+    await ask(args.a2a, { role: "helper", unit_id: "a", text: "a question" });
+    await write(args.cwd, "src/a/impl.mjs", `export const id = "a${args.attempt}";\n`);
+    return "done";
+  }, (args, n) => (n === 1 ? reject(RUBRIC) : approve(RUBRIC)));
+  assert.equal(one.status, "completed");
+  const before = lineage(one);
+  assert.deepEqual([...new Set(before.map(c => c[0]))].sort(), ["critique", "subtask", "work"]);
+  const cp = JSON.parse(readFileSync(one.units.a.checkpoint.file, "utf8"));
+  assert.deepEqual(cp.contributions.map(c => [c.kind, c.role, c.vendor, c.model]), before);
+
+  // Run 2: the unit resumes with no provider call, and its lineage is the one it was approved with.
+  const two = await runOnce("run2", async () => { throw new Error("a resumed unit must not be implemented"); }, () => { throw new Error("a resumed unit must not be reviewed"); });
+  assert.equal(two.status, "completed");
+  assert.deepEqual([two.units.a.resumed, two.units.a.attempts.length, two.units.a.a2a.calls.length, two.units.a.reviews.length], [true, 0, 0, 0]);
+  assert.deepEqual(lineage(two), before);
+  assert.ok(contributionsOf(two).filter(c => c.kind !== "plan").every(c => c.from_checkpoint === true));
+  // So none of them may sit on a later panel.
+  const keys = contributorKeys(contributionsOf(two));
+  for (const s of [{ vendor: "agy_google", model: "gemini-4-hydrogen-medium" }, { vendor: "xai", model: "grok-4.5" }, { vendor: "openai", model: "gpt-6-luna" }])
+    assert.ok(candidateRefusal(s, keys), `${s.model} contributed to the reused unit and is eligible after resume`);
+});
+
+test("a checkpoint written before the lineage was kept (v1, or without contributions) is not resumed: the unit runs again", async t => {
+  const env = await tempRepo(); t.after(env.cleanup);
+  const checkpoints = { dir: join(env.root, "checkpoints") };
+  const one = await go(env, "run1", good, checkpoints);
+  const fileA = one.out.units.a.checkpoint.file, cpA = JSON.parse(readFileSync(fileA, "utf8"));
+  const { contributions, ...old } = cpA;
+  assert.ok(contributions.length);
+  writeFileSync(fileA, JSON.stringify({ ...old, schema: "pantheon.unit-checkpoint/v1" }));
+  const fileB = one.out.units.b.checkpoint.file, cpB = JSON.parse(readFileSync(fileB, "utf8"));
+  writeFileSync(fileB, JSON.stringify({ ...cpB, contributions: [] }));
+  const two = await go(env, "run2", good, checkpoints);
+  assert.equal(two.out.status, "completed");
+  assert.match(two.out.units.a.checkpoint_rejected.why, /schema is pantheon\.unit-checkpoint\/v1/);
+  assert.match(two.out.units.b.checkpoint_rejected.why, /records no implementer contribution/);
+  for (const id of ["a", "b"]) { assert.equal(two.out.units[id].resumed, false); assert.equal(two.out.units[id].attempts.length, 1); }
 });

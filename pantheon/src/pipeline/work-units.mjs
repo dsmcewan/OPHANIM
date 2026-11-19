@@ -33,6 +33,13 @@ export function reservedPathRefusal(p) {
 export const DIFFICULTIES = Object.freeze(["easy", "medium", "hard"]);
 export const UNIT_KEYS = Object.freeze(["unit_id", "depends_on", "owned_paths", "difficulty", "specialist_role", "allowed_subagents", "verify_cmd", "invariants"]);
 const UNIT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// A specialist role is a NAME, not an instruction (independent review, assignment 2, question 7): the implementer's
+// prompt interpolates it, so free text there would be an unreviewed instruction channel outside the frozen rubric.
+// Lower-case words joined by "-", at most six words and 48 characters: "node-esm-library-engineer".
+export const SPECIALIST_ROLE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+){0,5}$/;
+export const SPECIALIST_ROLE_MAX = 48;
+export const specialistRoleRefusal = v => (typeof v === "string" && v.length <= SPECIALIST_ROLE_MAX && SPECIALIST_ROLE.test(v) ? null
+  : `specialist_role is a role name: lower-case words joined by "-" (at most six words, ${SPECIALIST_ROLE_MAX} characters), not free text`);
 
 /** The strict JSON schema of a plan's work units (handed to a transport that supports structured output). */
 export const WORK_UNITS_SCHEMA = Object.freeze({
@@ -53,7 +60,7 @@ export const WORK_UNITS_SCHEMA = Object.freeze({
           depends_on: { type: "array", items: { type: "string" }, uniqueItems: true },
           owned_paths: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, uniqueItems: true },
           difficulty: { enum: [...DIFFICULTIES] },
-          specialist_role: { type: "string", minLength: 1 },
+          specialist_role: { type: "string", pattern: SPECIALIST_ROLE.source, maxLength: SPECIALIST_ROLE_MAX },
           allowed_subagents: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true },
           verify_cmd: { type: "string", minLength: 1 },
           invariants: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
@@ -94,6 +101,7 @@ export function validateWorkUnits(plan) {
     }
     if (!DIFFICULTIES.includes(u.difficulty)) no("DIFFICULTY", at, `unit ${at}: difficulty is one of ${DIFFICULTIES.join(", ")}`);
     if (!str(u.specialist_role)) no("SPECIALIST_ROLE", at, `unit ${at}: specialist_role is a non-empty string`);
+    else if (specialistRoleRefusal(u.specialist_role)) no("SPECIALIST_ROLE", at, `unit ${at}: ${specialistRoleRefusal(u.specialist_role)}`);
     if (!str(u.verify_cmd)) no("VERIFY_CMD", at, `unit ${at}: verify_cmd is a non-empty string`);
     if (!strings(u.invariants) || !u.invariants.length) no("INVARIANTS", at, `unit ${at}: invariants is a non-empty array of non-empty strings`);
     if (!strings(u.allowed_subagents)) no("ALLOWED_SUBAGENTS", at, `unit ${at}: allowed_subagents is an array of non-empty strings (it may be empty)`);

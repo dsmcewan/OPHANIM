@@ -3,7 +3,10 @@
 //  (1) The Dispatcher SPECIALIST — one read-only model turn per unit. It judges whether the unit is cohesive,
 //      confirms or corrects `specialist_role`, may RAISE (never lower) `difficulty`, and writes the acceptance
 //      rubric. The controller then FREEZES that rubric: rubric_hash = sha256(canonical {unit_id, owned_paths,
-//      verify_cmd, invariants, rubric}). Stage 5 re-hashes it before every review.
+//      verify_cmd, invariants, rubric, specialist_role, difficulty}). Stage 5 re-hashes it before every review.
+//      Everything the dispatcher changes about the unit the implementer is given is inside that hash, and the role is a
+//      role NAME (work-units.mjs SPECIALIST_ROLE), not free text: the dispatcher's influence on the work is confined to
+//      the frozen record (independent review, assignment 2, question 7).
 //  (2) The deterministic CONTROLLER ({vendor: "controller"}, no model) — disjoint owned-path locks, topological
 //      waves, and one isolated git worktree per active unit.
 //
@@ -22,7 +25,7 @@
 import { rm } from "node:fs/promises";
 import { CAPABILITIES, digestOf, judgingTurn, keysRefusal, str, clone } from "./util.mjs";
 import { pathsOverlap as overlapOf } from "./paths.mjs";
-import { DIFFICULTIES, cycleOf } from "./work-units.mjs";
+import { DIFFICULTIES, SPECIALIST_ROLE, SPECIALIST_ROLE_MAX, cycleOf, specialistRoleRefusal } from "./work-units.mjs";
 import { git } from "./git.mjs";
 
 export const CONTROLLER = Object.freeze({ vendor: "controller", model: null });
@@ -40,7 +43,7 @@ export const DISPATCH_SCHEMA = Object.freeze({
   properties: {
     unit_id: { type: "string" },
     cohesive: { type: "boolean" },
-    specialist_role: { type: "string", minLength: 1 },
+    specialist_role: { type: "string", pattern: SPECIALIST_ROLE.source, maxLength: SPECIALIST_ROLE_MAX },
     difficulty: { enum: [...DIFFICULTIES] },
     rubric: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, uniqueItems: true },
     notes: { type: "string" },
@@ -58,7 +61,7 @@ export function DISPATCHER_PROMPT({ unit, plan }) {
     others.length ? `THE OTHER UNITS OF THE PLAN\n${others.join("\n")}\n` : "",
     "DECIDE",
     "1. cohesive — true only if this unit holds everything that is coupled: its types, the implementation that uses them and the tests that prove them are all inside its owned_paths, and its verify_cmd can pass on top of its depends_on alone. If a coupled file belongs to another unit, or the unit is several unrelated changes, answer false and say what must move in `notes`: the unit goes back to the planner.",
-    "2. specialist_role — confirm the planner's, or correct it to the kind of engineer this unit really needs.",
+    "2. specialist_role — confirm the planner's, or correct it to the kind of engineer this unit really needs. A role NAME only: lower-case words joined by \"-\" (at most six), such as \"node-esm-library-engineer\"; any other text is refused.",
     `3. difficulty — confirm "${unit.difficulty}" or RAISE it. You may not lower it; a lower answer is refused.`,
     "4. rubric — the acceptance criteria a reviewer will later check one by one against the diff and the verify_cmd output. Each is one checkable sentence. Cover every invariant. Do not restate the same criterion twice. This rubric is frozen and hashed when you answer.",
     "",
@@ -75,6 +78,7 @@ export function dispatchRefusal(d, unit) {
   if (d.unit_id !== unit.unit_id) return { code: "SCHEMA", why: `dispatch answer is for "${d.unit_id}", not "${unit.unit_id}"` };
   if (typeof d.cohesive !== "boolean") return { code: "SCHEMA", why: "cohesive is a boolean" };
   if (!str(d.specialist_role)) return { code: "SCHEMA", why: "specialist_role is a non-empty string" };
+  if (specialistRoleRefusal(d.specialist_role)) return { code: "SPECIALIST_ROLE", why: specialistRoleRefusal(d.specialist_role) };
   if (!DIFFICULTIES.includes(d.difficulty)) return { code: "SCHEMA", why: `difficulty is one of ${DIFFICULTIES.join(", ")}` };
   if (typeof d.notes !== "string") return { code: "SCHEMA", why: "notes is a string" };
   if (!Array.isArray(d.rubric) || !d.rubric.length || !d.rubric.every(str)) return { code: "SCHEMA", why: "rubric is a non-empty array of non-empty strings" };
@@ -83,8 +87,12 @@ export function dispatchRefusal(d, unit) {
   return null;
 }
 
-/** The frozen acceptance rubric's hash. The five fields are everything a review is judged against. */
-export const rubricHash = ({ unit_id, owned_paths, verify_cmd, invariants, rubric }) => digestOf({ unit_id, owned_paths, verify_cmd, invariants, rubric });
+/**
+ * The frozen acceptance rubric's hash: everything a review is judged against, and everything the dispatcher set on the
+ * unit the implementer is given (its role and difficulty), so neither can change after dispatch unseen.
+ */
+export const rubricHash = ({ unit_id, owned_paths, verify_cmd, invariants, rubric, specialist_role, difficulty }) =>
+  digestOf({ unit_id, owned_paths, verify_cmd, invariants, rubric, specialist_role, difficulty });
 
 /**
  * Run the dispatcher turn for one unit and freeze its rubric.
@@ -104,7 +112,8 @@ export async function runDispatcher({ unit, plan = [], seat, turn, signal, sameM
   if (!r.admitted) return Object.assign(rec, { code: r.code, why: `no dispatcher answer was admitted: ${r.why}` });
   const d = r.value;
   Object.assign(rec, { served_model: r.served_model, served_model_source: r.served_model_source, cohesive: d.cohesive, specialist_role: d.specialist_role, difficulty: d.difficulty, rubric: [...d.rubric], notes: d.notes });
-  rec.rubric_hash = rubricHash({ unit_id: unit.unit_id, owned_paths: unit.owned_paths, verify_cmd: unit.verify_cmd, invariants: unit.invariants, rubric: rec.rubric });
+  rec.rubric_hash = rubricHash({ unit_id: unit.unit_id, owned_paths: unit.owned_paths, verify_cmd: unit.verify_cmd, invariants: unit.invariants, rubric: rec.rubric,
+    specialist_role: rec.specialist_role, difficulty: rec.difficulty });
   if (!d.cohesive) return Object.assign(rec, { status: "returned", code: "NOT_COHESIVE", why: `the dispatcher judged the unit not cohesive; it returns to the planner: ${d.notes}` });
   rec.status = "dispatched";
   return rec;

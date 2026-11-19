@@ -13,10 +13,20 @@
 // at the cycle's attempt limit.
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {labOf} from './lineage-kinds.mjs';
-import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V3, independenceRefusal} from './cycle-kinds.mjs';
+import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, independenceRefusal} from './cycle-kinds.mjs';
 import {resolveModel, contributorKeys, candidateRefusal, currentPolicy} from '../review/identity.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
+
+/**
+ * The raw contributor names a v3 cycle records: every requested and served model of each contribution, and a
+ * contribution that names a lab and no model as {vendor, model: null, lab} (its lab is excluded outright). The ledger
+ * re-derives the cycle's exclusions from exactly these rows (cycle-kinds.mjs v3LineageRefusal).
+ */
+export const contributorRows = contributions => contributions.flatMap(c => {
+  const names = [...new Set([c.model, c.served_model, c.requested_model].filter(Boolean))];
+  return names.length ? names.map(model => ({vendor: c.vendor ?? null, model})) : [{vendor: c.vendor ?? null, model: null, ...(c.lab ? {lab: c.lab} : {})}];
+});
 
 /** Tries per reviewer seat of one cycle, the first included, unless the caller names another limit. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -146,7 +156,12 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   const pinned = byModel ? change.identity_policy ?? currentPolicy() : null;
   const keys = byModel ? contributorKeys(change.contributions ?? [], pinned) : null;
   if (byModel && keys.unresolved.length) throw refuse('UNRESOLVED_CONTRIBUTOR', `reviewCycle: a contributor's identity is unresolved (${keys.unresolved.map(u => `${u.vendor}/${u.model}`).join(', ')}); no review can qualify`);
-  if (byModel && required_reviewers === undefined) required_reviewers = Math.max(n, REQUIRED_REVIEW_LABS);
+  // Every NEWLY opened cycle needs three distinct labs (independent review, assignment 2, question 5): the default
+  // contract (and v3) records the requirement, so the ledger itself refuses a close on fewer labs. A v1 cycle keeps its
+  // old payload byte for byte, so its floor is enforced here, before it opens. Cycles already on a ledger are verified
+  // under the rules they recorded; this changes only what a new cycle may be opened with.
+  const opensV1 = !byModel && contract === CYCLE_CONTRACT_V1;
+  if (!opensV1 && required_reviewers === undefined) required_reviewers = Math.max(n, REQUIRED_REVIEW_LABS);
   if (typeof diff !== 'string' || diff === '') throw new Error('reviewCycle: the change carries its diff text');
   const last = ledger.lastCycle(scope);
   if (last && !last.close) {
@@ -164,6 +179,9 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
     throw refuse('REVIEW_LABS_BELOW_REQUIRED', `reviewCycle: the review requires ${Math.max(Number(required_reviewers) || 0, REQUIRED_REVIEW_LABS)} independent labs ` +
       `and ${chosen.length} reviewer seat(s) were given; a caller cannot lower it`);
   }
+  if (opensV1 && chosen.length < REQUIRED_REVIEW_LABS) {
+    throw refuse('REVIEW_LABS_BELOW_REQUIRED', `reviewCycle: a new cycle requires ${REQUIRED_REVIEW_LABS} independent labs and ${chosen.length} reviewer seat(s) were given`);
+  }
   if (byModel) {
     for (const s of chosen) { const why = candidateRefusal(s, keys, pinned); if (why) throw Object.assign(new Error(`reviewCycle: ${why}`), {code: 'CONTRIBUTOR'}); }
   } else {
@@ -175,7 +193,7 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs: byModel ? keys.contributing_labs : author_labs, author_turns, opened_at,
     contract: byModel ? CYCLE_CONTRACT_V3 : contract, policy, practice_scope, ...(required_reviewers !== undefined ? {required_reviewers} : {}),
     ...(byModel ? {author_models: keys.models, excluded_labs: keys.labs, identity_policy: pinned,
-      contributors: (change.contributions ?? []).flatMap(c => [...new Set([c.model, c.served_model, c.requested_model].filter(Boolean))].map(model => ({vendor: c.vendor ?? null, model})))} : {})});
+      contributors: contributorRows(change.contributions ?? [])} : {})});
   const {reviews, failed} = await askSeats({ledger, cycle, seats: chosen, prompt, turn, author_turns, max_attempts: limit, resumed: false, at});
   return {cycle, scope, base, head, prompt_sha: promptSha(prompt), reviews, failed, complete: failed.length === 0, max_attempts: limit};
 }

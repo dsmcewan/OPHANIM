@@ -38,7 +38,7 @@ test("a verify_cmd that times out is a failure, its process group is killed, and
 });
 
 test("rubric hash tamper: a rubric, command or path that no longer hashes to the frozen rubric_hash is refused before any model is asked", async t => {
-  const u = unit("a"), frozen = rubricHash({ unit_id: "a", owned_paths: u.owned_paths, verify_cmd: u.verify_cmd, invariants: u.invariants, rubric: RUBRIC });
+  const u = unit("a"), frozen = rubricHash({ unit_id: "a", owned_paths: u.owned_paths, verify_cmd: u.verify_cmd, invariants: u.invariants, rubric: RUBRIC, specialist_role: u.specialist_role, difficulty: u.difficulty });
   let asked = 0;
   const turn = async a => { asked++; return { text: JSON.stringify(approve(RUBRIC)), served_model: a.model }; };
   const tampered = [
@@ -47,6 +47,8 @@ test("rubric hash tamper: a rubric, command or path that no longer hashes to the
     { unit: { ...u, verify_cmd: "true" }, dispatch: { rubric: RUBRIC, rubric_hash: frozen } },            // an easier ground truth
     { unit: { ...u, owned_paths: ["**"] }, dispatch: { rubric: RUBRIC, rubric_hash: frozen } },
     { unit: { ...u, invariants: ["anything"] }, dispatch: { rubric: RUBRIC, rubric_hash: frozen } },
+    { unit: { ...u, specialist_role: "other-engineer" }, dispatch: { rubric: RUBRIC, rubric_hash: frozen } },   // the role the implementer was given
+    { unit: { ...u, difficulty: "hard" }, dispatch: { rubric: RUBRIC, rubric_hash: frozen } },
   ];
   for (const x of tampered) {
     const rec = await runReviewer({ ...x, worktree: "/nonexistent-never-read", base_commit: "HEAD", seat: LUNA, turn });
@@ -145,7 +147,7 @@ test("an openai reviewer turn carries reasoning.context = all_turns as an opaque
   assert.equal(of(r.calls, "dispatcher")[0].extra, undefined);
   const env = await tempRepo(); t.after(env.cleanup);
   await write(env.repo, "f.txt", "x\n");
-  const u = unit("a", { verify_cmd: "true" }), d = { rubric: RUBRIC, rubric_hash: rubricHash({ unit_id: "a", owned_paths: u.owned_paths, verify_cmd: "true", invariants: u.invariants, rubric: RUBRIC }) };
+  const u = unit("a", { verify_cmd: "true" }), d = { rubric: RUBRIC, rubric_hash: rubricHash({ unit_id: "a", owned_paths: u.owned_paths, verify_cmd: "true", invariants: u.invariants, rubric: RUBRIC, specialist_role: u.specialist_role, difficulty: u.difficulty }) };
   let got;
   const rec = await runReviewer({ unit: u, worktree: env.repo, base_commit: "HEAD", seat: { vendor: "xai", model: "grok-4.5" }, dispatch: d, turn: async a => { got = a; return { text: JSON.stringify(approve(RUBRIC)), served_model: a.model }; } });
   assert.equal(rec.status, "approved"); assert.deepEqual(got.extra, {});
