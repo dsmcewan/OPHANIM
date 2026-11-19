@@ -331,6 +331,26 @@ test("REAL JAIL: the home's credential-bearing directories are empty to the brid
   assert.deepEqual(r.sandbox.home_paths_kept.map(k => k.path).sort(), [bridgeDir, venv], "the bridge's directory and the SDK's venv are bound back, and nothing else");
 });
 
+test("REAL JAIL: a python or bridge that lives under /tmp is bound back read-only: the jail's fresh /tmp would otherwise hide it", async t => {
+  const probe = await sandboxAvailable("bwrap");
+  if (!probe.ok) { t.skip(`UNVERIFIED: bwrap is not usable here (${probe.why})`); return; }
+  const { run, note } = await setup(t);
+  const where = join(tmpdir(), `pantheon-tmp-python-${process.pid}`);
+  t.after(() => rmSync(where, { recursive: true, force: true }));
+  mkdirSync(join(where, "bin"), { recursive: true }); mkdirSync(join(where, "bridge"), { recursive: true });
+  // "python" here is a launcher script (as a venv's would be a link): it runs node on the bridge it is given.
+  writeFileSync(join(where, "bin", "python"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
+  const bridge = join(where, "bridge", "fake-antigravity-bridge.mjs");
+  writeFileSync(bridge, readFileSync(FAKE_BRIDGE));
+  const other = join(tmpdir(), `pantheon-tmp-other-${process.pid}.txt`);
+  writeFileSync(other, "host /tmp\n"); t.after(() => rmSync(other, { force: true }));
+  const r = await run(CARBON, [{ probe: { read: [other], write: [join(where, "bin", "python")] } }], { sandbox: { enabled: true }, bridge, python: join(where, "bin", "python") });
+  const p = note(r).probes[0];
+  assert.equal(p.can_read[other], false, "the rest of the host's /tmp stays hidden");
+  assert.equal(p.can_write[join(where, "bin", "python")], false, "and what was bound back is read-only");
+  assert.equal(readFileSync(join(where, "bin", "python"), "utf8").startsWith("#!/bin/sh"), true);
+});
+
 test("pythonRoots: a venv's python needs the whole venv and the interpreter it links to", t => {
   const root = join(tmpdir(), `pantheon-venv-${process.pid}`);
   t.after(() => rmSync(root, { recursive: true, force: true }));

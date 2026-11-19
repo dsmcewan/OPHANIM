@@ -238,7 +238,10 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
       sandboxRecord = { enabled: false, why: `bwrap is not usable (${probe.why}); the caller allowed an unsandboxed session` };
     } else {
       const keep = [process.execPath, resolve(HERE, ".."), ...pythonRoots(python), real(dirname(bridge))];
-      const jail = bwrapArgs({ worktree: paths.worktree, control_dir: paths.control_dir, bwrap: box.bwrap, keep_visible: keep });
+      // The jail gives the session a fresh /tmp. A path it runs from that lives under /tmp (a python, the bridge) is
+      // bound back read-only, alone; the rest of the host's /tmp stays hidden.
+      const underTmp = [...new Set(keep.map(real).filter(p => p !== "/tmp" && inside("/tmp", p)))];
+      const jail = bwrapArgs({ worktree: paths.worktree, control_dir: paths.control_dir, bwrap: box.bwrap, keep_visible: keep, extra_ro: underTmp });
       // THE USER'S HOME. The bridge needs no credential from it (the key is the gateway's), so every credential-bearing
       // directory of the home (verify-jail.mjs HOME_SECRET_DIRS: .ssh, .gemini, .codex, .config, .local/share, ...) is
       // covered with an empty tmpfs; a path the session itself runs from that lies inside one (the SDK's venv under

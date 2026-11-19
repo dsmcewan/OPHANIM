@@ -4,14 +4,17 @@
 //
 //   Stage 1  the plan stage's planner writes `work_units` with the plan (three labs review them with it)
 //   Stage 2  an OpenAI dispatcher per unit, by the unit's difficulty          (scripted single-turn seat)
-//   Stage 3  an Antigravity lane per unit, in the unit's own worktree         (the fixture's fake agy CLI: a real
-//                                                                               child process that writes files)
-//   Stage 4  a Grok subagent over the unit's A2A shim                          (scripted single-turn seat)
+//   Stage 3  an Antigravity SDK session per unit, in the unit's own worktree  (the REAL transport -- gateway, governor,
+//                                                                               decisions, jail -- between the fixture's
+//                                                                               session relay and scripted provider; the
+//                                                                               worker is a real child process that
+//                                                                               writes files)
+//   Stage 4  the implementer's own gemini-4-hydrogen subagent                  (admitted by the real governor)
 //   Stage 5  the dispatcher's exact model, pinned                              (scripted single-turn seat)
 //   then     the coordinated three-lab change review, the validator and the outcome, unchanged.
 //
-// Every provider is scripted or the fake CLI: these show routing, scheduling, escalation and recording, not model
-// judgment and not a live quota.
+// Every provider is scripted: these show routing, scheduling, escalation and recording, not model judgment and not a
+// live quota. The agy CLI is installed as a fake so that a launch of it would be seen; none is expected.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -43,11 +46,11 @@ const branches = (repo, pattern) => git(repo, 'branch', '--list', pattern).split
 // THREE WORK UNITS: `a` (easy) and `c` (hard) are disjoint and share a wave; `b` (medium) builds on `a`.
 //   a  alpha.mjs exports ok = true                               verified by the fixture's verify.mjs
 //   b  beta.mjs imports alpha.mjs: passes only on top of `a`     a multi-unit dependency
-//   c  gamma/**: a module AND its test, one owner; it may consult one subagent
+//   c  gamma/**: a module AND its test, one owner; its implementer (Carbon) may delegate to one specialist type
 const UNITS = [
   UNIT('a'),
   UNIT('b', {depends_on: ['a'], owned_paths: ['beta.mjs'], difficulty: 'medium', verify_cmd: 'node -e "import(\'./beta.mjs\').then(m => process.exit(m.both === true ? 0 : 1))"', invariants: ['beta.mjs exports both === true, computed from alpha.mjs']}),
-  UNIT('c', {owned_paths: ['gamma/**'], difficulty: 'hard', allowed_subagents: ['api-designer'], verify_cmd: 'node gamma/gamma.test.mjs', invariants: ['gamma/gamma.mjs exports g === 3 and its test proves it']}),
+  UNIT('c', {owned_paths: ['gamma/**'], difficulty: 'hard', allowed_subagents: ['code-explorer'], verify_cmd: 'node gamma/gamma.test.mjs', invariants: ['gamma/gamma.mjs exports g === 3 and its test proves it']}),
 ];
 // The configured reviewer pool with two OpenAI reviewer candidates appended, a dispatcher (gpt-6-astra) first: the pool in
 // which, WITHOUT Decision 6, a dispatcher is seated on the change panel. With the configured pool alone no dispatcher is
@@ -56,16 +59,15 @@ const UNITS = [
 const OPENAI_REVIEWERS = [{vendor: 'openai', model: 'gpt-6-astra', band: 'medium', basis: 'TEST POOL', why: 'a dispatcher first in line'}, {vendor: 'openai', model: 'gpt-6-sol', band: 'medium', basis: 'TEST POOL', why: 'test pool'}];
 const DECISION6_POOL = {...SEATING, reviewer: [...SEATING.reviewer, ...OPENAI_REVIEWERS]};
 const THREE = {work_units: UNITS, slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}, {id: 's2', title: 'beta.mjs', slot: 'beta', path: 'beta.mjs'}, {id: 's3', title: 'gamma.mjs', slot: 'gamma', path: 'gamma/gamma.mjs'}]};
-// The fake agy CLI's worker for those units (sourced with $dir = the unit's worktree, $unit, $model, $prompt): it
-// writes the unit's files, logs when it started and ended, and unit c asks its subagent one question over A2A.
+// The scripted worker for those units (sourced with $dir = the unit's worktree, $unit, $model, $prompt): it writes the
+// unit's files, logs when it started and ended, and unit c asks for one native subagent (sdk_subagent).
 const SPAN = 'printf \'%s %s %s %s\\n\' "$dir" "$unit" "$1" "$(date +%s%N)" >> "$FAKE_AGY_LOG.spans"';
-// Unit c asks its subagent one question through the stdio MCP server over the unit's Unix socket (the fake CLI's agy_ask).
 const WORKER = `span() { ${SPAN}; }
 span start
 case "$unit" in
   a) sleep 0.3; printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;;
   b) printf 'import {ok} from "./alpha.mjs";\\nexport const both = ok === true;\\n' > "$dir/beta.mjs" ;;
-  c) sleep 0.3; agy_ask api-designer "what should g be?" >/dev/null || exit 1; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
+  c) sleep 0.3; sdk_subagent code-explorer "Find where g is read and what value it must have; report file paths and lines."; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
 esac
 span end
 `;
@@ -115,8 +117,13 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
         const x = rec.units[u.unit_id], d = u.difficulty;
         assert.equal(named(x.dispatch), named(fitMatrix('dispatcher', d)), `${u.unit_id}: dispatcher`);
         assert.equal(x.dispatch.served_model, x.dispatch.model);
-        assert.deepEqual(x.attempts.map(a => [named(a), a.status, a.served_model, a.served_model_source]), [[named(fitMatrix('implementer', d)), 'written', IMPLEMENTER_LADDERS[d][0].model, 'input']], `${u.unit_id}: implementer`);
-        assert.deepEqual(x.implementer_ladder.map(s => s.model), implementerPath(d).map(s => s.model));
+        // The implementer is an Antigravity SDK session on the matrix's model, at the matrix's thinking level; the served
+        // model is the PROVIDER's own statement, as the controller's gateway saw it.
+        const seat = fitMatrix('implementer', d);
+        assert.deepEqual(x.attempts.map(a => [named(a), a.transport, a.effort, a.status, a.served_model, a.served_model_source]), [[named(seat), 'antigravity-sdk', seat.effort, 'written', seat.model, 'provider']], `${u.unit_id}: implementer`);
+        assert.deepEqual(x.implementer_ladder, implementerPath(d));
+        assert.equal(x.attempts[0].session.jail.enabled, true, 'the session ran in the jail');
+        assert.equal(x.a2a.socket, null, 'no A2A relay was opened');
         // STAGE 5: the dispatcher's exact model, pinned; its ladder never leaves OpenAI.
         assert.deepEqual(x.reviews.map(v => [named(v), v.pinned_to_dispatcher, v.status, v.verify.exit_code]), [[named(pinnedReviewer(fitMatrix('dispatcher', d))), true, 'approved', 0]], `${u.unit_id}: reviewer`);
         assert.deepEqual(x.reviewer_ladder.map(named), REVIEWER_ESCALATION.slice(REVIEWER_ESCALATION.findIndex(s => s.model === x.dispatch.model)).map(named));
@@ -124,8 +131,16 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
         assert.equal(x.merged, true);
       }
       assert.deepEqual([rec.units.b.dispatch.model, rec.units.b.reviews[0].model], ['gpt-6.1-sol', 'gpt-6.1-sol'], 'the medium dispatcher and its pinned reviewer');
-      assert.deepEqual(rec.units.c.a2a.calls.map(c => [c.role, c.status, named(c)]), [['api-designer', 'answered', named(fitMatrix('subagent', 'hard'))]]);
-      assert.deepEqual([rec.units.a.a2a.calls.length, rec.units.b.a2a.calls.length], [0, 0]);
+      // STAGE 4: unit c's Carbon implementer was admitted ONE gemini-4-hydrogen specialist (its ceiling is 8); the easy
+      // unit's Hydrogen implementer and the unit that allows none have none. No A2A subagent seat was asked anywhere.
+      const subs = u => rec.units[u].attempts[0].session.subagents;
+      assert.deepEqual(subs('c').instances.map(i => [i.type, i.model, i.status, i.scope.write]), [['code-explorer', 'gemini-4-hydrogen', 'idle', 'none']]);
+      assert.deepEqual([subs('c').ceiling, subs('c').peak_live, subs('c').rejections.length], [8, 1, 0]);
+      assert.deepEqual([subs('a').ceiling, subs('a').admitted_total, subs('b').ceiling, subs('b').admitted_total], [0, 0, 4, 0]);
+      assert.deepEqual(['a', 'b', 'c'].map(u => rec.units[u].a2a.calls.length), [0, 0, 0]);
+      assert.deepEqual(impl.outputs.run.units.c.subagents, {model: 'gemini-4-hydrogen', admitted: 1, peak_live: 1, ceilings: [8], rejected: 0});
+      // Every billed request was charged by class: one implementer session per unit and one native subagent request.
+      assert.deepEqual([rec.provider_calls.by_role.implementer, rec.provider_calls.by_role.native_subagent, rec.provider_calls.by_role.subagent], [3, 1, 0]);
 
       // ARBITERS vs CONTRIBUTIONS (owner governance decision 2026-11-17): the dispatcher is recorded as a non-authoring
       // arbiter, and is NOT an authored contribution. DECISION 6 (owner, 2026-11-19): its identity rides with the
@@ -133,17 +148,19 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       assert.deepEqual(impl.outputs.arbiters.map(a => [a.unit_id, a.role, a.standing, a.authored, named(a)]),
         [['a', 'dispatcher', 'arbiter', false, 'openai/gpt-6-luna'], ['b', 'dispatcher', 'arbiter', false, 'openai/gpt-6.1-sol'], ['c', 'dispatcher', 'arbiter', false, 'openai/gpt-6-astra']]);
       assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['arbiter', 'openai/gpt-6-astra'], ['arbiter', 'openai/gpt-6-luna'], ['arbiter', 'openai/gpt-6.1-sol'],
-        ['plan', `anthropic/${PLANNER[item]}`], ['subtask', 'xai/grok-4.7'],
-        ['work', 'agy_google/gemini-4-carbon-high'], ['work', 'agy_google/gemini-4-hydrogen-high'], ['work', 'agy_google/gemini-4-hydrogen-medium']].sort());
+        ['plan', `anthropic/${PLANNER[item]}`], ['subtask', 'agy_google/gemini-4-hydrogen'],
+        ['work', 'agy_google/gemini-4-carbon'], ['work', 'agy_google/gemini-4-hydrogen'], ['work', 'agy_google/gemini-4-neon']].sort());
+      assert.ok(!impl.contributions.some(c => c.vendor === 'xai'), 'no xAI model was spent on Google implementation delegation');
       assert.ok(!impl.contributions.some(c => c.vendor === 'openai' && c.purpose !== 'arbiter'), 'no OpenAI model AUTHORED anything: the dispatchers arbitrated and the pinned reviewers only approved');
       assert.deepEqual(impl.contributions, impl.outputs.contributions);
       const dispatchers = impl.team.filter(x => x.role === 'dispatcher');
       assert.equal(dispatchers.length, 3);
       for (const d of dispatchers) assert.deepEqual([d.standing, d.authored], ['arbiter', false]);
       const keys = contributorKeys(impl.contributions);
-      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'openai', 'xai']);
-      assert.deepEqual(keys.models, [`anthropic/${PLANNER[item]}`, 'google/gemini-4-carbon', 'google/gemini-4-hydrogen',
-        'openai/gpt-6-astra', 'openai/gpt-6-luna', 'openai/gpt-6.1-sol', 'xai/grok-4.7']);
+      assert.deepEqual(keys.contributing_labs, ['anthropic', 'google', 'openai']);
+      assert.deepEqual(keys.unresolved, [], 'every contributor resolves, gemini-4-neon included: an unresolved one would leave no reviewer eligible');
+      assert.deepEqual(keys.models, [`anthropic/${PLANNER[item]}`, 'google/gemini-4-carbon', 'google/gemini-4-hydrogen', 'google/gemini-4-neon',
+        'openai/gpt-6-astra', 'openai/gpt-6-luna', 'openai/gpt-6.1-sol']);
 
       // INTEGRATION reaches the review as one commit on pantheon/<item>, parent = the base the run started from.
       assert.equal(git(repo, 'rev-parse', `${impl.outputs.commit}^`).trim(), impl.outputs.base);
@@ -160,6 +177,9 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
       assert.equal(panel.length, 3);
       assert.equal(new Set(panel.map(t => t.lab)).size, 3);
       for (const t of panel) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
+      // xAI contributed nothing to this change (the implementer's subagents were Google's own), so it reviews it.
+      assert.ok(panel.some(t => t.lab === 'xai'), `xAI is on the independent panel (${panel.map(named).join(', ')})`);
+      assert.ok(!panel.some(t => idOf(t) === 'google/gemini-4-hydrogen') && idOf(val.outputs.validator) !== 'google/gemini-4-hydrogen', 'the subagent model judged nothing');
       // Independent review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 7: before Decision 6 a dispatcher could be seated here.
       // NOT VACUOUS: on these very contributions without the arbiter rows, this pool seats gpt-6-astra on the panel.
       const without = reviewSeatsByModel({n: 3, contributions: impl.contributions.filter(c => c.purpose !== 'arbiter'), seating: DECISION6_POOL});
@@ -178,16 +198,17 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
     assert.deepEqual(branches(repo, 'pantheon/*').filter(b => !b.includes('/pipeline/')).sort(), ['pantheon/fresh', 'pantheon/ticketed']);
     assert.equal(fs.readFileSync(path.join(repo, 'alpha.mjs'), 'utf8'), 'export const ok = false;\n');
     assert.equal(git(repo, 'worktree', 'list').trim().split('\n').length, 1);
-    // Every implementer turn was the fake agy CLI on its lane, with the worktree and the A2A socket; no metered API. The
-    // A2A TOKEN is NOT in the CLI's environment (credential isolation, owner direction 2026-11-19: the relay reads it
-    // from the unit's token file; pantheon/src/agy/verify-jail.mjs).
-    const launched = ctx.agyContext();
-    assert.deepEqual(launched.map(a => a.model).sort(), ITEMS.flatMap(() => ['gemini-4-carbon-high', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-medium']).sort());
-    for (const a of launched) assert.deepEqual([a.agent, a.a2a_socket, a.a2a_token, a.google_key], ['pantheon-unit-worker', true, false, false]);
-    assert.equal(calls.length, 0, 'no SDK client was used: the metered Gemini API was never called');
-    // The single-turn seats: one dispatcher and one pinned review per unit, one subagent answer per item.
+    // Every implementer turn was an SDK session on the matrix's model, and each item's one subagent request went to
+    // gemini-4-hydrogen. THE AGY CLI WAS NEVER STARTED, and no API client of the single-turn seats wrote anything.
+    const seen = ctx.sdk();
+    assert.deepEqual(seen.filter(x => x.agent === 'sdk-implementer').map(x => x.model).sort(), ITEMS.flatMap(() => ['gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-4-neon']).sort());
+    assert.deepEqual(seen.filter(x => x.agent !== 'sdk-implementer').map(x => [x.agent, x.model]), ITEMS.map(() => ['sdk-subagent:code-explorer', 'gemini-4-hydrogen']));
+    assert.deepEqual(ctx.agyContext(), [], 'no agy CLI process was launched');
+    assert.deepEqual(ctx.agy(), []);
+    assert.equal(calls.length, 0, 'no API client of the work seats was used');
+    // The single-turn seats: one dispatcher and one pinned review per unit. No subagent is a single-turn seat.
     const kinds = k => turn.log.filter(l => l.kind === k);
-    assert.deepEqual([kinds('dispatcher').length, kinds('unit-review').length, kinds('subagent').length], [6, 6, 2]);
+    assert.deepEqual([kinds('dispatcher').length, kinds('unit-review').length, kinds('subagent').length], [6, 6, 0]);
     for (const l of kinds('unit-review')) assert.deepEqual(l.extra, {reasoning: {context: 'all_turns'}});
     assert.ok(reconcile({repo, statusRoot: f.statusRoot, workLedger: w}).items.every(i => i.gate.gate === 'complete'));
   });
@@ -200,7 +221,7 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
     const f = fixture(repo, ITEMS.map(item => ({item})), {tickets: ['ticketed']});
     // The worker revises when it is given the finding (and says so); the pinned reviewer (gpt-6-luna) rejects every
     // revision it sees, so after two rejections the reviewer is raised; the next rung approves passing work.
-    ctx.agyWorker(`case "$prompt" in *"${FINDING}"*) printf '%s %s\\n' "$dir" "$model" >> "$FAKE_AGY_LOG.told"; printf '// frozen: the importer reads it lazily\\nexport const ok = true;\\n' > "$dir/alpha.mjs" ;; *) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;; esac\n`);
+    ctx.agyWorker(`case "$prompt" in *"${FINDING}"*) printf '%s %s@%s\\n' "$dir" "$model" "$effort" >> "$FAKE_AGY_LOG.told"; printf '// frozen: the importer reads it lazily\\nexport const ok = true;\\n' > "$dir/alpha.mjs" ;; *) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;; esac\n`);
     const turn = scriptedTurn({'unit-review': ({model, rubric, passed}) => JSON.stringify(model === 'gpt-6-luna' || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))});
     const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
@@ -211,14 +232,16 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
       assert.deepEqual(seq(w, item), DONE, JSON.stringify(r.dispatched.map(d => [d.item, d.stage, d.status, d.next?.why])));
       const [, impl, rev, val] = w.stages(item);
       const u = recordOf(impl).units.alpha;
-      // hydrogen-medium -> hydrogen-high -> hydrogen-xhigh: the same base model, one thinking level up per rejection.
-      assert.deepEqual(u.attempts.map(a => [a.model, a.status, a.findings_in]), [['gemini-4-hydrogen-medium', 'written', 0], ['gemini-4-hydrogen-high', 'written', 2], ['gemini-4-hydrogen-xhigh', 'written', 2]]);
+      // hydrogen@medium -> @high -> @xhigh: the same model, one thinking level up per rejection.
+      assert.deepEqual(u.attempts.map(a => [a.model, a.effort, a.status, a.findings_in]), [['gemini-4-hydrogen', 'medium', 'written', 0], ['gemini-4-hydrogen', 'high', 'written', 2], ['gemini-4-hydrogen', 'xhigh', 'written', 2]]);
+      assert.deepEqual(ctx.sdk().filter(x => x.agent === 'sdk-implementer' && x.model === 'gemini-4-hydrogen').map(x => x.thinking).sort(), ITEMS.flatMap(() => ['high', 'medium', 'xhigh']).sort(), 'each session asked the provider at its rung\'s thinking level');
       assert.equal(new Set(u.attempts.map(idOf)).size, 1, 'one model identity: a thinking level is not another model');
       // The reviewer: pinned gpt-6-luna twice, then raised one rung, inside OpenAI.
       assert.deepEqual(u.reviews.map(v => [named(v), v.level, v.pinned_to_dispatcher, v.status, v.fed_revision]),
         [['openai/gpt-6-luna', 0, true, 'request_changes', true], ['openai/gpt-6-luna', 0, true, 'request_changes', true], ['openai/gpt-6.1-sol', 1, false, 'approved', false]]);
-      assert.deepEqual(u.escalations.map(e => [e.after_attempt, e.kind, e.from.model, e.to.model]), [[1, 'implementer', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-high'],
-        [2, 'implementer', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh'], [2, 'reviewer', 'gpt-6-luna', 'gpt-6.1-sol']]);
+      const at = x => (x.effort ? `${x.model}@${x.effort}` : x.model);
+      assert.deepEqual(u.escalations.map(e => [e.after_attempt, e.kind, at(e.from), at(e.to)]), [[1, 'implementer', 'gemini-4-hydrogen@medium', 'gemini-4-hydrogen@high'],
+        [2, 'implementer', 'gemini-4-hydrogen@high', 'gemini-4-hydrogen@xhigh'], [2, 'reviewer', 'gpt-6-luna', 'gpt-6.1-sol']]);
       assert.ok(u.escalations.filter(e => e.kind === 'reviewer').every(e => e.from.vendor === 'openai' && e.to.vendor === 'openai'));
       assert.equal(u.reviewer_fed_revision, true);
       // The findings are kept on the stage record with the reviewer that made them.
@@ -226,7 +249,7 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
       // CONTRIBUTIONS: gpt-6-luna's finding fed a revision, so it IS a critique contributor; gpt-6.1-sol only approved
       // and is not. The dispatcher (gpt-6-luna as an arbiter) is listed apart, and excluded as an arbiter (Decision 6).
       assert.deepEqual(impl.contributions.map(c => [c.purpose, named(c)]).sort(), [['arbiter', 'openai/gpt-6-luna'], ['critique', 'openai/gpt-6-luna'], ['plan', `anthropic/${PLANNER[item]}`],
-        ['work', 'agy_google/gemini-4-hydrogen-high'], ['work', 'agy_google/gemini-4-hydrogen-medium'], ['work', 'agy_google/gemini-4-hydrogen-xhigh']]);
+        ['work', 'agy_google/gemini-4-hydrogen']]);
       assert.deepEqual(impl.outputs.arbiters.map(named), ['openai/gpt-6-luna']);
       const keys = contributorKeys(impl.contributions);
       assert.ok(keys.models.includes('openai/gpt-6-luna') && !keys.models.includes('openai/gpt-6.1-sol'));
@@ -234,12 +257,14 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
       const panel = rev.team.filter(t => t.role === 'cycle-reviewer');
       assert.equal(new Set(panel.map(t => t.lab)).size, 3);
       for (const t of panel) assert.ok(!keys.models.includes(idOf(t)), `${idOf(t)} contributed and reviewed`);
+      assert.ok(!panel.some(t => idOf(t) === 'google/gemini-4-hydrogen') && idOf(val.outputs.validator) !== 'google/gemini-4-hydrogen', 'the implementer\'s model judged nothing');
       assert.ok(rev.outputs.author_models.includes('openai/gpt-6-luna'));
       assert.ok(!panel.some(t => idOf(t) === 'openai/gpt-6-luna') && idOf(val.outputs.validator) !== 'openai/gpt-6-luna');
       assert.match(git(repo, 'show', `${impl.outputs.commit}:alpha.mjs`), /^\/\/ frozen/);
     }
-    assert.deepEqual(lines(path.join(repo, 'agy.log.told')).map(l => l.split(' ')[1]), ITEMS.flatMap(() => ['gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh']), 'the finding reached the worker on each raised lane');
-    assert.equal(calls.length, 0, 'the metered Gemini API wrote nothing');
+    assert.deepEqual(lines(path.join(repo, 'agy.log.told')).map(l => l.split(' ')[1]), ITEMS.flatMap(() => ['gemini-4-hydrogen@high', 'gemini-4-hydrogen@xhigh']), 'the finding reached the worker at each raised thinking level');
+    assert.equal(calls.length, 0, 'no API client of the work seats wrote anything');
+    assert.deepEqual(ctx.agy(), [], 'no agy CLI process was launched');
   });
 });
 
