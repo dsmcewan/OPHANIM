@@ -121,7 +121,9 @@ test("write tools: an owned path is auto-approved; traversal, .git, .agents, uno
   assert.deepEqual(rows.map(r => r.decision), cases.map(c => c[2]));
   assert.equal(rows[0].args.TargetFile, join(wt, "src/a/impl.mjs"));
   // The raw stdin is logged verbatim, with the parsed payload; the hook ran in .agents/ (owner-stated).
+  // test-lint: allow truncated-sequence -- cases[0].slice(0, 2) is the case's [name, args], spread into call() to rebuild the payload sent; the whole raw stdin line is compared
   assert.equal(rows[0].raw, JSON.stringify(call(...cases[0].slice(0, 2))));
+  // test-lint: allow truncated-sequence -- cases[0].slice(0, 2) is the case's [name, args], spread into call() to rebuild the payload sent; the whole parsed payload is compared
   assert.deepEqual(rows[0].payload, call(...cases[0].slice(0, 2)));
   assert.equal(rows[0].cwd, join(ctl, ".agents"));
 });

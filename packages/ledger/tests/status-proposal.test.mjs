@@ -55,6 +55,7 @@ test('a proposal is made against the latest status without any key, and is well 
   // Three independent labs (86ce18a review, defect 2): a smaller panel is never completion evidence.
   refuse(evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 2)}}), /at least 3 reviewers on 3 distinct labs \(this one has 2\)/);
   refuse(evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 1)}}), /at least 3 reviewers/);
+  // test-lint: allow truncated-sequence -- reviewers.slice(0, 1) builds the INPUT, a one-reviewer panel; proposalRefusal's whole result for that proposal is compared, to null
   assert.equal(proposalRefusal({...p, to: to('Ready'), evidence: evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 1)}})}), null,
     'a slice that leaves the item Ready is not completion evidence');
   refuse(evidence({ticket: {path: '/abs/t.json', digest: h('7'), slice: 's'}}), /repository-relative/);
