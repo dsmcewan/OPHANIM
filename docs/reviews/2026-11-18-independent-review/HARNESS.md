@@ -18,7 +18,9 @@ This text comes from the review runner (`pantheon/scripts/run-review.mjs`). It d
 
 You have only the tools in this session's tool definitions. Which ones, and which test files `run_tests` accepts, follow your assignment's Testing line. Where your assignment allows killing and restarting processes, do it only within tests you write.
 
-Each process run is limited to {{TIMEOUT_S}} seconds and returns the exit code and at most the last {{OUTPUT_CAP}} bytes of output. Processes run with a minimal environment: a new temporary HOME and TMPDIR, and no credentials.
+Each process run is limited to {{TIMEOUT_S}} seconds and returns the exit code and at most the last {{OUTPUT_CAP}} bytes of output. Processes run in a verify jail: the copy, the system's runtime files and the node install only, a private `/tmp` (`$HOME` is `/tmp/home`), no network and no credentials. Tests that start a bwrap jail of their own may not be able to; report what such a test would have shown as `cannot tell`.
+
+The runner records which source files you read and which tests ran: a review that read no source file, had a read refused, or ran no test where your assignment allows tests is recorded as incomplete, whatever its final message says.
 
 ## Limits
 

@@ -94,8 +94,10 @@ for (const form of ["direct", "wrapped"]) {
       "startup_errors", "deprecations", "diagnostics", "stderr_tail", "log_tail", "owner_stated_mechanics", "gemini_state", "aborted", "kept", "kept_contains_credentials"], "stable key order");
     // The zero-spend preflight ran first, in the same jail, and passed: the card's four tools, `agy agents` (exit 0, no
     // flag refused), the login, a clean output and log dir; discovery (advisory) found the worker and the server.
-    assert.deepEqual([o.preflight.ok, o.preflight.failed, o.preflight.warnings, Object.keys(o.preflight.checks)], [true, [], ["hooks_discovery"], ["card_tools", "auth", "lane_quota", "agents", "mcp_list", "log_scan", "discovery", "hooks_discovery"]]);
-    assert.deepEqual([o.preflight.blocking, o.preflight.advisory], [["card_tools", "auth", "lane_quota", "agents", "log_scan"], ["mcp_list", "discovery", "hooks_discovery"]]);
+    assert.deepEqual([o.preflight.ok, o.preflight.failed, o.preflight.warnings, Object.keys(o.preflight.checks)], [true, [], ["hooks_discovery"], ["card_tools", "auth", "lane_quota", "agents", "mcp_list", "log_scan", "discovery", "hooks_discovery", "tool_drift"]]);
+    // TOOL DRIFT (L-502, self-audit round 3, assignment 4 (sealed fe2a612)): the card's four tools are all classified by the hook.
+    assert.deepEqual([o.preflight.checks.tool_drift.ok, o.preflight.checks.tool_drift.methods, o.preflight.checks.tool_drift.discovered], [true, ["card_frontmatter"], ["replace_file_content", "run_command", "view_file", "write_file"]]);
+    assert.deepEqual([o.preflight.blocking, o.preflight.advisory], [["card_tools", "auth", "lane_quota", "agents", "log_scan", "tool_drift"], ["mcp_list", "discovery", "hooks_discovery"]]);
     // As observed (2026-11-18): the subcommands loaded 0 hooks.json files from the control dir (not a git repo): a
     // WARNING, surfaced, never blocking.
     assert.deepEqual([o.preflight.checks.hooks_discovery.seen, o.preflight.checks.hooks_discovery.files, o.preflight.checks.hooks_discovery.ok], [true, 0, false]);
@@ -269,7 +271,9 @@ test("a ~/.gemini without antigravity-cli: the probe refuses (AGY_STATE_LAYOUT, 
   assert.equal(r.code, 2);
   assert.match(r.summary.aborted.reason, /the jail could not be built \(AGY_STATE_LAYOUT\): .*antigravity-cli does not exist/);
   assert.equal(r.summary.gemini_state.error.code, "AGY_STATE_LAYOUT");
-  assert.deepEqual(r.summary.checks, { forbidden_denied: null, allowed_written: null, mcp_called: null, verify_ran: null, gemini_state_untouched: true });
+  // Since L-401 the quota probe runs in the worker's jail too, so the layout refusal comes before the host snapshot:
+  // nothing was snapshotted (null), and the host is unchanged (below).
+  assert.deepEqual(r.summary.checks, { forbidden_denied: null, allowed_written: null, mcp_called: null, verify_ran: null, gemini_state_untouched: null });
   assert.deepEqual([s.launches().length, s.subs().length], [0, 0]);
   assert.deepEqual(s.host(), hostBefore);
 });

@@ -202,7 +202,7 @@ test("codex event log: usage summed over turns, the last agent message is final,
     { type: "item.completed", item: { id: "4", type: "agent_message", text: "A" } }, { type: "item.completed", item: { id: "5", type: "reasoning", text: "r" } },
     { type: "turn.completed", usage: { input_tokens: 3, output_tokens: 1 } }, { type: "turn.completed", usage: { input_tokens: 2, output_tokens: 1 } }]);
   assert.deepEqual([ev.thread_id, ev.usage, ev.final_text, ev.turns_completed, ev.errors.length, ev.item_errors, ev.other_items], ["t", { input_tokens: 5, output_tokens: 2 }, "A", 2, 1, ["model mismatch warning"], { reasoning: 1 }]);
-  assert.deepEqual(ev.commands, [{ command: "node --test a", exit_code: 0, status: "completed" }]);
+  assert.deepEqual(ev.commands, [{ command: "node --test a", exit_code: 0, status: "completed", denied: false }]);
   assert.deepEqual(ev.own.map(o => o.kind), ["command and its output", "file change", "your message"]);
   assert.equal(parseCodexEvents([{ type: "turn.failed", error: { message: "usage limit reached" } }]).turn_failed, "usage limit reached");
 });
@@ -285,7 +285,9 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
   assert.doesNotMatch(tpl, /You may run only these commands/, "the 09d490f wording that kept a literal reader from reading any source");
   const permissions = permissionsFor(CLOSED, ["pantheon/tests/a.test.mjs"]);
   for (const transport of ["codex-sdk", "grok-cli", "agy-cli"]) {
-    const cmds = allowedCommands({ permissions, worktree: "/w", ...(transport === "agy-cli" ? { launcherDir: "/c" } : {}), envPrefix: transport === "codex-sdk" ? "env NO_PROXY=127.0.0.1 " : "" });
+    // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): agy and grok list the review's verify launchers; codex
+    // lists none (its sandbox cannot start the verify jail) and says why.
+    const cmds = allowedCommands({ permissions, worktree: "/w", ...(transport !== "codex-sdk" ? { launcherDir: "/c" } : { testsRefused: "the codex transport runs no test" }), envPrefix: transport === "codex-sdk" ? "env NO_PROXY=127.0.0.1 " : "" });
     const h = renderHarness(tpl, { COMMIT: "c", WORKTREE: "/w", ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed: false, worktree: "/w" }),
       READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: "/r/tmp" }), MAX_WALL_S: 60 });
     assert.doesNotMatch(h, /\{\{/, transport);
@@ -293,10 +295,11 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
     assert.match(h, /Apart from reading, you may run only these test commands, exactly as written/, transport);
     assert.match(h, /You may not create, change or delete any file/, transport);
     assert.match(h, /Make no network request and no call to a model provider/, transport);
-    assert.match(h, /bwrap unavailable/, transport);
+    if (transport !== "codex-sdk") assert.match(h, /bwrap unavailable/, transport);   // codex runs no test at all (L-404)
     if (transport === "agy-cli") { assert.match(h, /`view_file`/); assert.match(h, /`run_command` is limited to that list/); assert.match(h, /- `\/c\/pantheon-test pantheon\/tests\/a\.test\.mjs`/); assert.match(h, /verify jail/); assert.match(h, /no network at all/); }
     else { for (const c of READ_ONLY_SHELL) assert.ok(h.includes(`\`${c}\``), `${transport}: ${c}`); assert.match(h, /no `sed -i`/); }
-    if (transport === "codex-sdk") { assert.match(h, /`\/r\/tmp`/); assert.match(h, /- `env NO_PROXY=127\.0\.0\.1 node --test pantheon\/tests\/a\.test\.mjs`/); }
+    if (transport === "codex-sdk") { assert.match(h, /`\/r\/tmp`/); assert.match(h, /- none: the codex transport runs no test/); assert.doesNotMatch(h, /node --test pantheon/); assert.match(h, /No test runs in this transport/); }
+    if (transport === "grok-cli") { assert.match(h, /- `\/c\/pantheon-test pantheon\/tests\/a\.test\.mjs`/); assert.match(h, /verify jail/); assert.doesNotMatch(h, /`node --test pantheon/); }
   }
   assert.equal(reviewTmpBase({ HOME: "/home/fixture" }), "/home/fixture/.cache/ophanim-review", "review worktrees are not put under /tmp");
 });

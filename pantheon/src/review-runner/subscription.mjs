@@ -26,9 +26,10 @@ import { redact } from "./vendors.mjs";
 import { allowedCommands, compareWorktree, findCli, readRule, reviewTmpBase, runCli, sandboxNote, scrubEnv, secretValues, tail, worktreeState, writeRule, REVIEW_TESTS_DIR } from "./cli-common.mjs";
 import { CODEX_SDK_PACKAGE, LOOPBACK_NO_PROXY, codexPermissionProfile, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv,
   SCRATCH_TMP_MAX, UNIX_SOCKET_PATH_MAX, codexOuterLauncher, detectWsl, readOsRelease, scratchCandidates, scratchFits } from "./codex.mjs";
-import { dropGrokScratch, grokArgv, grokBwrapArgs, grokPreflight, grokStateScratch, grokStopFailure, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
+import { dropGrokScratch, grokArgv, grokBwrapArgs, grokLauncherAllow, grokPreflight, grokStateScratch, grokStopFailure, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
 import { exportReviewCopy, REVIEW_COPY_KIND } from "./review-copy.mjs";
-import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane } from "./agy.mjs";
+import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane, writeReviewLaunchers } from "./agy.mjs";
+import { coverageGate, coverageHeaderLine, coverageOfAgy, coverageOfCodex, coverageOfGrok, gatedStatus, mergeCoverage, testsAllowedBy } from "./coverage.mjs";
 import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
 import { prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
 import { CLI_CONTINUE_NOTE, ContinueRefusal, captureReviewTests, cumulative, loadContinuation, ownTranscriptAppendix, preserveFiles, restoreReviewTests } from "./continue.mjs";
@@ -48,6 +49,8 @@ const capOwn = own => { const out = []; let n = 0; for (const x of [...own].reve
 export const SUB_PLAN_SCHEMA = "ophanim.review-run-plan/v2-subscription";
 export const TRANSPORT_FOR = Object.freeze({ gemini: "agy-cli", openai: "codex-sdk", xai: "grok-cli" });
 export const COVERAGE = Object.freeze({ "agy-cli": "documented", "codex-sdk": "documented", "grok-cli": "undocumented" });
+/** Why codex runs no test (L-404): its own sandbox cannot start the verify jail. */
+export const CODEX_TESTS_REFUSED = "the codex transport runs no test: the code under review runs only in the runner's verify jail, and codex's own sandbox cannot start it (nested namespaces are refused there), so a test would run as codex's child next to its login (L-404, self-audit round 3, assignment 4)";
 const DROP = { "codex-sdk": ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"], "grok-cli": ["XAI_API_KEY", "GROK_API_KEY"], "agy-cli": ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
 const LANES = new URL("../config/lanes.json", import.meta.url);
 const exists = p => access(p).then(() => true, () => false);
@@ -195,7 +198,8 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       }
       scratchRec = { path: scratchTmp, bytes: Buffer.byteLength(scratchTmp), max_bytes: SCRATCH_TMP_MAX, unix_socket_path_max: UNIX_SOCKET_PATH_MAX, removed_after_run: !opts.keep };
       childEnv.TMPDIR = scratchTmp;
-      codexProfile = codexPermissionProfile({ worktree: wt, write_allowed, scratchTmp, readRoots: await codexReadRoots({ cli, childEnv, telosRoot: opts.telosRoot }) });
+      const rr = await codexReadRoots({ cli, childEnv, telosRoot: opts.telosRoot });
+      codexProfile = codexPermissionProfile({ worktree: wt, write_allowed, scratchTmp, readRoots: rr.roots, denyPaths: rr.deny });
       // WSL: the outer runtime namespace (codex.mjs codexOuterLauncher), unless --codex-outer-runtime off.
       const det = detectWsl({ env, osrelease: deps.osRelease !== undefined ? deps.osRelease : readOsRelease() });
       const mode = opts.codexOuterRuntime ?? "auto";
@@ -218,8 +222,15 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
         if (!outer.applied) outer.failed = `the WSL outer runtime for codex could not be set up: ${outer.why}`;
       }
     }
-    const cmds = allowedCommands({ permissions, worktree: wt, telosRoot: opts.telosRoot, ...(transport === "agy-cli" ? { launcherDir: control } : {}),
+    // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): the code under review runs ONLY in a verify jail. agy and
+    // grok reach it through the review's launchers in the control dir (grok: allowed by --allow for exactly those paths,
+    // and a config.toml rule that could run it another way refuses the preflight); codex's own sandbox cannot start the
+    // jail, so codex runs no test at all (testsRefused) and the coverage gate says so.
+    const cmds = allowedCommands({ permissions, worktree: wt, telosRoot: opts.telosRoot, ...(transport === "agy-cli" || transport === "grok-cli" ? { launcherDir: control } : {}),
+      ...(transport === "codex-sdk" ? { testsRefused: CODEX_TESTS_REFUSED } : {}),
       envPrefix: transport === "codex-sdk" ? `env NO_PROXY=${LOOPBACK_NO_PROXY} no_proxy=${LOOPBACK_NO_PROXY} ` : "" });
+    if (transport === "grok-cli" && !opts.dryRun) { await mkdir(control, { recursive: true }); cmds.launchers = writeReviewLaunchers({ control_dir: control, worktree: wt, run_command_policy: cmds.run_command_policy }); }
+    else if (transport === "grok-cli") cmds.launchers = {};
     const harness = renderHarness(harnessTemplate, { COMMIT: opts.commit, WORKTREE: wt, ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed, worktree: wt }),
       READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: codexProfile?.scratch_tmp ?? null }), MAX_WALL_S: wall });
     // A continuation: agy and codex resume their own conversation (a note, then the same prompt); otherwise the same
@@ -287,8 +298,8 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       const box = await sandboxAvailable(bw);
       const stateOk = await exists(grokStateDir);
       const cliDir = resolve(cli, "..");
-      const jailPlan = grokBwrapArgs({ worktree: wt, write_allowed, state: { dir: grokStateDir, scratch: join(runDir, "grok-state") }, cliDir, bwrap: bw });
-      const gargv = grokArgv({ model: row.model, prompt });
+      const jailPlan = grokBwrapArgs({ worktree: wt, write_allowed, state: { dir: grokStateDir, scratch: join(runDir, "grok-state") }, cliDir, bwrap: bw, controlDir: opts.dryRun ? null : control });
+      const gargv = grokArgv({ model: row.model, prompt, allow: grokLauncherAllow(cmds) });
       Object.assign(plan, { argv: [...jailPlan.argv, cli, ...gargv.map(x => (x === prompt ? promptRef : x))], cwd: wt,
         sandbox: { kind: "the runner's bwrap jail (the containment; the Grok CLI's permission profile only decides what it attempts)", binds: jailPlan.binds, network: "not cut (the CLI must reach xAI)", state_dir: grokStateDir, state_dir_exists: stateOk },
         writable_paths: jailPlan.writable });
@@ -302,7 +313,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       pre = await grokPreflight({ cli, env: childEnv, stateDir: grokStateDir, bwrapOk: box, parentEnv: env, inspect });
       runner = async () => {
         grokScratch = await grokStateScratch(grokStateDir, runDir);
-        const j = grokBwrapArgs({ worktree: wt, write_allowed, state: grokScratch, cliDir, bwrap: bw });
+        const j = grokBwrapArgs({ worktree: wt, write_allowed, state: grokScratch, cliDir, bwrap: bw, controlDir: control });
         return runGrok({ argv: [...j.argv, cli, ...gargv], wt, childEnv, wall });
       };
     } else {
@@ -368,7 +379,17 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       agyState = { dir: name, conversation_id: r.record.conversation_id, saved, note: "the CLI's conversation state of this run (no OAuth token: only conversations/ and brain/), for --continue" };
     }
     const check = compareWorktree(before, after, { write_allowed });
-    let status = r.status;
+    // THE COVERAGE GATE (L-501; coverage.mjs): what the runner observed of the reviewer's reads and test runs, per
+    // transport. A `complete` transport result whose gate fails is `incomplete`.
+    const tests_allowed = testsAllowedBy(permissions);
+    // A continuation is one review across its runs: the earlier runs' coverage counts too (as the API runner's events do).
+    const coverage = mergeCoverage(resume?.t?.coverage ?? null, transport === "agy-cli" ? coverageOfAgy(r.record ?? {}, { worktree: wt, tests_allowed })
+      : transport === "codex-sdk" ? coverageOfCodex(r.record ?? {}, { worktree: wt, tests_allowed, tests_refused: cmds.tests_refused ?? null })
+        : coverageOfGrok(r.record ?? {}, { worktree: wt, control_dir: control, tests_allowed }));
+    const gate = coverageGate(coverage);
+    const gated = gatedStatus(r.status, r.stop_reason, gate);
+    let status = gated.status;
+    const stopReason = gated.stop_reason;
     if (check.violations.length && status !== "refused") status = "policy_violation";
     const finalText = r.final_text ? redact(r.final_text, secrets) : "";
     const transcript = {
@@ -377,7 +398,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}), argv: plan.argv, cwd: plan.cwd, env_names: plan.env.passed, env_removed: scrub.removed,
       prompt: plan.prompt, sandbox: plan.sandbox, review_copy: plan.review_copy, ...(plan.codex_outer_runtime ? { codex_outer_runtime: plan.codex_outer_runtime, scratch_tmp: plan.scratch_tmp } : {}),
       preflight: plan.preflight, limits: plan.limits, started_at: started.toISOString(), ended_at: ended.toISOString(),
-      status, stop_reason: r.stop_reason, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
+      status, stop_reason: stopReason, coverage, coverage_gate: gate, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
       worktree_check: { changed: check.changed, violations: check.violations, limits: check.limits }, worktree_kept: opts.keep ? wt : null,
       review_tests: reviewTests, ...(agyState ? { agy_state: agyState } : {}),
       ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method }, continued: method, ...(restored ? { restored_review_tests: restored.restored } : {}),
@@ -391,7 +412,8 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       `# Review run: assignment ${opts.n}, ${row.title}`,
       "",
       `- status: ${status}`,
-      `- stop_reason: ${r.stop_reason}`,
+      `- stop_reason: ${stopReason}`,
+      `- coverage: ${coverageHeaderLine(coverage, gate)}`,
       `- via: subscription`,
       `- transport: ${transport}`,
       `- cli_version: ${pre.cli_version ? `\`${pre.cli_version.replace(/`/g, "'")}\`` : "unknown"}`,
@@ -430,8 +452,10 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       "",
       "",
     ].join("\n");
-    await writeFile(outPaths.findings, header + (status === "complete" || status === "policy_violation" ? finalText : ""));
-    err(`run-review: ${status} (${r.stop_reason}); wrote ${outPaths.findings}\n`);
+    // A run the coverage gate made incomplete keeps the reviewer's final message (marked by the header's status and
+    // coverage lines): it is evidence of what was reviewed, not a finished review.
+    await writeFile(outPaths.findings, header + (status === "complete" || status === "policy_violation" || (r.status === "complete" && !gate.ok) ? finalText : ""));
+    err(`run-review: ${status} (${stopReason}); wrote ${outPaths.findings}\n`);
     code = status === "complete" ? EXIT.complete : status === "refused" ? EXIT.refused : EXIT.incomplete;
     return code;
   } finally {
@@ -475,13 +499,17 @@ const timeoutStop = wall => `wall clock reached (${wall} s): process group kille
  * dir (codex re-executes itself inside its sandbox; ripgrep sits beside it), the install of the `node` the commands
  * will run (first on the child's PATH, else this process's), and the telos root when given. All real paths.
  */
+// L-404: the node install is NO LONGER a read root (no code under review runs in codex's sandbox); the node and npm
+// binaries the commands would find are returned as `deny` (codexPermissionProfile denyPaths), so a node that sits under
+// :minimal (/usr/bin/node) is denied too.
 async function codexReadRoots({ cli, childEnv, telosRoot }) {
   const real = p => realpath(p).catch(() => null);
   const bin = await real(cli);
   const vendor = bin ? (/\/bin\/codex(\.exe)?$/.test(bin) ? dirname(dirname(bin)) : dirname(bin)) : null;
-  const node = (await findCli("node", null, childEnv)) ?? await real(process.execPath);
-  const nodePrefix = node ? dirname(dirname(node)) : null;
-  return [vendor, nodePrefix, telosRoot ? await real(telosRoot) : null].filter(Boolean);
+  const deny = new Set();
+  for (const n of ["node", "npm", "npx", "nodejs"]) { const p = await findCli(n, null, childEnv).catch(() => null); if (p) deny.add(p); }
+  const self = await real(process.execPath); if (self) deny.add(self);
+  return { roots: [vendor, telosRoot ? await real(telosRoot) : null].filter(Boolean), deny: [...deny].sort() };
 }
 
 /** What the plan and transcript record about the SDK: package, version, which binary runs and why, the key check. */
@@ -499,7 +527,7 @@ async function runGrok({ argv, wt, childEnv, wall }) {
   const r = await runCli({ cmd: argv[0], args: argv.slice(1), cwd: wt, env: childEnv, timeoutMs: wall * 1000, onLine: l => lines.push(l) });
   const ev = parseGrokStream(lines);
   const record = { own: capOwn(ev.own), events: ev.events, unparsed_lines: ev.unparsed, text_chunks: ev.chunks, complete_messages: ev.messages, final_source: ev.final_source,
-    cli_stop_reason: ev.stop_reason, num_turns: ev.num_turns, ...(ev.cancelled_tools.length ? { cancelled_tools: ev.cancelled_tools } : {}), ...(ev.diagnosis ? { no_final_text: ev.diagnosis } : {}), error: ev.error && redactStrong(ev.error, childEnv), stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
+    cli_stop_reason: ev.stop_reason, num_turns: ev.num_turns, tool_calls: ev.tool_calls, advertised_tools: ev.advertised_tools, ...(ev.cancelled_tools.length ? { cancelled_tools: ev.cancelled_tools } : {}), ...(ev.diagnosis ? { no_final_text: ev.diagnosis } : {}), error: ev.error && redactStrong(ev.error, childEnv), stderr_tail: redactStrong(tail(r.stderr), childEnv), ...(r.spawn_error ? { spawn_error: r.spawn_error } : {}) };
   const base = { exit_code: r.exit_code, killed_for: r.killed_for, usage: ev.usage, record, final_text: ev.final_text };
   if (r.killed_for === "timeout") return { ...base, status: "incomplete", stop_reason: timeoutStop(wall) };
   if (r.killed_for || r.spawn_error) return { ...base, status: "incomplete", stop_reason: `grok stopped (${r.killed_for ?? r.spawn_error})` };
@@ -519,7 +547,7 @@ async function runAgy({ cli, ws, wt, lane, prompt, timeoutS, graceS, childEnv, s
   const summarize = async x => ({ conversation_id: x?.conversation_id ?? null,
     own: capOwn([...(x?.tool_steps ?? []).map(st => ({ kind: `tool step ${st.tool_name ?? "?"} (${st.state ?? "?"})`, text: JSON.stringify(st.tool_info ?? null).slice(0, 16384) })),
       ...(typeof x?.text === "string" && x.text ? [{ kind: "your message", text: x.text }] : [])]),
-    tool_steps: x?.tool_steps ?? [], jail_decisions: (await readJailLog(ws.paths.control_dir)).map(d => ({ tool: d.tool ?? null, args: d.args ?? null, decision: d.decision ?? null, reason: d.reason ?? null })),
+    tool_steps: x?.tool_steps ?? [], tool_drift: x?.tool_drift ?? null, jail_decisions: (await readJailLog(ws.paths.control_dir)).map(d => ({ tool: d.tool ?? null, args: d.args ?? null, decision: d.decision ?? null, reason: d.reason ?? null })),
     launch: x?.launch ?? null, num_turns: x?.num_turns ?? null, result_status: x?.result_status ?? x?.status ?? null, exit_code: x?.exit_code ?? null, stderr_tail: x?.stderr_tail ? redactStrong(x.stderr_tail, childEnv) : null });
   try {
     const t = await runAgyWorkerTurn({ cli, control_dir: ws.paths.control_dir, worktree: wt, model: lane, prompt, timeoutS, graceS, base_env: childEnv, sandbox, jail, agent: REVIEW_AGENT, conversation });

@@ -4,12 +4,13 @@
 // child. One test drives the REAL @openai/codex-sdk against the fake codex binary.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main, EXIT } from "../src/review-runner/index.mjs";
+import { CODEX_TESTS_REFUSED } from "../src/review-runner/subscription.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { fixtureRepo, fakeFetch, capture, deps, FAKE_KEY, sh, mkdtemp, cleanup, REAL_ROOT, REVIEW_DIR } from "./review-runner-helper.mjs";
 import { fakeCodexSdk, fakeReviewClis } from "./fixtures/review-clis.mjs";
@@ -98,7 +99,12 @@ test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's b
   const tmpEntry = pp.expected_entries.find(e => e.startsWith("write ") && !e.endsWith(".review-tests"));
   assert.ok(tmpEntry && !tmpEntry.slice(6).startsWith(p.worktree.path + "/"), "the scratch TMPDIR is outside the worktree");
   assert.ok(p.env.passed.includes("TMPDIR"));
-  assert.ok(p.allowed_commands.every(l => l.includes("env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 ")), p.allowed_commands.join("\n"));
+  // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): codex's sandbox cannot start the verify jail, so codex
+  // lists NO test command, says why, and its profile denies node (the node install is no longer a read root).
+  assert.deepEqual(p.allowed_commands, [`- none: ${CODEX_TESTS_REFUSED}`]);
+  assert.equal(p.sandbox.filesystem[realpathSync(process.execPath)], "deny", "the node binary is denied in codex's sandbox");
+  assert.ok(pp.expected_entries.includes(`deny ${realpathSync(process.execPath)}`));
+  assert.ok(!Object.entries(p.sandbox.filesystem).some(([k, v]) => v === "read" && realpathSync(process.execPath).startsWith(k + "/")), "the node install is not readable");
   assert.equal(p.argv.at(-1), `(stdin: <prompt sha256:${p.prompt.sha256}>)`);
   assert.deepEqual(p.thread_options, { model: "gpt-6-astra", workingDirectory: p.worktree.path, skipGitRepoCheck: true, approvalPolicy: "never" });
   assert.deepEqual([p.sdk_options.apiKey, p.sdk_options.baseUrl, p.sdk_options.codexPathOverride, p.sdk_options.config], ["never passed", "never passed", f.clis.codex, { forced_login_method: "chatgpt" }]);
@@ -115,7 +121,9 @@ test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's b
 test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary, no apiKey/baseUrl, read-only thread options; the events become the transcript; the final message verbatim", async () => {
   const f = await setup();
   const r = await run(f, { n: 4, args: ["--max-wall-s", "60"] });
-  assert.equal(r.code, EXIT.complete, r.out.err);
+  // THE COVERAGE GATE (L-501) with codex's refused tests (L-404): the review read the source but could run no test, so
+  // it is `incomplete`, and says why; the reviewer's final message is kept after the header.
+  assert.equal(r.code, EXIT.incomplete, r.out.err);
   const [made, ran] = r.sdk;
   assert.deepEqual(made.option_names, ["codexPathOverride", "config", "configOverrides", "env"], "never apiKey or baseUrl");
   assert.ok(made.config_overrides.some(c => c.endsWith(`":workspace_roots"={"."="read"}}`)), "assignment 4: nothing in the worktree is writable");
@@ -129,15 +137,18 @@ test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary,
   assert.equal(createHash("sha256").update(ran.input).digest("hex"), t.prompt.sha256, "the prompt given to the SDK is the recorded one");
   const md = await r.read("findings-4-openai.md");
   const h = headerOf(md);
-  for (const line of ["- status: complete", "- via: subscription", "- transport: codex-sdk", "- cli_version: `codex-cli 9.9.9-fake`", "- auth_method_observed: chatgpt",
+  for (const line of ["- status: incomplete", "- via: subscription", "- transport: codex-sdk", "- cli_version: `codex-cli 9.9.9-fake`", "- auth_method_observed: chatgpt",
     "- subscription_coverage: documented", "- requested_model: `gpt-6.1-sol`", "- served_model: `gpt-6.1-sol`", "- policy_violations: none"]) assert.ok(h.includes(line + "\n"), line);
+  assert.match(h, /- stop_reason: coverage gate: no test ran although the testing limit allows tests: the codex transport runs no test.*\(the transport ended with: final answer\)\n/);
+  assert.match(h, /- coverage: `\{"source_reads":1,"denied_reads":0,"tests_run":0,"tests_allowed":true\}`, gate FAILED .*files read \(sample\): `hello\.txt`\n/);
   assert.match(h, /- served_model_source: input/);
   assert.match(h, /- sandbox: codex permission profile ophanim-review .*writes a scratch TMPDIR outside the worktree.*approvals never/);
   assert.match(h, /- usage_totals: `\{"input_tokens":100,"cached_input_tokens":10,"output_tokens":20\}`/);
   assert.equal(bodyOf(md), "# Findings (fake codex)\n\n1. holds\n\nModel: gpt-6.1-sol\n");
-  assert.deepEqual([t.via, t.transport, t.status, t.worktree_check.violations], ["subscription", "codex-sdk", "complete", []]);
+  assert.deepEqual([t.via, t.transport, t.status, t.worktree_check.violations], ["subscription", "codex-sdk", "incomplete", []]);
+  assert.deepEqual([t.coverage.source_reads, t.coverage.tests_run, t.coverage.tests_refused, t.coverage_gate.ok], [1, 0, CODEX_TESTS_REFUSED, false]);
   assert.match(t.cli.thread_id, /^01a1f0fe-/, "the thread id is recorded (for --continue)");
-  assert.deepEqual([t.cli.commands.length, t.cli.turns_completed, t.cli.errors], [1, 1, ["Reconnecting... 1/5 (stream disconnected)"]], "a retry error event is recorded, not a failure");
+  assert.deepEqual([t.cli.commands.length, t.cli.turns_completed, t.cli.errors], [2, 1, ["Reconnecting... 1/5 (stream disconnected)"]], "a retry error event is recorded, not a failure");
   assert.ok(t.cli.own.some(o => o.kind === "your message"));
   for (const s of [md, JSON.stringify(t), r.out.out, r.out.err]) for (const v of Object.values(KEYS)) assert.ok(!s.includes(v));
   assert.equal(r.fetch.calls.length, 0);
@@ -148,7 +159,9 @@ test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary,
 test("codex through the REAL @openai/codex-sdk spawning the fake binary: the argv it builds is the plan's, the prompt goes to stdin, no key in its env", async () => {
   const f = await setup();
   const r = await run(f, { n: 2, args: ["--max-wall-s", "60"], realSdk: true });
-  assert.equal(r.code, EXIT.complete, r.out.err);
+  // The fake binary reads nothing and codex runs no test: the coverage gate makes the run incomplete (L-501, L-404).
+  assert.equal(r.code, EXIT.incomplete, r.out.err);
+  assert.match(r.out.err, /run-review: incomplete \(coverage gate: no source file was read; no test ran/);
   const log = await calls(f.log);
   const exec = log.find(x => x.argv?.[0] === "exec");
   assert.deepEqual([f.clis.codex, ...exec.argv], r.plan.argv.slice(0, -1), "the SDK spawned exactly the argv the plan records");
@@ -173,7 +186,7 @@ test("codex failure is explicit: turn.failed and a thrown SDK error are status `
   assert.match(headerOf(md), /- status: failed\n- stop_reason: codex reported turn\.failed: usage limit reached\n/);
   assert.equal(bodyOf(md), "");
   let t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
-  assert.deepEqual([t.status, t.cli.turn_failed, t.cli.commands.length], ["failed", "usage limit reached", 1]);
+  assert.deepEqual([t.status, t.cli.turn_failed, t.cli.commands.length], ["failed", "usage limit reached", 2]);
   r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "throw" } });
   assert.equal(r.code, EXIT.incomplete);
   md = await r.read("findings-2-openai.md");
@@ -190,8 +203,8 @@ test("the post-run git check: a change outside .review-tests/ is a policy violat
   assert.match(h, /- status: policy_violation/);
   assert.match(h, /- policy_violations: `pantheon\/evil\.mjs`/);
   r = await run(f, { n: 2, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_WRITE: ".review-tests/mine.test.mjs" } });
-  assert.equal(r.code, EXIT.complete, r.out.err);
-  assert.match(headerOf(await r.read("findings-2-openai.md")), /- policy_violations: none/);
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // not a violation; incomplete only for codex's refused tests (L-404)
+  assert.match(headerOf(await r.read("findings-2-openai.md")), /- status: incomplete\n[\s\S]*- policy_violations: none/);
   r = await run(f, { n: 4, args: ["--max-wall-s", "60"], env: { FAKE_CLI_WRITE: ".review-tests/x.test.mjs" } });
   assert.equal(r.code, EXIT.incomplete);
   h = headerOf(await r.read("findings-4-openai.md"));
@@ -274,10 +287,17 @@ test("grok, assignment 3: inside bwrap -- worktree read-only, .review-tests writ
   assert.deepEqual([probe.worktree_root, probe.review_tests, probe.state, probe.state_login_visible, probe.tmp], ["EROFS", "ok", "ok", true, "ok"]);
   assert.equal(existsSync(join(f.home, ".grok", "written-in-run.txt")), false, "the real state dir is untouched (the run wrote its scratch copy)");
   assert.deepEqual(probe.keys, [], "no XAI_API_KEY (nor any other key) inside the jail");
-  assert.deepEqual(probe.argv, ["-p", "--output-format", "streaming-json", "-m", "grok-4.7"]);
+  // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): the only test commands grok is allowed are the review's
+  // verify launchers (per invocation, --allow); the fake ran one, and it ran the test in a verify jail NESTED in grok's.
+  assert.deepEqual(probe.argv.slice(0, 5), ["-p", "--output-format", "streaming-json", "-m", "grok-4.7"]);
+  const allow = probe.argv.slice(5);
+  assert.ok(allow.length >= 2 && allow.every((a, i) => (i % 2 === 0 ? a === "--allow" : /^Bash\(\/\S+\/control\/pantheon-(test \*|suite-[a-z]+)\)$/.test(a))), allow.join(" "));
+  assert.deepEqual(r.plan.allowed_commands.every(l => /\/control\/pantheon-(test|suite-[a-z]+)\b/.test(l)), true, "every listed test command is a launcher");
+  assert.equal(probe.launcher.exit, 0, `the launcher ran the test in the verify jail: ${probe.launcher.out}`);
   const h = headerOf(md);
   for (const line of ["- status: complete", "- transport: grok-cli", "- subscription_coverage: undocumented", "- served_model: `grok-4.7`", "- policy_violations: none"]) assert.ok(h.includes(line + "\n"), line);
   const t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
+  assert.deepEqual([t.coverage.source_reads, t.coverage.denied_reads, t.coverage.tests_run, t.coverage_gate.ok], [1, 0, 1, true], "the coverage gate (L-501) from grok's tool events");
   assert.deepEqual([t.cli.unparsed_lines, t.worktree_check.changed], [1, [".review-tests/probe.test.mjs"]]);
   assert.deepEqual(await readdir(r.d.tmpBase), []);
 });
@@ -306,7 +326,7 @@ test("grok stream: an answer sent as incremental text chunks is the final text (
   assert.doesNotMatch(bodyOf(md), /NOT THE ANSWER|hmm/);
   const t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
   assert.deepEqual([t.cli.final_source, t.cli.text_chunks, t.cli.complete_messages], ["chunks", 4, 0]);
-  r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "nofinal" } });
+  r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "nofinal", FAKE_GROK_NO_WORK: "1" } });
   assert.equal(r.code, EXIT.incomplete, r.out.err + (await r.read("findings-3-xai.md").catch(() => "")));
   const h = headerOf(await r.read("findings-3-xai.md"));
   assert.match(h, /grok returned no final text \(5 event\(s\), 0 unparsed line\(s\); no assistant message, result event or text chunk was recognised; last event types: start, tool_call, tool_result, thinking_delta, usage/);
@@ -323,14 +343,15 @@ test("grok, the observed grok 1.0.44 shapes: text chunks after the last tool cal
   let md = await r.read("findings-3-xai.md");
   assert.match(bodyOf(md), /^# Findings \(fake grok, native\)\n\nPROBE \{/);
   assert.doesNotMatch(bodyOf(md), /Next I will write a test|NOT THE ANSWER/);
-  assert.match(headerOf(md), /^- grok_permissions: config\.toml permission_mode unset \(default "ask"\); 35 string-form allow rule\(s\): `Read` `Grep` `Edit` `Bash\(cat \*\)`.*`Bash\(npm test\)`\n/m);
+  // No test rule in the recommended profile any more (L-404): tests run only through the launchers the runner allows.
+  assert.match(headerOf(md), /^- grok_permissions: config\.toml permission_mode unset \(default "ask"\); 30 string-form allow rule\(s\): `Read` `Grep` `Edit` `Bash\(cat \*\)`.*`Bash\(git show\)`\n/m);
   let t = JSON.parse(await r.read("findings-3-xai.transcript.json"));
   assert.deepEqual([t.cli.final_source, t.cli.cli_stop_reason, t.cli.num_turns], ["chunks", "end_turn", 3]);
   // The owner's narrow rules are recorded (the runner writes none); the allowances they lack are named before the run.
   await writeFile(join(f.home, ".grok", "config.toml"), '[permission]\nallow = ["Edit"]\n');
   r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--force"], env: { FAKE_CLI_MODE: "cancelled" } });
   assert.equal(r.code, EXIT.incomplete, r.out.err);
-  assert.match(r.plan.preflight.warnings.join("\n"), /34 recommended allowance\(s\) missing .*Read, Grep, Bash\(cat \*\)/);
+  assert.match(r.plan.preflight.warnings.join("\n"), /29 recommended allowance\(s\) missing .*Read, Grep, Bash\(cat \*\)/);
   md = await r.read("findings-3-xai.md");
   const h = headerOf(md);
   assert.match(h, /- status: failed\n/);
@@ -358,7 +379,7 @@ test("grok permission refusals (round 2, 77480d6): no config.toml, or only the s
   assert.equal(r.code, EXIT.complete, r.out.err);
   const pi = r.plan.preflight.checks.permissions_inspect;
   assert.deepEqual([pi.argv.slice(1), pi.ok, pi.loaded, pi.sources.length], [["inspect", "--json"], true, 6, 1]);
-  assert.match(r.plan.preflight.warnings.join(""), /loaded 6 rule\(s\), fewer than the 35 string-form rule\(s\)/);
+  assert.match(r.plan.preflight.warnings.join(""), /loaded 6 rule\(s\), fewer than the 30 string-form rule\(s\)/);
   r = await run(f, { n: 3, args: ["--max-wall-s", "60", "--dry-run", "--grok-permissions-inspect", "inspect --json"], env: { FAKE_GROK_INSPECT_LOADED: "0" } });
   assert.equal(r.code, EXIT.refused);
   assert.match(r.out.err, /the Grok CLI reports 0 loaded permission rules/);
@@ -378,6 +399,8 @@ async function agySetup() {
   await writeFile(join(fx, "quota-report.txt"), usage(0.8)); await writeFile(join(fx, "quota-exit"), "0");
   const worker = join(fx, "review-worker.sh");
   await writeFile(worker, [
+    // A reviewer reads the source first (the coverage gate counts the hook-approved read: coverage.mjs, L-501).
+    'agy_read "$dir/hello.txt" >/dev/null || true',
     'agy_write "$dir/.review-tests/mine.test.mjs" \'import test from "node:test"; test("ok", () => {});\' || true',
     'agy_write "$dir/pantheon/evil.mjs" "x" || true',
     // The listed test command is the review's verify launcher in its control dir (the CLI's cwd); the jail hook
@@ -409,7 +432,9 @@ test("agy run, assignment 1: the hook approves the .review-tests write and the l
   assert.deepEqual((await f.launches()).map(l => l.split(" ")), [["pantheon-reviewer-agent", "gemini-4-carbon-high"]]);
   const t = JSON.parse(await r.read("findings-1-google.transcript.json"));
   const decisions = t.cli.jail_decisions.map(d => [d.tool, d.decision]);
-  assert.deepEqual(decisions, [["write_file", "auto_approve"], ["write_file", "deny"], ["run_command", "auto_approve"], ["run_command", "deny"]]);
+  assert.deepEqual(decisions, [["view_file", "auto_approve"], ["write_file", "auto_approve"], ["write_file", "deny"], ["run_command", "auto_approve"], ["run_command", "deny"]]);
+  // THE COVERAGE GATE (L-501): one source read, no denied read, one test run through the launcher.
+  assert.deepEqual([t.coverage.source_reads, t.coverage.denied_reads, t.coverage.tests_run, t.coverage.files_read_sample, t.coverage_gate.ok], [1, 0, 1, ["hello.txt"], true]);
   assert.deepEqual(t.worktree_check, { ...t.worktree_check, changed: [".review-tests/mine.test.mjs"], violations: [] });
   const md = await r.read("findings-1-google.md");
   const h = headerOf(md);
@@ -455,7 +480,7 @@ test("--reviewer openai:<model> on assignment 1: codex-sdk transport, its ChatGP
 test("--reviewer on a codex run: the header and transcript record the substitution; assignment 4 still writes nothing", async () => {
   const f = await setup();
   const r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--reviewer", "openai:gpt-6-astra"] });
-  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
   assert.ok(r.files.includes("findings-4-openai.md"));
   overrideHeader(headerOf(await r.read("findings-4-openai.md")), { lab: "OpenAI", model: "gpt-6-astra", def: "OpenAI, `gpt-6.1-sol`" });
   const t = JSON.parse(await r.read("findings-4-openai.transcript.json"));
@@ -504,7 +529,7 @@ test("--continue refuses when the reviewer override differs from the transcript'
   let r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--continue", tpath] });
   assert.equal(r.code, EXIT.refused); assert.match(r.out.err, /model gpt-6-astra vs gpt-6\.1-sol.*reviewer override openai:gpt-6-astra vs none/);
   r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--continue", tpath, "--reviewer", "openai:gpt-6-astra"] });
-  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // accepted (not refused); incomplete only for codex's refused tests (L-404)
   // A default run continued with a --reviewer naming the very same model is a different review too.
   const g = await setup();
   const d1 = await run(g, { n: 4, args: ["--max-wall-s", "60"], env: { FAKE_CLI_MODE: "partial" } });

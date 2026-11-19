@@ -13,23 +13,26 @@ const FINAL = "# Findings\n\n1. holds — `a.mjs:1`\n\n## Blockers for a live ru
 const ENV_FOR = { openai: "OPENAI_API_KEY", xai: "XAI_API_KEY", gemini: "GEMINI_API_KEY" };
 const ASSIGNMENT_FOR = { openai: "2", xai: "3", gemini: "1" };
 
-// Scripted vendor responses: a tool call, then a final answer.
+// Scripted vendor responses: two tool calls (a source read and a test run: the coverage gate of L-501 requires both for
+// a complete review, self-audit round 3, assignment 4 (sealed fe2a612)), then a final answer. The test runs in the
+// verify jail (L-404 sibling: tools.mjs).
+const TEST_FILE = "pantheon/tests/other.test.mjs";
 const SCRIPTS = {
   openai: (served = "gpt-6-astra-2026-11-01") => [
     () => ({ json: { id: "resp_1", model: served, status: "completed", usage: { input_tokens: 100, output_tokens: 10, output_tokens_details: { reasoning_tokens: 4 } },
-      output: [{ type: "reasoning", id: "rs_1" }, { type: "function_call", call_id: "call_1", name: "read_file", arguments: JSON.stringify({ path: "hello.txt" }) }] } }),
+      output: [{ type: "reasoning", id: "rs_1" }, { type: "function_call", call_id: "call_1", name: "read_file", arguments: JSON.stringify({ path: "hello.txt" }) }, { type: "function_call", call_id: "call_2", name: "run_tests", arguments: JSON.stringify({ files: [TEST_FILE] }) }] } }),
     () => ({ json: { id: "resp_2", model: served, status: "completed", usage: { input_tokens: 200, output_tokens: 20, output_tokens_details: { reasoning_tokens: 6 } },
       output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: FINAL }] }] } }),
   ],
   xai: (served = "grok-4.7-0105") => [
     () => ({ json: { id: "c1", model: served, usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
-      choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "tc_1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "hello.txt" }) } }] } }] } }),
+      choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "tc_1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "hello.txt" }) } }, { id: "tc_2", type: "function", function: { name: "run_tests", arguments: JSON.stringify({ files: [TEST_FILE] }) } }] } }] } }),
     () => ({ json: { id: "c2", model: served, usage: { prompt_tokens: 200, completion_tokens: 20, total_tokens: 220 },
       choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: FINAL } }] } }),
   ],
   gemini: (served = "gemini-4-carbon-001") => [
     () => ({ json: { modelVersion: served, usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10, totalTokenCount: 110 },
-      candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ functionCall: { name: "read_file", args: { path: "hello.txt" } }, thoughtSignature: "sig" }] } }] } }),
+      candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ functionCall: { name: "read_file", args: { path: "hello.txt" } }, thoughtSignature: "sig" }, { functionCall: { name: "run_tests", args: { files: [TEST_FILE] } } }] } }] } }),
     () => ({ json: { modelVersion: served, usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 20, totalTokenCount: 220 },
       candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: FINAL }] } }] } }),
   ],
@@ -84,7 +87,7 @@ for (const vendor of ["openai", "xai", "gemini"]) {
       assert.equal(c1.body.model, "grok-4.7");
       assert.equal(c1.body.messages[0].role, "system");
       assert.equal(c2.body.messages.at(-1).role, "tool");
-      assert.equal(c2.body.messages.at(-1).tool_call_id, "tc_1");
+      assert.deepEqual(c2.body.messages.slice(-2).map(m => m.tool_call_id), ["tc_1", "tc_2"]);
     }
     const md = r.files.find(f => f.endsWith(".md")), tj = r.files.find(f => f.endsWith(".transcript.json"));
     const lab = { openai: "openai", xai: "xai", gemini: "google" }[vendor];
@@ -96,7 +99,9 @@ for (const vendor of ["openai", "xai", "gemini"]) {
     assert.match(header, new RegExp(`served_model: \`${served.replace(/\./g, "\\.")}\``));
     assert.match(header, /status: complete/);
     assert.match(header, /provider_calls: 2/);
-    assert.match(header, /tool_calls: 1/);
+    assert.match(header, /tool_calls: 2/);
+    // THE COVERAGE GATE (L-501): the runner's own record of the read and the jailed test run.
+    assert.match(header, /- coverage: `\{"source_reads":1,"denied_reads":0,"tests_run":1,"tests_allowed":true\}`, gate passed; files read \(sample\): `hello\.txt`\n/);
     assert.match(header, new RegExp(`commit: \`${r.repo.commit}\``));
     const sum = { openai: '"input_tokens":300,"output_tokens":30,"output_tokens_details":{"reasoning_tokens":10}', xai: '"prompt_tokens":300,"completion_tokens":30,"total_tokens":330', gemini: '"promptTokenCount":300,"candidatesTokenCount":30,"totalTokenCount":330' }[vendor];
     assert.ok(header.includes(sum), header);
@@ -104,11 +109,13 @@ for (const vendor of ["openai", "xai", "gemini"]) {
     for (const s of [findings, transcriptText, r.out.out, r.out.err]) assert.equal(s.includes(FAKE_KEY), false);
     const t = JSON.parse(transcriptText);
     assert.equal(t.status, "complete");
-    assert.deepEqual(t.events.map(e => e.type), ["provider_call", "tool_call", "provider_call"]);
+    assert.deepEqual(t.events.map(e => e.type), ["provider_call", "tool_call", "tool_call", "provider_call"]);
     const tc = t.events[1];
     assert.equal(tc.name, "read_file");
     assert.equal(tc.outcome, "ok");
     assert.match(tc.result_sha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual([t.events[2].name, t.events[2].outcome, t.events[2].exit_code], ["run_tests", "ok", 0], "the test ran (in the verify jail) and passed");
+    assert.deepEqual([t.coverage.source_reads, t.coverage.tests_run, t.coverage_gate.ok], [1, 1, true]);
     // the disposable worktree is gone and git no longer lists it
     assert.deepEqual(await readdir(r.d.tmpBase), []);
     const wl = await sh("git", ["-C", r.repo.root, "worktree", "list"]);
@@ -225,7 +232,10 @@ test("the reviewer cannot read another reviewer's findings in the worktree", asy
     { type: "function_call", call_id: "b", name: "grep", arguments: JSON.stringify({ pattern: "PRIOR-FINDINGS" }) }] } });
   const fin = () => ({ json: { id: "r2", model: "m", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "done" }] }] } });
   const r = await run({ vendor: "openai", script: [call, fin] });
-  assert.equal(r.code, EXIT.complete);
+  // THE COVERAGE GATE (L-501, self-audit round 3, assignment 4 (sealed fe2a612)): a denied read, no source read and no
+  // test make this "done" an incomplete review, whatever its text says.
+  assert.equal(r.code, EXIT.incomplete);
+  assert.match(r.out.err, /run-review: incomplete \(coverage gate: no source file was read; 1 read\(s\) were denied by the hook or the sandbox; no test command ran although the testing limit allows tests \(the transport ended with: final answer\)\)/);
   const outputs = r.fetch.calls[1].body.input.map(i => i.output);
   assert.match(outputs[0], /refused/);
   assert.equal(outputs[1], "(no matches)");

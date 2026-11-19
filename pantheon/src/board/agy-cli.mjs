@@ -2,8 +2,11 @@
 // API-key transport and cannot consume an OAuth refresh token renamed to GEMINI_API_KEY.
 import { spawnPromise } from "./spawn.mjs";
 import { existsSync, readFileSync } from "node:fs";
+import { copyFile as copyFileP, mkdtemp as mkdtempP, rm as rmP } from "node:fs/promises";
+import { tmpdir as tmpdirOf } from "node:os";
 import { join } from "node:path";
 import { parseUsageEnvelope, quotaEvidence, scopeQuota } from "../agy/quota.mjs";
+import { prepareSingleTurnWorkspace } from "../agy/workspace.mjs";
 
 // A QUOTA REFUSAL by Antigravity, read from what the CLI itself reported (its result event and its stderr): an HTTP
 // 429, RESOURCE_EXHAUSTED, or a quota/rate-limit/spend-cap/prepaid-balance message. The CLI has no status code of its
@@ -22,11 +25,34 @@ const refused = (message, run, result) => {
     : new Error(`${message} (inspect local CLI diagnostics)`);
 };
 
-// `env` (optional) ADDS variables to the child's environment (the pipeline's implementer is given its unit's A2A
-// endpoint this way); `signal` (optional) cancels the child. Neither can restore a Google API key: those are
-// stripped after `env` is merged.
+// THE SINGLE-TURN SEAT (the planner, the plan and change reviewers, the validator and the A2A subagents through
+// sdk/agy-turn.mjs; the board's agy seat through board/run-item.mjs). SELF-AUDIT ROUND 3, ASSIGNMENT 4 (sealed fe2a612),
+// L-401: this launch ran the real CLI UNJAILED, with `{...process.env}` minus only the two Google keys (so OPENAI_API_KEY,
+// ANTHROPIC_API_KEY, XAI_API_KEY and every other secret of the controller reached it), and with `--sandbox`, on text that
+// is partly worker-controlled (an A2A subagent's question is the implementer's text; a change reviewer reads the
+// worker's diff) -- and the reviewer card it runs for a subagent lists run_command. It now runs in the WORKER's jail
+// profile, exactly:
+//   ENV   workerEnvOf(env, base_env): the worker's allowlist (no provider key, no secret-named variable, from `base` or
+//         from `env`), plus ANTIGRAVITY_AGY_CLEANUP=all and AGY_CLI_DISABLE_AUTO_UPDATE=true;
+//   JAIL  prepareWorkerJail: the worker's bwrap (host read-only, /tmp a fresh tmpfs, --unshare-pid, --new-session,
+//         --die-with-parent, the Gemini state as a per-run scratch copy dropped afterwards, the worktree and the control
+//         dir's run/ writable); SANDBOX_UNAVAILABLE without bwrap -- never a silent unjailed run;
+//   ARGV  workerArgv (--mode=accept-edits, --add-dir <abs worktree>, --disable-slash-commands, --log-file
+//         <control>/run/agy.log) + --json-schema, through assertWorkerArgv: NO --sandbox (never inside bwrap,
+//         owner-stated) and NO --dangerously-skip-permissions (it skips the hook);
+//   HOOK  the worker's PreToolUse jail hook with a READ-ONLY policy (src/agy/workspace.mjs prepareSingleTurnWorkspace):
+//         reads inside the worktree only; every write, command, MCP call and native subagent denied.
+// The CLI's cwd is a fresh control dir holding the role card (copied from `repo`'s .agents/agents/), the hook and the
+// policy; `schemaPath` is copied into it (the jail's /tmp is its own). The control dir and the Gemini scratch are
+// removed on every path.
+// REMAINING (owner constraint L-004, explicitly UNRESOLVED): the jailed CLI itself still has the worker's egress and
+// read-only view of the whole host; this change does not narrow the trusted CLI's own jail.
+// `env` (optional) ADDS non-secret variables (a provider key or secret-named one is dropped, as for the worker);
+// `base_env` (optional) replaces process.env as the allowlist's source; `sandbox` is prepareWorkerJail's (bwrap,
+// agy_state_dirs, home, ...; `allowUnsandboxed: true` is the only way to run without bwrap, and is recorded); `signal`
+// cancels the child's process group. The result adds {jail_log, tool_steps, tool_drift, launch, sandbox} to the earlier fields (a thrown failure carries them too).
 export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, timeoutS,
-  schemaPath = null, onEvent = () => {}, env: extraEnv = null, signal = undefined }) {
+  schemaPath = null, onEvent = () => {}, env: extraEnv = null, signal = undefined, base_env = null, sandbox = {} }) {
   if (!/^[a-z][a-z-]*$/.test(role)) throw new Error(`agy CLI invalid role ${role}`);
   const agent = `pantheon-${role}`;
   const cardPath = join(repo, ".agents", "agents", agent, "agent.md");
@@ -37,17 +63,32 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
   if (!frontmatter.split("\n").some(line => line === `name: ${agent}`)) {
     throw new Error(`agy CLI role card ${cardPath} does not declare name: ${agent}`);
   }
-  const args = ["--agent", agent, "--model", model, "--add-dir", worktree, "--sandbox",
-    "--output-format", "stream-json", "--print-timeout", `${timeoutS}s`];
-  if (schemaPath) args.push("--json-schema", schemaPath);
-  args.push("--print", prompt);
+  if (typeof worktree !== "string" || !worktree) throw Object.assign(new Error("agy CLI: pass the seat's worktree"), { code: "BAD_INPUT" });
+  const { env, dropped: envDropped } = workerEnvOf(extraEnv ?? {}, base_env);
+  const control_dir = await mkdtempP(join(tmpdirOf(), "pantheon-agy-turn-"));
+  let gstate = null;
+  try {
+    const ws = await prepareSingleTurnWorkspace({ control_dir, worktree: resolveOf(worktree), agent, card: cardPath, agents_dir: join(repo, ".agents", "agents") });
+    let schema = null;
+    if (schemaPath) { schema = join(ws.paths.control_dir, "schema.json"); await copyFileP(schemaPath, schema); }
+    const base = workerArgv({ model, worktree: ws.paths.worktree, prompt, timeoutS, log_file: ws.paths.agy_log, agent });
+    const at = base.lastIndexOf("--print");
+    const args = [...base.slice(0, at), ...(schema ? ["--json-schema", schema] : []), ...base.slice(at)];
+    const jail = await prepareWorkerJail({ cli, control_dir: ws.paths.control_dir, worktree: ws.paths.worktree, env, sandbox });
+    gstate = jail.gstate;
+    const cmd = jail.prefix.length ? jail.prefix[0] : cli;
+    const argv = assertWorkerArgv(jail.prefix.length ? [...jail.prefix.slice(1), cli, ...args] : args);
+    const launch = { cmd, args: argv.map(a => (a === prompt ? "<prompt>" : a)), cwd: ws.paths.control_dir, env_policy: "allowlist", env_names: Object.keys(env).sort(),
+      env_dropped_count: envDropped.length, env_stripped: envDropped.filter(k => ENV_SECRETISH.test(k) || PROVIDER_KEY.test(k)).sort() };
+    return await singleTurnIn({ cmd, argv, cwd: ws.paths.control_dir, env, agent, model, timeoutS, onEvent, signal, control_dir: ws.paths.control_dir, launch, sandboxRec: jail.sandboxRec });
+  } finally {
+    await dropGeminiState(gstate).catch(() => null);   // the scratch holds the OAuth token: never left behind
+    await rmP(control_dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
-  // A child inheriting GEMINI_API_KEY could silently use the API-key route while appearing to
-  // validate OAuth. Strip both Google API-key spellings at the subprocess boundary.
-  const env = { ...process.env, ...(extraEnv ?? {}) };
-  delete env.GEMINI_API_KEY;
-  delete env.GOOGLE_API_KEY;
-
+/** The rest of runAgyCliTurn, inside its jail (the caller drops the state and the control dir). */
+async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEvent, signal, control_dir, launch, sandboxRec }) {
   let init = null, result = null, toolCalls = 0, subagentCalls = 0, answerChars = 0;
   const report = ev => { try { onEvent(ev); } catch { /* telemetry is not the turn's authority */ } };
   const onStdoutLine = line => {
@@ -58,6 +99,7 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
       report({ event: "seat.start", detail: `OAuth CLI agent ${init?.agent ?? "unknown"}, model ${init?.model ?? "unknown"}` });
     } else if (event.event === "step_update") {
       const step = event.step_update;
+      if (step?.step_type === "tool") tool_steps.push(toolStepOf(step));
       if (step?.step_type === "tool" && step.state === "DONE") {
         toolCalls++;
         if (step.tool_name === "invoke_subagent") subagentCalls++;
@@ -71,27 +113,42 @@ export async function runAgyCliTurn({ cli, repo, worktree, role, model, prompt, 
       result = event.result;
     }
   };
+  const tool_steps = [];
 
-  const run = await spawnPromise(cli, args, { cwd: repo, env,
-    timeout: (timeoutS + 15) * 1000, onStdoutLine, ...(signal ? { signal } : {}) });
-  if (run.killedFor === "cancelled") throw Object.assign(new Error("agy CLI turn was cancelled"), { code: "ABORTED" });
-  if (run.signal === "SIGTERM") throw new Error(`agy CLI timed out after ${timeoutS}s`);
-  if (run.status !== 0) throw refused(`agy CLI exited ${run.status}; status ${result?.status ?? "missing"}`, run, result);
+  let run;
+  try {
+    run = await spawnPromise(cmd, argv, { cwd, env, timeout: (timeoutS + 15) * 1000, onStdoutLine, ...(signal ? { signal } : {}) });
+  } catch (e) {
+    if (e?.name === "AbortError" || signal?.aborted) throw Object.assign(new Error("agy CLI turn was cancelled"), { code: "ABORTED" });
+    throw Object.assign(new Error(`agy CLI could not be started (${e?.code ?? e?.message ?? e})`), { code: "lane_failure", kind: "spawn", transport: "agy-cli" });
+  }
+  // The evidence of the turn: the hook's decisions and the tool steps (redacted like the worker's: no secret value).
+  const secrets = secretValues({ ...process.env }, []);
+  const jail_log = redactDeep(await readJailLog(control_dir), secrets);
+  const tool_drift = { ...toolDriftCheck(advertisedTools({ initTools: init?.tools ?? null, stepNames: tool_steps.map(s => s.tool_name) })), unhooked: unhookedSteps(tool_steps, jail_log) };
+  const evidence = { jail_log, tool_steps: redactDeep(tool_steps, secrets), tool_drift, launch, sandbox: sandboxRec };
+  if (run.killedFor === "cancelled") throw Object.assign(new Error("agy CLI turn was cancelled"), { code: "ABORTED", ...evidence });
+  if (run.killedFor === "timeout" || run.signal === "SIGTERM") throw Object.assign(new Error(`agy CLI timed out after ${timeoutS}s`), evidence);
+  if (run.killedFor) throw Object.assign(new Error(`agy CLI stopped: ${run.killedFor}`), evidence);
+  if (sandboxRec?.enabled && run.status !== 0 && /^bwrap: /m.test(String(run.stderr ?? "")) && !init) {
+    throw Object.assign(new Error(`the sandbox could not start the agy CLI: ${String(run.stderr).trim().slice(0, 300)}`), { code: "lane_failure", kind: "spawn", transport: "agy-cli", ...evidence });
+  }
+  if (run.status !== 0) throw Object.assign(refused(`agy CLI exited ${run.status}; status ${result?.status ?? "missing"}`, run, result), evidence);
   // init echoes launch selection; it does not prove the CLI actually applied the role card.
   // The local frontmatter preflight above catches missing cards, while a live answered turn is
   // still needed before this transport can replace the SDK as the board default.
   if (init?.agent !== agent || init?.model !== model) {
-    throw new Error(`agy CLI identity mismatch: expected ${agent}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`);
+    throw Object.assign(new Error(`agy CLI identity mismatch: expected ${agent}/${model}, got ${init?.agent ?? "none"}/${init?.model ?? "none"}`), evidence);
   }
-  if (result?.status !== "SUCCESS") throw refused(`agy CLI status ${result?.status ?? "missing"}`, run, result);
+  if (result?.status !== "SUCCESS") throw Object.assign(refused(`agy CLI status ${result?.status ?? "missing"}`, run, result), evidence);
   const text = typeof result.response === "string" ? result.response.trim() : "";
   const structured = result.structured_output;
   if (!Number.isInteger(result.num_turns) || result.num_turns < 1 || (!text && !structured)) {
-    throw new Error("agy CLI returned no completed model turn (empty response or print timeout)");
+    throw Object.assign(new Error("agy CLI returned no completed model turn (empty response or print timeout)"), evidence);
   }
   return { text, structured_output: structured ?? null,
     response_id: result.conversation_id ?? null, usage: result.usage ?? null,
-    tool_calls: toolCalls, subagent_calls: subagentCalls };
+    tool_calls: toolCalls, subagent_calls: subagentCalls, ...evidence };
 }
 
 // ---- THE PIPELINE'S UNIT WORKER: a headless, multi-turn, tool-enabled agy run inside the bwrap jail ----------------
@@ -131,7 +188,7 @@ import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf }
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
 import { extendVerifyPolicy } from "../agy/verify-jail.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
-import { MCP_SERVER as MCP_SERVER_NAME } from "../agy/jail-hook.mjs";
+import { MCP_SERVER as MCP_SERVER_NAME, toolDrift } from "../agy/jail-hook.mjs";
 import { SECRETISH, controlDirSecrets, redactDeep, redactExact, redactStrong, secretValues } from "../agy/redact.mjs";
 
 export const WORKER_AGENT = "pantheon-unit-worker";
@@ -221,6 +278,17 @@ function summaryOf(text) {
   try { const v = JSON.parse(text); return v && typeof v === "object" && !Array.isArray(v) ? v : null; } catch { return null; }
 }
 
+/**
+ * The tools that finished (state DONE) more often than the jail hook approved them: [{tool, done, approved}] (L-502). A
+ * hook decision names its tool (jail-hook.mjs log row `tool`); an MCP call is matched by any approved MCP spelling.
+ */
+export function unhookedSteps(tool_steps = [], jail_log = []) {
+  const done = new Map(), approved = new Map();
+  const key = n => (/ask_subagent$|^call_mcp_tool$/.test(String(n ?? "")) ? "<mcp>" : String(n ?? "?"));
+  for (const s of tool_steps) if (s?.state === "DONE") done.set(key(s.tool_name), (done.get(key(s.tool_name)) ?? 0) + 1);
+  for (const d of jail_log) if (d?.decision === "auto_approve") approved.set(key(d.tool), (approved.get(key(d.tool)) ?? 0) + 1);
+  return [...done].filter(([t, n]) => n > (approved.get(t) ?? 0)).map(([tool, n]) => ({ tool, done: n, approved: approved.get(tool) ?? 0 }));
+}
 /** A stream-json tool step as recorded: {tool_name, state, tool_info} (tool_info: whatever the CLI attached, if any). */
 const toolStepOf = step => ({ tool_name: step.tool_name ?? null, state: step.state ?? null, tool_info: step.tool_info ?? step.toolInfo ?? null });
 const isSubagentStep = s => s.tool_name === "invoke_subagent" || /ask_subagent$/.test(s.tool_name ?? "")
@@ -404,7 +472,33 @@ export function parseHooksLoaded(text) {
 }
 const HOOKS_LOADED = /loaded (\d+) named hooks? from (\d+) hooks\.json file/i;
 const GEMINI_DIR_LINE = /GeminiDir/i;
-export const PREFLIGHT_BLOCKING = Object.freeze(["card_tools", "auth", "lane_quota", "agents", "log_scan"]);
+export const PREFLIGHT_BLOCKING = Object.freeze(["card_tools", "auth", "lane_quota", "agents", "log_scan", "tool_drift"]);
+/**
+ * The tool names the CLI advertises, as far as a zero-spend run shows them: {discovered: {name: [sources]}, methods}.
+ * Sources: card_frontmatter (the card's tools: line), agy_agents_output (a `tools: [...]` / `Tools: a, b` line of
+ * `agy agents`), cli_log_registry (`tool "X" not found in registry` / `Tool "X" is deprecated`), stream_init (the
+ * stream's init.tools), stream_step (a step_update's tool_name).
+ */
+export function advertisedTools({ cardTools: card = null, agentsOut = "", logText = "", initTools = null, stepNames = [] } = {}) {
+  const discovered = {}, methods = new Set();
+  const add = (n, src) => { if (typeof n !== "string" || !/^[A-Za-z0-9_.:\/-]{1,80}$/.test(n)) return; (discovered[n] ??= []).push(src); methods.add(src); };
+  for (const t of card ?? []) add(t, "card_frontmatter");
+  for (const l of String(agentsOut ?? "").split("\n")) {
+    const m = /\btools?\s*[:=]\s*\[?([A-Za-z0-9_.:\/, -]+)\]?\s*$/i.exec(l);
+    if (m) for (const t of m[1].split(/[,\s]+/).map(s => s.trim()).filter(Boolean)) add(t, "agy_agents_output");
+  }
+  for (const m of String(logText ?? "").matchAll(/\btool "([^"]{1,80})" (?:not found in registry|is deprecated)/gi)) add(m[1], "cli_log_registry");
+  for (const t of Array.isArray(initTools) ? initTools : []) add(typeof t === "string" ? t : t?.name, "stream_init");
+  for (const t of stepNames ?? []) add(t, "stream_step");
+  return { discovered, methods: [...methods].sort() };
+}
+/** The tool_drift check of the preflight (blocking) or of a turn's record: {ok, why, methods, discovered, unclassified, unknown, note}. */
+export function toolDriftCheck({ discovered, methods }) {
+  const d = toolDrift(discovered);
+  return { ok: d.ok, why: d.ok ? null : `the CLI advertises ${d.unclassified.map(u => `${u.name} (${u.looks_like}-like; seen by ${u.sources.join(", ")})`).join(", ")}, which the jail hook does not classify: add ${d.unclassified.length === 1 ? "it" : "them"} to the hook's classification (src/agy/jail-hook.mjs) before running`,
+    methods, discovered: Object.keys(discovered).sort(), unclassified: d.unclassified, unknown: d.unknown,
+    note: "Antigravity documents no tool-listing command: the zero-spend discovery reads the card, `agy agents` and the CLI's registry lines; the turn's stream is checked at run time" };
+}
 export const PREFLIGHT_ADVISORY = Object.freeze(["mcp_list", "discovery", "hooks_discovery"]);
 export const USAGE_ARGS = Object.freeze(["--print", "/usage", "--output-format", "json"]);
 const lines = t => String(t ?? "").split("\n").map(l => l.trimEnd()).filter(Boolean);
@@ -528,6 +622,13 @@ export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEn
     checks.hooks_discovery = hooks ? { ok: hooks.files > 0, seen: true, named: hooks.named, files: hooks.files, lines: hooks.lines, sources: ev.hooks_loaded?.sources ?? [],
       why: hooks.files > 0 ? null : "the CLI loaded hooks from 0 hooks.json files: the workspace's .agents/hooks.json was not discovered by these subcommands" }
       : { ok: true, seen: false, named: null, files: null, lines: [], sources: [], why: null };
+    // TOOL DRIFT (L-502, self-audit round 3, assignment 4 (sealed fe2a612)): the tools the CLI advertises against the jail
+    // hook's classification (jail-hook.mjs toolDrift). Antigravity documents no command that lists its tools, so the
+    // discovery is what the zero-spend commands show: the card's own `tools:` line (card_frontmatter), any tool list in
+    // `agy agents`' output (agy_agents_output), and the CLI's registry lines for a card tool (cli_log_registry: "tool \"X\"
+    // not found in registry", "Tool \"X\" is deprecated"). The turn's stream is the run-time discovery
+    // (runAgyWorkerTurn's tool_drift: init.tools and every step_update tool_name).
+    checks.tool_drift = toolDriftCheck(advertisedTools({ cardTools: tools, agentsOut: a.raw.stdout, logText: `${runs.map(x => `${x.raw.stdout}\n${x.raw.stderr}`).join("\n")}\n${logDirText}` }));
     const { negative_login_lines, gemini_dir_lines, ...cliRest } = ev;
     diagnostics = { hooks_loaded: hooks ? { named: hooks.named, files: hooks.files } : null, workspace_dirs: ev.workspace_dirs, gemini_dir_lines,
       negative_login_lines: { advisory: true, count: lines(`${red(runs.map(x => `${x.raw.stdout}\n${x.raw.stderr}`).join("\n"))}\n${logDirText}`).filter(l => AGY_NOT_LOGGED_IN.test(l)).length, lines: negative_login_lines, note: NEGATIVE_LOGIN_NOTE },
@@ -661,7 +762,11 @@ async function workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS,
   const stderr = String(run.stderr ?? "");
   const cli_log = await turnCliLog({ logDir, before: logBefore, log_file, stderr: redactExact(stderr, secrets), env });
   const gemini_scratch = await dropState();
-  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps: redactDeep(tool_steps, secrets), gemini_scratch, cli_log, exit_code: run.status,
+  // TOOL DRIFT AT RUN TIME (L-502): the tools the stream advertised (init.tools) or used (step_update tool_name) that the
+  // hook does not classify, and UNHOOKED steps: a tool that finished (DONE) more often than the hook approved it -- a
+  // call the CLI did not route through the PreToolUse hook. Recorded on every result and failure (`tool_drift`).
+  const tool_drift = { ...toolDriftCheck(advertisedTools({ initTools: init?.tools ?? null, stepNames: tool_steps.map(s => s.tool_name) })), unhooked: unhookedSteps(tool_steps, jail_log) };
+  const more = { launch, sandbox: sandboxRec, jail_log, cleanup_env: AGY_CLEANUP, tool_steps: redactDeep(tool_steps, secrets), tool_drift, gemini_scratch, cli_log, exit_code: run.status,
     stderr_tail: redactStrong(redactExact(stderr.slice(-4000), secrets)),
     result_status: result?.status ?? null, num_turns: result?.num_turns ?? null, usage: result?.usage ?? null,
     conversation_id: (typeof result?.conversation_id === "string" && result.conversation_id) || conversationId };

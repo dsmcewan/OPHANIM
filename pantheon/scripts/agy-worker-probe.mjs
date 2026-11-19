@@ -463,6 +463,14 @@ async function main() {
 
   const qb = await probeQuota({ cli, model: LANE });
   summary.quota_before = quotaView(qb);
+  // The quota probe runs in the worker's jail too (L-401 sibling, src/agy/quota.mjs): a jail that cannot be built is
+  // the same refusal as the turn's own jail below (exit 2, nothing spent).
+  const jailRefused = /^the probe was not run: (AGY_STATE_LAYOUT|SANDBOX_UNAVAILABLE): ([\s\S]*)$/.exec(String(qb.error ?? ""));
+  if (jailRefused) {
+    const g0 = join(process.env.HOME ?? homedir(), ".gemini");
+    summary.gemini_state = { home_gemini: g0, ...layoutView(null), error: { code: jailRefused[1], message: jailRefused[2].slice(0, 500) } };
+    return abort(`the jail could not be built (${jailRefused[1]}): ${jailRefused[2].slice(0, 500)}`);
+  }
   if (qb.state !== "available") return abort(`the quota of ${LANE}'s Gemini group reads "${qb.state}", not "available": no turn is spent`);
   const box = await sandboxAvailable("bwrap");
   if (!box.ok) return abort(`the bwrap sandbox is unavailable (${box.why}); the probe never runs the worker unjailed`);

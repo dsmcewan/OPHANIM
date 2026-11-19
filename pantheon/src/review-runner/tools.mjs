@@ -3,6 +3,8 @@
 import { lstat, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ToolRefusal, resolveInRoot, runProcess, matchGlob, WITHHELD } from "./sandbox.mjs";
+import { VERIFY_JAIL_MODULE, VERIFY_JAIL_REFUSED, VERIFY_JAIL_SCHEMA, launcherEnv } from "../agy/verify-jail.mjs";
+import { shQuote } from "../agy/jail-hook.mjs";
 
 export const CAPS = Object.freeze({
   READ_BYTES: 200_000,        // read_file, per call
@@ -74,8 +76,20 @@ async function walk(root, relDir, out, limit) {
 const isTestFile = f => /\.test\.mjs$/.test(f);
 const reviewTestRe = /^\.review-tests\/[a-z0-9-]{1,64}\.test\.mjs$/;
 
-// root: the worktree; permissions: from permissionsFor; env: the scrubbed child env.
-export function createToolbox({ root, permissions, env, timeoutMs, nodePath = process.execPath, npmPath = "npm" }) {
+// THE CODE UNDER REVIEW RUNS ONLY IN A VERIFY JAIL (self-audit round 3, assignment 4 (sealed fe2a612), L-404 sibling:
+// the API-mode reviewer's run_tests / run_suite ran `node --test` and `npm ...` as the RUNNER's own children -- the
+// runner holds the provider API key, and a same-uid child can read /proc/<runner pid>/environ, the owner's home (the
+// CLIs' logins) and the network). Now each runs through the verify jail (src/agy/verify-jail.mjs, `--inline`): no
+// credential, no home, no network, its own PID namespace; the worktree read-write (the tests' own files), the node
+// toolchain, the worktree's git dirs (sanitized config) and the telos root (read-only) only. No bwrap: the launcher
+// refuses (exit VERIFY_JAIL_REFUSED) and the tool result says so; it never runs a test unjailed.
+// root: the worktree; permissions: from permissionsFor; env: the scrubbed child env (the jail's env is its allowlist of
+// it); telosRoot: OPHANIM_TELOS_ROOT for the proof suite (set in the script, bound read-only); bwrap: the binary.
+export function createToolbox({ root, permissions, env, timeoutMs, nodePath = process.execPath, npmPath = "npm", telosRoot = null, bwrap = "bwrap" }) {
+  const jailed = script => {
+    const policy = { schema: VERIFY_JAIL_SCHEMA, worktree: root, cwd: root, script, extra_ro: telosRoot ? [telosRoot] : [], hide: [], bwrap };
+    return runProcess({ cmd: nodePath, args: [VERIFY_JAIL_MODULE, "--inline", JSON.stringify(policy)], cwd: root, env: launcherEnv(env), timeoutMs, capBytes: CAPS.OUTPUT_BYTES });
+  };
   const allowed = new Set(permissions.tools);
   const listed = new Set(permissions.run_tests.files ?? []);
 
@@ -174,13 +188,13 @@ export function createToolbox({ root, permissions, env, timeoutMs, nodePath = pr
         }
         rels.push(rel);
       }
-      return processResult(await runProcess({ cmd: nodePath, args: ["--test", ...rels], cwd: root, env, timeoutMs, capBytes: CAPS.OUTPUT_BYTES }));
+      return processResult(await jailed(`node --test ${rels.map(shQuote).join(" ")}`));
     },
 
     async run_suite({ suite } = {}) {
-      const args = { proof: ["run", "test:proof"], pantheon: ["--prefix", "pantheon", "test"], all: ["test"] }[suite];
-      if (!args) throw new ToolRefusal("suite must be proof, pantheon or all");
-      return processResult(await runProcess({ cmd: npmPath, args, cwd: root, env, timeoutMs, capBytes: CAPS.OUTPUT_BYTES }));
+      const script = { proof: `${telosRoot ? `OPHANIM_TELOS_ROOT=${shQuote(telosRoot)} ` : ""}npm run test:proof`, pantheon: "npm --prefix pantheon test", all: "npm test" }[suite];
+      if (!script) throw new ToolRefusal("suite must be proof, pantheon or all");
+      return processResult(await jailed(script));
     },
   };
 
@@ -199,7 +213,9 @@ export function createToolbox({ root, permissions, env, timeoutMs, nodePath = pr
 }
 
 function processResult(r) {
-  const head = `exit_code: ${r.exit_code}${r.signal ? ` signal: ${r.signal}` : ""}${r.timed_out ? " (timed out, process group killed)" : ""}\n` +
+  // exit VERIFY_JAIL_REFUSED: the verify jail could not be built, so the tests did NOT run (the coverage gate counts it so).
+  const refused = r.exit_code === VERIFY_JAIL_REFUSED;
+  const head = `exit_code: ${r.exit_code}${r.signal ? ` signal: ${r.signal}` : ""}${r.timed_out ? " (timed out, process group killed)" : ""}${refused ? " (the verify jail refused: the tests did not run)" : ""}\n` +
     `duration_ms: ${r.duration_ms}  output_bytes: ${r.bytes_total}${r.truncated ? ` (last ${CAPS.OUTPUT_BYTES} bytes shown)` : ""}\n---\n`;
-  return { text: head + r.output, exit_code: r.exit_code, timed_out: r.timed_out };
+  return { text: head + r.output, exit_code: r.exit_code, timed_out: r.timed_out, ran: Number.isInteger(r.exit_code) && !refused, jailed: true };
 }

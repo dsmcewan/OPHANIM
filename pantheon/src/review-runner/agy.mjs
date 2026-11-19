@@ -72,19 +72,27 @@ export async function prepareReviewWorkspace({ control_dir, worktree, n, write_a
   await chmod(paths.hook_command, 0o755);
   await writeFile(paths.hooks, JSON.stringify(hooksConfig({ command: paths.hook_command }), null, 2) + "\n");
   await writeFile(paths.jail_log, "", { flag: "a" });
-  // THE VERIFY LAUNCHERS (credential isolation, src/agy/verify-jail.mjs): the code under review runs only through them,
-  // in a verify jail, never as agy's own child. pantheon-test takes the test files (checked again by the launcher);
-  // each pantheon-suite-<name> runs its suite script. The hook approves exactly these paths (decideReviewCommand).
-  paths.launchers = {};
-  const rcp = run_command_policy;
-  if (rcp?.launcher) {
-    if (rcp.launcher !== join(ctl, REVIEW_TEST_LAUNCHER)) throw Object.assign(new Error(`the review's test launcher ${rcp.launcher} is not ${join(ctl, REVIEW_TEST_LAUNCHER)}`), { code: "BAD_POLICY" });
-    const extra_ro = (rcp.extra_ro ?? []).filter(p => typeof p === "string" && isAbsolute(p));
-    paths.launchers.test = writeVerifyLauncher({ control_dir: ctl, worktree: wt, script: "node --test", test_files: true, name: REVIEW_TEST_LAUNCHER, policyName: "verify-test.json", extra_ro, node }).command;
-    for (const [name, script] of Object.entries(rcp.suite_scripts ?? {})) {
-      if (!/^[a-z][a-z0-9-]*$/.test(name) || rcp.suites?.[name] !== join(ctl, REVIEW_SUITE_LAUNCHER(name))) throw Object.assign(new Error(`the review suite ${name} has no launcher in ${ctl}`), { code: "BAD_POLICY" });
-      paths.launchers[name] = writeVerifyLauncher({ control_dir: ctl, worktree: wt, script, name: REVIEW_SUITE_LAUNCHER(name), policyName: `verify-suite-${name}.json`, extra_ro, node }).command;
-    }
-  }
+  paths.launchers = writeReviewLaunchers({ control_dir: ctl, worktree: wt, run_command_policy, node });
   return { paths, policy };
+}
+
+/**
+ * THE VERIFY LAUNCHERS (credential isolation, src/agy/verify-jail.mjs): the code under review runs only through them,
+ * in a verify jail, never as a reviewer CLI's own child. pantheon-test takes the test files (checked again by the
+ * launcher); each pantheon-suite-<name> runs its suite script. The agy hook approves exactly these paths
+ * (decideReviewCommand); the grok transport is allowed exactly these (grok.mjs grokLauncherAllow, L-404). Returns
+ * {test, <suite>: command}; {} when the policy names no launcher.
+ */
+export function writeReviewLaunchers({ control_dir, worktree, run_command_policy, node = process.execPath }) {
+  const launchers = {};
+  const rcp = run_command_policy, ctl = real(control_dir), wt = real(worktree);
+  if (!rcp?.launcher) return launchers;
+  if (rcp.launcher !== join(ctl, REVIEW_TEST_LAUNCHER)) throw Object.assign(new Error(`the review's test launcher ${rcp.launcher} is not ${join(ctl, REVIEW_TEST_LAUNCHER)}`), { code: "BAD_POLICY" });
+  const extra_ro = (rcp.extra_ro ?? []).filter(p => typeof p === "string" && isAbsolute(p));
+  launchers.test = writeVerifyLauncher({ control_dir: ctl, worktree: wt, script: "node --test", test_files: true, name: REVIEW_TEST_LAUNCHER, policyName: "verify-test.json", extra_ro, node }).command;
+  for (const [name, script] of Object.entries(rcp.suite_scripts ?? {})) {
+    if (!/^[a-z][a-z0-9-]*$/.test(name) || rcp.suites?.[name] !== join(ctl, REVIEW_SUITE_LAUNCHER(name))) throw Object.assign(new Error(`the review suite ${name} has no launcher in ${ctl}`), { code: "BAD_POLICY" });
+    launchers[name] = writeVerifyLauncher({ control_dir: ctl, worktree: wt, script, name: REVIEW_SUITE_LAUNCHER(name), policyName: `verify-suite-${name}.json`, extra_ro, node }).command;
+  }
+  return launchers;
 }

@@ -426,6 +426,51 @@ export function mcpCallOf(tc) {
   return m ? { form: "direct", server: m.server, tool: m.tool, args: tc.args } : null;
 }
 
+// ---- THE HOOK'S CLASSIFICATION OF A TOOL NAME, and TOOL DRIFT (self-audit round 3, assignment 4 (sealed fe2a612), L-502) --
+// Every tool the hook decides on falls in one class (decideUnsafe): write, exec (run_command), read, mcp, hard_deny, or
+// deny (named here: the network and messaging tools the role cards list -- search_web, read_url_content, send_message --
+// and the CLI's browser tools; denied with a reason, as before by default). Anything else is denied as UNKNOWN. That
+// default is safe, but it is silent: a new or renamed read tool would make a reviewer blind (a denial per read), and a
+// new exec-like tool the CLI routed past the hook would not be seen at all. toolDrift() names, for a list of advertised
+// tool names, every one the hook does not classify that LOOKS read-, write-, exec- or network-like (toolLooksLike: a
+// name-based guess, deliberately broad); the agy preflight (board/agy-cli.mjs runAgyPreflight, check `tool_drift`) fails
+// on any, naming it and the discovery method.
+export const DENIED_TOOLS = Object.freeze(["search_web", "read_url_content", "send_message", "browser_subagent", "open_browser_url", "read_browser_page", "capture_browser_screenshot", "browser_preview"]);
+/** The hook's class of a tool name: "write" | "exec" | "read" | "mcp" | "hard_deny" | "deny" | null (unclassified). */
+export function classifyTool(name) {
+  if (typeof name !== "string" || !name) return null;
+  if (WRITE_TOOLS.includes(name)) return "write";
+  if (name === "run_command") return "exec";
+  if (READ_TOOLS.includes(name)) return "read";
+  if (HARD_DENY.includes(name)) return "hard_deny";
+  if (name === MCP_WRAPPER || MCP_NAMES.includes(name)) return "mcp";
+  if (DENIED_TOOLS.includes(name)) return "deny";
+  return null;
+}
+/** What a tool name looks like (a broad guess): "exec" | "write" | "network" | "read" | null. */
+export function toolLooksLike(name) {
+  const n = String(name ?? "").toLowerCase();
+  if (/run|exec|command|shell|terminal|bash|spawn|subagent|process|kill|schedul|job|task|eval/.test(n)) return "exec";
+  if (/write|edit|replace|create|delete|remove|move|rename|patch|apply|insert|mkdir|save|upload/.test(n)) return "write";
+  if (/web|url|http|browser|fetch|download|send|message|mail|net/.test(n)) return "network";
+  if (/read|view|grep|search|find|list|glob|cat|open|outline|code_item|ls|file|dir/.test(n)) return "read";
+  return null;
+}
+/**
+ * {ok, unclassified: [{name, looks_like, sources}], unknown: [{name, sources}]} for `discovered` ({name: [sources]}):
+ * `unclassified` are the read/write/exec/network-like names the hook does not classify (ok: false when any); `unknown`
+ * the other unclassified names (denied by default; recorded).
+ */
+export function toolDrift(discovered = {}) {
+  const unclassified = [], unknown = [];
+  for (const [name, sources] of Object.entries(discovered)) {
+    if (classifyTool(name)) continue;
+    const looks = toolLooksLike(name);
+    (looks ? unclassified : unknown).push({ name, ...(looks ? { looks_like: looks } : {}), sources: [...new Set(sources)] });
+  }
+  return { ok: unclassified.length === 0, unclassified, unknown };
+}
+
 function checkPolicy(policy) {
   if (!isObj(policy)) throw new Error("the policy is not an object");
   for (const k of ["worktree"]) if (typeof policy[k] !== "string" || !policy[k]) throw new Error(`the policy lacks ${k}`);
@@ -441,6 +486,7 @@ function decideUnsafe(policy, payload) {
   if (WRITE_TOOLS.includes(tc.name)) return decideWrite(policy, tc.args);
   if (tc.name === "run_command") return policy.run_command_policy !== undefined && policy.run_command_policy !== null ? decideReviewCommand(policy, policy.run_command_policy, tc.args) : decideCommand(policy, tc.args);
   if (READ_TOOLS.includes(tc.name)) return decideRead(policy, tc.args);
+  if (DENIED_TOOLS.includes(tc.name)) return deny(`${tc.name} is a network, browser or messaging tool: never allowed in the jail`);
   const mcp = mcpCallOf(tc);
   if (mcp) return decideMcp(policy, mcp);
   return deny(`tool ${tc.name} is not allowed for a unit worker`);
