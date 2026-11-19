@@ -213,7 +213,8 @@ test('LIFECYCLE: a recorded reassessment stops the disqualified review, and the 
       const sibling = contributorKeys(impl.contributions).models.find(m => m.startsWith(`${shared.lab}/`)).split('/')[1];
       return {shared, policy: {...currentPolicy(), same_model: {...currentPolicy().same_model, [shared.model]: sibling}}};
     };
-    const before = Object.fromEntries(['active', 'ticketed', 'done'].map(i => [i, w.stages(i).length]));
+    const seqOf = item => w.stages(item).map(s => `${s.stage}:${s.status}`);
+    const before = Object.fromEntries(['active', 'ticketed', 'done'].map(i => [i, seqOf(i)]));
     const fixes = {};
     for (const item of ['active', 'ticketed', 'done']) {
       fixes[item] = corrected(item);
@@ -236,12 +237,11 @@ test('LIFECYCLE: a recorded reassessment stops the disqualified review, and the 
     w = openWorkLedger({root: f.workRoot});
     assert.equal(openStatusLedger({root: f.statusRoot, create: false}).board().entries, statusEntries, 'no status was recorded');
     assert.equal(openStatusLedger({root: f.statusRoot, create: false}).board().items.find(i => i.item === 'done').state, 'Resolved');
-    assert.equal(w.stages('done').length, before.done, 'the Resolved item was not dispatched');
+    assert.deepEqual(seqOf('done'), before.done, 'the Resolved item was not dispatched');
     for (const item of ['active', 'ticketed']) {
-      // A bounded re-review: one new review, then validation and outcome again on it.
-      const added = w.stages(item).slice(before[item]);
-      assert.deepEqual(added.map(s => `${s.stage}:${s.status}`), ['review:passed', 'validate:passed', 'outcome:passed']);
-      const [, impl, old] = w.stages(item), [rev2, val2, out2] = added;
+      // A bounded re-review: the earlier records as they were, then one new review, and validation and outcome again on it.
+      assert.deepEqual(seqOf(item), [...before[item], 'review:passed', 'validate:passed', 'outcome:passed']);
+      const [, impl, old] = w.stages(item), [rev2, val2, out2] = w.stages(item).slice(before[item].length);
       assert.equal(rev2.outputs.rereview_of.replaces, old.hash);
       assert.notEqual(rev2.outputs.cycle, old.outputs.cycle);
       // Its panel was chosen under the corrected policy: the model the correction identified is not on it. Three labs, still.

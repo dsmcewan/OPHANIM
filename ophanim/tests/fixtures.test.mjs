@@ -7,13 +7,16 @@ import {makeFixtures,createPlanning,createWorkers,createSyntheticDestination,dig
 
 test('workers derive fixture outputs from inputs and accepted dependencies without the oracle',async()=>{
   const fixture=makeFixtures({count:3}),workers=createWorkers({delayMs:0}),accepted={};
+  // Every case declares exactly one destination effect, on its draft: the effect check below runs for each of them.
+  assert.deepEqual(fixture.obligations.filter(spec=>spec.effectKey).map(spec=>spec.kind),['draft-task','draft-task','draft-task']);
   for(const spec of fixture.obligations){
     const {expected,...obligation}=spec;
     const dependencies=Object.fromEntries(spec.dependsOn.map(id=>[id,{output:accepted[id],sha256:digest(accepted[id])}]));
     const worker=workers.find(row=>row.kinds.includes(spec.kind));
     const reply=await worker.run({obligation,inputs:{...spec.inputs,dependencies},priorAttempts:0});
     assert.deepEqual(reply.output,expected);accepted[spec.id]=reply.output;
-    if(spec.effectKey)assert.deepEqual(reply.effects,[{key:spec.effectKey,payload:expected}]);
+    // Unconditional: the declared effect exactly, and none from an obligation that declares no effect.
+    assert.deepEqual(reply.effects??[],spec.effectKey?[{key:spec.effectKey,payload:expected}]:[],`${spec.id}: effects`);
   }
 });
 

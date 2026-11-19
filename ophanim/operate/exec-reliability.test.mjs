@@ -23,12 +23,14 @@ function fixture(items) {
   fs.mkdirSync(path.join(repo, 'tickets'));
   return {repo, statusRoot, workRoot, done: () => fs.rmSync(repo, {recursive: true, force: true})};
 }
+// test-lint: allow scripted-terminal-status -- a stub stage result, the INPUT of the scheduler tests below: they assert what the scheduler makes of it (a 9-call 'passed' recorded failed STAGE_BUDGET_EXCEEDED, one dispatch under a shared budget, a resumed claim recorded), not a stage's own outcome
 const passed = (calls, extra = {}) => ({status: 'passed', outputs: {ok: true, ...extra}, team: [], contributions: [], findings: [], usage: {provider_calls: calls}, next: {stage: 'implement', why: 'ok'}});
 const passPlan = f => async ctx => {
   const ticket = {schema: 'ophanim.ticket/v1', item: ctx.item, slice: 'all', proposes: {state: 'Resolved', basis: 'done'}, title: ctx.gate.requirement.title, goal: 'g', question: 'q', repo_root: '.', slot: 'a', path: 'a.mjs', copy: [], acceptance_cmd: 'true'};
   fs.writeFileSync(path.join(f.repo, 'tickets', `${ctx.item}.json`), JSON.stringify(ticket));
   const {readTicket} = await import('../../pantheon/src/board/operate.mjs');
   const t = readTicket({repo: f.repo, item: ctx.item});
+  // test-lint: allow scripted-terminal-status -- a stub plan that writes the ticket, the INPUT setting up the lease-fence and verifyInChild tests, which assert the fence refusal and the child process's verdict, not this plan's status
   return {status: 'passed', identity: {ticket: {path: t.path, digest: t.digest}}, outputs: {plan_version: 1, ticket: {path: t.path, digest: t.digest}, deps: {}, evidence: []}, team: [{role: 'planner'}],
     contributions: [], findings: [], usage: {provider_calls: 1}, next: {stage: 'implement', why: 'approved'}};
 };
@@ -47,6 +49,7 @@ test('the lease fence: a stage recorded under a released or expired claim is ref
     const plan = w.stages('eps').find(s => s.stage === 'plan' && s.status === 'passed');
     const inputs = {upstream: outputsDigest(plan.outputs), requirement: plan.identity.requirement};
     const claim = w.claim({item: 'eps', stage: 'implement', attempt: 1, inputs, holder: 'stale', budget: BUDGET, lease_ms: 1000, at: new Date(T0).toISOString()});
+    // test-lint: allow scripted-terminal-status -- a forged late record, the INPUT: the test asserts recordStage REFUSES it (LEASE_FENCED) and that only the live holder's result reaches the ledger
     const rec = at => ({claim, from: plan.hash, stage: 'implement', attempt: 1, status: 'passed', identity: plan.identity, inputs, outputs: {forged: true}, team: [], contributions: [],
       findings: [{id: 'f1', severity: 'block', text: 'arrived after the lease'}], usage: {provider_calls: 9}, next: {stage: 'review', why: 'stale holder says shipped'}, at});
     // Past the lease, still unreleased: refused (the lease time is part of the fence).
@@ -79,6 +82,7 @@ test('a second claim over an unreleased expired claim releases it first; the old
     const now = new Date(T0 + 5000).toISOString();
     const fresh = w.claim({item: 'one', stage: 'plan', attempt: 1, inputs: {n: 1}, holder: 'b', budget: BUDGET, lease_ms: 60_000, at: now});
     assert.equal(w.released(old).outcome, 'expired');
+    // test-lint: allow scripted-terminal-status -- the old and the fresh holder's records, the INPUT: the test asserts the old holder's is refused (LEASE_FENCED) and only holder b's is recorded
     const rec = claim => ({claim, stage: 'plan', attempt: 1, status: 'passed', identity: id, inputs: {n: 1}, outputs: {by: claim === old ? 'a' : 'b'}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, next: null, at: now});
     assert.throws(() => w.recordStage(rec(old)), e => e.code === 'LEASE_FENCED');
     w.recordStage(rec(fresh));
@@ -176,6 +180,7 @@ test('the cooperative stop: past the stage\'s elapsed budget no call is admitted
         await new Promise(r => setTimeout(r, 15));
       }
       assert.equal(ctx.signal.aborted, true);
+      // test-lint: allow scripted-terminal-status -- the stopped stage's own report: this test asserts the stop record (STAGE_ELAPSED, the calls charged) and the calls admitted, never this status
       return {...passed(made), status: 'failed', next: {stage: 'plan', why: 'stopped at the deadline'}};
     };
     const r = await tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: {plan}, limits: {total_provider_calls: 1000, stage_provider_calls: 1000, elapsed_ms: 80, iterations: 5}});

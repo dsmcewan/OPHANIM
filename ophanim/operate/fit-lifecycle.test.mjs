@@ -119,7 +119,12 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
         assert.deepEqual(x.implementer_ladder.map(s => s.model), implementerPath(d).map(s => s.model));
         // STAGE 5: the dispatcher's exact model, pinned; its ladder never leaves OpenAI.
         assert.deepEqual(x.reviews.map(v => [named(v), v.pinned_to_dispatcher, v.status, v.verify.exit_code]), [[named(pinnedReviewer(fitMatrix('dispatcher', d))), true, 'approved', 0]], `${u.unit_id}: reviewer`);
-        assert.deepEqual(x.reviewer_ladder.map(named), REVIEWER_ESCALATION.slice(REVIEWER_ESCALATION.findIndex(s => s.model === x.dispatch.model)).map(named));
+        // The expected ladder is the escalation from the dispatcher's model on; that model must be on it (a findIndex of -1
+        // would make the expected ladder the last rung alone).
+        const from = REVIEWER_ESCALATION.findIndex(s => s.model === x.dispatch.model);
+        assert.ok(from >= 0, `${u.unit_id}: the dispatcher's model ${x.dispatch.model} is on the reviewer escalation`);
+        // test-lint: allow truncated-sequence -- the slice builds the EXPECTED ladder (the escalation from the dispatcher's model, asserted present above); the actual x.reviewer_ladder is compared whole
+        assert.deepEqual(x.reviewer_ladder.map(named), REVIEWER_ESCALATION.slice(from).map(named));
         assert.ok(x.reviewer_ladder.every(s => s.vendor === 'openai'));
         assert.equal(x.merged, true);
       }
@@ -335,7 +340,7 @@ test('LIFECYCLE: under fit a plan without valid work_units is refused at plan va
     const argo = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', profile: 'argo'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: argo, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
-    assert.deepEqual(seq(w, 'fresh').slice(0, 2), ['plan:passed', 'implement:passed']);
+    assert.deepEqual(seq(w, 'fresh'), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']);
     const impl = w.stages('fresh')[1];
     assert.equal(impl.outputs.run.kind, undefined, 'the per-file board run, not the pipeline');
     assert.ok(JSON.parse(fs.readFileSync(impl.outputs.run.run_json, 'utf8')).turns.some(t => t.purpose === 'work'));
