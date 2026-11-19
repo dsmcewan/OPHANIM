@@ -12,6 +12,10 @@
 //   work.claim    the controller takes one stage of one item: attempt, idempotency key, lease, budget. Refused
 //                 while another unreleased, unexpired claim on the same item exists (no duplicate execution), and
 //                 refused when the same idempotency key already completed (no paying twice for the same inputs).
+//                 The key is the digest of the attempt's inputs, which the scheduler builds from its gate
+//                 (gates.mjs attemptInputs, ATTEMPT_IDENTITY 2: the routing basis -- what made the gate route the
+//                 stage -- and the status entry are part of them). Older claims were keyed on version-1 inputs; a key
+//                 is compared, never re-derived from inputs, so every older claim keeps verifying.
 //                 A FENCED claim (payload `fence: 1`, every claim this module writes) is also refused while ANY earlier
 //                 claim on the item is unreleased, expired or not: `claim()` first releases an expired one as `expired`,
 //                 so two claims can never both lead to recorded stages (independent review, assignment 3, Q3/Q4).
@@ -33,9 +37,12 @@
 //                 since the fence; older records carry none and keep verifying as written) -- when the claim's lease had
 //                 expired at `at` (leased_at + lease_ms <= at) or the claim already has a stage record. A holder that
 //                 outlived its lease cannot make its late result the handoff. Its handoff is verified on append: the identity (item,
-//                 ticket, requirement) matches the previous stage's, and the inputs it names are exactly the
-//                 previous stage's outputs (by digest). Team, contributions, findings, usage, next stage and any
-//                 blocker are part of the record.
+//                 requirement) matches the previous stage's, and the inputs it names are exactly the previous stage's
+//                 outputs (by digest). THE TICKET IDENTITY is checked too for a record carrying `lineage: 2` (every
+//                 record this module writes since self-audit round 3, assignment 1 (sealed 323361a), question 2, whose
+//                 header claimed the check before the code made it): a record that received from a stage naming a
+//                 ticket names the same ticket {path, digest}. Records with `lineage: 1` keep verifying as written.
+//                 Team, contributions, findings, usage, next stage and any blocker are part of the record.
 //                 THE LINEAGE RULE (a record carrying `lineage: 1`, every record this module writes since independent
 //                 review, assignment 1, Google gemini-4-carbon, 09d490f, question 2; older records keep verifying as
 //                 written): only a plan starts without a handoff, and a handoff from a passed record is from the stage
@@ -93,6 +100,9 @@ const budgetRefusal = b => {
   for (const k of ['provider_calls', 'iterations', 'elapsed_ms', 'retries']) if (!(Number.isInteger(b[k]) && b[k] >= 0)) return `budget.${k} is a non-negative integer, declared before dispatch`;
   return null;
 };
+/** Why `next` does not keep the ticket identity of `prev` (a stage that names a ticket hands it on unchanged), or null. */
+const ticketRefusal = (prev, next) => (prev?.ticket && !(next?.ticket && next.ticket.path === prev.ticket.path && next.ticket.digest === prev.ticket.digest)
+  ? `a handoff keeps the ticket identity: the record received names ${prev.ticket.path} ${String(prev.ticket.digest).slice(0, 19)}, this one ${next?.ticket ? `${next.ticket.path} ${String(next.ticket.digest).slice(0, 19)}` : 'none'}` : null);
 const identityRefusal = id => {
   if (!plain(id) || !ID.test(id.item ?? '') || !SHA.test(id.requirement ?? '')) return 'a stage names its identity {item, requirement, ticket?}';
   if (id.ticket != null && !(plain(id.ticket) && str(id.ticket.path) && SHA.test(id.ticket.digest ?? ''))) return 'identity.ticket is {path, digest}';
@@ -229,6 +239,7 @@ function kinds({operators}) {
         const why = identityRefusal(p.identity);
         if (why) return why;
         if (!(Number.isInteger(p.attempt) && p.attempt >= 1)) return 'a stage names its attempt';
+        if (p.lineage !== undefined && p.lineage !== 1 && p.lineage !== 2) return 'a stage\'s lineage marker is 1 or 2';
         if (!plain(p.inputs) || !plain(p.outputs)) return 'a stage names its inputs and outputs';
         if (!Array.isArray(p.team) || !p.team.every(t => plain(t) && str(t.role))) return 'a stage names its team [{role, vendor?, model?, lab?}]';
         if (!Array.isArray(p.contributions) || !Array.isArray(p.findings)) return 'a stage names its contributions and findings';
@@ -258,7 +269,7 @@ function kinds({operators}) {
         // The handoff: the stage it received from, if any, is the same work, and what this stage consumed is exactly
         // what that stage produced.
         const from = p.handoff?.from ?? null;
-        if (p.lineage === 1 && from === null && p.stage !== 'plan') return `a ${p.stage} stage starts from a handoff; only a plan starts without one`;
+        if (p.lineage >= 1 && from === null && p.stage !== 'plan') return `a ${p.stage} stage starts from a handoff; only a plan starts without one`;
         if (from !== null) {
           if (!e.derived_from.includes(from) || view.entry(from)?.kind !== 'work.stage') return 'a handoff cites the stage record it received';
           const prev = view.payload(from);
@@ -266,7 +277,8 @@ function kinds({operators}) {
             return 'a handoff keeps the item and the original requirement';
           }
           if (prev.status !== 'passed' && !(prev.status === 'returned' && prev.next?.stage === p.stage)) return `a handoff starts from a passed stage, or one that returned to this stage (it was ${prev.status})`;
-          if (p.lineage === 1 && prev.status === 'passed' && prev.stage !== STAGES[STAGES.indexOf(p.stage) - 1]) return `${p.stage} receives from ${STAGES[STAGES.indexOf(p.stage) - 1] ?? 'no stage'}, not ${prev.stage}: no stage is skipped`;
+          if (p.lineage >= 1 && prev.status === 'passed' && prev.stage !== STAGES[STAGES.indexOf(p.stage) - 1]) return `${p.stage} receives from ${STAGES[STAGES.indexOf(p.stage) - 1] ?? 'no stage'}, not ${prev.stage}: no stage is skipped`;
+          if (p.lineage >= 2 && ticketRefusal(prev.identity, p.identity)) return ticketRefusal(prev.identity, p.identity);
           if (p.inputs.upstream !== outputsDigest(prev.outputs)) return 'the stage\'s inputs are not the outputs of the stage it received from';
         }
         return null;
@@ -302,6 +314,9 @@ export function handoffRefusal(work, {item, stage, from, requirement = null}) {
     const prev = byHash.get(up);
     if (!prev) return `${item}: the ${rec.stage} record's handoff is not a stage record of this item`;
     if (rec.inputs?.upstream !== outputsDigest(prev.outputs)) return `${item}: the ${rec.stage} record's inputs are not the outputs of the record it received`;
+    // The ticket identity is handed on unchanged (checked on every chain, whatever its records' lineage marker).
+    const tw = ticketRefusal(prev.identity, rec.identity);
+    if (tw) return `${item}: the ${rec.stage} record: ${tw}`;
     want = rec.stage;
     rec = prev;
   }
@@ -380,7 +395,7 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     // re-derivation refuses the same, so the check cannot be skipped by appending directly.
     recordStage: ({claim, from = null, at = new Date().toISOString(), ...rec}) => {
       fence(claim, at);
-      return append('work.stage', {...rec, at, handoff: {from}, lineage: 1}, [claim, ...(from ? [from] : [])]);
+      return append('work.stage', {...rec, at, handoff: {from}, lineage: 2}, [claim, ...(from ? [from] : [])]);
     },
     /** Charge provider calls under a live claim, BEFORE they are made: `provider_calls` is the claim's cumulative count. */
     recordSpend: ({claim, provider_calls, at = new Date().toISOString()}) => {

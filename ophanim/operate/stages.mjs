@@ -57,6 +57,7 @@ import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
 import {VERIFY_JAIL_MODULE, VERIFY_JAIL_SCHEMA, launcherEnv} from '../../pantheon/src/agy/verify-jail.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
+import {SEATING} from '../../pantheon/src/role/seating.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
 import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 
@@ -143,7 +144,7 @@ const jsonOf = text => {
  * Why the planner's answer is not a plan (a list; empty when it is one). Deterministic: shape, substance and
  * consistency with the repository, the requirement's dependencies, the mode and the ticket it would write.
  */
-export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional'} = {}) {
+export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional', declared = {}} = {}) {
   if (!plain(j)) return ['the answer is not one JSON plan object (a title or prose is not a plan)'];
   const why = [];
   // What the planner was actually given (dossier entries and retrieved records). A citation of anything else is refused.
@@ -218,7 +219,7 @@ export function planRefusal(j, {shown = [], delivered = null, depends_on = [], m
     for (const f of findings) if (!answered.has(f.id)) why.push(`finding ${f.id} is not answered (answers: [{finding, response}])`);
   }
   if (!why.length && repo && item && !(mode === 'revalidate' && j.ticket_assessment.still_valid)) {
-    const t = ticketOf({plan: j, item, requirement: {title: 'x', basis: 'x'}});
+    const t = ticketOf({plan: j, item, requirement: {title: 'x', basis: 'x'}, declared});
     const spec = {...t, key: item, repo_root: path.resolve(repo)};
     let refused = null;
     try { refused = ticketRuntimeRefusal(spec) ?? ticketContainmentRefusal(spec); normalizeSlots(spec); taskProfile(t); } catch (e) { refused = e.message; }
@@ -227,14 +228,25 @@ export function planRefusal(j, {shown = [], delivered = null, depends_on = [], m
   return why;
 }
 
+/**
+ * What a re-derived ticket KEEPS from the ticket it replaces: the owner's declarations, which no plan field states --
+ * the task profile's declared dimensions (stakes, ambiguity, depth, output, latency, kind) and the owner's
+ * constraints and forbidden paths. A plan rewrote the ticket from its own fields only, and the declared stakes (with
+ * the planner tier and the review-lab count they drive) were erased (self-audit round 3, assignment 1 (sealed 323361a),
+ * question 4). The plan's own `difficulty` is the plan's estimate; without one the earlier ticket's is kept.
+ */
+export const OWNER_DECLARED = Object.freeze(['stakes', 'ambiguity', 'depth', 'output', 'latency', 'kind', 'constraints', 'forbidden']);
+export const declaredOf = spec => Object.fromEntries([...OWNER_DECLARED, 'difficulty'].filter(k => spec?.[k] !== undefined).map(k => [k, spec[k]]));
 /** The ticket (ophanim.ticket/v1) an approved plan derives: its slices, files, acceptance and proposed state. */
-export function ticketOf({plan, item, requirement}) {
+export function ticketOf({plan, item, requirement, declared = {}}) {
   const slices = plan.slices;
   const cmds = [...new Set(plan.acceptance.map(a => a.test.cmd))];
+  const kept = Object.fromEntries(OWNER_DECLARED.filter(k => declared?.[k] !== undefined).map(k => [k, declared[k]]));
+  const difficulty = plan.difficulty ?? declared?.difficulty;
   return {schema: TICKET_SCHEMA, item, slice: slices.map(s => s.title).join('; '), proposes: {state: plan.proposes.state, basis: plan.proposes.basis},
     title: requirement.title, goal: plan.problem.statement, question: requirement.basis, repo_root: '.',
     ...(slices.length === 1 ? {slot: slices[0].slot, path: slices[0].path} : {slots: slices.map(s => ({slot: s.slot, path: s.path}))}),
-    copy: [...plan.copy], acceptance_cmd: cmds.join(' && '), ...(plan.difficulty ? {difficulty: plan.difficulty} : {})};
+    copy: [...plan.copy], acceptance_cmd: cmds.join(' && '), ...(difficulty ? {difficulty} : {}), ...kept};
 }
 
 // The work-unit rules, in the pipeline's own words (PLANNER_PROMPT), so the lifecycle's planner and a stand-alone
@@ -322,7 +334,9 @@ function fullScope(base, contributions) {
   const all = dedupe([...(base?.contributions ?? []), ...contributions]);
   return {...(base ?? {kind: 'change'}), contributions: all, author_labs: labsOfContribs(all)};
 }
-const pendingCapacity = (why, extra = {}) => ({what: `REVIEW_CAPACITY_PENDING: ${why}`, role: 'check@review', resume_when: 'a reviewer lab outside the contributors becomes available', ...extra});
+// A capacity block names its code and the signature of the reviewer pool it was judged on (makeExecutors capacitySig),
+// so the gate can see the pool change and dispatch the stage again (gates.mjs wakeOf).
+const capacityBlocker = (why, extra = {}) => ({code: 'REVIEW_CAPACITY_PENDING', what: `REVIEW_CAPACITY_PENDING: ${why}`, role: 'check@review', resume_when: 'a reviewer lab outside the contributors becomes available', ...extra});
 const result = (status, rest) => ({status, outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, ...rest});
 /**
  * A REVIEW LEFT INCOMPLETE BY THE STAGE'S OWN PROVIDER-CALL BUDGET is a budget stop, recorded with its own code
@@ -454,6 +468,18 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   if (!['lab', 'model'].includes(independence)) throw new Error(`makeExecutors: independence is "lab" or "model", got ${independence}`);
   const byModel = independence === 'model';
   const pool = {...(seating ? {seating} : {}), ...(facts ? {facts} : {})};
+  /**
+   * THE REVIEWER POOL'S SIGNATURE: everything a capacity check seats from (the seating, the seat facts, the configured
+   * provider pools, n, the independence rule and the profile). Recorded on every capacity block and attached to each
+   * executor as `.capacity()`, so the scheduler re-dispatches a capacity-pending stage when the pool changed (self-audit
+   * round 3, assignment 1 (sealed 323361a), question 1: "a reviewer lab becomes available" was unobservable).
+   */
+  const capacitySig = () => {
+    let pools;
+    try { pools = readPools().map(r => ({id: r.id, vendor: r.vendor, auth: r.auth})); } catch (e) { pools = {unreadable: String(e.message).slice(0, 200)}; }
+    return 'sha256:' + digest({seating: seating ?? SEATING, facts: facts ?? null, pools, n, independence, profile});
+  };
+  const pendingCapacity = (why, extra = {}) => capacityBlocker(why, {...extra, capacity: capacitySig()});
   /** A panel of `k` distinct labs for work with these contributions, under the independence in force. Throws NO_SEATS. */
   // `policy` is given only for a re-review after a reassessment: the corrected identity policy that reassessment used.
   const panel = (contributions, k = n, policy = null) => (byModel ? reviewSeatsByModel({n: k, contributions, ...(policy ? {policy} : {}), ...pool}) : reviewSeats({n: k, avoidLabs: labsOfContribs(contributions), ...pool}));
@@ -467,7 +493,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   const INV = {...DEFAULT_INVESTIGATION, ...investigation};
   const evidenceFor = (ctx, extra = {}) => {
     const dossier = buildDossier({repo, statusRoot: statusAt, item: ctx.item, work: ctx.work, issues: ctx.issues ?? null, bundlesDir: ctx.bundlesDir ?? bundlesDir, limits: INV});
-    return {dossier, retriever: makeRetriever({repo, statusRoot: statusAt, work: ctx.work, issues: ctx.issues ?? null, limits: INV, ...extra})};
+    // The seats' retriever serves the dossier's DERIVED views too ({"op":"dossier"}), so a cut derived view can be continued
+    // by the seat it was shown to (self-audit round 3, assignment 1 (sealed 323361a), question 6: no stage's retriever
+    // could serve the continuation every cut derived view names).
+    return {dossier, retriever: makeRetriever({repo, statusRoot: statusAt, work: ctx.work, issues: ctx.issues ?? null, limits: INV, dossierViews: dossier.views, ...extra})};
   };
   const dossierRecord = d => ({digest: d.digest, stable: d.stable, head: d.head, entries: d.entries.map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, complete: e.coverage?.complete !== false})), omissions: d.omissions});
   /**
@@ -536,7 +565,14 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const deps = Object.fromEntries((status?.depends_on ?? []).map(d => [d, board.items.find(i => i.item === d)?.entry ?? null]));
     const existing = fs.existsSync(path.join(repo, 'tickets', `${item}.json`)) ? readTicket({repo, item}) : null;
     const ticket = existing && !existing.why ? existing : null;
-    const prevRec = [...ctx.work.stages(item)].reverse().find(s => s.stage === 'plan' && s.status === 'passed') ?? null;
+    // The ticket bytes this plan is GIVEN (its dossier is built from them): recorded, so the plan's dossier views are
+    // re-derived without its own ticket write (reconcile.mjs ticketGiven).
+    const givenText = fs.existsSync(path.join(repo, 'tickets', `${item}.json`)) ? fs.readFileSync(path.join(repo, 'tickets', `${item}.json`), 'utf8') : null;
+    // A REVISION revises the plan the returning chain rests on (the gate's reused plan), not merely the latest passed one:
+    // when an older plan is reused because a newer one went stale, it is that older plan that is revised.
+    const stagesNow = ctx.work.stages(item);
+    const prevRec = (mode === 'revise' && gate.revises ? stagesNow.find(s => s.hash === gate.revises) : null)
+      ?? [...stagesNow].reverse().find(s => s.stage === 'plan' && s.status === 'passed') ?? null;
     const previous = prevRec?.outputs.plan ?? null;
     // The planner seat: the policy's first planner, chosen on its own merits. It is NOT moved into the implementer's
     // lab to leave the coordinated review its pool (owner direction 2026-11-17: never force planner and implementer
@@ -548,10 +584,14 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // record says so. Under `fit` a stakes or ambiguity floor can raise the seat (e.g. critical -> the hard planner),
     // never lower it. Other profiles ignore the task profile.
     const declared = Object.fromEntries(['difficulty', 'stakes', 'ambiguity', 'depth'].filter(k => ticket?.spec?.[k] !== undefined).map(k => [k, ticket.spec[k]]));
-    let planTask;
-    try { planTask = taskProfile(declared); } catch { planTask = taskProfile({}); }
-    const pick = selectSeat('planner', {profile, difficulty: declared.difficulty ?? 'medium', task: planTask, needsContext: 1, pools: readPools()}).seat;
-    const plannerTier = {declared, source: ticket ? (Object.keys(declared).length ? 'ticket' : 'ticket declares none: medium') : 'no ticket: medium'};
+    let planTask, refusedDeclared = null;
+    try { planTask = taskProfile(declared); } catch (e) { planTask = taskProfile({}); refusedDeclared = e.message; }
+    const pick = selectSeat('planner', {profile, difficulty: refusedDeclared ? 'medium' : declared.difficulty ?? 'medium', task: planTask, needsContext: 1, pools: readPools()}).seat;
+    // A declared value the task profile refuses is not "the ticket's" tier: the record says it fell back, and why.
+    const plannerTier = {declared, source: ticket ? (refusedDeclared ? `ticket declares a value the task profile refuses (${refusedDeclared.slice(0, 160)}): medium`
+      : Object.keys(declared).length ? 'ticket' : 'ticket declares none: medium') : 'no ticket: medium'};
+    // What a re-derived ticket keeps of the owner's declarations (ticketOf).
+    const ownerDeclared = declaredOf(ticket?.ticket ?? {});
     const planner = {...seatOf(pick), selection: {source: pick.selection?.source ?? null, reason: pick.selection?.reason ?? 'the policy\'s first planner candidate', tier: plannerTier}};
     // The tier the planner was seated at, and why, is on the record (question 4): seatOf keeps only the identity.
     const plannerOut = {...seatOf(planner), selection: planner.selection};
@@ -683,7 +723,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
             next: {stage: 'plan', why: 'the evidence does not yet support a plan'}});
         }
         const delivered = deliveryOf(built, inv);
-        const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional'});
+        const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional', declared: ownerDeclared});
         progress({event: 'plan.answer', item, version: v, try: k + 1, refused: why.length});
         if (why.length) { refused.push({version: v, try: k + 1, why}); continue; }
         turnHash = rec.recordTurn({seat: {seat_id: `${planner.vendor}-plan@${planner.model}`, vendor: planner.vendor, mode: 'operate-plan', occupancy_gen: 1},
@@ -720,7 +760,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           bound_sources: [...new Map(bound.map(x => [x.path ? `file:${x.path}` : x.source, x])).values()],
           version: {n: versions.length + 1, previous: prevDigest},
           // A plan made again because a reassessment disqualified its earlier review names that reassessment.
-          ...(gate.rereview ? {rereview_of: gate.rereview.reassessment} : {})};
+          ...(gate.rereview ? {rereview_of: gate.rereview.reassessment} : {}),
+          // WHY THIS PLAN WAS MADE: the gate's routing basis and reason (what went stale, a wake). A re-plan whose answer
+          // is the same as the version before it (a dependency's entry changed, the plan did not) is still a change its
+          // reviewers can see and judge -- "re-validated, unchanged" -- instead of an empty diff the review cycle refuses
+          // (self-audit round 3, assignment 1 (sealed 323361a), question 1: a sibling of the re-plan the wedge hid).
+          ...(gate.route ? {routed: {route: gate.route, reason: gate.reason ?? null, stale: [...new Set((gate.stale ?? []).flatMap(x => x.why ?? []))], ...(gate.wake ? {wake: gate.wake} : {})}} : {})};
       }
       if (!doc) return stop(`no well-formed plan after ${PLANNER_TRIES} planner answer(s): ${refused.at(-1)?.why.join('; ')}`);
       const planDigest = 'sha256:' + digest(doc);
@@ -751,6 +796,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         brief: boundBrief(ctx, `plan|${base}|${head}`, () => [PLAN_BRIEF, '', renderDossier(built), '',
           `## What the planner retrieved beyond the dossier: ${(authorLog?.requests ?? []).map(q => `${JSON.stringify(q.request)} -> ${q.ok ? 'delivered' : `FAILED ${q.error}`}`).join('; ') || '(nothing)'}`,
           '', RETRIEVAL_HELP(INV)].join('\n'))});
+      const wasResumed = Boolean(resume);
       resume = null;
       const state = rec.cycleState(r.cycle);
       const version = {n: doc.version.n, digest: planDigest, commit: head, cycle: r.cycle, reviews: state.reviews.map(x => ({lab: x.lab, verdict: x.verdict}))};
@@ -766,6 +812,17 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // Each finding with what the record shows about its cause: did the source it is about ever reach the planner?
       const authorGot = plannerGot();
       const rows = findingRows(state).map(f => ({...f, ...authorCause(f.file, authorGot, doc)}));
+      // A RESUMED version was never put through planRefusal by this executor: under `fit` its work units are required
+      // here too. A version opened without them (under another profile, or before units were required) is not
+      // approved: it is revised to carry them, in its own cycle (self-audit round 3, assignment 1 (sealed 323361a),
+      // question 3: a resumed cycle was approved under fit with no work_units).
+      if (needsUnits && wasResumed) {
+        const v = doc.work_units === undefined ? null : validateWorkUnits({work_units: doc.work_units});
+        const unitWhy = !v ? ['work_units is required and absent'] : !v.ok ? v.refusals.map(x => `work_units: ${x.message}`)
+          : (Array.isArray(doc.slices) ? doc.slices : []).filter(sl => plain(sl) && str(sl.path) && !v.units.some(u => matchesOwned(sl.path, u.owned_paths))).map(sl => `slice ${sl.id ?? sl.path} writes ${sl.path}, which no work unit owns`);
+        if (unitWhy.length) rows.push({id: 'controller-work-units', severity: 'block', cause: 'inadequate-plan', lab: null, vendor: null, model: null,
+          text: `under the fit profile a plan carries valid work_units, and this version (resumed from an open cycle) does not: ${unitWhy.join('; ')}`.slice(0, 600)});
+      }
       const blocking = rows.filter(f => BLOCKING.has(f.severity));
       const changes = state.reviews.some(x => x.verdict === 'request_changes');
       if (!blocking.length && !changes) {
@@ -781,7 +838,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           const tfile = path.join(repo, 'tickets', `${item}.json`);
           const prior = fs.existsSync(tfile) ? fs.readFileSync(tfile) : null;
           fs.mkdirSync(path.dirname(tfile), {recursive: true});
-          fs.writeFileSync(tfile, JSON.stringify(ticketOf({plan: doc, item, requirement: gate.requirement}), null, 2) + '\n');
+          fs.writeFileSync(tfile, JSON.stringify(ticketOf({plan: doc, item, requirement: gate.requirement, declared: ownerDeclared}), null, 2) + '\n');
           tk = readTicket({repo, item});
           if (tk.why) { if (prior) fs.writeFileSync(tfile, prior); else fs.rmSync(tfile); return stop(`the derived ticket is refused: ${tk.why}`); }
           if (prior) ticketRevision = {previous_digest: existing?.digest ?? sha256(prior), reasons: doc.ticket_assessment?.reasons ?? ['the plan was revised: the ticket is re-derived from the approved version']};
@@ -795,6 +852,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
           outputs: {plan: doc, plan_digest: planDigest, plan_commit: head, plan_ledger: sys.root ?? planLedger, plan_review: {cycle: r.cycle, labs: closed.labs, close: closed.close, outcome: closed.outcome,
             unresolved: rows, ledger_anchor: sys.anchor, independence, shared_labs: planSeats.filter(x => x.shared_lab).map(x => x.lab).sort()}, ticket: {path: tk.path, digest: tk.digest}, ...(ticketRevision ? {ticket_revision: ticketRevision} : {}),
             ...(mode === 'revalidate' ? {ticket_kept: ticketRevision === null && Boolean(ticket)} : {}), deps, evidence, refused, versions, planner: plannerOut,
+            ticket_given: givenText === null ? null : {digest: sha256(givenText), text: givenText},
             context: ctxOut(), carry: carryForward(doc, planDigest)},
           team: [...team, ...planSeats.map(s => reviewerRow('plan-reviewer', s))], contributions: dedupe(contributions), findings: rows, usage: usage(),
           next: {stage: 'implement', why: `plan v${doc.version.n} approved by ${closed.labs.join(', ')}`}});
@@ -804,7 +862,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       for (const f of state.findings) rec.deferFinding({finding: f.hash, reason: `answered by a revision of plan ${planDigest.slice(0, 19)}; the revision is re-reviewed in its own cycle`});
       const closed = closeWith(rec, r.cycle, `plan review of ${item}`);
       if (closed.why) return stop(`the plan cycle cannot close: ${closed.why}`);
-      for (const f of rows) contributions.push({purpose: 'plan-review', vendor: f.vendor, model: f.model, ...withServed(f), lab: f.lab, via: `plan finding ${f.id.slice(0, 19)} reached the revised plan`});
+      for (const f of rows.filter(x => x.lab)) contributions.push({purpose: 'plan-review', vendor: f.vendor, model: f.model, ...withServed(f), lab: f.lab, via: `plan finding ${f.id.slice(0, 19)} reached the revised plan`});
       findings = rows.map(f => ({id: f.id, severity: f.severity, text: f.text, lab: f.lab, cause: f.cause}));
       prevDoc = doc; prevDigest = planDigest;
       progress({event: 'plan.revise', item, version: v, findings: rows.length});
@@ -1492,7 +1550,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // What it says it checked, against what THIS answer was actually given: its own investigation, never what a
       // rejected seat or an earlier try retrieved (question 6). A source it never received is not "checked".
       const got = deliveryOf(dossier, tryLog);
-      const sources = (Array.isArray(j.sources) ? j.sources : []).filter(x => typeof x === 'string').map(x => ({ref: refOf(x), delivered: got.has(refOf(x)), ...(got.has(refOf(x)) ? {complete: got.get(refOf(x)).complete} : {})}));
+      // Each delivered source is bound to the view and version the validator was given, with the request that re-reads
+      // it, so the gate re-checks it before the validation is reused (gates.mjs validationEvidence; self-audit round 3,
+      // assignment 1 (sealed 323361a), question 5).
+      const sources = (Array.isArray(j.sources) ? j.sources : []).filter(x => typeof x === 'string').map(x => {
+        const v = got.get(refOf(x));
+        return {ref: refOf(x), delivered: Boolean(v), ...(v ? {complete: v.complete, source: v.source, version: v.version ?? null, ...(v.request ? {request: v.request} : {})} : {})};
+      });
       judged = {...j, sources, vendor: seat.vendor, model: seat.model, served_model: served, lab: seat.lab};
     }
     const outputs = {commit, checkout: {commit, tree: G(['rev-parse', `${commit}^{tree}`]).trim(), method: 'git archive'}, tests, green,
@@ -1537,7 +1601,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     if (t.why || t.digest !== impl.outputs.ticket.digest) return result('returned', {next: {stage: 'plan', why: 'the ticket is no longer the one implemented'}});
     const o = impl.outputs;
     const dir = dirOf(ctx, `outcome-${commit.slice(0, 12)}`);
-    const bundle = {schema: BUNDLE_SCHEMA, item, title: ctx.gate.requirement.title, made_against: o.made_against, checked: today(),
+    // THE STATUS THE PROPOSAL IS MADE AGAINST is the one the gate routed this outcome on: the chain was re-derived for it
+    // (the handoff above checks the requirement; the gate checks the plan's requirement, dependencies, ticket and
+    // evidence against it). When the owner recorded a new entry after the implementation (a re-check, the same Ready
+    // requirement), the proposal is made against that entry and the record names both; it was refused "re-dispatch it"
+    // and blocked for good (self-audit round 3, assignment 1 (sealed 323361a), question 1). A change between this read
+    // and the proposal is still refused by proposeFromBundle.
+    const current = readBoard({statusRoot: statusAt}).items.find(i => i.item === item)?.entry ?? null;
+    const against = ctx.gate?.entry && current === ctx.gate.entry ? current : o.made_against;
+    const bundle = {schema: BUNDLE_SCHEMA, item, title: ctx.gate.requirement.title, made_against: against, checked: today(),
       // The ticket file, so the owner's apply re-checks its bytes (status.mjs checkEvidenceLedgers: locations.ticket).
       ticket: {...o.ticket, file: path.resolve(repo, o.ticket.path)}, board: o.run.board, base: o.base, branch: o.branch, commit,
       run: {ledger: o.run.ledger, ledger_anchor: o.run.ledger_anchor, ledger_head: o.run.ledger_head, run_json: o.run.run_json, run_json_digest: o.run_json_digest,
@@ -1564,9 +1636,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     }
     const bytes = fs.readFileSync(path.join(dir, 'proposal.json'));
     return result('passed', {outputs: {proposal_path: path.join(dir, 'proposal.json'), proposal_digest: p.bundle.proposal.digest, proposal_file_sha256: sha256(bytes),
-      to: p.proposal.to.state, item, ticket: o.ticket.digest, commit, bundle: dir, signed: false}, usage: {provider_calls: 0, elapsed_ms: Date.now() - t0},
+      to: p.proposal.to.state, item, ticket: o.ticket.digest, commit, bundle: dir, signed: false, made_against: against,
+      ...(against !== o.made_against ? {implemented_against: o.made_against} : {})}, usage: {provider_calls: 0, elapsed_ms: Date.now() - t0},
       next: {stage: null, why: 'the unsigned status proposal awaits the owner'}});
   }
 
+  // Each executor carries the reviewer pool's signature, so the scheduler (scheduler.mjs capacityOf) can tell the gate
+  // when a capacity-pending stage can be dispatched again, whichever subset of the executors a caller passes.
+  for (const f of [plan, implement, review, validate, outcome]) f.capacity = capacitySig;
   return {plan, implement, review, validate, outcome};
 }

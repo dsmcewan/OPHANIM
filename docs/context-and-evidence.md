@@ -42,7 +42,7 @@ Every entry states its kind (authoritative requirement, observation, derived, hy
 **Retrieval the model drives** (`makeRetriever`, `investigate`). A seat may answer with requests instead of a judgment: read a file or a line range, list, search, read history or a commit, read any item's status history or work record, an earlier stage record, an issue, or a full test output.
 
 - **Views.** Each request names a view: a source (including any selection, such as a `match` on status history) and a version. A result is a byte range of that view's whole body, with the total.
-- **Continuation.** A cut result or dossier entry carries `next`, the complete request that continues it. This holds for every source, including a long status history, a large stage record and a file that is one oversized line. `match` and `entry` select rows instead of paging through them.
+- **Continuation.** A cut result or dossier entry carries `next`, the complete request that continues it. This holds for every source, including a long status history, a large stage record and a file that is one oversized line. `match` and `entry` select rows instead of paging through them. A cut view the dossier *derived* (relations, consumers, guess, runs, index) continues with `{"op":"dossier"}`. Every seat's retriever serves it from the dossier that seat was shown; before self-audit round 3 (assignment 1, sealed `323361a`), no stage's retriever could.
 - **Containment.** A path must be inside the repository as written and as resolved: a symlink, or a path through a symlinked directory, to a target outside is refused, in retrieval and in the dossier alike. The refusal is listed.
 - **Budgets, in bytes.** The initial view is at most `dossier_bytes` (80 KB) of evidence text, one result at most `result_bytes` (16 KB), and one seat's investigation at most `total_bytes` (160 KB) of delivered record text, counted as UTF-8 bytes without splitting a character. Both are enforced before a result enters the prompt: a result is cut to what is left, and a request that does not fit is not run. Each cut and each request not run is recorded with what remains retrievable.
 - **Rounds.** 3 rounds of at most 6 requests by default. Every round is a counted provider call. At the bound the seat is told nothing more was retrieved and must say what it could not see.
@@ -53,7 +53,14 @@ Every entry states its kind (authoritative requirement, observation, derived, hy
 
 - A plan may cite only what was delivered to the planner; a citation of anything else is refused. Each citation records how it arrived (supplied, retrieved), the byte ranges, and whether that is all of it.
 - A view delivered only in part is recorded on the stage as an unresolved gap, with the request that continues it.
-- A validator's list of sources it checked is marked per source with whether that source reached it, and whether in full.
+- A validator's list of sources it checked is marked per source with whether that source reached it, and whether in full. A source that reached it is bound to the view and version it was given, with the request that re-reads it. A passed validation is reused only while those sources are unchanged; otherwise validation runs again. Change reviewers' `[source: …]` citations are not bound this way yet. They are free text in the review, not a structured list.
+
+**Freshness without self-inflicted staleness.**
+
+- A plan's derived dossier views are re-derived with the work ledger as it stood before the plan, and with the ticket the plan was *given* (`ticket_given` on the record), not the one it wrote. A plan citing the consumers view is no longer stale the moment it passes.
+- The work ledger's share of the initial view (8 KB) is reserved whether or not it is used. Recording an attempt therefore never changes how the evidence after it is cut, and the `stable` digest moves only when the evidence does.
+- A re-plan is new work only when the state it reads changed (`docs/operate-service.md`, "When an item is dispatched again"). The plan document states why it was routed (`routed`), so a re-validation whose answer did not change is still a reviewable change.
+- A re-derived ticket keeps the owner's declarations: `stakes`, `ambiguity`, `depth`, `output`, `latency`, `kind`, `constraints` and `forbidden`. Its `difficulty` is the plan's estimate, else the earlier ticket's.
 
 **Carried through the loops.**
 

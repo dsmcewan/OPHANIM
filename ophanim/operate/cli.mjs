@@ -322,7 +322,9 @@ export async function prepareDispatch({paths, opts, limits, stagesFile, progress
 }
 
 export const tickSummary = (t, limits) => ({
-  dispatched: t.dispatched, released_expired: t.released_expired, intake: t.intake.length, recovery: t.recovery ?? [], blocked: t.blocked.length, skipped: t.skipped,
+  dispatched: t.dispatched, released_expired: t.released_expired, intake: t.intake.length, recovery: t.recovery ?? [], blocked: t.blocked.length,
+  // What is blocked and why, not only how many (an attempt-identity collision or a structural block is named here).
+  blockers: t.blocked.map(b => ({item: b.item, gate: b.gate, code: b.blocker?.code ?? null, what: String(b.blocker?.what ?? '').slice(0, 300)})), skipped: t.skipped,
   stopped: t.stopped, spent: t.spent, by_gate: t.reconcile.counts.by_gate, ...(t.scope ? {scope: t.scope} : {}),
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
 });
