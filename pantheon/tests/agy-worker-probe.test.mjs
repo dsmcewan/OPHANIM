@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,8 @@ function probe({ cli, fx, home }, extraEnv = {}, args = []) {
 }
 /** A recursive {relative path: content} listing of a host directory (directories end with "/"). */
 const tree = dir => { const out = {}; const walk = (d, pre) => { for (const e of readdirSync(d, { withFileTypes: true })) { const r = pre ? `${pre}/${e.name}` : e.name; if (e.isDirectory()) { out[r + "/"] = ""; walk(join(d, e.name), r); } else out[r] = readFileSync(join(d, e.name), "utf8"); } }; walk(dir, ""); return out; };
+/** The processes of a host-wide agy listing that are THIS test's (their binary under the test's root); never the host's others. */
+const ownAgy = (s, listing) => (listing.processes ?? []).filter(p => p.binary === s.cli || p.binary.startsWith(s.root + "/"));
 const probeDirs = () => readdirSync(tmpdir()).filter(n => n.startsWith("pantheon-agy-probe-"));
 
 for (const form of ["direct", "wrapped"]) {
@@ -78,6 +80,12 @@ for (const form of ["direct", "wrapped"]) {
     const s = await setup(t);
     const hostBefore = s.host();
     const dirsBefore = probeDirs();
+    // An AMBIENT agy (as on the owner's machine, 2026-11-19): a process named agy that is not this test's, running
+    // throughout. The probe lists it (it is a host-wide listing), and the test must not count it as its own.
+    const decoyDir = realpathSync(mkdtempSync(join(tmpdir(), "pantheon-ambient-agy-")));
+    symlinkSync("/usr/bin/sleep", join(decoyDir, "agy"));
+    const decoy = existsSync("/usr/bin/sleep") ? spawn(join(decoyDir, "agy"), ["300"], { stdio: "ignore" }) : null;
+    t.after(() => { decoy?.kill("SIGKILL"); rmSync(decoyDir, { recursive: true, force: true }); });
     const r = await probe(s, { FAKE_PROBE_MCP: form, FAKE_AGY_GEMINI_WRITES: form === "direct" ? "1" : "refresh" });
     assert.deepEqual(r.summary.aborted, null, JSON.stringify(r.summary.aborted));
     const o = r.summary;
@@ -165,9 +173,13 @@ for (const form of ["direct", "wrapped"]) {
       "log/: one CLI log per preflight subcommand, one for the turn");
     assert.deepEqual(w.writable_subdirs, { bin: [{ path: "agentapi", size: 26, copied: false, changed: true }, { path: "language_server", size: 2, copied: true, changed: false }] },
       "run_command's agentapi landed in the writable copy of bin/");
-    // Host-state attribution: nothing changed on the host; the agy processes around the turn were listed (none here).
+    // Host-state attribution: nothing changed on the host; the agy processes around the turn were listed. The listing
+    // is HOST-wide (ps), so it is judged only for this test's own fake agy (its binary lives under this test's root):
+    // ambient Antigravity processes on the machine running the suite (the owner's, 2026-11-19) are not this test's.
     assert.deepEqual(o.gemini_state.host_changes, []);
-    assert.deepEqual([o.gemini_state.host_agy_processes.before.processes, o.gemini_state.host_agy_processes.after.processes], [[], []]);
+    for (const k of ["before", "after"]) assert.ok(Array.isArray(o.gemini_state.host_agy_processes[k].processes), `ps ran ${k} the turn`);
+    assert.deepEqual([ownAgy(s, o.gemini_state.host_agy_processes.before), ownAgy(s, o.gemini_state.host_agy_processes.after)], [[], []], "none of this test's agy processes outlived its command");
+    if (decoy) assert.ok(o.gemini_state.host_agy_processes.before.processes.some(p => p.pid === decoy.pid), "the ambient agy was listed (host-wide) and did not fail the test");
     assert.deepEqual(w.top_level.map(x => [x.name.replace(/\.\d+\.tmp$/, ".<rand>.tmp"), x.changed]),
       [["antigravity-oauth-token", false], ["installation_id", false], ["jetbox_summaries_proto.pb.<rand>.tmp", true], ["settings.json", false]]);
     assert.deepEqual(w.writable_copies, { "config/projects": [{ path: "default-cli-project.json", size: 2, copied: true, changed: true }] }, "the preflight's project write landed in the copy");
@@ -323,9 +335,29 @@ test("~/.gemini/config/projects absent on the host: it is not created; the CLI's
   assert.equal(r.code, 2);
   assert.deepEqual(o.preflight.failed, ["log_scan"]);
   assert.match(o.preflight.checks.log_scan.lines.read_only.join("\n"), /\/\.gemini\/config\/projects\/default-cli-project\.json\.\d+\.tmp: read-only file system/);
+  // The refusal names the path that failed, in the check's reason and in the probe's abort message.
+  // (one write per preflight subcommand, so one path each, under the per-pid tmp name)
+  const tmpPath = `${join(s.g, "config", "projects", "default-cli-project.json")}\\.\\d+\\.tmp`.replace(/\//g, "\\/");
+  assert.match(o.preflight.checks.log_scan.why, new RegExp(`^found: read_only \\(a write was refused under a read-only mount: ${tmpPath}(, ${tmpPath})*\\)$`));
+  assert.match(o.aborted.reason, new RegExp(`log_scan \\(found: read_only \\(a write was refused under a read-only mount: ${tmpPath}`));
+  assert.deepEqual([...new Set(o.preflight.checks.log_scan.read_only_paths.map(p => p.replace(/\.\d+\.tmp$/, ".<rand>.tmp")))], [join(s.g, "config", "projects", "default-cli-project.json.<rand>.tmp")]);
   assert.deepEqual(o.gemini_state.writable_copies.map(w => [w.path, w.status]), [["config/projects", "absent"]]);
   assert.equal(s.launches().length, 0);
   assert.deepEqual(s.host(), hostBefore, "nothing created under HOME");
+});
+
+test("builtin plugin assets (~/.gemini/antigravity-cli/builtin/plugins/<p>/asset.js, rewritten at startup -- inferred from the 09d490f report): the preflight's write lands in the per-run copy and does not block; the host is unchanged", needBwrap, async t => {
+  const s = await setup(t);
+  mkdirSync(join(s.c, "builtin", "plugins", "core"), { recursive: true });
+  writeFileSync(join(s.c, "builtin", "plugins", "core", "asset.js"), "// host asset\n");
+  const hostBefore = s.host();
+  const r = await probe(s);
+  const o = r.summary;
+  assert.equal(r.code, 0, JSON.stringify(o.aborted ?? o.checks));
+  assert.ok(!o.preflight.failed.includes("log_scan"), JSON.stringify(o.preflight.checks.log_scan));
+  assert.deepEqual(o.preflight.checks.log_scan.lines.read_only, []);
+  assert.deepEqual(o.gemini_state.scratch_written.writable_subdirs.builtin.map(f => [f.path, f.copied, f.changed]), [["plugins/core/asset.js", true, true]]);
+  assert.deepEqual(s.host(), hostBefore, "the host builtin/ is untouched");
 });
 
 test("--keep keeps the scratch and says it holds credentials", needBwrap, async t => {

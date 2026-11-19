@@ -425,6 +425,16 @@ export const usageHasBuckets = env => Boolean(env && env.format === "json" && (e
  * and never its output. `model` (optional): the lane whose group is scoped (without one: the Gemini group, recorded
  * only). `jail` (optional) a prepareWorkerJail() result; without one a jail is built and its state dropped afterwards.
  */
+/**
+ * The log_scan reason for read-only-file-system lines, naming the refused paths (the first five, then how many more), or
+ * the first such line when it names no path. E.g. `read_only (a write was refused under a read-only mount: <path>)`.
+ */
+export function readOnlyWhy(ev) {
+  const paths = ev.erofs_paths ?? [];
+  if (!paths.length) return `read_only (a write was refused under a read-only mount: ${JSON.stringify(String(ev.erofs_lines?.[0] ?? "").slice(0, 300))})`;
+  return `read_only (a write was refused under a read-only mount: ${paths.slice(0, 5).join(", ")}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""})`;
+}
+
 export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEnv = {}, base_env = null, sandbox = {}, a2a_socket = null, jail = null, timeoutS = 60, agent = WORKER_AGENT, server = MCP_SERVER_NAME, model = null }) {
   const env = workerEnv(extraEnv, base_env);
   const own = !jail;
@@ -486,7 +496,7 @@ export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEn
     const ev = cliLogEvidence({ stdout: runs.map(x => x.raw.stdout).join("\n"), stderr: runs.map(x => x.raw.stderr).join("\n"), log_dir: logDirText }, env);
     const found = { read_only: ev.erofs_lines.slice(0, 30), unknown_component: ev.unknown_component, not_in_registry: ev.not_in_registry, deprecated: ev.deprecated };
     const hits = Object.entries(found).filter(([, x]) => x.length).map(([k]) => k);
-    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.join(", ")}` : null, lines: found, log_text: logDirText.slice(-8000) };
+    checks.log_scan = { ok: !hits.length, why: hits.length ? `found: ${hits.map(k => (k === "read_only" ? readOnlyWhy(ev) : k)).join(", ")}` : null, lines: found, ...(found.read_only.length ? { read_only_paths: ev.erofs_paths } : {}), log_text: logDirText.slice(-8000) };
     const agent_listed = word(agent).test(a.raw.stdout), server_listed = (parsed.servers ?? []).includes(server);
     checks.discovery = { ok: agent_listed && server_listed, agent_listed, server_listed,
       note: "advisory: `agy agents` and `agy mcp list` take no --add-dir and were observed (agy 1.5.10, 2026-11-18) to list the global configuration only; the turn's --add-dir workspace is what counts" };

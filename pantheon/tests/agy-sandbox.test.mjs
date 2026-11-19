@@ -7,8 +7,8 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { bwrapArgs, sandboxAvailable, repoGitDirs, geminiState, dropGeminiState, defaultAgyStateDirs, GEMINI_CLI_COPY, GEMINI_STATE_SUBDIRS, GEMINI_WRITABLE_COPIES, GEMINI_WRITABLE_SUBDIR_COPIES } from "../src/agy/sandbox.mjs";
+import { basename, join } from "node:path";
+import { bwrapArgs, sandboxAvailable, repoGitDirs, geminiState, dropGeminiState, defaultAgyStateDirs, GEMINI_CLI_COPY, GEMINI_STATE_SUBDIRS, GEMINI_WRITABLE_COPIES, GEMINI_WRITABLE_SUBDIR_COPIES, GEMINI_WRITABLE_TREE_COPIES } from "../src/agy/sandbox.mjs";
 import { prepareWorkerWorkspace } from "../src/agy/workspace.mjs";
 import { sh } from "./fixtures/pipeline-stages.mjs";
 
@@ -63,11 +63,11 @@ import { writeFileSync } from "node:fs";
 import { connect } from "node:net";
 const out = {};
 const tryWrite = (k, p) => { try { writeFileSync(p, "x"); out[k] = "written"; } catch (e) { out[k] = e.code; } };
-const [wt, run, state, home, repo, hooks, ref, sockA, sockB] = process.argv.slice(2);
+const [wt, run, state, home, repo, hooks, ref, sockA, sockB, tmpProbe] = process.argv.slice(2);
 tryWrite("worktree", wt + "/src-a.txt");
 tryWrite("run", run + "/x.log");
 tryWrite("state", state + "/session.json");
-tryWrite("tmp", "/tmp/scratch");
+tryWrite("tmp", tmpProbe);
 tryWrite("home", home + "/pantheon-bwrap-escape-test");
 tryWrite("repo", repo + "/escaped.txt");
 tryWrite("hooks", hooks);
@@ -79,7 +79,11 @@ console.log(JSON.stringify(out));
 `);
   const { argv } = bwrapArgs({ worktree: wt, control_dir: ctl, agy_state_dirs: [state], extra_ro: [sockDir, root] });
   const homeBefore = readdirSync(home).sort();
-  const r = await run([...argv, process.execPath, probe, wt, join(ctl, "run"), state, home, repo, ws.hooks, join(repo, ".git", "refs", "heads", "evil"), join(ctl, "a2a.sock"), join(sockDir, "a2a.sock")]);
+  // A name under /tmp no other process uses (this test's own random dir name): the host's /tmp may hold anything, e.g.
+  // an existing /tmp/scratch directory (the owner's machine, 2026-11-19), so a fixed name is not a hermetic probe.
+  const tmpProbe = join("/tmp", `${basename(root)}-tmpfs-probe`);
+  assert.equal(existsSync(tmpProbe), false, "the probe's /tmp name is unused on the host");
+  const r = await run([...argv, process.execPath, probe, wt, join(ctl, "run"), state, home, repo, ws.hooks, join(repo, ".git", "refs", "heads", "evil"), join(ctl, "a2a.sock"), join(sockDir, "a2a.sock"), tmpProbe]);
   assert.equal(r.code, 0, r.err);
   const out = JSON.parse(r.out);
   // The property is that a write cannot reach the HOST home. When HOME itself lies under /tmp (a test or CI home in a
@@ -95,7 +99,7 @@ console.log(JSON.stringify(out));
   assert.equal(existsSync(join(repo, ".git", "refs", "heads", "evil")), false);
   assert.equal(existsSync(join(home, "pantheon-bwrap-escape-test")), false);
   assert.match(readFileSync(ws.hooks, "utf8"), /PreToolUse/);
-  assert.equal(existsSync("/tmp/scratch") && readFileSync("/tmp/scratch", "utf8") === "x", false, "/tmp inside is a fresh tmpfs");
+  assert.equal(existsSync(tmpProbe), false, "/tmp inside is a fresh tmpfs: the write inside did not reach the host /tmp");
   // The worker cannot commit: the main .git is read-only, even though the worktree is writable.
   const commit = await run([...argv, "sh", "-c", `cd ${wt} && git -c user.name=t -c user.email=t@t.invalid add -A && git -c user.name=t -c user.email=t@t.invalid commit -qm evil`]);
   assert.notEqual(commit.code, 0);
@@ -238,6 +242,51 @@ console.log(JSON.stringify(out));
     writable_copies: { "config/projects": [{ path: "default-cli-project.json", size: 7, copied: true, changed: true }] } });
   assert.equal(existsSync(st.scratch_root), false);
   assert.deepEqual(snapshot(home), before, "the host ~/.gemini is unchanged and nothing was created under HOME");
+});
+
+test("~/.gemini/antigravity-cli/builtin/ (the CLI's builtin plugin assets; inferred from the 09d490f report) is a per-run writable DEEP copy: writable at every depth inside, the host tree untouched, the writes listed; plugin_data/ stays read-only", { skip: have.ok ? false : `bwrap unavailable: ${have.why}` }, async t => {
+  const { root, wt, ctl } = await layout(t);
+  const { home, c } = fakeHome(root);
+  const b = join(c, "builtin");
+  mkdirSync(join(b, "plugins", "core", "assets"), { recursive: true }); mkdirSync(join(c, "plugin_data"));
+  writeFileSync(join(b, "manifest.json"), '{"v":1}', { mode: 0o640 });
+  writeFileSync(join(b, "plugins", "core", "asset.js"), "host asset", { mode: 0o644 });
+  writeFileSync(join(b, "plugins", "core", "assets", "icon.svg"), "<svg/>");
+  symlinkSync("asset.js", join(b, "plugins", "core", "current.js"));
+  writeFileSync(join(c, "plugin_data", "d.json"), "{}");
+  const before = snapshot(home);
+  const st = await geminiState({ home, run_dir: join(ctl, "run") });
+  assert.deepEqual(GEMINI_WRITABLE_TREE_COPIES, ["builtin"]);
+  const w = st.writable_subdirs.find(x => x.name === "builtin");
+  assert.deepEqual(w, { name: "builtin", src: b, dest: join(st.scratch_cli, "builtin"), deep: true, copied: ["manifest.json", "plugins/core/asset.js", "plugins/core/assets/icon.svg"],
+    symlinks: [{ name: "plugins/core/current.js", target: "asset.js" }], skipped: [], bytes: 23, readonly_subdirs: [] });
+  assert.ok(!st.mounts.some(m => m.dest.startsWith(b)), "nothing of the host builtin/ is bound into the jail");
+  assert.ok(st.readonly_subdirs.includes("plugin_data") && !st.readonly_subdirs.includes("builtin"));
+  assert.equal(statSync(join(w.dest, "manifest.json")).mode & 0o777, 0o640, "modes kept");
+  const { argv } = bwrapArgs({ worktree: wt, control_dir: ctl, gemini_state: st, extra_ro: [root] });
+  const probe = join(root, "builtin-probe.mjs");
+  writeFileSync(probe, `
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+const c = process.argv[2], out = {};
+const tryIt = (k, f) => { try { out[k] = f() ?? "ok"; } catch (e) { out[k] = e.code; } };
+tryIt("read_link", () => readFileSync(c + "/builtin/plugins/core/current.js", "utf8"));
+tryIt("rewrite_asset", () => { writeFileSync(c + "/builtin/plugins/core/asset.js.1.tmp", "new asset"); renameSync(c + "/builtin/plugins/core/asset.js.1.tmp", c + "/builtin/plugins/core/asset.js"); });
+tryIt("write_deep", () => writeFileSync(c + "/builtin/plugins/core/assets/icon.svg", "<svg id=1/>"));
+tryIt("new_plugin", () => { mkdirSync(c + "/builtin/plugins/extra"); writeFileSync(c + "/builtin/plugins/extra/asset.js", "x"); });
+tryIt("write_plugin_data", () => writeFileSync(c + "/plugin_data/d.json", "x"));
+console.log(JSON.stringify(out));
+`);
+  const r = await run([...argv, process.execPath, probe, c], { env: { ...process.env, HOME: home } });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(r.out), { read_link: "host asset", rewrite_asset: "ok", write_deep: "ok", new_plugin: "ok", write_plugin_data: "EROFS" });
+  const listing = await dropGeminiState(st);
+  assert.deepEqual(listing.writable_subdirs.builtin, [
+    { path: "manifest.json", size: 7, copied: true, changed: false },
+    { path: "plugins/core/asset.js", size: 9, copied: true, changed: true },
+    { path: "plugins/core/assets/icon.svg", size: 11, copied: true, changed: true },
+    { path: "plugins/core/current.js", size: 8, copied: true, changed: false },
+    { path: "plugins/extra/asset.js", size: 1, copied: false, changed: true }]);
+  assert.deepEqual(snapshot(home), before, "the host builtin/ (and the rest of HOME) is unchanged");
 });
 
 test("config/projects absent on the host: not created, recorded as absent, and the rest of the layout still works", async t => {

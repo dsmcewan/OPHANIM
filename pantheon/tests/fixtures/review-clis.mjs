@@ -8,7 +8,9 @@
 //                      the --config overrides define (as the real 0.170.0 binary renders it), the legacy workspace-write
 //                      profile (as if the overrides were ignored), no profile at all, or exit 1
 //   FAKE_CLI_MODE      ok (default) | hang | fail | needkey             what a model run (`codex exec` / `grok -p`) does
-//                      (grok also: chunks -- the answer as text_delta events; nofinal -- tool events only)
+//                      (grok also: chunks -- the answer as text_delta events; nofinal -- tool events only;
+//                      native -- grok 1.0.44's observed text/tool_call/end shapes, end_turn; cancelled -- the same with
+//                      the edit cancelled and stopReason "cancelled", exit 0)
 //   FAKE_CLI_WRITE     a worktree-relative path the model run writes (a policy probe)
 //   FAKE_CLI_PIDFILE   hang: the file the run writes its child's pid to (the timeout test checks it was killed)
 // The fake `codex exec` speaks the SDK's protocol (`exec --experimental-json ... [resume <id>]`, the prompt on stdin):
@@ -107,7 +109,7 @@ if (pi >= 0) {
     review_tests: tryWrite(path.join(wt, ".review-tests", "probe.test.mjs")),
     state: tryWrite(path.join(process.env.HOME, ".grok", "written-in-run.txt")),
     state_login_visible: fs.existsSync(path.join(process.env.HOME, ".grok", "auth.json")),
-    tmp: tryWrite("/tmp/fake-grok-probe.txt"),
+    tmp: tryWrite("/tmp/fake-grok-probe-" + process.pid + ".txt"),   // inside the jail: its own /tmp tmpfs
     keys: ${KEYS},   // inside the jail the log (under the host /tmp) is hidden: the probe reports the env itself
     argv: argv.filter((a, i) => i !== pi + 1),
   };
@@ -122,6 +124,25 @@ if (pi >= 0) {
     ev({ type: "thinking_delta", delta: "hmm" });
     if (mode === "chunks") for (const piece of ["# Findings (fake grok, ", "chunked)\n\nPROBE ", JSON.stringify(probe), "\n"]) ev({ type: "text_delta", delta: piece });
     ev({ type: "usage", usage: { prompt_tokens: 7, completion_tokens: 3 } });
+    process.exit(0);
+  }
+  if (mode === "native" || mode === "cancelled") {
+    // The shapes OBSERVED from grok 1.0.44 (2026-11-19; tests/fixtures/grok-1.0.44-observed-stream.json): narration text,
+    // a tool call, then (native) the answer as {"type":"text","data"} chunks and end_turn, or (cancelled) the edit
+    // cancelled by the permission profile and stopReason "cancelled" -- with exit 0 either way.
+    ev({ type: "text", data: "Next I will write a test." });
+    ev({ type: "thought", data: "NOT THE ANSWER" });
+    ev({ type: "tool_call", toolCallId: "call-1", title: "search_replace", kind: "edit", status: "pending", toolName: "search_replace", rawInput: {}, content: [], locations: [] });
+    if (mode === "cancelled") {
+      ev({ type: "tool_call_update", toolCallId: "call-1", status: "failed", content: [{ type: "content", content: { type: "text", text: "User cancelled the execution for tool \`search_replace\`" } }], rawOutput: null, locations: [] });
+      ev({ type: "end", stopReason: "cancelled", usage: { input_tokens: 5 }, num_turns: 3 });
+      process.exit(0);
+    }
+    ev({ type: "tool_call_update", toolCallId: "call-1", status: "completed", content: [], rawOutput: null, locations: [] });
+    for (const piece of ["# Findings (fake grok, ", "native)\n\nPROBE ", JSON.stringify(probe), "\n"]) ev({ type: "text", data: piece });
+    ev({ type: "available_commands", tools: ["read_file"], commands: [] });
+    ev({ type: "usage", usage: { input_tokens: 5, output_tokens: 2 } });
+    ev({ type: "end", stopReason: "end_turn", usage: { input_tokens: 5, output_tokens: 2 }, num_turns: 3 });
     process.exit(0);
   }
   process.stdout.write("this line is not json\n");
