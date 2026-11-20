@@ -11,6 +11,8 @@
 //   node ophanim/graph/cli.mjs why-exists PATH [--commit C]              (Slice D1, KD1-6: the requirement and decision that introduced it)
 //   node ophanim/graph/cli.mjs learning PATH [--test FILE#NAME] [--claim TEXT]   (Slice D1, KD1-4: the established learning about a new defect)
 //   node ophanim/graph/cli.mjs shared-prerequisites --work-root DIR --work-anchor A [--commit C]   (Slice D1, KD1-2: with the capability graph)
+//   node ophanim/graph/cli.mjs hub-readiness [--scales 1,4] [--commit C]   (ADVISORY: whether OPHANIM may replicate into three
+//                                            departments with itself as the hub; hub.mjs, docs/knowledge-graph/hub-and-spoke.md)
 //
 // QUERY is one of the directive's section 8 questions: why (does it exist), requirement (that introduced it), governs
 // (which contracts govern it), dependents (what depends on it), evidence (what qualified it), changed-since (--since C),
@@ -38,6 +40,7 @@ import {capabilitySources, capabilityOrigins, currentRegistries, DECLARED, STRUC
 import {sharedPrerequisites} from './work.mjs';
 import {learningReuse} from './learning.mjs';
 import {whyExists} from './why.mjs';
+import {hubReadiness} from './hub.mjs';
 
 /** Slice D part 1's queries (docs/knowledge-graph/slice-d1.md). */
 export const D1_QUERIES = Object.freeze(['why-exists', 'learning', 'shared-prerequisites']);
@@ -54,7 +57,8 @@ const USAGE = `usage: node ophanim/graph/cli.mjs (${[...QUERIES, 'trace'].join('
        node ophanim/graph/cli.mjs impact-range FROM TO
        node ophanim/graph/cli.mjs stats [--commit C]
        node ophanim/graph/cli.mjs (why-exists|learning) SUBJECT [--test FILE#NAME] [--claim TEXT] [--commit C]
-       node ophanim/graph/cli.mjs shared-prerequisites --work-root DIR --work-anchor A [--commit C]`;
+       node ophanim/graph/cli.mjs shared-prerequisites --work-root DIR --work-anchor A [--commit C]
+       node ophanim/graph/cli.mjs hub-readiness [--scales 1,4] [--commit C]`;
 
 /**
  * Run the CLI on `argv` (without node and the script); {code, output} (output: the JSON text, or the usage). `built`: a
@@ -73,10 +77,12 @@ export function run(argv, {repo = ROOT, observed_at, built = null} = {}) {
   const bounds = {depth: int('--depth'), maxNodes: int('--max-nodes'), maxEdges: int('--max-edges')};
   if (Object.values(bounds).some(v => Number.isNaN(v))) return {code: 2, output: `--depth, --max-nodes and --max-edges are whole numbers\n${USAGE}`};
   const [q, subject, extra] = pos;
-  if (![...QUERIES, ...DEPENDENCY_QUERIES, ...D1_QUERIES, 'trace', 'impact-range', 'stats'].includes(q)) return {code: 2, output: `unknown query "${q}"\n${USAGE}`};
+  if (![...QUERIES, ...DEPENDENCY_QUERIES, ...D1_QUERIES, 'trace', 'impact-range', 'stats', 'hub-readiness'].includes(q)) return {code: 2, output: `unknown query "${q}"\n${USAGE}`};
+  const scales = q === 'hub-readiness' ? String(flags.get('--scales') ?? '1,4').split(',').map(Number) : null;
+  if (scales && !scales.every(k => Number.isFinite(k) && k > 0 && k <= 16)) return {code: 2, output: `--scales is a comma-separated list of department sizes, multiples of this graph's (0 < k <= 16)\n${USAGE}`};
   if (q === 'impact-range' && (!subject || !extra)) return {code: 2, output: USAGE};
   if (q === 'shared-prerequisites' && !(flags.get('--work-root') && flags.get('--work-anchor'))) return {code: 2, output: `shared-prerequisites reads a work ledger: name --work-root and --work-anchor\n${USAGE}`};
-  if (!['stats', 'impact-range', 'shared-prerequisites'].includes(q) && !subject) return {code: 2, output: `${q} needs a SUBJECT\n${USAGE}`};
+  if (!['stats', 'impact-range', 'shared-prerequisites', 'hub-readiness'].includes(q) && !subject) return {code: 2, output: `${q} needs a SUBJECT\n${USAGE}`};
   let commit;
   try { commit = resolveCommit(repo, q === 'impact-range' ? extra : flags.get('--commit') ?? 'HEAD'); }
   catch (e) { return {code: 1, output: JSON.stringify({error: 'NOT_FOUND', why: e.message}, null, 2)}; }
@@ -90,6 +96,7 @@ export function run(argv, {repo = ROOT, observed_at, built = null} = {}) {
       note: 'built for this run from the registered sources (synthetic keys, a temporary graph ledger); nothing is claimed beyond what they state'}};
     let out;
     if (q === 'stats') out = {...head, stats: view.stats()};
+    else if (q === 'hub-readiness') out = {...head, ...hubReadiness({built: g, repo, scales})};
     else if (q === 'impact-range') {
       let from;
       try { from = resolveCommit(repo, subject); } catch (e) { return {code: 1, output: JSON.stringify({error: 'NOT_FOUND', why: e.message}, null, 2)}; }
