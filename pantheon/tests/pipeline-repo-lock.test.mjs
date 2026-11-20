@@ -163,7 +163,10 @@ test("L-303: two runPipeline PROCESSES on one repository (4 units each, all at o
     writeFileSync(go, "");
     const [ra, rb] = await Promise.all([a.done, b.done]);
     const ops = intervals(log);
-    rounds.push({ k, codes: [ra.code, rb.code], status: [ra.out, rb.out].map(o => { try { return JSON.parse(o).status; } catch { return o; } }), overlaps: crossOverlaps(ops.done), ops: ops.done.length, errs: [ra.err, rb.err].join("").slice(0, 500) });
+    rounds.push({ k, codes: [ra.code, rb.code], status: [ra.out, rb.out].map(o => { try { return JSON.parse(o).status; } catch { return o; } }),
+      // A run that did not complete names why (its reason and each unit's status and reason), so an intermittent failure on a
+      // slow runner is diagnosable from the log alone (register L-161). The assertions below are unchanged.
+      detail: [ra.out, rb.out].map(o => { try { const j = JSON.parse(o); return j.status === "completed" ? null : { reason: j.reason, units: j.units }; } catch { return o; } }), overlaps: crossOverlaps(ops.done), ops: ops.done.length, errs: [ra.err, rb.err].join("").slice(0, 500) });
   }
   for (const r of rounds) {
     assert.deepEqual(r.codes, [0, 0], r.errs);
