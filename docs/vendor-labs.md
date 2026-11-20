@@ -9,7 +9,7 @@ Every title, description and figure below is the lab's own, read from its docume
 | Lab | Read | Pages listed | Captured | Largest sections |
 |---|---|---|---|---|
 | openai | 2026-11-20 | 1642 | 1474 | Documentation (638), Guides (233), Resources (203), Models (111), Showcase projects (93), Guide (56), Examples (48), Posts (36), and 64 more |
-| xai | 2026-11-20 | 252 | 250 | API (84), Grok Bot (32), Cookbook (28), The X Subscription (27), Grok Build (24), API Reference (22), Grok (15), Models (14), and 2 more |
+| xai | 2026-11-20 | 266 | 264 | API (84), Grok Bot (32), Cookbook (28), The X Subscription (27), Grok Build (24), API Reference (22), Grok (15), (no section) (14), and 3 more |
 | google | 2026-11-20 | 390 | 387 | Models (114), API reference — Platform APIs (88), API reference — Agent APIs (34), Resources (26), Guides (23), Core capabilities (22), API reference — Core APIs (17), Tools (15), and 9 more |
 | anthropic | 2026-11-20 | 923 | 923 | API Reference (581), Messages (99), Admin (71), Models & pricing (59), Managed Agents (54), Best practices (25), SDKs, CLI, and libraries (17), API reference (13), and 4 more |
 

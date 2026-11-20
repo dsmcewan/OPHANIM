@@ -49,6 +49,7 @@ function classify(url, def) {
   const u = new URL(url);
   if (u.protocol !== "https:") return { kind: "skipped", why: "not an https link" };
   if (!def.hosts.includes(u.hostname)) return { kind: "skipped", why: `outside the lab's documentation hosts (${def.hosts.join(", ")})` };
+  if (def.server?.url === u.href) return { kind: "skipped", why: "the lab's documentation server: it is asked as a server, not read as a page" };
   if (/\/llms-full\.txt$/.test(u.pathname)) return { kind: "skipped", why: "a single-file export of pages that are listed one by one" };
   if (/\/llms\.txt$/.test(u.pathname)) return { kind: "index" };
   return { kind: "page" };
@@ -115,6 +116,35 @@ async function ask(server, fetch, name, args, id) {
   const text = message.result?.content?.find(c => c.type === "text")?.text ?? "";
   return message.result?.isError ? { error: text.split(/\r?\n/)[0].slice(0, 300) } : { text };
 }
+
+// The labs' documentation servers do not list their documents the same way. Each way has a reading here:
+//   hits   a page of results at a time, each with the document's address, and the number held (paged by a cursor)
+//   names  every page's name at once; a page's address is made from its name, and it is asked for by its name
+//   paths  the site's navigation as text, a titled line per page with its path; a page is asked for by its path
+// → {held, next, docs: [{url, title, section, ask}]}; `ask` is what the page is asked for with when it is not its address.
+const SHAPES = {
+  hits: { paged: true, read(text) {
+    const page = JSON.parse(text);
+    return { held: typeof page.nbHits === "number" ? page.nbHits : null, next: page.nextCursor,
+      docs: (page.hits ?? []).map(h => ({ url: h.url_without_anchor ?? h.url, title: h.hierarchy?.lvl1 ?? null, section: h.hierarchy?.lvl0 ?? null })) };
+  } },
+  names: { read(text, server) {
+    const names = JSON.parse(text);
+    if (!Array.isArray(names)) throw new Error("not a list");
+    return { held: null, docs: names.filter(n => typeof n === "string").map(n => ({ url: server.page.replace("{name}", n), title: null, section: null, ask: n })) };
+  } },
+  paths: { read(text, server) {
+    const docs = [];
+    let section = null;
+    for (const line of String(text).split(/\r?\n/)) {
+      const heading = /^#{2,6}\s+(.+?)\s*$/.exec(line);
+      if (heading) { section = heading[1]; continue; }
+      const page = /^\s*[-*]\s+(.+?):\s+(\/\S+)\s*$/.exec(line);
+      if (page) docs.push({ url: new URL(page[2], server.url).href, title: page[1], section, ask: page[2] });
+    }
+    return { held: null, docs };
+  } },
+};
 
 /** A page's address without what does not change which page it is: the markdown ending, a closing slash, a fragment. */
 const same = url => { const u = new URL(url); return u.origin + u.pathname.replace(/\.md$/, "").replace(/\/$/, "") + u.search; };
@@ -193,33 +223,36 @@ export async function captureLab({ lab, def, store, fetch = globalThis.fetch, no
   if (def.server) {
     const at = new URL(def.server.url);
     if (at.protocol !== "https:" || !def.hosts.includes(at.hostname)) throw fail("VENDOR_SERVER_ELSEWHERE", `${lab}: the documentation server ${def.server.url} is on ${at.hostname}, outside the lab's documentation hosts`);
+    const shape = SHAPES[def.server.shape ?? "hits"];
+    if (!shape) throw fail("VENDOR_SERVER_SHAPE", `${lab}: no reading is written for a documentation server that lists its documents as "${def.server.shape}"`);
     server = { url: def.server.url, status: "read", held: null, listed: 0, added: 0, followed: 0 };
-    const have = new Set([...listed.keys()].map(same)), wanted = [];
+    const have = new Set([...listed.keys()].map(same)), wanted = [], asks = new Map();
     let cursor, id = 0;
     for (let n = 0; n < MAX_LISTS; n++) {
-      const got = await ask(def.server, fetch, def.server.list, { limit: 50, ...(cursor ? { cursor } : {}) }, ++id);
+      const got = await ask(def.server, fetch, def.server.list, { ...(def.server.list_args ?? (shape.paged ? { limit: 50 } : {})), ...(cursor ? { cursor } : {}) }, ++id);
       let page;
-      try { page = got.error ? null : JSON.parse(got.text); } catch { got.error = "a list that is not JSON"; }
+      try { page = got.error ? null : shape.read(got.text, def.server); } catch { got.error = "a list this capture cannot read"; }
       if (!page) { Object.assign(server, { status: "failed", why: got.error }); break; }
-      server.held = typeof page.nbHits === "number" ? page.nbHits : server.held;
-      for (const hit of page.hits ?? []) {
+      server.held = page.held ?? server.held;
+      for (const doc of page.docs) {
         server.listed++;
         let url;
-        try { url = new URL(hit.url_without_anchor ?? hit.url); url.hash = ""; } catch { continue; }
+        try { url = new URL(doc.url); url.hash = ""; } catch { continue; }
         if (have.has(same(url.href))) continue;
         have.add(same(url.href));
-        const entry = { section: hit.hierarchy?.lvl0 ?? null, title: hit.hierarchy?.lvl1 ?? null, url: url.href, description: null, index: null, via: def.server.url };
+        const entry = { section: doc.section, title: doc.title, url: url.href, description: null, index: null, via: def.server.url };
         if (url.protocol !== "https:" || !(def.server.hosts ?? def.hosts).includes(url.hostname))
           Object.assign(entry, { status: "skipped", why: `the lab's documentation server lists it on ${url.hostname}, which is not one of the lab's sites` });
-        else wanted.push(entry);
+        else { wanted.push(entry); if (doc.ask !== undefined) asks.set(entry, doc.ask); }
         listed.set(entry.url, entry);
       }
-      cursor = page.nextCursor;
-      if (!cursor || !(page.hits ?? []).length) break;
+      cursor = page.next;
+      // Only a reading that pages gives a cursor: the others end here after their one list.
+      if (!cursor || !page.docs.length) break;
     }
     server.added = wanted.length;
     const through = async page => {
-      const got = await ask(def.server, fetch, def.server.fetch, { url: page.url }, ++id);
+      const got = await ask(def.server, fetch, def.server.fetch, { [def.server.fetch_with ?? "url"]: asks.get(page) ?? page.url }, ++id);
       if (got.error) { page.status = "skipped"; page.why = `${page.derived_from ? `${page.derived_from} links to it and the lab's documentation server` : "the lab's documentation server lists it and"} did not return it (${got.error})`; return; }
       const bytes = Buffer.from(got.text, "utf8");
       if (bytes.length > maxBytes) { page.status = "skipped"; page.why = `larger than the bound of ${maxBytes} bytes (${bytes.length})`; return; }

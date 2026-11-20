@@ -31,7 +31,7 @@ This reads every page each lab's documentation lists (about a minute for the fou
 
 The four documentation hosts must be reachable: `developers.openai.com`, `docs.x.ai`, `aistudio.google.com`, `platform.claude.com`. No key is sent to them.
 
-OpenAI also runs its own documentation server (`developers.openai.com/mcp`). The capture asks it for what OpenAI's index does not list, which is how the Codex documentation (on `learn.chatgpt.com`, never asked directly) is read: the server's list, then that site's own links, each page through the server.
+Three labs run a documentation server of their own, and the capture asks each for what the lab's index does not list. OpenAI's (`developers.openai.com/mcp`) is how the Codex documentation (on `learn.chatgpt.com`, never asked directly) is read: the server's list, then that site's own links, each page through the server. xAI's (`docs.x.ai/api/mcp`) supplies a few pages its index omits. Anthropic's (`platform.claude.com/docs/mcp`) lists nothing its index does not. Google's (`gemini-api-docs-mcp.dev`) only answers searches, so it is not read.
 
 ## 2. Record that it was seen
 

@@ -248,6 +248,15 @@ function served({ pages = PAGES, held = HELD, perPage = 2, total = held.length, 
       const from = params.arguments.cursor ? Number(params.arguments.cursor) : 0, hits = held.slice(from, from + perPage);
       return answer(id, { content: [{ type: "text", text: JSON.stringify({ hits, nbHits: total, ...(from + perPage < held.length ? { nextCursor: String(from + perPage) } : {}) }) }] });
     }
+    // The other labs' servers: one lists page names and returns a page by its name, one prints its navigation and
+    // returns a page by its path.
+    if (params.name === "list_names") return answer(id, { content: [{ type: "text", text: JSON.stringify(["models/one", "guides/unlisted", "guides/absent", 7]) }] });
+    if (params.name === "navigation") return answer(id, { content: [{ type: "text", text: "## Guides\nDefault: /guides/unlisted\n\n### Start here\n- Model One: /models/one\n- A guide the index omits: /guides/unlisted\n\n### Later\n(not expanded)\n- Gone: /guides/absent\n" }] });
+    const named = params.arguments.name ?? params.arguments.path;
+    if (named !== undefined) {
+      const text = BODIES[`https://docs.lab.test/${String(named).replace(/^\//, "")}`];
+      return answer(id, text === undefined ? { isError: true, content: [{ type: "text", text: `No page ${named}` }] } : { content: [{ type: "text", text }] });
+    }
     const body = BODIES[params.arguments.url];
     return answer(id, body === undefined ? { isError: true, content: [{ type: "text", text: `Failed to fetch ${params.arguments.url}.md: 404 Not Found\nmore detail` }] } : { content: [{ type: "text", text: body }] });
   };
@@ -321,4 +330,45 @@ test("a listed page that moved to a site read only through the server is read th
   assert.deepEqual([moved.status, moved.title, moved.derived_from, moved.sha256], ["captured", "Where the old address went", old.url, sha(BODIES[moved.url])]);
   assert.equal(asked.some(a => a.url.includes("help.lab.test")), false);
   assert.equal(byUrl(manifest, "https://accounts.elsewhere.test/signin") ?? null, null, "a move to a site that is not the lab's is still only refused");
+});
+
+test("A SERVER THAT LISTS PAGE NAMES: each name is a page of the lab's site, asked for by its name, and only the ones the index did not supply are read", async t => {
+  const def = { ...LAB, server: { url: SERVER, list: "list_names", shape: "names", page: "https://docs.lab.test/{name}", fetch: "get_page", fetch_with: "name" } };
+  const { manifest, posts } = await viaServer(t, { def });
+  const calls = posts.map(p => [p.body.params.name, p.body.params.arguments]);
+  assert.deepEqual(calls.filter(c => c[0] === "list_names"), [["list_names", {}]]);
+  assert.deepEqual(calls.filter(c => c[0] === "get_page").map(c => c[1]).sort((a, b) => (a.name < b.name ? -1 : 1)), [{ name: "guides/absent" }, { name: "guides/unlisted" }], "the page the index holds is not read again");
+  const got = byUrl(manifest, "https://docs.lab.test/guides/unlisted"), absent = byUrl(manifest, "https://docs.lab.test/guides/absent");
+  assert.deepEqual([got.status, got.title, got.via, got.sha256], ["captured", "A guide the index omits", SERVER, sha(BODIES[got.url])]);
+  assert.deepEqual([absent.status, absent.why], ["skipped", "the lab's documentation server lists it and did not return it (No page guides/absent)"]);
+  assert.deepEqual(manifest.server, { url: SERVER, status: "read", held: null, listed: 3, added: 2, followed: 0 });
+  assert.equal(got.ask ?? null, null, "what the server was asked with is not kept in the manifest");
+});
+
+test("A SERVER THAT PRINTS ITS NAVIGATION: each page line is a page with its title and its group, asked for by its path, with the arguments the configuration gives the listing", async t => {
+  const def = { ...LAB, server: { url: SERVER, list: "navigation", list_args: { depth: 10 }, shape: "paths", fetch: "get_doc", fetch_with: "path" } };
+  const { manifest, posts } = await viaServer(t, { def });
+  const calls = posts.map(p => [p.body.params.name, p.body.params.arguments]);
+  assert.deepEqual(calls.filter(c => c[0] === "navigation"), [["navigation", { depth: 10 }]]);
+  assert.deepEqual(calls.filter(c => c[0] === "get_doc").map(c => c[1].path).sort(), ["/guides/absent", "/guides/unlisted"]);
+  const got = byUrl(manifest, "https://docs.lab.test/guides/unlisted"), absent = byUrl(manifest, "https://docs.lab.test/guides/absent");
+  assert.deepEqual([got.status, got.title, got.section, got.sha256], ["captured", "A guide the index omits", "Start here", sha(BODIES[got.url])]);
+  assert.deepEqual([absent.status, absent.title, absent.section], ["skipped", "Gone", "Later"]);
+  assert.deepEqual(manifest.server, { url: SERVER, status: "read", held: null, listed: 3, added: 2, followed: 0 });
+});
+
+test("a server whose way of listing is not one this capture reads is an error naming it, before anything is asked of it", async t => {
+  const def = { ...LAB, server: { url: SERVER, list: "navigation", shape: "sitemap", fetch: "get_doc" } };
+  const s = served();
+  await assert.rejects(captureLab({ lab: "lab", def, store: store(t), fetch: s.fetch, now: NOW, sleep: async () => {}, retries: 0 }), { code: "VENDOR_SERVER_SHAPE", message: /sitemap/ });
+  assert.deepEqual(s.posts, []);
+});
+
+test("the server's own address, where the index lists it as a link, is not read as a page: it is asked as a server", async t => {
+  const pages = { ...PAGES, "https://docs.lab.test/api/llms.txt": { body: API + "- [Documentation server](https://docs.lab.test/mcp): search and read these pages.\n", type: "text/plain" } };
+  const { manifest, asked } = await viaServer(t, { pages });
+  const link = byUrl(manifest, SERVER);
+  assert.deepEqual([link.status, link.why], ["skipped", "the lab's documentation server: it is asked as a server, not read as a page"]);
+  assert.equal(asked.some(a => a.url === SERVER), false, "no plain request is made to the server's address");
+  assert.equal(manifest.server.status, "read");
 });

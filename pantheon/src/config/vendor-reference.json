@@ -531,10 +531,10 @@
    }
   },
   "xai": {
-   "read": "2026-11-20T07:10:26.664Z",
+   "read": "2026-11-20T07:56:23.448Z",
    "pages": {
-    "listed": 252,
-    "captured": 250
+    "listed": 266,
+    "captured": 264
    },
    "indexes": [
     {
@@ -570,6 +570,10 @@
     {
      "section": "Grok",
      "pages": 15
+    },
+    {
+     "section": "(no section)",
+     "pages": 14
     },
     {
      "section": "Models",
@@ -1036,7 +1040,7 @@
    }
   },
   "anthropic": {
-   "read": "2026-11-20T07:08:36.043Z",
+   "read": "2026-11-20T07:56:44.811Z",
    "pages": {
     "listed": 923,
     "captured": 923
