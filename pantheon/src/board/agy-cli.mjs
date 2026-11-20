@@ -278,7 +278,7 @@ import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
 import { extendVerifyPolicy, writeVerifyLauncher } from "../agy/verify-jail.mjs";
-import { fdExecArgv, fdExecAvailable, fdExecPython, FD_EXEC_MODULE, FDS_PASSED } from "../agy/fd-exec.mjs";
+import { fdExecArgv, fdExecAvailable, fdExecPython, FD_EXEC_MODULE, FDS_PASSED, closerLine } from "../agy/fd-exec.mjs";
 import { workerVerifyCommand } from "../agy/jail-hook.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
 import { MCP_SERVER as MCP_SERVER_NAME, toolDrift } from "../agy/jail-hook.mjs";
@@ -630,6 +630,18 @@ export function advertisedTools({ cardTools: card = null, agentsOut = "", logTex
   for (const t of stepNames ?? []) add(t, "stream_step");
   return { discovered, methods: [...methods].sort() };
 }
+/** The preflight auth check's reason (null when logged in). When /usage printed no envelope, it names the exit code and,
+ *  if the jail's descriptor closer spoke, its own `pantheon-fds:` line (redacted like the stderr record), so a closer
+ *  refusal states its cause in the reason itself (KG-11: two integration refusals surfaced only as "exit 125"). */
+export function usageAuthWhy(u, envelope, logged_in, redact = t => t) {
+  if (logged_in) return null;
+  if (u.killed_for) return `/usage was stopped (${u.killed_for})`;
+  if (!envelope) {
+    const fds = closerLine(u.raw?.stderr);
+    return `/usage did not print the JSON envelope (exit ${u.exit_code}${fds ? `; ${redact(fds)}` : ""})`;
+  }
+  return "/usage returned no quota group with buckets: the CLI has no usable session in the jail";
+}
 /** The tool_drift check of the preflight (blocking) or of a turn's record: {ok, why, methods, discovered, unclassified, unknown, note}. */
 export function toolDriftCheck({ discovered, methods }) {
   const d = toolDrift(discovered);
@@ -725,7 +737,7 @@ export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEn
     const envelope = usageEnvelopeOf(u.raw.stdout);
     const logged_in = !u.killed_for && usageHasBuckets(envelope);
     checks.auth = { ok: logged_in, source: "agy --print /usage --output-format json, in the jail",
-      why: logged_in ? null : u.killed_for ? `/usage was stopped (${u.killed_for})` : !envelope ? `/usage did not print the JSON envelope (exit ${u.exit_code})` : "/usage returned no quota group with buckets: the CLI has no usable session in the jail",
+      why: usageAuthWhy(u, envelope, logged_in, red),
       argv: u.argv, exit_code: u.exit_code, killed_for: u.killed_for, envelope: envelope ? envelope.format : null,
       groups: envelope ? [...new Set((envelope.buckets ?? []).map(b => b.group))] : null,
       num_turns: envelope?.spent?.num_turns ?? null, total_tokens: envelope?.spent?.total_tokens ?? null, stderr: red(u.raw.stderr).slice(-4000) };

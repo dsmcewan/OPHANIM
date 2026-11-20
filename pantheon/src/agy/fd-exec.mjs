@@ -52,6 +52,13 @@ export const FD_EXEC_MODULE = fileURLToPath(import.meta.url);
 export const FDS_REFUSED = 125;
 /** The descriptors a jailed command is given on purpose: stdin, stdout and stderr, and no other. */
 export const FDS_PASSED = Object.freeze([0, 1, 2]);
+/** The closer's own last `pantheon-fds:` line in a stderr (its refusal or exec failure), bounded, or null when it said
+ *  nothing. Callers put it in their reason, so a refusal states its cause wherever the exit code alone is reported
+ *  (KG-11: two integration refusals were seen only as "exit 125", and their records were gone). */
+export function closerLine(stderr) {
+  const lines = String(stderr ?? "").split("\n").filter(l => l.startsWith("pantheon-fds:"));
+  return lines.length ? lines[lines.length - 1].slice(0, 400) : null;
+}
 /** python3's flags for the closer: isolated (-I: no PYTHON* variable, no user site, no script dir on sys.path), no site (-S). */
 export const FD_EXEC_PY_FLAGS = Object.freeze(["-I", "-S"]);
 
