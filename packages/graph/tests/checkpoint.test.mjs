@@ -13,6 +13,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {generateSigner} from '../../ledger/chain.mjs';
 import {canonical} from '../../ledger/canonical.mjs';
 import {assertion, createProjection, defineOrigins, writeSnapshot, listSnapshots, GRAPH_SCHEMA, CONTRACT_VERSION} from '../index.mjs';
+import {encodeState, decodeState} from '../checkpoint.mjs';
 import {world, ORIGINS, SYSTEM, SYSTEM_SNAPSHOT, C, id, src, RUN, T0, at, V1, dirSource, publish} from './fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -40,9 +41,11 @@ function snapped(t, o = {}) {
  */
 function forge(file, {state = () => {}, body = () => {}, digests = true, signer, keyId = signer.key_id}) {
   const raw = fs.readFileSync(file), nl = raw.indexOf(0x0a), head = JSON.parse(raw.subarray(0, nl).toString('utf8'));
-  const x = JSON.parse(raw.subarray(nl + 1).toString('utf8'));
+  const x = decodeState(raw.subarray(nl + 1));
   state(x);
-  const bytes = Buffer.from(JSON.stringify(x));
+  const ids = x.assertions.map(([r]) => r.id);
+  x.order = ids.map((_, i) => i).sort((i, j) => (ids[i] < ids[j] ? -1 : ids[i] > ids[j] ? 1 : 0));   // the id order, as a careful forger keeps it
+  const bytes = encodeState(x);
   const b = {...head.body, state_digest: sha(bytes), state_bytes: bytes.length};
   if (digests) { const p = createProjection({origins: ORIGINS}); p.restore(x); b.projection_digest = p.digest(x.seq); }
   body(b);
@@ -125,9 +128,11 @@ test('trust: a snapshot derived under another contract registry, origin registry
 test('trust: a snapshot whose state is not the state it signed, or does not reproduce its projection digest, is refused', t => {
   const {w, g, s, written} = snapped(t);
   // The state edited after signing: one attribute of one record (the projection digest does not cover attributes).
-  const raw = fs.readFileSync(written.file, 'utf8');
-  assert.equal(raw.split('"outcome":"pass"').length, 2, 'the attribute occurs once in the file');
-  fs.writeFileSync(written.file, raw.replace('"outcome":"pass"', '"outcome":"fail"'));
+  const raw = fs.readFileSync(written.file), nl = raw.indexOf(0x0a), x = decodeState(raw.subarray(nl + 1));
+  const passed = x.assertions.filter(([r]) => r.attributes?.outcome === 'pass');
+  assert.equal(passed.length, 1, 'the attribute occurs once in the state');
+  passed[0][0].attributes.outcome = 'fail';
+  fs.writeFileSync(written.file, Buffer.concat([raw.subarray(0, nl + 1), encodeState(x)]));
   const a = w.open(s.opts);
   assert.equal(used(a), false);
   assert.match(a.verification.snapshot.reason, /its state is not the state it signed/);
