@@ -52,6 +52,16 @@ test('TELOS IS READ AT THE COMMIT THIS REPOSITORY PINS, not at whatever its chec
   assert.equal(lacking.observed['sibling.telos.code'], undefined, 'nothing is read of a sibling at a commit other than the pinned one');
 });
 
+test('A RUNTIME STATE DIRECTORY is a source under its own name; one that cannot be read is recorded unavailable with the reason and states nothing', t => {
+  const home = tempRepo(t), empty = tempRepo(t);
+  home.commit(HOME_FILES, 'home');
+  const g = dependencyGraph({repo: home.repo, status: null, lessons: false, verification: false, records: false, states: [{name: 'nothing-here', stateDir: empty.repo}], observed_at: T0});
+  t.after(g.close);
+  const o = g.observed['ophanim.runtime.nothing-here'];
+  assert.deepEqual([o.state, typeof o.why, o.count], ['unavailable', 'string', null]);
+  assert.throws(() => dependencyGraph({repo: home.repo, states: [{name: 'Bad Name', stateDir: empty.repo}]}), /a runtime state has a short lowercase name/);
+});
+
 test('A SUBJECT is named the way a person writes it: a path, a path#function, npm:name, env:NAME, program:name, host:name, sibling:path', t => {
   const {v} = setup(t);
   assert.deepEqual(['app/main.mjs', 'app/main.mjs#run', 'npm:leftpad', 'env:APP_HOME', 'node:fs', 'telos:lib/a.mjs', 'telos:lib/a.mjs#a', fileId('app/util.mjs')].map(s => subjectOf(v, s).id),
@@ -83,8 +93,8 @@ test('WHAT NEEDS IT: the dependents of a package, a file and an environment vari
   assert.deepEqual([pkg.assessment.blast_radius, pkg.assessment.class, pkg.assessment.advisory, pkg.assessment.coverage], [4, 'medium', true, 'unverified']);
   // Every gap a reading of the repository reported lowers the coverage of an answer about it: none is judged irrelevant here.
   assert.deepEqual(pkg.coverage.why, ['ophanim: 1 file(s) the parser rejected give no facts',
-    'ophanim: ophanim/governance.mjs is not in the tree at this commit: no TELOS pin is read',
-    'ophanim: PROVENANCE.json is not in the tree at this commit: the lineage of this repository is not stated']);
+    'ophanim: PROVENANCE.json is not in the tree at this commit: the lineage of this repository is not stated',
+    'ophanim: ophanim/governance.mjs is not in the tree at this commit: no TELOS pin is read']);
   assert.deepEqual(neededBy(v, 'telos:lib/b.mjs').direct.map(d => d.name), ['telos:lib/a.mjs', 'telos:lib/a.mjs#a']);
 });
 

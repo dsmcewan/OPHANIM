@@ -69,7 +69,7 @@ function gapsOf(view, ids) {
   for (const repo of [...repos].sort()) for (const a of view.node(repositoryId(repo)).assertions) {
     for (const g of view.assertion(a.id).record.missing_evidence ?? []) out.push(`${repo}: ${g}`);
   }
-  return [...new Set(out)];
+  return [...new Set(out)].sort(byString);            // an assertion's id follows its content: sorted, the answer does not
 }
 
 /** What `subject` needs: its direct dependencies by kind, how many nodes it reaches in all, and what it merely names. */

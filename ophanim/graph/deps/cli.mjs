@@ -5,7 +5,8 @@
 //   node ophanim/graph/deps/cli.mjs needed-by SUBJECT   what depends on SUBJECT, and the advisory assessment
 //   node ophanim/graph/deps/cli.mjs audit               what each reading could not state; where two sources agree
 //   node ophanim/graph/deps/cli.mjs stats               the sources observed and the size of the graph
-//   options: [--repo DIR] [--commit C] [--telos DIR] [--argo DIR] [--lexi DIR] [--no-status] [--no-lessons]
+//   options: [--repo DIR] [--commit C] [--telos DIR] [--argo DIR] [--lexi DIR] [--state NAME=DIR]... [--no-status] [--no-lessons]
+//   --state names a runtime state directory (the record of what the runtime built there); it may be given more than once.
 //
 // SUBJECT is a path, path#function, npm:name, node:name, program:name, env:NAME, host:name, <sibling>:path[#function],
 // or a graph id. A sibling repository is read only from a checkout given by its option or by OPHANIM_TELOS_ROOT,
@@ -22,24 +23,25 @@ import {needs, neededBy, audit} from './query.mjs';
 
 const USAGE = `usage: node ophanim/graph/deps/cli.mjs (needs|needed-by) SUBJECT [options]
        node ophanim/graph/deps/cli.mjs (audit|stats) [options]
-       options: [--repo DIR] [--commit C] ${Object.keys(SIBLINGS).map(n => `[--${n} DIR]`).join(' ')} [--no-status] [--no-lessons]`;
+       options: [--repo DIR] [--commit C] ${Object.keys(SIBLINGS).map(n => `[--${n} DIR]`).join(' ')} [--state NAME=DIR]... [--no-status] [--no-lessons]`;
 const WITH_SUBJECT = {needs, 'needed-by': neededBy}, WITHOUT = ['audit', 'stats'];
 
 export function main(argv, {out = s => process.stdout.write(s), err = s => process.stderr.write(s), env = process.env} = {}) {
   const [command, ...rest] = argv, flags = {}, positional = [];
-  const VALUED = ['repo', 'commit', ...Object.keys(SIBLINGS)], BARE = ['no-status', 'no-lessons'];
+  const VALUED = ['repo', 'commit', 'state', ...Object.keys(SIBLINGS)], BARE = ['no-status', 'no-lessons'], states = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (!a.startsWith('--')) { positional.push(a); continue; }
     const k = a.slice(2);
     if (BARE.includes(k)) flags[k] = true;
-    else if (VALUED.includes(k) && rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) flags[k] = rest[++i];
+    else if (k === 'state' && /^[a-z][a-z0-9-]{0,31}=.+/.test(rest[i + 1] ?? '')) { const v = rest[++i], eq = v.indexOf('='); states.push({name: v.slice(0, eq), stateDir: path.resolve(v.slice(eq + 1))}); }
+    else if (VALUED.includes(k) && k !== 'state' && rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) flags[k] = rest[++i];
     else { err(USAGE + '\n'); return 2; }
   }
   const needsSubject = Object.hasOwn(WITH_SUBJECT, command);
   if ((!needsSubject && !WITHOUT.includes(command)) || positional.length !== (needsSubject ? 1 : 0)) { err(USAGE + '\n'); return 2; }
   const siblings = Object.fromEntries(Object.keys(SIBLINGS).map(n => [n, flags[n] ?? env[`OPHANIM_${n.toUpperCase()}_ROOT`]]).filter(([, dir]) => dir).map(([n, dir]) => [n, {repo: path.resolve(dir)}]));
-  const g = dependencyGraph({repo: flags.repo ? path.resolve(flags.repo) : ROOT, commit: flags.commit, siblings,
+  const g = dependencyGraph({repo: flags.repo ? path.resolve(flags.repo) : ROOT, commit: flags.commit, siblings, states,
     ...(flags['no-status'] ? {status: null} : {}), lessons: !flags['no-lessons']});
   try {
     const view = g.graph.view();
