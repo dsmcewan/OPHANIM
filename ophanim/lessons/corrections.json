@@ -265,6 +265,13 @@
           "date": "2026-11-20",
           "ref": "22ecb82 (mutation run and one sweep of uncovered refusal lines)",
           "note": "with each refusal line that no mutation covered disabled in turn, 22 in the new controller modules were noticed by no test, and six of twelve mutations of the SDK bridge survived a suite that ran whole sessions only; one acceptance item (a subagent's own failed request) had no test. Caught by disabling the lines and by reading the acceptance list line by line; each now has a test that fails without it. Limits: the sweep was by pattern and was run once (docs/OPEN-LIMITATIONS.md L-720)"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "6ee0fea (independent review of that commit)",
+          "note": "a mutation that survived was read as proof that the mutated line was a duplicate: the gateway's stop check on arrival was removed, with a comment saying it decided nothing the later check did not. Every test passing without the line showed only that no test told the two apart. A reviewer given the diff, and not the author's conclusion, showed what the line alone did (a stopped gateway answered a stalled upload at once and held none of it). Restored, with a test of its own. Limits: one case; the author had weighed the difference and judged it negligible before writing the comment"
         }
       ],
       "fixed_in": null,
@@ -396,6 +403,12 @@
           "date": "2026-11-19",
           "ref": "22ecb82 (independent review of the Antigravity SDK transport)",
           "note": "the same class in new code, two days after the owner raised it: the controller judged a tool call on the argument name the tool declares, and the SDK's runtime also read another spelling. run_command ran the command in `commandline` outside the verify jail; invoke_subagent started twelve subagents from `subagents` after the governor admitted one from `Subagents` (the ceiling). Found by a reviewer probing the installed runtime, not by this class's detector test, which is about its first instance; fixed by refusing any key a tool does not declare. NOT recorded as corrected_by mechanism: that would claim the owner's success criterion, which corrections.test.mjs pins as not claimed. Whether this counts is the owner's decision"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "22ecb82, found at 6ee0fea (independent review)",
+          "note": "the class a third time in this transport: the gateway's contract was 'abort() forwards nothing afterwards', and it kept the stop as its reason text, so the stop held on the easy path only (a reason with words). An abort with an empty reason, or a signal aborted with an error that has no message, left it open: the next request was charged and forwarded. No shipped caller sends one. Found by the reviewer, not by the author's 157 mutations, none of which varied the reason. Fixed: any abort stops the gateway. NOT recorded as corrected_by mechanism, for the reason given on the instance of 2026-11-19: the owner's decision"
         }
       ],
       "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",

@@ -15,8 +15,9 @@
 //                The model the PROVIDER says answered (`modelVersion`) is recorded for every request.
 //   CEILING      a subagent session past the implementer's ceiling is refused on the wire: the second line behind the
 //                governor's admission at invoke_subagent (subagents.mjs).
-//   STOP         abort() cuts every request in flight and forwards nothing afterwards. A request that was not already
-//                being charged when the stop came is not charged either.
+//   STOP         ANY abort() (whatever its reason says, an empty one included) cuts every request in flight and
+//                forwards nothing afterwards. A request that was not already being charged when the stop came is not
+//                charged either, and one that arrives after it is answered at once, its body unread.
 //
 // Observed on google-antigravity 0.1.24 (pantheon/tests/antigravity-sdk-contract.test.mjs repeats it): the runtime
 // calls POST /v1beta/models/<model>:streamGenerateContent?alt=sse over HTTP/1.1 with the key in x-goog-api-key and a
@@ -117,15 +118,19 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
       if (++unauthorized > MAX_UNAUTHORIZED_ROWS) requests.splice(requests.indexOf(rec), 1);
       return done();
     }
+    // THE STOP IS READ THREE TIMES, and each reading does what the other two cannot (the first was removed once as a
+    // duplicate, because no test told them apart; an independent review of 6ee0fea showed what it alone does):
+    //   1. on arrival        a stopped gateway answers at once and reads no body: a stalled upload is neither waited
+    //                        for nor held, and "stopped" comes before "not served" and "too large"
+    //   2. with the body     a request whose body was still arriving at the stop is not charged
+    //   3. after its charge  a request whose admission was pending at the stop is not sent (its charge stands)
+    const stopped = () => (aborted ?? (closed ? "the gateway closed" : null));
+    if (stopped()) { req.resume(); refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
     if (req.method !== "POST" || !m || !verbs.has(m[2])) { req.resume(); refuse(res, rec, 404, GATEWAY_REFUSALS.PATH, `only POST /v1beta/models/<model>:${[...verbs].join("|")} is served`, "NOT_FOUND"); return done(); }
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > maxBodyBytes) { req.destroy(); refuse(res, rec, 413, GATEWAY_REFUSALS.TOO_LARGE, `the request is over ${maxBodyBytes} bytes`); return done(); } chunks.push(c); }
     const raw = Buffer.concat(chunks);
-    // THE STOP IS READ WHERE THIS HANDLER HAS WAITED, not on arrival: here, with the whole request in hand, and again once
-    // its charge is admitted. Read on arrival only (as it was until the independent review of 2026-11-19), a request whose
-    // body was still arriving, or whose admission was pending, was charged and forwarded after the stop. A check on
-    // arrival beside this one would decide nothing this one does not.
-    const stopped = () => (aborted ?? (closed ? "the gateway closed" : null));
+    // 2. With the body in hand: a request whose body was still arriving at the stop is not charged.
     if (stopped()) { refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
     let body = null; try { body = JSON.parse(raw.toString("utf8")); } catch { body = null; }
     const model = m[1], system = JSON.stringify(body?.systemInstruction ?? "");
@@ -209,7 +214,10 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
   const abort = why => {
     if (aborted) return;
-    aborted = String(why ?? "aborted").slice(0, 300);
+    // The stop is kept as its reason, and the reason is what every later reading tests: it is NEVER EMPTY. An abort("")
+    // or a signal aborted with an error that has no message read as "not stopped", and the next request was charged and
+    // forwarded (independent review of 6ee0fea).
+    aborted = (String(why ?? "").trim() || "aborted, no reason given").slice(0, 300);
     for (const e of inflight) { e.ac.abort(new Error(aborted)); try { e.res.destroy(); } catch { /* gone */ } }
   };
   const onSignal = () => abort(signal?.reason?.message ?? "the caller's signal aborted");

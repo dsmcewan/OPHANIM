@@ -209,6 +209,42 @@ test("a request on a stopped session is refused before it is charged: one whose 
   assert.deepEqual(gw.record().requests.map(r => [r.refusal, r.forwarded]), [[GATEWAY_REFUSALS.ABORTED, false], [GATEWAY_REFUSALS.ABORTED, false]]);
 });
 
+test("ANY abort stops the gateway, whatever its reason says: an empty reason, or a signal aborted with an error that has no message, is still a stop", async t => {
+  // Independent review of 6ee0fea: the stop was kept as its reason text, and an empty text read as "not stopped": the
+  // next request was charged and forwarded with the key.
+  for (const stopWith of ["an empty reason", "no reason", "a signal whose error has no message"]) {
+    const charged = [], ac = new AbortController();
+    const { upstream, gw, post } = await setup(t, { admit: info => { charged.push(info.class); }, over: { signal: ac.signal } });
+    if (stopWith === "an empty reason") gw.abort(""); else if (stopWith === "no reason") gw.abort(); else ac.abort(new Error());
+    const r = await post("gemini-4-carbon", body(ROOT.marker));
+    assert.equal(r.status, 503, stopWith);
+    assert.match((await r.json()).error.message, /^PANTHEON_GATEWAY_ABORTED: the session was stopped: \S/, `${stopWith}: the refusal still says, in words, that it was stopped`);
+    assert.deepEqual([charged, upstream.requests.length, gw.record().totals.forwarded], [[], 0, 0], stopWith);
+    assert.match(gw.record().aborted, /\S/, `${stopWith}: the record says the gateway was stopped`);
+  }
+});
+
+test("a stopped gateway answers a request as it arrives: it does not wait for a body that may never come, and a path it does not serve is not answered as if it were open", async t => {
+  // Independent review of 6ee0fea, which had removed the check on arrival as a duplicate of the one after the body: it
+  // was the only one that answers without the body, so a stalled upload was held (up to the size bound) and never answered.
+  const charged = [];
+  const { upstream, gw } = await setup(t, { admit: info => { charged.push(info.class); } });
+  gw.abort("stopped by the caller");
+  const payload = Buffer.from(JSON.stringify(body(ROOT.marker)));
+  const stalled = request(`${gw.url}/v1beta/models/gemini-4-carbon:streamGenerateContent?alt=sse`,
+    { method: "POST", headers: { "content-type": "application/json", "content-length": payload.length, "x-goog-api-key": gw.token } });
+  const answer = new Promise(resolve => { stalled.on("error", e => resolve({ status: `connection error: ${e.code ?? e.message}`, text: "" })); stalled.on("response", res => { let s = ""; res.setEncoding("utf8"); res.on("data", c => { s += c; }); res.on("end", () => resolve({ status: res.statusCode, text: s })); }); });
+  stalled.write(payload.subarray(0, 16));                        // the rest of the body never comes
+  const first = await Promise.race([answer, new Promise(resolve => setTimeout(() => resolve({ status: "no answer within 2 s", text: "" }), 2000))]);
+  stalled.destroy();
+  assert.equal(first.status, 503);
+  assert.match(first.text, /PANTHEON_GATEWAY_ABORTED: the session was stopped: stopped by the caller/);
+  const elsewhere = await fetch(`${gw.url}/v1beta/models`, { headers: { "x-goog-api-key": gw.token } });
+  assert.equal(elsewhere.status, 503, "stopped comes before what is served");
+  assert.deepEqual([charged, upstream.requests.length], [[], 0]);
+  assert.deepEqual(gw.record().requests.map(r => r.refusal), [GATEWAY_REFUSALS.ABORTED, GATEWAY_REFUSALS.ABORTED]);
+});
+
 test("callers without the session token cannot grow the record without bound: they are counted, and a bounded number of rows is kept", async t => {
   const { upstream, gw, post } = await setup(t);
   for (let i = 0; i < 60; i++) assert.equal((await post("gemini-4-carbon", body(ROOT.marker), { token: `wrong-${i}` })).status, 401);

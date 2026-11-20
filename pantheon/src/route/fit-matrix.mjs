@@ -62,7 +62,9 @@ export function sdkRoutingRefusal(cfg) {
     const pick = cfg.implementer[d], ladder = cfg.ladders[d];
     for (const { model, effort = null } of [pick, ...ladder]) {
       if (!Object.hasOwn(cfg.models, model)) return `"${model}" is not a model config/antigravity-sdk.json declares`;
-      if (effort !== null && !(cfg.models[model].thinking ?? []).includes(effort)) return `"${effort}" is not a thinking level recorded for ${model}`;
+      // A LIST that contains the level: levels written as one string, or a model declared with no entry, record none.
+      const levels = cfg.models[model]?.thinking;
+      if (effort !== null && !(Array.isArray(levels) && levels.includes(effort))) return `"${effort}" is not a thinking level recorded for ${model}`;
     }
     if (ladder[0].model !== pick.model || (ladder[0].effort ?? null) !== (pick.effort ?? null)) return `the ${d} ladder does not start on the ${d} implementer`;
   }

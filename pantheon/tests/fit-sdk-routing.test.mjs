@@ -28,6 +28,10 @@ test("the routing config is checked before the matrix is built from it: an undec
   assert.equal(broken(c => { c.implementer.medium.effort = "high"; }), '"high" is not a thinking level recorded for gemini-4-neon');
   assert.equal(broken(c => { c.ladders.medium = [...c.ladders.medium].reverse(); }), "the medium ladder does not start on the medium implementer");
   assert.equal(broken(c => { c.ladders.easy[0].effort = "high"; }), "the easy ladder does not start on the easy implementer", "the same model at another level is another rung");
+  // A config that is malformed, not merely inconsistent (independent review of 6ee0fea): the levels written as one string
+  // are not a list that contains the level, and a model declared with no entry has no level recorded at all.
+  assert.equal(broken(c => { c.models["gemini-4-hydrogen"].thinking = "low, medium, high, xhigh"; }), '"medium" is not a thinking level recorded for gemini-4-hydrogen');
+  assert.equal(broken(c => { c.models["gemini-4-carbon"] = null; }), '"high" is not a thinking level recorded for gemini-4-carbon');
 });
 
 test("the implementer row: hard carbon, medium neon, easy hydrogen, each an SDK seat and none an agy CLI lane", () => {
