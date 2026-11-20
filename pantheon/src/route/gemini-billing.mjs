@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { _internals as seatLock } from "../seat/lock.mjs";
 
 export const GEMINI_BILLING_SCHEMA = "ophanim.gemini-billing/v1";
 export const GEMINI_KINDS = Object.freeze(["failover", "primary"]);
@@ -134,10 +135,43 @@ export function billingFromConfig(block, where) {
   return resolveGeminiBilling(declared);
 }
 
+/** A record whose lock a LIVE holder keeps longer than this is refused (GEMINI_USAGE_LOCKED): its request is not sent. */
+export const USAGE_LOCK_WAIT_MS = 30_000;
+export const GEMINI_USAGE_LOCKED = "GEMINI_USAGE_LOCKED";
+const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+/**
+ * THE RECORD'S EXCLUSIVE LOCK (register L-148): `<file>.lock`, held only for one count and one append, synchronously
+ * (spendGemini and its callers are synchronous). It is the seat lock's own protocol (src/seat/lock.mjs), not a second
+ * one: takeClaim publishes {pid, start, nonce, at} by hard link (never a half-written lock) and, when a holder is there,
+ * reclaims the lock only if that holder is PROVABLY DEAD (its pid gone, or reused: a different kernel start time), under
+ * the claim that keeps two reclaimers from both entering. That is the stale-lock rule: a crashed holder never blocks a
+ * restart, and a live one is never robbed. releaseFileLock removes the lock only while its nonce is still this holder's.
+ */
+function withRecordLock(file, fn) {
+  const lock = `${file}.lock`, deadline = Date.now() + USAGE_LOCK_WAIT_MS;
+  for (let wait = 1; !seatLock.takeClaim(lock); wait = Math.min(wait * 2, 25)) {
+    if (Date.now() >= deadline) {
+      let held = null;
+      try { held = JSON.parse(readFileSync(lock, "utf8")); } catch { held = null; }
+      throw Object.assign(new Error(`${GEMINI_USAGE_LOCKED}: the Gemini usage record ${file} is locked by a live process${held?.pid ? ` (pid ${held.pid})` : ""} `
+        + `for more than ${USAGE_LOCK_WAIT_MS} ms: its usage cannot be counted, so the request is not sent`), { code: GEMINI_USAGE_LOCKED });
+    }
+    pause(wait);
+  }
+  const { nonce } = JSON.parse(readFileSync(lock, "utf8"));
+  try { return fn(); } finally { seatLock.releaseFileLock(lock, nonce); }
+}
+
 /**
  * A PERSISTENT USAGE RECORD in a file: one JSON line per billed Gemini request, appended and fsynced BEFORE the request
  * is sent. Consumption is counted from the file every time it is asked (never cached), so a restart cannot reset it. A
  * line that does not parse fails closed: consumption cannot be derived, so no billed request is admitted.
+ * THE COUNT-AND-APPEND IS ATOMIC ACROSS PROCESSES (register L-148: two view servers on one seat home, or a restart while
+ * the old process still runs, share one record). record(row) takes the record's exclusive lock, RE-DERIVES the usage of
+ * the row's kind from the file under it, refuses with METERED_GEMINI_BUDGET_EXHAUSTED when that count has reached the
+ * row's budget (spendGemini keeps that code: nothing is sent), and otherwise appends, fsyncs and releases. The row's
+ * used_before / remaining_after are the re-derived ones. In one process the result is what it always was: spendGemini
+ * counts and appends with no await between them, so no other request runs in between and the two counts agree.
  */
 export function geminiUsageFile(file) {
   const rows = () => {
@@ -154,7 +188,18 @@ export function geminiUsageFile(file) {
   const record = row => {
     mkdirSync(dirname(file), { recursive: true });
     const fd = openSync(file, "a");
-    try { writeSync(fd, JSON.stringify(row) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+    try {
+      withRecordLock(file, () => {
+        const { kind, budget } = row ?? {};
+        if (GEMINI_KINDS.includes(kind) && Number.isSafeInteger(budget) && budget > 0) {
+          const used = rows().filter(r => r.kind === kind).length;
+          if (used !== row.used_before) Object.assign(row, { used_before: used, remaining_after: budget - used - 1 });
+          const refused = budgetRefusal({ kind, budget, used });
+          if (refused) throw Object.assign(new Error(`${refused} at ${file}, counted under its lock just before the append: the request is not sent`), { code: METERED_GEMINI_BUDGET_EXHAUSTED, used });
+        }
+        writeSync(fd, JSON.stringify(row) + "\n"); fsyncSync(fd);
+      });
+    } finally { closeSync(fd); }
   };
   return Object.freeze({ where: file, used: kind => rows().filter(r => r.kind === kind).length, rows, record });
 }

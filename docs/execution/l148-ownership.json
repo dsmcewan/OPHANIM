@@ -6,7 +6,8 @@
   "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
   "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**"],
   "dependencies": ["single agent; the region limits below are written from the brief's DESIGN section (lessons class brief-manifest-disagree): where the brief requires a change, the limit allows it",
-    "pantheon/src/swarm/** is NOT owned: the swarm and discussion orchestration already records a seat's failed turn and continues; if a refusal cannot be carried without changing it, the agent stops and reports"],
+    "pantheon/src/swarm/** is NOT owned: the swarm and discussion orchestration already records a seat's failed turn and continues; if a refusal cannot be carried without changing it, the agent stops and reports",
+    "post-hoc amendment (coordinator, 2026-11-20, at integration): the launchers' seat labels (210ccca, 2 lines) are accepted under the standing rule that a defect necessary to establish an assigned invariant is repaired. Both launchers sent labels the view server refuses with 400 (server.mjs:205, badId), so no seat of either ever reached a provider and owner item 9 could not be shown at the launchers. The repair is a separate commit; register L-152"],
   "subwaves": {
     "L148": {
       "agent-l148-billing": {

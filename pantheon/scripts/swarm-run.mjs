@@ -5,7 +5,21 @@
 // The number that matters is `overlap` = sum(seat durations) / layer wall clock. A genuinely
 // concurrent layer of n seats approaches n. A layer that fired sequentially lands at ~1.0 no
 // matter what the code claims, which is the point of printing it.
+//
+// GEMINI BILLING (register L-148; docs/billing-policy.md): this script is an HTTP CLIENT of the view server and holds NO
+// billing authority. Every provider call happens in the server process, which admits and charges each Gemini request
+// itself (bin/pantheon-view.mjs --gemini-api-primary N); nothing this script sends can authorize one, so a billing flag
+// given here is refused at startup. A seat the server refuses is printed with its code and recovery condition and
+// recorded as that seat's failed turn; the other seats go on.
 import { runSwarm } from "../src/swarm/layered.mjs";
+import { FLAG_OF, GEMINI_BILLING_INVALID, GEMINI_BILLING_REFUSALS, USAGE_FLAG } from "../src/route/gemini-billing.mjs";
+
+const billingFlag = process.argv.slice(2).find(a => [...Object.values(FLAG_OF), USAGE_FLAG].some(f => a === f || a.startsWith(`${f}=`)));
+if (billingFlag) {
+  console.error(`swarm-run: ${GEMINI_BILLING_INVALID}: ${billingFlag.split("=")[0]} is not taken here: this script only sends turns to the view server, `
+    + "and Gemini billing is authorized only by that server (start pantheon-view with --gemini-api-primary N); nothing ran");
+  process.exit(2);
+}
 
 const base = process.env.PANTHEON_VIEW ?? "http://127.0.0.1:7777";
 const question = process.argv[2] ??
@@ -24,11 +38,21 @@ const spec = Object.fromEntries(SEATS.map(s => [s.seat, s]));
 
 const state = async () => (await (await fetch(`${base}/seats`)).json()).state;
 
+// A seat's failed turn, as the server reported it. A billing refusal is printed whole (its code and the condition that
+// would admit it) and its code and recovery lead the failure the swarm records for the seat.
+function refusedSeat(seat, layer, res) {
+  const why = res?.why ?? "failed";
+  if (!(GEMINI_BILLING_REFUSALS.includes(res?.code) || res?.recovery)) return why;
+  console.log(`gemini_refused ${JSON.stringify({ seat, layer, code: res.code ?? null, recovery: res.recovery ?? null })}`);
+  return `${res.code}: refused by the view server's Gemini billing policy; recovery: ${res.recovery ?? "none stated"} (${why})`;
+}
+
 // One seat turn. Returns its own duration so the layer can compute real overlap, and reads the
 // produced text back from the server's reduced state rather than re-deriving it here.
 async function runSeat(seat, prompt, layer) {
   const s = spec[seat];
-  const label = `${seat} · swarm/${layer}`;
+  // An identifier (letters, digits, . _ : -): the view server refuses any other label with 400 before the turn runs.
+  const label = `${seat}.swarm.${layer}`;
   const t0 = Date.now();
   const r = await fetch(`${base}/turn`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -36,7 +60,7 @@ async function runSeat(seat, prompt, layer) {
   }).then(x => x.json());
   const ms = Date.now() - t0;
   const ok = r?.results?.[0]?.ok === true;
-  if (!ok) return { ok: false, why: r?.results?.[0]?.why ?? "failed", ms };
+  if (!ok) return { ok: false, why: refusedSeat(seat, layer, r?.results?.[0]), ms };
   const text = (await state())[label]?.text ?? "";
   return { ok: true, text, ms };
 }
