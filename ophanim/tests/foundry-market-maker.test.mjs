@@ -15,11 +15,12 @@ import {replay, loadTape, halves, CONFIG} from '../foundry/requests/market-maker
 const here = p => fileURLToPath(new URL(p, import.meta.url));
 const REQUEST = here('../foundry/requests/market-maker/request.json'), FIXTURES = here('../foundry/fixtures/market-maker');
 const {request, seed} = readRequest(REQUEST);
-const product = (t, name) => {
+const EVIDENCE = here('../../docs/foundry/market-maker');
+const product = (t, name, from = FIXTURES) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foundry-mm-'));
   t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
   fs.cpSync(seed, path.join(dir, 'seed'), {recursive: true});
-  fs.copyFileSync(path.join(FIXTURES, `${name}.mjs`), path.join(dir, 'strategy.mjs'));
+  fs.copyFileSync(path.join(from, `${name}.mjs`), path.join(dir, 'strategy.mjs'));
   const run = cmd => { const [bin, ...args] = cmd.split(' '); const r = spawnSync(bin === 'node' ? process.execPath : bin, args, {cwd: dir, encoding: 'utf8'}); return {exit: r.status, out: r.stdout, report: JSON.parse(r.stdout.trim().split('\n').at(-1))}; };
   return {accept: () => run(request.acceptance_cmd), operate: () => run(request.operate.cmd)};
 };
@@ -81,4 +82,12 @@ test('the reference needs nothing the request does not allow; a strategy that re
   assert.deepEqual(dependencyGate([{path: 'strategy.mjs', text: ref}], request.allowed), {ok: true, needs: {relative: [], builtins: [], packages: [], env: [], hosts: [], programs: [], reads: [], writes: [], unresolved: 0}, refused: []});
   const leaky = "import https from 'node:https';\n" + ref;
   assert.deepEqual(dependencyGate([{path: 'strategy.mjs', text: leaky}], request.allowed).refused, [{file: 'strategy.mjs', line: 1, kind: 'builtin', name: 'node:https'}]);
+});
+
+test('THE RECORDED PRODUCT (docs/foundry/market-maker/strategy.mjs, built by the foundry\'s live run) still passes its acceptance and reproduces the operation its evidence records, to the cent; it needs nothing the request does not allow', t => {
+  const e = JSON.parse(fs.readFileSync(path.join(EVIDENCE, 'evidence.json'), 'utf8')), text = fs.readFileSync(path.join(EVIDENCE, 'strategy.mjs'), 'utf8');
+  const p = product(t, 'strategy', EVIDENCE), a = p.accept(), o = p.operate();
+  assert.deepEqual([a.exit, o.exit, o.report.score, o.report.fills, o.report.violations], [0, 0, e.product.operation.score, e.product.operation.report.fills, 0]);
+  assert.deepEqual([dependencyGate([{path: 'strategy.mjs', text}], request.allowed).ok, e.product.files[0].bytes, e.product.accepted, e.product.shipped, e.product.review_independent, e.product.live], [true, Buffer.byteLength(text), true, false, false, true]);
+  assert.match(e.note, /PAPER TRADING on one recorded window of public BTCUSD trades: no order was sent/);
 });
