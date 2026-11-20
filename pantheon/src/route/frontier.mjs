@@ -9,7 +9,7 @@ import {ROSTER} from '../team/roster.mjs';
 import {routeFor,documentedWindow} from './protocol.mjs';
 import {taskProfile,classFloor,requirementsOf,effortForDepth,PROFILE_MAPPING,LATENCY_CLIMB} from './task-profile.mjs';
 import {FIT_MATRIX,FIT_MATRIX_BODY,FIT_DIFFICULTIES,FIT_ROLES,REVIEWER_ESCALATION,IMPLEMENTER_LADDERS,fitMatrix,fitLadder,
-  pinnedReviewer,reviewerEscalation,implementerEscalation,implementerPath,laneFor,laneParts,laneLevels,quotaFailoverFor} from './fit-matrix.mjs';
+  pinnedReviewer,reviewerEscalation,implementerEscalation,implementerPath,laneFor,laneParts,laneLevels,quotaFailoverFor,lanePinFallback} from './fit-matrix.mjs';
 import {isSdkSeat,SDK_TRANSPORT,thinkingLevelsOf} from '../antigravity/config.mjs';
 
 // The fit matrix (fit-matrix.mjs), re-exported so a caller of the selector imports one module.
@@ -254,6 +254,17 @@ export function selectSeat(role,{profile='argo',difficulty='medium',needsContext
   if(slotOverride)return finish([as(slotOverride,'slot-override',`operator per-slot seat: ${why(slotOverride)}`)]);
   if(pin&&roleOverride?.model===pin)return finish([as(roleOverride,'operator-override',`operator seat for ${role}, also the ticket's pin: ${why(roleOverride)}`)]);
   if(pin){
+    // A LANE-PINNED IMPLEMENTER UNDER FIT KEEPS LANE SEMANTICS (owner decision 2026-11-20, register L-721; fit-matrix.mjs
+    // lanePinFallback). The matrix's own implementer is a primary Gemini API seat, and an exhausted lane does not
+    // authorize it: the pin is followed by its lane fallback only. An operator's fallback seat is its own authorization.
+    const lanePin=profile==='fit'&&role==='implementer'&&!roleOverride?lanePinFallback(pin,fitLevel(base.task,role).value):null;
+    if(lanePin){
+      const record={pin,ladder:lanePin.ladder,difficulty:fitLevel(base.task,role).value};
+      const note=c=>c.quota_failover?`quota failover of the ticket's pin ${pin}: ${QUOTA_FAILOVER_RULE}`
+        :`lane fallback of the ticket's pin ${pin}: the next Antigravity lane of the ${record.difficulty} lane ladder; a lane-pinned ticket is not moved to the primary Gemini API seat`;
+      return finish([as({...resolvePinned(pin),why:'the ticket pins this model'},'ticket-pin',`the ticket pins ${pin} for this slot`),
+        ...lanePin.seats.map(c=>[c,{...base,source:'policy',band:null,reason:note(c),lane_pin:record}])]);
+    }
     const rest=roleOverride?[as(roleOverride,'operator-override',`fallback after the ticket's pin: ${why(roleOverride)}`)]
       :policyCandidates(role,{profile,difficulty,needsContext,avoid,avoidLabs,base}).filter(([c])=>c.model!==pin);
     return finish([as({...resolvePinned(pin),why:'the ticket pins this model'},'ticket-pin',`the ticket pins ${pin} for this slot`),...rest]);

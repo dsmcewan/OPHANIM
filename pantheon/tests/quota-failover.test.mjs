@@ -196,6 +196,64 @@ test("fit through the real dispatcher: a seat that names the SDK transport was s
   });
 });
 
+// ---- A LANE-PINNED TICKET UNDER FIT (owner decision 2026-11-20, register L-721) ----------------------------------------
+// The default fit implementer is a primary Gemini API seat (the tests above). A ticket that explicitly pins its
+// implementer to an Antigravity lane asked for the subscription lane: an exhausted lane does not move it to the primary
+// seat. It keeps the lane's own authorized fallback, or is refused on the record.
+const PINNED = { slot: undefined, path: undefined, slots: [{ slot: "code", path: "code.mjs", goal: "g", model: "gemini-4-carbon-high" }], difficulty: "hard" };
+const workOf = r => runJson(r).turns.filter(t => t.purpose === "work").map(t => [t.model, t.transport]);
+const triedLanes = agy => agy().filter(a => a.agent === "pantheon-implementer").map(a => a.model);
+const googleApi = calls => calls.filter(c => c.vendor === "agy_google" && WORK.test(c.prompt)).map(c => c.model);
+
+test("fit, a ticket pinned to an Antigravity lane: the lane answers and nothing is billed; refused for quota with NOTHING declared it moves to the next subscription lane and ships, still with nothing billed and no primary API turn", async () => {
+  await withDispatch(async ({ spec, opts, calls, agy }) => {
+    const r = await runOpenItem(spec("pinLane", PINNED), opts({ profile: "fit" }));
+    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    assert.deepEqual([workOf(r), triedLanes(agy), googleApi(calls)], [[["gemini-4-carbon-high", "agy-cli"]], ["gemini-4-carbon-high"], []]);
+    assert.equal(runJson(r).turns.find(t => t.purpose === "work").selection.source, "ticket-pin");
+  });
+  await withDispatch(async ({ spec, opts, calls, agy, agyQuota }) => {
+    agyQuota(["gemini-4-carbon-high"]);
+    const billing = optIn({});
+    const r = await runOpenItem(spec("pinLaneQuota", PINNED), opts({ profile: "fit", billing }));
+    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    assert.deepEqual([workOf(r), triedLanes(agy), googleApi(calls)], [[["gemini-4-hydrogen-xhigh", "agy-cli"]], ["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh"], []],
+      "the next lane of the lane ladder wrote the work; the Gemini API was not asked");
+    assert.deepEqual(billing.rows, [], "nothing was billed");
+    const work = runJson(r).turns.find(t => t.purpose === "work");
+    assert.deepEqual([work.selection.source, work.selection.lane_pin.pin], ["policy", "gemini-4-carbon-high"]);
+    assert.match(work.selection.reason, /lane fallback of the ticket's pin gemini-4-carbon-high/);
+    // The pinned lane's metered failover was on the walk and was not taken: the failover setting is off.
+    const attempts = runJson(r).attempts.filter(a => a.purpose === "work").map(a => [a.model, a.transport, a.outcome]);
+    assert.deepEqual(attempts.filter(a => a[1] === "agy-cli"), [["gemini-4-carbon-high", "agy-cli", "quota"], ["gemini-4-hydrogen-xhigh", "agy-cli", "ok"]]);
+  });
+});
+
+test("fit, a ticket pinned to an Antigravity lane: with the FAILOVER declared the pinned lane's own metered API id answers as a failover; declaring PRIMARY execution does not move it to the primary seat; with every lane refused the work is refused on the record", async () => {
+  // The lane's own failover, explicitly authorized: billed as kind failover, recorded as the lane's failover.
+  await withDispatch(async ({ spec, opts, calls, agy, agyQuota }) => {
+    agyQuota(["gemini-4-carbon-high"]);
+    const billing = optIn({ failover: 10 });
+    const r = await runOpenItem(spec("pinFailover", PINNED), opts({ profile: "fit", billing }));
+    assert.equal(r.shipped, true, JSON.stringify(r.error));
+    assert.deepEqual([workOf(r), triedLanes(agy), googleApi(calls), billing.rows.map(x => x.kind)], [[["gemini-4-carbon", "api"]], ["gemini-4-carbon-high"], ["gemini-4-carbon"], ["failover"]]);
+    assert.equal(runJson(r).turns.find(t => t.purpose === "work").quota_failover.used, true);
+  });
+  // PRIMARY declared, failover not: the authorization of the matrix's own seat is not an authorization to leave the lane.
+  await withDispatch(async ({ spec, opts, calls, agy, agyQuota }) => {
+    agyQuota(["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"]);
+    const billing = optIn({ primary: 100 });
+    const r = await runOpenItem(spec("pinPrimaryDeclared", PINNED), opts({ profile: "fit", billing }));
+    assert.equal(r.shipped, false);
+    assert.deepEqual([workOf(r), triedLanes(agy), googleApi(calls), billing.rows], [[], ["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"], [], []],
+      "every lane of the ladder was asked, none answered, and the primary Gemini API seat was not asked in their place");
+    assert.equal(r.error.stage, "work");
+    const attempts = runJson(r).attempts.filter(a => a.purpose === "work");
+    assert.deepEqual(attempts.filter(a => a.transport === "agy-cli").map(a => [a.model, a.outcome]), [["gemini-4-carbon-high", "quota"], ["gemini-4-hydrogen-xhigh", "quota"], ["gemini-4-argon-high", "quota"]], "each refusal is on the run's record");
+    assert.ok(attempts.every(a => a.transport === "agy-cli" || a.quota_failover || a.outcome !== "ok"), JSON.stringify(attempts.map(a => [a.model, a.transport, a.outcome])));
+  });
+});
+
 test("a single-turn seat: lane first; the API only as the lane's quota failover, and it says so", async () => {
   const asked = [];
   const api = async ({ vendor, model }) => { asked.push(`api:${vendor}/${model}`); return { text: "from api", response_id: "r1", served_model: model }; };

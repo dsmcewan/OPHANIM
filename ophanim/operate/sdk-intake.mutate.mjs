@@ -525,6 +525,15 @@ export const MUTATIONS = [
     from: 'progress, research: {enabled: true},', to: 'progress,'},
   {id: 'RS66', what: 'the live run builds executors that run no research', file: LR, tests: T.rest,
     from: '    research: {enabled: true}});', to: '    });'},
+  // ---- A LANE-PINNED IMPLEMENTER UNDER FIT (owner decision 2026-11-20, register L-721)
+  {id: 'LP1', what: 'a lane-pinned fit implementer is followed by the matrix\'s primary Gemini API seats (an exhausted lane switches transport)', file: FR, tests: [...T.route, ...T.board],
+    from: "const lanePin=profile==='fit'&&role==='implementer'&&!roleOverride?lanePinFallback(pin,fitLevel(base.task,role).value):null;", to: 'const lanePin=null;'},
+  {id: 'LP2', what: 'the pinned lane\'s metered API id is seated as a plain Gemini API seat (primary), not as that lane\'s quota failover', file: FM, tests: [...T.route, ...T.board],
+    from: '[{ ...spare, quota_failover: { base: spare.model, lanes: [pin] } }]', to: '[{ ...spare }]'},
+  {id: 'LP3', what: 'an operator\'s fallback seat after a lane pin is dropped for the lane ladder', file: FR, tests: T.route,
+    from: "const lanePin=profile==='fit'&&role==='implementer'&&!roleOverride?", to: "const lanePin=profile==='fit'&&role==='implementer'?"},
+  {id: 'LP4', what: 'a lane-pin ladder may name something that is not a live lane', file: FM, tests: T.route,
+    from: '    for (const m of ladders[d]) if (!laneParts(m)) return', to: '    for (const m of ladders[d]) if (false) return'},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

@@ -123,5 +123,13 @@
     "tools": ["view_file", "list_directory", "search_directory", "find_file"],
     "bounds": { "max_nodes": 40, "max_requests": 240, "node_model_calls": 24, "node_tool_calls": 80, "node_timeout_s": 900, "coordinator_rounds": 12, "finding_bytes": 4000, "min_question_chars": 24 },
     "triggers": ["intake", "insufficient-evidence", "contradiction", "relationship", "review-finding", "invalidated-evidence", "reflection"]
+  },
+  "lane_pin": {
+    "basis": "owner decision 2026-11-20 (register L-721): a ticket that explicitly pins its implementer to an Antigravity CLI lane keeps lane semantics under fit. After the pinned lane come that lane's own metered failover (admitted only by metered_gemini_failover) and then the other lanes of this ladder for the ticket's difficulty; it is never moved to the primary Gemini API seat of the fit matrix because its lane is exhausted. With no lane left the work is refused, on the record. The ladders are the 2026-11-17 Antigravity lane ladders, unchanged.",
+    "ladders": {
+      "easy": ["gemini-4-hydrogen-medium", "gemini-3.8-flash-high"],
+      "medium": ["gemini-4-hydrogen-high", "gemini-4-argon-high"],
+      "hard": ["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"]
+    }
   }
 }

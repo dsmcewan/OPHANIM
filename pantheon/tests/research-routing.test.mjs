@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, RESEARCH_ROLES, RESEARCH_MAX_DEPTH, RESEARCH_DEPTH_LIMIT, researchConfigRefusal } from "../src/antigravity/config.mjs";
-import { FIT_MATRIX, FIT_ROLES, researchSeat, researchSubordinate, researchLimits, RESEARCH_ROUTING_SCHEMA } from "../src/route/fit-matrix.mjs";
+import { FIT_MATRIX, FIT_MATRIX_BODY, FIT_ROLES, researchSeat, researchSubordinate, researchLimits, RESEARCH_ROUTING_SCHEMA } from "../src/route/fit-matrix.mjs";
 import { selectionPolicy } from "../src/route/frontier.mjs";
 import { SUBAGENT_MODEL, ceilingFor } from "../src/antigravity/subagents.mjs";
 
@@ -65,6 +65,9 @@ test("the research configuration is checked when it is read: a depth over 10, an
 test("the implementer's rows and the fit selection policy are not changed by the research roles", () => {
   assert.deepEqual(Object.fromEntries(Object.entries(FIT_MATRIX.implementer).map(([d, s]) => [d, s.model])), { easy: "gemini-4-hydrogen", medium: "gemini-4-neon", hard: "gemini-4-carbon" });
   assert.deepEqual(RESEARCH_ROLES.filter(r => FIT_ROLES.includes(r)), [], "no research role is a row of the fit matrix");
-  // The fit policy's hash as it was before the research roles existed (pull request 68, L-712).
-  assert.equal(selectionPolicy("fit").hash, "sha256:b3f314ff933e86575f02fd80ace8aefdc4e1674bdf671330e96a8467990fd0da");
+  // The research roles are no part of what the fit policy hashes: its digest is the one the fit matrix alone gives.
+  // (It was sha256:b3f314ff... before the research roles existed and stayed so with them; the owner's lane-pin rule of
+  // 2026-11-20, which IS routing policy for the implementer, made it this one: register L-712, L-721.)
+  assert.equal(selectionPolicy("fit").hash, "sha256:d9c6d0dc821e73955d3a30905f181611eb62e3ba48d62c18ca2944672dd47eab");
+  assert.ok(!JSON.stringify(FIT_MATRIX_BODY).includes("research") && !JSON.stringify(FIT_MATRIX_BODY).includes("scout"), "no research role or setting is in the hashed body");
 });

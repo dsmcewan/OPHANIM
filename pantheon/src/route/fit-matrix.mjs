@@ -188,6 +188,37 @@ export function implementerEscalation(seat, ladder) {
   return next ? { action: "step_rung", vendor: AGY, model: next } : null;
 }
 
+// ---------------------------------------------------------------- A LANE-PINNED IMPLEMENTER (owner decision 2026-11-20)
+// The fit matrix's Google implementer is a PRIMARY seat of the Gemini API. A ticket that explicitly pins its implementer
+// to an Antigravity CLI lane asked for the subscription lane, and an exhausted lane is no authorization to bill the
+// primary API in its place (register L-721). So after such a pin the selector seats, in order: the pinned lane's own
+// metered failover (the same model; the billing policy admits it only as FAILOVER), then the other lanes of the lane
+// ladder for the ticket's difficulty (config `lane_pin.ladders`). Never a seat of the SDK transport, in either form.
+// With none of them able to answer, the work is refused and the refusals are on the run's record. An operator's own
+// fallback seat (a role override) is an explicit authorization and stands as it did.
+/** Why `cfg.lane_pin` cannot be used, or null: every rung is a live Antigravity lane, each difficulty has a ladder. */
+export function lanePinRefusal(cfg) {
+  const ladders = cfg?.lane_pin?.ladders;
+  if (!ladders || typeof ladders !== "object") return "config/antigravity-sdk.json declares no lane_pin.ladders";
+  for (const d of FIT_DIFFICULTIES) {
+    if (!Array.isArray(ladders[d]) || !ladders[d].length) return `lane_pin.ladders.${d} names no lane`;
+    for (const m of ladders[d]) if (!laneParts(m)) return `lane_pin.ladders.${d}: "${m}" is not a live Antigravity lane (config/lanes.json)`;
+  }
+  return null;
+}
+{ const bad = lanePinRefusal(SDK_CONFIG); if (bad) throw new Error(`fit matrix: ${bad}`); }
+export const LANE_PIN_LADDERS = Object.freeze(Object.fromEntries(FIT_DIFFICULTIES.map(d => [d, Object.freeze([...SDK_CONFIG.lane_pin.ladders[d]])])));
+/**
+ * The seats that follow an implementer's lane pin at `difficulty`: [{vendor, model, quota_failover?}], the pinned lane's
+ * metered failover first (when the registry has an id for its base model), then the ladder's other lanes. Null when
+ * `pin` is not a live Antigravity lane.
+ */
+export function lanePinFallback(pin, difficulty) {
+  if (!laneParts(pin)) return null;
+  const ladder = LANE_PIN_LADDERS[level(difficulty)], spare = quotaFailoverFor(pin);
+  return { ladder: [...ladder], seats: [...(spare ? [{ ...spare, quota_failover: { base: spare.model, lanes: [pin] } }] : []), ...ladder.filter(m => m !== pin).map(m => lane(m))] };
+}
+
 /** The matrix as data: what selectionPolicy('fit') hashes. */
 const ladderName = s => (s.effort ? `${s.model}@${s.effort}` : s.model);
 export const FIT_MATRIX_BODY = Object.freeze({ schema: FIT_MATRIX_SCHEMA,
@@ -197,6 +228,8 @@ export const FIT_MATRIX_BODY = Object.freeze({ schema: FIT_MATRIX_SCHEMA,
   subagents: { model: SDK_CONFIG.subagents.model, ceilings: { ...SDK_CONFIG.subagents.ceilings }, default_ceiling: SDK_CONFIG.subagents.default_ceiling, max_depth: SDK_CONFIG.subagents.max_depth },
   reviewer: { pinned_to: "dispatcher", escalation: REVIEWER_ESCALATION.map(s => `${s.vendor}/${s.model}`) },
   rejection: "raise the thinking level on the same model, then the next ladder rung",
+  lane_pin: { ladders: Object.fromEntries(FIT_DIFFICULTIES.map(d => [d, [...LANE_PIN_LADDERS[d]]])),
+    rule: "an implementer ticket that pins an Antigravity lane: the pinned lane, its own metered failover (failover kind only), then the other lanes of this ladder; never the primary SDK or Gemini API seat of the matrix" },
   google: "implementation: the google-antigravity SDK on the Gemini API (GEMINI_API_KEY), no Antigravity CLI lane and no metered-API failover; every other role's Gemini seat: its Antigravity lane, the metered Gemini API id of the lane's base model only as its 429/quota failover" });
 
 // ---- THE RESEARCH ROLES (owner direction 2026-11-20: the Carbon 4 research and exploration team) ---------------------

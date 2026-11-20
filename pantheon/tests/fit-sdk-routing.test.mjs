@@ -6,7 +6,7 @@
 // a record, a config model the identity policy or the class table does not know.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FIT_MATRIX, FIT_MATRIX_BODY, IMPLEMENTER_LADDERS, fitMatrix, fitLadder, implementerPath, laneParts, quotaFailoverFor, sdkRoutingRefusal } from "../src/route/fit-matrix.mjs";
+import { FIT_MATRIX, FIT_MATRIX_BODY, IMPLEMENTER_LADDERS, LANE_PIN_LADDERS, fitMatrix, fitLadder, implementerPath, laneParts, quotaFailoverFor, sdkRoutingRefusal, lanePinRefusal, lanePinFallback } from "../src/route/fit-matrix.mjs";
 import { selectSeat, selectionPolicy, antigravityFirst, seatTransport, CLASSES } from "../src/route/frontier.mjs";
 import { taskProfile } from "../src/route/task-profile.mjs";
 import { resolveModel, candidateIdentity } from "../src/review/identity.mjs";
@@ -168,4 +168,50 @@ test("the fit policy's body states the transport, the thinking levels and the su
   // The other profiles' tables did not change.
   assert.equal(selectionPolicy("argo").hash, "sha256:f698663054f75b33a39ba38f37ad13b5566ef899c585ab063cafff4df039d5e0");
   assert.equal(selectionPolicy("legacy").hash, "sha256:0000f574015cf50f5ebcd93e7284df2581412546035a516296a49c4a2724d7e3");
+});
+
+// ---- A LANE-PINNED IMPLEMENTER UNDER FIT (owner decision 2026-11-20, register L-721) ---------------------------------
+test("A TICKET THAT PINS ITS IMPLEMENTER TO AN ANTIGRAVITY LANE KEEPS LANE SEMANTICS UNDER FIT: after the pinned lane come that lane's own metered failover and then the other lanes of the lane ladder; the fit matrix's primary seat is never among them", () => {
+  const pinned = selectSeat("implementer", { profile: "fit", difficulty: "hard", pin: "gemini-4-carbon-high" });
+  assert.deepEqual(pinned.candidates.map(c => [c.model, c.transport, c.selection.source, c.quota_failover?.lanes ?? null]), [
+    ["gemini-4-carbon-high", "agy-cli", "ticket-pin", null],
+    ["gemini-4-carbon", "api", "policy", ["gemini-4-carbon-high"]],          // the pinned lane's failover: admitted only by the FAILOVER setting
+    ["gemini-4-hydrogen-xhigh", "agy-cli", "policy", null],
+    ["gemini-4-argon-high", "agy-cli", "policy", null]]);
+  assert.deepEqual(pinned.candidates.filter(c => c.direct_api || c.session_transport || isSdkSeat(c)).map(c => c.model), [], "no candidate is the fit matrix's primary seat, in either of its forms");
+  assert.match(pinned.candidates[2].selection.reason, /lane fallback of the ticket's pin gemini-4-carbon-high.*a lane-pinned ticket is not moved to the primary Gemini API seat/);
+  assert.deepEqual(pinned.candidates[1].selection.lane_pin, { pin: "gemini-4-carbon-high", ladder: ["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"], difficulty: "hard" });
+  // A pin that is not the ladder's first lane: its own failover, then the ladder without it.
+  const mid = selectSeat("implementer", { profile: "fit", difficulty: "medium", pin: "gemini-4-argon-high" });
+  assert.deepEqual(mid.candidates.map(c => [c.model, c.transport]), [["gemini-4-argon-high", "agy-cli"], ["gemini-4-argon", "api"], ["gemini-4-hydrogen-high", "agy-cli"]]);
+  assert.deepEqual(mid.candidates[1].quota_failover.lanes, ["gemini-4-argon-high"]);
+});
+
+test("THE OTHER PATHS ARE AS THEY WERE: the unpinned fit implementer is the primary Gemini API seat; a ticket that pins a Gemini API id is followed by the matrix; an operator's fallback after a lane pin is the operator's; another role's lane pin, and a lane pin under argo, keep their own order", () => {
+  const plain = selectSeat("implementer", { profile: "fit", difficulty: "hard" });
+  assert.deepEqual([plain.seat.model, plain.seat.transport, plain.seat.direct_api, plain.seat.session_transport], ["gemini-4-carbon", "api", true, SDK_TRANSPORT]);
+  // An API pin names the transport itself: nothing is "switched", and the matrix's ladder follows it as before.
+  const api = selectSeat("implementer", { profile: "fit", difficulty: "easy", pin: "gemini-4-carbon" });
+  assert.deepEqual(api.candidates.map(c => [c.model, c.transport, c.selection.source, c.direct_api === true]), [["gemini-4-carbon", "api", "ticket-pin", false], ["gemini-4-hydrogen", "api", "policy", true], ["gemini-3.8-flash", "api", "policy", true]]);
+  // The operator's explicit fallback is an authorization: it stands, whatever its transport.
+  const op = selectSeat("implementer", { profile: "fit", difficulty: "hard", pin: "gemini-4-carbon-high", roleOverride: { vendor: "openai", model: "gpt-6-astra", why: "operator" } });
+  assert.deepEqual(op.candidates.map(c => [c.model, c.selection.source]), [["gemini-4-carbon-high", "ticket-pin"], ["gpt-6-astra", "operator-override"]]);
+  // Another role: unchanged by the rule (its fit candidates were never the primary SDK seat).
+  const planner = selectSeat("planner", { profile: "fit", difficulty: "hard", pin: "gemini-4-carbon-high" });
+  assert.deepEqual([planner.candidates.length > 1, planner.candidates.filter(c => c.selection.lane_pin !== undefined).map(c => c.model)], [true, []]);
+  // argo: its own order after the pin, as before.
+  const argo = selectSeat("implementer", { profile: "argo", difficulty: "hard", pin: "gemini-4-carbon-high" });
+  assert.deepEqual(argo.candidates.map(c => [c.model, c.selection.source, c.selection.lane_pin === undefined]), [["gemini-4-carbon-high", "ticket-pin", true], ["gpt-6-astra", "profile", true], ["claude-fable-5-2", "profile", true], ["gemini-4-carbon", "profile", true]]);
+});
+
+test("the lane-pin ladders are configuration, checked when read, and part of the fit policy: a rung that is not a live lane does not load, and another ladder is another policy", () => {
+  assert.equal(lanePinRefusal(SDK_CONFIG), null);
+  const broken = edit => { const c = structuredClone(SDK_CONFIG); edit(c); return lanePinRefusal(c); };
+  assert.equal(broken(c => { c.lane_pin.ladders.hard[1] = "gemini-4-carbon"; }), 'lane_pin.ladders.hard: "gemini-4-carbon" is not a live Antigravity lane (config/lanes.json)');
+  assert.equal(broken(c => { c.lane_pin.ladders.easy = []; }), "lane_pin.ladders.easy names no lane");
+  assert.equal(broken(c => { delete c.lane_pin; }), "config/antigravity-sdk.json declares no lane_pin.ladders");
+  assert.deepEqual(FIT_MATRIX_BODY.lane_pin.ladders, LANE_PIN_LADDERS);
+  assert.match(FIT_MATRIX_BODY.lane_pin.rule, /never the primary SDK or Gemini API seat/);
+  assert.equal(lanePinFallback("gemini-4-carbon", "hard"), null, "a Gemini API id is not a lane: the rule does not apply to it");
+  assert.equal(lanePinFallback("gpt-6-astra", "hard"), null);
 });
