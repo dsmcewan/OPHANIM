@@ -257,14 +257,34 @@ export async function qualifyMeasurement(options){
       must(workMs<=budgetMs,'Investigation exceeded admitted wall allowance');
       const totalMs=performance.now()-started;
       const {costs,grossInformationValueMs}=plan.decision.selected.value;
-      const report={schema:REPORT,identity:plan.identity,outcome:verification.outcome,claim,plan,authenticated,
-        packetFile,packetSha:read(packetFile).sha,verification,model,
-        cost:{admissionMs,sourceVerificationMs,probeMs,independentEvaluationMs,workMs,totalMs,budgetMs,
+      const report = {
+        schema: REPORT,
+        identity: plan.identity,
+        outcome: verification.outcome,
+        claim,
+        plan,
+        authenticated,
+        packetFile,
+        packetSha: read(packetFile).sha,
+        verification,
+        model,
+        cost: {
+          admissionMs,
+          sourceVerificationMs,
+          probeMs,
+          independentEvaluationMs,
+          workMs,
+          totalMs,
+          budgetMs,
           // Forecast information value net of what this investigation and any rollout would cost.
-          conditionalNetInformationValueMs:grossInformationValueMs-totalMs-costs.rolloutMs-costs.regressionMs-
-            costs.opportunityMs},
-        scopeLimit:'Forecast applies to the declared qualification scenario only. Historical value remains unquantified.',
-        policy:{proposed:[],accepted:[],historicalWideSetting:'refused-stage-p95'},...ZERO};
+          conditionalNetInformationValueMs:
+            grossInformationValueMs - totalMs - costs.rolloutMs - costs.regressionMs - costs.opportunityMs
+        },
+        scopeLimit:
+          'Forecast applies to the declared qualification scenario only. Historical value remains unquantified.',
+        policy: {proposed: [], accepted: [], historicalWideSetting: 'refused-stage-p95'},
+        ...ZERO
+      };
       publish(finalFile,report);
       return {...report,reportFile:finalFile,reportSha:read(finalFile).sha,executed:true};
     }catch(error){

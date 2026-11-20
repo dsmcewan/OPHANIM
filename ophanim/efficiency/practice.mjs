@@ -42,12 +42,20 @@ export function practiceAssessment(projection,
       ? `Can the chair record be trusted? ranking stopped: ${decision.reason}`
       : 'Which chair practice question does this board\'s evidence raise? none was found');
   return {
-    outcome, question, measured: false, provisional: true,
-    evidence: [{kind: 'digest', schema: decision.schema, sha: digest(decision)},
+    outcome,
+    question,
+    measured: false,
+    provisional: true,
+    evidence: [
+      {kind: 'digest', schema: decision.schema, sha: digest(decision)},
       {kind: 'digest', schema: projection.schema, sha: projection.projectionSha},
-      ...(contribution ? [{kind: 'ledger', hash: contribution}] : [])],
-    provenance: {by: {role},
-      method: `chair investigation ranking (ophanim/efficiency/investigation/chairs.mjs): ${decision.outcome}, ${decision.reason}`},
-    investigation: {outcome: decision.outcome, reason: decision.reason, selected: decision.selected?.id ?? null},
+      ...(contribution ? [{kind: 'ledger', hash: contribution}] : [])
+    ],
+    provenance: {
+      by: {role},
+      method: `chair investigation ranking ` +
+        `(ophanim/efficiency/investigation/chairs.mjs): ${decision.outcome}, ${decision.reason}`
+    },
+    investigation: {outcome: decision.outcome, reason: decision.reason, selected: decision.selected?.id ?? null}
   };
 }

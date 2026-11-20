@@ -4,13 +4,19 @@ import {digest} from '../../board.mjs';
 import {createWorkers, makeFixtures} from '../../fixtures.mjs';
 
 export const MEASUREMENT_RECIPE = Object.freeze({
-  schema:'ophanim.measurement-protocol/v1',
-  methods:Object.freeze(['phase-boundaries']),
-  timerDelayMs:3,
-  timerHoldNs:18_000_000,
-  transformPasses:8192,
-  markNames:Object.freeze(['timerScheduledNs','timerEnteredNs','transformStartedNs','transformCompletedNs','callbackReturnedNs']),
-  calibrationRounds:32,
+  schema: 'ophanim.measurement-protocol/v1',
+  methods: Object.freeze(['phase-boundaries']),
+  timerDelayMs: 3,
+  timerHoldNs: 18_000_000,
+  transformPasses: 8192,
+  markNames: Object.freeze([
+    'timerScheduledNs',
+    'timerEnteredNs',
+    'transformStartedNs',
+    'transformCompletedNs',
+    'callbackReturnedNs'
+  ]),
+  calibrationRounds: 32
 });
 const ORDERS = [
   ['baseline','timer','combined','transform'],
@@ -54,7 +60,12 @@ export function createPhaseRecorder(names, {enabled=false, origin=clock()}={}) {
 
 function fixtureWorkload(options, obligationId) {
   const {count,namespace,department='operations'}=options;
-  if (!Number.isInteger(count)||count<1||count>6||Object.keys(options).some(key=>!['count','namespace','department'].includes(key)))
+  if (
+    !Number.isInteger(count) ||
+    count < 1 ||
+    count > 6 ||
+    Object.keys(options).some(key => !['count', 'namespace', 'department'].includes(key))
+  )
     throw Error('Bounded measurement fixture required');
   const fixture={count,namespace,department};
   const trusted=makeFixtures(fixture);
@@ -70,8 +81,19 @@ function fixtureWorkload(options, obligationId) {
   const input={obligation,inputs:{...target.inputs,dependencies},priorAttempts:0};
   const worker=createWorkers({department,delayMs:0}).find(item=>item.kinds.includes(target.kind));
   const expectedEffects=target.effectKey?[{key:target.effectKey,payload:expected}]:[];
-  return {input,worker,workload:{fixture,fixtureSha:digest(trusted),obligationId:target.id,specSha:digest(target),
-    inputSha:digest(input),expectedOutputsSha:digest({[target.id]:expected}),expectedEffectsSha:digest(expectedEffects)}};
+  return {
+    input,
+    worker,
+    workload: {
+      fixture,
+      fixtureSha: digest(trusted),
+      obligationId: target.id,
+      specSha: digest(target),
+      inputSha: digest(input),
+      expectedOutputsSha: digest({[target.id]: expected}),
+      expectedEffectsSha: digest(expectedEffects)
+    }
+  };
 }
 
 function burnUntil(stop) {
@@ -108,7 +130,13 @@ async function runSample({t0, deadline, worker, input, condition, collection}) {
   recorder.mark('callbackReturnedNs');
   const endedNs=Number(clock()-t0);
   ensureTime();
-  return {startedNs,endedNs,marks:recorder.finish(),outputsSha:digest({[input.obligation.id]:result.output}),effectsSha:digest(result.effects??[])};
+  return {
+    startedNs,
+    endedNs,
+    marks: recorder.finish(),
+    outputsSha: digest({[input.obligation.id]: result.output}),
+    effectsSha: digest(result.effects ?? [])
+  };
 }
 
 function measureMarks(t0) {
@@ -143,7 +171,10 @@ export async function runMeasurementProbe({scopeSha,sourceSha,recipeId,methods=[
       const collections=(trial+index)%2===0?['on','off']:['off','on'];
       for(const collection of collections){
         const observations=await runSample({t0,deadline,worker,input,condition,collection});
-        if (observations.outputsSha!==workload.expectedOutputsSha||observations.effectsSha!==workload.expectedEffectsSha)
+        if (
+          observations.outputsSha !== workload.expectedOutputsSha ||
+          observations.effectsSha !== workload.expectedEffectsSha
+        )
           throw Error('Frozen fixture output or effect proposal differs');
         const identity={scopeSha,sourceSha,recipeId,trial,condition,collection,inputSha:workload.inputSha};
         samples.push({sampleId:digest(identity),trial,condition,collection,inputSha:workload.inputSha,...observations});
@@ -155,7 +186,23 @@ export async function runMeasurementProbe({scopeSha,sourceSha,recipeId,methods=[
     throw Error('Measurement source changed during collection');
   const cpu=process.cpuUsage(startedCpu),elapsedNs=Number(clock()-t0);
   if(elapsedNs>maxWallMs*1_000_000)throw Error('Measurement wall limit exhausted');
-  return {schema:'ophanim.measurement-probe/v1',scopeSha,sourceSha,recipeId,protocol:{...MEASUREMENT_RECIPE,repeats,maxWallMs},
-    workload,sources,samples,overhead:{markCalibration},resource:{elapsedNs,cpuUserMicros:cpu.user,cpuSystemMicros:cpu.system,
-      nodeVersion:process.versions.node,clock:'process.hrtime.bigint'},boundaries:BOUNDARIES};
+  return {
+    schema: 'ophanim.measurement-probe/v1',
+    scopeSha,
+    sourceSha,
+    recipeId,
+    protocol: {...MEASUREMENT_RECIPE, repeats, maxWallMs},
+    workload,
+    sources,
+    samples,
+    overhead: {markCalibration},
+    resource: {
+      elapsedNs,
+      cpuUserMicros: cpu.user,
+      cpuSystemMicros: cpu.system,
+      nodeVersion: process.versions.node,
+      clock: 'process.hrtime.bigint'
+    },
+    boundaries: BOUNDARIES
+  };
 }

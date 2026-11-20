@@ -439,9 +439,24 @@ export async function verifyProof({outputDir,telosRoot=process.env.OPHANIM_TELOS
     assert.equal(quiescent.convergence,'no_change');assert.equal(quiescent.dispatches,0);
     assert.equal(quiescent.blockers.length,0);
   }
-  return {schema:'ophanim.independent-verification/v1',ok:true,synthetic:true,files,states,chains,accepted,effects,
-    decisions,efficiencyAssessments,investigationAssessments,modelCalls:0,runtimeDispatches:0,
-    deterministicSemanticChecks:'replayed, including fixed synthetic worker transformations',readOnly:true,
+  return {
+    schema: 'ophanim.independent-verification/v1',
+    ok: true,
+    synthetic: true,
+    files,
+    states,
+    chains,
+    accepted,
+    effects,
+    decisions,
+    efficiencyAssessments,
+    investigationAssessments,
+    modelCalls: 0,
+    runtimeDispatches: 0,
+    deterministicSemanticChecks: 'replayed, including fixed synthetic worker transformations',
+    readOnly: true,
     limits:
-      'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, shared-drive integration or a live productivity gain.'};
+      'Revalidates retained local fixture authority and TELOS evidence; does not establish production authorization, ' +
+        'shared-drive integration or a live productivity gain.'
+  };
 }

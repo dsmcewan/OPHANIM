@@ -37,16 +37,20 @@ const EVENT_FIELDS={
   'work.accepted':'acceptedAt',
 };
 // The stage intervals derived from those boundaries, with what each one includes.
-const PHASES={
-  readyToStartMs:'Readiness to dispatch, including controller scheduling and batch wait.',
-  startToPersistMs:'Dispatch to candidate persistence, including worker activity, lease handling and publication.',
-  persistToGateMs:'Persistence to gate acceptance, including controller scheduling, verification and event publication.',
-  gateToAcceptedMs:'Gate acceptance to obligation acceptance, including effects and controller publication.',
+const PHASES = {
+  readyToStartMs: 'Readiness to dispatch, including controller scheduling and batch wait.',
+  startToPersistMs: 'Dispatch to candidate persistence, including worker activity, lease handling and publication.',
+  persistToGateMs:
+    'Persistence to gate acceptance, including controller scheduling, verification and event publication.',
+  gateToAcceptedMs: 'Gate acceptance to obligation acceptance, including effects and controller publication.'
 };
 // Finer signals from the retained worker callback intervals, bound inside the startToPersist interval.
-const WORKER_SIGNALS={
-  workerCallbackMs:'Retained driver callback span, including configured timer wait and the transformation. Bound to its enclosing committed interval.',
-  nonCallbackBeforePersistMs:'Remainder of dispatch-to-persistence outside the driver callback. Does not assign it to a particular mechanism.',
+const WORKER_SIGNALS = {
+  workerCallbackMs:
+    'Retained driver callback span, including configured timer wait and the transformation. Bound to its enclosing ' +
+      'committed interval.',
+  nonCallbackBeforePersistMs:
+    'Remainder of dispatch-to-persistence outside the driver callback. Does not assign it to a particular mechanism.'
 };
 // Every outcome states it grants no authority.
 const AUTHORITY=Object.freeze({execution:false,policyActivation:false});
@@ -285,31 +289,64 @@ export async function verifyPairedInvestigation({root,telosRoot=process.env.OPHA
 
 // For each signal, two competing explanations and the observable each predicts would increase; a
 // hypothesis predicts its own observable increases and the other stays unchanged.
-const SIGNAL_CONTRASTS={
-  workerCallbackMs:[
-    {id:'timer-resume-lag',componentId:'worker-reasoning',observable:'timer-resume-lag-ms',
-      explanation:'The configured wait may have resumed later under the observed overlap.'},
-    {id:'transform-body-wall',componentId:'worker-reasoning',observable:'transform-body-wall-ms',
-      explanation:'Work after timer resume may have taken longer under the observed overlap.'},
+const SIGNAL_CONTRASTS = {
+  workerCallbackMs: [
+    {
+      id: 'timer-resume-lag',
+      componentId: 'worker-reasoning',
+      observable: 'timer-resume-lag-ms',
+      explanation: 'The configured wait may have resumed later under the observed overlap.'
+    },
+    {
+      id: 'transform-body-wall',
+      componentId: 'worker-reasoning',
+      observable: 'transform-body-wall-ms',
+      explanation: 'Work after timer resume may have taken longer under the observed overlap.'
+    }
   ],
-  nonCallbackBeforePersistMs:[
-    {id:'lease-and-setup',componentId:'board-integrity',observable:'dispatch-to-callback-entry-ms',
-      explanation:'The additional dispatch-to-persistence span may have accrued before callback entry.'},
-    {id:'candidate-publication',componentId:'board-integrity',observable:'callback-exit-to-candidate-persistence-ms',
-      explanation:'The additional dispatch-to-persistence span may have accrued after the callback ended.'},
+  nonCallbackBeforePersistMs: [
+    {
+      id: 'lease-and-setup',
+      componentId: 'board-integrity',
+      observable: 'dispatch-to-callback-entry-ms',
+      explanation: 'The additional dispatch-to-persistence span may have accrued before callback entry.'
+    },
+    {
+      id: 'candidate-publication',
+      componentId: 'board-integrity',
+      observable: 'callback-exit-to-candidate-persistence-ms',
+      explanation: 'The additional dispatch-to-persistence span may have accrued after the callback ended.'
+    }
   ],
-  persistToGateMs:[
-    {id:'verifier-elapsed',componentId:'review',observable:'verifier-body-wall-ms',
-      explanation:'The independent check may have elapsed longer under the observed overlap.'},
-    {id:'gate-envelope-residual',componentId:'scheduling',observable:'gate-envelope-non-check-ms',
-      explanation:'The extra interval may have accumulated in waiting, controller work or publication around the check.'},
+  persistToGateMs: [
+    {
+      id: 'verifier-elapsed',
+      componentId: 'review',
+      observable: 'verifier-body-wall-ms',
+      explanation: 'The independent check may have elapsed longer under the observed overlap.'
+    },
+    {
+      id: 'gate-envelope-residual',
+      componentId: 'scheduling',
+      observable: 'gate-envelope-non-check-ms',
+      explanation:
+        'The extra interval may have accumulated in waiting, controller work or publication around the check.'
+    }
   ],
-  gateToAcceptedMs:[
-    {id:'effect-operations',componentId:'effects',observable:'effect-adapter-wall-ms',
-      explanation:'The retained effects path may have elapsed longer between gate and acceptance.'},
-    {id:'acceptance-publication',componentId:'board-integrity',observable:'acceptance-non-effect-wall-ms',
-      explanation:'The extra interval may have accumulated in controller work and publication around effect handling.'},
-  ],
+  gateToAcceptedMs: [
+    {
+      id: 'effect-operations',
+      componentId: 'effects',
+      observable: 'effect-adapter-wall-ms',
+      explanation: 'The retained effects path may have elapsed longer between gate and acceptance.'
+    },
+    {
+      id: 'acceptance-publication',
+      componentId: 'board-integrity',
+      observable: 'acceptance-non-effect-wall-ms',
+      explanation: 'The extra interval may have accumulated in controller work and publication around effect handling.'
+    }
+  ]
 };
 
 // Use the evidence to select which envelope is worth trying to explain.
@@ -330,25 +367,57 @@ export function latencyInvestigationFindings(verified) {
     const contenders=SIGNAL_CONTRASTS[focus.signal];
     const componentIds=[...new Set(['scheduling','concurrency',...contenders.map(item=>item.componentId)])].sort();
     return {
-      id:'throughput-stage-tail-tradeoff',scopeSha:probe.scopeSha,evidenceSha:probe.evidenceSha,
-      applicabilitySha:digest({scopeSha:probe.scopeSha,requestSha:probe.requestSha,policySha:baseline.policySha,
-        workerArtifactSha:baseline.workerArtifactSha,outputSha:baseline.outputSha,effectSha:baseline.effectSha}),
-      metric:'stage-p95-ms',componentIds,
-      question:`What accounts for the observed ${focus.signal} increase on matched tail stages at the wider scheduler setting?`,
-      decision:'Decide which isolated phase measurement could justify a further scheduler investigation within the stage limit.',
-      observations:[
-        {signal:'completion-ms',baseline:baseline.durationMs,candidate:candidate.durationMs,
-          delta:-probe.throughputSavedMs,unit:'ms'},
-        {signal:'stage-p95-ms',baseline:probe.stageP95.baselineMs,candidate:probe.stageP95.candidateMs,
-          limit:probe.stageP95.limitMs,passed:false,unit:'ms'},
-        {signal:'matched-candidate-tail-phase-deltas',samples:matched,unit:'ms',
-          coverage:'Ready-to-start is outside stage p95; matched phase intervals do not establish causes.'},
-        {signal:'largest-matched-tail-increase',...focus,unit:'ms',coverage:probe.phases[focus.signal]},
+      id: 'throughput-stage-tail-tradeoff',
+      scopeSha: probe.scopeSha,
+      evidenceSha: probe.evidenceSha,
+      applicabilitySha: digest({
+        scopeSha: probe.scopeSha,
+        requestSha: probe.requestSha,
+        policySha: baseline.policySha,
+        workerArtifactSha: baseline.workerArtifactSha,
+        outputSha: baseline.outputSha,
+        effectSha: baseline.effectSha
+      }),
+      metric: 'stage-p95-ms',
+      componentIds,
+      question: `What accounts for the observed ${focus.signal} increase on matched tail stages at the wider ` +
+        `scheduler setting?`,
+      decision:
+        'Decide which isolated phase measurement could justify a further scheduler investigation within the stage ' +
+          'limit.',
+      observations: [
+        {
+          signal: 'completion-ms',
+          baseline: baseline.durationMs,
+          candidate: candidate.durationMs,
+          delta: -probe.throughputSavedMs,
+          unit: 'ms'
+        },
+        {
+          signal: 'stage-p95-ms',
+          baseline: probe.stageP95.baselineMs,
+          candidate: probe.stageP95.candidateMs,
+          limit: probe.stageP95.limitMs,
+          passed: false,
+          unit: 'ms'
+        },
+        {
+          signal: 'matched-candidate-tail-phase-deltas',
+          samples: matched,
+          unit: 'ms',
+          coverage: 'Ready-to-start is outside stage p95; matched phase intervals do not establish causes.'
+        },
+        {signal: 'largest-matched-tail-increase', ...focus, unit: 'ms', coverage: probe.phases[focus.signal]}
       ],
-      hypotheses:contenders.map(hypothesis=>({id:hypothesis.id,componentId:hypothesis.componentId,
-        explanation:hypothesis.explanation,
-        predictions:contenders.map(
-          other=>({signal:other.observable,direction:other===hypothesis?'increase':'unchanged'}))})),
+      hypotheses: contenders.map(hypothesis => ({
+        id: hypothesis.id,
+        componentId: hypothesis.componentId,
+        explanation: hypothesis.explanation,
+        predictions: contenders.map(other => ({
+          signal: other.observable,
+          direction: other === hypothesis ? 'increase' : 'unchanged'
+        }))
+      }))
     };
   });
 }
