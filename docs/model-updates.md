@@ -66,6 +66,12 @@ Each step has a check that fails until the step is done.
 
 `registered-ended` and `registered-not-published` mean a seat may stop answering. Decide its replacement (steps 3 and 4 for the replacement), then remove the old name from the registry and from every lane and route that names it. `registered-legacy` is a warning with no date: the lab's deprecations page, named in `docs/vendor-labs.md`, says when.
 
+## The captured documentation as an MCP server
+
+`pantheon/bin/pantheon-vendor-docs-mcp.mjs` serves what was captured to a model at work, over stdio: which labs are held and when each was read, find a page by the index's words, search the pages' own text, read a page (a long one in parts, a web page as its words), list a lab's catalogued models or get one with every figure and the line it was read from, and the cross-lab reference by topic. It only reads, and it reads only through the manifest: a lab not captured says so instead of looking empty. Register it as the file's header shows.
+
+A search of the pages' text reads every page of the lab each time; over Anthropic's 6,008 pages that took about eight seconds.
+
 ## Looking something up through Context7
 
 A session that has the Context7 connector can ask it about any lab's documentation. The library ids are in `pantheon/src/config/vendor-context7.json`, among them the Codex repository.
