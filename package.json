@@ -10,7 +10,7 @@
     "ophanim": "./ophanim/cli.mjs"
   },
   "scripts": {
-    "test": "npm --prefix packages/model-client test && npm --prefix packages/ledger test && npm --prefix pantheon test -- --test-concurrency=2 --test-timeout=120000",
+    "test": "npm --prefix packages/model-client test && npm --prefix packages/ledger test && npm --prefix packages/graph test && npm --prefix pantheon test -- --test-concurrency=2 --test-timeout=120000",
     "test:proof": "node --test --test-timeout=120000 ophanim/governance/*.test.mjs ophanim/efficiency/*.test.mjs ophanim/efficiency/investigation/*.test.mjs ophanim/tests/*.test.mjs ophanim/ledger/*.test.mjs ophanim/public/*.test.mjs ophanim/lessons/*.test.mjs ophanim/operate/*.test.mjs",
     "test:gates": "node scripts/test-gates/check.mjs run",
     "test:gates:self": "node --test --test-timeout=120000 scripts/test-gates/*.test.mjs",
@@ -21,7 +21,8 @@
   "workspaces": [
     "pantheon",
     "packages/model-client",
-    "packages/ledger"
+    "packages/ledger",
+    "packages/graph"
   ],
   "devDependencies": {
     "typescript": "5.9.3",
