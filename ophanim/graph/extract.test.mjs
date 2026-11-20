@@ -10,7 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {closure, entityId, idRefusal} from '../../packages/graph/index.mjs';
+import {closure, entityId, idRefusal, writeSnapshot} from '../../packages/graph/index.mjs';
+import {generateSigner} from '../../packages/ledger/index.mjs';
 import {repoFacts, repoSource, SPEC, fileId, symbolId, contractId, ticketId, itemId, changeId, REPO_ORIGIN} from './extract/repo.mjs';
 import {verificationFacts, mutationTable, mutationId, suiteId, workflowId, RUNNER} from './extract/verification.mjs';
 import {recordsFacts, recordId, RECORDS_ORIGIN, registerEntries} from './extract/records.mjs';
@@ -88,6 +89,18 @@ test('extract: the real repository at its commit -- files, modules, tests, symbo
   const t0 = process.hrtime.bigint(), again = g.open(), replay = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.deepEqual([again.digest(), again.verification.complete], [g.graph.digest(), true], 'a fresh replay re-derives the same projection');
   t.diagnostic(`real graph at ${commit.slice(0, 12)}: ${total} facts ${JSON.stringify(by)}; observe ms ${JSON.stringify(Object.fromEntries(Object.entries(g.observed).map(([k, x]) => [k, Math.round(x.ms)])))}; replay (fresh open, git readings cached in this process) ${Math.round(replay)} ms (${(replay * 1000 / total).toFixed(1)} µs a fact)`);
+});
+
+test('extract: the real graph opened from a signed snapshot equals its full open (KG-1; a synthetic snapshot key)', t => {
+  const g = realGraph(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-graph-snapshot-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const signer = generateSigner('graph-snapshot'), snapshot = {dir, keys: {[signer.key_id]: signer.publicJwk}};
+  const t0 = process.hrtime.bigint(), written = writeSnapshot(g.graph, {dir, signer}), t1 = process.hrtime.bigint();
+  const fast = g.open(undefined, {snapshot}), t2 = process.hrtime.bigint();
+  assert.deepEqual([fast.verification.snapshot.used, fast.verification.snapshot.seq, fast.verification.rederived], [true, g.graph.projection.seq, 0]);
+  assert.deepEqual([fast.digest(), fast.verification.complete, fast.view().sources()], [g.graph.digest(), true, g.graph.view().sources()]);
+  const ms = (a, b) => Math.round(Number(b - a) / 1e6);
+  t.diagnostic(`real graph snapshot: ${(written.bytes / 1048576).toFixed(1)} MiB at seq ${written.seq}, written in ${ms(t0, t1)} ms; opened from it in ${ms(t1, t2)} ms (this process)`);
 });
 
 test('extract: mutation runners are read as TEXT, never imported -- every committed runner\'s mutations, targets and deciding tests', t => {

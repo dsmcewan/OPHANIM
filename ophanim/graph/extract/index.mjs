@@ -60,15 +60,18 @@ export function sourcesOf({repo = ROOT, commit, status = {root: path.join(repo, 
 /**
  * A new graph ledger at `dir` (default: a new temporary directory) with SYNTHETIC keys made here, opened over
  * `sources`. Returns {graph, dir, anchor, by (the extractors' writer), rule (the impact rule's writer), origins, close}.
+ * `snapshot` ({dir, keys}: a snapshot directory and the PINNED keys that may sign one; packages/graph/checkpoint.mjs):
+ * every open() opens from the newest acceptable snapshot there, else in full. open(sources, {snapshot}) names one per
+ * open. Which key signs the real graph's snapshots is the owner's decision (KG-4): this file names none.
  */
-export function openSystemsGraph({dir = null, sources, extraOrigins = {}, extraKeys = {}} = {}) {
+export function openSystemsGraph({dir = null, sources, extraOrigins = {}, extraKeys = {}, snapshot = null} = {}) {
   const root = dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-graph-b-'));
   const op = generateSigner('graph-operator'), ex = generateSigner('graph-extractor'), rk = generateSigner('graph-rule');
   const keys = Object.fromEntries(Object.keys(extraKeys).map(k => [k, generateSigner(k)]));
   const anchor = createGraphLedger({dir: root, operator: op, order: op, authority: {orderer: 'graph-operator', operators: ['graph-operator'],
     keyring: {'graph-operator': op.publicJwk, 'graph-extractor': ex.publicJwk, 'graph-rule': rk.publicJwk, ...Object.fromEntries(Object.entries(keys).map(([k, s]) => [k, s.publicJwk]))}}});
   const origins = originsOf(extraOrigins);
-  const open = (s = sources) => openGraph({dir: root, anchor, origins, sources: s});
+  const open = (s = sources, o = {}) => openGraph({dir: root, anchor, origins, sources: s, ...(snapshot ? {snapshot} : {}), ...o});
   const graph = open();
   return {graph, dir: root, anchor, origins, open, by: {signer: ex, order: op}, rule: {signer: rk, order: op},
     signers: Object.fromEntries(Object.entries(keys).map(([k, s]) => [k, {signer: s, order: op}])),
@@ -89,9 +92,9 @@ export function observeAll(graph, by, {observed_at = new Date().toISOString(), o
 }
 
 /** One call: the systems and evidence graph of `repo` at `commit`, observed. Close it with `close()`. */
-export function systemsGraph({repo = ROOT, commit, status, work = null, cycle = null, lessons = true, dir = null, observed_at, extraOrigins, extraKeys} = {}) {
+export function systemsGraph({repo = ROOT, commit, status, work = null, cycle = null, lessons = true, dir = null, observed_at, extraOrigins, extraKeys, snapshot} = {}) {
   const {commit: pinned, sources} = sourcesOf({repo, commit, ...(status !== undefined ? {status} : {}), work, cycle, lessons});
-  const g = openSystemsGraph({dir, sources, extraOrigins, extraKeys});
+  const g = openSystemsGraph({dir, sources, extraOrigins, extraKeys, snapshot});
   const observed = observeAll(g.graph, g.by, {observed_at});
   return {...g, commit: pinned, observed};
 }

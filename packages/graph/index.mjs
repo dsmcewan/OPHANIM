@@ -9,4 +9,5 @@ export {createProjection, entryHash} from './projection.mjs';
 export {GRAPH_DOMAIN, graphKinds, createGraphLedger, openGraph, recoverGraph} from './kinds.mjs';
 export {DEFAULTS, CEILINGS, neighborhood, closure, contradictions, resume} from './traverse.mjs';
 export {observationOf, changeEvents, eventOf, affected, freshness} from './events.mjs';
+export {SNAPSHOT_SCHEMA, SNAPSHOT_FILE, contractOf, originsDigest, listSnapshots, writeSnapshot, openSnapshot, verifySnapshot} from './checkpoint.mjs';
 export {EXPORT_SCHEMA, NOTICE_SCHEMA, REFERENCES, ACCESS_CEILING, DEFAULT_MAX_AGE_MS, LINKER, RECEIVER, WITHHELD, importSource, identityOf, identityRefusal, referenceRefusal, definePolicy, outbox, outboxTransport, noticeTransport, department, receiverOrigin, exportRefusal, centralOrigins, openCentral} from './federation.mjs';
