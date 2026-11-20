@@ -34,6 +34,24 @@ test('cli: every section-8 query about a real component is answered, bounded, wi
   assert.equal(run(['dependents', SUBJECT, '--depth', 'x'], {built}).code, 2);
 });
 
+test('cli: the dependency questions (Slice B2, KD2-8) about real subjects, each with its sources and versions', () => {
+  const built = realGraph();
+  const ask = argv => { const r = run(argv, {built}); assert.equal(r.code, 0, `${argv.join(' ')}: ${r.output.slice(0, 300)}`); return JSON.parse(r.output); };
+  const pkg = ask(['package', '@google/genai']);
+  assert.ok(pkg.direct.imports['run-time'].total > 0 && pkg.packages[0].version && pkg.graph.commit === built.commit);
+  const needs = ask(['needs', 'ophanim/public/github.mjs']);
+  assert.ok(needs.needs['run-time'].environment.shown.some(e => e.name === 'GITHUB_TOKEN' && e.lines.length));
+  assert.ok(ask(['needs', 'ophanim/public/github.mjs', '--transitive']).transitive);
+  const auth = ask(['authority', 'ophanim/graph/impact.mjs']);
+  assert.ok(auth.authorized_by.some(a => a.region_limits.length && a.sources.every(s => s.version)));
+  for (const subject of ['repository:telos', 'lock:package-lock.json#pantheon/node_modules/@google/genai']) {
+    const inv = ask(['invalidates', subject]);
+    assert.ok(inv.counts.consumers > 0 && inv.sources.every(s => s.source && s.version), `${subject}: what a change to it reaches, with its sources`);
+  }
+  for (const a of [pkg, needs, auth]) assert.ok(a.sources.length && a.sources.every(s => s.version), `${a.query}: its sources and versions`);
+  assert.equal(run(['package', 'no-such-package'], {built}).code, 1);
+});
+
 test('cli: a real process run builds the graph at the commit and answers from it', () => {
   const head = execFileSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
   const r = spawnSync(process.execPath, [path.join(ROOT, 'ophanim/graph/cli.mjs'), 'requirement', SUBJECT, '--commit', head], {encoding: 'utf8', maxBuffer: 1 << 26});

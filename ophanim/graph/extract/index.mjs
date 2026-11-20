@@ -1,11 +1,15 @@
-// THE SYSTEMS AND EVIDENCE GRAPH's composition (Slice B, KB1; docs/knowledge-graph/slice-b.md).
+// THE SYSTEMS AND EVIDENCE GRAPH's composition (Slice B, KB1; docs/knowledge-graph/slice-b.md; Slice B2, KD2-1;
+// docs/knowledge-graph/slice-b2.md).
 //
 // Purpose   Compose the registered origins and source adapters of Slice B over packages/graph (contract
 //           ophanim.graph/v1): the repository, its declared verification and the register's records at one commit;
-//           the status, work and cycle ledgers at their heads; the lessons registry (Slice A's adapter). Open a graph
-//           over them and observe each source, in the order their references need (a mention names a file the
-//           repository source holds, so the repository is observed first).
-// Inputs    The repository root, the commit (a name is resolved ONCE here and pinned), the ledgers' roots and anchors.
+//           the status, work and cycle ledgers at their heads; the lessons registry (Slice A's adapter); and Slice B2's
+//           dependency sources at the same commit (packages and imports, pinned external sources, the environment,
+//           files read by path, authority, the literals' mentions) and the board's obligations when a state directory
+//           is named. Open a graph over them and observe each source, in the order their references need (a mention
+//           names a file the repository source holds, so the repository is observed first).
+// Inputs    The repository root, the commit (a name is resolved ONCE here and pinned), the ledgers' roots and anchors,
+//           the board's state directory.
 // Outputs   ORIGIN_SPEC / originsOf(): the origin registry; sourcesOf(): the adapters, each declaring its extractor's
 //           version (extractorVersionOf: the digest of the extractor's module and its local imports, transitively, as
 //           read from disk; a snapshot derived by other code is refused, packages/graph/checkpoint.mjs); openSystemsGraph(): a graph
@@ -24,14 +28,27 @@ import {repoSource, SOURCE_ID as REPO_SOURCE, EXTRACTOR as REPO_EXTRACTOR, REPO_
 import {verificationSource, SOURCE_ID as VERIFICATION_SOURCE, EXTRACTOR as VERIFICATION_EXTRACTOR, VERIFICATION_ORIGIN} from './verification.mjs';
 import {recordsSource, SOURCE_ID as RECORDS_SOURCE, EXTRACTOR as RECORDS_EXTRACTOR, RECORDS_ORIGIN} from './records.mjs';
 import {statusSource, workSource, cycleSource, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE, STATUS_ANCHOR, EXTRACTOR as LEDGERS_EXTRACTOR, LEDGERS_ORIGIN} from './ledgers.mjs';
+import {packagesSource, importsSource, PACKAGES_SOURCE, IMPORTS_SOURCE, PACKAGES_EXTRACTOR, IMPORTS_EXTRACTOR, PACKAGES_ORIGIN, IMPORTS_ORIGIN} from './packages.mjs';
+import {environmentSource, pathsSource, literalsSource, ENVIRONMENT_SOURCE, PATHS_SOURCE, LITERALS_SOURCE, ENVIRONMENT_EXTRACTOR, PATHS_EXTRACTOR, LITERALS_EXTRACTOR,
+  ENVIRONMENT_ORIGIN, PATHS_ORIGIN, LITERALS_ORIGIN} from './needs.mjs';
+import {pinsSource, PINS_SOURCE, PINS_EXTRACTOR, PINS_ORIGIN} from './pins.mjs';
+import {authoritySource, AUTHORITY_SOURCE, AUTHORITY_EXTRACTOR, AUTHORITY_ORIGIN} from './authority.mjs';
+import {boardSource, BOARD_SOURCE, BOARD_EXTRACTOR, BOARD_ORIGIN} from './board.mjs';
 import {resolveCommit} from './git.mjs';
 import {IMPACT_RULE} from '../impact.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export {IMPACT_RULE};
 export {REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE, LESSONS_SOURCE, STATUS_ANCHOR};
-/** The order sources are observed in: every reference a source's facts make is to a source observed before it. */
-export const ORDER = Object.freeze([REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE]);
+export {PACKAGES_SOURCE, PINS_SOURCE, IMPORTS_SOURCE, ENVIRONMENT_SOURCE, PATHS_SOURCE, AUTHORITY_SOURCE, LITERALS_SOURCE, BOARD_SOURCE};
+/** Slice B2's dependency sources read from the repository at the commit (KD2-1), in their reference order. */
+export const DEPENDENCY_SOURCES = Object.freeze([PACKAGES_SOURCE, PINS_SOURCE, IMPORTS_SOURCE, ENVIRONMENT_SOURCE, PATHS_SOURCE, AUTHORITY_SOURCE, LITERALS_SOURCE]);
+/**
+ * The order sources are observed in: every reference a source's facts make is to a source observed before it (Slice
+ * B2's: the packages before the imports that resolve to them; the pins after the workflows of the verification source;
+ * the literals, whose mentions name what the others hold, last of the repository-backed; the board with the ledgers).
+ */
+export const ORDER = Object.freeze([REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, ...DEPENDENCY_SOURCES, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE, BOARD_SOURCE]);
 
 /** The origins of Slice B (and Slice A's lessons extractor), each with the key id that may write as it. */
 export const ORIGIN_SPEC = Object.freeze({
@@ -40,6 +57,14 @@ export const ORIGIN_SPEC = Object.freeze({
   [RECORDS_EXTRACTOR]: {...RECORDS_ORIGIN, keys: ['graph-extractor']},
   [LEDGERS_EXTRACTOR]: {...LEDGERS_ORIGIN, keys: ['graph-extractor']},
   [LESSONS_EXTRACTOR]: {...LESSONS_ORIGIN, keys: ['graph-extractor']},
+  [PACKAGES_EXTRACTOR]: {...PACKAGES_ORIGIN, keys: ['graph-extractor']},
+  [IMPORTS_EXTRACTOR]: {...IMPORTS_ORIGIN, keys: ['graph-extractor']},
+  [ENVIRONMENT_EXTRACTOR]: {...ENVIRONMENT_ORIGIN, keys: ['graph-extractor']},
+  [PATHS_EXTRACTOR]: {...PATHS_ORIGIN, keys: ['graph-extractor']},
+  [LITERALS_EXTRACTOR]: {...LITERALS_ORIGIN, keys: ['graph-extractor']},
+  [PINS_EXTRACTOR]: {...PINS_ORIGIN, keys: ['graph-extractor']},
+  [AUTHORITY_EXTRACTOR]: {...AUTHORITY_ORIGIN, keys: ['graph-extractor']},
+  [BOARD_EXTRACTOR]: {...BOARD_ORIGIN, keys: ['graph-extractor']},
   [IMPACT_RULE]: {kind: 'rule', basis: 'structural', keys: ['graph-rule']},
 });
 /** The composed origin registry; `extra` adds origins (a test's synthetic tools and models). */
@@ -72,6 +97,10 @@ export const EXTRACTOR_MODULES = Object.freeze({
   [RECORDS_SOURCE]: {factory: recordsSource, module: here('./records.mjs')}, [LESSONS_SOURCE]: {factory: lessonsSource, module: here('../lessons.mjs')},
   [STATUS_SOURCE]: {factory: statusSource, module: here('./ledgers.mjs')}, [WORK_SOURCE]: {factory: workSource, module: here('./ledgers.mjs')},
   [CYCLE_SOURCE]: {factory: cycleSource, module: here('./ledgers.mjs')},
+  [PACKAGES_SOURCE]: {factory: packagesSource, module: here('./packages.mjs')}, [IMPORTS_SOURCE]: {factory: importsSource, module: here('./packages.mjs')},
+  [ENVIRONMENT_SOURCE]: {factory: environmentSource, module: here('./needs.mjs')}, [PATHS_SOURCE]: {factory: pathsSource, module: here('./needs.mjs')},
+  [LITERALS_SOURCE]: {factory: literalsSource, module: here('./needs.mjs')}, [PINS_SOURCE]: {factory: pinsSource, module: here('./pins.mjs')},
+  [AUTHORITY_SOURCE]: {factory: authoritySource, module: here('./authority.mjs')}, [BOARD_SOURCE]: {factory: boardSource, module: here('./board.mjs')},
 });
 // Read once per process: the version of the code this process loaded when it first composed its sources.
 const versions = new Map();
@@ -83,16 +112,20 @@ const declared = s => {
 
 /**
  * The source adapters, each declaring its extractor's version. `commit` pins the repository-backed sources (repo,
- * verification, records) to ONE commit, so their cross-references meet in one tree; the ledgers are included when their
- * roots are given.
+ * verification, records, and Slice B2's dependency sources unless `deps` is false) to ONE commit, so their
+ * cross-references meet in one tree; the ledgers are included when their roots are given, the board when its state
+ * directory is (`board: {stateDir}`).
  */
 export function sourcesOf({repo = ROOT, commit, status = {root: path.join(repo, 'status/ledger'), anchor: STATUS_ANCHOR}, work = null, cycle = null,
-  lessons = true, only = null} = {}) {
+  lessons = true, deps = true, board = null, only = null} = {}) {
   const pinned = resolveCommit(repo, commit ?? 'HEAD');
   const all = [
     repoSource({repo, ref: pinned}), verificationSource({repo, ref: pinned}), recordsSource({repo, ref: pinned}),
     ...(lessons ? [lessonsSource({repo})] : []),
+    ...(deps ? [packagesSource({repo, ref: pinned}), pinsSource({repo, ref: pinned}), importsSource({repo, ref: pinned}), environmentSource({repo, ref: pinned}),
+      pathsSource({repo, ref: pinned}), authoritySource({repo, ref: pinned}), literalsSource({repo, ref: pinned})] : []),
     ...(status ? [statusSource(status)] : []), ...(work ? [workSource(work)] : []), ...(cycle ? [cycleSource(cycle)] : []),
+    ...(board ? [boardSource(board)] : []),
   ].map(declared);
   return {commit: pinned, sources: only ? all.filter(s => only.includes(s.id)) : all};
 }
@@ -132,8 +165,8 @@ export function observeAll(graph, by, {observed_at = new Date().toISOString(), o
 }
 
 /** One call: the systems and evidence graph of `repo` at `commit`, observed. Close it with `close()`. */
-export function systemsGraph({repo = ROOT, commit, status, work = null, cycle = null, lessons = true, dir = null, observed_at, extraOrigins, extraKeys, snapshot} = {}) {
-  const {commit: pinned, sources} = sourcesOf({repo, commit, ...(status !== undefined ? {status} : {}), work, cycle, lessons});
+export function systemsGraph({repo = ROOT, commit, status, work = null, cycle = null, lessons = true, deps = true, board = null, dir = null, observed_at, extraOrigins, extraKeys, snapshot} = {}) {
+  const {commit: pinned, sources} = sourcesOf({repo, commit, ...(status !== undefined ? {status} : {}), work, cycle, lessons, deps, board});
   const g = openSystemsGraph({dir, sources, extraOrigins, extraKeys, snapshot});
   const observed = observeAll(g.graph, g.by, {observed_at});
   return {...g, commit: pinned, observed};
