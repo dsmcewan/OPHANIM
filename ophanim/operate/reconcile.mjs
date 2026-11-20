@@ -97,8 +97,15 @@ export function ticketGiven(rec) {
 
 // `capacity(stage)` (optional): the reviewer-pool signature of the stage executors (stages.mjs), passed to the gate
 // so a capacity-pending stage is dispatched again when the pool changed. A caller without executors leaves it out.
-export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesDir = null, now = Date.now(), capacity = null}) {
+// `graph` (optional; knowledge graphs, Slice D part 2, KD2-2, KD2-3, KD2-5): the graph loop's context
+// (graph-loop.mjs createGraphLoop().context). Prepared once per reconciliation: D1's reassessWork on each observation event
+// (recorded when the context writes) and its members mapped onto planValidity and validationEvidence; each item's
+// graph-derived gate input; the waits a prerequisite creates (`graph_depends_on`, for dependencyOrder); and the
+// discoveries, which become intake CANDIDATES only (`graph.candidates`, recorded unsigned, never executed). Without it
+// the reconciliation is exactly as before.
+export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesDir = null, now = Date.now(), capacity = null, graph = null}) {
   const {board, byItem} = statusHistory(statusRoot);
+  const G = graph ? graph.prepare({items: board.items, byItem, stagesOf: i => (workLedger ? (i === undefined ? workLedger.stages() : workLedger.stages(i)) : [])}) : null;
   const latest = new Map(board.items.map(i => [i.item, i]));
   const runs = retainedRuns(bundlesDir);
   const ticketsDir = path.join(repo, 'tickets');
@@ -132,7 +139,10 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
         const before = [];
         for (const x of workLedger ? workLedger.stages(item) : []) { if (x.hash === plan.hash) break; before.push(x); }
         const work = workLedger ? {root: workLedger.root, stages: i => (i === undefined ? workLedger.stages() : i === item ? before : workLedger.stages(i))} : null;
-        v = buildDossier({repo, statusRoot, item, work, issues, bundlesDir, ticketText: ticketGiven(plan)}).views;
+        // A plan made with the graph's views (stages.mjs, outputs.graph) is re-derived with the graph AS IT STOOD at the
+        // cursor the plan was made at; without the graph here those views are gone, and a citation of one is stale.
+        const at = G && Number.isInteger(plan.outputs?.graph?.cursor) ? G.at(plan.outputs.graph.cursor) : null;
+        v = buildDossier({repo, statusRoot, item, work, issues, bundlesDir, ticketText: ticketGiven(plan), ...(at ? {graph: at, learning: at} : {})}).views;
       } catch { v = null; }
       views.set(plan.hash, v);
     }
@@ -172,7 +182,7 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     const recs = workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry) : [];
     const recovery = recs.filter(r => r.sources === recoverySources).at(-1) ?? recs.at(-1) ?? null;
     let gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, versionOf, now,
-      recovery, recoverySources, capacity, outcomeRecheck,
+      recovery, recoverySources, capacity, outcomeRecheck, ...(G ? {graph: G.gateInput(s.item, stages)} : {}),
       reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
@@ -197,12 +207,14 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     }
     return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length,
       ticket: ticket ? (ticket.why ? {invalid: ticket.why} : {path: ticket.path, digest: ticket.digest}) : null,
-      issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate};
+      issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate,
+      // The items this one waits for because they implement a prerequisite it requires (KD2-2): dependencyOrder runs them first.
+      ...(G ? {graph_depends_on: G.dependsOn(s.item), claimed_paths: G.paths(s.item)} : {})};
   });
   const orphans = ticketItems.filter(i => !latest.has(i)).map(i => ({ticket: `tickets/${i}.json`, why: 'a ticket for an item that is not on the status ledger'}));
   const gateCounts = {};
   for (const i of items) gateCounts[i.gate.gate] = (gateCounts[i.gate.gate] ?? 0) + 1;
-  return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, orphans, duplicates,
+  return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, orphans, duplicates, ...(G ? {graph: G.report()} : {}),
     counts: {items: items.length, issues: (issues ?? []).length, linked_issues: [...issueByItem.values()].flat().length, candidates: candidates.length,
       tickets: ticketItems.length, orphans: orphans.length, items_with_runs: items.filter(i => i.runs.length).length, by_gate: gateCounts}};
 }
