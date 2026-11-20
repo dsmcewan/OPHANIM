@@ -1,0 +1,1265 @@
+{
+ "schema": "pantheon.vendor-reference/v1",
+ "labs": {
+  "openai": {
+   "read": "2026-11-20T07:10:14.447Z",
+   "pages": {
+    "listed": 1003,
+    "captured": 892
+   },
+   "indexes": [
+    {
+     "url": "https://developers.openai.com/llms.txt",
+     "sha256": "3d64d4a0fee8befc3a6d6f19ca6793ee8e6b1d555ef7980af2450b957ac8b9e2"
+    },
+    {
+     "url": "https://developers.openai.com/api/llms.txt",
+     "sha256": "9f66b4cbcf5fa83018857243f3451488d8709bd353c3afc718a51a9c5952cecf"
+    },
+    {
+     "url": "https://developers.openai.com/ads/llms.txt",
+     "sha256": "2edf1c33cc9d470ffe5ef366bcf7da539ebcc983f02803b13e3c3911efdff625"
+    },
+    {
+     "url": "https://developers.openai.com/siwc/llms.txt",
+     "sha256": "34ad9c9440e7a1093820e518e36eea8643fc6b1604968427788bd5a6302c8df4"
+    },
+    {
+     "url": "https://developers.openai.com/plugins/llms.txt",
+     "sha256": "8524b6f0b9343569e23dda5c54c3e0731fde0ec08f80e31db9cd12581fc6975e"
+    },
+    {
+     "url": "https://developers.openai.com/workspace-agents/llms.txt",
+     "sha256": "1a67d2d152b10de3a9e7339368abfa575c9c6771940fb2343e99dbe4991b0e84"
+    },
+    {
+     "url": "https://developers.openai.com/commerce/llms.txt",
+     "sha256": "ea43202524e550298c59f5cb0e47c63b9799da18a614ab45c5f46ddc085edaa3"
+    },
+    {
+     "url": "https://developers.openai.com/blog/llms.txt",
+     "sha256": "ff3c19f54be48cf5fff5cbb05b091070664d72ecc5ba519e22550cf0bff18997"
+    },
+    {
+     "url": "https://developers.openai.com/cookbook/llms.txt",
+     "sha256": "9ac876887ceb71d254f3ca0db6971207d0cdbd9153796731b2233d362505cfb4"
+    },
+    {
+     "url": "https://developers.openai.com/learn/llms.txt",
+     "sha256": "b0430ff1679034fc1485f863660370f9c8edd60dd6bd26059666b29d5da03f41"
+    },
+    {
+     "url": "https://developers.openai.com/showcase/llms.txt",
+     "sha256": "aa579301e183c400c31c3757703f03b00485c109daef20c9baca24c789a9c60e"
+    },
+    {
+     "url": "https://developers.openai.com/api/docs/llms.txt",
+     "sha256": "becac827e721b9063dd0e4edd11af9362303db0a121f0e701874c3154ca860da"
+    },
+    {
+     "url": "https://developers.openai.com/api/reference/llms.txt",
+     "sha256": "011c60869f95f7156165e63e08e249853dd73c99c2b19c3ac57846d087480626"
+    }
+   ],
+   "sections": [
+    {
+     "section": "Guides",
+     "pages": 233
+    },
+    {
+     "section": "Resources",
+     "pages": 203
+    },
+    {
+     "section": "Models",
+     "pages": 111
+    },
+    {
+     "section": "Showcase projects",
+     "pages": 93
+    },
+    {
+     "section": "Guide",
+     "pages": 56
+    },
+    {
+     "section": "Examples",
+     "pages": 48
+    },
+    {
+     "section": "Posts",
+     "pages": 36
+    },
+    {
+     "section": "Cookbook",
+     "pages": 26
+    },
+    {
+     "section": "Video",
+     "pages": 26
+    },
+    {
+     "section": "Code",
+     "pages": 18
+    },
+    {
+     "section": "Common tasks",
+     "pages": 15
+    },
+    {
+     "section": "Documentation sets",
+     "pages": 13
+    },
+    {
+     "section": "Articles",
+     "pages": 12
+    },
+    {
+     "section": "Site navigation",
+     "pages": 10
+    },
+    {
+     "section": "Api Reference",
+     "pages": 9
+    },
+    {
+     "section": "Build",
+     "pages": 9
+    },
+    {
+     "section": "ChatGPT plan usage",
+     "pages": 9
+    },
+    {
+     "section": "Actions",
+     "pages": 7
+    },
+    {
+     "section": "Concepts",
+     "pages": 5
+    },
+    {
+     "section": "Deploy",
+     "pages": 5
+    },
+    {
+     "section": "Learning tracks",
+     "pages": 3
+    },
+    {
+     "section": "Specs",
+     "pages": 3
+    },
+    {
+     "section": "Docs",
+     "pages": 2
+    },
+    {
+     "section": "Libraries",
+     "pages": 2
+    },
+    {
+     "section": "Plan",
+     "pages": 2
+    },
+    {
+     "section": "Tutorials",
+     "pages": 2
+    },
+    {
+     "section": "Account Management",
+     "pages": 1
+    },
+    {
+     "section": "Account Security Notification",
+     "pages": 1
+    },
+    {
+     "section": "Administration",
+     "pages": 1
+    },
+    {
+     "section": "Api Overview",
+     "pages": 1
+    },
+    {
+     "section": "Api Partner Setup",
+     "pages": 1
+    },
+    {
+     "section": "Assistants",
+     "pages": 1
+    },
+    {
+     "section": "Authentication",
+     "pages": 1
+    },
+    {
+     "section": "Bidding And Budgets",
+     "pages": 1
+    },
+    {
+     "section": "Bots",
+     "pages": 1
+    },
+    {
+     "section": "Bulk Api",
+     "pages": 1
+    },
+    {
+     "section": "Campaign Management",
+     "pages": 1
+    },
+    {
+     "section": "Campaign Targeting",
+     "pages": 1
+    },
+    {
+     "section": "Changelog",
+     "pages": 1
+    },
+    {
+     "section": "Chat Completions",
+     "pages": 1
+    },
+    {
+     "section": "ChatGPT plugin",
+     "pages": 1
+    },
+    {
+     "section": "Conversion Optimized Campaigns",
+     "pages": 1
+    },
+    {
+     "section": "Conversion Tracking",
+     "pages": 1
+    },
+    {
+     "section": "Conversions Api",
+     "pages": 1
+    },
+    {
+     "section": "Custom Audiences",
+     "pages": 1
+    },
+    {
+     "section": "Delta Feeds",
+     "pages": 1
+    },
+    {
+     "section": "Deprecations",
+     "pages": 1
+    },
+    {
+     "section": "Gpts",
+     "pages": 1
+    },
+    {
+     "section": "Hotel Feeds",
+     "pages": 1
+    },
+    {
+     "section": "Image Tag",
+     "pages": 1
+    },
+    {
+     "section": "Location Targeting",
+     "pages": 1
+    },
+    {
+     "section": "Mcp",
+     "pages": 1
+    },
+    {
+     "section": "Measurement Pixel",
+     "pages": 1
+    },
+    {
+     "section": "Multiple Pixels",
+     "pages": 1
+    },
+    {
+     "section": "Optional",
+     "pages": 1
+    },
+    {
+     "section": "Overview",
+     "pages": 1
+    },
+    {
+     "section": "Platform Targeting",
+     "pages": 1
+    },
+    {
+     "section": "Plugin Guidelines",
+     "pages": 1
+    },
+    {
+     "section": "Pricing",
+     "pages": 1
+    },
+    {
+     "section": "Product Feeds",
+     "pages": 1
+    },
+    {
+     "section": "Quickstart",
+     "pages": 1
+    },
+    {
+     "section": "Realtime Beta",
+     "pages": 1
+    },
+    {
+     "section": "Reporting",
+     "pages": 1
+    },
+    {
+     "section": "Request Client Id",
+     "pages": 1
+    },
+    {
+     "section": "Responses",
+     "pages": 1
+    },
+    {
+     "section": "Supported Countries",
+     "pages": 1
+    },
+    {
+     "section": "Supported Events",
+     "pages": 1
+    },
+    {
+     "section": "Troubleshooting",
+     "pages": 1
+    },
+    {
+     "section": "UI/UX guidelines",
+     "pages": 1
+    },
+    {
+     "section": "Website",
+     "pages": 1
+    },
+    {
+     "section": "Workload Identity Federation",
+     "pages": 1
+    }
+   ],
+   "topics": {
+    "generate": [
+     {
+      "url": "https://developers.openai.com/api/reference/resources/responses/methods/create.md",
+      "title": "Create a response API reference",
+      "description": "Parameters and response schema for the Responses API create method.",
+      "sha256": "9ef891b1de2fc06e523033776ae93f07068b621e0f0475b26cd07a70fc5299c2"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/guides/text.md",
+      "title": "Text generation",
+      "description": "Learn how to use the OpenAI API to generate text from a prompt. Learn about message types and available text formats like JSON and Structured Outputs.",
+      "sha256": "c7d30a352fe6357189d27d339e1742c4cbc4061dd94ad5ce918aa1034ab1d3ea"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/guides/migrate-to-responses.md",
+      "title": "Migrate to the Responses API",
+      "description": null,
+      "sha256": "7d8db706134672f69452c9b23842a8a43e37cd7882618560669b4f5e611a1846"
+     }
+    ],
+    "reasoning": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/reasoning.md",
+      "title": "Reasoning models",
+      "description": "Learn how to use OpenAI reasoning models in the Responses API, choose a reasoning effort, manage reasoning tokens, and keep reasoning state across turns.",
+      "sha256": "41279ffe43e21d54f1a3a76117f20e95bb7737644a26623ab424d176689e0d54"
+     }
+    ],
+    "tools": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/function-calling.md",
+      "title": "Function calling guide",
+      "description": "Define tools and handle model requests to call application functions.",
+      "sha256": "3af03603c1099cdb3ea36449ac7f4ce3e90eb312042cd794f4b206ac4e97399f"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/guides/tools.md",
+      "title": "Using tools",
+      "description": "Use powerful tools like remote MCP servers, or built-in tools like web search and file search to extend the model's capabilities.",
+      "sha256": "c9c7ec5abbac1c2bac0c107572cbc2492b737f2a3b522b62fb0646caaeef23cf"
+     }
+    ],
+    "structured-output": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/structured-outputs.md",
+      "title": "Structured model outputs",
+      "description": "Understand how to ensure model responses follow specific JSON Schema you define.",
+      "sha256": "fbabb4598029cba47f3b19e173371da9950e6c9050b5380460b0256b8a08d9fe"
+     }
+    ],
+    "streaming": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/streaming-responses.md",
+      "title": "Streaming API responses",
+      "description": "Learn how to stream model responses from the OpenAI API using server-sent events.",
+      "sha256": "c4641a8560e55daf680cf9da2426f90c9b4fe13bf52b536631d002ad51481a03"
+     }
+    ],
+    "token-counting": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/token-counting.md",
+      "title": "Counting tokens",
+      "description": "Use the Responses API to count input tokens for text, images, files, tools, and more—without estimation or tiktoken.",
+      "sha256": "696836465d98fbd38929a9e8700e03408c8d19a227d4bbfedb9e8a34dba95604"
+     }
+    ],
+    "batch": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/batch.md",
+      "title": "Batch API",
+      "description": "Learn how to use OpenAI's Batch API for processing jobs with asynchronous requests, increased rate limits, and cost efficiency.",
+      "sha256": "437dd4cd60a8aa8266d82048b659132b2b8a1a35b95f20e089869de7d61ecb31"
+     }
+    ],
+    "caching": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/prompt-caching.md",
+      "title": "Prompt caching",
+      "description": "Learn how prompt caching reduces latency and cost for long prompts in OpenAI's API.",
+      "sha256": "41fd5ad72dc74045ffb0fbe33e8213a879cc018a473b1e022b7be8fa04057625"
+     }
+    ],
+    "multi-agent": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/responses-multi-agent.md",
+      "title": "Multi-agent",
+      "description": "Enable Responses API Multi-agent, handle client-side HTTP and WebSocket flows, and read Multi-agent output items.",
+      "sha256": "d1040281c1978b3a6474240c1768c173d80c392002329078cb4208d65bee2a71"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/guides/agents-api/multi-agent.md",
+      "title": "Multi-agent",
+      "description": "Let an agent delegate work to independent subagents.",
+      "sha256": "5f716814d1c6b4b3343a5fcf60e6460ddc245ee166832f74551a57205268f3fc"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/guides/agents.md",
+      "title": "Agents",
+      "description": "Compare the Agents API, Agents SDK, and Responses API, then choose the guide for your application.",
+      "sha256": "df4f61b609550619a3f9e445c66d28318b9f681affe1a819ef0098cde32bf43a"
+     }
+    ],
+    "files": [
+     {
+      "url": "https://developers.openai.com/api/reference/resources/files.md",
+      "title": "Files",
+      "description": "OpenAI API endpoint reference.",
+      "sha256": "64db5399585d3ef89d6f467ecd90424e359d679a9c2c81a4c996e22bec7b48e8"
+     }
+    ],
+    "rate-limits": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/rate-limits.md",
+      "title": "Rate limits",
+      "description": "Rate limits are restrictions that our API imposes on the number of times a user or client can access our services within a specified period of time.",
+      "sha256": "1baea1045e0ed327fba5f8d754c734999ee1402d4b8c25afafe743c77594e9af"
+     }
+    ],
+    "errors": [
+     {
+      "url": "https://developers.openai.com/api/docs/guides/error-codes.md",
+      "title": "Error codes",
+      "description": "An overview of error codes from the OpenAI API and Python library, including solutions and guidance.",
+      "sha256": "286bb744451fc352ff361a9a1b72d3f21525f238b370e9fd6dcf6b2e311d3efa"
+     }
+    ],
+    "deprecations": [
+     {
+      "url": "https://developers.openai.com/api/docs/deprecations.md",
+      "title": "Deprecations",
+      "description": "Find information about OpenAI API deprecations and recommended replacements.",
+      "sha256": "947f740cdc922910da6ffed196ace5ba88befeae4889acf3e37e92fac112850e"
+     }
+    ],
+    "changelog": [
+     {
+      "url": "https://developers.openai.com/api/docs/changelog.md",
+      "title": "API changelog",
+      "description": "Customer-visible changes to the OpenAI API and models.",
+      "sha256": "c507d04d60954466c05c8ac5452599e079adb1d02c6c167f8d9b0ad07651a820"
+     }
+    ],
+    "models": [
+     {
+      "url": "https://developers.openai.com/api/docs/models.md",
+      "title": "Models",
+      "description": "Catalog of models available through the OpenAI API.",
+      "sha256": "17ccdfe4098e838f457e2b6b104dd7ba934382220db78f7e11946d90b1af0687"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/models/all.md",
+      "title": "All models",
+      "description": "Browse the complete OpenAI API model catalog.",
+      "sha256": "0431762d5c61d0181e77b4f6efc1b5c689421316b27e65e251f4dc13ac21a078"
+     },
+     {
+      "url": "https://developers.openai.com/api/docs/guides/model-selection.md",
+      "title": "Model selection",
+      "description": "Find the right model for your use case",
+      "sha256": "e24eba5eac2ae05c6e916eb48330d557a67fccba9d902104e8a1ab56932c61fd"
+     },
+     {
+      "url": "https://developers.openai.com/api/reference/resources/models.md",
+      "title": "Models",
+      "description": "OpenAI API endpoint reference.",
+      "sha256": "a64be226ba741a62035defe36c70d931936821e620587bd5bc8781bfd2fa6daa"
+     }
+    ],
+    "sdks": [
+     {
+      "url": "https://developers.openai.com/api/docs/libraries.md",
+      "title": "SDKs and CLI",
+      "description": "Discover official OpenAI SDKs, the OpenAI CLI, and the Agents SDK.",
+      "sha256": "f05881f4249cb2c0fa28a32e3c00988d8192cac9557aaa6c6b9d262514637b15"
+     }
+    ]
+   }
+  },
+  "xai": {
+   "read": "2026-11-20T07:10:26.664Z",
+   "pages": {
+    "listed": 252,
+    "captured": 250
+   },
+   "indexes": [
+    {
+     "url": "https://docs.x.ai/llms.txt",
+     "sha256": "4d63856b37d8f273f7f1e61dd799dd5da77fa72341ce5ec4b8f196e67fc6bab7"
+    }
+   ],
+   "sections": [
+    {
+     "section": "API",
+     "pages": 84
+    },
+    {
+     "section": "Grok Bot",
+     "pages": 32
+    },
+    {
+     "section": "Cookbook",
+     "pages": 28
+    },
+    {
+     "section": "The X Subscription",
+     "pages": 27
+    },
+    {
+     "section": "Grok Build",
+     "pages": 24
+    },
+    {
+     "section": "API Reference",
+     "pages": 22
+    },
+    {
+     "section": "Grok",
+     "pages": 15
+    },
+    {
+     "section": "Models",
+     "pages": 14
+    },
+    {
+     "section": "Machine-readable resources",
+     "pages": 5
+    },
+    {
+     "section": "Optional",
+     "pages": 1
+    }
+   ],
+   "topics": {
+    "generate": [
+     {
+      "url": "https://docs.x.ai/developers/rest-api-reference/inference/responses.md",
+      "title": "Inference API — Responses",
+      "description": null,
+      "sha256": "c3df54cc89e58d274ce0d5bedd348994d96e415654388898b1e1f7765e35087a"
+     },
+     {
+      "url": "https://docs.x.ai/developers/rest-api-reference/inference/chat-completions.md",
+      "title": "Inference API — Chat Completions",
+      "description": null,
+      "sha256": "6e0fc6cee129b0511520035eb31b756b94898a3cef46e2fe9873463c5484b4a5"
+     },
+     {
+      "url": "https://docs.x.ai/developers/model-capabilities/text/comparison.md",
+      "title": "Migration Guides — Migrating to Responses API",
+      "description": null,
+      "sha256": "a4e0089444f9afc023db872ad52497ecaa12d958f75d075de9c6c07b0cb8b1d4"
+     }
+    ],
+    "reasoning": [
+     {
+      "url": "https://docs.x.ai/developers/model-capabilities/text/reasoning.md",
+      "title": "Text — Reasoning",
+      "description": null,
+      "sha256": "a2e64d53f9053b2eb08073b8ff47b47b76188080e0a788e1c983e76c5448394d"
+     }
+    ],
+    "tools": [
+     {
+      "url": "https://docs.x.ai/developers/tools/function-calling.md",
+      "title": "Tools — Function Calling",
+      "description": null,
+      "sha256": "38b7952cd832aec2bf56ff8b81a326e386f6f0cc2aa0ce01c65f7fa91fa31307"
+     },
+     {
+      "url": "https://docs.x.ai/developers/tools/overview.md",
+      "title": "Tools",
+      "description": null,
+      "sha256": "4454ac7fb13009472a45550f4cd29bf7800dcf146b6ae85c65645077d13a2da8"
+     }
+    ],
+    "structured-output": [
+     {
+      "url": "https://docs.x.ai/developers/model-capabilities/text/structured-outputs.md",
+      "title": "Text — Structured Outputs",
+      "description": null,
+      "sha256": "5ee0c8f1e7e06f4b05d803f23acc7109dbfd7d5f56a88943d28122dcf2c1f907"
+     }
+    ],
+    "streaming": [
+     {
+      "url": "https://docs.x.ai/developers/model-capabilities/text/streaming.md",
+      "title": "Text — Streaming",
+      "description": null,
+      "sha256": "95cfe42efa83d1a84a476684e7485b1e002f2eea5913700cb73dc4bce4ac56c1"
+     }
+    ],
+    "token-counting": [],
+    "batch": [
+     {
+      "url": "https://docs.x.ai/developers/advanced-api-usage/batch-api.md",
+      "title": "Advanced API Usage — Batch API",
+      "description": null,
+      "sha256": "a876e803b0e657f3295b378d23237855d25010063e40f1d372fc44186774e601"
+     }
+    ],
+    "caching": [
+     {
+      "url": "https://docs.x.ai/developers/advanced-api-usage/prompt-caching.md",
+      "title": "Advanced API Usage — Prompt Caching",
+      "description": null,
+      "sha256": "9b2a2b882b3a9d0c49b7bf3b2bfd1b9feef1cdca31a5ae5f949e733e556fe074"
+     }
+    ],
+    "multi-agent": [
+     {
+      "url": "https://docs.x.ai/developers/model-capabilities/text/multi-agent.md",
+      "title": "Text — Multi Agent",
+      "description": null,
+      "sha256": "d830cd1460ad6c86c13c545627c1c57b22d60fe873a8c7201067251ba22a5543"
+     },
+     {
+      "url": "https://docs.x.ai/build/features/subagents.md",
+      "title": "Agents and Automation",
+      "description": null,
+      "sha256": "42511685ebf61b0e7fb1e188d2e97b08d33afe033f4cc7135a68da5c0bdb8d0b"
+     }
+    ],
+    "files": [
+     {
+      "url": "https://docs.x.ai/developers/files.md",
+      "title": "Files & Collections",
+      "description": null,
+      "sha256": "19da60bcccf156f5bf1e5184c0f9316b6f17de6fbce5a3755485359f6c6dca80"
+     },
+     {
+      "url": "https://docs.x.ai/developers/rest-api-reference/files.md",
+      "title": "Inference API — Files",
+      "description": null,
+      "sha256": "7d7f64deef1ca6054bf5bbee73ca6aec6daf1a32df15ba056998e6e4132e66e1"
+     }
+    ],
+    "rate-limits": [
+     {
+      "url": "https://docs.x.ai/developers/rate-limits.md",
+      "title": "Advanced API Usage",
+      "description": null,
+      "sha256": "76c66e3e7fa09d7df7c579b5229030b7c23f1fd3993f0a9f1587d66ccb4cfbad"
+     }
+    ],
+    "errors": [
+     {
+      "url": "https://docs.x.ai/developers/debugging.md",
+      "title": "Advanced API Usage — Debugging Errors",
+      "description": null,
+      "sha256": "2a43c08ea87ff5ae01803875bc19df7a2c707272dc3405789e14a3a02be312d9"
+     }
+    ],
+    "deprecations": [
+     {
+      "url": "https://docs.x.ai/developers/rest-api-reference/inference/legacy.md",
+      "title": "Inference API — Legacy & Deprecated",
+      "description": null,
+      "sha256": "87c61bf8a79b8fe350b2d281dd8f93746de0b6f17f9fb01bb9c448839c40a66b"
+     },
+     {
+      "url": "https://docs.x.ai/developers/migration/may-15-retirement.md",
+      "title": "Migration Guides — Model Retirement (May 15, 2026)",
+      "description": null,
+      "sha256": "d228ec29ccd39efefa16af6347b02069fb7ef1fc29085bded9004c71c3437b6c"
+     }
+    ],
+    "changelog": [
+     {
+      "url": "https://docs.x.ai/developers/release-notes.md",
+      "title": "Get Started — Release Notes",
+      "description": null,
+      "sha256": "e4cfc5a2deaedf5444a97ddd2c4b3d20938e7d296d7393e1ab9996e5ea7a0387"
+     }
+    ],
+    "models": [
+     {
+      "url": "https://docs.x.ai/developers/models.md",
+      "title": "Get Started — Models",
+      "description": null,
+      "sha256": "c3c3a2bd359df5bd275ccaf3908c0d87ab3f5cb572cbcd8516c458e0c8424bb2"
+     },
+     {
+      "url": "https://docs.x.ai/developers/rest-api-reference/inference/models.md",
+      "title": "Inference API — Models",
+      "description": null,
+      "sha256": "fa8ebbc9bda427b4a9eabd3e3cdf8ede1546b664d2686105a80de1d72ba0513b"
+     }
+    ],
+    "sdks": [
+     {
+      "url": "https://docs.x.ai/developers/quickstart.md",
+      "title": "Get Started",
+      "description": null,
+      "sha256": "d980cafdd757caeef7183baf3b8ec98de8d3deee2a84cdea33767d9409c2a7c6"
+     },
+     {
+      "url": "https://docs.x.ai/openapi.json",
+      "title": "OpenAPI specification",
+      "description": "OpenAPI schema for the xAI REST API (https://api.x.ai)",
+      "sha256": "9fff743d1553147301b069d6d8c1c49fdd66a93701438d404cfec6620a0f4774"
+     }
+    ]
+   }
+  },
+  "google": {
+   "read": "2026-11-20T07:08:14.078Z",
+   "pages": {
+    "listed": 390,
+    "captured": 387
+   },
+   "indexes": [
+    {
+     "url": "https://aistudio.google.com/llms.txt",
+     "sha256": "c9477f7b37eb7bd6af5b09f0d0a8e55f7759498ee094629edfa842a308dcbbaa"
+    }
+   ],
+   "sections": [
+    {
+     "section": "Models",
+     "pages": 114
+    },
+    {
+     "section": "API reference — Platform APIs",
+     "pages": 88
+    },
+    {
+     "section": "API reference — Agent APIs",
+     "pages": 34
+    },
+    {
+     "section": "Resources",
+     "pages": 26
+    },
+    {
+     "section": "Guides",
+     "pages": 23
+    },
+    {
+     "section": "Core capabilities",
+     "pages": 22
+    },
+    {
+     "section": "API reference — Core APIs",
+     "pages": 17
+    },
+    {
+     "section": "Tools",
+     "pages": 15
+    },
+    {
+     "section": "Optimization",
+     "pages": 10
+    },
+    {
+     "section": "Live API",
+     "pages": 9
+    },
+    {
+     "section": "Agents",
+     "pages": 8
+    },
+    {
+     "section": "Get started",
+     "pages": 8
+    },
+    {
+     "section": "Policies",
+     "pages": 6
+    },
+    {
+     "section": "API reference — Real-time APIs",
+     "pages": 4
+    },
+    {
+     "section": "Agent setup & developer tooling",
+     "pages": 3
+    },
+    {
+     "section": "API reference",
+     "pages": 2
+    },
+    {
+     "section": "Optional",
+     "pages": 1
+    }
+   ],
+   "topics": {
+    "generate": [
+     {
+      "url": "https://aistudio.google.com/api-reference/interactions-api/create-interaction.md",
+      "title": "Interactions API — create",
+      "description": "Creates a new interaction.",
+      "sha256": "cc7d9135a225750593ff415035de2fa0dc15db17f28a185dfe16b259e073b0d1"
+     },
+     {
+      "url": "https://aistudio.google.com/api-reference/generate-content/generate-content.md",
+      "title": "GenerateContent — generateContent",
+      "description": "Generates a model response given an input `GenerateContentRequest`.",
+      "sha256": "c2a1f7481b810fbeb24a4bfe1299e76db01734fa65cdde8d7ba93a22d8be9a82"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/interactions-overview.md",
+      "title": "Interactions API",
+      "description": "The Interactions API is the simplest and recommended way to build with Gemini models and agents.",
+      "sha256": "e66edf85aa494233038a75619331a93adc9fded214b91c0bce28bf76a13e186f"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/migrate-to-interactions.md",
+      "title": "Migration — To Interactions API",
+      "description": "Guide for migrating from generateContent to the Interactions API.",
+      "sha256": "01acbc289bd5f3cf5746b71af8e52f4614a4a632c0ff3d9cda6488f75d56acad"
+     }
+    ],
+    "reasoning": [
+     {
+      "url": "https://aistudio.google.com/docs/thinking.md",
+      "title": "Thinking — Thinking",
+      "description": "Use thinking capabilities with the Gemini API",
+      "sha256": "a964d5cf09c78e857929495388c4b425bfe1901f83f415b2c6239fd8130d2588"
+     }
+    ],
+    "tools": [
+     {
+      "url": "https://aistudio.google.com/docs/function-calling.md",
+      "title": "Function calling",
+      "description": "Get started using Function Calling with the Gemini API",
+      "sha256": "4e800a1d653b31baf0ee58eb53451335f04b635dd6da9730a2af2bac86ac69fd"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/tools.md",
+      "title": "Overview",
+      "description": "Use tools with the Gemini API to extend the capabilities of Gemini models, enabling them to access real-time information and perform complex computational tasks.",
+      "sha256": "5376249c2cf869f572045e9f23d7cb039e08272b51610a7faf41f768cf5d7752"
+     }
+    ],
+    "structured-output": [
+     {
+      "url": "https://aistudio.google.com/docs/structured-output.md",
+      "title": "Structured outputs",
+      "description": "Learn how to generate structured JSON output with the Gemini API.",
+      "sha256": "f8f0301a40ce6f5c11aef9e83a850c0eeb3bdf6883fd935ae49d820296ecbd71"
+     }
+    ],
+    "streaming": [
+     {
+      "url": "https://aistudio.google.com/docs/streaming.md",
+      "title": "Streaming",
+      "description": "Learn how to stream responses, tool calls, thinking, and images in real time with the Interactions API.",
+      "sha256": "0fa46503edadb86033fd6c6fbb7ca5782ffe7a74e91ea166e669bbd5927c131b"
+     }
+    ],
+    "token-counting": [
+     {
+      "url": "https://aistudio.google.com/docs/tokens.md",
+      "title": "Token counting",
+      "description": "Understand and count tokens with the Gemini API",
+      "sha256": "aafd6958ec08a445538d4330c9d58912e7e112fa460f73cfff8729af5a74a302"
+     },
+     {
+      "url": "https://aistudio.google.com/api-reference/tokens/count-tokens.md",
+      "title": "Tokens — countTokens",
+      "description": "Runs a model's tokenizer on input `Content` and returns the token count.",
+      "sha256": "e3d88132fa43cdd106651a3e8ec4773a0eca5fcd38d68abc5f8d36c023c3480f"
+     }
+    ],
+    "batch": [
+     {
+      "url": "https://aistudio.google.com/docs/batch-api.md",
+      "title": "Batch API",
+      "description": "Get started building with the Batch API",
+      "sha256": "eb44b7b33dd07def08e7c6063bc4edbf53681dc394a5386982990dfd2e8db473"
+     }
+    ],
+    "caching": [
+     {
+      "url": "https://aistudio.google.com/docs/caching.md",
+      "title": "Context caching",
+      "description": "Learn how to use Context Caching in the Interactions API",
+      "sha256": "cc7e029be025d6feef3f2383f9f147d209d98d50375648dbe1f63ce3e2e106d9"
+     }
+    ],
+    "multi-agent": [
+     {
+      "url": "https://aistudio.google.com/docs/agents.md",
+      "title": "Overview",
+      "description": "Build agents that reason, write code, manage files, and browse the web with the Gemini API.",
+      "sha256": "f8a82bdc9061e6239a60bb9af9b1bc9268b8fb6d25fbac4f924b6c59c23b7b37"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/antigravity-agent.md",
+      "title": "Antigravity agent",
+      "description": "Use the Antigravity managed agent to perform multi-step tasks that require reasoning, file operations, and tool use.",
+      "sha256": "f8c3d332c38ec5a27cd06ffaf36d9ec8f52898b02f08c3e21cc34de5ffe307f7"
+     }
+    ],
+    "files": [
+     {
+      "url": "https://aistudio.google.com/docs/files.md",
+      "title": "File input — Files API",
+      "description": "Learn how to upload, manage, and process media files using the Gemini Interactions API.",
+      "sha256": "5b33a7806dcee420bb94941d003971c12b1433283c28cb261df591e08e49bbb3"
+     }
+    ],
+    "rate-limits": [
+     {
+      "url": "https://aistudio.google.com/docs/rate-limits.md",
+      "title": "Rate limits",
+      "description": "Understand request quotas, token limits, and rate limits for the Gemini API.",
+      "sha256": "4a686ea91d9f161cbd5fd286c09de2004dd89532534daaf8c0abcf08733d57c2"
+     }
+    ],
+    "errors": [
+     {
+      "url": "https://aistudio.google.com/docs/api-errors.md",
+      "title": "API errors",
+      "description": "Reference for Interactions API error codes and response format",
+      "sha256": "3767652a4f4ba797be493926a0e4268dfbbb23d91e16b1efd0e5eb6b337337d7"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/troubleshooting.md",
+      "title": "API troubleshooting",
+      "description": "Diagnose and resolve common errors and API exceptions when using Gemini.",
+      "sha256": "fc8cf52ff50d3b220585db1b7362e71d15f9610886ce072796edb38728da37aa"
+     }
+    ],
+    "deprecations": [
+     {
+      "url": "https://aistudio.google.com/docs/deprecations.md",
+      "title": "Deprecations",
+      "description": "Keep track of deprecation schedules for Gemini models and features",
+      "sha256": "dc8ba8a7ba89b444cac491f7e3d7ae94fa474f6864bf7560d5953149b0e258bc"
+     }
+    ],
+    "changelog": [
+     {
+      "url": "https://aistudio.google.com/docs/changelog.md",
+      "title": "Release notes",
+      "description": "Keep track of updates to the Gemini API",
+      "sha256": "b8d5e2c35aa54dabd2a7cd64188393b32db748580df73540260b04d7c8ec472c"
+     }
+    ],
+    "models": [
+     {
+      "url": "https://aistudio.google.com/docs/models.md",
+      "title": "All models",
+      "description": "Learn about all of Google's most advanced AI models",
+      "sha256": "1b3e30032a1fd5935cdfbe11bc4fba62fcfaf342d0d12d6959231cde2e0e0f2e"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/latest-model.md",
+      "title": "Latest Gemini models — Overview",
+      "description": "Compare the latest Gemini models across text, code, images, video, and audio, run a quickstart, and connect your coding agent.",
+      "sha256": "29747bc7f75ac709525539f5c97c4e4c3e559f81ffd75d4b84ba363918e6f776"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/choosing-a-model.md",
+      "title": "Choosing a model",
+      "description": "Compare Gemini models across reasoning depth, speed, cost, and modality to pick the right model for your workload.",
+      "sha256": "e26434ac5f7da5e96177607b867f0dd3339e2744b5a34d3af9442a4a0a5b92cf"
+     },
+     {
+      "url": "https://aistudio.google.com/api-reference/models/list-models.md",
+      "title": "Model API — list",
+      "description": "Lists the [`Model`s](/docs/models) available through the Gemini API.",
+      "sha256": "5e575d17e8071e3204887ecdb7b47f164a999f45d1d81589f401fa0b38036181"
+     }
+    ],
+    "sdks": [
+     {
+      "url": "https://aistudio.google.com/docs/libraries.md",
+      "title": "Libraries",
+      "description": "Download and get started with the Gemini API Libraries + SDKs",
+      "sha256": "6a0e19d0ba3972a89657d2a83f98c186ba8cff1b0e749105838b61133fa39982"
+     },
+     {
+      "url": "https://aistudio.google.com/docs/migrate.md",
+      "title": "Migration — To GenAI SDK",
+      "description": "Migrate existing applications to the unified Google Gen AI SDK.",
+      "sha256": "b7c40862ea1d2eb8a10030a12b883ddc380764694626e114ca3dbf4129c5b5fa"
+     }
+    ]
+   }
+  },
+  "anthropic": {
+   "read": "2026-11-20T07:08:36.043Z",
+   "pages": {
+    "listed": 923,
+    "captured": 923
+   },
+   "indexes": [
+    {
+     "url": "https://platform.claude.com/llms.txt",
+     "sha256": "b53485b5d9f5ca77c069e19b2ac2a0633b04757d3af2d325de91c80eedc27882"
+    }
+   ],
+   "sections": [
+    {
+     "section": "API Reference",
+     "pages": 581
+    },
+    {
+     "section": "Messages",
+     "pages": 99
+    },
+    {
+     "section": "Admin",
+     "pages": 71
+    },
+    {
+     "section": "Models & pricing",
+     "pages": 59
+    },
+    {
+     "section": "Managed Agents",
+     "pages": 54
+    },
+    {
+     "section": "Best practices",
+     "pages": 25
+    },
+    {
+     "section": "SDKs, CLI, and libraries",
+     "pages": 17
+    },
+    {
+     "section": "API reference",
+     "pages": 13
+    },
+    {
+     "section": "Claude API skill",
+     "pages": 1
+    },
+    {
+     "section": "Docs home",
+     "pages": 1
+    },
+    {
+     "section": "Other pages",
+     "pages": 1
+    },
+    {
+     "section": "Release notes",
+     "pages": 1
+    }
+   ],
+   "topics": {
+    "generate": [
+     {
+      "url": "https://platform.claude.com/docs/en/api/messages/create.md",
+      "title": "Create a Message",
+      "description": null,
+      "sha256": "2cd5b3693f3a9db4fd1ad61579f2112d04b04c79649c53cce155f06ee66cf693"
+     },
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/working-with-messages.md",
+      "title": "Using the Messages API",
+      "description": null,
+      "sha256": "66e6e0bbb6156c5790f18336cbb134f6b2bda51f64d3af3180925f0b884b2daa"
+     }
+    ],
+    "reasoning": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/effort.md",
+      "title": "Overview",
+      "description": "Effort",
+      "sha256": "73bba57c1bcd79dc7703e46af4fcdb0c33e21d4338297c97babe0f5589c88937"
+     },
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/thinking.md",
+      "title": "Overview",
+      "description": "Thinking",
+      "sha256": "46d0a74ef4577c85bda14f276ab37af1e9fb2ce0f7333116e25bc5deb1a8c960"
+     }
+    ],
+    "tools": [
+     {
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview.md",
+      "title": "Overview",
+      "description": "Tool use with Claude",
+      "sha256": "6535a7334cf05e928f4d060d6998f33f8b8ecd358d9c7c0582ee7a9c9b133e9e"
+     }
+    ],
+    "structured-output": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs.md",
+      "title": "Structured outputs",
+      "description": null,
+      "sha256": "fb8695eae76615da29aa4fe0b3392a7c89530a136bbc71236440539855a2e8ba"
+     }
+    ],
+    "streaming": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/streaming.md",
+      "title": "Streaming Messages",
+      "description": "Streaming messages",
+      "sha256": "4bff0cea67a67acb430fb2de841cdc329731c2dc4a0a1f8ab8ff224bb030460b"
+     }
+    ],
+    "token-counting": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting.md",
+      "title": "Token counting",
+      "description": null,
+      "sha256": "5802f8a3b0e4981b598cd81bb9f2cb863c042efc9f053007279260a3c890ee7a"
+     }
+    ],
+    "batch": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing.md",
+      "title": "Batch processing",
+      "description": null,
+      "sha256": "b043236e16f7069879840d1ad8b08cc5dd68e1455e19ca1a05f54960b8cc35b6"
+     }
+    ],
+    "caching": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md",
+      "title": "Prompt caching",
+      "description": null,
+      "sha256": "7b3cd21e5423fe8e4dda4447037a43404769ebfd7831cac562047663b70ef88e"
+     }
+    ],
+    "multi-agent": [
+     {
+      "url": "https://platform.claude.com/docs/en/managed-agents/overview.md",
+      "title": "Overview",
+      "description": "Claude Managed Agents overview",
+      "sha256": "cb20fd84fd19fb21a934d3ae0d9eeedaf6e9b0cb79f08dfc44ddece96edcd565"
+     }
+    ],
+    "files": [
+     {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/files.md",
+      "title": "Files API",
+      "description": null,
+      "sha256": "d60a517ec614c8aba421b69aadbca6748fad9b435dd9d8279392cf4081d9fcd8"
+     }
+    ],
+    "rate-limits": [
+     {
+      "url": "https://platform.claude.com/docs/en/api/rate-limits.md",
+      "title": "Rate limits",
+      "description": null,
+      "sha256": "d5ec9bd34d288e22fc4e20b3d521502aae8c37a7e08d7219b8954cecac905c4c"
+     }
+    ],
+    "errors": [
+     {
+      "url": "https://platform.claude.com/docs/en/api/errors.md",
+      "title": "Errors",
+      "description": "Claude API errors",
+      "sha256": "08c1b2790d85667705c533f03dc624b74b3b83ad9f17e51a8a5f7cb6adac8e48"
+     }
+    ],
+    "deprecations": [
+     {
+      "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations.md",
+      "title": "Model deprecations",
+      "description": null,
+      "sha256": "83b08416da9fbbcbd9ca771e881eca703839588e3385dd3fe5cb6c028471a2e8"
+     }
+    ],
+    "changelog": [
+     {
+      "url": "https://platform.claude.com/docs/en/release-notes/overview.md",
+      "title": "Overview",
+      "description": "Claude Platform release notes",
+      "sha256": "599b183a126388b48baf75f799aa43a9a4128be14ebd15ed2d9cd490aa3f54be"
+     }
+    ],
+    "models": [
+     {
+      "url": "https://platform.claude.com/docs/en/models/overview.md",
+      "title": "Models overview",
+      "description": null,
+      "sha256": "d5d0ec8acea9cde0b2a218c7ab4224e6be514b8a04fc995c0e08d784ded3da8e"
+     },
+     {
+      "url": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model.md",
+      "title": "Choosing a model",
+      "description": "Choosing the right model",
+      "sha256": "327ea712e3dfba5d74c1611a8c76160777cb6b294fa90ba8b5d424b4bd458237"
+     },
+     {
+      "url": "https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions.md",
+      "title": "Model IDs and versioning",
+      "description": null,
+      "sha256": "821abd1b54ba7704c07c9fc7337e42c58f53da2fbd9956fd1fce3f307a3958bf"
+     },
+     {
+      "url": "https://platform.claude.com/docs/en/api/models.md",
+      "title": "Models",
+      "description": null,
+      "sha256": "10ec2be631b503336893197f141629e55eada25c48dceebe19c6a8b455ee879d"
+     }
+    ],
+    "sdks": [
+     {
+      "url": "https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk.md",
+      "title": "OpenAI SDK compatibility",
+      "description": null,
+      "sha256": "3d81b8b09e25841e3e94e4430d71350d65bbce4ffe3debf2dc17d52b05da9688"
+     },
+     {
+      "url": "https://platform.claude.com/docs/en/api/overview.md",
+      "title": "Features overview",
+      "description": "API overview",
+      "sha256": "0b97b20ba0ec2a2854faf9a71321fd251801805a773230f83577be901425febf"
+     }
+    ]
+   }
+  }
+ },
+ "problems": []
+}

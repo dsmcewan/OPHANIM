@@ -390,6 +390,16 @@ test("THE COMMAND, from a capture already taken: a model the lab now describes i
   assert.equal(readFileSync(kept, "utf8"), before, "the kept catalogue is not written without --write");
   const none = cli("models", "--offline", "--lab", "google", "--store", store);
   assert.deepEqual([none.code, none.err.trim()], [1, `google: VENDOR_NOT_CAPTURED: nothing was captured in ${store} (run without --offline)`]);
+  // The captured pages are at hand without the network: found by their words, printed by their address.
+  const found = cli("find", "xai", "--store", store, "grok-9", "pricing");
+  assert.deepEqual([found.code, found.out, found.err.trim()], [2, "", "0 page(s) of xai, read 2026-12-24T08:00:00.000Z"], "every word must be found: the search reads the index's words, not the page's text");
+  const byAddress = cli("find", "xai", "--store", store, "MODELS/GROK-9");
+  assert.deepEqual([byAddress.code, byAddress.out, byAddress.err.trim()], [0, `${url}\n    \n`, "1 page(s) of xai, read 2026-12-24T08:00:00.000Z"]);
+  const shown = cli("show", "xai", url, "--store", store);
+  assert.deepEqual([shown.code, shown.out], [0, XAI]);
+  const absent = cli("show", "xai", "https://docs.x.ai/developers/models/never.md", "--store", store);
+  assert.deepEqual([absent.code, absent.out, absent.err.trim()], [1, "", "show needs one address of a captured page of xai (find lists them)"]);
+  assert.deepEqual(cli("find", "--store", store, "grok").code, 1, "a search names its lab");
   const bad = cli("models", "--lab", "nowhere");
   assert.deepEqual([bad.code, bad.err.trim()], [1, "unknown lab nowhere (known: openai, xai, google, anthropic)"]);
 });

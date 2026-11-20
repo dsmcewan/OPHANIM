@@ -2,7 +2,8 @@
 // gone or whose record changed, and every place this repository's own registry and recorded facts no longer agree with what
 // the lab publishes. The check reads and compares. It registers nothing and routes nothing: adopting a model is the
 // procedure in docs/model-updates.md, and where work is sent stays the owner's decision.
-const ENDED = /deprecat|shut ?down|retired|sunset/i, LEGACY = /legacy/i;
+export const ENDED = /deprecat|shut ?down|retired|sunset/i;
+const LEGACY = /legacy/i;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const shown = v => (v === undefined ? "nothing" : JSON.stringify(v));
 

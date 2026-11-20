@@ -1,0 +1,319 @@
+{
+ "schema": "pantheon.vendor-topics/v1",
+ "note": "The pages of each lab's own documentation that describe each capability, chosen by a person from the lab's index so the labs can be read side by side. The choice is the only thing here that is not the lab's: each page's title, description and digest are read from the capture (src/vendor-docs/reference.mjs), a page that is no longer listed is reported, and an empty list says no page of that lab's index was found for the topic.",
+ "topics": [
+  {
+   "id": "generate",
+   "title": "Generating a response",
+   "what": "The method a request for text is made with, and the older method it replaces where the lab has one."
+  },
+  {
+   "id": "reasoning",
+   "title": "Reasoning control",
+   "what": "How much the model thinks: the parameter, the levels it takes and which models take which."
+  },
+  {
+   "id": "tools",
+   "title": "Tool and function calling",
+   "what": "How a model is given tools and how its calls come back."
+  },
+  {
+   "id": "structured-output",
+   "title": "Structured output",
+   "what": "Constraining the answer to a schema."
+  },
+  {
+   "id": "streaming",
+   "title": "Streaming",
+   "what": "Receiving the answer as it is produced."
+  },
+  {
+   "id": "token-counting",
+   "title": "Counting tokens",
+   "what": "Asking how many tokens a request is before it is sent."
+  },
+  {
+   "id": "batch",
+   "title": "Batch",
+   "what": "Sending many requests for later completion at a lower price."
+  },
+  {
+   "id": "caching",
+   "title": "Prompt caching",
+   "what": "Reusing a prompt's prefix across requests."
+  },
+  {
+   "id": "multi-agent",
+   "title": "Agents and subagents",
+   "what": "What the lab runs as an agent or lets a model delegate to."
+  },
+  {
+   "id": "files",
+   "title": "Files",
+   "what": "Uploading files for a model to read."
+  },
+  {
+   "id": "rate-limits",
+   "title": "Rate limits",
+   "what": "The limits on requests and tokens, and how they are reported."
+  },
+  {
+   "id": "errors",
+   "title": "Errors",
+   "what": "Error codes and what each one means."
+  },
+  {
+   "id": "deprecations",
+   "title": "Deprecations",
+   "what": "Which models and methods are ending, and when."
+  },
+  {
+   "id": "changelog",
+   "title": "Release notes",
+   "what": "Where the lab announces what it released: the page to read when a model is new."
+  },
+  {
+   "id": "models",
+   "title": "Models",
+   "what": "The lab's list of models, how it says to choose one, and the method that lists them."
+  },
+  {
+   "id": "sdks",
+   "title": "Client libraries",
+   "what": "The lab's own SDKs and machine-readable API descriptions."
+  }
+ ],
+ "pages": {
+  "openai": {
+   "generate": [
+    "https://developers.openai.com/api/reference/resources/responses/methods/create.md",
+    "https://developers.openai.com/api/docs/guides/text.md",
+    "https://developers.openai.com/api/docs/guides/migrate-to-responses.md"
+   ],
+   "reasoning": [
+    "https://developers.openai.com/api/docs/guides/reasoning.md"
+   ],
+   "tools": [
+    "https://developers.openai.com/api/docs/guides/function-calling.md",
+    "https://developers.openai.com/api/docs/guides/tools.md"
+   ],
+   "structured-output": [
+    "https://developers.openai.com/api/docs/guides/structured-outputs.md"
+   ],
+   "streaming": [
+    "https://developers.openai.com/api/docs/guides/streaming-responses.md"
+   ],
+   "token-counting": [
+    "https://developers.openai.com/api/docs/guides/token-counting.md"
+   ],
+   "batch": [
+    "https://developers.openai.com/api/docs/guides/batch.md"
+   ],
+   "caching": [
+    "https://developers.openai.com/api/docs/guides/prompt-caching.md"
+   ],
+   "multi-agent": [
+    "https://developers.openai.com/api/docs/guides/responses-multi-agent.md",
+    "https://developers.openai.com/api/docs/guides/agents-api/multi-agent.md",
+    "https://developers.openai.com/api/docs/guides/agents.md"
+   ],
+   "files": [
+    "https://developers.openai.com/api/reference/resources/files.md"
+   ],
+   "rate-limits": [
+    "https://developers.openai.com/api/docs/guides/rate-limits.md"
+   ],
+   "errors": [
+    "https://developers.openai.com/api/docs/guides/error-codes.md"
+   ],
+   "deprecations": [
+    "https://developers.openai.com/api/docs/deprecations.md"
+   ],
+   "changelog": [
+    "https://developers.openai.com/api/docs/changelog.md"
+   ],
+   "models": [
+    "https://developers.openai.com/api/docs/models.md",
+    "https://developers.openai.com/api/docs/models/all.md",
+    "https://developers.openai.com/api/docs/guides/model-selection.md",
+    "https://developers.openai.com/api/reference/resources/models.md"
+   ],
+   "sdks": [
+    "https://developers.openai.com/api/docs/libraries.md"
+   ]
+  },
+  "xai": {
+   "generate": [
+    "https://docs.x.ai/developers/rest-api-reference/inference/responses.md",
+    "https://docs.x.ai/developers/rest-api-reference/inference/chat-completions.md",
+    "https://docs.x.ai/developers/model-capabilities/text/comparison.md"
+   ],
+   "reasoning": [
+    "https://docs.x.ai/developers/model-capabilities/text/reasoning.md"
+   ],
+   "tools": [
+    "https://docs.x.ai/developers/tools/function-calling.md",
+    "https://docs.x.ai/developers/tools/overview.md"
+   ],
+   "structured-output": [
+    "https://docs.x.ai/developers/model-capabilities/text/structured-outputs.md"
+   ],
+   "streaming": [
+    "https://docs.x.ai/developers/model-capabilities/text/streaming.md"
+   ],
+   "token-counting": [],
+   "batch": [
+    "https://docs.x.ai/developers/advanced-api-usage/batch-api.md"
+   ],
+   "caching": [
+    "https://docs.x.ai/developers/advanced-api-usage/prompt-caching.md"
+   ],
+   "multi-agent": [
+    "https://docs.x.ai/developers/model-capabilities/text/multi-agent.md",
+    "https://docs.x.ai/build/features/subagents.md"
+   ],
+   "files": [
+    "https://docs.x.ai/developers/files.md",
+    "https://docs.x.ai/developers/rest-api-reference/files.md"
+   ],
+   "rate-limits": [
+    "https://docs.x.ai/developers/rate-limits.md"
+   ],
+   "errors": [
+    "https://docs.x.ai/developers/debugging.md"
+   ],
+   "deprecations": [
+    "https://docs.x.ai/developers/rest-api-reference/inference/legacy.md",
+    "https://docs.x.ai/developers/migration/may-15-retirement.md"
+   ],
+   "changelog": [
+    "https://docs.x.ai/developers/release-notes.md"
+   ],
+   "models": [
+    "https://docs.x.ai/developers/models.md",
+    "https://docs.x.ai/developers/rest-api-reference/inference/models.md"
+   ],
+   "sdks": [
+    "https://docs.x.ai/developers/quickstart.md",
+    "https://docs.x.ai/openapi.json"
+   ]
+  },
+  "google": {
+   "generate": [
+    "https://aistudio.google.com/api-reference/interactions-api/create-interaction.md",
+    "https://aistudio.google.com/api-reference/generate-content/generate-content.md",
+    "https://aistudio.google.com/docs/interactions-overview.md",
+    "https://aistudio.google.com/docs/migrate-to-interactions.md"
+   ],
+   "reasoning": [
+    "https://aistudio.google.com/docs/thinking.md"
+   ],
+   "tools": [
+    "https://aistudio.google.com/docs/function-calling.md",
+    "https://aistudio.google.com/docs/tools.md"
+   ],
+   "structured-output": [
+    "https://aistudio.google.com/docs/structured-output.md"
+   ],
+   "streaming": [
+    "https://aistudio.google.com/docs/streaming.md"
+   ],
+   "token-counting": [
+    "https://aistudio.google.com/docs/tokens.md",
+    "https://aistudio.google.com/api-reference/tokens/count-tokens.md"
+   ],
+   "batch": [
+    "https://aistudio.google.com/docs/batch-api.md"
+   ],
+   "caching": [
+    "https://aistudio.google.com/docs/caching.md"
+   ],
+   "multi-agent": [
+    "https://aistudio.google.com/docs/agents.md",
+    "https://aistudio.google.com/docs/antigravity-agent.md"
+   ],
+   "files": [
+    "https://aistudio.google.com/docs/files.md"
+   ],
+   "rate-limits": [
+    "https://aistudio.google.com/docs/rate-limits.md"
+   ],
+   "errors": [
+    "https://aistudio.google.com/docs/api-errors.md",
+    "https://aistudio.google.com/docs/troubleshooting.md"
+   ],
+   "deprecations": [
+    "https://aistudio.google.com/docs/deprecations.md"
+   ],
+   "changelog": [
+    "https://aistudio.google.com/docs/changelog.md"
+   ],
+   "models": [
+    "https://aistudio.google.com/docs/models.md",
+    "https://aistudio.google.com/docs/latest-model.md",
+    "https://aistudio.google.com/docs/choosing-a-model.md",
+    "https://aistudio.google.com/api-reference/models/list-models.md"
+   ],
+   "sdks": [
+    "https://aistudio.google.com/docs/libraries.md",
+    "https://aistudio.google.com/docs/migrate.md"
+   ]
+  },
+  "anthropic": {
+   "generate": [
+    "https://platform.claude.com/docs/en/api/messages/create.md",
+    "https://platform.claude.com/docs/en/build-with-claude/working-with-messages.md"
+   ],
+   "reasoning": [
+    "https://platform.claude.com/docs/en/build-with-claude/effort.md",
+    "https://platform.claude.com/docs/en/build-with-claude/thinking.md"
+   ],
+   "tools": [
+    "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview.md"
+   ],
+   "structured-output": [
+    "https://platform.claude.com/docs/en/build-with-claude/structured-outputs.md"
+   ],
+   "streaming": [
+    "https://platform.claude.com/docs/en/build-with-claude/streaming.md"
+   ],
+   "token-counting": [
+    "https://platform.claude.com/docs/en/build-with-claude/token-counting.md"
+   ],
+   "batch": [
+    "https://platform.claude.com/docs/en/build-with-claude/batch-processing.md"
+   ],
+   "caching": [
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md"
+   ],
+   "multi-agent": [
+    "https://platform.claude.com/docs/en/managed-agents/overview.md"
+   ],
+   "files": [
+    "https://platform.claude.com/docs/en/build-with-claude/files.md"
+   ],
+   "rate-limits": [
+    "https://platform.claude.com/docs/en/api/rate-limits.md"
+   ],
+   "errors": [
+    "https://platform.claude.com/docs/en/api/errors.md"
+   ],
+   "deprecations": [
+    "https://platform.claude.com/docs/en/about-claude/model-deprecations.md"
+   ],
+   "changelog": [
+    "https://platform.claude.com/docs/en/release-notes/overview.md"
+   ],
+   "models": [
+    "https://platform.claude.com/docs/en/models/overview.md",
+    "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model.md",
+    "https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions.md",
+    "https://platform.claude.com/docs/en/api/models.md"
+   ],
+   "sdks": [
+    "https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk.md",
+    "https://platform.claude.com/docs/en/api/overview.md"
+   ]
+  }
+ }
+}
