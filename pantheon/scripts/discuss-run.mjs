@@ -31,7 +31,8 @@ const state = async () => (await (await fetch(`${base}/seats`)).json()).state;
 // turns are its context and the prompt only has to carry what the OTHERS said.
 async function runSeat(seat, prompt, round) {
   const s = SEATS[seat];
-  const label = `${seat} · discuss`;
+  // An identifier (letters, digits, . _ : -): the view server refuses any other label with 400 before the turn runs.
+  const label = `${seat}.discuss`;
   const t0 = Date.now();
   const r = await fetch(`${base}/turn`, {
     method: "POST", headers: { "content-type": "application/json" },

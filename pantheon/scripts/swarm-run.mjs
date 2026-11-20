@@ -28,7 +28,8 @@ const state = async () => (await (await fetch(`${base}/seats`)).json()).state;
 // produced text back from the server's reduced state rather than re-deriving it here.
 async function runSeat(seat, prompt, layer) {
   const s = spec[seat];
-  const label = `${seat} · swarm/${layer}`;
+  // An identifier (letters, digits, . _ : -): the view server refuses any other label with 400 before the turn runs.
+  const label = `${seat}.swarm.${layer}`;
   const t0 = Date.now();
   const r = await fetch(`${base}/turn`, {
     method: "POST", headers: { "content-type": "application/json" },
