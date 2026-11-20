@@ -1,0 +1,48 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "01ac30a22cded9ea76a318aa8c65ada35ae645f6",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "docs/knowledge-graph/architecture.md",
+    "package.json",
+    "package-lock.json",
+    "packages/**",
+    "scripts/**"
+  ],
+  "wave": "Hub-and-spoke assessment: OPHANIM determines from its own graph whether a hub-and-spoke split into three domains is appropriate (advisory)",
+  "base_commit": "01ac30a",
+  "authorization": "owner, 2026-11-20: \"I want Ophanim to determine if its appropriate to Hub and Spoke. Say into three domains.\"",
+  "dependencies": [
+    "concurrent with the self-repair lane (ophanim/operate/**) and the jail integration verification (pantheon/**); disjoint",
+    "reach: T1 over ophanim/graph/cli.mjs at the base: ophanim/graph/cli.test.mjs only, granted; no overlap with kg-self-repair-ownership.json"
+  ],
+  "subwaves": {
+    "KGHS": {
+      "agent-kg-hub-spoke": {
+        "branch": "kg/hub-spoke",
+        "base_commit": "01ac30a",
+        "findings": [
+          "owner request: the hub-and-spoke determination"
+        ],
+        "files": [
+          "ophanim/graph/partition.mjs",
+          "ophanim/graph/partition*.test.mjs",
+          "ophanim/graph/partition.mutate.mjs",
+          "ophanim/graph/fixtures/partition*",
+          "ophanim/graph/cli.mjs",
+          "ophanim/graph/cli.test.mjs",
+          "docs/knowledge-graph/hub-and-spoke.md"
+        ]
+      }
+    }
+  }
+}
