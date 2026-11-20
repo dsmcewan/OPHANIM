@@ -1,6 +1,6 @@
 # The knowledge graph's replay checkpoint (register KG-1)
 
-Status: built on `kg/checkpoint` from `a028497`, before Slice D. Code: `packages/graph/checkpoint.mjs`; the projection's state serializer and restorer (`projection.mjs`); `openGraph`'s `snapshot` option (`kinds.mjs`); the real graph's opener (`ophanim/graph/extract/index.mjs`). Tests: `packages/graph/tests/checkpoint.test.mjs`, `packages/graph/tests/checkpoint-equality.test.mjs`, one real-graph test in `ophanim/graph/extract.test.mjs`. Mutations: `packages/graph/tests/checkpoint.mutate.mjs`.
+Status: built on `kg/checkpoint` from `a028497`, before Slice D. Code: `packages/graph/checkpoint.mjs`; the projection's state serializer and restorer (`projection.mjs`); `openGraph`'s `snapshot` option (`kinds.mjs`); the real graph's opener (`ophanim/graph/extract/index.mjs`). Tests: `packages/graph/tests/checkpoint.test.mjs`, `packages/graph/tests/checkpoint-equality.test.mjs`, two real-graph tests in `ophanim/graph/extract.test.mjs`. Mutations: `packages/graph/tests/checkpoint.mutate.mjs`.
 
 ## 1. In one paragraph
 
@@ -61,6 +61,7 @@ One file per snapshot, `graph-snapshot-<seq, 12 digits>-<16 hex of the state dig
 | `contract` | `{schema, version, registry}`: `ophanim.graph/v1`, the contract version, and the digest of the entity types, the relationship registry and the admission tables (classifications, bases, origin kinds, statuses, access, source states, kinds, record and retraction fields, the change-list bound) |
 | `origins` | the digest of the composed origin registry |
 | `adapters` | the registered sources' identity `{id, extractor, authority, ref}` (a fact's id depends on them) |
+| `extractors` | each registered source's `extractorVersion`, or null where its adapter declares none (section 5a) |
 | `sources` | each source as the projection held it: `{id, version, digest (of its facts), state, replay, seq}` |
 | `projection_digest` | the projection digest at `position.seq` |
 | `state_digest`, `state_bytes` | sha256 and length of the serialized state |
@@ -74,11 +75,13 @@ The state (`ophanim.graph.projection-state/v1`, `projection.serialize()`) holds 
 
 1. its record is a snapshot record, and its signature verifies under a key in `keys`;
 2. its anchor is the reader's;
-3. its contract (version and registry digest), origin-registry digest, instance and registered sources equal the reader's;
+3. its contract (version and registry digest), origin-registry digest, instance and registered sources equal the reader's, and so does every source's extractor version (section 5a);
 4. the ledger verifies in frontier mode, and its own entry at the snapshot's seq is a graph entry with the recorded hash (a rewritten, forked or shorter ledger refuses it);
 5. its state bytes have the signed digest and length; the state restores; the restored state is at the recorded position, reproduces the recorded projection digest, and holds the recorded sources.
 
 Then each graph entry after the snapshot is re-derived as full mode re-derives an entry: payload object intact, author permitted, `validate` under the reader's registry, then the kind's re-derivation (`projection.sync`). What an entry cannot re-derive is noted against that entry's seq, exactly as the ledger notes it. If an entry refuses, the snapshot is refused. The full open then refuses the same ledger with the error it gives today.
+
+A snapshot directory that exists but cannot be listed is a reason like any other: the full open is taken, with the reason (`the snapshot directory could not be listed (<code>)`); the open never throws for it. A malformed `snapshot` option (not `{dir: an absolute path, keys: {...}}`) or an `extractorVersion` that is not a non-empty string is the caller's error and throws.
 
 `verification` keeps its fields and adds `snapshot`:
 
@@ -87,9 +90,19 @@ Then each graph entry after the snapshot is re-derived as full mode re-derives a
 
 Other fields:
 
-- `rederived` counts the entries this open re-derived, as frontier mode counts them. A full open counts every graph entry.
+- `rederived` counts the entries this open re-derived, as frontier mode counts them. A full open counts every graph entry. This is the one existing field that differs from the full open's, by decision: reporting every entry would claim re-derivation this open did not do.
 - `partial` adds one note per source that the snapshot holds without having re-derived it (a replay of `unavailable`, `invalid` or `diverged`), at the seq of that observation. `complete` is then false.
 - A `refresh()` keeps the provenance while the restored state stands, and says so once a replay from the genesis has replaced it.
+
+## 5a. The extractor's version
+
+The facts a source yields at one version are a function of its extractor's code as well as of the source. When an extractor's code changes and the source's version does not, a full open re-derives other facts, finds that they do not match the recorded digest, notes "the source now yields digest X, not the recorded Y; its facts are not applied", and marks the observation `diverged`: the open is partial. A snapshot derived by the old code would load the old facts as `applied` and report the open complete, a status upgraded in the dangerous direction.
+
+So a source adapter may declare `extractorVersion`, an opaque string. `packages/graph` stays domain-free: it records each registered source's string (or null) in the snapshot and compares it with the reader's adapter, and refuses the snapshot when any differs (`the extractor of source "<id>" is <here> here, not <then> as when it was derived`). The full open then reports what it reports today.
+
+The systems graph (`ophanim/graph/extract/index.mjs`) declares one for every source, the lessons source included: `extractorVersionOf(module)`, the digest of the text of the extractor's own module and of every module it imports by a relative specifier, transitively (static and dynamic imports, found by Slice B's `SPEC` regex), as read from disk, with paths relative to the repository root. Modules imported by name (node built-ins, packages) are not this repository's code and are not followed; a specifier that resolves to no file is part of the digest as unresolved. `EXTRACTOR_MODULES` names, for each source, the module its adapter factory is defined in; the closure is computed, never listed. On this checkout the closures hold 12 (lessons) to 88 (the ledger sources, which reach `ophanim/operate` and `pantheon/src/ledger`) modules. The version is computed once per process, when it first composes its sources: the code the process loaded.
+
+**An adapter that declares no `extractorVersion` relies on the `verifySnapshot` audit for this**: a change of its extractor's code with no change of source version is not detected at open. Slice A's lessons adapter used alone, the federation's import sources and the test fixtures declare none.
 
 ## 6. Writing (KP5)
 
@@ -116,7 +129,7 @@ Other fields:
 - the **next observation** of each source (the cursor rule's state);
 - the **verification fields** (`ok, entries, head, partial, complete, notes`).
 
-Each equality test also asserts that the snapshot was used, and that `rederived` equals the number of entries after it.
+KP4's equality covers every verification field **except `rederived`**, which counts the work this open did (the entries after the snapshot), not the full open's (every graph entry): reporting the full count would claim re-derivation this open did not do. Each equality test asserts instead that the snapshot was used, and that `rederived` equals the number of entries after it.
 
 | Case | Test |
 |---|---|
@@ -126,12 +139,14 @@ Each equality test also asserts that the snapshot was used, and that `rederived`
 | a federation import source (Slice E): the central from a snapshot, then an export imported after it; `dependencies` and `freshness` too | `equality: a federation import source` |
 | a source the snapshot recorded `unavailable` is never loaded as `applied`, even when readable again; its facts absent, `complete` false; the audit reports the difference | `never better:` |
 | the audit passes a sound snapshot, and reports one this reader would not use | `audit:` |
-| the real graph opened from a snapshot: the same digest, sources and `complete` | `ophanim/graph/extract.test.mjs` "the real graph opened from a signed snapshot" |
+| the real graph opened from a snapshot: the same digest, sources and `complete`; the record holds each extractor's version | `ophanim/graph/extract.test.mjs` "the real graph opened from a signed snapshot" |
+| every source of the systems graph declares its extractor version; each declared module defines its adapter factory; the closure follows transitive and dynamic imports and ignores files not imported | `ophanim/graph/extract.test.mjs` "every source of the systems graph declares" |
 
 KP3, KP5 and KP7 are covered in `checkpoint.test.mjs`:
 
 - **trust**: unpinned key; signature; another ledger, a fork, a shorter ledger; contract, origin registry, instance, sources; state bytes and projection digest;
-- **fallback**: none, partial, the newest refused and the next used;
+- **extractor**: a snapshot derived by another extractor version (or one declared on one side only) is refused, and the open equals the full open, which marks the source `diverged` and is partial;
+- **fallback**: none, partial, the newest refused and the next used; a snapshot directory that cannot be listed;
 - **tail**: the chain verified; validation under the reader's registry; notes against each entry;
 - **write**: atomic, under a real writer process paused mid-write and then killed; two real writer processes; retention and the ledger untouched;
 - **no snapshot**: the full open unchanged on a checkpointed ledger;
@@ -156,7 +171,7 @@ Setup:
 | full open of L2 | 1.63, 1.66, 1.68 s |
 | writing a snapshot (23.9 MiB) | 323 to 507 ms |
 
-**The target (a current-snapshot open under 0.5 s) is met: 353 to 437 ms.** Where it goes, re-timed one part at a time in the same process:
+**The target (a current-snapshot open under 0.5 s) is met: 353 to 437 ms.** After the extractor versions were added (section 5a), one fresh-process open from a current snapshot of a rebuilt L (24.2 MiB; its record holds the five extractor versions) took **408 ms**; composing the sources, which now digests each extractor's module closure, took 26 ms of the process's setup, outside the open. Where it goes, re-timed one part at a time in the same process:
 
 - JSON parse of the state: 204 ms
 - the projection-digest check: 106 ms
@@ -168,7 +183,7 @@ A snapshot 1 entry behind costs what that entry re-derives. A tool's entry costs
 
 ## 9. Mutations
 
-`node packages/graph/tests/checkpoint.mutate.mjs` runs 20 mutations, each against only its deciding tests, on a disposable copy of the tree. It is kept apart from `graph.mutate.mjs` and `federation.mutate.mjs`, and its source shape reads as text for `extract.test.mjs`.
+`node packages/graph/tests/checkpoint.mutate.mjs` runs 22 mutations, each against only its deciding tests, on a disposable copy of the tree. It is kept apart from `graph.mutate.mjs` and `federation.mutate.mjs`, and its source shape reads as text for `extract.test.mjs`.
 
 | ID | Regression | Deciding tests |
 |---|---|---|
@@ -178,6 +193,8 @@ A snapshot 1 entry behind costs what that entry re-derives. A tool's entry costs
 | K4 | the contract registry digest ignored | trust: contract |
 | K5 | the origin registry digest ignored | trust: contract |
 | K6 | the instance and registered sources ignored | trust: contract |
+| K21 | a source's extractor version ignored (other code's facts loaded as applied) | extractor |
+| K22 | an unlistable snapshot directory throws instead of falling back | fallback: cannot be listed |
 | K7 | the state not checked against its signed digest | trust: state; fallback |
 | K8 | the projection digest not checked | trust: state |
 | K9 | the chain not verified on the snapshot path | tail: chain |
@@ -198,17 +215,17 @@ The anchor check has no mutation of its own. Every entry hash commits to its par
 ## 10. What the owner decides
 
 - **The key that signs snapshots**, and who holds it (with KG-4). Tests and the real-graph opener use synthetic keys only. A reader pins the keys it accepts. Rotating a key means pinning the new key next to the old one until the old snapshots age out.
-- **The audit cadence**: how often `verifySnapshot` performs the full open and compares. The audit is the only check against what no digest covers: an extractor whose output changed without a change of source version, and a source that became unreadable after the snapshot (below).
+- **The audit cadence**: how often `verifySnapshot` performs the full open and compares. The audit is the only check against what no digest covers: an extractor change in a source whose adapter declares no `extractorVersion` (section 5a), and a source that became unreadable after the snapshot (below).
 - **Retention**: the default keeps 2 snapshots (about 24 MiB each on the real graph today).
 - **When Slice D writes**: a write costs 0.3 to 0.5 s on the real graph, so writing on every tick would cost what it saves.
 
 ## 11. Caveats and future work
 
 - **A snapshot holds facts as they were re-derived when it was written.** A source that has become unreadable since keeps those facts, with the `applied` status the snapshot recorded. A full open would mark it `unavailable`. `freshness()` still reads the source now and reports it, and the audit shows the difference. The reverse never happens: a status the snapshot recorded as not re-derived is never loaded as `applied` (`never better`).
-- **Facts from an extractor whose output changed with no change of source version** keep the snapshot's facts, where a full open would mark that observation `diverged`. Neither the contract nor the registry digest covers extractor code. The audit is the check.
+- **An extractor whose code changed with no change of source version** refuses the snapshot when its adapter declares `extractorVersion` (every source of the systems graph does). An adapter that declares none keeps the snapshot's facts, where a full open would mark that observation `diverged`; for it, the audit is the check. The version covers the code this repository holds, not the node built-ins or third-party packages an extractor imports by name.
 - `partial` is equal to the full open's when the snapshot holds no gap. When it holds one, the snapshot path notes each gap once, at its observation; the full open notes each entry it could not re-derive.
 - `rederived` counts the work this open did, as frontier mode does. The equality tests compare it against the number of entries after the snapshot, not against the full open's count.
 - **A constant factor, not a different curve.** The open from a snapshot parses the whole state (about 1.3 KB a fact, 23.9 MiB for 19,188 facts), so it grows with the graph. At the synthetic 300,000-fact scale (architecture section 13), expect it to be several seconds. The next steps, if needed: a compact encoding of the records, or per-source fact caches keyed by `(source, version, facts digest)` (slice-b section 7).
-- A writer killed mid-write leaves its `.tmp-*` file. Readers ignore it, but nothing removes it yet.
+- **Future ticket:** a writer killed mid-write leaves its `.tmp-*` file. Readers ignore it, but nothing removes it yet.
 - `kinds.mjs` imports `openSnapshot` and `checkpoint.mjs` imports `openGraph`. This is a module cycle of function declarations only, used at call time.
 - KG-8 still applies: a ledger re-created with the same authority has the same anchor. Its snapshots are refused by the entry-hash check, not by the anchor.

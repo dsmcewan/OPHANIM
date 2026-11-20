@@ -3,7 +3,8 @@
 // projection's state serializer and restorer, openGraph's `snapshot` option; docs/knowledge-graph/checkpoint.md). Kept
 // apart from graph.mutate.mjs and federation.mutate.mjs. Every mutation re-introduces a plausible regression of what a
 // snapshot may be trusted for -- its signature not checked, any key accepted, a forked ledger accepted, the registry,
-// origin registry or registered sources ignored, its state or its projection digest not checked, the entries after it
+// origin registry, registered sources or extractor versions ignored, an unlistable snapshot directory thrown rather than
+// fallen back from, its state or its projection digest not checked, the entries after it
 // not applied, verified or noted, a source's replay status upgraded, a refusal not recorded, a partial file visible, a
 // write of a projection that is not its ledger's, retention not applied, and the full open changed when no snapshot is
 // given -- on a DISPOSABLE COPY of this tree (never the tree itself). Only the tests that decide it run there (`tests`:
@@ -45,6 +46,13 @@ export const MUTATIONS = [
     edits: [one(CK, "  if (state.length !== body.state_bytes || sha(state) !== body.state_digest) return 'its state is not the state it signed';\n", '')]},
   {id: 'K8', what: 'the restored state is not checked against its recorded projection digest', tests: [t('checkpoint', '^trust: a snapshot whose state is not')],
     edits: [one(CK, "    : projection.digest(body.position.seq) !== body.projection_digest ? 'its state does not reproduce its recorded projection digest'\n", '')]},
+  {id: 'K21', what: 'a source\'s extractor version is ignored: a snapshot derived by other extractor code loads its facts as applied',
+    tests: [t('checkpoint', '^extractor:')],
+    edits: [one(CK, '  if (moved !== undefined) return', '  if (false) return')]},
+  {id: 'K22', what: 'a snapshot directory that exists but cannot be listed throws instead of falling back to the full open',
+    tests: [t('checkpoint', '^fallback: a snapshot directory that exists')],
+    edits: [one(CK, '  try { files = listSnapshots(snapshot.dir); } catch (e) { return declined(`the snapshot directory could not be listed (${e.code ?? e.message})`); }',
+      '  files = listSnapshots(snapshot.dir);')]},
   // ---- the chain and the entries after the snapshot (KP3) ------------------------------------------------------------
   {id: 'K9', what: 'the chain is not verified on the snapshot path (the ledger\'s frontier verification skipped)', tests: [t('checkpoint', '^tail: the chain after the snapshot')],
     edits: [one(CK, "      try { v = openLedger({dir, kinds: chainOnly(kinds), anchor, checkpointEvery, lockTimeoutMs, lockStaleMs, log}).verify({mode: 'frontier'}); }",

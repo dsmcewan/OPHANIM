@@ -163,6 +163,41 @@ test('fallback: no snapshot, a partial file, or a refused newest one: the next a
   assert.equal(f.digest(), g.digest());
 });
 
+test('extractor: a snapshot derived by another version of a source\'s extractor is refused; the full open reports what it reports today', t => {
+  const w = world(t), s = pinned(w);
+  const A = 'sha256:' + 'a'.repeat(64), B = 'sha256:' + 'b'.repeat(64);
+  const g = w.open({sources: [{...dirSource(w.srcRoot), extractorVersion: A}]});
+  g.observe(SYSTEM, ex(w, 0));
+  g.assert([tool({entity: id('evidence', 'observation', 'o1')})], w.by('tool'));
+  const written = writeSnapshot(g, {dir: s.dir, signer: s.signer});
+  assert.deepEqual(JSON.parse(fs.readFileSync(written.file, 'utf8').split('\n')[0]).body.extractors, {[SYSTEM]: A}, 'the snapshot records it');
+  assert.equal(used(w.open({sources: [{...dirSource(w.srcRoot), extractorVersion: A}], ...s.opts})), true, 'the same code: used');
+  // The extractor's code changed (every fact now carries one more attribute); the source's version did not.
+  const changed = {...dirSource(w.srcRoot), extractorVersion: B, readAt: v => dirSource(w.srcRoot).readAt(v).map(d => ({...d, attributes: {...d.attributes, extra: true}}))};
+  const fast = w.open({sources: [changed], ...s.opts}), full = w.open({sources: [changed]});
+  assert.deepEqual([used(fast), fast.verification.snapshot.refused], [false, true]);
+  assert.equal(fast.verification.snapshot.reason, `the extractor of source "${SYSTEM}" is ${B} here, not ${A} as when it was derived (other code yields other facts)`);
+  const {snapshot, ...fields} = fast.verification;
+  assert.deepEqual([fields, fast.digest()], [full.verification, full.digest()], 'the full open was taken');
+  assert.deepEqual([fast.verification.complete, fast.view().sources().map(x => x.replay), fast.view().node(C('sdk-gateway')).present], [false, ['diverged'], false],
+    'the old facts are not loaded as applied');
+  assert.match(fast.verification.partial[0].why, /the source now yields digest sha256:[0-9a-f]+, not the recorded sha256:[0-9a-f]+; its facts are not applied/);
+  // Declared on one side only is a difference too.
+  const undeclared = w.open(s.opts);
+  assert.equal(used(undeclared), false);
+  assert.match(undeclared.verification.snapshot.reason, new RegExp(`is null here, not ${A}`));
+  void snapshot;
+});
+
+test('fallback: a snapshot directory that exists but cannot be listed takes the full open, with why; the open does not throw', t => {
+  const {w, g} = snapped(t);
+  const notADirectory = path.join(w.dir, 'not-a-directory');
+  fs.writeFileSync(notADirectory, 'a file where the snapshot directory should be');
+  const h = w.open({snapshot: {dir: notADirectory, keys: {}}});
+  assert.deepEqual(h.verification.snapshot, {used: false, seq: null, refused: false, reason: 'the snapshot directory could not be listed (ENOTDIR)', refusals: []});
+  assert.equal(h.digest(), g.digest());
+});
+
 test('tail: the chain after the snapshot is verified as the full open verifies it; an entry that fails there fails here', t => {
   const {w, s} = snapped(t);
   w.open().assert([tool({entity: id('evidence', 'observation', 'after')})], w.by('tool'));

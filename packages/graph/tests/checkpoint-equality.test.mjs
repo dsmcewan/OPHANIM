@@ -154,7 +154,8 @@ test('never better: a source the snapshot recorded unavailable is never loaded a
   // The source is readable again: the open from the snapshot still holds it as the snapshot recorded it.
   gone = false;
   const fast = w.open({sources: sources(), snapshot: s.snapshot});
-  assert.deepEqual([fast.verification.snapshot.used, fast.verification.snapshot.sources.map(x => [x.id, x.replay])], [true, [[SYSTEM, 'unavailable']]]);
+  assert.equal(fast.verification.snapshot.used, true, `the snapshot is used: ${fast.verification.snapshot.reason}`);
+  assert.deepEqual(fast.verification.snapshot.sources.map(x => [x.id, x.replay]), [[SYSTEM, 'unavailable']]);
   assert.deepEqual(fast.view().sources().map(x => [x.id, x.replay]), [[SYSTEM, 'unavailable']], 'never applied');
   assert.equal(fast.view().node(C('sdk-gateway')).present, false, 'its facts are absent, not assumed');
   assert.equal(fast.verification.complete, false);

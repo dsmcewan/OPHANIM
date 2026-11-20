@@ -11,6 +11,9 @@
 // Inputs    writeSnapshot: an open graph, a directory and a signer ({key_id, privatePem}: packages/ledger
 //           generateSigner). openSnapshot (called by openGraph's `snapshot` option): the directory and the pinned keys
 //           ({key_id: publicJwk}). Which key signs snapshots is the owner's decision (KG-4): tests use synthetic keys.
+//           A source adapter may declare `extractorVersion`, an opaque string naming the code its extractor runs (the
+//           domain decides what it digests; this file only records and compares it): a snapshot derived by another
+//           version of any source's extractor is refused. An adapter that declares none relies on verifySnapshot.
 // Outputs   A file per snapshot, `graph-snapshot-<seq>-<state digest>.json`: one header line (the signed record) and the
 //           serialized state. The graph's verification says which open was taken: {snapshot: {used, seq, refused, reason}}.
 // Must never  Write the ledger; let a reader see a partial file (a temporary file, then a rename in the same
@@ -51,6 +54,20 @@ export const originsDigest = origins => H(origins);
 /** The registered source adapters, as their identity: the facts a source yields name its extractor, authority and ref. */
 const adaptersOf = adapters => [...adapters.values()].map(a => ({id: a.id, extractor: a.extractor ?? null, authority: a.authority ?? null, ref: a.ref ?? null}))
   .sort((a, b) => byString(a.id, b.id));
+/**
+ * Each registered source's extractor version, {source id: string | null (undeclared)}. The facts a source yields at one
+ * version are a function of its extractor's code too: a replay by changed code yields other facts (a full open marks
+ * that observation diverged), so a snapshot derived by other code is not this reader's.
+ */
+function extractorsOf(adapters) {
+  const out = {};
+  for (const a of [...adapters.values()].sort((x, y) => byString(x.id, y.id))) {
+    const v = a.extractorVersion ?? null;
+    if (v !== null && (typeof v !== 'string' || !v.length)) fail(`source ${a.id}: extractorVersion is a non-empty string, or absent`);
+    out[a.id] = v;
+  }
+  return out;
+}
 /** Each source as the projection holds it at its cursor: {id, version, digest (of its facts), state, replay, seq}. */
 function sourcesHeld(projection) {
   const v = projection.at(projection.seq);
@@ -104,7 +121,7 @@ export function writeSnapshot(graph, {dir, signer, retain = 2} = {}) {
   if (!at || entryHash(at) !== p.head) fail(`the projection's position (seq ${p.seq}) is not an entry of its ledger; refresh the graph first`);
   const bytes = Buffer.from(JSON.stringify(p.serialize()));
   const body = {schema: SNAPSHOT_SCHEMA, anchor: graph.anchor, instance: p.instance, position: {seq: p.seq, hash: p.head}, contract: contractOf(),
-    origins: originsDigest(p.origins), adapters: adaptersOf(p.adapters), sources: sourcesHeld(p), projection_digest: p.digest(p.seq),
+    origins: originsDigest(p.origins), adapters: adaptersOf(p.adapters), extractors: extractorsOf(p.adapters), sources: sourcesHeld(p), projection_digest: p.digest(p.seq),
     state_digest: sha(bytes), state_bytes: bytes.length};
   const signature = {key_id: signer.key_id, public: createPublicKey(createPrivateKey(signer.privatePem)).export({format: 'jwk'}), sig: signBody(body, signer.privatePem)};
   const header = Buffer.from(JSON.stringify({schema: SNAPSHOT_SCHEMA, body, signature}) + '\n');
@@ -130,7 +147,7 @@ export function writeSnapshot(graph, {dir, signer, retain = 2} = {}) {
 
 // ---- reading ----------------------------------------------------------------------------------------------------------
 /** Why a snapshot's signed record is refused by this reader, or null. Decided from the record alone. */
-function headerRefusal(head, {keys, anchor, contract, origins, instance, adapters}) {
+function headerRefusal(head, {keys, anchor, contract, origins, instance, adapters, extractors}) {
   if (!plain(head) || head.schema !== SNAPSHOT_SCHEMA || !plain(head.body) || !plain(head.signature)) return `the record is not ${SNAPSHOT_SCHEMA}`;
   const {body, signature} = head;
   if (body.schema !== SNAPSHOT_SCHEMA) return `the record is not ${SNAPSHOT_SCHEMA}`;
@@ -142,6 +159,9 @@ function headerRefusal(head, {keys, anchor, contract, origins, instance, adapter
   if (body.origins !== origins) return `it was derived under origin registry ${body.origins}, not this reader's ${origins}`;
   if (body.instance !== instance) return `it is of instance ${body.instance}, not ${instance}`;
   if (canonical(body.adapters) !== canonical(adapters)) return 'it was derived with other registered sources than this reader\'s';
+  const was = id => (plain(body.extractors) && Object.hasOwn(body.extractors, id) ? body.extractors[id] : null);
+  const moved = Object.keys(extractors).find(id => was(id) !== extractors[id]);
+  if (moved !== undefined) return `the extractor of source "${moved}" is ${extractors[moved]} here, not ${was(moved)} as when it was derived (other code yields other facts)`;
   return null;
 }
 
@@ -215,10 +235,13 @@ export function openSnapshot({snapshot, dir, anchor, ledger, kinds, projection, 
     throw Object.assign(new Error('snapshot is {dir: an absolute directory, keys: {key_id: public key}}'), {code: 'GRAPH_REFUSED'});
   }
   const expect = {keys: snapshot.keys, anchor, contract: contractOf(), origins: originsDigest(projection.origins), instance: projection.instance,
-    adapters: adaptersOf(projection.adapters)};
-  const files = listSnapshots(snapshot.dir), refusals = [];
+    adapters: adaptersOf(projection.adapters), extractors: extractorsOf(projection.adapters)};
+  const refusals = [];
   // Declined: the caller performs the full open, and the reason is recorded in its verification.
   const declined = reason => ({used: false, info: {used: false, seq: refusals[0]?.seq ?? null, refused: refusals.length > 0, reason, refusals}});
+  // A directory that exists but cannot be listed is a reason to take the full open, never an error of the open.
+  let files;
+  try { files = listSnapshots(snapshot.dir); } catch (e) { return declined(`the snapshot directory could not be listed (${e.code ?? e.message})`); }
   if (!files.length) return declined('there is no snapshot in the snapshot directory');
   let chain = null;
   for (const f of files) {

@@ -6,7 +6,9 @@
 //           over them and observe each source, in the order their references need (a mention names a file the
 //           repository source holds, so the repository is observed first).
 // Inputs    The repository root, the commit (a name is resolved ONCE here and pinned), the ledgers' roots and anchors.
-// Outputs   ORIGIN_SPEC / originsOf(): the origin registry; sourcesOf(): the adapters; openSystemsGraph(): a graph
+// Outputs   ORIGIN_SPEC / originsOf(): the origin registry; sourcesOf(): the adapters, each declaring its extractor's
+//           version (extractorVersionOf: the digest of the extractor's module and its local imports, transitively, as
+//           read from disk; a snapshot derived by other code is refused, packages/graph/checkpoint.mjs); openSystemsGraph(): a graph
 //           ledger with SYNTHETIC keys generated for this process (never persisted, never a production key: key
 //           custody for the graph domain is the owner's decision, architecture.md section 16); observeAll().
 // Must never  Hold or name a production key; write any source; observe a source out of its reference order.
@@ -14,10 +16,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
 import {generateSigner} from '../../../packages/ledger/index.mjs';
 import {createGraphLedger, openGraph, defineOrigins} from '../../../packages/graph/index.mjs';
 import {lessonsSource, SOURCE_ID as LESSONS_SOURCE, EXTRACTOR as LESSONS_EXTRACTOR, LESSONS_ORIGIN} from '../lessons.mjs';
-import {repoSource, SOURCE_ID as REPO_SOURCE, EXTRACTOR as REPO_EXTRACTOR, REPO_ORIGIN} from './repo.mjs';
+import {repoSource, SOURCE_ID as REPO_SOURCE, EXTRACTOR as REPO_EXTRACTOR, REPO_ORIGIN, SPEC} from './repo.mjs';
 import {verificationSource, SOURCE_ID as VERIFICATION_SOURCE, EXTRACTOR as VERIFICATION_EXTRACTOR, VERIFICATION_ORIGIN} from './verification.mjs';
 import {recordsSource, SOURCE_ID as RECORDS_SOURCE, EXTRACTOR as RECORDS_EXTRACTOR, RECORDS_ORIGIN} from './records.mjs';
 import {statusSource, workSource, cycleSource, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE, STATUS_ANCHOR, EXTRACTOR as LEDGERS_EXTRACTOR, LEDGERS_ORIGIN} from './ledgers.mjs';
@@ -43,8 +46,45 @@ export const ORIGIN_SPEC = Object.freeze({
 export const originsOf = (extra = {}) => defineOrigins({...ORIGIN_SPEC, ...extra});
 
 /**
- * The source adapters. `commit` pins the repository-backed sources (repo, verification, records) to ONE commit, so their
- * cross-references meet in one tree; the ledgers are included when their roots are given.
+ * The version of the code an extractor runs: the digest of the text of `file` and of every module it imports by a
+ * relative specifier, transitively, as read from disk now (the import-specifier regex is repo.mjs's SPEC, the layering
+ * test's). A specifier that names no readable file is part of the digest as unresolved. Paths are relative to `root`, so
+ * the version does not depend on where the checkout is. Modules imported by name (node built-ins, packages) are not this
+ * repository's code and are not followed.
+ */
+export function extractorVersionOf(file, {root = ROOT} = {}) {
+  const seen = new Map(), todo = [path.resolve(file)];
+  while (todo.length) {
+    const f = todo.pop();
+    if (seen.has(f)) continue;
+    let text = null;
+    try { text = fs.readFileSync(f); } catch {}
+    seen.set(f, text === null ? null : createHash('sha256').update(text).digest('hex'));
+    if (text !== null) for (const m of text.toString('utf8').matchAll(SPEC)) if (m[2].startsWith('.')) todo.push(path.resolve(path.dirname(f), m[2]));
+  }
+  const rows = [...seen].map(([f, h]) => [path.relative(root, f).split(path.sep).join('/'), h]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return 'sha256:' + createHash('sha256').update(JSON.stringify({schema: 'ophanim.graph.extractor-version/v1', modules: rows})).digest('hex');
+}
+const here = spec => fileURLToPath(new URL(spec, import.meta.url));
+/** Each source's extractor: the adapter factory, and the module it is defined in (the root of its version's closure). */
+export const EXTRACTOR_MODULES = Object.freeze({
+  [REPO_SOURCE]: {factory: repoSource, module: here('./repo.mjs')}, [VERIFICATION_SOURCE]: {factory: verificationSource, module: here('./verification.mjs')},
+  [RECORDS_SOURCE]: {factory: recordsSource, module: here('./records.mjs')}, [LESSONS_SOURCE]: {factory: lessonsSource, module: here('../lessons.mjs')},
+  [STATUS_SOURCE]: {factory: statusSource, module: here('./ledgers.mjs')}, [WORK_SOURCE]: {factory: workSource, module: here('./ledgers.mjs')},
+  [CYCLE_SOURCE]: {factory: cycleSource, module: here('./ledgers.mjs')},
+});
+// Read once per process: the version of the code this process loaded when it first composed its sources.
+const versions = new Map();
+const declared = s => {
+  const m = EXTRACTOR_MODULES[s.id].module;
+  if (!versions.has(m)) versions.set(m, extractorVersionOf(m));
+  return {...s, extractorVersion: versions.get(m)};
+};
+
+/**
+ * The source adapters, each declaring its extractor's version. `commit` pins the repository-backed sources (repo,
+ * verification, records) to ONE commit, so their cross-references meet in one tree; the ledgers are included when their
+ * roots are given.
  */
 export function sourcesOf({repo = ROOT, commit, status = {root: path.join(repo, 'status/ledger'), anchor: STATUS_ANCHOR}, work = null, cycle = null,
   lessons = true, only = null} = {}) {
@@ -53,7 +93,7 @@ export function sourcesOf({repo = ROOT, commit, status = {root: path.join(repo, 
     repoSource({repo, ref: pinned}), verificationSource({repo, ref: pinned}), recordsSource({repo, ref: pinned}),
     ...(lessons ? [lessonsSource({repo})] : []),
     ...(status ? [statusSource(status)] : []), ...(work ? [workSource(work)] : []), ...(cycle ? [cycleSource(cycle)] : []),
-  ];
+  ].map(declared);
   return {commit: pinned, sources: only ? all.filter(s => only.includes(s.id)) : all};
 }
 
