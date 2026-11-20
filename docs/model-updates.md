@@ -90,6 +90,18 @@ The cross-check found something the capture alone could not: pages the labs' own
 
 A figure is cited from the lab's own page (`show <lab> <address>`), never from a Context7 snippet.
 
+## From documentation to practice
+
+Captured pages change nothing here until they are read across the labs and set beside what this repository does. `ophanim/lessons/practices.json` is that reading: per theme, where the labs agree, where they differ, and practices proposed for OPHANIM, each resting on a lab's quoted words. `docs/ophanim-best-practices.md` is generated from it. A practice is a proposal until the owner accepts or strikes it, recorded with the owner's dated decision in the registry.
+
+```
+node ophanim/lessons/practices.mjs report    # what stands
+node ophanim/lessons/practices.mjs verify    # every quotation against the captured pages
+node ophanim/lessons/practices.mjs render    # rewrite the page from the registry
+```
+
+When a lab's pages change, `verify` names the quotations that are no longer in their pages; those practices are read again.
+
 ## What this does not do
 
 - It reads documentation. It does not ask a lab's API which models a given key is served; that needs a key the lab accepts.
