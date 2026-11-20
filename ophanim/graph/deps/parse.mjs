@@ -7,7 +7,7 @@
 //           runs, the files it reads and writes by path, the hosts and path-like strings it contains, and its top-level
 //           functions with the calls they make to an imported name or to another function of the file.
 // Inputs    The file's text and its path (for the parser's diagnostics only).
-// Outputs   readCode(text, {file}) -> {ok, imports, env, programs, reads, writes, hosts, strings, functions,
+// Outputs   readCode(text, {file}) -> {ok, imports, exports, env, programs, reads, writes, hosts, strings, functions,
 //           module_calls, unresolved: {programs, reads}} or {ok: false, why, ...empty lists}. parserVersion().
 // Invariants  A line is the 1-based line the thing is written on. A call, a program or a read is recorded only when the
 //           callee resolves, in this file, to an import (or a top-level function of the file) that no enclosing function
@@ -42,7 +42,7 @@ export const isBuiltin = s => s.startsWith('node:') || CHILD_PROCESS.has(s) || F
 const HOST = /https?:\/\/([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,})(?![a-z0-9.-])/gi;
 const PATHLIKE = /^[\w@.~-]+(?:\/[\w@.~-]+)*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const empty = () => ({imports: [], env: [], programs: [], reads: [], writes: [], hosts: [], strings: [], functions: [], module_calls: [],
+const empty = () => ({imports: [], exports: [], env: [], programs: [], reads: [], writes: [], hosts: [], strings: [], functions: [], module_calls: [],
   unresolved: {programs: [], reads: []}});
 
 /** What `text` (the file `file`) needs, read by the parser. See the header for the shape. */
@@ -79,6 +79,26 @@ export function readCode(text, {file = 'file.mjs'} = {}) {
       specifierNodes.add(s.moduleSpecifier);
       const names = s.exportClause?.kind === K.NamedExports ? s.exportClause.elements.map(e => (e.propertyName ?? e.name).text) : [];
       out.imports.push({specifier: s.moduleSpecifier.text, line: lineOf(s), kind: 'reexport', names, default: false, namespace: s.exportClause?.kind !== K.NamedExports});
+    }
+  }
+
+  // ---- exports: the names other files may take, and where a re-exported or aliased one really is ----------------------
+  const exportedBy = s => Boolean(s.modifiers?.some(m => m.kind === K.ExportKeyword));
+  const defaulted = s => Boolean(s.modifiers?.some(m => m.kind === K.DefaultKeyword));
+  const fnLike = n => n && (n.kind === K.ArrowFunction || n.kind === K.FunctionExpression);
+  for (const s of sf.statements) {
+    const line = lineOf(s);
+    if (s.kind === K.FunctionDeclaration && exportedBy(s)) out.exports.push({name: defaulted(s) ? 'default' : s.name.text, line, kind: 'function'});
+    else if (s.kind === K.ClassDeclaration && exportedBy(s)) out.exports.push({name: defaulted(s) ? 'default' : s.name.text, line, kind: 'class'});
+    else if (s.kind === K.VariableStatement && exportedBy(s)) {
+      for (const d of s.declarationList.declarations) if (d.name.kind === K.Identifier) out.exports.push({name: d.name.text, line, kind: fnLike(d.initializer) ? 'function' : 'value'});
+    } else if (s.kind === K.ExportAssignment) out.exports.push({name: 'default', line, kind: fnLike(s.expression) ? 'function' : 'value'});
+    else if (s.kind === K.ExportDeclaration) {
+      const from = literal(s.moduleSpecifier);
+      if (s.exportClause?.kind === K.NamedExports) for (const e of s.exportClause.elements) {
+        const inner = (e.propertyName ?? e.name).text;
+        out.exports.push(from === null ? {name: e.name.text, line, kind: 'alias', local: inner} : {name: e.name.text, line, kind: 'reexport', specifier: from, imported: inner});
+      } else if (from !== null) out.exports.push({name: s.exportClause?.name?.text ?? '*', line, kind: 'reexport', specifier: from, imported: '*'});
     }
   }
 
@@ -167,7 +187,8 @@ export function readCode(text, {file = 'file.mjs'} = {}) {
   const walk = (n, ctx) => {
     const unit = unitOf.get(n);
     if (unit && !ctx.unit) {
-      const record = {name: unit.name, line: lineOf(unit.node.kind === K.VariableDeclaration ? unit.node.parent.parent : unit.node), exported: unit.exported, calls: []};
+      const record = {name: unit.name, kind: unit.node.kind === K.ClassDeclaration ? 'class' : 'function',
+        line: lineOf(unit.node.kind === K.VariableDeclaration ? unit.node.parent.parent : unit.node), exported: unit.exported, calls: []};
       out.functions.push(record);
       ctx = {unit: record, shadows: declaredIn(n), keys: new Set()};
     }

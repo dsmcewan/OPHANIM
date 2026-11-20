@@ -117,11 +117,36 @@ test('FUNCTIONS AND CALLS: each top-level function with the calls it makes to an
   assert.deepEqual(r.module_calls, [{line: 9, local: 'helper'}], 'a call at the top level belongs to the module');
 });
 
+test('EXPORTS: every exported name with its line and what it is; an alias names its local, a re-export names where it comes from', () => {
+  const r = read(lines(
+    "export function f() {}",
+    "export const k = 1, arrow = () => 2;",
+    "export class C {}",
+    "const a = 1; function g() {}",
+    "export {a, g as h};",
+    "export {x as y} from './x.mjs';",
+    "export * from './all.mjs';",
+    "export default function () {}",
+  ));
+  assert.deepEqual(r.exports, [
+    {name: 'f', line: 1, kind: 'function'},
+    {name: 'k', line: 2, kind: 'value'},
+    {name: 'arrow', line: 2, kind: 'function'},
+    {name: 'C', line: 3, kind: 'class'},
+    {name: 'a', line: 5, kind: 'alias', local: 'a'},
+    {name: 'h', line: 5, kind: 'alias', local: 'g'},
+    {name: 'y', line: 6, kind: 'reexport', specifier: './x.mjs', imported: 'x'},
+    {name: '*', line: 7, kind: 'reexport', specifier: './all.mjs', imported: '*'},
+    {name: 'default', line: 8, kind: 'function'},
+  ]);
+  assert.deepEqual(read("const v = 1;\nexport default v;\n").exports, [{name: 'default', line: 2, kind: 'value'}]);
+});
+
 test('A FILE THAT DOES NOT PARSE is reported, with what the parser said, and gives no facts', () => {
   const r = read("import {a from './a.mjs';\nexport const = ;\n");
   assert.equal(r.ok, false);
   assert.match(r.why, /^the parser reports \d+ syntax error\(s\); first at line 1: /);
-  assert.deepEqual([r.imports, r.env, r.programs, r.reads, r.functions], [[], [], [], [], []]);
+  assert.deepEqual([r.imports, r.exports, r.env, r.programs, r.reads, r.functions], [[], [], [], [], [], []]);
 });
 
 test('A TYPESCRIPT FILE is read as TypeScript by its extension: type-only syntax is not a syntax error', () => {
