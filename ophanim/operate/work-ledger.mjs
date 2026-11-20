@@ -88,6 +88,23 @@ export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed'
 export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket', 'prompt']);
 export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
 export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
+// RESEARCH (owner direction 2026-11-20: the research team; operate/research.mjs). `work.research` records, by `phase`:
+//   request     an investigation is asked for, with what triggered it and by whom. A request carrying `once: 1` (every
+//               request this code writes) is refused while the same {item, trigger, question} is already recorded.
+//   team        a research team is opened for an item: its role, its coordinator and subordinate seats, the selection
+//               record, its limits and its root node. Once per team.
+//   node        one member: its identity, its parent, its level, its seat and its question, recorded when it is admitted
+//               (before it runs) and again with its outcome (the model that answered, where its full report is, by digest).
+//   refusal     a delegation the controller did not admit, with its code.
+//   conclusion  the team's end: status, whether the question is answered, whether what was found changes what a plan
+//               should rest on, the findings (concise text here, the full record by digest), the telemetry, and every
+//               contributor with the model asked and the model that answered. Once per team. It answers its request.
+// The level of a node is bounded HERE as well as in the controller: a record of an eleventh level is not taken.
+export const RESEARCH_PHASES = Object.freeze(['request', 'team', 'node', 'refusal', 'conclusion']);
+export const RESEARCH_NODE_STATES = Object.freeze(['admitted', 'finished', 'failed', 'cancelled']);
+export const RESEARCH_DEPTH_MAX = 10;
+/** The requests no conclusion has answered yet, from an item's research records (`work.research(item)`), oldest first. */
+export const openResearchRequests = records => { const answered = new Set(records.filter(r => r.phase === 'conclusion' && r.request).map(r => r.request)); return records.filter(r => r.phase === 'request' && !answered.has(r.hash)); };
 /** Why a claim may no longer record a result or charge a call at `at` (ms), or null. Shared by append and re-derivation. */
 export function fenceRefusal(claim, {released, at}) {
   if (released) return `the claim (${claim.stage}, attempt ${claim.attempt}) was already released (${released.outcome ?? 'released'}): LEASE_FENCED, a released claim records nothing`;
@@ -163,6 +180,38 @@ function kinds({operators}) {
         const q = view.payload(h);
         return q.item === e.payload.item && q.status_entry === e.payload.status_entry && q.sources === e.payload.sources;
       }) ? `a recovery of "${e.payload.item}" against these sources and this status is already recorded` : null,
+    },
+    'work.research': {
+      authors: byController,
+      validate: p => {
+        if (p?.schema !== WORK_SCHEMA || !ID.test(p.item ?? '') || !RESEARCH_PHASES.includes(p.phase) || !ISO(p.at)) return 'a research record names {item, phase, at}';
+        const seat = x => plain(x) && str(x.model);
+        if (p.phase === 'request') return str(p.trigger) && str(p.question) && str(p.by) && (p.scope === undefined || (Array.isArray(p.scope) && p.scope.every(str))) && (p.role === undefined || str(p.role)) ? null
+          : 'a research request names {trigger, question, by, scope?, role?}';
+        if (!str(p.team)) return 'a research record after the request names its team';
+        if (p.phase === 'team') return (p.request === null || SHA.test(p.request ?? '')) && str(p.trigger) && str(p.role) && seat(p.coordinator) && seat(p.subordinate) && plain(p.limits) && str(p.root) ? null
+          : 'a research team names {request|null, trigger, role, coordinator, subordinate, limits, root}';
+        if (p.phase === 'node') return str(p.node) && ['coordinator', 'specialist'].includes(p.kind) && Number.isInteger(p.depth) && p.depth >= 1 && p.depth <= RESEARCH_DEPTH_MAX && RESEARCH_NODE_STATES.includes(p.state)
+          && (p.parent === null || str(p.parent)) && seat(p.seat) && str(p.question) ? null : `a research node names {node, kind, parent|null, depth (1 to ${RESEARCH_DEPTH_MAX}), state, seat, question}`;
+        if (p.phase === 'refusal') return str(p.code) && str(p.reason) ? null : 'a research refusal names {code, reason}';
+        return (p.request === null || SHA.test(p.request ?? '')) && str(p.status) && typeof p.satisfied === 'boolean' && typeof p.material === 'boolean' && plain(p.telemetry) && Array.isArray(p.contributors)
+          && typeof p.findings_text === 'string' && (p.findings === null || (plain(p.findings) && SHA.test(p.findings.sha256 ?? ''))) ? null
+          : 'a research conclusion names {request|null, status, satisfied, material, telemetry, contributors, findings_text, findings|null}';
+      },
+      rederive: (e, view) => {
+        const p = e.payload, mine = entriesOf(view, 'work.research').filter(h => h !== e.hash).map(h => view.payload(h)).filter(q => q.item === p.item);
+        if (p.phase === 'request') return p.once === 1 && mine.some(q => q.phase === 'request' && q.trigger === p.trigger && q.question === p.question) ? 'this research is already requested for the item (same trigger and question)' : null;
+        const team = mine.filter(q => q.team === p.team);
+        if (p.phase === 'team') return team.some(q => q.phase === 'team') ? 'this research team is already recorded' : null;
+        if (!team.some(q => q.phase === 'team')) return 'its team is not recorded for this item';
+        if (p.phase === 'node') {
+          if (p.kind === 'coordinator') return p.depth === 1 && p.parent === null ? null : 'a coordinator is level 1 and has no parent';
+          if (p.parent === null) return 'a specialist has a parent';
+          return team.some(q => q.phase === 'node' && q.node === p.parent && q.depth === p.depth - 1) ? null : `its parent ${p.parent} is not a recorded node of this team one level above it`;
+        }
+        if (p.phase === 'conclusion') return team.some(q => q.phase === 'conclusion') ? 'this research team has already concluded' : null;
+        return null;
+      },
     },
     'work.reassessment': {
       authors: byController,
@@ -467,6 +516,9 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     recordReassessment: ({item, cycle, recorded_policy, policy, findings, policy_rules = undefined, at = new Date().toISOString()}) =>
       append('work.reassessment', {item, cycle, recorded_policy, policy, findings, ...(policy_rules !== undefined ? {policy_rules} : {}), at}),
     reassessments: item => of('work.reassessment', r => item === undefined || r.item === item),
+    /** Record one research record (see RESEARCH above). `claim`: the stage claim it was made under, when there is one. */
+    recordResearch: ({claim = null, at = new Date().toISOString(), ...p}) => append('work.research', {...p, at}, claim ? [claim] : []),
+    research: item => of('work.research', r => item === undefined || r.item === item),
     intakes: () => of('work.intake'),
     claims: item => of('work.claim', c => item === undefined || c.item === item),
     stages: item => of('work.stage', s => item === undefined || s.identity.item === item),
