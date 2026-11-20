@@ -1,6 +1,6 @@
 # Knowledge graphs: the architecture and relationship contract
 
-**Contract** `ophanim.graph/v1`, contract version 1.0.0 (`packages/graph/schema.mjs` `GRAPH_SCHEMA`, `CONTRACT_VERSION`).
+**Contract** `ophanim.graph/v1`, contract version 1.1.0 (`packages/graph/schema.mjs` `GRAPH_SCHEMA`, `CONTRACT_VERSION`).
 **Slice** A of the program the owner's directive of 2026-11-20 sets (`docs/knowledge-graph/directive-2026-11-20.md`): the shared graph foundation (its deliverable 2, and the foundation part of deliverable 3).
 **Base** branch `kg/slice-a`, from `c14fed0` (the inventory `docs/knowledge-graph/inventory.md` and the Slice A ownership manifest).
 **Decisions** KD1 to KD13 are the coordinator's (the Slice A brief). This document says how each is implemented; it does not reopen them.
@@ -75,6 +75,9 @@ Five logical domains share one identity grammar, one assertion record and one re
 | `capability` | A | `qualification` | a qualification record, established only from measured evidence |
 | `capability` | A | `limitation` | a known limitation or constraint |
 | `capability` | A | `pool` | an availability or quota pool |
+| `capability` | A | `lane` | a named serving variant of a model on one transport at a fixed setting (an Antigravity lane name); not a model of its own |
+| `capability` | A | `chair` | a roster chair: a named seat position, the roles it holds and the vendors that may occupy it |
+| `capability` | A | `placement` | an owner- or operator-directed placement of a model in a role (a seating-table row, an ARGO seat, a fit-matrix cell), with its declared basis; a direction, never a measurement |
 | `systems` | B | `enterprise` | an enterprise |
 | `systems` | B | `department` | a department |
 | `systems` | B | `process` | a business process |
@@ -255,6 +258,14 @@ The types beyond the directive's list and its examples: `runs-in` and `eligible-
 | `applies-to` | the source lesson, failure or repair applies to the target, under its stated conditions | `learning/lesson`, `learning/failure-class`, `learning/failure-mechanism`, `learning/repair` | `systems/*`, `work/*`, `capability/*` | no | — | from → to | authoritative: declared; derived: declared, measured; hypothetical: any basis |
 | `runs-in` | the source model, agent or tool executes in the target runtime, environment or transport | `capability/model`, `capability/agent`, `capability/tool` | `capability/runtime`, `capability/environment`, `capability/transport` | no | — | to → from | authoritative: declared; observed: measured; derived: declared; hypothetical: any basis |
 | `mentions` | the source text names the target; a textual relation, never a dependency, cause or qualification | `*` | `*` | no | — | not followed | authoritative: textual, declared; derived: textual, structural; hypothetical: any basis |
+| `made-by` | the source model was made by the target laboratory: lineage and the reviewer-exclusion input, never a restriction on who may do the work | `capability/model` | `capability/lab` | no | — | not followed | authoritative: declared; derived: declared; hypothetical: any basis |
+| `served-by` | the source model, lane or executable capability is served through the target provider, transport or credential pool | `capability/model`, `capability/lane`, `capability/capability` | `capability/provider`, `capability/transport`, `capability/pool` | no | — | to → from | authoritative: declared, structural; observed: measured; derived: declared, structural; hypothetical: any basis |
+| `alias-of` | the source name denotes the target model (a thinking or effort variant, a lane name, an alias); it is not another model | `capability/lane`, `capability/model` | `capability/model` | no | — | to → from | authoritative: declared, structural; derived: declared, structural; hypothetical: any basis |
+| `limited-by` | the source is constrained by the target known limitation, which carries its source and quote; a limitation is never read as a capability | `capability/capability`, `capability/runtime`, `capability/transport`, `capability/tool`, `capability/environment`, `capability/model`, `capability/lane`, `capability/pool`, `capability/agent` | `capability/limitation` | no | — | to → from | authoritative: declared, structural; observed: measured; derived: declared, structural, measured; hypothetical: any basis |
+| `combines` | the source executable capability is the combination of the target model or lane, runtime, transport, tool, sandbox profile (environment) or credential scope (pool); each stays its own entity | `capability/capability` | `capability/model`, `capability/lane`, `capability/runtime`, `capability/transport`, `capability/tool`, `capability/environment`, `capability/pool` | no | — | to → from | authoritative: declared, structural; derived: declared, structural; hypothetical: any basis |
+| `holds` | the source roster chair holds the target role | `capability/chair` | `capability/role` | no | — | not followed | authoritative: declared; derived: declared; hypothetical: any basis |
+| `places` | the source owner- or operator-directed placement names the target role, or the model, lane or executable capability placed in it; a direction, never a measurement or a qualification | `capability/placement` | `capability/role`, `capability/model`, `capability/lane`, `capability/capability` | no | — | to → from | authoritative: declared; derived: declared; hypothetical: any basis |
+| `measures` | the source observation is a defined metric over the recorded executions of the target (its sources and coverage stated); never a qualification | `evidence/observation` | `capability/capability`, `capability/model`, `capability/lane`, `capability/runtime`, `capability/transport`, `capability/role` | no | — | not followed | observed: measured; derived: measured; hypothetical: any basis |
 <!-- relationship-registry:end -->
 
 ## 8. Storage, keys, replay and the projection

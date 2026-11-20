@@ -1,0 +1,40 @@
+{
+  "format": 2,
+  "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+  "key": "synthetic-pair-1",
+  "providers": {
+    "kind": "synthetic"
+  },
+  "profile": "argo",
+  "shipped": false,
+  "turns": [
+    {
+      "vendor": "xai",
+      "model": "grok-4.6",
+      "transport": "api",
+      "purpose": "work",
+      "selection": {
+        "profile": "argo",
+        "source": "operator-override",
+        "difficulty": "easy"
+      }
+    }
+  ],
+  "attempts": [
+    {
+      "n": 1,
+      "purpose": "work",
+      "vendor": "xai",
+      "model": "grok-4.6",
+      "pool": "xai",
+      "transport": "api",
+      "outcome": "ok",
+      "usage": {
+        "input_tokens": 400,
+        "output_tokens": 600
+      },
+      "ms": 3000,
+      "provider_requests": 1
+    }
+  ]
+}

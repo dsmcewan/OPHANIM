@@ -1,0 +1,79 @@
+{
+  "format": 2,
+  "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+  "key": "synthetic-b",
+  "started_at": "2026-11-20T11:00:00.000Z",
+  "providers": {
+    "kind": "undeclared"
+  },
+  "profile": "argo",
+  "shipped": false,
+  "gates": null,
+  "turns": [
+    {
+      "vendor": "xai",
+      "model": "grok-4.3",
+      "transport": "api",
+      "purpose": "scout",
+      "selection": {
+        "profile": "argo",
+        "source": "profile",
+        "difficulty": "medium"
+      }
+    }
+  ],
+  "attempts": [
+    {
+      "n": 1,
+      "purpose": "scout",
+      "vendor": "xai",
+      "model": "grok-4.3",
+      "pool": "xai",
+      "transport": "api",
+      "outcome": "transient",
+      "usage": null,
+      "ms": 100,
+      "provider_requests": 1
+    },
+    {
+      "n": 2,
+      "purpose": "scout",
+      "vendor": "xai",
+      "model": "grok-4.3",
+      "pool": "xai",
+      "transport": "api",
+      "outcome": "ok",
+      "usage": {
+        "input_tokens": 300,
+        "output_tokens": 50
+      },
+      "ms": 900,
+      "provider_requests": 1,
+      "usd": 0.01
+    },
+    {
+      "n": 3,
+      "purpose": "work",
+      "vendor": "agy_google",
+      "model": "gemini-4-carbon",
+      "pool": "agy_google",
+      "transport": "api",
+      "outcome": "refused_metered",
+      "code": "METERED_GEMINI_DISABLED",
+      "usage": null,
+      "provider_requests": 0
+    },
+    {
+      "n": 4,
+      "purpose": "critique",
+      "vendor": "agy_google",
+      "model": "gemini-3.6-flash",
+      "pool": "agy_google",
+      "transport": "agy",
+      "outcome": "ok",
+      "usage": null,
+      "ms": 7000,
+      "provider_requests": 2
+    }
+  ]
+}

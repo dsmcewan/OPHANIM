@@ -1,0 +1,10 @@
+{
+  "schema": "pantheon.pair/v1",
+  "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+  "pair_id": "pair-1",
+  "stakes": "low",
+  "primary": {
+    "run_digest": "sha256:2c3ab27147c0cc7c55f67d59e4ce6d14b43a793d2fdd60a05e61d7b63d596af1"
+  },
+  "counterpart": null
+}
