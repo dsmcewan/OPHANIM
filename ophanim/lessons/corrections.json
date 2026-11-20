@@ -537,6 +537,14 @@
           "ref": "kg/jail-fds-closer (552022d)",
           "detected_by": "the KG-11 closer agent itself, disclosed in its report",
           "note": "a NEAR MISS: one Grep tool call over **/*.mutate.mjs ran without excluding findings-* paths; no withheld path matched and nothing was shown or used, and every later search used git grep with the exclusion. The brief named the exclusion for git grep only; later briefs name Glob and Grep as well (the self-repair and hub briefs)"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/hub-spoke (7d77566)",
+          "detected_by": "the hub-readiness agent itself, disclosed in its report",
+          "note": "two early commands reached findings-* paths before filtering them out of their output: `git ls-files | grep -v findings` (path names only) and `grep -rln openCentral --include=*.mjs .` without the exclusion (it searched file contents under those paths; matching names were filtered from what was shown). Nothing was displayed or used, and later commands used the exclusion. The third instance in one day: the brief named the exclusion, so the next step is the mechanical one this class already records (a pre-integration scan of an agent transcript for withheld paths)"
         }
       ],
       "detector": {
