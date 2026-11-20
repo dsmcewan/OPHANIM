@@ -8,6 +8,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The full history: the knowledge graph's why-it-exists demonstrations read the commit that introduced a file
+          # (ophanim/graph/graph-d1-why.test.mjs); a shallow checkout holds one commit and cannot answer.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.1'

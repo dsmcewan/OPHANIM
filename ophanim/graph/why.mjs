@@ -31,6 +31,15 @@ const sourceOf = a => ({source: a.source.id, version: a.source.version, ref: a.s
 const established = (view, id) => view.query(id, 'established');
 const out = (view, id, types) => view.edgesOf(id, {mode: 'established', types}).filter(e => e.from === id);
 
+/**
+ * Where this graph's repository history is CUT (a shallow checkout), or null when it is complete: then no commit of it can
+ * be named as the one that introduced a path (coordinator fix at integration).
+ */
+export function historyCutAt(view) {
+  const cut = view.subjects().filter(s => kindOf(s) === 'systems/repository').flatMap(r => view.node(r)?.attributes?.history_cut_at ?? []);
+  return cut.length ? [...new Set(cut)].sort(byString) : null;
+}
+
 /** The commits of the ancestry that changed `subject`, oldest first (Slice B's structural `derived-from`). */
 export function commitsOf(view, subject) {
   return out(view, subject, ['derived-from']).filter(e => kindOf(e.to) === 'systems/change')
@@ -69,7 +78,8 @@ export function whyJoins(view, subject) {
     }
   }
   // The commit that introduced it names a register id; the register defines it.
-  const first = commitsOf(view, subject)[0] ?? null;
+  // The earliest commit in this checkout introduced the path, unless the history is cut there (a shallow boundary).
+  const earliest = commitsOf(view, subject)[0] ?? null, first = earliest?.history_cut ? null : earliest;
   if (first) for (const id of [...new Set(String(first.subject ?? '').match(ENTRY_ID) ?? [])].sort(byString)) {
     const rec = recordId(id);
     if (!view.nodeIn(rec, 'established')) continue;
@@ -110,11 +120,13 @@ export function whyExists(view, subject) {
     .sort(byString).map(n => ({id: n, status: view.node(n).attributes.status ?? null, decisions: (view.node(n).attributes.decisions ?? []).length,
       basis: 'textual: the text names it; not a statement that it introduced or decided it'}));
   if (!requirements.length) gaps.push({category: 'requirement', why: 'no source states the requirement that introduced it: no ticket or plan names it as its slot, and no status item or prompt is joined to it'});
-  if (!decisions.length) gaps.push({category: 'decision', why: 'no decision is stated for it: the commit that introduced it names no register entry the register defines'});
+  const cut = commits[0]?.history_cut === true;
+  if (cut) gaps.push({category: 'introduced', why: `the history in this checkout is cut at ${String(commits[0].commit ?? '').slice(0, 12)} (a shallow clone) and the path is already in that commit's tree: the commit that introduced it is not in this checkout, so none is named and no decision is read from a commit message`});
+  if (!decisions.length) gaps.push({category: 'decision', why: cut ? 'no decision is stated for it in what this checkout holds' : 'no decision is stated for it: the commit that introduced it names no register entry the register defines'});
   if (!commits.length) gaps.push({category: 'commits', why: 'no commit of the ancestry changed this path under this name (a rename is not followed)'});
   const used = new Set([...joins.flatMap(j => j.sources.map(s => s.source)), ...view.node(subject).assertions.map(a => a.source.id)]);
   return {query: 'why-exists', cursor: view.seq, subject, requirements, decisions,
-    introduced_by: commits[0] ? {id: commits[0].id, commit: commits[0].commit ?? null, date: commits[0].date ?? null, subject: commits[0].subject ?? null} : null,
+    introduced_by: !cut && commits[0] ? {id: commits[0].id, commit: commits[0].commit ?? null, date: commits[0].date ?? null, subject: commits[0].subject ?? null} : null,
     recorded, textual: {register}, gaps, sources: [...used].sort(byString),
     note: 'every requirement and decision is a JOIN on an identity both sources state, labelled with its basis; a category no source fills is a gap, never filled by resemblance'};
 }
