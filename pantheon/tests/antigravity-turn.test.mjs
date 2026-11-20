@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, pythonRoots, IMPLEMENTER_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
-import { startFakeGemini, text, QUOTA } from "./fixtures/fake-gemini.mjs";
+import { startFakeGemini, text, QUOTA, notFound } from "./fixtures/fake-gemini.mjs";
 import { tempRepo } from "./fixtures/pipeline-stages.mjs";
 
 const FAKE_BRIDGE = fileURLToPath(new URL("./fixtures/fake-antigravity-bridge.mjs", import.meta.url));
@@ -183,6 +183,38 @@ test("every billed request is admitted before the provider sees it, by class; a 
   assert.deepEqual(r.gateway.refusals.map(x => x.refusal), ["PANTHEON_SUBAGENT_NOT_PINNED", "PANTHEON_MODEL_NOT_ALLOWED"]);
   assert.deepEqual(r.gateway.totals.by_class, { root: 1, subagent: 1, aux: 0 });
   assert.equal(r.gateway.sessions.find(s => s.class === "subagent").type, "code-explorer");
+});
+
+test("SUBAGENT FAILURES KEEP THE LEDGER AND THE BOUNDS: a child's refused or failed request, and its retry, are each charged before they are sent; they do not stop the implementer's session, and they free no slot", async t => {
+  // The provider answers the implementer, refuses the first child for quota (twice: the second is its retry) and fails the second child.
+  let child = 0;
+  const { upstream, run, note, admitted } = await setup(t, { decide: ({ model }) => (model !== "gemini-4-hydrogen" ? { parts: [text("ok")] }
+    : ++child === 2 ? { status: 500, error: { code: 500, message: "Internal error encountered.", status: "INTERNAL" } } : QUOTA) });
+  // The children's failures are the LAST thing the provider says in this session: no later answer to the implementer
+  // stands between them and the session's end.
+  const r = await run(CARBON, [
+    { request: { model: "gemini-4-carbon", as: "root" } },                                    // 200: the implementer's own request
+    invoke(2),
+    { request: { model: "gemini-4-hydrogen", as: "code-explorer", session: "child-1" } },     // 429
+    { request: { model: "gemini-4-hydrogen", as: "code-explorer", session: "child-2" } },     // 500
+    { request: { model: "gemini-4-hydrogen", as: "code-explorer", session: "child-1" } },     // 429 again: the child's retry
+    invoke(7),                                                                                // 2 + 7 > 8: the failed children still hold their slots
+  ]);
+  assert.deepEqual(note(r).requests.map(x => x.status), [200, 429, 500, 429]);
+  // THE LEDGER: every request was charged at its point of spend, the refused ones and the retry included.
+  assert.deepEqual(admitted.map(a => [a.class, a.type, a.model]), [["root", null, "gemini-4-carbon"], ["subagent", "code-explorer", "gemini-4-hydrogen"],
+    ["subagent", "code-explorer", "gemini-4-hydrogen"], ["subagent", "code-explorer", "gemini-4-hydrogen"]]);
+  assert.equal(upstream.requests.filter(x => x.verb).length, 4, "and each was sent once: nothing was retried behind the controller");
+  // THE SESSION: a child's failure is the child's. The implementer's session is not ended as a quota refusal or a
+  // failure of its own (which would step the ladder and discard its work): it ends with its answer.
+  assert.deepEqual([r.gateway.stop, r.served_model, r.served_model_source], [null, "gemini-4-carbon", "provider"]);
+  assert.deepEqual(r.gateway.sessions.filter(x => x.class === "subagent").map(x => [x.session, x.requests, x.errors.map(e => [e.kind, e.status])]),
+    [["child-1", 2, [["quota", 429], ["quota", 429]]], ["child-2", 1, [["provider_error", 500]]]], "each failure is on the child's own record");
+  assert.deepEqual(r.gateway.served_by_type, {}, "no child was answered, so no child is recorded as answered by any model");
+  // THE BOUND: both are still counted, and the invocation that would pass the ceiling with them is rejected and recorded.
+  assert.deepEqual([r.subagents.admitted_total, r.subagents.live, r.subagents.peak_live], [2, 2, 2]);
+  assert.deepEqual(note(r).decisions.map(d => d.allow), [true, false]);
+  assert.deepEqual(r.subagents.rejections.map(x => [x.code, x.asked, x.live, x.ceiling]), [["SUBAGENT_LIMIT", 7, 2, 8]]);
 });
 
 // EXACTLY THE DECLARED NAMES. The runtime reads other spellings of a declared argument name (observed on SDK 0.1.24, and
@@ -388,12 +420,94 @@ test("without the key, without the python, or without a jail the session does no
   assert.ok(existsSync(control_dir));
 });
 
+test("a session that cannot be run prepares nothing: no seat model, an effort the SDK does not take, no prompt, no usable key, a stop already given, no python, no bridge", async t => {
+  const { env, unit, upstream, admitted } = await setup(t);
+  const fresh = join(env.root, "control", "never-prepared");
+  const start = over => runAntigravitySdkTurn({ seat: CARBON, prompt: fake([]), worktree: env.repo, control_dir: fresh, unit, apiKey: KEY, upstream: upstream.url, python: process.execPath, bridge: FAKE_BRIDGE,
+    sandbox: { enabled: false, allowUnsandboxed: true }, admit: info => { admitted.push(info); }, timeoutS: 20, graceS: 1, ...over });
+  await assert.rejects(start({ seat: { vendor: "agy_google" } }), { code: "BAD_SEAT" });
+  await assert.rejects(start({ seat: { ...CARBON, effort: "ultra" } }), e => e.code === "BAD_SEAT" && /effort "ultra" is not a thinking level the SDK accepts/.test(e.message));
+  await assert.rejects(start({ prompt: "  " }), { code: "BAD_INPUT" });
+  // The key: absent, and one that cannot be a header value (a pasted line break). Each says which, and neither quotes it.
+  await assert.rejects(start({ apiKey: null }), e => e.code === "NO_API_KEY" && /the Antigravity SDK transport needs GEMINI_API_KEY/.test(e.message));
+  await assert.rejects(start({ apiKey: "SYNTH-KEY-first-line\nsecond-line" }), e => e.code === "NO_API_KEY" && /GEMINI_API_KEY is not usable as a key/.test(e.message) && !e.message.includes("SYNTH-KEY"));
+  const stopped = new AbortController();
+  stopped.abort(new Error("the stage was stopped"));
+  await assert.rejects(start({ signal: stopped.signal }), e => e.code === "ABORTED" && /before the implementer session started/.test(e.message));
+  // No python, no bridge: the SDK is not available here, which is not a failure of the model (no ladder step is owed).
+  await assert.rejects(start({ python: "/nonexistent/venv/bin/python" }), e => e.code === "lane_failure" && e.kind === "spawn" && e.sdk_unavailable === true && /PANTHEON_ANTIGRAVITY_PYTHON/.test(e.message));
+  await assert.rejects(start({ bridge: "/nonexistent/antigravity-bridge.py" }), e => e.code === "lane_failure" && e.kind === "spawn" && e.sdk_unavailable === true && /the bridge script is absent/.test(e.message));
+  assert.equal(existsSync(fresh), false, "no control directory was made for any of them");
+  assert.deepEqual([admitted.length, upstream.requests.length], [0, 0], "and the provider was asked nothing");
+});
+
+test("a workspace is not prepared without its two directories, nor for a unit that owns no path", async t => {
+  const env = await tempRepo();
+  t.after(env.cleanup);
+  const control_dir = join(env.root, "control", "nothing");
+  await assert.rejects(prepareSdkWorkspace({ worktree: env.repo, owned_paths: ["src/**"] }), { code: "NO_WORKSPACE" });
+  await assert.rejects(prepareSdkWorkspace({ control_dir, owned_paths: ["src/**"] }), { code: "NO_WORKSPACE" });
+  for (const owned_paths of [undefined, [], "src/**"]) await assert.rejects(prepareSdkWorkspace({ control_dir, worktree: env.repo, owned_paths }), { code: "NO_OWNED_PATHS" }, `owned_paths ${JSON.stringify(owned_paths)}`);
+  assert.equal(existsSync(control_dir), false, "nothing was made");
+});
+
+test("the availability check's own refusals end the turn before a session is started: quota is a quota failure, any other failure a transport failure", async t => {
+  const env = await tempRepo();
+  t.after(env.cleanup);
+  const control_dir = join(env.root, "control", "u1");
+  const answering = (status, error) => async () => new Response(JSON.stringify({ error }), { status, headers: { "content-type": "application/json" } });
+  const start = fetchImpl => runAntigravitySdkTurn({ seat: CARBON, prompt: fake([{ probe: true }]), worktree: env.repo, control_dir, unit: { unit_id: "u1", owned_paths: ["src/**"], verify_cmd: null, allowed_subagents: [] }, apiKey: KEY,
+    python: process.execPath, bridge: FAKE_BRIDGE, sandbox: { enabled: false, allowUnsandboxed: true }, fetchImpl });
+  await assert.rejects(start(answering(429, { code: 429, message: "Quota exceeded for quota metric 'Requests'", status: "RESOURCE_EXHAUSTED" })), e => {
+    assert.deepEqual([e.code, e.status, e.launch ?? null], ["quota_exhausted", 429, null]);
+    assert.deepEqual(e.availability.map(a => [a.model, a.available, a.kind]), [["gemini-4-carbon", false, "quota"]]);
+    return true;
+  });
+  await assert.rejects(start(answering(500, { code: 500, message: "Internal error encountered.", status: "INTERNAL" })), e => {
+    assert.deepEqual([e.code, e.kind, e.status, e.launch ?? null], ["lane_failure", "exit", 500, null]);
+    assert.match(e.message, /the provider could not be asked about gemini-4-carbon/);
+    return true;
+  });
+});
+
+test("a key the provider refuses DURING the session blocks the turn as CREDENTIAL_REFUSED: it is not a failure of the model, and no ladder step is owed", async t => {
+  // The availability check passed (a key may read the model list and still be refused generation).
+  const { run } = await setup(t, { decide: () => ({ status: 403, error: { code: 403, message: "Generative Language API has not been used in this project or it is disabled.", status: "PERMISSION_DENIED" } }) });
+  await assert.rejects(run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { result: { ok: false, message: "model unreachable: Error 403" } }]), e => {
+    assert.deepEqual([e.code, e.status, e.gateway.stop.kind], ["CREDENTIAL_REFUSED", 403, "auth"]);
+    return true;
+  });
+});
+
+test("a model the provider stops serving DURING the session is reported as unavailable, as it is before one: nothing is substituted", async t => {
+  // The availability check passed; the generation call is answered 404.
+  const { run } = await setup(t, { decide: ({ model }) => notFound(model) });
+  await assert.rejects(run(NEON, [{ request: { model: "gemini-4-neon", as: "root" } }, { result: { ok: false, message: "model unreachable: Error 404" } }]), e => {
+    assert.deepEqual([e.code, e.status, e.model, e.gateway.stop.kind], ["model_unavailable", 404, "gemini-4-neon", "model_unavailable"]);
+    return true;
+  });
+});
+
+test("a read that names no path is refused: there is nothing for the controller to check it against", () => {
+  const governor = subagentGovernor({ implementer: CARBON, allowed_types: [] });
+  const policy = { worktree: "/w", owned_paths: ["a"], control_dir: "/c" };
+  for (const call of [{ tool: "view_file", args: {} }, { tool: "list_directory", args: {} }, { tool: "search_directory", args: { Query: "BEGIN PRIVATE KEY" } }, { tool: "find_file", args: { Pattern: "*.pem", FullPath: true } }]) {
+    const d = toolDecision({ policy, governor }, call);
+    assert.deepEqual([d.allow, d.code], [false, "READ_NO_PATH"], JSON.stringify(call));
+  }
+});
+
 test("toolDecision never throws: a malformed call is a denial", () => {
   const governor = subagentGovernor({ implementer: CARBON, allowed_types: [] });
   for (const call of [{ tool: null, args: null }, { tool: "create_file", args: "x" }, { tool: "view_file", args: { AbsolutePath: 7 } }, { tool: 7 }]) {
     const d = toolDecision({ policy: { worktree: "/w", owned_paths: ["a"], control_dir: "/c" }, governor }, call);
     assert.equal(d.allow, false, JSON.stringify(call));
   }
+  // And when the decision itself fails (here: a governor that throws), the call is denied, never let through.
+  const broken = { isChild() { throw new Error("the governor failed"); } };
+  const d = toolDecision({ policy: { worktree: "/w", owned_paths: ["a"], control_dir: "/c" }, governor: broken }, { tool: "view_file", args: { AbsolutePath: "/w/a" } });
+  assert.deepEqual([d.allow, d.code], [false, "DECISION_EXCEPTION"]);
+  assert.match(d.reason, /the decision failed: the governor failed/);
 });
 
 test("REAL JAIL: the home's credential-bearing directories are empty to the bridge, except the one path the session runs from", async t => {

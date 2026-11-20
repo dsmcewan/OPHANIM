@@ -251,6 +251,20 @@
           "date": "2026-11-17",
           "ref": "practice-measure-plan-title.test.mjs (pre-commit)",
           "note": "a bare /TITLE:/ counted reviewer prompts (they quote the work item) as planner calls, and a total boundary of 30 was too loose to stop any run; caught by printing what matched and what ran, fixed with the planner's own instruction and a boundary that binds"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-19",
+          "ref": "4a040f1 (sdk-intake.mutate.mjs, G5)",
+          "note": "the test that an idle subagent keeps its slot never bound a trajectory, so it passed whether or not the slot was freed; caught when the mutation that frees the slot survived, fixed by starting the children the test speaks of"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "22ecb82 (mutation run and one sweep of uncovered refusal lines)",
+          "note": "with each refusal line that no mutation covered disabled in turn, 22 in the new controller modules were noticed by no test, and six of twelve mutations of the SDK bridge survived a suite that ran whole sessions only; one acceptance item (a subagent's own failed request) had no test. Caught by disabling the lines and by reading the acceptance list line by line; each now has a test that fails without it. Limits: the sweep was by pattern and was run once (docs/OPEN-LIMITATIONS.md L-720)"
         }
       ],
       "fixed_in": null,
@@ -310,6 +324,13 @@
           "note": "the chain was gated on grep's exit status; the backlog JSON carried an absolute key path and a proof test failed",
           "detected_by": "CI after the push (qualification.yml)",
           "corrected_by": "integrator"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-19",
+          "ref": "PR 68, the five commits before 9770094",
+          "note": "five commits were pushed while the qualification gate was red: the SDK contract suite skipped on the runner (no SDK installed there) and the no-skip gate failed, while the same suites were green where the SDK was installed. The pushes followed the local result; CI was not read until the pull request's events were. Fixed by installing the pinned SDK in the workflow"
         }
       ],
       "fixed_in": "b8bf3d9 (the path); the commit chain is now gated on the parsed fail count being 0",
@@ -369,6 +390,12 @@
           "date": "2026-11-17",
           "ref": "22cbbb8",
           "note": "symlinks escaped containment; requirement and history shared one identity; cut sources had no continuation; grep and the investigation total exceeded their byte budgets"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-19",
+          "ref": "22ecb82 (independent review of the Antigravity SDK transport)",
+          "note": "the same class in new code, two days after the owner raised it: the controller judged a tool call on the argument name the tool declares, and the SDK's runtime also read another spelling. run_command ran the command in `commandline` outside the verify jail; invoke_subagent started twelve subagents from `subagents` after the governor admitted one from `Subagents` (the ceiling). Found by a reviewer probing the installed runtime, not by this class's detector test, which is about its first instance; fixed by refusing any key a tool does not declare. NOT recorded as corrected_by mechanism: that would claim the owner's success criterion, which corrections.test.mjs pins as not claimed. Whether this counts is the owner's decision"
         }
       ],
       "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",
@@ -376,6 +403,44 @@
         "kind": "test",
         "file": "ophanim/operate/context-bounds.test.mjs",
         "name": "4. budgets hold before anything enters a prompt"
+      }
+    },
+    {
+      "id": "misses-fixed-without-cause",
+      "class": "Defects found late (by a mutation run, a merge, CI or a review) are fixed and reported one by one, without asking why each was missed and which other paths rest on the same assumption, so the next change repeats the mechanism.",
+      "source": "owner question 2026-11-19 ('Where do the missed failures come from. Explain why they were missed.'); owner's Evidence-Driven Reflection direction 2026-11-20; owner condition 7 (docs/self-evaluation.md)",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-19",
+          "ref": "PR 68 at d4f945e",
+          "note": "ten late-found defects had been fixed and listed; the causes were stated only when the owner asked. The answer named five (green accepted without a red run, tests written from the implementation, two enforcement points never compared, a stale base, CI not read) and missed the one the next day showed: no test had been derived from the acceptance list itself"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "a step of the work, not a property of the code; no executable check exists for it",
+        "next": "when a defect is found after its code was reported working, record with the fix which assumption let it through and which other paths share it, and check those paths before the next report. Evidence for it so far is this one run"
+      }
+    },
+    {
+      "id": "verification-past-the-contract",
+      "class": "Verification is extended on the strength of what else could be tested (a sweep, more mutations, whole sessions where a unit test would do) without first evaluating the work against its acceptance contract, so the run does not end and optional hardening is not told apart from a contract violation.",
+      "source": "owner direction 2026-11-20 ('Do not initiate another broad sweep or expand scope based solely on additional test opportunities. Evaluate the implementation against the original acceptance contract. Separate actual contract violations from optional hardening.'); owner conditions 2, 3 and 5 (docs/self-evaluation.md)",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-20",
+          "ref": "PR 68 after 22ecb82",
+          "note": "after one surviving mutation, a sweep of every uncovered refusal line and then mutations of the SDK bridge at about 25 s each against the installed SDK were started, with no evaluation against the nine acceptance items; the owner stopped it. The evaluation then found the one acceptance item with no test, which the sweep had not"
+        }
+      ],
+      "fixed_in": "this commit (the acceptance evaluation is in the pull request; the bridge is tested without a session; what remains is recorded as open entries L-719 and L-720)",
+      "detector": {
+        "kind": "none",
+        "why": "a judgement about when verification serves the contract; no executable check exists for it",
+        "next": "evaluate against the acceptance list as soon as its own suites are green; before a verification activity the list does not name, say which line it serves, and with none record it as a future entry instead of doing it. Use a test of the unit where one can show the behaviour, and a whole session only for what needs one"
       }
     }
   ]

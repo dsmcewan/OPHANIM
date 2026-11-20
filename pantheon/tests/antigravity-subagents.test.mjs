@@ -19,6 +19,12 @@ test("the ceilings are the owner's: Carbon 8, Neon 4, Hydrogen none; any other i
   assert.equal(SUBAGENT_MODEL, "gemini-4-hydrogen");
 });
 
+test("a governor is not built without the implementer's seat: a session whose model is unknown has no ceiling to enforce", () => {
+  for (const implementer of [undefined, null, {}, { vendor: "agy_google" }, { vendor: "agy_google", model: "" }]) {
+    assert.throws(() => subagentGovernor({ implementer }), /subagentGovernor: pass the implementer seat \{vendor, model\}/, `seat ${JSON.stringify(implementer)}`);
+  }
+});
+
 test("a Carbon implementer is admitted up to 8 live subagents; the ninth is rejected, and the rejection is on the record", () => {
   const g = gov(CARBON);
   const first = ask(g, 5), second = ask(g, 3);

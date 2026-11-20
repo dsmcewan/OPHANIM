@@ -6,7 +6,7 @@
 // a record, a config model the identity policy or the class table does not know.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FIT_MATRIX, FIT_MATRIX_BODY, IMPLEMENTER_LADDERS, fitMatrix, fitLadder, implementerPath, laneParts, quotaFailoverFor } from "../src/route/fit-matrix.mjs";
+import { FIT_MATRIX, FIT_MATRIX_BODY, IMPLEMENTER_LADDERS, fitMatrix, fitLadder, implementerPath, laneParts, quotaFailoverFor, sdkRoutingRefusal } from "../src/route/fit-matrix.mjs";
 import { selectSeat, selectionPolicy, antigravityFirst, seatTransport, CLASSES } from "../src/route/frontier.mjs";
 import { taskProfile } from "../src/route/task-profile.mjs";
 import { resolveModel, candidateIdentity } from "../src/review/identity.mjs";
@@ -16,6 +16,19 @@ import { modelId } from "../src/config/models.mjs";
 
 const D = ["easy", "medium", "hard"];
 const rung = s => `${s.model}@${s.effort ?? "-"}`;
+
+test("the routing config is checked before the matrix is built from it: an undeclared model, a thinking level the model has no record of, or a ladder that does not start on its own pick does not load", () => {
+  assert.equal(sdkRoutingRefusal(SDK_CONFIG), null, "the config as shipped");
+  const broken = edit => { const c = structuredClone(SDK_CONFIG); edit(c); return sdkRoutingRefusal(c); };
+  assert.equal(broken(c => { c.implementer.hard.model = "gemini-9-ultra"; }), '"gemini-9-ultra" is not a model config/antigravity-sdk.json declares');
+  assert.equal(broken(c => { c.ladders.easy[1].model = "gemini-9-ultra"; }), '"gemini-9-ultra" is not a model config/antigravity-sdk.json declares');
+  assert.equal(broken(c => { c.implementer.easy.effort = "ludicrous"; }), '"ludicrous" is not a thinking level recorded for gemini-4-hydrogen');
+  assert.equal(broken(c => { c.ladders.hard[1].effort = "ludicrous"; }), '"ludicrous" is not a thinking level recorded for gemini-4-hydrogen');
+  // Neon has no recorded level: any level named for it is one nobody recorded.
+  assert.equal(broken(c => { c.implementer.medium.effort = "high"; }), '"high" is not a thinking level recorded for gemini-4-neon');
+  assert.equal(broken(c => { c.ladders.medium = [...c.ladders.medium].reverse(); }), "the medium ladder does not start on the medium implementer");
+  assert.equal(broken(c => { c.ladders.easy[0].effort = "high"; }), "the easy ladder does not start on the easy implementer", "the same model at another level is another rung");
+});
 
 test("the implementer row: hard carbon, medium neon, easy hydrogen, each an SDK seat and none an agy CLI lane", () => {
   assert.deepEqual(D.map(d => fitMatrix("implementer", d).model), ["gemini-4-hydrogen", "gemini-4-neon", "gemini-4-carbon"]);

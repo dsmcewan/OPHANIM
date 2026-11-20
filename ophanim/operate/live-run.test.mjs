@@ -105,6 +105,8 @@ test('the manifest: every limit must be chosen (the example\'s nulls are refused
   assert.match(why({billing: {...good.billing, gemini_api_primary: false}})[0], /^billing\.gemini_api_primary is true: .* a primary Gemini API seat \(GEMINI_API_KEY\), and primary Gemini API execution is off unless the owner enables it/);
   assert.ok(why({billing: {scope: 's', metered_gemini_failover: false, note: ''}}).includes('billing.gemini_api_primary is required'));
   assert.deepEqual(why({schema: 'ophanim.live-run/v1'}), ['schema is "ophanim.live-run/v2"']);
+  assert.match(why({billing: {...good.billing, metered_gemini_failover: 'no'}})[0], /^billing\.metered_gemini_failover is true or false/);
+  assert.deepEqual(why({credentials: {required: [...good.credentials.required, 'GITHUB_TOKEN'], gemini_api_key: 'required'}}), ['credentials.required: unknown credential "GITHUB_TOKEN"']);
   assert.deepEqual(why({require_subagent: {type: 'api-designer', model: 'grok-4.7', min_calls: 0}}), ['require_subagent.type is a specialist type: one of code-explorer, dependency-analyst, context-retriever, test-constructor, bounded-implementer',
     'require_subagent.model is gemini-4-hydrogen (the model every implementer\'s native subagents run on)', 'require_subagent.min_calls is a positive integer']);
   assert.deepEqual(why({require_subagent: {type: 'code-explorer', model: 'gemini-4-hydrogen', min_calls: 1}}), []);

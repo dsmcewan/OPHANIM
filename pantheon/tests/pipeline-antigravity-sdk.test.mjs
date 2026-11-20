@@ -145,6 +145,21 @@ test("a seat that is neither an SDK seat nor an Antigravity lane is still refuse
   await assert.rejects(turns.implementer({ vendor: "agy_google", model: "gemini-4-carbon", seat: { vendor: "agy_google", model: "gemini-4-carbon" }, prompt: "p", cwd: "/tmp" }), e => e.code === "NOT_A_LANE");
 });
 
+test("the SDK implementer turn enters no session without a worktree, nor when the stage's deadline leaves no time for one; a session it does start is bounded by what the deadline leaves", async t => {
+  const env = await tempRepo();
+  t.after(env.cleanup);
+  const entered = [];
+  const turns = pipelineTurns({ turn: async () => ({ text: "", served_model: null }), antigravity: { geminiApiPrimary: true, graceS: 5, run: async a => { entered.push(a); return session(a); } } });
+  const ask = over => turns.implementer({ vendor: CARBON.vendor, model: CARBON.model, seat: CARBON, prompt: "p", cwd: env.repo, unit_id: "a", owned_paths: ["src/a/**"], ...over });
+  await assert.rejects(ask({ cwd: undefined }), { code: "NO_WORKTREE" });
+  // 5 s of kill grace and a 1 s turn do not fit in the 3 s the stage has left.
+  await assert.rejects(ask({ deadline: Date.now() + 3000 }), e => e.code === "DEADLINE" && /leaves no time for an implementer session/.test(e.message));
+  assert.equal(entered.length, 0, "the transport was entered for neither");
+  await ask({ deadline: Date.now() + 60_000, timeoutS: 600 });
+  assert.deepEqual([entered.length, entered[0].graceS], [1, 5]);
+  assert.ok(entered[0].timeoutS >= 50 && entered[0].timeoutS <= 55, `600 s asked, 60 s left, 5 s of grace: the session was given ${entered[0].timeoutS} s`);
+});
+
 test("a seat of the SDK transport is never asked as a single-turn seat: no relay reaches Hydrogen through a lane or the metered API", async () => {
   // The fit matrix's subagent row is the implementer's OWN subagents (native Hydrogen). Were that seat handed to the
   // A2A relay's single-turn path, it would be served lane-first by the agy CLI (sdk/agy-turn.mjs). It is refused instead.

@@ -51,12 +51,26 @@ function lane(model) {
 // The planner's medium seat: the newer Opus point release where the catalog declares it, else claude-opus-5.
 const OPUS = MODELS.anthropic["opus-5-5"] ? api("anthropic", "opus-5-5") : api("anthropic", "opus");
 
-/** An implementer seat of the Antigravity SDK transport, from config/antigravity-sdk.json: {vendor, model, transport, effort}. */
-function sdkSeat({ model, effort = null }) {
-  if (!Object.hasOwn(SDK_CONFIG.models, model)) throw new Error(`fit matrix: "${model}" is not a model config/antigravity-sdk.json declares`);
-  if (effort !== null && !thinkingLevelsOf(model).includes(effort)) throw new Error(`fit matrix: "${effort}" is not a thinking level recorded for ${model}`);
-  return Object.freeze({ vendor: SDK_VENDOR, model, transport: SDK_TRANSPORT, effort });
+/**
+ * Why `cfg` (the shape of config/antigravity-sdk.json) cannot seat the Google implementer, or null. Checked ONCE, below,
+ * before the matrix and the ladders are built from the config: every pick and every rung names a declared model, at a
+ * thinking level recorded for it or at none, and each ladder starts on its own difficulty's pick. A function of the
+ * config it is given, so that a test can show each refusal (a check that only runs at import can never be seen to fail).
+ */
+export function sdkRoutingRefusal(cfg) {
+  for (const d of SDK_DIFFICULTIES) {
+    const pick = cfg.implementer[d], ladder = cfg.ladders[d];
+    for (const { model, effort = null } of [pick, ...ladder]) {
+      if (!Object.hasOwn(cfg.models, model)) return `"${model}" is not a model config/antigravity-sdk.json declares`;
+      if (effort !== null && !(cfg.models[model].thinking ?? []).includes(effort)) return `"${effort}" is not a thinking level recorded for ${model}`;
+    }
+    if (ladder[0].model !== pick.model || (ladder[0].effort ?? null) !== (pick.effort ?? null)) return `the ${d} ladder does not start on the ${d} implementer`;
+  }
+  return null;
 }
+{ const bad = sdkRoutingRefusal(SDK_CONFIG); if (bad) throw new Error(`fit matrix: ${bad}`); }
+/** An implementer seat of the Antigravity SDK transport, from a checked config entry: {vendor, model, transport, effort}. */
+const sdkSeat = ({ model, effort = null }) => Object.freeze({ vendor: SDK_VENDOR, model, transport: SDK_TRANSPORT, effort });
 /** The seat of an SDK implementer's own subagents: the pinned subagent model on the same transport. Never asked as a seat of its own. */
 const NATIVE_SUBAGENT = Object.freeze({ vendor: SDK_VENDOR, model: SDK_CONFIG.subagents.model, transport: SDK_TRANSPORT, native: true });
 
@@ -69,7 +83,6 @@ export const FIT_MATRIX = freeze({
 });
 /** The implementer's ladder per difficulty: SDK seats, the matrix pick first (config/antigravity-sdk.json ladders). */
 export const IMPLEMENTER_LADDERS = freeze(Object.fromEntries(SDK_DIFFICULTIES.map(d => [d, SDK_CONFIG.ladders[d].map(sdkSeat)])));
-for (const d of SDK_DIFFICULTIES) if (IMPLEMENTER_LADDERS[d][0].model !== FIT_MATRIX.implementer[d].model || IMPLEMENTER_LADDERS[d][0].effort !== FIT_MATRIX.implementer[d].effort) throw new Error(`fit matrix: the ${d} ladder does not start on the ${d} implementer (config/antigravity-sdk.json)`);
 /** The stage-5 reviewer's only escalation path: inside OpenAI, each tier the dispatcher's own model. */
 export const REVIEWER_ESCALATION = Object.freeze(FIT_DIFFICULTIES.map(d => FIT_MATRIX.dispatcher[d]));
 export const FIT_ROLES = Object.freeze([...Object.keys(FIT_MATRIX), "reviewer"]);

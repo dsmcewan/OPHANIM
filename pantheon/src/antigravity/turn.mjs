@@ -236,8 +236,9 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   if (!str(model)) throw fail("BAD_SEAT", "runAntigravitySdkTurn: pass the implementer seat {vendor, model}");
   if (effort !== null && !SDK_THINKING.includes(effort)) throw fail("BAD_SEAT", `effort "${effort}" is not a thinking level the SDK accepts (${SDK_THINKING.join(", ")})`);
   if (!str(prompt)) throw fail("BAD_INPUT", "runAntigravitySdkTurn: pass the unit prompt");
-  if (!str(apiKey)) throw fail("NO_API_KEY", `the Antigravity SDK transport needs ${SDK_CONFIG.api.key_env} (the Gemini API; no subscription login is used)`);
-  { const bad = keyRefusal(apiKey); if (bad) throw fail("NO_API_KEY", `${SDK_CONFIG.api.key_env} is not usable as a key (${bad}); it was not sent anywhere`); }
+  // No key, or one that cannot be a header value: ONE check (keyRefusal covers both), here, before anything is prepared.
+  { const bad = keyRefusal(apiKey); if (bad) throw fail("NO_API_KEY", str(apiKey) ? `${SDK_CONFIG.api.key_env} is not usable as a key (${bad}); it was not sent anywhere`
+    : `the Antigravity SDK transport needs ${SDK_CONFIG.api.key_env} (the Gemini API; no subscription login is used)`); }
   if (signal?.aborted) throw fail("ABORTED", "the run was aborted before the implementer session started");
   if (python.includes("/") && !existsSync(python)) throw laneFailure("spawn", `the Antigravity SDK's python is absent at ${python} (set PANTHEON_ANTIGRAVITY_PYTHON to the venv that has google-antigravity ${SDK_CONFIG.sdk.version})`, { sdk_unavailable: true });
   if (!existsSync(bridge)) throw laneFailure("spawn", `the bridge script is absent at ${bridge}`, { sdk_unavailable: true });

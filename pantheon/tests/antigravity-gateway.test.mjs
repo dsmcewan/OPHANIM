@@ -3,6 +3,7 @@
 // Each test names the defect it would catch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { startModelGateway, providerAvailability, GATEWAY_REFUSALS } from "../src/antigravity/gateway.mjs";
 import { startFakeGemini, text, QUOTA, notFound } from "./fixtures/fake-gemini.mjs";
 
@@ -175,7 +176,7 @@ test("a stop that arrives while a request is still being admitted is honoured: t
     const pending = new Promise(r => { release = r; }), inAdmit = new Promise(r => { entered = r; });
     const { upstream, gw, post } = await setup(t, { admit: async () => { entered(); await pending; } });
     const sent = post("gemini-4-carbon", body(ROOT.marker)).then(r => r.status, () => "connection cut");
-    await inAdmit;                                  // the request is past the arrival check, waiting on its charge
+    await inAdmit;                                  // the request is past the first reading of the stop, waiting on its charge
     const closing = stopWith === "abort" ? (gw.abort("stopped by the caller"), null) : gw.close();
     release();
     const status = await sent;
@@ -184,6 +185,28 @@ test("a stop that arrives while a request is still being admitted is honoured: t
     assert.deepEqual(upstream.requests.filter(x => x.verb), [], `${stopWith}: nothing reached the provider after the stop`);
     assert.equal(gw.record().totals.forwarded, 0, stopWith);
   }
+});
+
+test("a request on a stopped session is refused before it is charged: one whose body was still arriving at the stop, and one that arrives after it", async t => {
+  // The stop is read once the whole request is in hand, so both are refused at the same place. Read on arrival only, the
+  // first would go on to its charge: a request that can no longer be sent would be charged to the run's bound.
+  const charged = [];
+  const { upstream, gw, post } = await setup(t, { admit: info => { charged.push(info.class); } });
+  const payload = Buffer.from(JSON.stringify(body(ROOT.marker)));
+  const slow = request(`${gw.url}/v1beta/models/gemini-4-carbon:streamGenerateContent?alt=sse`,
+    { method: "POST", headers: { "content-type": "application/json", "content-length": payload.length, "x-goog-api-key": gw.token } });
+  const answer = new Promise((resolve, reject) => { slow.on("error", reject); slow.on("response", res => { let s = ""; res.setEncoding("utf8"); res.on("data", c => { s += c; }); res.on("end", () => resolve({ status: res.statusCode, text: s })); }); });
+  slow.write(payload.subarray(0, 16));                            // the headers and the first bytes of the body
+  while (gw.record().requests.length < 1) await new Promise(r => setTimeout(r, 5));   // the gateway has the request, not its body
+  gw.abort("stopped by the caller");
+  slow.end(payload.subarray(16));
+  const first = await answer;
+  const second = await post("gemini-4-carbon", body(ROOT.marker));
+  assert.deepEqual([first.status, second.status], [503, 503]);
+  assert.match(JSON.parse(first.text).error.message, /^PANTHEON_GATEWAY_ABORTED: the session was stopped: stopped by the caller/);
+  assert.deepEqual(charged, [], "neither request was charged");
+  assert.deepEqual(upstream.requests, [], "and neither reached the provider");
+  assert.deepEqual(gw.record().requests.map(r => [r.refusal, r.forwarded]), [[GATEWAY_REFUSALS.ABORTED, false], [GATEWAY_REFUSALS.ABORTED, false]]);
 });
 
 test("callers without the session token cannot grow the record without bound: they are counted, and a bounded number of rows is kept", async t => {
@@ -201,10 +224,36 @@ test("callers without the session token cannot grow the record without bound: th
 test("a key that is not a clean header value is refused before it is sent, and its text is in no message", async t => {
   // A pasted key with a line break: the HTTP layer rejects the header and quotes the value in its error.
   const BAD = "SYNTH-KEY-first-line\nsecond-line";
-  await assert.rejects(startModelGateway({ upstream: "http://127.0.0.1:9", apiKey: BAD, root: ROOT, subagents: SUBS }), e => e.code === "NO_API_KEY" && !e.message.includes("SYNTH-KEY") && /not usable as a key/.test(e.message));
+  // (A gateway that started is closed: a missing refusal fails this test, and leaves no listener that keeps the run from ending.)
+  await assert.rejects(startModelGateway({ upstream: "http://127.0.0.1:9", apiKey: BAD, root: ROOT, subagents: SUBS }).then(g => g.close()),
+    e => e.code === "NO_API_KEY" && !e.message.includes("SYNTH-KEY") && /not usable as a key/.test(e.message));
   const a = await providerAvailability({ upstream: "http://127.0.0.1:9", apiKey: BAD, model: "gemini-4-carbon" });
   assert.deepEqual([a.available, a.kind, a.status], [false, "auth", null]);
   assert.ok(!JSON.stringify(a).includes("SYNTH-KEY"), "the key's text is not in the availability record");
+});
+
+test("the gateway does not start without a key, nor without the implementer's model and marker", async t => {
+  // A gateway that started is closed here, so a missing refusal fails this test and leaves no listener behind.
+  const start = async over => { const gw = await startModelGateway({ upstream: "http://127.0.0.1:9", apiKey: KEY, root: ROOT, subagents: SUBS, ...over }); await gw.close(); return "started"; };
+  for (const apiKey of [undefined, null, "", "   "]) await assert.rejects(start({ apiKey }), { code: "NO_API_KEY" }, `key ${JSON.stringify(apiKey)}`);
+  // Without its marker the implementer's own requests would be recorded as nobody's; without its model none would be served.
+  for (const root of [undefined, { model: ROOT.model }, { marker: ROOT.marker }, { model: "", marker: ROOT.marker }]) await assert.rejects(start({ root }), /pass root \{model, marker\}/, `root ${JSON.stringify(root)}`);
+  assert.equal(await start({}), "started", "and with both it starts");
+});
+
+test("a request over the size bound is refused while it arrives: it is not held whole, not charged and not forwarded", async t => {
+  const charged = [];
+  const { upstream, gw, post } = await setup(t, { admit: info => { charged.push(info.class); }, over: { maxBodyBytes: 2048 } });
+  const outcome = await post("gemini-4-carbon", body(ROOT.marker, "s-root", { padding: "x".repeat(8192) })).then(r => r.status, () => "connection cut");
+  assert.ok(outcome === 413 || outcome === "connection cut", `the oversized request was answered ${outcome}`);
+  assert.deepEqual(charged, [], "it was not charged");
+  assert.deepEqual(upstream.requests, [], "and it did not reach the provider");
+  assert.deepEqual(gw.record().requests.map(r => [r.refusal, r.forwarded]), [[GATEWAY_REFUSALS.TOO_LARGE, false]]);
+  // A request within the bound is still served by the same gateway.
+  assert.equal((await post("gemini-4-carbon", body(ROOT.marker))).status, 200);
+  assert.deepEqual(charged, ["root"]);
+  // The bound is a positive whole number of bytes, or the gateway does not start.
+  for (const maxBodyBytes of [0, -1, 1.5, "2048", null]) await assert.rejects(startModelGateway({ upstream: upstream.url, apiKey: KEY, root: ROOT, subagents: SUBS, maxBodyBytes }).then(g => g.close()), /maxBodyBytes/, `bound ${JSON.stringify(maxBodyBytes)}`);
 });
 
 test("only the generation calls of an allowed model are served: any other path or verb is refused", async t => {

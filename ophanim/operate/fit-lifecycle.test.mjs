@@ -343,6 +343,10 @@ test('LIFECYCLE, default routing (fit): primary Gemini API execution is off by d
     const on = await run('on', {geminiApiPrimary: true, meteredFailover: false});
     assert.deepEqual(on.map(s => `${s.stage}:${s.status}`), DONE);
     assert.deepEqual(ctx.sdk().map(x => [x.agent, x.unit]), [['sdk-implementer', 'alpha']]);
+    // The setting is true or false: a truthy value that is not `true` is not an authorization, and is not read as one.
+    for (const geminiApiPrimary of ['yes', 1, null]) {
+      assert.throws(() => makeExecutors({repo: ctx.dir, makeClientFor: ctx.makeClientFor, turn: scriptedTurn(), stateDir: ctx.dir, geminiApiPrimary}), /makeExecutors: geminiApiPrimary is true or false/, JSON.stringify(geminiApiPrimary));
+    }
   });
 });
 

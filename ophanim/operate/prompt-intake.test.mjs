@@ -265,6 +265,10 @@ test('the command line: `prompt` registers the text it is given; without the own
     assert.deepEqual([JSON.parse(none.out).authorized, JSON.parse(none.out).blocked], [false, 'NO_AUTHORITY']);
     assert.equal((await run(['prompt'])).code, 2, 'no text: usage');
     assert.equal((await run(['prompt', '--text', 'x', '--file', file])).code, 2);
+    // Who submitted it is part of the provenance: with no --author and no user name in the environment it is asked for, never guessed.
+    const said = [];
+    assert.equal(await cli(['prompt', '--text', 'x', '--repo', repo, '--status-ledger', f.statusRoot, '--json'], {log: () => {}, err: s => said.push(s), env: {}}), 2);
+    assert.match(said.join('\n'), /prompt needs --author NAME/);
     assert.deepEqual(promptRecords(repo).map(p => p.item).sort(), [j.item, JSON.parse(none.out).item].sort());
     assert.equal(readPromptRecord({repo, item: j.item}).prompt, PROMPT);
   } finally { fs.rmSync(repo, {recursive: true, force: true}); fs.rmSync(noKeys, {recursive: true, force: true}); }
@@ -373,4 +377,48 @@ test('the basis that binds a prompt record is written by the intake only: a plan
     assert.notEqual(plan.status, 'passed', 'a plan that proposes the intake\'s basis was accepted');
     assert.match(JSON.stringify([plan.blocker, plan.findings, plan.next]), /proposes\.basis may not take the form of a prompt intake's basis/);
   });
+});
+
+test('a record changed after it was written is not signed for by submitting the original words again: it is refused and left as it was found', () => {
+  const repo = mkTmp('prompt-changed-'), noKeys = mkTmp('prompt-changed-nokeys-');
+  try {
+    const f = emptyBoard(repo);
+    const first = registerPrompt({repo, statusRoot: f.statusRoot, keys: noKeys, prompt: PROMPT, provenance: WHO});   // recorded, unsigned
+    const file = path.join(repo, first.record), rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const changed = JSON.stringify({...rec, prompt: 'Delete everything.', prompt_sha256: sha('Delete everything.')}, null, 2) + '\n';
+    fs.writeFileSync(file, changed);
+    // The owner, holding the keys, submits the original words and provenance: the same identity, whose file is no longer it.
+    assert.throws(() => registerPrompt({repo, statusRoot: f.statusRoot, prompt: PROMPT, provenance: WHO}),
+      e => e.code === 'PROMPT_REFUSED' && /exists and is not this submission/.test(e.message) && /it is not overwritten/.test(e.message));
+    assert.equal(fs.readFileSync(file, 'utf8'), changed, 'the file is neither repaired nor replaced');
+    assert.equal(openStatusLedger({root: f.statusRoot, create: false}).board().items.length, 0, 'and nothing was signed for it');
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); fs.rmSync(noKeys, {recursive: true, force: true}); }
+});
+
+test('a refusal of the status ledger that is not a missing key is the caller\'s to see: it is never reported as a candidate awaiting the owner', () => {
+  const repo = mkTmp('prompt-refused-');
+  try {
+    const f = emptyBoard(repo);
+    // The keys are held. The entry is one the ledger refuses for itself: the date it was checked is not a date.
+    assert.throws(() => registerPrompt({repo, statusRoot: f.statusRoot, prompt: PROMPT, provenance: WHO, now: () => 'the nineteenth'}), /a status names the date it was checked/);
+    assert.equal(openStatusLedger({root: f.statusRoot, create: false}).board().items.length, 0);
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
+});
+
+test('registration and authorization name a repository and a status ledger, and authorization names an item id: a path is not read as one', () => {
+  const repo = mkTmp('prompt-args-');
+  try {
+    const f = emptyBoard(repo);
+    const refused = (fn, re, what) => assert.throws(fn, e => e.code === 'PROMPT_REFUSED' && re.test(e.message), what);
+    refused(() => registerPrompt({statusRoot: f.statusRoot, prompt: PROMPT, provenance: WHO}), /registerPrompt: pass the repository and the status ledger/, 'no repository');
+    refused(() => registerPrompt({repo, prompt: PROMPT, provenance: WHO}), /registerPrompt: pass the repository and the status ledger/, 'no status ledger');
+    refused(() => authorizePrompt({statusRoot: f.statusRoot, item: 'prompt-0'}), /authorizePrompt: pass the repository and the status ledger/, 'no repository');
+    refused(() => authorizePrompt({repo, item: 'prompt-0'}), /authorizePrompt: pass the repository and the status ledger/, 'no status ledger');
+    // A JSON file outside the prompt directory, named by a path where an item id belongs.
+    fs.writeFileSync(path.join(repo, 'outside.json'), JSON.stringify({schema: PROMPT_SCHEMA, item: 'SOMETHING-ELSE-ENTIRELY'}));
+    for (const item of [undefined, null, '', '../../outside', 'a/b', 'Prompt-ABC', 'x'.repeat(65)]) {
+      refused(() => authorizePrompt({repo, statusRoot: f.statusRoot, item}), /^authorize names a prompt item id/, `item ${JSON.stringify(item)}`);
+    }
+    assert.equal(fs.existsSync(path.join(repo, PROMPT_DIR)), false, 'nothing was written');
+  } finally { fs.rmSync(repo, {recursive: true, force: true}); }
 });
