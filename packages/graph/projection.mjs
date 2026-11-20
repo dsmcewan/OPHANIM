@@ -25,6 +25,8 @@ export const entryHash = e => H(storedOf(e));
 const EPOCH = '1970-01-01T00:00:00Z';
 const byString = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const RANK = Object.freeze({authoritative: 0, observed: 1, derived: 2, hypothetical: 3});
+/** The schema of a serialized projection state (serialize / restore). */
+export const STATE_SCHEMA = 'ophanim.graph.projection-state/v1';
 
 /**
  * A projection over one graph ledger. `origins` is the composed origin registry (schema.mjs defineOrigins);
@@ -377,6 +379,40 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
     return notes;
   }
 
+  // ---- the state as a restorable value (KG-1; checkpoint.mjs) ---------------------------------------------------------
+  // A DERIVED cache, never authoritative: the state replay built, as JSON. Assertions are kept in admission order, so
+  // the restored indexes (by subject, incident) list them in the order replay pushed them. The materialized facts and
+  // fact keys are caches and are not part of it.
+  /** The projection state as a JSON value (refused while a write is being checked). */
+  function serialize() {
+    if (st.pending.size || st.expected !== null) throw Object.assign(new Error('the projection is in the middle of a write'), {code: 'GRAPH_REFUSED'});
+    return {schema: STATE_SCHEMA, seq: st.seq, head: st.head, log: st.log,
+      assertions: [...st.assertions.values()].map(a => [a.record, a.admitted, a.retired]),
+      retractions: [...st.retractions.values()].map(x => [x.record, x.seq]),
+      sourceLog: [...st.sourceLog], factsBySource: [...st.factsBySource].map(([s, ids]) => [s, [...ids]]), gap: [...st.gap]};
+  }
+  /** Replace the state with `x` (a serialize() value); throws, leaving an empty projection, if it does not restore. */
+  function restore(x) {
+    reset();
+    try {
+      if (x?.schema !== STATE_SCHEMA) throw new Error(`the state is not ${STATE_SCHEMA}`);
+      const last = x.log.at(-1) ?? {seq: 0, hash: null};
+      if (last.seq !== x.seq || last.hash !== x.head) throw new Error('its cursor is not its last entry');
+      for (const item of x.log) st.bySeq.set(item.seq, item);
+      st.log = x.log;
+      for (const [record, admitted, retired] of x.assertions) {
+        if (st.assertions.has(record.id)) throw new Error(`assertion ${record.id} is listed twice`);
+        admit(record, admitted); st.assertions.get(record.id).retired = retired;
+      }
+      for (const [record, seq] of x.retractions) st.retractions.set(record.id, {record, seq});
+      st.sourceLog = new Map(x.sourceLog);
+      st.factsBySource = new Map(x.factsBySource.map(([s, ids]) => [s, new Set(ids)]));
+      st.gap = new Set(x.gap);
+      st.seq = x.seq; st.head = x.head;
+      st.restored = {seq: x.seq, head: x.head};
+    } catch (e) { reset(); throw Object.assign(new Error(`the projection state does not restore: ${e.message}`), {code: 'GRAPH_REFUSED'}); }
+  }
+
   // ---- views at a cursor ----------------------------------------------------------------------------------------------
   /** The view of the graph as of ledger seq `cursor` (default: the latest applied). */
   function at(cursor = st.seq) {
@@ -393,6 +429,9 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
     retractionOf: id => st.retractions.get(id)?.record ?? null,
     get seq() { return st.seq; }, get head() { return st.head; }, get log() { return st.log; },
     digest: cursor => at(cursor).digest(),
+    serialize, restore,
+    /** {seq, head} of the state restored by restore(), while it stands (a reset or a replay from genesis drops it). */
+    get restored() { return st.restored ?? null; },
   };
 }
 

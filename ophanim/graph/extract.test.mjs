@@ -10,12 +10,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {closure, entityId, idRefusal} from '../../packages/graph/index.mjs';
+import {closure, entityId, idRefusal, writeSnapshot} from '../../packages/graph/index.mjs';
+import {generateSigner} from '../../packages/ledger/index.mjs';
 import {repoFacts, repoSource, SPEC, fileId, symbolId, contractId, ticketId, itemId, changeId, REPO_ORIGIN} from './extract/repo.mjs';
 import {verificationFacts, mutationTable, mutationId, suiteId, workflowId, RUNNER} from './extract/verification.mjs';
 import {recordsFacts, recordId, RECORDS_ORIGIN, registerEntries} from './extract/records.mjs';
 import {statusSource, workSource, cycleSource, readStatusLedger, STATUS_ANCHOR, itemId as statusItem} from './extract/ledgers.mjs';
-import {sourcesOf, openSystemsGraph, observeAll, ORIGIN_SPEC} from './extract/index.mjs';
+import {sourcesOf, openSystemsGraph, observeAll, ORIGIN_SPEC, ORDER, EXTRACTOR_MODULES, extractorVersionOf} from './extract/index.mjs';
+import {pathToFileURL} from 'node:url';
 import {treeAt, WITHHELD} from './extract/git.mjs';
 import {fixtureWorkLedger, fixtureCycleLedger} from './fixtures/ledgers.mjs';
 import {tempRepo, realGraph, closeRealGraph, git, ROOT, T0, at, PACKAGE, LIB_PACKAGE, WORKFLOW} from './fixtures/repo.mjs';
@@ -88,6 +90,54 @@ test('extract: the real repository at its commit -- files, modules, tests, symbo
   const t0 = process.hrtime.bigint(), again = g.open(), replay = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.deepEqual([again.digest(), again.verification.complete], [g.graph.digest(), true], 'a fresh replay re-derives the same projection');
   t.diagnostic(`real graph at ${commit.slice(0, 12)}: ${total} facts ${JSON.stringify(by)}; observe ms ${JSON.stringify(Object.fromEntries(Object.entries(g.observed).map(([k, x]) => [k, Math.round(x.ms)])))}; replay (fresh open, git readings cached in this process) ${Math.round(replay)} ms (${(replay * 1000 / total).toFixed(1)} µs a fact)`);
+});
+
+test('extract: the real graph opened from a signed snapshot equals its full open (KG-1; a synthetic snapshot key)', t => {
+  const g = realGraph(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-graph-snapshot-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const signer = generateSigner('graph-snapshot'), snapshot = {dir, keys: {[signer.key_id]: signer.publicJwk}};
+  const t0 = process.hrtime.bigint(), written = writeSnapshot(g.graph, {dir, signer}), t1 = process.hrtime.bigint();
+  const fast = g.open(undefined, {snapshot}), t2 = process.hrtime.bigint();
+  assert.deepEqual([fast.verification.snapshot.used, fast.verification.snapshot.seq, fast.verification.rederived], [true, g.graph.projection.seq, 0]);
+  assert.deepEqual([fast.digest(), fast.verification.complete, fast.view().sources()], [g.graph.digest(), true, g.graph.view().sources()]);
+  const raw = fs.readFileSync(written.file), record = JSON.parse(raw.subarray(0, raw.indexOf(0x0a)).toString('utf8'));
+  assert.deepEqual(record.body.extractors, Object.fromEntries([...g.graph.projection.adapters.values()].map(a => [a.id, a.extractorVersion])), 'it records each extractor\'s version');
+  const ms = (a, b) => Math.round(Number(b - a) / 1e6);
+  t.diagnostic(`real graph snapshot: ${(written.bytes / 1048576).toFixed(1)} MiB at seq ${written.seq}, written in ${ms(t0, t1)} ms; opened from it in ${ms(t1, t2)} ms (this process)`);
+});
+
+test('extract: every source of the systems graph declares its extractor\'s version: its module and local imports, transitively, from disk', async t => {
+  const w = fixtureWorkLedger(), c = await fixtureCycleLedger();
+  t.after(() => { fs.rmSync(w.dir, {recursive: true, force: true}); fs.rmSync(c.dir, {recursive: true, force: true}); });
+  const {sources} = sourcesOf({repo: ROOT, commit: 'HEAD', work: {root: w.root, anchor: w.anchor}, cycle: {root: c.root, anchor: c.anchor}});
+  assert.deepEqual(sources.map(s => s.id).sort(), [...ORDER].sort(), 'every source of the systems graph');
+  for (const s of sources) {
+    const {factory, module} = EXTRACTOR_MODULES[s.id];
+    assert.equal((await import(pathToFileURL(module).href))[factory.name], factory, `${s.id}: its extractor is defined in ${path.relative(ROOT, module)}`);
+    assert.match(s.extractorVersion ?? '', /^sha256:[0-9a-f]{64}$/, s.id);
+    assert.equal(s.extractorVersion, extractorVersionOf(module), s.id);
+  }
+  assert.ok([...realGraph().graph.projection.adapters.values()].every(a => /^sha256:[0-9a-f]{64}$/.test(a.extractorVersion ?? '')), 'and so does the real graph');
+  // The closure: a change to a module imported transitively changes the version; an unrelated file does not; a
+  // dynamic import is followed; a module imported by name (node:fs) is not this repository's code.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-graph-extractor-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const put = (f, text) => { fs.mkdirSync(path.dirname(path.join(dir, f)), {recursive: true}); fs.writeFileSync(path.join(dir, f), text); };
+  put('a.mjs', "import fs from 'node:fs';\nimport {b} from './b.mjs';\nexport const a = b;\n");
+  put('b.mjs', "export {d} from './sub/d.mjs';\nexport const b = 1;\n");
+  put('sub/d.mjs', 'export const d = 2;\n');
+  put('e.mjs', 'export const e = 3;\n');
+  const v = () => extractorVersionOf(path.join(dir, 'a.mjs'), {root: dir});
+  const v0 = v();
+  put('e.mjs', 'export const e = 4;\n');
+  assert.equal(v(), v0, 'a file the extractor does not import');
+  put('sub/d.mjs', 'export const d = 3;\n');
+  const v1 = v();
+  assert.notEqual(v1, v0, 'a module imported through another');
+  put('a.mjs', "import fs from 'node:fs';\nimport {b} from './b.mjs';\nexport const a = b;\nexport const later = () => import('./e.mjs');\n");
+  const v2 = v();
+  put('e.mjs', 'export const e = 5;\n');
+  assert.deepEqual([v2 !== v1, v() !== v2], [true, true], 'a dynamic import is followed');
 });
 
 test('extract: mutation runners are read as TEXT, never imported -- every committed runner\'s mutations, targets and deciding tests', t => {

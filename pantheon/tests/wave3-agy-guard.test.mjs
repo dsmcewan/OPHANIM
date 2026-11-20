@@ -42,6 +42,10 @@ import { fixtureRepo, fakeFetch, capture, deps, mkdtemp as rrTemp, cleanup as rr
 // THE BILLING POLICY (register L-136): both kinds default OFF. A row with the failover (or primary execution) ON declares
 // it explicitly, with a budget, over a usage record of its own; a row with it OFF declares nothing (the default).
 import { optIn } from "./fixtures/billing.mjs";
+import { sandboxAvailable } from "../src/agy/sandbox.mjs";
+const have = await sandboxAvailable("bwrap");
+// THE SDK SEAT RUNS IN ITS JAIL (knowledge graphs, Slice C2): a cell that spawns it is a real-bwrap cell.
+const jailed = { skip: have.ok ? false : `bwrap unavailable: ${have.why}` };
 const failoverOn = () => optIn({ failover: 100 });
 
 // The distinct refusal code (board/agy-cli.mjs AGY_MODEL_MISMATCH), spelled out so this file also loads on a tree without it.
@@ -85,12 +89,12 @@ function writeFakePython(bin, state) {
   const py = join(bin, "python");
   writeFileSync(py, `#!/bin/sh
 S=${sh1(state)}
-printf '%s\\n' "$*" >> "$S/python"
 role=none; model=none; out=/nonexistent
 for a in "$@"; do case "$prev" in --role) role="$a" ;; --model) model="$a" ;; --out) out="$a" ;; esac; prev="$a"; done
+printf '%s\\n' "$*" >> "$out/python.log"
 MODEL="$model" ${sh1(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_RELAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_RELAY_CAPABILITY ?? "" }, body: "{}" }).then(r => r.text()).catch(() => null)'
-served="$model"; [ -f "$S/served" ] && served=$(cat "$S/served")
-mode=answer; [ -f "$S/mode" ] && mode=$(cat "$S/mode")
+served="\${FAKE_SDK_SERVED:-$model}"
+mode="\${FAKE_SDK_MODE:-answer}"
 if [ "$mode" = failure ]; then printf '{"ok": false, "role": "%s", "model": "%s", "error": "vendor error"}\\n' "$role" "$served"; exit 3; fi
 printf 'VERDICT: approve\\n' > "$out/response.md"
 # mode noinit: an envelope that names no model at all.
@@ -125,6 +129,7 @@ before(() => {
 after(async () => {
   globalThis.fetch = savedFetch;
   for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  delete process.env.FAKE_SDK_MODE; delete process.env.FAKE_SDK_SERVED;
   rmSync(fx.root, { recursive: true, force: true });
   await rrCleanup();
 });
@@ -134,9 +139,19 @@ function arm(mode, served = OTHER) {
   for (const f of ["launches", "probes", "python", "served", "mode"]) rmSync(join(fx.state, f), { force: true });
   if (served !== null) writeFileSync(join(fx.state, "served"), served);
   writeFileSync(join(fx.state, "mode"), mode);
+  // The python SDK seat runs in its jail (Slice C2): it reads how to behave from FAKE_SDK_* and logs into its out dir.
+  if (served !== null) process.env.FAKE_SDK_SERVED = served; else delete process.env.FAKE_SDK_SERVED;
+  process.env.FAKE_SDK_MODE = mode;
+  armedAt = boards;
   fetched.length = 0;
 }
-const lines = f => (existsSync(join(fx.state, f)) ? readFileSync(join(fx.state, f), "utf8").split("\n").filter(Boolean) : []);
+let armedAt = 0;
+/** The SDK seat's launches since arm(): each board's seat dirs' python.log. */
+const sdkLaunches = () => Array.from({ length: boards - armedAt }, (_, i) => armedAt + i + 1).flatMap(b => {
+  const d = join(fx.root, `board-${b}`, "outputs", "open-items", `wave3-guard-${b}`, "agy_google");
+  return existsSync(d) ? readdirSync(d).flatMap(n => (existsSync(join(d, n, "python.log")) ? readFileSync(join(d, n, "python.log"), "utf8").split("\n").filter(Boolean) : [])) : [];
+});
+const lines = f => (f === "python" ? sdkLaunches() : existsSync(join(fx.state, f)) ? readFileSync(join(fx.state, f), "utf8").split("\n").filter(Boolean) : []);
 const launches = () => lines("launches").map(l => l.split(" "));
 const identity = (agent, model, reported = OTHER) => ({ requested: { agent, model }, reported: { agent, model: reported } });
 /** What a turn in `mode` reports: another model, or (noinit) no identity at all. */
@@ -265,7 +280,7 @@ test("A2 the board's plan, work and scout seats on an Antigravity lane (operator
   }
 });
 
-test("C the python SDK seat (board reviewer, transport sdk): a reported model other than the one asked for is refused before its answer or failure is used, and nothing is stamped", async t => {
+test("C the python SDK seat (board reviewer, transport sdk): a reported model other than the one asked for is refused before its answer or failure is used, and nothing is stamped", jailed, async t => {
   const sdkSeat = { ...XAI_WORKER, reviewer: seat("agy_google", "gemini-3.8-flash") };
   // The board's reviewer defaults to the CLI lane now (owner decision 2026-11-19, L-136): the SDK seat is asked for, and
   // it is primary Gemini execution, so this row declares gemini_api_primary with a budget.
@@ -279,7 +294,7 @@ test("C the python SDK seat (board reviewer, transport sdk): a reported model ot
       assert.equal(lines("python").length, 1, "the seat was spawned once, never re-asked");
       assert.equal(result.shipped, false);
       const want = { requested: { agent: "pantheon-reviewer", model: "gemini-3.8-flash" }, reported: { agent: "pantheon-reviewer", model: mode === "noinit" ? null : "gemini-3.6-flash" } };
-      assert.deepEqual(run.attempts.filter(a => a.purpose === "critique").map(a => [a.transport, a.code, a.provider_requests]), [["agy", AGY_MODEL_MISMATCH, 1]]);
+      assert.deepEqual(run.attempts.filter(a => a.purpose === "critique").map(a => [a.transport, a.code, a.provider_requests]), [["agy-sdk", AGY_MODEL_MISMATCH, 1]]);
       assert.deepEqual([run.error?.code, run.error?.identity], [AGY_MODEL_MISMATCH, want], JSON.stringify(run.error));
     });
   }

@@ -1,7 +1,9 @@
 // The capability and model/runtime graph (knowledge graphs, Slice C1; docs/knowledge-graph/slice-c1.md): the extractors over
 // the REAL registries, the model kept apart from its runtime, owner direction never read as measurement, the bubble as the
-// code provides it (L-155), observation into a real graph ledger, and the negative cases of demonstration 12.
+// code provides it (the SDK seat's jail, Slice C2: L-155 closed), observation into a real graph ledger, and the negative cases of
+// demonstration 12.
 import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {capabilitySnapshot, extractionCounts, indexOfView, capabilityId, E, S, SOURCE_ORDER, DECLARED, STRUCTURAL} from '../src/capability/graph.mjs';
 import {decide} from '../src/capability/eligibility.mjs';
@@ -83,24 +85,39 @@ test('owner direction is never a measurement: every seating, ARGO and fit placem
   assert.match(recordRefusal(asMeasured, {origins: ORIGINS}), /places may not be admitted as observed/);
 });
 
-test('the bubble: the SDK seat\'s unsandboxed run_command (L-155) is recorded as a limitation with its source and quote; isolation only where the code provides it', () => {
+test('the bubble: each profile as the code provides it -- the SDK seat jailed (L-155 closed, its shared network a retained limitation), the CLI lane jailed (L-004 retained), the API seat not torn down; isolation only on found code evidence', () => {
   const sdk = IX.node(capabilityId('agy-sdk', 'agy_google', 'gemini-3.6-flash')).attributes;
-  assert.equal(sdk.isolated, false, 'the SDK seat is NOT recorded as isolated');
-  assert.equal(sdk.bubble.sandbox.holds, false);
-  assert.equal(sdk.bubble.sandbox.limitation, 'L-155');
-  assert.equal(sdk.bubble.tools.holds, false);
-  assert.equal(sdk.bubble.credentials.holds, true, 'the relay\'s scoped capability and no key in its environment, on code evidence');
-  assert.ok(sdk.bubble.credentials.evidence.every(e => e.found));
+  // Slice C2: the SDK seat's whole process runs in its jail at both spawn points, so all four components hold on the jail's
+  // code (C1's rule, unchanged: all four hold or do not apply): the SDK capability IS isolated.
+  assert.deepEqual(Object.fromEntries(Object.entries(sdk.bubble).map(([k, v]) => [k, v.holds])), {sandbox: true, credentials: true, tools: true, lifetime: true});
+  assert.equal(sdk.isolated, true, 'the jailed SDK seat is recorded as isolated, on the jail\'s code');
+  assert.equal(sdk.environment, 'sdk-jail');
+  assert.deepEqual([sdk.bubble.sandbox.limitation, sdk.bubble.tools.limitation], ['sdk-jail-egress', 'sdk-jail-egress'], 'with the retained limitation recorded');
+  const cited = Object.values(sdk.bubble).flatMap(c => c.evidence.map(e => e.file));
+  for (const f of ['pantheon/src/agy/sandbox.mjs', 'pantheon/src/board/run-item.mjs', 'pantheon/bin/agy-seat.mjs']) assert.ok(cited.includes(f), `the bubble cites ${f}: the jail and both spawn points`);
+  assert.ok(sdk.bubble.sandbox.evidence.some(e => /^const \[cmd, \.\.\.argv\] = \[\.\.\.jail\.prefix, python, \.\.\.args\];$/.test(e.quote)), 'the board\'s jailed spawn is quoted');
+  assert.ok(sdk.bubble.sandbox.evidence.some(e => /^const \[cmd, \.\.\.argv\] = \[\.\.\.jail\.prefix, python, SEAT, \.\.\.args\];$/.test(e.quote)), 'the launcher\'s jailed spawn is quoted');
+  assert.ok(sdk.bubble.lifetime.evidence.some(e => /dropSdkSeatScratch/.test(e.quote)), 'the lifetime cites the teardown');
+  const env = IX.node(E('environment', 'sdk-jail'));
+  assert.deepEqual([env.established, env.attributes.sandboxed], [true, true]);
+  assert.equal(IX.node(E('environment', 'host-process')), null, 'no SDK seat runs as a plain host process any more');
+  // L-155 no longer limits the SDK capability: its register line is found and its record says closed, by the jail's code.
   const l155 = IX.node(E('limitation', 'L-155'));
-  assert.equal(l155.established, true);
+  assert.deepEqual([l155.established, l155.attributes.status, l155.attributes.breaks], [true, 'closed', []]);
   assert.equal(l155.attributes.register.file, 'docs/OPEN-LIMITATIONS.md');
-  assert.ok(l155.attributes.evidence.length >= 3 && l155.attributes.evidence.every(e => e.found), 'the register line and the code it describes, each quote found');
-  for (const from of [capabilityId('agy-sdk', 'agy_google', 'gemini-3.6-flash'), E('environment', 'host-process'), E('tool', 'agy-sdk/run_command')]) {
-    assert.ok(IX.out(from, 'limited-by').some(e => e.to === E('limitation', 'L-155')), `${from} is limited by L-155`);
+  assert.ok(l155.attributes.evidence.length >= 3 && l155.attributes.evidence.every(e => e.found), 'the register line and the jail that closed it, each quote found');
+  assert.deepEqual(IX.in(E('limitation', 'L-155'), 'limited-by'), [], 'nothing is limited by L-155');
+  // The shared network is RETAINED, never claimed isolated: the capability, its environment and its run_command are limited by it.
+  const egress = IX.node(E('limitation', 'sdk-jail-egress'));
+  assert.deepEqual([egress.established, egress.attributes.status], [true, 'retained']);
+  for (const from of [capabilityId('agy-sdk', 'agy_google', 'gemini-3.6-flash'), E('environment', 'sdk-jail'), E('tool', 'agy-sdk/run_command')]) {
+    assert.ok(IX.out(from, 'limited-by').some(e => e.to === E('limitation', 'sdk-jail-egress')), `${from} is limited by sdk-jail-egress`);
   }
+  assert.ok(IX.out(E('tool', 'agy-sdk/run_command'), 'runs-in').some(e => e.to === E('environment', 'sdk-jail')), 'run_command runs in the jail');
   const cli = IX.node(capabilityId('agy-cli', 'agy_google', 'gemini-4-carbon-high')).attributes;
   assert.equal(cli.isolated, true, 'the jailed CLI lane: the jail hook, the scrubbed environment, a fresh control dir per turn');
   assert.equal(cli.bubble.sandbox.limitation, 'L-004', 'with the retained limitation recorded');
+  // The negative example among the real profiles: an API seat's records persist, so its bubble does not hold.
   const api = IX.node(capabilityId('api', 'openai', 'gpt-6-astra')).attributes;
   assert.equal(api.bubble.sandbox.holds, 'not-applicable');
   assert.equal(api.bubble.lifetime.holds, false, 'no per-assignment teardown is enforced for an API seat');
@@ -110,14 +127,42 @@ test('the bubble: the SDK seat\'s unsandboxed run_command (L-155) is recorded as
   }
 });
 
+test('the bubble: the SDK seat\'s jail is its evidence -- the jail\'s code gone from the files it quotes, the SDK seat\'s sandbox, credentials and tools are unresolved and it is not isolated', () => {
+  // The code changes under the claim: the jail's argv and both jailed spawns removed from their files' text.
+  const r = structuredClone(REG);
+  const cut = (file, quote) => { assert.ok(r.evidence[file].includes(quote), `${file} holds ${quote}`); r.evidence[file] = r.evidence[file].split(quote).join(''); };
+  cut('pantheon/src/agy/sandbox.mjs', 'const prefix = [bwrap, "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];');
+  cut('pantheon/src/board/run-item.mjs', 'const [cmd, ...argv] = [...jail.prefix, python, ...args];');
+  cut('pantheon/src/board/run-item.mjs', 'sdkRun = await spawnPromise(cmd, argv, { env: jail.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });');
+  cut('pantheon/bin/agy-seat.mjs', 'const [cmd, ...argv] = [...jail.prefix, python, SEAT, ...args];');
+  const ix = capabilitySnapshot(r).index, sdk = ix.node(capabilityId('agy-sdk', 'agy_google', 'gemini-3.6-flash')).attributes;
+  assert.deepEqual([sdk.bubble.sandbox.holds, sdk.bubble.credentials.holds, sdk.bubble.tools.holds], ['unresolved', 'unresolved', 'unresolved']);
+  assert.ok(sdk.bubble.sandbox.missing.some(m => /jail\.prefix, python, \.\.\.args/.test(m)), 'the missing quote is named');
+  assert.equal(sdk.isolated, false, 'nothing is recorded as isolated that the code does not isolate');
+  assert.equal(ix.node(E('environment', 'sdk-jail')).established, false, 'the jail environment\'s claim is unresolved, not established');
+  assert.equal(ix.node(E('limitation', 'L-155')).established, false, 'and so is the closing of L-155');
+});
+
 test('the bubble: isolation is never claimed without code evidence (a missing or absent quote leaves the claim unresolved)', () => {
   const claim = mutate => { const r = structuredClone(REG); mutate(r); return capabilitySnapshot(r).index; };
-  const sdkOf = ix => ix.node(capabilityId('agy-sdk', 'agy_google', 'gemini-3.6-flash')).attributes;
-  const quoted = claim(r => { r.runtimes.profiles['agy-sdk'].bubble.sandbox = {holds: true, why: 'claimed', evidence: [{file: 'pantheon/src/board/run-item.mjs', quote: 'bwrap around the python SDK seat'}]}; });
-  assert.equal(sdkOf(quoted).bubble.sandbox.holds, 'unresolved', 'a quote the code does not contain proves nothing');
-  assert.equal(sdkOf(quoted).isolated, false);
-  const bare = claim(r => { r.runtimes.profiles['agy-sdk'].bubble.sandbox = {holds: true, why: 'claimed'}; });
-  assert.equal(sdkOf(bare).bubble.sandbox.holds, 'unresolved', 'a claim with no evidence at all');
+  // A FIXTURE capability (fixtures/capability-bubble-fixture.json): its sandbox claims to hold on a quote the code does not
+  // contain. The SDK seat was this example until its jail made its bubble hold (Slice C2).
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/capability-bubble-fixture.json', import.meta.url), 'utf8'));
+  const withFixture = (sandbox = fx.profile.bubble.sandbox) => r => {
+    r.runtimes.profiles['fixture-unquoted'] = {...structuredClone(fx.profile), bubble: {...structuredClone(fx.profile.bubble), sandbox}};
+    r.runtimes.serving.push(structuredClone(fx.serving));
+  };
+  const fxOf = ix => ix.node(capabilityId('fixture-unquoted', 'agy_google', 'gemini-3.6-flash')).attributes;
+  const quoted = claim(withFixture());
+  assert.equal(fxOf(quoted).bubble.sandbox.holds, 'unresolved', 'a quote the code does not contain proves nothing');
+  assert.deepEqual([fxOf(quoted).bubble.credentials.holds, fxOf(quoted).bubble.tools.holds, fxOf(quoted).bubble.lifetime.holds], [true, 'not-applicable', true], 'its other components hold on found quotes');
+  assert.equal(fxOf(quoted).isolated, false);
+  const bare = claim(withFixture({holds: true, why: 'claimed'}));
+  assert.equal(fxOf(bare).bubble.sandbox.holds, 'unresolved', 'a claim with no evidence at all');
+  assert.equal(fxOf(bare).isolated, false);
+  // The control: the same claim on a quote the code does contain holds -- the rule decides, not the fixture.
+  const found = claim(withFixture({...fx.profile.bubble.sandbox, evidence: [fx.found]}));
+  assert.deepEqual([fxOf(found).bubble.sandbox.holds, fxOf(found).isolated], [true, true]);
   // The code changes under a claim: the jail's quote disappears from agy-cli.mjs. Nothing of the lane is isolated any more.
   const gone = claim(r => { r.evidence['pantheon/src/board/agy-cli.mjs'] = r.evidence['pantheon/src/board/agy-cli.mjs'].replace('refusing to run the worker unjailed (pass sandbox.allowUnsandboxed: true to override)', 'running'); });
   const lane = gone.node(capabilityId('agy-cli', 'agy_google', 'gemini-4-carbon-high')).attributes;

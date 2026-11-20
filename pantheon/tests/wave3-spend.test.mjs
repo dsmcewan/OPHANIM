@@ -22,7 +22,7 @@
 // is shown to see the call; every primary row is ALSO refused with the failover switch on (the split).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as quotaFailover from "../src/route/quota-failover.mjs";
@@ -34,6 +34,10 @@ import { openCooldownStore } from "../../packages/model-client/index.mjs";
 import { scriptedClients } from "./fixtures/dispatch.mjs";
 import { tempRepo } from "./fixtures/pipeline-stages.mjs";
 import { optIn } from "./fixtures/billing.mjs";
+import { sandboxAvailable } from "../src/agy/sandbox.mjs";
+const have = await sandboxAvailable("bwrap");
+// THE SDK SEAT RUNS IN ITS JAIL (knowledge graphs, Slice C2): a cell that spawns it is a real-bwrap cell.
+const jailed = { skip: have.ok ? false : `bwrap unavailable: ${have.why}` };
 
 // The refusal codes, spelled out so this file also loads on a tree without the new exports.
 const METERED_GEMINI_DISABLED = "METERED_GEMINI_DISABLED", GEMINI_PRIMARY_DISABLED = "GEMINI_PRIMARY_DISABLED";
@@ -75,11 +79,11 @@ function writeFakePython(bin, state) {
   const py = join(bin, "python");
   writeFileSync(py, `#!/bin/sh
 S=${sh1(state)}
-printf '%s\\n' "$*" >> "$S/python"
 role=none; model=none; out=/nonexistent
 for a in "$@"; do case "$prev" in --role) role="$a" ;; --model) model="$a" ;; --out) out="$a" ;; esac; prev="$a"; done
-served="$model"; [ -f "$S/served" ] && served=$(cat "$S/served")
-mode=answer; [ -f "$S/mode" ] && mode=$(cat "$S/mode")
+printf '%s\\n' "$*" >> "$out/python.log"
+served="\${FAKE_SDK_SERVED:-$model}"
+mode="\${FAKE_SDK_MODE:-answer}"
 if [ "$mode" = failure ]; then printf '{"ok": false, "role": "%s", "model": "%s", "error": "vendor error"}\\n' "$role" "$served"; exit 3; fi
 printf 'VERDICT: approve\\n' > "$out/response.md"
 printf '{"ok": true, "role": "%s", "model": "%s", "conversation_id": "fake-sdk", "tool_calls": 0, "subagent_calls": 0}\\n' "$role" "$served"
@@ -112,6 +116,7 @@ before(() => {
 after(async () => {
   globalThis.fetch = savedFetch;
   for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  delete process.env.FAKE_SDK_MODE; delete process.env.FAKE_SDK_SERVED;
   rmSync(fx.root, { recursive: true, force: true });
 });
 
@@ -120,9 +125,19 @@ function arm(mode, served = OTHER) {
   for (const f of ["launches", "probes", "python", "served", "mode"]) rmSync(join(fx.state, f), { force: true });
   if (served !== null) writeFileSync(join(fx.state, "served"), served);
   writeFileSync(join(fx.state, "mode"), mode);
+  // The python SDK seat runs in its jail (Slice C2): it reads how to behave from FAKE_SDK_* and logs into its out dir.
+  if (served !== null) process.env.FAKE_SDK_SERVED = served; else delete process.env.FAKE_SDK_SERVED;
+  process.env.FAKE_SDK_MODE = mode;
+  armedAt = boards;
   fetched.length = 0;
 }
-const lines = f => (existsSync(join(fx.state, f)) ? readFileSync(join(fx.state, f), "utf8").split("\n").filter(Boolean) : []);
+let armedAt = 0;
+/** The SDK seat's launches since arm(): each board's seat dirs' python.log. */
+const sdkLaunches = () => Array.from({ length: boards - armedAt }, (_, i) => armedAt + i + 1).flatMap(b => {
+  const d = join(fx.root, `board-${b}`, "outputs", "open-items", `wave3-spend-${b}`, "agy_google");
+  return existsSync(d) ? readdirSync(d).flatMap(n => (existsSync(join(d, n, "python.log")) ? readFileSync(join(d, n, "python.log"), "utf8").split("\n").filter(Boolean) : [])) : [];
+});
+const lines = f => (f === "python" ? sdkLaunches() : existsSync(join(fx.state, f)) ? readFileSync(join(fx.state, f), "utf8").split("\n").filter(Boolean) : []);
 const launches = () => lines("launches").map(l => l.split(" "));
 /** A quota refusal of a lane, kept as one with the failover disabled: status 429, quota_failover {used: false, disabled: true}. */
 function isDisabledQuota(e, at) {
@@ -293,12 +308,12 @@ test("B(sdk) L-124: the python Antigravity SDK seat (critique, scout; asked for 
         assert.deepEqual(lines("python"), [], "the SDK seat was never spawned");
         assert.deepEqual(fetched, []);
         assert.equal(result.shipped, false);
-        refusedAtSpend(run, purpose, model, "agy", GEMINI_PRIMARY_DISABLED);
+        refusedAtSpend(run, purpose, model, "agy-sdk", GEMINI_PRIMARY_DISABLED);
         assert.ok(progress.some(p => p.event === "turn.refused" && p.model === model), "the refusal is on the progress trail");
       });
     }
   }
-  await t.test("CONTROL (primary on): the SDK seat is spawned", async () => {
+  await t.test("CONTROL (primary on): the SDK seat is spawned", jailed, async () => {
     arm("answer", null);
     await board({ seatOverrides: rows[0][1], billing: PRIMARY() });
     assert.equal(lines("python").length, 1);

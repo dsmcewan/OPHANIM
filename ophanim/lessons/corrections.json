@@ -448,6 +448,14 @@
           "ref": "docs/execution/l150-ownership.json (amended at integration)",
           "detected_by": "the L-150 agent, in its report",
           "note": "the region limit allowed run-item.mjs's SDK branch only, while the design's per-request admission needed one line in turn(); and the brief's list of runners to --check left out wave3-agy-spend.mutate.mjs, whose S6 and G6 the change broke (found by the coordinator). Next step added: --check every committed *.mutate.mjs, not a chosen list"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "kg/slice-c2 e0902da; integration 8df1c4c",
+          "detected_by": "the Slice C2 agent's budget run (every test naming PANTHEON_AGY_TRANSPORT or agy-seat), before its commit",
+          "note": "the C2 brief required every existing SDK-transport test to keep passing (KS2) but the manifest granted only l150-billing and agy-seat-identity; four more suites (wave3-spend, wave3-agy-guard, l136-billing, reliability-r3-a3) spawned the seat with fakes that wrote under /tmp, which the jail hides, and asserted transport agy: 12 failures. The agent stayed inside its manifest and handed over a patch, which the coordinator reviewed and applied. Next step, as before: list every file the brief's own verification list names (here: every test that names the transport) in the manifest before dispatch"
         }
       ],
       "detector": {
