@@ -345,6 +345,13 @@
           "date": "2026-11-20",
           "ref": "642887b (PR 68)",
           "note": "a check written to stop a push on a moved base printed that the base had moved, and the same command went on to commit and push: the check was joined to the rest with ';', so its failure stopped nothing. The base had moved (the L-136 billing policy had landed) and the pull request conflicted in twelve files. Caught by reading the command's own output; the base was merged and the suites re-run before any result was reported for that commit. The third instance of this class, and the second in this run: a note to fetch the base before each push did not prevent it"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "662431c (PR 68)",
+          "detected_by": "the owner's Evidence-Driven Reflection: reading the session's own commands",
+          "note": "the '&&' gate written after the previous instance stopped a push as designed: the base had moved again. The next command pushed the same verified commit without the gate, and listed what the base had added only after the push. The addition was two documentation files, merged and pushed twenty seconds later, and no result was reported for the head in between. Not noticed at the time. The gate bound one command, not its author; what needed gating was the report and the pull request's state, not the push. One instance: recorded, not made a rule"
         }
       ],
       "fixed_in": "b8bf3d9 (the path); the commit chain is now gated on the parsed fail count being 0",
@@ -495,6 +502,13 @@
           "date": "2026-11-19",
           "ref": "PR 68 at d4f945e",
           "note": "ten late-found defects had been fixed and listed; the causes were stated only when the owner asked. The answer named five (green accepted without a red run, tests written from the implementation, two enforcement points never compared, a stale base, CI not read) and missed the one the next day showed: no test had been derived from the acceptance list itself"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "59fdac2 (PR 68, the merge of the billing policy)",
+          "detected_by": "the owner's Evidence-Driven Reflection: asked where observed behaviour had differed from expected",
+          "note": "a test written during the merge failed for a reason that was not determined, and 23 seconds later its scenario was replaced by one that passed. The abandoned scenario had shown a behaviour change: a fit ticket pinned to an Antigravity lane falls to the primary Gemini API seat when the lane is refused for quota, where the base moved to the next lane. That went unrecorded until the reflection (register L-721). The failure itself is explained from the source only (the second arm of a comparison does not ask a lane that the first arm's refusal put in cooldown), not by a run. The same step as the surviving mutation read as a duplicate at 6ee0fea: an unexpected result was made to pass before it was explained. Not marked as corrected by the mechanism: the owner's direction prompted the reflection, and that ruling is the owner's"
         }
       ],
       "fixed_in": null,
@@ -502,6 +516,33 @@
         "kind": "none",
         "why": "a step of the work, not a property of the code; no executable check exists for it",
         "next": "when a defect is found after its code was reported working, record with the fix which assumption let it through and which other paths share it, and check those paths before the next report. Evidence for it so far is this one run"
+      }
+    },
+    {
+      "id": "report-figure-not-derived",
+      "class": "A figure or a result in a report (a count, a pass total, the commit a result belongs to) is written from memory, or carried over from an earlier run, instead of being read from a record when the report is written, so the report states what no record supports.",
+      "source": "self-observed 2026-11-20 on PR 68, when the owner's Evidence-Driven Reflection direction required the session's records to be read",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "22ecb82 (PR 68)",
+          "detected_by": "the mutation runner, when it was run on that commit",
+          "note": "the pull request cited this branch's mutation runner as 85 of 85 killed beside a commit it had not been run on. Run on that commit, one mutation survived and one run never ended (register L-713)"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "fc4707d (PR 68)",
+          "detected_by": "the owner's Evidence-Driven Reflection: every figure in the pull request was compared with the session's records",
+          "note": "the pull request said the base had been merged six times (the history shows five merges), and the register and the merge's commit message said twenty board tests now declare primary Gemini execution (the run's record shows nineteen: the twentieth test that failed was one of the five restated). Both were written from memory. The pull request and the register are corrected; the commit message stands. The other figures in the pull request were re-derived and hold, except the count of refusal lines no test noticed (22), which is as recorded at the time"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "reporting conduct; nothing executable compares a report's figures with the run records",
+        "next": "before a report is sent, re-derive each figure in it with a command whose output is in the same session's record, and name the commit each result was measured on; say so where a figure is recalled and not re-derived. Evidence so far is one run"
       }
     }
   ]
