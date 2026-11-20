@@ -55,7 +55,7 @@ Five logical domains share one identity grammar, one assertion record and one re
 | `learning` | D | defect, failure-class, failure-mechanism, repair, finding, lesson, detection-gap, ... | internal | source: the lessons registry (this slice, read only) and cycle findings (Slice D); `shares-failure-mechanism-with` never from similar text |
 | `work` | E | prompt, item, ticket, plan, work-unit, team, lease, budget, request, artifact, review, ... | internal | sources: intake, tickets, plans, the work ledger (Slice D); the graph never writes the work ledger |
 
-`scope` (`{access, owner}`) is carried by every assertion and enforced by nothing in this slice: access-controlled queries and projections across instances are Slice E's.
+`scope` (`{access, owner}`) is carried by every assertion and enforced by nothing in this slice: access-controlled queries and projections across instances are Slice E's. As integrated, Slice E enforces it on every federation export (public with its details, internal as a reference, restricted withheld; register KG-3, `slice-e.md`); queries inside one instance do not filter by it.
 
 ### Entity types
 
@@ -389,7 +389,7 @@ Not implemented here, on purpose (KD13): any integration with the planner, sched
 ## 17. Caveats
 
 - The lessons registry's detector names a test by a name substring; the graph records that, not the test case.
-- `scope` is recorded and not enforced (Slice E).
+- `scope` is enforced on every federation export by Slice E (KG-3, qualified, synthetic); queries inside one instance do not filter by it. (This line said "not enforced" until an outside-lab review, GLM 5.3, pointed out it contradicted section 19.)
 - Replay re-derives every observed source and costs about 40 µs a fact (section 13).
 - A SIGKILL between the ledger lock's exclusive create and the write of its holder record leaves an empty lock that `packages/ledger` breaks only after `lockStaleMs` (default 600 s); a readable lock naming a dead holder is broken at once. Found by this slice's kill test, which shortens the bound; the fix belongs to `packages/ledger` (write the holder record to a temporary file and link it into place).
 - The registry of origins is the reader's composition: an origin removed from it makes its entries fail re-derivation, as a removed ledger kind does.
