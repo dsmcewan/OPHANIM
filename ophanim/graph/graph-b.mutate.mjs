@@ -75,22 +75,30 @@ export const MUTATIONS = [
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
 function copyTree(dest) {
-  const files = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard', '-z'], {encoding: 'utf8', maxBuffer: 1 << 28}).split('\0').filter(Boolean);
+  // The extractors read the repository AT A COMMIT, and the why-it-exists queries (Slice D1, in cli.test.mjs) read the
+  // commit that introduced a file: the copy keeps the HISTORY (coordinator fix at integration; it was a fresh repository
+  // of one commit, whose root commit "introduced" every file). A local clone at HEAD whose sparse checkout never writes a
+  // withheld path (recorded review findings), with this working tree committed on top, as graph-d1.mutate.mjs does.
+  const g = (dir, args) => execFileSync('git', ['-C', dir, '-c', 'user.name=mutation-runner', '-c', 'user.email=mutation-runner@example.invalid', '-c', 'commit.gpgsign=false', ...args],
+    {stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 28, encoding: 'utf8'});
+  execFileSync('git', ['clone', '-q', '--no-checkout', '--no-hardlinks', ROOT, dest], {stdio: 'ignore'});
+  g(dest, ['sparse-checkout', 'set', '--no-cone', '/*', '!findings-*/', '!findings-*']);
+  g(dest, ['checkout', '-q', g(ROOT, ['rev-parse', 'HEAD']).trim()]);
+  const files = g(ROOT, ['ls-files', '-co', '--exclude-standard', '-z']).split('\0').filter(Boolean);
   for (const f of files) {
     if (WITHHELD.test(f)) continue;                                   // recorded review findings are not read, so not copied
-    const from = path.join(ROOT, f);
+    const from = path.join(ROOT, f), to = path.join(dest, f);
     if (!fs.existsSync(from) || fs.lstatSync(from).isDirectory()) continue;
-    fs.mkdirSync(path.dirname(path.join(dest, f)), {recursive: true});
-    if (fs.lstatSync(from).isSymbolicLink()) { fs.symlinkSync(fs.readlinkSync(from), path.join(dest, f)); continue; }
-    fs.copyFileSync(from, path.join(dest, f));
-    fs.chmodSync(path.join(dest, f), fs.statSync(from).mode);
+    fs.mkdirSync(path.dirname(to), {recursive: true});
+    if (fs.lstatSync(from).isSymbolicLink()) { fs.rmSync(to, {force: true}); fs.symlinkSync(fs.readlinkSync(from), to); continue; }
+    fs.copyFileSync(from, to);
+    fs.chmodSync(to, fs.statSync(from).mode);
   }
   for (const nm of ['node_modules', 'pantheon/node_modules', 'packages/model-client/node_modules', 'packages/ledger/node_modules', 'packages/graph/node_modules']) {
-    if (fs.existsSync(path.join(ROOT, nm))) fs.symlinkSync(path.join(ROOT, nm), path.join(dest, nm), 'dir');
+    if (fs.existsSync(path.join(ROOT, nm)) && !fs.existsSync(path.join(dest, nm))) fs.symlinkSync(path.join(ROOT, nm), path.join(dest, nm), 'dir');
   }
-  // The extractors read the repository AT A COMMIT: the copy is a repository of its own, with one commit of this tree.
-  const g = args => execFileSync('git', ['-C', dest, '-c', 'user.name=mutation-runner', '-c', 'user.email=mutation-runner@example.invalid', '-c', 'commit.gpgsign=false', ...args], {stdio: 'ignore'});
-  g(['init', '-q']); g(['add', '-A']); g(['commit', '-q', '-m', 'copy']);
+  g(dest, ['add', '-A']);
+  g(dest, ['commit', '-q', '--allow-empty', '-m', 'the working tree under mutation']);
 }
 const runSuites = (dir, logFile, files, patterns = []) => {
   const r = spawnSync(process.execPath, ['--test', '--test-timeout=600000', ...patterns.map(p => `--test-name-pattern=${p}`), ...files],

@@ -162,16 +162,23 @@ export function repoFacts(repo, commit, {name = 'ophanim'} = {}) {
   // The ancestry: each commit, and each file of THIS tree it changed (a file changed under another name is not followed).
   const history = historyAt(repo, commit), touched = new Map();
   for (const c of history) {
+    // A commit the checkout's history is CUT at (a shallow boundary): its parents are unknown, so git lists every path of
+    // its tree as changed. The edge says so instead: the path was present in that tree, and whether this commit changed
+    // (or introduced) it is not known (coordinator fix at integration).
     drafts.push({entity: changeId(c.commit), ref: `git:${c.commit}`, attributes: {commit: c.commit, parents: c.parents, date: c.date, subject: c.subject.slice(0, 300),
-      changed: c.paths.length}});
+      changed: c.cut ? null : c.paths.length, ...(c.cut ? {history_cut: true} : {})}});
     for (const p of c.paths) if (paths.has(p)) {
       const k = `${p}\0${c.commit}`;
-      if (!touched.has(k)) { touched.set(k, true); drafts.push({type: 'derived-from', from: fileId(p), to: changeId(c.commit), ref: `git:${c.commit}`, attributes: {basis: 'the commit changed this path'}}); }
+      if (!touched.has(k)) { touched.set(k, true); drafts.push({type: 'derived-from', from: fileId(p), to: changeId(c.commit), ref: `git:${c.commit}`,
+        attributes: c.cut ? {basis: 'present in the tree the history is cut at; whether this commit changed it is not known', history_cut: true} : {basis: 'the commit changed this path'}}); }
     }
   }
+  const cutAt = history.filter(c => c.cut).map(c => c.commit).sort();
+  const missing = [...(tree.withheld ? [`${tree.withheld} withheld path(s) (recorded review findings) are counted and never read`] : []),
+    ...(cutAt.length ? [`the history in this checkout is cut at ${cutAt.length} commit(s) (a shallow clone): older commits, and the paths a cut commit changed, are not known`] : [])];
   drafts.push({entity: entityId({domain: 'systems', type: 'repository', key: name}), ref: 'git',
-    attributes: {commit, ...counts, changes: history.length, withheld: {pattern: String(WITHHELD), count: tree.withheld}},
-    ...(tree.withheld ? {missing_evidence: [`${tree.withheld} withheld path(s) (recorded review findings) are counted and never read`]} : {})});
+    attributes: {commit, ...counts, changes: history.length, withheld: {pattern: String(WITHHELD), count: tree.withheld}, ...(cutAt.length ? {history_cut_at: cutAt} : {})},
+    ...(missing.length ? {missing_evidence: missing} : {})});
   return drafts;
 }
 

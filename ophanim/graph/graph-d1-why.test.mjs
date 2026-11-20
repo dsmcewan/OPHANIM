@@ -8,7 +8,7 @@ import {test, after} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {whyExists, whyJoins, recordWhy, WHY_RULE} from './why.mjs';
+import {whyExists, whyJoins, recordWhy, WHY_RULE, historyCutAt} from './why.mjs';
 import {workGraphSource, WORK_GRAPH_SOURCE} from './work.mjs';
 import {openSystemsGraph} from './extract/index.mjs';
 import {STATUS_ANCHOR} from './extract/ledgers.mjs';
@@ -17,7 +17,9 @@ import {recordId} from './extract/records.mjs';
 import {promptId} from './work.mjs';
 import {d1WorkLedger} from './fixtures/d1-work.mjs';
 import {d1Graph, ROOT} from './fixtures/d1-graph.mjs';
-import {tempRepo, at, T0} from './fixtures/repo.mjs';
+import {tempRepo, at, T0, git} from './fixtures/repo.mjs';
+import os from 'node:os';
+import {recordsSource} from './extract/records.mjs';
 
 let real = null;
 const realWhy = () => (real ??= d1Graph({only: ['ophanim.repo', 'ophanim.records', 'ophanim.status'], lessons: false, status: {root: path.join(ROOT, 'status/ledger'), anchor: STATUS_ANCHOR}}));
@@ -99,4 +101,41 @@ test('why it exists: a recorded join whose input is withdrawn is STALE, kept and
   assert.deepEqual(r.recorded.map(x => [x.to, x.established]), [[ticketId('x'), false]]);
   assert.match(r.recorded[0].assertions[0].why, /^stale/);
   assert.deepEqual(r.requirements, [], 'and the requirement is a gap again');
+});
+
+test('why it exists: a SHALLOW checkout names no introducing commit for a path already in the tree it is cut at, and reads no decision from that commit (coordinator fix at integration)', t => {
+  // Three commits, each introducing one file and naming one register id. A clone of depth 2 is cut at the second: git
+  // shows it as a root commit that "changed" every path of its tree (f and g). h was added after the cut.
+  const {repo, commit} = tempRepo(t);
+  const register = '| Id | Item | Consequence | Status |\n|---|---|---|---|\n' + ['L-901', 'L-902', 'L-903'].map(id => `| ${id} | an entry | none | open |\n`).join('');
+  commit({'lib/f.mjs': 'export const f = 1;\n', 'docs/OPEN-LIMITATIONS.md': register}, 'L-901: introduce lib/f.mjs');
+  commit({'lib/g.mjs': 'export const g = 1;\n'}, 'L-902: introduce lib/g.mjs');
+  commit({'lib/h.mjs': 'export const h = 1;\n'}, 'L-903: introduce lib/h.mjs');
+  const shallow = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-graph-shallow-'));
+  t.after(() => fs.rmSync(shallow, {recursive: true, force: true}));
+  git(shallow, 'clone', '-q', '--depth', '2', `file://${repo}`, '.');
+  const open = r => {
+    const g = openSystemsGraph({sources: [repoSource({repo: r}), recordsSource({repo: r})]});
+    t.after(() => g.close());
+    for (const s of ['ophanim.repo', 'ophanim.records']) g.graph.observe(s, {...g.by, observed_at: T0});
+    return g.graph.view();
+  };
+  const fv = open(repo), cv = open(shallow);
+  // Complete history: each file's introducing commit is named, and its subject's register id is the decision.
+  assert.equal(historyCutAt(fv), null);
+  assert.deepEqual(['f', 'g', 'h'].map(n => whyExists(fv, fileId(`lib/${n}.mjs`)).decisions.map(d => d.entry)), [['L-901'], ['L-902'], ['L-903']]);
+  // Cut at the second commit: f and g are in its tree, so who introduced them is unknown -- nothing named, no decision read
+  // from the boundary's message (L-902), and the gap says why. h was added after the cut: its commit is still known.
+  assert.equal(historyCutAt(cv)?.length, 1, 'the clone is cut at one commit');
+  for (const n of ['f', 'g']) {
+    const r = whyExists(cv, fileId(`lib/${n}.mjs`));
+    assert.equal(r.introduced_by, null, `${n}: the boundary commit is not named as the one that introduced it`);
+    assert.deepEqual(r.decisions, [], `${n}: no decision is read from the boundary commit's message`);
+    assert.match(r.gaps.find(x => x.category === 'introduced')?.why ?? '', /history in this checkout is cut at/);
+    assert.ok(cv.edgesOf(fileId(`lib/${n}.mjs`), {mode: 'established', types: ['derived-from']}).filter(e => e.from === fileId(`lib/${n}.mjs`))
+      .every(e => e.assertions.every(a => cv.assertion(a).record.attributes.history_cut === true)), `${n}: the boundary edge says the history is cut`);
+  }
+  const h = whyExists(cv, fileId('lib/h.mjs'));
+  assert.equal(h.introduced_by?.subject, 'L-903: introduce lib/h.mjs');
+  assert.deepEqual(h.decisions.map(d => d.entry), ['L-903']);
 });

@@ -7,7 +7,7 @@
 //           an untracked file or a deleted one does not change what these functions return.
 // Inputs    The repository root and a commit id (or a name git resolves to one: only resolveCommit takes a name).
 // Outputs   treeAt: {commit, entries [{path, mode, type, blob, size}], withheld}; blobsAt: Map blob -> Buffer;
-//           historyAt: [{commit, parents, date, subject, paths}] newest first; skeletonAt: a temporary directory.
+//           historyAt: [{commit, parents, date, subject, paths, cut}] newest first; historyCut: a shallow clone's boundary; skeletonAt: a temporary directory.
 // Must never  Read a withheld path's bytes (WITHHELD: review findings, `findings-*`, which no agent of this program
 //           reads; they are counted, never opened); write to the repository; follow a symbolic link's target.
 import fs from 'node:fs';
@@ -91,16 +91,35 @@ export function textAt(repo, commit, p) {
  * The ancestry of `commit`, newest first: each commit's parents, author date, subject line and the paths it changed
  * against its first parent (none for a merge, as `git log --name-only` reports it). Withheld paths are left out.
  */
+/**
+ * The commits this checkout's history is CUT at: a shallow clone's boundary, whose parents are not in it (git's
+ * `shallow` file). Empty when the history is complete. A cut commit looks like a root commit to `git log`, which then
+ * lists every path of its tree as changed; that is not a fact about the commit (coordinator fix at integration: a
+ * shallow CI checkout named its single commit as the one that introduced every file).
+ */
+export function historyCut(repo) {
+  return cached(`${repo}\0shallow`, () => {
+    let file;
+    try { file = run(repo, ['rev-parse', '--git-path', 'shallow'], {encoding: 'utf8'}).trim(); } catch { return Object.freeze([]); }
+    const at = path.isAbsolute(file) ? file : path.join(repo, file);
+    let text = '';
+    try { text = fs.readFileSync(at, 'utf8'); } catch { return Object.freeze([]); }
+    return Object.freeze(text.split('\n').map(x => x.trim()).filter(x => COMMIT.test(x)).sort());
+  });
+}
+
 export function historyAt(repo, commit) {
   if (!COMMIT.test(commit ?? '')) throw new Error(`${commit} is not a commit id`);
   return cached(`${repo}\0history\0${commit}`, () => {
+    const cut = new Set(historyCut(repo));
     const raw = run(repo, ['log', '--no-renames', '--name-only', '--format=%x01%H%x00%P%x00%aI%x00%s', commit], {encoding: 'utf8'});
     const out = [];
     for (const chunk of raw.split('\x01')) {
       if (!chunk.trim()) continue;
       const nl = chunk.indexOf('\n'), head = (nl === -1 ? chunk : chunk.slice(0, nl)).split('\0');
       const paths = (nl === -1 ? '' : chunk.slice(nl + 1)).split('\n').map(s => s.trim()).filter(p => p && !WITHHELD.test(p));
-      out.push(Object.freeze({commit: head[0], parents: head[1] ? head[1].split(' ') : [], date: head[2], subject: head[3] ?? '', paths: Object.freeze([...new Set(paths)].sort())}));
+      out.push(Object.freeze({commit: head[0], parents: head[1] ? head[1].split(' ') : [], date: head[2], subject: head[3] ?? '', paths: Object.freeze([...new Set(paths)].sort()),
+        cut: cut.has(head[0])}));
     }
     return Object.freeze(out);
   });

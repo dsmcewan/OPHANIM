@@ -74,6 +74,9 @@ export const MUTATIONS = [
     edits: [one(WHY, "  if (!requirements.length) gaps.push({category: 'requirement',",
       String.raw`  if (!requirements.length) { const base = keyOf(subject).split('/').at(-1).replace(/\.[a-z]+$/, ''); const guess = view.subjects().find(s => kindOf(s) === 'work/item' && keyOf(s).split('-').some(w => w.length > 3 && base.includes(w))); if (guess) requirements.push({to: guess, kind: 'status item', basis: 'resemblance', join: 'the item is named like the file', inputs: [], sources: []}); }
   if (!requirements.length) gaps.push({category: 'requirement',`)]},
+  {id: 'Y2', what: 'a shallow checkout\'s boundary commit is named as the one that introduced a path already in its tree, and its message read for a decision', tests: [[WHY_TEST, '^why it exists: a SHALLOW checkout']],
+    edits: [one(WHY, "first = earliest?.history_cut ? null : earliest;", "first = earliest;"),
+      one(WHY, "  const cut = commits[0]?.history_cut === true;", "  const cut = false;")]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
