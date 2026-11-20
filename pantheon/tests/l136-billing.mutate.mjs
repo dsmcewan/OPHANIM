@@ -22,6 +22,10 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SUITES = ['pantheon/tests/l136-policy.test.mjs', 'pantheon/tests/l136-billing.test.mjs', 'ophanim/operate/l136-billing.test.mjs'];
+// A mutation may name the suites that decide it (`suites`); the others run SUITES. P6 does: where the lifecycle seats its
+// Google implementer on the Antigravity SDK, `operate` does not reach the pipeline's lane implementer, so none of the three
+// suites above drives that failover any more, and the suite that does is the pipeline's own (register L-721).
+const LANE_IMPLEMENTER = 'pantheon/tests/wave3-spend.test.mjs';
 const GB = 'pantheon/src/route/gemini-billing.mjs', WL = 'ophanim/operate/work-ledger.mjs', SCH = 'ophanim/operate/scheduler.mjs', RUN = 'pantheon/src/board/run-item.mjs';
 const CLI = 'ophanim/operate/cli.mjs', SVC = 'ophanim/operate/service.mjs', BOARD = 'pantheon/bin/pantheon-board.mjs', CMP = 'pantheon/bin/pantheon-compare.mjs';
 const CYC = 'pantheon/bin/pantheon-review-cycle.mjs', RR = 'pantheon/src/review-runner/index.mjs', PIPE = 'pantheon/src/pipeline/turns.mjs';
@@ -99,7 +103,8 @@ export const MUTATIONS = [
     edits: [one(CYC, "  return apiTurn({label: 'cycle-review', billing});", "  return apiTurn({label: 'cycle-review'});")]},
   {id: 'P5', path: 'run-review --via api', what: 'the Gemini request is sent without the policy',
     edits: [one(RR, '    if (plan.vendor === "gemini") {\n      try { gemini = spendGemini(', '    if (false) {\n      try { gemini = spendGemini(')]},
-  {id: 'P6', path: 'operate, the pipeline implementer (pipeline/turns.mjs)', what: 'the implementer\'s failover is sent without the policy (only the pipeline\'s admission)',
+  {id: 'P6', path: 'the pipeline\'s lane implementer (pipeline/turns.mjs), at the pipeline\'s turn', what: 'the implementer\'s failover is sent without the policy (only the pipeline\'s admission)',
+    suites: [...SUITES, LANE_IMPLEMENTER],
     edits: [one(PIPE, '        spendGemini(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer"',
       '        ((_b, _a, admit) => admit())(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer"')]},
 ];
@@ -120,8 +125,8 @@ function copyTree(dest) {
   g('init', '-q', '-b', 'main'); g('-c', 'user.name=mutation', '-c', 'user.email=mutation@example.invalid', 'add', '-A');
   g('-c', 'user.name=mutation', '-c', 'user.email=mutation@example.invalid', 'commit', '-q', '-m', 'mutation copy');
 }
-const runSuites = (dir, logFile) => {
-  const r = spawnSync(process.execPath, ['--test', '--test-concurrency=3', '--test-timeout=900000', ...SUITES], {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env: {...process.env}});
+const runSuites = (dir, logFile, suites = SUITES) => {
+  const r = spawnSync(process.execPath, ['--test', '--test-concurrency=3', '--test-timeout=900000', ...suites], {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env: {...process.env}});
   const out = `${r.stdout}${r.stderr}`;
   fs.writeFileSync(logFile, out);
   const count = k => Number(new RegExp(`^ℹ ${k} (\\d+)`, 'm').exec(out)?.[1] ?? NaN);
@@ -146,7 +151,8 @@ let exit = 0;
 const summary = [];
 try {
   copyTree(copy);
-  const baseline = runSuites(copy, path.join(logDir, 'baseline.log'));
+  // The baseline is every suite a chosen mutation will be run against.
+  const baseline = runSuites(copy, path.join(logDir, 'baseline.log'), [...new Set(chosen.flatMap(m => m.suites ?? SUITES))]);
   console.log(`baseline: ${baseline.pass}/${baseline.tests} pass, ${baseline.fail} fail, ${baseline.cancelled} cancelled, ${baseline.skipped} skipped`);
   if (baseline.status !== 0 || baseline.fail || baseline.cancelled || baseline.skipped || !(baseline.tests > 0)) {
     console.error('the unmutated suites are not green: no mutation result would mean anything');
@@ -161,10 +167,10 @@ try {
         fs.writeFileSync(file, before.replace(e.from, () => e.to));
         if (fs.readFileSync(file, 'utf8') === before) { console.error(`${m.id}: EDIT DID NOT APPLY in ${e.file}`); exit = 2; }
       }
-      const r = runSuites(copy, path.join(logDir, `${m.id}.log`));
+      const r = runSuites(copy, path.join(logDir, `${m.id}.log`), m.suites ?? SUITES);
       for (const [file, text] of originals) fs.writeFileSync(file, text);
       const killed = r.status !== 0 && (r.fail > 0 || r.cancelled > 0 || !Number.isFinite(r.tests));
-      summary.push({id: m.id, path: m.path, what: m.what, files: [...new Set(m.edits.map(e => e.file))], killed, tests: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
+      summary.push({id: m.id, path: m.path, what: m.what, files: [...new Set(m.edits.map(e => e.file))], ...(m.suites ? {suites: m.suites} : {}), killed, tests: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
       console.log(`${m.id} ${killed ? 'KILLED  ' : 'SURVIVED'} ${r.pass}/${r.tests} pass, ${r.fail} fail  [${m.path}] ${m.what}`);
       for (const f of r.failed.slice(0, 4)) console.log(`    ${f.slice(0, 200)}`);
       if (!killed) exit = exit || 1;

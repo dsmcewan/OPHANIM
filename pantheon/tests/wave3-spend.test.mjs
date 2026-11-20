@@ -211,6 +211,28 @@ test("I the pipeline implementer (failover off): its lane's proven quota refusal
     await go(FAILOVER());
     assert.ok(fetched.length > 0);
   });
+  // THE FAILOVER DECLARED, AT THIS CALL SITE (register L-136, L-721). Where the lifecycle seats its Google implementer on
+  // the Antigravity SDK, `operate` does not reach this lane implementer, so what ophanim/operate/l136-billing.test.mjs
+  // showed through it for the failover kind is shown here, at the pipeline's turn: the request is charged, and its usage
+  // row persisted, before it is sent; a spent budget refuses the next one; a later run over the same usage record does not
+  // start the budget again.
+  await t.test("failover declared with a budget of one: its usage row is persisted before the metered request is sent, and the next proven quota refusal is not answered", async () => {
+    const file = join(mkdtempSync(join(fx.root, "usage-")), "usage.jsonl");
+    const rows = () => (existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)) : []);
+    const edge = globalThis.fetch, persistedWhenSent = [];
+    globalThis.fetch = async (...a) => { persistedWhenSent.push(rows().map(r => [r.kind, r.model, r.purpose])); return edge(...a); };
+    try {
+      arm("quota", null);
+      await go(optIn({ failover: 1, file }));
+      assert.ok(persistedWhenSent.length > 0, "the metered API was asked");
+      assert.deepEqual(persistedWhenSent[0], [["failover", API_ID, "implementer"]], "the request was charged, and its row persisted, before it was sent");
+      arm("quota", null);
+      const e = await go(optIn({ failover: 1, file }));   // a new context over the same usage record, as a later run has
+      assert.deepEqual(fetched, [], "the budget is spent: no metered request");
+      assert.deepEqual([e?.code, e?.quota_failover?.used, e?.quota_failover?.code], ["quota_exhausted", false, "METERED_GEMINI_BUDGET_EXHAUSTED"], e?.message);
+      assert.equal(rows().length, 1, "and nothing more was charged");
+    } finally { globalThis.fetch = edge; }
+  });
 });
 
 // ---- B: the board -------------------------------------------------------------------------------------------------
