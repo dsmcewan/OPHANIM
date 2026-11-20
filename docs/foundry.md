@@ -6,7 +6,9 @@ capabilities, verify outcomes, operate systems, and improve its own processes" (
 one request, and lets the knowledge graph decide who builds (owner direction, 2026-11-20: "Use the knowledge_graph";
 "A/B test and keep metrics of the best and fastest set up").
 
-Every limit of what follows is in `docs/OPEN-LIMITATIONS.md`, rows F-1 to F-9.
+Every limit of what follows is in `docs/OPEN-LIMITATIONS.md`, rows F-1 to F-13. Four of them (F-10 to F-13) are where
+the foundry, as built, sits outside rules the rest of the system keeps: one lifecycle and its work ledger,
+owner-directed seats, one store of measurements, and the central billing policy. F-10 and F-11 wait on the owner.
 
 ## What it does
 
