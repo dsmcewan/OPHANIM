@@ -1,0 +1,15 @@
+{
+  "schema": "ophanim.foundry.request/v1",
+  "key": "adder",
+  "title": "an add function",
+  "class": "build/module",
+  "goal": "Write add.mjs: an ES module exporting a function add(a, b) that returns the sum of two numbers. It imports nothing.",
+  "question": "What is the simplest correct ES module exporting add(a, b)?",
+  "files": [{"slot": "add", "path": "add.mjs"}],
+  "seed": "seed",
+  "acceptance_cmd": "node seed/check.mjs",
+  "tests_file": "seed/check.mjs",
+  "operate": {"cmd": "node seed/operate.mjs", "timeout_ms": 20000, "score": "sums"},
+  "allowed": {"builtins": []},
+  "difficulty": "easy"
+}
