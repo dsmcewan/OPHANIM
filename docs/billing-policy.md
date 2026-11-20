@@ -220,6 +220,29 @@ request is charged on the record before it is sent; other labs' clients are made
   as for any failed seat. Their seat labels are identifiers (`<seat>.swarm.<layer>`, `<seat>.discuss`): the server
   refuses any other label with 400, so before L-148 none of their seats, Gemini or not, reached a provider.
 
+## The research team on the Antigravity SDK transport
+
+A research team (`ophanim/operate/research.mjs`, `pantheon/src/antigravity/research.mjs`; owner direction 2026-11-20) is
+read-only sessions of the same SDK transport: a coordinator on the role's seat (`gemini-4-carbon`) and specialists on
+`gemini-4-hydrogen`. Every one of them is primary Gemini execution, purpose `research`:
+
+- The policy is asked before a team is prepared. With `gemini_api_primary` off, or its budget spent, no directory is
+  made, no session is started, no team is recorded, and the request for research stays open on the work ledger. The plan
+  stage that was to run it ends pending on that refusal, and the scheduler wakes it when the launcher's policy changes
+  (the billing wake above). The planner is not asked meanwhile.
+- Every billed request of every member, at every level of the team, is one billed request of kind `primary`: this
+  policy first, then the plan stage's provider-call bound and its charge on the work ledger, then the usage row
+  (`work.billing`, purpose `research`, with the research role), all before the controller's model gateway forwards it.
+  The team has its own bound on requests as well (`research.bounds.max_requests`), shared by concurrent and nested
+  members; it is checked first and adds no authorization.
+- A budget that runs out inside a team refuses that request (it is not sent) and stops the team without a conclusion.
+  Members that finished are kept: their records are on the ledger and in the item's state, and the next run reuses them
+  and pays only for the rest. The spending is counted from the ledger and is never reset by a restart or a resume.
+- A planner's "insufficient evidence" answer starts research only where `gemini_api_primary` is declared and the
+  executors were built with research on (the launchers of this repository do that); otherwise nothing is requested.
+- The budget is not reserved per team: teams of several items, and the `fit` implementer, draw on the same
+  `gemini_api_primary` budget request by request (register L-731).
+
 ## Every billed Gemini path
 
 | Path | Kind | Status |
@@ -231,6 +254,7 @@ request is charged on the record before it is sent; other labs' clients are made
 | `pipeline/turns.mjs` implementer failover, and its further requests | failover | per request |
 | `pipeline/turns.mjs` single-turn seats (dispatcher, reviewer, subagent) | as their turn | the stage's context rides with each call |
 | `pipeline/turns.mjs` SDK implementer (`fit`: a session of the Antigravity SDK transport, `src/antigravity/`): the implementer's requests and its native subagents' | primary | refused before the session is prepared unless admitted; then per request at the controller's model gateway, each usage row persisted before the request is forwarded |
+| `ophanim/operate/research.mjs runResearch` (a research team: the plan stage's requested research and its research on the planner's gaps): the coordinator's requests and every specialist's, at every level | primary (purpose `research`) | refused before the team is prepared unless admitted; then per request at the controller's model gateway, after the team's own request bound and before the stage's call bound, each usage row persisted before the request is forwarded |
 | The SDK transport's model metadata requests (`GET models/<id>`: the availability check before a session; the dry run of `ophanim/operate/live-run.mjs`, `sdkPreflight`) | none (not a generation request) | the availability check is made only for a seat the policy admitted; the dry run sends them with the manifest's key and spends nothing. Not observed against the live provider (L-701) |
 | `board/run-item.mjs` walk (`routeSeats`): the lane's quota-failover candidate | failover | skipped unless admitted |
 | `board/run-item.mjs turn()`: a Gemini API seat (failover candidate, operator seat, ticket pin) | failover or primary | refused up front unless admitted; then per request |

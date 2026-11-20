@@ -283,6 +283,65 @@ Not done by this intake: it does not decide whether two prompts ask for the same
 through its dossier, and the identity only collapses an exact repeat), and it does not split one prompt into several
 status items (one prompt is one item; the planner splits it into work units).
 
+## Research before or during an item's lifecycle (owner direction 2026-11-20)
+
+An item can be investigated by a research team before it is planned, or at any later point: a `gemini-4-carbon`
+coordinator (scout, explorer or researcher) that reads the repository and, where a specific gap needs it, delegates
+bounded questions to `gemini-4-hydrogen` specialists, at most 10 levels deep and at most 8 specialists at once. The
+team is assembled by the controller from what the coordinator asks for; nobody assembles it by hand. The roles, the
+team's rules and what the SDK does against what OPHANIM does are in
+[docs/routing-task-profile.md](routing-task-profile.md); this section is how it is used.
+
+1. **A request.** Research is activated by a record on the work ledger (`work.research`, phase `request`): the item,
+   what triggered it, the question, and who asks.
+
+   ```
+   node ophanim/operate/cli.mjs research --item ID --trigger T --question TEXT --by NAME [--role scout|explorer|researcher]
+   ```
+
+   It needs the controller's authority, writes one record and runs nothing. The triggers are `intake` (a new item needs
+   investigation before planning), `insufficient-evidence`, `contradiction` (new evidence contradicts an assumption),
+   `relationship` (a stage found a relationship nobody knew), `review-finding`, `invalidated-evidence` (a change
+   invalidated evidence that had qualified) and `reflection` (an unresolved systemic question). Each has a default role;
+   `--role` overrides it. The same trigger and question twice is refused.
+2. **One trigger is recorded by the lifecycle itself.** When the planner answers that the evidence is insufficient, the
+   plan stage records a request for exactly those gaps and runs it, where primary Gemini execution is declared. The
+   other six are recorded by whoever observes them, through the command or `requestResearch`; no stage emits them yet
+   (register L-727).
+3. **When it runs.** An open request makes the item's plan stale. At the next tick the plan stage runs the team first,
+   then builds the dossier, then asks the planner, who is shown the findings with their sources and versions. Research
+   on one item runs while other items are planned, implemented and reviewed, up to the scheduler's `--concurrency`; on
+   the same item it is the plan stage, so a request made after a plan was approved means the item is planned again
+   (register L-729).
+4. **What it may do.** Read. A member's session is offered read tools only, inside its assignment's scope, and the
+   repository is read-only inside its jail. It cannot write, run a command, start an agent, approve anything or change a
+   rule. Its findings are evidence the planner and the reviewers weigh; they authorize nothing.
+5. **Spend.** Every request of every member is a billed request of kind `primary`
+   ([docs/billing-policy.md](billing-policy.md)): without `--gemini-api-primary N` (or the service's or manifest's
+   equivalent) nothing is prepared and the plan stage waits, pending on the policy's refusal, until the policy changes.
+   The requests also count in the stage's provider-call bound and on the work ledger's spend.
+6. **What a change of the findings does.** The findings are a view of the item's dossier, so a plan that waited on
+   evidence is woken by them. A conclusion the coordinator marks material (what was found changes what a plan should
+   rest on) makes stale every approved plan that was not given it, and the item is planned again through the existing
+   plan gate. Nothing downstream of a stale plan is reused.
+7. **Review independence.** Every member that answered is recorded as a contributor to the plan, with the model that
+   was asked and the model that answered. The plan's and the change's review panels are seated outside those models,
+   as for any contributor. Eight Hydrogen specialists are one model of one lab, never eight reviewers' worth of
+   independence. OpenAI's dispatch and pinned in-run review, Grok's eligibility for the independent adversarial review
+   and the cross-lab qualification are as they were.
+8. **Interruption and recovery.** A team that was stopped, refused a charge or cut by its stage's end records no
+   conclusion. Its request stays open, every member that finished stays on the ledger with its record, and the next
+   run reuses them (each record checked against its digest) and pays only for the rest.
+9. **Where it does not run.** Executors built without `research: {enabled: true}` run none (`operate tick`, `watch`,
+   `serve` and the live run turn it on). On such executors an open request stops the plan stage as
+   `RESEARCH_NOT_ENABLED`; where the SDK transport cannot start a session (no key, no SDK, no jail) it stops as
+   `RESEARCH_TRANSPORT`, and the planner's gaps request nothing. In neither case is the item planned around the request.
+
+The records: `work.research` on the work ledger (request, team with the routing record, each member admitted and then
+with its outcome, each refused delegation, the conclusion with its telemetry and contributors), the members' full
+records and `findings.json` under the item's state (`<state>/<item>/research/<team>/`), and the `research:<item>` view
+of the dossier.
+
 ## The first ticket
 
 `tickets/co1-readability.json` is slice 1 of `co1-readability` (CO1: ophanim/ is expensive to review): wrap

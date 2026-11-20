@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, sdkPreflight, pythonRoots, IMPLEMENTER_TOOLS, RESEARCH_TOOLS, READ_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
 import { SDK_READ_TOOLS } from "../src/antigravity/config.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
@@ -696,4 +697,20 @@ test("REAL JAIL: the bridge runs inside bwrap with the host read-only, its own P
   assert.equal(note(r).requests[0].status, 200, "the jailed bridge reaches the controller's loopback gateway");
   assert.equal(r.sandbox.enabled, true);
   assert.ok(r.launch.argv[0].endsWith("bwrap") && r.launch.argv.includes("--unshare-pid") && !r.launch.argv.join(" ").includes(KEY));
+});
+
+test("REAL JAIL, A RESEARCH SESSION: the repository itself is read-only inside the jail, so a write that no tool decision ever saw still fails; a read works, and the session's own run directory is writable", async t => {
+  const probe = await sandboxAvailable("bwrap");
+  if (!probe.ok) { t.skip(`UNVERIFIED: bwrap is not usable here (${probe.why})`); return; }
+  const { env, control_dir, run, note } = await setup(t);
+  const readme = join(env.repo, "README.md"), fresh = join(env.repo, "src/u1/jailed.txt"), scratch = join(control_dir, "run", "scratch.txt");
+  // The probe writes from inside the jail with no tool call at all: what a runtime that ignored the controller could do.
+  const r = await run(CARBON, [{ probe: { read: [readme], write: [fresh, readme, scratch] } }, { request: { model: "gemini-4-carbon", as: "root" } }],
+    { sandbox: { enabled: true }, base_env: { ...process.env, GEMINI_API_KEY: KEY }, research: RESEARCH });
+  const p = note(r).probes[0];
+  assert.equal(p.pid1, "bwrap");
+  assert.deepEqual([p.can_read[readme], p.can_write], [true, { [fresh]: false, [readme]: false, [scratch]: true }], "the repository: readable, not writable; the run directory: writable");
+  assert.equal(readFileSync(readme, "utf8"), "base\n", "the file is as it was");
+  assert.equal(existsSync(fresh), false);
+  assert.equal(execFileSync("git", ["-C", env.repo, "status", "--porcelain"], { encoding: "utf8" }), "", "the repository is as it was");
 });

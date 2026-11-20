@@ -39,6 +39,8 @@ Finding 3 was found by a test, not by reading: the scripted implementer never sa
 
 Every entry states its kind (authoritative requirement, observation, derived, hypothesis), source, version, date and coverage. An excerpt says how much of how much. What is not in the view is listed. When no file is named anywhere, the selection is a word-match guess and is labelled a hypothesis.
 
+**Research findings** (`research-view.mjs`; owner direction 2026-11-20). When an item has research on the work ledger, its dossier holds one more derived view, `research:<item>`: every concluded team's answer and concise findings, each with its source and the digest the controller recorded, and every request not yet answered. The view's bytes are its version, and it is inside the dossier's stable digest: new findings, or a new request, are a change of the evidence, so a plan waiting on evidence is woken by them and a plan that cites the view is stale when they change. The full records stay on the work ledger and in the item's state; the view is derived from them and is not a second store.
+
 **Retrieval the model drives** (`makeRetriever`, `investigate`). A seat may answer with requests instead of a judgment: read a file or a line range, list, search, read history or a commit, read any item's status history or work record, an earlier stage record, an issue, or a full test output.
 
 - **Views.** Each request names a view: a source (including any selection, such as a `match` on status history) and a version. A result is a byte range of that view's whole body, with the total.

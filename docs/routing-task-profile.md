@@ -660,3 +660,60 @@ Owner direction: the Google **implementation** transport is the official `google
 **What still uses the `agy` CLI.** Only seats outside Google implementation routing, and an explicit lane seat: the single-turn Gemini seats of other roles (planner, reviewers, validator through `laneFirstTurn`), the `argo`/`legacy` per-file board's Antigravity seats, the review runner's agy reviewer, and an implementer seat that names an Antigravity lane by hand. The CLI worker path is kept for those and is not retired by this change (register L-703).
 
 **The per-file board under `fit`.** `runOpenItem` runs one tool-less turn per file, not a session, so it cannot run an SDK seat. The selector gives it the matrix's model as one Gemini API turn (`boardSeat` in `route/frontier.mjs`: `transport: "api"`, no lane in front, no metered failover behind), and a seat that still names the SDK transport is refused there before any call (`SDK_SEAT_NEEDS_PIPELINE`). On that path there are no native subagents and no ceilings to enforce.
+
+## The research roles on the Antigravity SDK transport (owner direction 2026-11-20)
+
+Owner direction: `gemini-4-carbon` is the preferred model of three roles of the investigation, on the same SDK transport as the Google implementer (the Gemini API with `GEMINI_API_KEY`; no `agy` CLI, no subscription login). They are not implementer rows and not reviewers.
+
+| Role | What it is for | Seat | Default for the trigger |
+|---|---|---|---|
+| scout | discover the systems, evidence, capabilities, dependencies and unknowns that bear on a question | `gemini-4-carbon`, thinking level `high` | `intake` |
+| explorer | investigate uncertain assumptions, competing explanations, alternatives and relationships not yet known | `gemini-4-carbon`, `high` | `contradiction`, `relationship`, `reflection` |
+| researcher | a detailed, source-backed investigation: execution paths, dependencies, the evidence a plan or decision needs | `gemini-4-carbon`, `high` | `insufficient-evidence`, `review-finding`, `invalidated-evidence` |
+
+**Routing** (`pantheon/src/config/antigravity-sdk.json` `research`, read by `route/fit-matrix.mjs researchSeat`).
+
+- Each role has a list of candidates in preference order (today one: Carbon). `researchSeat(role, {qualified})` seats the first candidate the caller's test does not reject, and returns the record of the choice with the seat: the candidates, the one chosen, each one passed over with its reason, a digest of the configuration it was made under, and the basis. That record is on the team's `work.research` entry. With no candidate qualified nothing is substituted (`RESEARCH_NO_QUALIFIED_MODEL`). A capability-based selector plugs in as that test; none is wired today, so the first candidate is always the one chosen.
+- The research roles are not rows of the fit matrix. The implementer's hard, medium and easy assignments and the `fit` selection policy's digest are unchanged, and a test pins both.
+- Subordinate specialists are the subagent model, `gemini-4-hydrogen` at `medium`. The configuration is refused when it names another (one Hydrogen policy, not two), a depth over 10, a model the transport does not declare, a thinking level not recorded for a model, or a tool that is not a read tool.
+
+**The team** (`pantheon/src/antigravity/research.mjs`, the controller's side; `ophanim/operate/research.mjs`, the runner).
+
+- **One coordinator, level 1.** It reads the repository itself and answers with a report and, when it needs them, delegations. It says when the question is answered (`satisfied`), and the team stops there, whatever depth or capacity is unused.
+- **A delegation is a request the controller admits.** It names an open question of its parent's own report (`addresses`), its own question, one of ten specialties (source inventory, history and cause, dependency map, execution trace, contract and invariant, evidence retrieval, contradiction analysis, alternative hypothesis, change impact, acceptance criteria), a scope inside the team's, read tools, bounds within the node bounds, the evidence expected and why the gap matters. Anything else is refused and recorded (`RESEARCH_UNJUSTIFIED`, `RESEARCH_PARENT_UNKNOWN`, `RESEARCH_SPECIALTY`, `RESEARCH_SCOPE`, `RESEARCH_TOOLS`, `RESEARCH_BOUNDS`, `RESEARCH_DUPLICATE`, `RESEARCH_NODE_BUDGET`). No specialist exists by default.
+- **Depth.** A delegation that pursues an open question of a node at level d is level d + 1 and names that node as its parent. Level 11 is refused (`RESEARCH_DEPTH_EXCEEDED`), by the controller and again by the work ledger, which takes no research node above level 10 and no specialist whose parent is not a recorded node one level above it. The limit is a constant in code; configuration can lower it and cannot raise it.
+- **Hydrogen does not delegate.** A specialist reports its open questions and the next steps it recommends; the coordinator, shown them, asks for the next level, and the controller opens it. Every level below the coordinator is opened that way. A specialist's session is offered no subagent tool and is refused one if it asks.
+- **Concurrency.** At most the coordinator model's existing subagent ceiling of specialists run at once (Carbon 8, Neon 4); the rest wait for a slot. A coordinator on Hydrogen delegates to none (`RESEARCH_NO_SUBORDINATES`). Depth is not concurrency: ten levels may be ten specialists run one after another.
+- **Bounds** (`research.bounds`): 40 specialists per team, 240 billed requests per team, 12 coordinator rounds, and per member 24 model calls, 80 tool calls and 900 seconds. Reaching level 10 takes at least ten coordinator rounds, and the configuration is refused if the round bound is below the depth.
+
+**Each member is a read-only session** (`turn.mjs`, research mode).
+
+- It is given the read tools only (`view_file`, `list_directory`, `search_directory`, `find_file`) and the structured answer. A write, a command, a native delegation or any other tool is refused before it happens (`RESEARCH_READ_ONLY`), and the repository is bound read-only inside the jail, so a call the decision missed could not write either.
+- Its assignment's tools and scope are the session's: a read tool it was not given is neither offered nor served (`RESEARCH_TOOL_NOT_GIVEN`), and a read inside the repository and outside its scope is refused (`RESEARCH_SCOPE`).
+- The session's own directory is made outside the repository it reads and removed when the session ends.
+- There is no capability for an experiment that writes or runs something. A question that needs one is reported as unresolved (register L-728).
+
+**Evidence.**
+
+- A member answers with seven parts: the question it investigated, the sources it examined, observations, hypotheses with what supports and contradicts each, dependencies and the contracts they touch, unresolved questions and what limited the evidence, and the next investigation or planning obligations it recommends.
+- The controller records what each session read as it allows the read: the path, and for a file the digest and size of its bytes at that moment. A report may cite only that (for the coordinator, also what a finished member examined). The version of every cited source is the controller's digest, never the model's. A report that cites anything else, or a finding with no source, fails its node, and nothing of it is taken.
+- The full record of each finished member is a file of the item's state, cited by digest on the work ledger. The coordinator is shown each member's findings concisely, each with its source and version, bounded in bytes; transcripts are not passed up the levels.
+- The same claim from the same source and version is one piece of evidence that names every member that examined it. The same claim from another source is a second piece.
+- The team's record distinguishes the depth reached, the peak of specialists active at once, the specialists created, billed requests by model and tokens by model.
+
+**In the lifecycle** ([docs/operating-workflow.md](operating-workflow.md), [docs/billing-policy.md](billing-policy.md), [docs/context-and-evidence.md](context-and-evidence.md)). A request on the work ledger is run by the item's plan stage before the planner is asked; the findings are a view of the item's dossier; an open request, or a conclusion that changes what a plan should rest on and that a plan was not given, makes the plan stale through the existing gate; every member that answered is a contributor to the plan, so the review panels are seated outside those models. Several Hydrogen members are one model of one lab.
+
+**What the installed SDK does, and what OPHANIM does.**
+
+| | The installed SDK (google-antigravity 0.1.24) | OPHANIM |
+|---|---|---|
+| A child's model | a subagent type may name its model (`SubagentConfig.model`); used by the implementer's native Hydrogen subagents, and shown on the installed runtime against a scripted provider | seats every research member itself: each is its own session on the seat the controller chose |
+| Nesting | its capabilities declare a subagent depth (`max_subagent_depth`, default 1). A depth above 1 was read in its types and **not exercised here** | the transport keeps the native depth at 1 and gives a research session no subagent type. Levels 2 to 10 are sessions the controller opens, each recorded with its parent |
+| Concurrency | no event when a child ends (register L-706), so the runtime cannot be asked how many children are active | a pool in the controller: at most the ceiling of specialists run at once, counted by the sessions it started and saw end |
+| Tool scope | a list of enabled tools per session; a hook before most tool calls (three tools run with none: register L-715) | decides every hooked call: reads only, inside the repository, inside the assignment's scope and tools; binds the repository read-only |
+| Spend | none: it sends requests | every request of every member passes the billing policy, the team's bound and the stage's bound before the controller's gateway forwards it |
+| Evidence | the tool results the model saw | the digest of each file as the controller allowed the read; reports checked against that |
+
+So the hierarchy is OPHANIM-controlled delegation, not native SDK delegation. It was chosen because the owner's rule forbids Hydrogen to delegate and because the runtime cannot report active children; it is not a claim that the SDK cannot nest.
+
+**What is shown, and against what.** `pantheon/tests/research-routing.test.mjs`, `research-team.test.mjs`, `antigravity-turn.test.mjs`, `ophanim/operate/research.test.mjs` and `research-lifecycle.test.mjs` pin the controller with scripted sessions. One test in `antigravity-sdk-contract.test.mjs` runs a two-level team (a Carbon coordinator, one Hydrogen specialist, the coordinator again) on the installed SDK in the real jail against a scripted provider. Nothing of it has reached the live Gemini API: whether Carbon and Hydrogen follow the report format, how good their findings are and what a team costs are UNVERIFIED (register L-726).

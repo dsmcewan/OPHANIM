@@ -230,3 +230,30 @@ test("EVERY CONTRIBUTOR IS RECORDED WITH THE MODEL ASKED AND THE MODEL THAT ANSW
   assert.deepEqual(Object.keys(r.telemetry).sort(), ["active_peak", "coordinator_rounds", "depth_reached", "nodes", "nodes_created", "refusals", "requests", "reused", "tokens"].sort(), "depth, concurrency, nodes, requests and tokens are separate figures");
   assert.deepEqual(r.telemetry.tokens, { total: 250, by_model: { "gemini-4-carbon": 200, "gemini-4-hydrogen": 50 } });
 });
+
+test("A CHARGE THE CALLER REFUSES STOPS THE TEAM WHERE IT IS: the refused request is not counted, the node it was for fails under the caller's code, and no further session is started, the coordinator's next round included", async () => {
+  let asked = 0;
+  // The caller refuses the second request only: a team that went on would be admitted again, and would run on.
+  const t = team({ coordinator: () => lead({ delegations: [ask("u1")] }),
+    over: { admit: () => { asked += 1; if (asked === 2) throw Object.assign(new Error("the stage's provider-call bound is spent"), { code: "STAGE_CALLS" }); } } });
+  const r = await t.run();
+  assert.deepEqual([r.status, r.stop_reason, r.telemetry.requests.total, asked], ["stopped", "STAGE_CALLS", 1, 2]);
+  assert.deepEqual(t.calls.map(c => [c.kind, c.round]), [["coordinator", 1], ["specialist", 1]], "no session is started after the refusal");
+  assert.deepEqual(r.nodes.map(n => [n.kind, n.state, n.error?.code ?? null]), [["coordinator", "finished", null], ["specialist", "failed", "STAGE_CALLS"]]);
+});
+
+test("WHAT GOES UP IS BOUNDED: a member with more findings than the bound allows is shown to the coordinator up to the bound, with the count of what stayed in its stored report; the stored report is whole", async () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({ id: `o${i + 1}`, text: `finding ${i + 1} of forty: ${"".padStart(60, "x")}`, sources: ["src/a.mjs"] }));
+  const t = team({ limits: { finding_bytes: 600 },
+    coordinator: round => (round === 1 ? lead({ delegations: [ask("u1")] }) : lead({ satisfied: true, open: [] })),
+    specialist: node => ({ report: { ...report({ question: node.question }), observations: many } }) });
+  const r = await t.run();
+  const specialist = r.nodes.find(n => n.kind === "specialist");
+  const shown = t.prompts.find(p => p.kind === "coordinator" && p.round === 2).prompt;
+  const lines = shown.split("\n").filter(l => /^ {2}o\d+: finding \d+ of forty/.test(l));
+  const left = new RegExp(`\\(\\+(\\d+) more line\\(s\\) in the stored report of ${specialist.id}\\)`).exec(shown);
+  assert.ok(left, "the coordinator is told how much stayed behind, and where");
+  assert.deepEqual([lines.length + Number(left[1]), lines.length > 0, lines.length < 40, Buffer.byteLength(lines.join("\n"), "utf8") <= 600], [40, true, true, true]);
+  assert.equal(specialist.report.observations.length, 40, "the stored report keeps every finding");
+  assert.equal(r.knowledge.observations.length, 40, "and so does the team's knowledge");
+});

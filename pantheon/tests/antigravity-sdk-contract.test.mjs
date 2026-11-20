@@ -365,6 +365,25 @@ contract("A RESEARCH SESSION ON THE INSTALLED RUNTIME reads only: the model is o
   if (BWRAP.ok) assert.deepEqual(r.sandbox.binds.filter(b => b.path === s.env.repo).map(b => b.mode), ["ro"], "the repository's bind in the jail is read-only");
 });
 
+contract("THE RUNTIME'S READ TOOLS REACH THE CONTROLLER UNDER THE NAMES IT DECLARES: a research session's model is offered list_dir, grep_search and find_by_name beside view_file; a call of each is decided as list_directory, search_directory and find_file, served, and recorded as examined; only a file that was read has a content digest", async t => {
+  const ref = {};
+  const s = await session(t, { over: { research: { system: "You are a research specialist. Read what the question needs and report it with its sources. You change nothing." } },
+    decide: ({ body }) => {
+      const n = responsesIn(body);
+      if (n === 0) return { parts: [fc("list_dir", { DirectoryPath: join(ref.repo, "src") })] };
+      if (n === 1) return { parts: [fc("grep_search", { SearchPath: ref.repo, Query: "keep" })] };
+      if (n === 2) return { parts: [fc("find_by_name", { SearchDirectory: join(ref.repo, "src/u1"), Pattern: "*.mjs" })] };
+      if (n === 3) return { parts: [fc("view_file", { AbsolutePath: join(ref.repo, "src/u1/keep.mjs") })] };
+      return { parts: [text("REPORT: src/u1/keep.mjs exports keep")] };
+    } });
+  ref.repo = s.env.repo;
+  const r = await s.run();
+  assert.deepEqual(s.gen()[0].body.tools.flatMap(x => (x.functionDeclarations ?? []).map(f => f.name)).sort(), ["find_by_name", "grep_search", "list_dir", "view_file"], "what the model is offered: the runtime's own names for the four read tools, and nothing else");
+  assert.deepEqual(r.tool_log.map(x => [x.tool, x.allow, x.code, x.who]), [["list_directory", true, null, "researcher"], ["search_directory", true, null, "researcher"], ["find_file", true, null, "researcher"], ["view_file", true, null, "researcher"]]);
+  const digest = "sha256:" + createHash("sha256").update(readFileSync(join(s.env.repo, "src/u1/keep.mjs"))).digest("hex");
+  assert.deepEqual(r.examined.map(x => [x.tool, x.path, x.kind, x.sha256]), [["list_directory", "src", "listing", null], ["search_directory", ".", "listing", null], ["find_file", "src/u1", "listing", null], ["view_file", "src/u1/keep.mjs", "file", digest]]);
+});
+
 // ---- A RESEARCH TEAM ON THE INSTALLED RUNTIME (owner direction 2026-11-20) -----------------------------------------------
 // Two levels, each its own controller-run session of the installed SDK in the real jail: a Carbon coordinator that reads
 // and delegates one gap, a Hydrogen specialist that reads and reports, the coordinator again, satisfied. What is scripted
@@ -390,7 +409,7 @@ contract("A RESEARCH TEAM ON THE INSTALLED RUNTIME: a Carbon coordinator and a H
     return { parts: [report({ question: "What does this repository export?", sources: [{ ref: "README.md" }],
       observations: [{ id: "o1", text: "README.md says only: base", sources: ["README.md"] }],
       unresolved: [{ id: "u1", question: "what the source files under src export", why: "the README does not say" }], next: [{ addresses: "u1", question: "read the files under src" }],
-      delegations: [{ addresses: "u1", question: "What does src/u1/keep.mjs export, and under which name?", specialty: "source-inventory", scope: ["src"], expected_evidence: "the export statement of the file", why: "the team's question is what the repository exports" }],
+      delegations: [{ addresses: "u1", question: "What does src/u1/keep.mjs export, and under which name?", specialty: "source-inventory", scope: ["src"], tools: ["view_file"], expected_evidence: "the export statement of the file", why: "the team's question is what the repository exports" }],
       satisfied: false, material: false, summary: "The README does not say; one specialist is asked." })] };
   } });
   t.after(async () => { await upstream.close(); await env.cleanup(); });
@@ -418,11 +437,10 @@ contract("A RESEARCH TEAM ON THE INSTALLED RUNTIME: a Carbon coordinator and a H
   assert.deepEqual(r.telemetry.requests, { total: gen.length, by_model: { "gemini-4-carbon": gen.filter(g => g.model === "gemini-4-carbon").length, "gemini-4-hydrogen": gen.filter(g => g.model === "gemini-4-hydrogen").length } });
   assert.deepEqual([...new Set(gen.map(g => `${g.model}@${g.body.generationConfig.thinkingConfig.thinkingLevel}`))], ["gemini-4-carbon@high", "gemini-4-hydrogen@medium"]);
   assert.ok(gen.every(g => g.headers["x-goog-api-key"] === KEY), "the controller's key, on every member's requests");
-  // NO MEMBER IS OFFERED A WRITE, A COMMAND OR A SUBAGENT: the Hydrogen restriction is the runtime's tool list, not a request to the model.
-  for (const g of gen) {
-    const offered = g.body.tools.flatMap(x => (x.functionDeclarations ?? []).map(f => f.name));
-    for (const tool of ["create_file", "edit_file", "run_command", "invoke_subagent", "define_subagent"]) assert.ok(!offered.includes(tool), `${tool} is offered to ${g.model} (offered: ${offered.join(", ")})`);
-  }
+  // NO MEMBER IS OFFERED A WRITE, A COMMAND OR A SUBAGENT, AND A SPECIALIST IS OFFERED ONLY WHAT ITS DELEGATION GAVE IT:
+  // the Hydrogen restriction is the runtime's tool list, not a request to the model.
+  const offeredTo = model => [...new Set(gen.filter(g => g.model === model).map(g => g.body.tools.flatMap(x => (x.functionDeclarations ?? []).map(f => f.name)).sort().join(",")))];
+  assert.deepEqual([offeredTo("gemini-4-carbon"), offeredTo("gemini-4-hydrogen")], [["find_by_name,grep_search,list_dir,view_file"], ["view_file"]]);
   // EVIDENCE: what a member cites is the digest of the bytes the controller saw it read.
   const digest = p => "sha256:" + createHash("sha256").update(readFileSync(join(env.repo, p))).digest("hex");
   const specialist = r.nodes.find(n => n.kind === "specialist");
