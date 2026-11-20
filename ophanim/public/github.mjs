@@ -186,9 +186,7 @@ export async function syncProject({env = process.env, issues, fetchImpl = global
     const why = 'Projects sync skipped: no PROJECT_URL or PROJECT_ID is configured'; log(why); return {skipped: why};
   }
   if (!token) {
-    const why =
-      'Projects sync skipped: no OPHANIM_PROJECT_TOKEN (a PAT with project scope; GITHUB_TOKEN cannot write a ' +
-        'user-owned project)';
+    const why = 'Projects sync skipped: no OPHANIM_PROJECT_TOKEN (a PAT with project scope; GITHUB_TOKEN cannot write a user-owned project)';
     log(why); return {skipped: why};
   }
   const gql = async (query, variables) => {
@@ -212,27 +210,19 @@ export async function syncProject({env = process.env, issues, fetchImpl = global
     if (!projectId) throw new Error(`project not found: ${url}`);
   }
   // The project's single-select Status field and its options; an issue's state sets the matching option.
-  const f = await gql(
-    `query($p:ID!){ node(id:$p){ ... on ProjectV2 { field(name:"Status"){ ... on ProjectV2SingleSelectField { id ` +
-      `options { id name } } } } } }`,
-    {p: projectId}
-  );
+  const f = await gql(`query($p:ID!){ node(id:$p){ ... on ProjectV2 { field(name:"Status"){ ... on ProjectV2SingleSelectField { id options { id name } } } } } }`,
+    {p: projectId});
   const status = f.node?.field ?? null;
   let added = 0, set = 0;
   for (const i of issues) {
     if (!i.node_id) continue;
-    const d = await gql(
-      `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p, contentId:$c}){ item { id } } }`,
-      {p: projectId, c: i.node_id}
-    );
+    const d = await gql(`mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p, contentId:$c}){ item { id } } }`,
+      {p: projectId, c: i.node_id});
     added++;
     const option = status?.options?.find(o => o.name.toLowerCase() === i.state.toLowerCase());
     if (option) {
-      await gql(
-        `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p, itemId:$i, ` +
-          `fieldId:$f, value:{singleSelectOptionId:$o}}){ projectV2Item { id } } }`,
-        {p: projectId, i: d.addProjectV2ItemById.item.id, f: status.id, o: option.id}
-      );
+      await gql(`mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p, itemId:$i, fieldId:$f, value:{singleSelectOptionId:$o}}){ projectV2Item { id } } }`,
+        {p: projectId, i: d.addProjectV2ItemById.item.id, f: status.id, o: option.id});
       set++;
     }
   }
@@ -273,11 +263,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         const out = path.resolve(opts.out);
         fs.mkdirSync(path.join(out, 'issues'), {recursive: true});
         // One preview file per issue: title, labels, state and assignees, then the body.
-        for (const i of p.issues) fs.writeFileSync(
-          path.join(out, 'issues', `${i.item}.md`),
-          `# ${i.title}\n\nlabels: ${i.labels.join(', ')} · state: ${i.state}${i.state_reason ? ` ` +
-            `(${i.state_reason})` : ''} · assignees: ${i.assignees.join(', ') || 'none'}\n\n---\n\n${i.body}`
-        );
+        for (const i of p.issues) fs.writeFileSync(path.join(out, 'issues', `${i.item}.md`),
+          `# ${i.title}\n\nlabels: ${i.labels.join(', ')} · state: ${i.state}${i.state_reason ? ` (${i.state_reason})` : ''} · assignees: ${i.assignees.join(', ') || 'none'}\n\n---\n\n${i.body}`);
         fs.writeFileSync(path.join(out, 'plan.json'), JSON.stringify(p, null, 2) + '\n');
       }
       console.log(opts.json ? JSON.stringify(p, null, 2) : planSummary(p));
@@ -314,9 +301,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         console.log(files.map(f => path.relative(process.cwd(), f)).join('\n'));
       } else {
         if (!opened)
-          throw Object.assign(new Error('pr-provenance needs --ledger DIR (a system or review-cycle ledger)'), {
-            usage: true
-          });
+          throw Object.assign(new Error('pr-provenance needs --ledger DIR (a system or review-cycle ledger)'),
+            {usage: true});
         const cycles = P.listCycles(opened.view).filter(c => !opts.scope || c.scope === opts.scope);
         const cycle = opts.cycle ?? cycles.at(-1)?.hash;
         if (!cycle) throw new Error('no cycle on this ledger');

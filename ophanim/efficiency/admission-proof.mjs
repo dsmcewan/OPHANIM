@@ -172,16 +172,8 @@ export function controlledPositiveModel({request,acceptance}={}) {
   assert.equal(acceptance.effectSha,digest(expected.effects));
   // A hypothetical cheaper local controller. No source/configuration or
   // authority changes are performed to make this assumption true.
-  const assumptions = {
-    serviceMs: 500,
-    controllerMs: 5,
-    startupMs: 20,
-    verificationPerNodeMs: 5,
-    fullAuthorityOverheadMs: 1000,
-    recovery:
-      'Conservative complete second execution after a lost outcome; one effect per stable key is required by the ' +
-        'separately verified acceptance evidence.'
-  };
+  const assumptions={serviceMs:500,controllerMs:5,startupMs:20,verificationPerNodeMs:5,fullAuthorityOverheadMs:1000,
+    recovery:'Conservative complete second execution after a lost outcome; one effect per stable key is required by the separately verified acceptance evidence.'};
   const baseline=modeledSchedule(expected.obligations,1,assumptions),
     candidate=modeledSchedule(expected.obligations,3,assumptions);
   const cleanCostMs=3*(baseline.durationMs+candidate.durationMs);
@@ -195,35 +187,18 @@ export function controlledPositiveModel({request,acceptance}={}) {
   const evaluation=assessEfficiency(measurements);
   const fullAssessmentNetMs=evaluation.forecastGrossSavedMs-trialCostMs-assumptions.fullAuthorityOverheadMs;
   assert.equal(evaluation.eligible,true);assert.ok(fullAssessmentNetMs>0);
-  return {
-    schema: 'ophanim.admission-capacity-model/v1',
-    evidenceClass: 'deterministic-model',
-    timingOrigin: 'explicit assumptions, not wall-clock measurements',
-    assumptions,
-    requestSha: digest(request),
-    acceptance: {
-      outputSha: acceptance.outputSha,
-      effectSha: acceptance.effectSha,
-      obligations: expected.obligations.length,
-      effects: expected.effects.length
-    },
-    schedules: {baseline, candidate},
-    cost: {
-      cleanCostMs,
-      recoveryCostMs,
-      verificationCostMs,
-      trialCostMs,
-      fullAuthorityOverheadMs: assumptions.fullAuthorityOverheadMs
-    },
-    measurements,
-    evaluation,
-    fullAssessmentNetMs,
-    productionAdmission: false,
-    interpretation:
-      'The unchanged numeric gate admits a feasible capacity model. This is neither an actual runtime qualification ' +
-        'nor a signed scheduler decision.',
-    boundaries: boundaries()
-  };
+  return {schema:'ophanim.admission-capacity-model/v1',evidenceClass:'deterministic-model',
+    timingOrigin:'explicit assumptions, not wall-clock measurements',
+    assumptions,requestSha:digest(request),
+    acceptance:{
+      outputSha:acceptance.outputSha,effectSha:acceptance.effectSha,obligations:expected.obligations.length,
+      effects:expected.effects.length},
+    schedules:{baseline,candidate},
+    cost:{cleanCostMs,recoveryCostMs,verificationCostMs,trialCostMs,
+      fullAuthorityOverheadMs:assumptions.fullAuthorityOverheadMs},
+    measurements,evaluation,fullAssessmentNetMs,productionAdmission:false,
+    interpretation:'The unchanged numeric gate admits a feasible capacity model. This is neither an actual runtime qualification nor a signed scheduler decision.',
+    boundaries:boundaries()};
 }
 
 // The nine-node fixture under declared costs, passed through both unchanged decision functions: the
@@ -287,23 +262,14 @@ export function controlledDualGateModel({request,acceptance}={}) {
     baselineRecoveryMs:baseline.durationMs,candidateRecoveryMs:candidate.durationMs,trialCostMs};
   const finalNumericEvaluation=assessEfficiency(measurements);assert.equal(finalNumericEvaluation.eligible,true);
   assert.ok(trialCostMs<=30000);
-  return {
-    schema: 'ophanim.admission-dual-gate-model/v1',
-    evidenceClass: 'deterministic-model',
-    timingOrigin: 'declared capacity assumptions, not measured execution',
-    requestSha: digest(request),
-    acceptance: {outputSha: acceptance.outputSha, effectSha: acceptance.effectSha, obligations: 9, effects: 3},
-    assumptions,
+  return {schema:'ophanim.admission-dual-gate-model/v1',evidenceClass:'deterministic-model',
+    timingOrigin:'declared capacity assumptions, not measured execution',
+    requestSha:digest(request),
+    acceptance:{outputSha:acceptance.outputSha,effectSha:acceptance.effectSha,obligations:9,effects:3},assumptions,
     modeledTrace,
-    measurements,
-    screeningDecision,
-    finalNumericEvaluation,
-    productionAdmission: false,
-    interpretation:
-      'The same nine-node fixture contracts pass both unchanged decision functions under the declared modeled ' +
-        'capacities. No measured trial, signed authority or activated policy is produced.',
-    boundaries: boundaries()
-  };
+    measurements,screeningDecision,finalNumericEvaluation,productionAdmission:false,
+    interpretation:'The same nine-node fixture contracts pass both unchanged decision functions under the declared modeled capacities. No measured trial, signed authority or activated policy is produced.',
+    boundaries:boundaries()};
 }
 
 // Read (and optionally re-verify with TELOS) one measured pair written by runPairedProbe: both widths must
@@ -333,22 +299,12 @@ export async function readPairedProbe({root,telosRoot,verifySigned=true}={}) {
   same(rows[0].outputSha,rows[1].outputSha);same(rows[0].effectSha,rows[1].effectSha);
   same(rows[0].contextBytes,rows[1].contextBytes);
   const savedMs=rows[0].durationMs-rows[1].durationMs,p95LimitMs=rows[0].stageP95Ms*1.25+25;
-  return {
-    schema: 'ophanim.admission-paired-probe/v1',
-    evidenceClass: 'measured-preflight-pair',
-    root,
-    request: preflight.request,
-    rows,
-    savedMs,
-    fraction: savedMs / rows[0].durationMs,
-    p95LimitMs,
-    p95Passed: rows[1].stageP95Ms <= p95LimitMs,
-    productionAdmission: false,
-    interpretation:
-      'One measured pair establishes only this observed run difference. Three pairs, both recovery trials, full cost ' +
-        'and independent admission are still required.',
-    boundaries: boundaries()
-  };
+  return {schema:'ophanim.admission-paired-probe/v1',evidenceClass:'measured-preflight-pair',root,
+    request:preflight.request,rows,
+    savedMs,fraction:savedMs/rows[0].durationMs,p95LimitMs,p95Passed:rows[1].stageP95Ms<=p95LimitMs,
+    productionAdmission:false,
+    interpretation:'One measured pair establishes only this observed run difference. Three pairs, both recovery trials, full cost and independent admission are still required.',
+    boundaries:boundaries()};
 }
 
 // Run one guarded 1-slot and one guarded 3-slot execution of a small fixture into a fresh directory,

@@ -142,17 +142,9 @@ function assessOverhead(overhead,blocks){
   const matched=blocks.flatMap(block=>Object.values(block).map(({on,off})=>on.runtimeNs-off.runtimeNs));
   const markerUpperP95Ns=Math.max(0,percentile(calibration,.95));
   const matchedUpperP95Ns=Math.max(0,percentile(matched,.95));
-  return {
-    calibration: distribution(calibration),
-    matched: distribution(matched),
-    markerUpperP95Ns,
-    matchedUpperP95Ns,
-    bounded:
-      markerUpperP95Ns <= THRESHOLDS.maxMarkCalibrationP95Ns && matchedUpperP95Ns <= THRESHOLDS.maxMatchedOverheadP95Ns,
-    meaning:
-      'Signed collection-on minus collection-off differences. The matched upper percentile includes execution noise; ' +
-        'it is not a per-call causal cost.'
-  };
+  return {calibration:distribution(calibration),matched:distribution(matched),markerUpperP95Ns,matchedUpperP95Ns,
+    bounded:markerUpperP95Ns<=THRESHOLDS.maxMarkCalibrationP95Ns&&matchedUpperP95Ns<=THRESHOLDS.maxMatchedOverheadP95Ns,
+    meaning:'Signed collection-on minus collection-off differences. The matched upper percentile includes execution noise; it is not a per-call causal cost.'};
 }
 
 // Per-block contrasts between conditions (collection-on samples). Each intervention must raise its

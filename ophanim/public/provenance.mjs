@@ -134,13 +134,11 @@ export function cycleRecord(view, cycle) {
 
 // What the independence evidence does not show; printed with every provenance section.
 const LIMITS = [
-  'Every seat runs under one operator and one GitHub account; distinct labs are distinct model vendors, not distinct ' +
-    'people or organisations.',
+  'Every seat runs under one operator and one GitHub account; distinct labs are distinct model vendors, not distinct people or organisations.',
   'Distinct labs do not establish independent training data or that the models share no blind spots.',
   'The served model is what the provider reported answering; the ledger records it, it cannot observe it.',
-  'Re-derivation checks signatures, citations and the cold-review rule; it does not run tests or reproductions. ' +
-    'Fail-before / pass-after exit codes are recorded by the controller and checked for consistency only.',
-  'A finding without a reproduction can be deferred; such a cycle closes `unverified`, never `verified`.'
+  'Re-derivation checks signatures, citations and the cold-review rule; it does not run tests or reproductions. Fail-before / pass-after exit codes are recorded by the controller and checked for consistency only.',
+  'A finding without a reproduction can be deferred; such a cycle closes `unverified`, never `verified`.',
 ];
 
 // A finding's resolution: the fixing commit with the test's fail-before / pass-after exit codes, the
@@ -149,9 +147,7 @@ function resolutionText(f) {
   const r = f.resolution?.payload;
   if (!r) return 'unresolved';
   if (r.status === 'fixed')
-    return `fixed in \`${r.fix.commit.slice(0, 12)}\`; \`${cell(r.fix.test)}\` exited ${r.fix.before.exit} on ` +
-      `\`${r.fix.before.commit.slice(0, 12)}\` (fail before) and ${r.fix.after.exit} on ` +
-      `\`${r.fix.after.commit.slice(0, 12)}\` (pass after)`;
+    return `fixed in \`${r.fix.commit.slice(0, 12)}\`; \`${cell(r.fix.test)}\` exited ${r.fix.before.exit} on \`${r.fix.before.commit.slice(0, 12)}\` (fail before) and ${r.fix.after.exit} on \`${r.fix.after.commit.slice(0, 12)}\` (pass after)`;
   return `deferred: ${cell(r.reason)}`;
 }
 const reproText = f => (
@@ -160,15 +156,10 @@ const reproText = f => (
 // Markdown table of seats (authors or reviews); `verdict` adds the review verdict column.
 function seatTable(rows, {verdict = false} = {}) {
   return [
-    `| Role | Vendor | Requested model | Served model | Lab | Seat key id |${verdict ? ' Verdict |' : ''} Ledger ` +
-      `entry |`,
+    `| Role | Vendor | Requested model | Served model | Lab | Seat key id |${verdict ? ' Verdict |' : ''} Ledger entry |`,
     `|---|---|---|---|---|---|${verdict ? '---|' : ''}---|`,
     ...rows.map(
-      r =>
-        `| ${cell(r.role)} | ${code(r.vendor)} | ${code(r.requested_model)} ` +
-          `| ${r.served_model ? code(r.served_model) : 'not reported'} | ${code(r.lab)} | ${code(r.key_id)} ` +
-          `|${verdict ? ` ${r.verdict} |` : ''} \`${r.entry}\` |`
-    )
+      r => `| ${cell(r.role)} | ${code(r.vendor)} | ${code(r.requested_model)} | ${r.served_model ? code(r.served_model) : 'not reported'} | ${code(r.lab)} | ${code(r.key_id)} |${verdict ? ` ${r.verdict} |` : ''} \`${r.entry}\` |`),
   ];
 }
 
@@ -176,27 +167,16 @@ function seatTable(rows, {verdict = false} = {}) {
 function independenceLines(rec) {
   const i = rec.independence, out = [];
   out.push(`- Reviews recorded: ${rec.reviews.length} of ${i.reviews_expected} expected.`);
+  out.push(i.distinct_labs
+    ? `- **Distinct labs:** yes (${i.labs.map(code).join(', ') || 'none'}), re-derived from each review's vendor and served model.`
+    : `- **Distinct labs:** NO; two reviews share a lab (${i.labs.join(', ')}). No independence is claimed.`);
+  out.push(i.author_lab_reviewed.length
+    ? `- **Author lab excluded:** NO (${i.author_lab_reviewed.join(', ')} authored and reviewed).`
+    : `- **Author lab excluded:** yes; author lab(s) ${i.author_labs.map(code).join(', ') || 'none recorded'} did not review.`);
   out.push(
-    i.distinct_labs
-      ? `- **Distinct labs:** yes (${i.labs.map(code).join(', ') || 'none'}), re-derived from each review's vendor ` +
-        `and served model.`
-      : `- **Distinct labs:** NO; two reviews share a lab (${i.labs.join(', ')}). No independence is claimed.`
-  );
+    `- **Cold-review check:** passed for every recorded review (the ledger verified in full, and a review whose lab, seat or response is in the lineage of what it reviews does not re-derive).`);
   out.push(
-    i.author_lab_reviewed.length
-      ? `- **Author lab excluded:** NO (${i.author_lab_reviewed.join(', ')} authored and reviewed).`
-      : `- **Author lab excluded:** yes; author lab(s) ${i.author_labs.map(code).join(', ') || 'none recorded'} did ` +
-        `not review.`
-  );
-  out.push(
-    `- **Cold-review check:** passed for every recorded review (the ledger verified in full, and a review whose lab, ` +
-      `seat or response is in the lineage of what it reviews does not re-derive).`
-  );
-  out.push(
-    `- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} ` +
-      `reviews${i.served_differs.length ? `; served differs from requested ` +
-      `for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}.`
-  );
+    `- **Served model reported:** ${i.served_reported} of ${rec.reviews.length} reviews${i.served_differs.length ? `; served differs from requested for ${i.served_differs.map(r => `${r.vendor} (${r.requested_model} -> ${r.served_model})`).join(', ')}` : ''}.`);
   return out;
 }
 
@@ -214,20 +194,15 @@ function practiceLines(rec) {
   const pol = rec.cycle.policy;
   return [
     // The model-selection policy the cycle opened under, when it records one.
-    ...(pol
-      ? [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, '']
-      : []),
+    ...(pol ?
+      [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, '']
+        : []),
     '| Stage | Outcome | Basis | Comparison evidence | Question | Admitted | Entry |',
     '|---|---|---|---|---|---|---|',
     ...rec.practice.map(
-      d =>
-        `| ${d.stage} | \`${d.outcome}\`${d.candidate ? ` (candidate \`${cell(d.candidate)}\`)` : ''} ` +
-          `| ${d.measured ? 'measured' : 'provisional'} | ${BASIS[d.evidence_basis]} | ${cell(d.question)} ` +
-          `| ${d.admitted ? 'listed by the close' : rec.close ? 'not listed' : 'cycle open'} | \`${d.entry}\` |`
-    ),
+      d => `| ${d.stage} | \`${d.outcome}\`${d.candidate ? ` (candidate \`${cell(d.candidate)}\`)` : ''} | ${d.measured ? 'measured' : 'provisional'} | ${BASIS[d.evidence_basis]} | ${cell(d.question)} | ${d.admitted ? 'listed by the close' : rec.close ? 'not listed' : 'cycle open'} | \`${d.entry}\` |`),
     '',
-    'A synthetic comparison verifies the comparison mechanics on fake providers; it measures no provider cost or ' +
-      'quality, and the ledger refuses a promote resting on it alone. Provisional is unmeasured judgment.'
+    'A synthetic comparison verifies the comparison mechanics on fake providers; it measures no provider cost or quality, and the ledger refuses a promote resting on it alone. Provisional is unmeasured judgment.',
   ];
 }
 
@@ -235,9 +210,7 @@ function practiceLines(rec) {
 function conclusion(rec) {
   if (rec.close) {
     const f = rec.close.findings;
-    return `Closed **${rec.close.outcome}** (entry \`${rec.close.entry}\`): ${f.total} finding(s), ${f.fixed} ` +
-      `fixed, ${f.deferred} deferred, ${f.unreproduced} unreproduced; reviews on ${rec.close.labs.join(', ')}. The ` +
-      `close re-derived from the cycle's entries.`;
+    return `Closed **${rec.close.outcome}** (entry \`${rec.close.entry}\`): ${f.total} finding(s), ${f.fixed} fixed, ${f.deferred} deferred, ${f.unreproduced} unreproduced; reviews on ${rec.close.labs.join(', ')}. The close re-derived from the cycle's entries.`;
   }
   return rec.pending?.why
     ? `Not closed: ${rec.pending.why}.`
@@ -254,18 +227,12 @@ export function prProvenance(view, cycle, {anchor, ledgerLabel = 'review-cycle l
     `<!-- ophanim:provenance cycle=${cycle} -->`,
     '## Provenance',
     '',
-    `Generated from the ${ledgerLabel} (anchor \`${anchor}\`), cycle \`${cycle}\` (scope \`${c.scope}\`, ` +
-      `\`${c.base.slice(0, 12)}..${c.head.slice(0, 12)}\`, ${c.files.length} file(s)). The ledger is authoritative; ` +
-      `this section is a projection of it.`,
+    `Generated from the ${ledgerLabel} (anchor \`${anchor}\`), cycle \`${cycle}\` (scope \`${c.scope}\`, \`${c.base.slice(0, 12)}..${c.head.slice(0, 12)}\`, ${c.files.length} file(s)). The ledger is authoritative; this section is a projection of it.`,
     '',
     '### Produced by',
     '',
-    ...(rec.authors.length
-      ? seatTable(rec.authors)
-      : [
-          `No author turn is cited by the cycle; author lab(s) ` +
-            `recorded: ${c.author_labs.map(code).join(', ') || 'none'}.`
-        ]),
+    ...(rec.authors.length ? seatTable(rec.authors) : [
+        `No author turn is cited by the cycle; author lab(s) recorded: ${c.author_labs.map(code).join(', ') || 'none'}.`]),
     '',
     '### Reviewed by',
     '',
@@ -281,17 +248,12 @@ export function prProvenance(view, cycle, {anchor, ledgerLabel = 'review-cycle l
     '',
     '### Findings',
     '',
-    ...(rec.findings.length
-      ? [
-          '| Severity | Where | Claim | Reproduction | Resolution | Entry |',
-          '|---|---|---|---|---|---|',
-          ...rec.findings.map(
-            f =>
-              `| ${f.severity} | ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\`` : '—'} | ${cell(f.claim)} ` +
-                `| ${reproText(f)} | ${resolutionText(f)} | \`${f.entry}\` |`
-          )
-        ]
-      : ['No findings were reported.']),
+    ...(rec.findings.length ? [
+      '| Severity | Where | Claim | Reproduction | Resolution | Entry |',
+      '|---|---|---|---|---|---|',
+      ...rec.findings.map(
+        f => `| ${f.severity} | ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\`` : '—'} | ${cell(f.claim)} | ${reproText(f)} | ${resolutionText(f)} | \`${f.entry}\` |`),
+    ] : ['No findings were reported.']),
     '',
     '### Practice dispositions',
     '',
@@ -302,10 +264,9 @@ export function prProvenance(view, cycle, {anchor, ledgerLabel = 'review-cycle l
     conclusion(rec),
     '',
     provenanceNotice([
-      "Pull request reviews and approvals on GitHub are never used for these seats: the reviews above are ledger " +
-        "entries signed by each seat's own key, not GitHub reviews."
+      'Pull request reviews and approvals on GitHub are never used for these seats: the reviews above are ledger entries signed by each seat\'s own key, not GitHub reviews.',
     ]),
-    ''
+    '',
   ].join('\n');
 }
 
@@ -318,64 +279,42 @@ export function cycleReport(view, cycle, {anchor, slug} = {}) {
   // and replies that failed closed.
   const better = [
     ...deferred.map(
-      f => `- Deferred (${f.severity}) ${cell(f.claim)}: ${cell(f.resolution.payload.reason)} (entry \`${f.entry}\`)`
-    ),
-    ...unreproduced
-      .filter(f => !deferred.includes(f))
-      .map(
-        f =>
-          `- Unreproduced (${f.severity}) ${cell(f.claim)}: fixed without a reviewer reproduction (entry ` +
-            `\`${f.entry}\`)`
-      ),
-    ...(rec.reviews.length < c.reviewers
-      ? [
-          `- ${c.reviewers - rec.reviews.length} of ${c.reviewers} reviews were not recorded; the range is ` +
-            `re-reviewed in a new cycle.`
-        ]
-      : []),
-    ...rec.reviews
-      .filter(r => !r.served_model)
-      .map(r => `- ${r.vendor} did not report the served model; its lab is judged from the requested model.`),
-    ...rec.reviews
-      .filter(r => !r.parsed)
-      .map(r => `- ${r.vendor}'s reply was not in the required form and failed closed as a blocking finding.`)
+      f => `- Deferred (${f.severity}) ${cell(f.claim)}: ${cell(f.resolution.payload.reason)} (entry \`${f.entry}\`)`),
+    ...unreproduced.filter(f => !deferred.includes(f)).map(
+      f => `- Unreproduced (${f.severity}) ${cell(f.claim)}: fixed without a reviewer reproduction (entry \`${f.entry}\`)`),
+    ...(rec.reviews.length < c.reviewers ?
+      [`- ${c.reviewers - rec.reviews.length} of ${c.reviewers} reviews were not recorded; the range is re-reviewed in a new cycle.`] : []),
+    ...rec.reviews.filter(r => !r.served_model).map(
+      r => `- ${r.vendor} did not report the served model; its lab is judged from the requested model.`),
+    ...rec.reviews.filter(r => !r.parsed).map(
+      r => `- ${r.vendor}'s reply was not in the required form and failed closed as a blocking finding.`),
   ];
   return [
-    `<!-- Generated from the review-cycle ledger by \`node ophanim/public/github.mjs cycles\`. Do not edit by hand. ` +
-      `-->`,
+    `<!-- Generated from the review-cycle ledger by \`node ophanim/public/github.mjs cycles\`. Do not edit by hand. -->`,
     `# Cycle ${slug ?? cycle.slice(7, 19)}: ${c.scope}`,
     '',
     `Cycle entry \`${cycle}\` (seq ${rec.seq}) on the ledger anchored at \`${anchor}\`. Opened ${c.opened_at}.`,
     '',
     '## What was',
     '',
-    `The reviewed range starts at \`${c.base}\`. The change was authored ` +
-      `by ${c.author_labs.length ? `the ${c.author_labs.join(', ')} lab(s)` : 'an unrecorded ' +
-      'lab'}${rec.authors.length ? `, through ${rec.authors.length} recorded turn(s)` : ''}.`,
+    `The reviewed range starts at \`${c.base}\`. The change was authored by ${c.author_labs.length ? `the ${c.author_labs.join(', ')} lab(s)` : 'an unrecorded lab'}${rec.authors.length ? `, through ${rec.authors.length} recorded turn(s)` : ''}.`,
     '',
     '## What is',
     '',
-    `The range ends at \`${c.head}\` (diff \`${c.diff_sha}\`), touching ${c.files.length} ` +
-      `file(s): ${c.files.map(f => `\`${f}\``).join(', ') || 'none'}.`,
+    `The range ends at \`${c.head}\` (diff \`${c.diff_sha}\`), touching ${c.files.length} file(s): ${c.files.map(f => `\`${f}\``).join(', ') || 'none'}.`,
     '',
     ...(rec.reviews.length ? seatTable(rec.reviews, {verdict: true}) : ['No review is recorded.']),
     '',
-    ...(rec.findings.length
-      ? [
-          '| Severity | Claim | Reproduction | Resolution |',
-          '|---|---|---|---|',
-          ...rec.findings.map(f => `| ${f.severity} | ${cell(f.claim)} | ${reproText(f)} | ${resolutionText(f)} |`)
-        ]
-      : ['No findings were reported.']),
+    ...(rec.findings.length ? [
+      '| Severity | Claim | Reproduction | Resolution |',
+      '|---|---|---|---|',
+      ...rec.findings.map(f => `| ${f.severity} | ${cell(f.claim)} | ${reproText(f)} | ${resolutionText(f)} |`),
+    ] : ['No findings were reported.']),
     '',
     '## What could be better',
     '',
-    ...(better.length
-      ? better
-      : [
-          'Nothing the ledger records: every finding was fixed with a reproduction, and every review reported its ' +
-            'served model.'
-        ]),
+    ...(better.length ?
+      better : ['Nothing the ledger records: every finding was fixed with a reproduction, and every review reported its served model.']),
     '',
     '## What the system concluded',
     '',
@@ -388,7 +327,7 @@ export function cycleReport(view, cycle, {anchor, slug} = {}) {
     ...practiceLines(rec),
     '',
     provenanceNotice(),
-    ''
+    '',
   ].join('\n');
 }
 
@@ -398,28 +337,17 @@ export function cycleIndex(cycles, {anchor = null} = {}) {
     '<!-- Generated by `node ophanim/public/github.mjs cycles`. Do not edit by hand. -->',
     '# Review cycles',
     '',
-    'Each cycle is a range of commits reviewed by model seats on distinct labs, none of them the lab that authored ' +
-      'it, recorded on the review-cycle ledger (`pantheon/src/ledger/cycle-kinds.mjs`). A cycle closes `verified` ' +
-      'only when every finding carries a reproduction and is fixed or deferred. The reports are generated from the ' +
-      'ledger; it is authoritative.',
+    'Each cycle is a range of commits reviewed by model seats on distinct labs, none of them the lab that authored it, recorded on the review-cycle ledger (`pantheon/src/ledger/cycle-kinds.mjs`). A cycle closes `verified` only when every finding carries a reproduction and is fixed or deferred. The reports are generated from the ledger; it is authoritative.',
     '',
-    ...(cycles.length
-      ? [
-          `Ledger anchor: \`${anchor}\`.`,
-          '',
-          '| Cycle | Range | Opened | Outcome |',
-          '|---|---|---|---|',
-          ...cycles.map(
-            c =>
-              `| [${cycleSlug(c)}](${cycleSlug(c)}.md) | \`${c.base.slice(0, 12)}..${c.head.slice(0, 12)}\` ` +
-                `| ${c.opened_at} | ${c.close ? c.close.outcome : 'open'} |`
-          )
-        ]
-      : [
-          'No review cycle is recorded on a ledger available to the generator yet. Cycles are recorded with `npm run ' +
-            'review-cycle`; their reports appear here when this index is regenerated from that ledger.'
-        ]),
-    ''
+    ...(cycles.length ? [
+      `Ledger anchor: \`${anchor}\`.`,
+      '',
+      '| Cycle | Range | Opened | Outcome |',
+      '|---|---|---|---|',
+      ...cycles.map(
+        c => `| [${cycleSlug(c)}](${cycleSlug(c)}.md) | \`${c.base.slice(0, 12)}..${c.head.slice(0, 12)}\` | ${c.opened_at} | ${c.close ? c.close.outcome : 'open'} |`),
+    ] : ['No review cycle is recorded on a ledger available to the generator yet. Cycles are recorded with `npm run review-cycle`; their reports appear here when this index is regenerated from that ledger.']),
+    '',
   ].join('\n');
 }
 

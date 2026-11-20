@@ -35,9 +35,8 @@ export function problems(reg, {root = ROOT} = {}) {
     ids.add(c.id);
     if (!c.class || !c.source) out.push(`${c.id}: class and source are required`);
     if (!Array.isArray(c.instances) || !c.instances.length) out.push(`${c.id}: no recorded instance`);
-    for (const i of c.instances ?? [])
-      if (!['owner', 'mechanism'].includes(i.observed_by))
-        out.push(`${c.id}: instance observed_by must be owner or mechanism`);
+    for (const i of c.instances ?? []) if (!['owner', 'mechanism'].includes(i.observed_by))
+      out.push(`${c.id}: instance observed_by must be owner or mechanism`);
     const d = c.detector;
     if (d?.kind === 'test') {
       const f = path.join(root, d.file);
@@ -55,20 +54,16 @@ export function report(reg) {
   const classes = reg.classes.map(c => {
     const byOwner = c.instances.filter(i => i.observed_by === 'owner');
     const byMechanism = c.instances.filter(i => i.observed_by === 'mechanism');
-    return {
-      id: c.id,
+    return {id: c.id,
       detector: c.detector.kind === 'test' ? `${c.detector.file} :: ${c.detector.name}` : `none (${c.detector.why})`,
-      fixed: Boolean(c.fixed_in),
-      owner_interventions: byOwner.length,
-      detections: byMechanism.length,
+      fixed: Boolean(c.fixed_in), owner_interventions: byOwner.length, detections: byMechanism.length,
       corrected_by_mechanism: byMechanism.filter(i => i.corrected_by === 'mechanism').length,
       // Condition 7: the owner raising the same class again is evidence the improvement process needs examination.
-      repeated: byOwner.length > 1
-    };
+      repeated: byOwner.length > 1};
   });
   const series = {};
-  for (const c of reg.classes)
-    for (const i of c.instances) if (i.observed_by === 'owner') series[i.date] = (series[i.date] ?? 0) + 1;
+  for (const c of reg.classes) for (const i of c.instances) if (i.observed_by === 'owner') series[i.date] =
+    (series[i.date] ?? 0) + 1;
   const dates = Object.keys(series).sort();
   // Success, per the owner: a previously observed class detected AND corrected without the owner pointing it out.
   const success = classes.filter(c => c.owner_interventions > 0 && c.corrected_by_mechanism > 0).map(c => c.id);
@@ -77,12 +72,9 @@ export function report(reg) {
     interventions_by_date: dates.map(d => ({date: d, owner_interventions: series[d]})),
     repeated_classes: classes.filter(c => c.repeated).map(c => c.id),
     without_detector: classes.filter(c => c.detector.startsWith('none')).map(c => c.id),
-    success: success.length
-      ? {demonstrated: true, classes: success}
-      : {
-          demonstrated: false,
-          why: 'no previously observed class has yet been both detected and corrected without the owner'
-        }
+    success: success.length ? {demonstrated: true, classes: success}
+      : {demonstrated: false,
+        why: 'no previously observed class has yet been both detected and corrected without the owner'},
   };
 }
 
@@ -93,18 +85,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const r = report(reg);
   if (process.argv.includes('--json')) { console.log(JSON.stringify(r, null, 2)); process.exit(0); }
   for (const c of r.classes) {
-    console.log(
-      `${c.id}: owner ${c.owner_interventions}, detected ${c.detections} (corrected by ` +
-        `mechanism ${c.corrected_by_mechanism})` +
-        `${c.repeated ? ' REPEATED' : ''}${c.fixed ? '' : ' OPEN'}\n  detector: ${c.detector}`
-    );
+    console.log(`${c.id}: owner ${c.owner_interventions}, detected ${c.detections} (corrected by mechanism ${c.corrected_by_mechanism})` +
+      `${c.repeated ? ' REPEATED' : ''}${c.fixed ? '' : ' OPEN'}\n  detector: ${c.detector}`);
   }
-  console.log(
-    `interventions by date: ${r.interventions_by_date.map(x => `${x.date} ${x.owner_interventions}`).join(', ')}`
-  );
+  console.log(`interventions by date: ${r.interventions_by_date.map(x => `${x.date} ${x.owner_interventions}`).join(', ')}`);
   console.log(`repeated (owner had to raise again): ${r.repeated_classes.join(', ') || 'none'}`);
-  console.log(
-    `self-improvement success: ${r.success.demonstrated ? r.success.classes.join(', ') : `not ` +
-      `demonstrated: ${r.success.why}`}`
-  );
+  console.log(`self-improvement success: ${r.success.demonstrated ? r.success.classes.join(', ') : `not demonstrated: ${r.success.why}`}`);
 }

@@ -29,52 +29,35 @@ const RECEIPT='ophanim.historical-latency-investigation/v1';
 const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 
 // The one instrumentation method this module can propose, and the two signals it would collect.
-const capability = {
-  id: PHASE_METHOD,
-  signals: [
-    {
-      id: 'timer-resume-lag-ms',
-      purpose: 'Measure excess time from timer scheduling to JavaScript callback entry after the requested wait.',
-      unit: 'ms',
-      scope: 'one timer in one matched obligation',
-      collection: 'Monotonic scheduling and callback entry marks, minus the configured delay.',
+const capability={
+  id:PHASE_METHOD,
+  signals:[
+    {id:'timer-resume-lag-ms',
+      purpose:'Measure excess time from timer scheduling to JavaScript callback entry after the requested wait.',
+      unit:'ms',scope:'one timer in one matched obligation',
+      collection:'Monotonic scheduling and callback entry marks, minus the configured delay.',
       limitation:
-        'Includes timer precision and any delay before callback entry. Does not identify the source of the delay.'
-    },
-    {
-      id: 'transform-body-wall-ms',
-      purpose: 'Measure elapsed time inside the transformation boundary independently of timer resumption.',
-      unit: 'ms',
-      scope: 'one transform in one matched obligation',
-      collection:
-        'Monotonic transformation start and completion marks. Entry and return marks check callback ordering.',
-      limitation: 'Wall time includes time descheduled by the host. It is not CPU time.'
-    }
-  ]
+        'Includes timer precision and any delay before callback entry. Does not identify the source of the delay.'},
+    {id:'transform-body-wall-ms',
+      purpose:'Measure elapsed time inside the transformation boundary independently of timer resumption.',
+      unit:'ms',scope:'one transform in one matched obligation',
+      collection:'Monotonic transformation start and completion marks. Entry and return marks check callback ordering.',
+      limitation:'Wall time includes time descheduled by the host. It is not CPU time.'},
+  ],
 };
 // Measurements considered and rejected for this question, each with the reason it cannot split the
 // callback. Reported in every plan so the choice is reviewable.
-const contextual = [
-  [
-    'event-loop-delay-and-utilization',
-    'Process-window signals pool other callbacks and cannot separate the two boundaries.'
-  ],
-  ['process-cpu', 'Aggregate CPU cannot identify either phase. Process CPU is recorded for investigation cost only.'],
-  [
-    'queue-and-worker-wall-time',
-    'Retained dispatch and aggregate worker spans already bound the affected phase. They combine the two proposed ' +
-      'explanations.'
-  ],
-  [
-    'verification-and-acceptance',
-    'Committed persistence, verification envelope, and acceptance marks are available as downstream context. They do ' +
-      'not split the callback.'
-  ],
-  [
-    'contention-and-overlap',
-    'Concurrency and host contention are candidate context for later experiments. They do not identify either ' +
-      'within-callback duration.'
-  ]
+const contextual=[
+  ['event-loop-delay-and-utilization',
+    'Process-window signals pool other callbacks and cannot separate the two boundaries.'],
+  ['process-cpu',
+    'Aggregate CPU cannot identify either phase. Process CPU is recorded for investigation cost only.'],
+  ['queue-and-worker-wall-time',
+    'Retained dispatch and aggregate worker spans already bound the affected phase. They combine the two proposed explanations.'],
+  ['verification-and-acceptance',
+    'Committed persistence, verification envelope, and acceptance marks are available as downstream context. They do not split the callback.'],
+  ['contention-and-overlap',
+    'Concurrency and host contention are candidate context for later experiments. They do not identify either within-callback duration.'],
 ];
 
 // Accept the receipt only if its recorded digest is the expected one and matches its own body, and it
@@ -133,27 +116,15 @@ export function planMeasurement({receipt,expectedSha,probeIndex=0,forecast=null,
   if(!Number.isInteger(probeIndex)||!probe)throw Error('Unknown retained probe');
   const findings=probe.selection.candidates.map(findingOf);
   const economics=economicsFor(forecast,probe);
-  const methods = [
-    {
-      id: 'retained-callback-envelope',
-      mode: 'retained-observation',
-      signals: ['worker-callback-ms'],
-      estimatedCostMs: 0,
-      stop: {maxWallMs: 1, maxTrials: 0, maxModelCalls: 0},
-      evidenceSha: probe.evidenceSha
-    },
-    {
-      id: capability.id,
-      mode: 'instrumentation',
-      signals: capability.signals.map(signal => signal.id),
-      estimatedCostMs: forecast?.estimatedInvestigationMs ?? MAX_WALL_MS,
-      stop: {maxWallMs: MAX_WALL_MS, maxTrials: 0, maxModelCalls: 0},
-      citations: [
-        'Single bound obligation. These boundaries require a separate controlled qualification. Cost includes source ' +
-          'verification and measurement.'
-      ]
-    }
-  ];
+  const methods=[{
+    id:'retained-callback-envelope',mode:'retained-observation',signals:['worker-callback-ms'],estimatedCostMs:0,
+    stop:{maxWallMs:1,maxTrials:0,maxModelCalls:0},evidenceSha:probe.evidenceSha,
+  },{
+    id:capability.id,mode:'instrumentation',signals:capability.signals.map(signal=>signal.id),
+    estimatedCostMs:forecast?.estimatedInvestigationMs??MAX_WALL_MS,
+    stop:{maxWallMs:MAX_WALL_MS,maxTrials:0,maxModelCalls:0},
+    citations:['Single bound obligation. These boundaries require a separate controlled qualification. Cost includes source verification and measurement.'],
+  }];
   const {decision}=planInvestigation({trace:probe.baselineTrace,findings,economics:economics??{},methods,history});
   // The selected design, or failing that the instrumentation candidate the controller considered.
   const candidate=decision.selected??decision.candidates.find(row=>row.design?.method.id===capability.id);

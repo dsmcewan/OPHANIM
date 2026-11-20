@@ -111,16 +111,13 @@ export function provenanceNotice(evidence = []) {
   return [
     '### Agent provenance',
     '',
-    'All GitHub activity on this public record (issues, labels, comments, provenance sections) is posted by **one ' +
-      'account**: the workflow token or the repository owner. ' +
-      'The roles named here (`impl@build`, `check@review`, `lead@orch`, `scout@opt`, `arbiter@judge`) are **model ' +
-      'seats operated under that account, not independent developers**. ' +
-      'None of them is a GitHub user, so none is ever an assignee, a requested reviewer or a pull request approver. ' +
-      'Independence is claimed only where the ledger shows it: reviews on distinct labs, the cold-review check ' +
-      'passed, and the served model reported, each with its evidence ' +
-      '(seat key id, vendor, requested and served model, lab, ledger entry hash). See `docs/public-record.md`.',
+    'All GitHub activity on this public record (issues, labels, comments, provenance sections) is posted by **one account**: the workflow token or the repository owner. ' +
+    'The roles named here (`impl@build`, `check@review`, `lead@orch`, `scout@opt`, `arbiter@judge`) are **model seats operated under that account, not independent developers**. ' +
+    'None of them is a GitHub user, so none is ever an assignee, a requested reviewer or a pull request approver. ' +
+    'Independence is claimed only where the ledger shows it: reviews on distinct labs, the cold-review check passed, and the served model reported, each with its evidence ' +
+    '(seat key id, vendor, requested and served model, lab, ledger entry hash). See `docs/public-record.md`.',
     '',
-    ...evidence
+    ...evidence,
   ].join('\n');
 }
 
@@ -138,24 +135,14 @@ export function evidenceSection(ev) {
   return [
     '## Evidence',
     '',
-    "Recorded on the latest status entry, from a Pantheon board run's proposal (`docs/operating-workflow.md`).",
+    'Recorded on the latest status entry, from a Pantheon board run\'s proposal (`docs/operating-workflow.md`).',
     '',
-    `- **Run ledger:** anchor ${short(ev.run.ledger_anchor)}, head ${short(ev.run.ledger_head)}; run.json ` +
-      `digest ${short(ev.run.run_json_digest)}; shipped: ${ev.run.shipped ? 'yes' : 'no'}; gate verdict ` +
-      `entry ${short(ev.run.gate_entry)}`,
-    `- **Review cycle:** ${rv ? `${short(rv.cycle)} on the ledger anchored at ${short(rv.cycle_ledger_anchor)}; ` +
-      `close entry ${short(rv.close_entry)}; outcome **${rv.outcome ?? 'open'}**` : 'none cited'}`,
-    ...(rv
-      ? [
-          '',
-          '| Reviewer seat (vendor) | Requested model | Served model | Lab |',
-          '|---|---|---|---|',
-          ...rv.reviewers.map(
-            r => `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`
-          ),
-          ''
-        ]
-      : []),
+    `- **Run ledger:** anchor ${short(ev.run.ledger_anchor)}, head ${short(ev.run.ledger_head)}; run.json digest ${short(ev.run.run_json_digest)}; shipped: ${ev.run.shipped ? 'yes' : 'no'}; gate verdict entry ${short(ev.run.gate_entry)}`,
+    `- **Review cycle:** ${rv ? `${short(rv.cycle)} on the ledger anchored at ${short(rv.cycle_ledger_anchor)}; close entry ${short(rv.close_entry)}; outcome **${rv.outcome ?? 'open'}**` : 'none cited'}`,
+    ...(rv ? ['', '| Reviewer seat (vendor) | Requested model | Served model | Lab |', '|---|---|---|---|',
+      ...rv.reviewers.map(r =>
+        `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`),
+      ''] : []),
     `- **Commit:** ${ev.commit ? `\`${ev.commit}\`` : 'none'}`,
     `- **Tests:** ${ev.tests ? `\`${cell(ev.tests.cmd)}\` exited ${ev.tests.exit}` : 'none recorded'}`,
     ...(ev.ticket
@@ -164,9 +151,8 @@ export function evidenceSection(ev) {
     ...(ev.accept_unverified_reason
       ? [`- **Accepted although the review closed unverified:** ${cell(ev.accept_unverified_reason)}`]
       : []),
-    `- **Proposal:** \`${ev.proposal}\`; cited ledgers at apply: ${ev.checked === 'structural' ? 're-checked ' +
-      'structurally (anchor, signatures, cited entries)' : 'not available on the applying machine'}`,
-    ''
+    `- **Proposal:** \`${ev.proposal}\`; cited ledgers at apply: ${ev.checked === 'structural' ? 're-checked structurally (anchor, signatures, cited entries)' : 'not available on the applying machine'}`,
+    '',
   ];
 }
 
@@ -182,9 +168,7 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
   const latestSeq = item.history.at(-1)?.seq;
   return [
     marker(item.item),
-    `> **Generated from the status ledger** (\`${ledgerPath}\`), which is authoritative. This issue is a read-only ` +
-      `projection: the publisher overwrites its title, body, state and \`state:\`/\`waiting:\`/\`role:\` labels from ` +
-      `the ledger. Comments are welcome but are not read by OPHANIM and change nothing in the ledger.`,
+    `> **Generated from the status ledger** (\`${ledgerPath}\`), which is authoritative. This issue is a read-only projection: the publisher overwrites its title, body, state and \`state:\`/\`waiting:\`/\`role:\` labels from the ledger. Comments are welcome but are not read by OPHANIM and change nothing in the ledger.`,
     '',
     '## What needs doing',
     '',
@@ -197,8 +181,7 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
     '## State',
     '',
     `- **State:** ${item.state} (${STATE_MEANS[item.state]})`,
-    `- **Waits on:** ${waiting ?? (deps.length && item.state === 'On Hold' ? 'its unresolved dependencies ' +
-      '(below)' : 'nothing')}`,
+    `- **Waits on:** ${waiting ?? (deps.length && item.state === 'On Hold' ? 'its unresolved dependencies (below)' : 'nothing')}`,
     `- **Last checked:** ${item.checked}`,
     `- **Owner role:** ${owner ? `\`${owner.role}\` (from ${owner.source})` : 'not recorded on the ledger'}`,
     '',
@@ -213,31 +196,16 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
     '| # | Date (checked) | State | Waits on | Basis | Ledger entry |',
     '|---|---|---|---|---|---|',
     // One row per status entry, oldest first; "Waits on" falls back to the unresolved dependencies of a hold.
-    ...item.history.map(
-      (h, i) =>
-        `| ${i + 1} | ${h.checked} | ${h.state} | ${cell(h.waiting_on ?? (h.depends_on?.length && h.state === ('On ' +
-          'Hold') ? `depends on ${h.depends_on.join(', ')}` : ''))} | ${cell(h.basis)}${h.evidence ? ' (with ' +
-          'evidence)' : ''} | \`${h.entry}\` (seq ${h.seq}) |`
-    ),
+    ...item.history.map((h, i) => `| ${i + 1} | ${h.checked} | ${h.state} | ${cell(h.waiting_on ?? (h.depends_on?.length && h.state === 'On Hold' ? `depends on ${h.depends_on.join(', ')}` : ''))} | ${cell(h.basis)}${h.evidence ? ' (with evidence)' : ''} | \`${h.entry}\` (seq ${h.seq}) |`),
     '',
     provenanceNotice([
-      `For this item: its status entries are signed by the status ledger's operator key ` +
-        `(${signers.map(s => `\`${s}\``).join(', ')}). ` +
-        (item.evidence?.review?.close_entry
-          ? `Its latest status cites a review cycle that closed ${item.evidence.review.outcome} with reviews on ` +
-            `distinct labs (${item.evidence.review.reviewers.map(r => r.lab).join(', ')}), none of them the lab that ` +
-            `implemented the change; ` +
-            'that independence rests on the cited cycle ledger, which re-derives the cold-review rule, and carries ' +
-            'the limits in docs/public-record.md. The reviewers are model seats, not people.'
-          : 'The status ledger records no model seat, review or served model for it, so **no independence is claimed ' +
-            'here**.'),
+      `For this item: its status entries are signed by the status ledger's operator key (${signers.map(s => `\`${s}\``).join(', ')}). ` +
+      (item.evidence?.review?.close_entry
+        ? `Its latest status cites a review cycle that closed ${item.evidence.review.outcome} with reviews on distinct labs (${item.evidence.review.reviewers.map(r => r.lab).join(', ')}), none of them the lab that implemented the change; ` +
+          'that independence rests on the cited cycle ledger, which re-derives the cold-review rule, and carries the limits in docs/public-record.md. The reviewers are model seats, not people.'
+        : 'The status ledger records no model seat, review or served model for it, so **no independence is claimed here**.'),
       ...(owner && owner.role !== 'decision-authority'
-        ? [
-            '',
-            `The owner role \`${owner.role}\` is a chair (a model seat), not a person; it is a label, never an ` +
-              `assignee.`
-          ]
-        : [])
+        ? ['', `The owner role \`${owner.role}\` is a chair (a model seat), not a person; it is a label, never an assignee.`] : []),
     ]),
     '',
     '### Verify this record',
@@ -252,9 +220,8 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
     `node ophanim/public/github.mjs verify-item ${item.item} ${item.entry}`,
     '```',
     '',
-    'The first re-checks every signature and re-derives every status against the pinned anchor. The second checks ' +
-      'that this entry is in that verified chain and is still the latest status of this item, and prints it.',
-    ''
+    'The first re-checks every signature and re-derives every status against the pinned anchor. The second checks that this entry is in that verified chain and is still the latest status of this item, and prints it.',
+    '',
   ].join('\n');
 }
 
@@ -324,12 +291,7 @@ export function planSummary(p) {
     `- By state: ${by('state:')}`,
     `- By waiting: ${by('waiting:') || 'none'}`,
     `- By role: ${[by('role:'), by('decision-authority')].filter(Boolean).join(', ') || 'none'}`,
-    `- Assignees: ${
-      p.issues
-        .filter(i => i.assignees.length)
-        .map(i => `${i.item} -> ${i.assignees.join(', ')}`)
-        .join('; ') || 'none'
-    }`,
-    ''
+    `- Assignees: ${p.issues.filter(i => i.assignees.length).map(i => `${i.item} -> ${i.assignees.join(', ')}`).join('; ') || 'none'}`,
+    '',
   ].join('\n');
 }
