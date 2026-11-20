@@ -70,6 +70,15 @@
           "date": "2026-11-17",
           "ref": "d4f9644",
           "note": "automatic assessment wrote measured:true once n was sufficient"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "docs/execution/research-team-report.md at 5b1f979",
+          "detected_by": "the independent review of ea858a6..af23623",
+          "note": "the qualification report said items 6, 7 and 8 of the research specification's verification list passed. Each passed its own tests and a mutation; each failed a reproduction the tests did not take (limits passed by a caller, a resumed team, a member citing another's source). 'Pass' was written for a property where only one path to it had been shown",
+          "corrected_by": "integrator",
+          "recurrence_check": "none yet: a report row still rests on whoever writes it; the register's L-737 and the corrected report record the case"
         }
       ],
       "fixed_in": "62e54e8 (automatic path only; the general write-side refusal is the owner's candidate a5f9c4e/b6b5cd0, not public)",
@@ -283,6 +292,15 @@
           "note": "the research lifecycle tests passed with research on by default and each session's directory under the item's state. Their fixture kept that state outside the repository and passed a scripted session, so they never met the transport's rule that a session's directory and the repository it reads are disjoint. Two existing tests, whose fixture keeps state inside the repository and declares primary execution, saw a plan that waited on evidence start a real research session, fail on CONTROL_IN_WORKTREE and plan twice. In a default checkout every team would have failed at its first session. Repaired before the commit; the lifecycle tests now keep the item's state inside the repository and assert where each session's directory was (register L-735)",
           "corrected_by": "integrator",
           "recurrence_check": "ophanim/operate/research-lifecycle.test.mjs keeps the item's state inside the repository and asserts where each session's directory was; mutations RS58 and RS60 killed on a3377f6"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "ea858a6..af23623 (PR 68)",
+          "detected_by": "the independent review of ea858a6..af23623: each reviewer removed the property a test names and ran the test",
+          "note": "tests that stayed green with their property removed: the admitted record written after the session had started; the depth cap on a caller's limits; symlink resolution in the scope check; a cancelled team recording no conclusion; a session's directory removed however it ends; and, in the retired relay's test file, an expected refusal code the test supplied itself when the connection was cut",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/research-team.test.mjs (A MEMBER IS ON THE RECORD BEFORE ITS SESSION STARTS; THE CEILINGS ARE THE CONTROLLER'S), pantheon/tests/antigravity-turn.test.mjs (a link out of the scope). Not all were given a test: L-743 and L-745 list the ones left"
         }
       ],
       "fixed_in": null,
@@ -475,6 +493,15 @@
           "note": "the code rewrote the jail's bind to read-only and separately marked the bind's record as read-only; the tests read the record. A test now writes from inside the jail with no tool call and sees it fail. Two more of 66 mutations survived the same run for want of a test (a refused charge did not have to stop the team at once; the findings passed up had no tested bound); both have tests now",
           "corrected_by": "integrator",
           "recurrence_check": "pantheon/tests/antigravity-turn.test.mjs :: REAL JAIL, A RESEARCH SESSION; seen to fail with the bind left writable (mutation RS8 applied by hand)"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "ea858a6..af23623 (PR 68), the research team and the gateway",
+          "detected_by": "the independent review of ea858a6..af23623: four reviewers given the change and the owner's requirements, not the author's report",
+          "note": "bounds reported as enforced held only on the path the tests took: a caller's limits raised the active ceiling above the coordinator model's (20 members under Carbon); the team's request bound restarted at each resume; after a refused charge the pool started every waiting specialist; gap research re-activated without bound; a research session could read the controller's private key with the default scope; the real key followed an upstream redirect",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/research-team.test.mjs, pantheon/tests/antigravity-turn.test.mjs, ophanim/operate/research.test.mjs, ophanim/operate/research-lifecycle.test.mjs, pantheon/tests/antigravity-gateway.test.mjs; mutation RV5 of ophanim/operate/sdk-intake.mutate.mjs and RV1 to RV29 with it"
         }
       ],
       "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",

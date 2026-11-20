@@ -719,3 +719,43 @@ test("REAL JAIL, A RESEARCH SESSION: the repository itself is read-only inside t
   assert.equal(existsSync(fresh), false);
   assert.equal(execFileSync("git", ["-C", env.repo, "status", "--porcelain"], { encoding: "utf8" }), "", "the repository is as it was");
 });
+
+// ---- Findings of the independent review of ea858a6..af23623 (2026-11-20) -------------------------------------------------
+test("WHAT THE CONTROLLER KEEPS IN THE REPOSITORY IS NOT A RESEARCH SOURCE: a read of a hidden path is refused, by its real path, whatever the scope; and a link out of the scope is outside it", async t => {
+  // Review finding (lifecycle 1): with scope "." a research session was allowed to read status/work/keys/controller.json.
+  const { env, run } = await setup(t);
+  const inWt = p => join(env.repo, p);
+  mkdirSync(inWt("status/work/keys"), { recursive: true });
+  writeFileSync(inWt("status/work/keys/controller.json"), JSON.stringify({ key_id: "controller", privatePem: "SYNTHETIC-PRIVATE-KEY" }));
+  symlinkSync(inWt("status/work/keys/controller.json"), inWt("src/u1/innocent.json"));
+  symlinkSync(inWt("README.md"), inWt("src/u1/readme-link.md"));
+  const r = await run(CARBON, [
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("status/work/keys/controller.json") } } },   // 1 the key itself
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("src/u1/innocent.json") } } },                // 2 a link to it from inside the scope
+    { hook: { tool: "list_directory", args: { DirectoryPath: inWt("status/work") } } },                   // 3 the hidden directory
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("README.md") } } },                            // 4 an ordinary file
+    { hook: { tool: "finish", args: { summary: "ok" } } },
+  ], { research: { ...RESEARCH, scope: ["."], hide: [inWt("status/work")] } });
+  assert.deepEqual(r.tool_log.map(x => [x.n, x.allow, x.code]), [[1, false, "RESEARCH_HIDDEN"], [2, false, "RESEARCH_HIDDEN"], [3, false, "RESEARCH_HIDDEN"], [4, true, null], [5, true, null]]);
+  assert.deepEqual(r.examined.map(x => x.path), ["README.md"], "nothing hidden was examined");
+  // Review finding (controller 7): the scope is judged on where a path really is. A link inside the scope to a file outside it is outside.
+  const linked = await run(CARBON, [{ hook: { tool: "view_file", args: { AbsolutePath: inWt("src/u1/readme-link.md") } } }], { research: { ...RESEARCH, scope: ["src"] } });
+  assert.deepEqual(linked.tool_log.map(x => [x.allow, x.code]), [[false, "RESEARCH_SCOPE"]]);
+  await assert.rejects(run(CARBON, [{ probe: true }], { research: { ...RESEARCH, hide: ["status/work"] } }), { code: "BAD_INPUT" }, "a hidden path is absolute: a relative one is not guessed at");
+});
+
+test("REAL JAIL, A RESEARCH SESSION: what the controller hides is not there inside the jail, so a search or a runtime that asked no one cannot read it", async t => {
+  const probe = await sandboxAvailable("bwrap");
+  if (!probe.ok) { t.skip(`UNVERIFIED: bwrap is not usable here (${probe.why})`); return; }
+  const { env, run, note } = await setup(t);
+  const key = join(env.repo, "status/work/keys/controller.json"), readme = join(env.repo, "README.md"), envFile = join(env.repo, "status/secret.env");
+  mkdirSync(join(env.repo, "status/work/keys"), { recursive: true });
+  writeFileSync(key, JSON.stringify({ key_id: "controller", privatePem: "SYNTHETIC-PRIVATE-KEY" }));
+  writeFileSync(envFile, "TOKEN=synthetic\n");
+  const r = await run(CARBON, [{ probe: { read: [key, envFile, readme], write: [] } }, { request: { model: "gemini-4-carbon", as: "root" } }],
+    { sandbox: { enabled: true }, base_env: { ...process.env, GEMINI_API_KEY: KEY }, research: { ...RESEARCH, hide: [join(env.repo, "status/work"), envFile] } });
+  const p = note(r).probes[0];
+  assert.deepEqual([p.pid1, p.can_read[key], p.can_read[envFile], p.can_read[readme]], ["bwrap", false, false, true], "a hidden directory and a hidden file are unreadable inside the jail; the rest of the repository reads");
+  assert.deepEqual(r.sandbox.research_hidden, [join(env.repo, "status/work"), envFile], "and the session's record says what was hidden");
+  assert.equal(JSON.parse(readFileSync(key, "utf8")).key_id, "controller", "the file itself is untouched");
+});

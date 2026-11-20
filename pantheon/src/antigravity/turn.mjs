@@ -126,7 +126,7 @@ export function bridgeEnvOf({ base = process.env, home } = {}) {
  * the unit's verify launcher <control_dir>/pantheon-verify, and the tool policy <control_dir>/sdk-jail.json (the record
  * of what the controller decides against; the controller holds the object, the file is evidence). Returns {policy, paths}.
  */
-export async function prepareSdkWorkspace({ control_dir, worktree, unit_id = null, owned_paths, verify_cmd = null, verify_hide = [], node = process.execPath, read_only = false, research_tools = null, research_scope = null }) {
+export async function prepareSdkWorkspace({ control_dir, worktree, unit_id = null, owned_paths, verify_cmd = null, verify_hide = [], node = process.execPath, read_only = false, research_tools = null, research_scope = null, research_hide = null }) {
   if (!str(control_dir) || !str(worktree)) throw fail("NO_WORKSPACE", "prepareSdkWorkspace: pass control_dir and worktree");
   // A READ-ONLY workspace (a research session) owns nothing and verifies nothing; the rule is `policy.read_only`, which
   // toolDecision reads, never the mere absence of owned paths.
@@ -143,7 +143,10 @@ export async function prepareSdkWorkspace({ control_dir, worktree, unit_id = nul
   const launcher = verify ? writeVerifyLauncher({ control_dir: ctl, worktree: wt, script, node, hide: verify_hide.filter(p => str(p) && isAbsolute(p)) }).command : null;
   const policy = { schema: SDK_POLICY_SCHEMA, unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, owned_paths: [...owned_paths], verify_cmd: verify, worker_verify_cmd: launcher, worker_verify_script: script,
     read_tools: [...READ_TOOLS], write_tools: [...WRITE_TOOLS],
-    ...(read_only ? { read_only: true, ...(research_tools ? { research_tools: [...research_tools] } : {}), ...(research_scope ? { research_scope: [...research_scope] } : {}) } : {}) };
+    ...(read_only ? { read_only: true, ...(research_tools ? { research_tools: [...research_tools] } : {}), ...(research_scope ? { research_scope: [...research_scope] } : {}),
+      // WHAT THE CONTROLLER KEEPS INSIDE THE REPOSITORY (its ledgers, its keys, its state) and the session must not read,
+      // as real paths: a read is judged on where the path really is, so a link to a hidden file is hidden too.
+      ...(research_hide?.length ? { research_hidden: research_hide.map(p => real(resolve(p))) } : {}) } : {}) };
   await writeFile(paths.policy_file, JSON.stringify(policy, null, 2) + "\n");
   return { policy, paths: { ...paths, verify_launcher: launcher } };
 }
@@ -164,6 +167,9 @@ function researchRefusal(research) {
   }
   if (research.scope !== undefined && !(Array.isArray(research.scope) && research.scope.length && research.scope.every(p => str(p) && !isAbsolute(p) && !p.split("/").includes("..")))) {
     return "research.scope is a list of paths inside the repository, and names at least one";
+  }
+  if (research.hide !== undefined && !(Array.isArray(research.hide) && research.hide.every(p => str(p) && isAbsolute(p)))) {
+    return "research.hide is a list of absolute paths the session must not read";
   }
   return null;
 }
@@ -218,6 +224,14 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
       for (const { key, value } of paths) {
         const d = decideRead(policy, { AbsolutePath: value });
         if (d.decision !== "auto_approve") return dec(false, "READ_OUTSIDE", `${key}: ${d.reason}`, { who });
+      }
+      // HIDDEN BY THE CONTROLLER (independent review of ea858a6..af23623, lifecycle finding 1: with scope "." a research
+      // session was allowed to read the work ledger's private key). Whatever the scope, a path inside a hidden one is not read.
+      if (policy?.read_only && Array.isArray(policy.research_hidden)) {
+        for (const { key, value } of paths) {
+          const abs = real(resolve(String(value)));
+          if (policy.research_hidden.some(h => inside(h, abs))) return dec(false, "RESEARCH_HIDDEN", `${key}: ${relative(policy.worktree, abs) || "."} is kept by the controller and is not a research source`, { who });
+        }
       }
       // ITS ASSIGNMENT'S SCOPE: paths of the repository; a read inside the repository and outside them is refused. A
       // scope is a path (src does not contain srcx), "." is the repository.
@@ -314,7 +328,7 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   if (!existsSync(bridge)) throw laneFailure("spawn", `the bridge script is absent at ${bridge}`, { sdk_unavailable: true });
 
   const { policy, paths } = research
-    ? await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, read_only: true, research_tools: research.tools ?? null, research_scope: research.scope ?? null })
+    ? await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, read_only: true, research_tools: research.tools ?? null, research_scope: research.scope ?? null, research_hide: research.hide ?? null })
     : await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, owned_paths: unit.owned_paths ?? [], verify_cmd: unit.verify_cmd ?? null, verify_hide });
   const box = { enabled: sandbox.enabled !== false, allowUnsandboxed: sandbox.allowUnsandboxed === true, bwrap: sandbox.bwrap ?? "bwrap", home: sandbox.home ?? null };
   const nonce = randomBytes(6).toString("hex");
@@ -367,7 +381,19 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
       }
       const at = jail.argv.indexOf("/tmp", jail.argv.indexOf("--tmpfs")) + 1;   // right after the base: --ro-bind / / --dev --proc --tmpfs /tmp
       argvPrefix = [...jail.argv.slice(0, at), ...extra, ...jail.argv.slice(at)];
-      sandboxRecord = { enabled: true, bwrap: box.bwrap, binds: jail.binds, hidden_control_dirs: jail.hidden, home_dirs_hidden: hidden, ...(kept.length ? { home_paths_kept: kept } : {}), network: "shared with the host: the runtime reaches the controller's loopback gateway; it holds no credential" };
+      // A RESEARCH SESSION DOES NOT SEE WHAT THE CONTROLLER HIDES: a tool decision covers the read that asks; a search over
+      // the repository, or a runtime that asked no one, is stopped here. Each hidden path is covered AFTER the repository's
+      // own bind (a later bind wins): a directory by an empty one, a file by an empty file.
+      const researchHidden = [];
+      for (const h of research ? policy.research_hidden ?? [] : []) {
+        let st; try { st = statSync(h); } catch { continue; }
+        // Placed right after the repository's bind, before whatever ends the option list.
+        const w = argvPrefix.findIndex((x, i) => (x === "--ro-bind" || x === "--bind") && argvPrefix[i + 2] === paths.worktree);
+        if (w < 0) throw fail("SANDBOX_UNAVAILABLE", "the research session is not started: the jail has no bind of the repository to hide the controller's paths under");
+        argvPrefix.splice(w + 3, 0, ...(st.isDirectory() ? ["--tmpfs", h] : ["--ro-bind", "/dev/null", h]));
+        researchHidden.push(h);
+      }
+      sandboxRecord = { enabled: true, bwrap: box.bwrap, binds: jail.binds, hidden_control_dirs: jail.hidden, home_dirs_hidden: hidden, ...(kept.length ? { home_paths_kept: kept } : {}), ...(researchHidden.length ? { research_hidden: researchHidden } : {}), network: "shared with the host: the runtime reaches the controller's loopback gateway; it holds no credential" };
     }
   } else if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", "the implementer session is not started unjailed (sandbox.enabled is false and allowUnsandboxed is not set)");
   record.sandbox = sandboxRecord;
@@ -375,8 +401,9 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   // ---- the gateway: the key stays here
   let governor = subagentGovernor({ implementer: { vendor: seat.vendor ?? SDK_VENDOR, model }, unit_id: unit.unit_id ?? null, allowed_types: types, now });
   // Each request's outcome is appended to <control_dir>/requests.jsonl as it ends (gateway.mjs OUTCOMES): the admitted
-  // ones and the refused one, in order, on disk whatever becomes of this process. A stopped session's exact point of
-  // refusal is read from it (requirement 8 of the L-150 decision).
+  // ones and the refused one, in order, on disk whatever becomes of this process. It is evidence for whoever reads the
+  // run's directory afterwards; nothing in the controller reads it back (a stopped session's point of refusal on its
+  // partial checkpoint comes from the count in pipeline/turns.mjs).
   const requestsFile = join(paths.control_dir, "requests.jsonl");
   const makeGateway = () => startModelGateway({ upstream, apiKey, root: { model, marker: rootMarker }, subagents: { model: SUBAGENT_MODEL, ceiling: types.length ? ceiling : 0, markers }, admit, signal, fetchImpl,
     outcomes: requestsFile, outcomeTag: { unit_id: unit.unit_id ?? null } });

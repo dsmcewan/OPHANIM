@@ -19,18 +19,37 @@
 
 The owner's specification is "OPHANIM: Carbon 4 Research & Exploration Team" (2026-11-20). The owner's decisions are "Owner decisions for PR #68" (2026-11-20). What the capability does is in `docs/routing-task-profile.md`, `docs/operating-workflow.md` and `docs/billing-policy.md`. Its limitations are register entries L-725 to L-736.
 
-**Verification.** One author wrote and tested all of it. There was no independent review of this work. Its tests were checked by mutation runs. Nothing has been answered by the live Gemini API.
+**Verification.** One author wrote and tested all of it, and its tests were checked by mutation runs. It was then reviewed by four independent reviewers of the same model family (below): they found defects in every part, several of them in properties this report had called passed. Nothing has been answered by the live Gemini API, and there has been no cross-lab review.
+
+## Corrected by an independent review (2026-11-20)
+
+This report was first written at `5b1f979` and said, among other things, that items 6, 7 and 8 of the verification list passed. An independent review of `ea858a6..af23623` then showed that each held only on the path its tests took. The rows below are corrected; the first version is in the history.
+
+Four reviewers, each a fresh session given the change and the owner's requirements, not this report. Each ran its own reproductions in its own checkout. What they found, and what was done:
+
+| Area | Found | Done |
+|---|---|---|
+| Research controller | a member could cite a file only another member read; an absent file was a source like any other; the request bound restarted at each resume; a stopped team went on starting members (10 sessions after one refused charge); a caller's limits raised the active ceiling (20 under Carbon); a failed team reported a summary and `material: true`; dependencies and "supported" hypotheses were unchecked; a team could be satisfied with no observation | all repaired, each with a test that failed first (L-737) |
+| Research in the lifecycle | a session could read the controller's private key; a plan recorded a material conclusion as given when it was outside the delivered view; gap research re-activated without bound (20 teams in one tick); the ledger took research records under an expired claim and several malformed ones; a member with an altered record was paid for on every resume | all repaired (L-738 to L-742); what stays open is in those entries |
+| The gateway and the python seat | the real key followed an upstream redirect; the session cap and expiry were answered with statuses the harness retries; a charged request that failed was accounted as refused and uncharged. Also: a lifetime that does not cut a request in flight, six claims with no deciding test, and the unjailed python seat can read the real key from the controller's environment | the first three repaired; the rest open (L-743, L-744) |
+| Partial checkpoints | after the base or the plan changed, a partial checkpoint was passed over in silence and its files stayed. Also: any admission failure treated as a budget stop, reviewer findings not carried over, a second stop losing the first session's requests, five claims with no deciding test | the first repaired; the rest open (L-745) |
+| Lane pin | no input puts a lane-pinned implementer on a primary seat. The rule covers the implementer role only | open, latent (L-746) |
+| Lessons registry | the report's success rule counted cases the decision forbids when called on its own | repaired (L-747) |
+
+The reviewers also said what they found sound, by removing each property and seeing a test fail: the read-only bind, the scope decisions (symlinks, case, other spellings), the tools refused in research mode, the budget within one run, charge before forward, no second billing path, no key in the records, restore fidelity of a partial checkpoint, lineage across a stop, and that no partial checkpoint approves anything.
+
+**What this changes in the claims below.** "Pass" in the verification table now means: passes its tests, a mutation of each enforcement line fails a test, and an independent reviewer's reproductions no longer break it. It still does not mean a cross-lab review or a live run.
 
 ## Status
 
 | | |
 |---|---|
-| Research team | **Qualified as a controller.** Its limits, charges, records and refusals are enforced in code, and each is decided by a test that a mutation was seen to fail. **Not qualified as research** (L-726): whether Carbon and Hydrogen answer in the required report format, delegate sensibly, stop when they have an answer or find anything true is UNVERIFIED |
-| Decision 1 (L-724, one gateway) | Done. The relay is removed; its protections and its tests are on the gateway |
-| Decision 2 (L-150 requirement 8) | Met for the session's files, shown with scripted sessions. **Not met for the conversation**: the next session is a new one that starts from the kept files (L-736). Requirement 8 is not claimed as passed in full |
+| Research team | **Qualified as a controller, after repairs.** Its limits, charges, records and refusals are enforced in code, and each is decided by a test that a mutation was seen to fail. An independent review found ten defects in the controller and five in its lifecycle integration; all are repaired, with open remainders recorded (L-737 to L-742). **Not qualified as research** (L-726): whether Carbon and Hydrogen answer in the required report format, delegate sensibly, stop when they have an answer or find anything true is UNVERIFIED |
+| Decision 1 (L-724, one gateway) | Done, with three defects found by review and repaired, and open items (L-743). The python seat can read the real key from the controller's environment, as it could with the relay (L-744) |
+| Decision 2 (L-150 requirement 8) | Met for the session's files, shown with scripted sessions. **Not met for the conversation**: the next session is a new one that starts from the kept files (L-736). The review found a partial checkpoint passed over in silence after the base moved (repaired) and four further gaps (open, L-745). Requirement 8 is not claimed as passed in full |
 | Decision 3 (L-701, live authentication) | **Not done. Blocked on the credential.** No live session was run and nothing was billed. The CLI is not retired |
 | Decision 4 (L-721, lane semantics) | Done. Both paths have their own tests |
-| Decision 5 (lessons registry) | Done. The registry's verdict on its own mechanism stays "not demonstrated" |
+| Decision 5 (lessons registry) | Done; the report's success rule was tightened after review (L-747). The registry's verdict on its own mechanism stays "not demonstrated" |
 
 ## The research team against the specification's verification list (section 8)
 
@@ -41,12 +60,12 @@ The owner's specification is "OPHANIM: Carbon 4 Research & Exploration Team" (20
 | 3 | An agent delegates a bounded question and receives evidence-backed results | pass | `pantheon/tests/research-team.test.mjs`; trace A below, on the installed SDK |
 | 4 | Nested delegation through level 10 when justified | pass, with scripted sessions | `research-team.test.mjs`; trace B |
 | 5 | An attempted level 11 is refused | pass | the same test, and the work ledger's own rule (`research.test.mjs`); RS12, RS13, RS36 |
-| 6 | Concurrent Hydrogen agents never exceed 8 per Carbon team | pass | `research-team.test.mjs`; trace C; RS15, RS21 |
-| 7 | Shared request budgets hold under concurrent and nested execution | pass | the team's bound, the billing policy's budget and the stage's bound, each before the request is sent; RS22, RS35, RS40 to RS42 |
-| 8 | Source identity, findings and lineage survive every delegation boundary | pass | reports held to the digests the controller recorded; each member on the ledger with its parent; RS23, RS24, RS27, RS33, RS37 |
-| 9 | Cancellation and interruption preserve recoverable work | pass | no conclusion for a stopped team, finished members reused by digest; RS26, RS29, RS43, RS44 |
+| 6 | Concurrent Hydrogen agents never exceed 8 per Carbon team | pass after repair: a caller's limits could raise the ceiling (L-737) | `research-team.test.mjs`; trace C; RS15, RS21 |
+| 7 | Shared request budgets hold under concurrent and nested execution | pass after repair: the bound restarted at each resume, and a stopped team kept starting members (L-737, L-742) | the team's bound, the billing policy's budget and the stage's bound, each before the request is sent; RS22, RS35, RS40 to RS42 |
+| 8 | Source identity, findings and lineage survive every delegation boundary | pass after repair: a member could cite a file it never read (L-737) | reports held to the digests the controller recorded; each member on the ledger with its parent; RS23, RS24, RS27, RS33, RS37 |
+| 9 | Cancellation and interruption preserve recoverable work | pass after repair: a member with an altered record was paid for on every resume (L-742) | no conclusion for a stopped team, finished members reused by digest; RS26, RS29, RS43, RS44 |
 | 10 | Independent review eligibility remains correct | pass for the plan's panel, under `independence: 'model'` | `research-lifecycle.test.mjs`; RS48. The research rows are contributions of the plan, which the implement and review stages inherit through the existing lineage; that inheritance was not tested again for research rows. Not tested under `lab` (L-732) |
-| 11 | Research ends when its objective is met | pass | `research-team.test.mjs`; RS25 |
+| 11 | Research ends when its objective is met | pass after repair: research on a planner's gaps re-activated without bound (L-740) | `research-team.test.mjs`; RS25 |
 
 Level 10 on the installed SDK was not run: trace A is two levels. Each level is the same kind of session, opened by the same code, so depth beyond two is shown with scripted sessions only.
 
@@ -448,9 +467,11 @@ On `af23623`. Node 24.22, bubblewrap 0.9.0; the pinned SDK installed.
 | Test lint, enforcing | 0 findings |
 | Target check of all ten mutation runners | 517 targets, each applies exactly once |
 
+**After the independent review**, on the tree of its repairs (the commit that adds this paragraph): `npm test` 62, 47 and 1,898 pass; `npm run test:proof` 543 pass; `npm run test:gates:self` 35 pass; 0 failed, 0 skipped; the test lint has 0 findings; every target of the ten mutation runners applies exactly once.
+
 ## Mutation results
 
-`ophanim/operate/sdk-intake.mutate.mjs` has 271 targets. Each run copies the tree, runs the named test files unchanged as a baseline, then applies one mutation at a time.
+`ophanim/operate/sdk-intake.mutate.mjs` has 302 targets (271 before the independent review; 31 were added for its repairs). Each run copies the tree, runs the named test files unchanged as a baseline, then applies one mutation at a time.
 
 | Run | Tree | Result |
 |---|---|---|
@@ -459,6 +480,9 @@ On `af23623`. Node 24.22, bubblewrap 0.9.0; the pinned SDK installed.
 | PC13 again | the same tree with one test case added | killed |
 | W1 to W21, GP1 to GP14, the other 21 of P, R1 to R8, LP1 to LP4, RS4 to RS6, G10 to G12, RS8, RS28, RS32 | `af23623` | 77 of 77 killed, none hung. Baseline 363 of 363 |
 | `pantheon/tests/l150-billing.mutate.mjs` (22, retargeted to the gateway) | `af23623` | 22 of 22 killed. Baseline 19 of 19 |
+| After the independent review: RV1 to RV22 (the research repairs) and the eight RS mutations the repairs moved | the tree of the review's repairs | 30 of 30 killed. Baseline 299 of 299 |
+| RV23 to RV31 (the plan stage, the gateway, checkpoints, the lessons rule), PC17 (moved), and every W and GP again (the gateway changed) | the same tree | 45 of 45 killed. Baseline 330 of 330 |
+| `l150-billing.mutate.mjs` again (the gateway changed) | the same tree | 22 of 22 killed. Baseline 19 of 19 |
 
 The three research survivors, and what was added:
 

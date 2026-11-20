@@ -23,9 +23,9 @@ const DELEGATE = {addresses: 'u1', question: 'Find every reader of the ok export
 /** A scripted research session: one billed request, then a coordinator that delegates once and concludes, or a specialist's report. */
 function scriptedResearch({material = true} = {}) {
   const calls = [];
-  const sdk = async ({seat, prompt, admit, control_dir, worktree}) => {
+  const sdk = async ({seat, prompt, admit, control_dir, worktree, research = null}) => {
     const specialist = /^ROLE: research specialist/.test(prompt), round = Number(/ROUND (\d+) of/.exec(prompt)?.[1] ?? 0);
-    calls.push({model: seat.model, specialist, round, prompt, control_dir, worktree, control_existed: fs.existsSync(control_dir)});
+    calls.push({model: seat.model, specialist, round, prompt, control_dir, worktree, control_existed: fs.existsSync(control_dir), hide: research?.hide ?? null});
     admit({class: 'root', model: seat.model});
     const report = specialist ? part('Find every reader of the ok export in this repository.') : round === 1 ? lead({delegations: [DELEGATE]}) : lead({satisfied: true, material, unresolved: [], summary: 'ok is exported and unread'});
     return {text: JSON.stringify(report), examined: specialist ? [{tool: 'view_file', path: 'alpha.mjs', kind: 'file', sha256: VERSION, bytes: 3}] : [], served_model: seat.model, served_model_source: 'provider', usage: {total_token_count: 5}};
@@ -57,6 +57,9 @@ test('RESEARCH ACTIVATES BEFORE A PLAN EXISTS, WITH NO TEAM ASSEMBLED BY HAND: a
     const r = researchOf(L.w(), 'alpha');
     assert.deepEqual([r.teams.map(x => [x.role, x.trigger, x.request, x.coordinator.model]), r.open, r.conclusions.map(c => [c.request, c.satisfied, c.telemetry.depth_reached])], [[['scout', 'intake', request, 'gemini-4-carbon']], [], [[request, true, 2]]]);
     assert.match(L.research.calls[0].prompt, /WHAT IS ALREADY KNOWN \(the controller's initial view\):[\s\S]*Original requirement/, 'the coordinator starts from the dossier, not from nothing');
+    // WHAT THE CONTROLLER KEEPS INSIDE THE REPOSITORY IS HIDDEN FROM EVERY SESSION (independent review, lifecycle finding 1):
+    // the work ledger with its private key, the item's state, and the owner's status keys.
+    for (const c of L.research.calls) assert.deepEqual([L.f.workRoot, L.f.stateDir, path.join(L.f.statusRoot, 'keys')].map(p => c.hide.includes(p)), [true, true, true], `${c.model} round ${c.round}`);
     // BEFORE THE PLANNER: the one planner prompt already holds the findings, as a dossier view with its version.
     assert.equal(L.seen.length, 1);
     assert.ok(L.seen[0].includes(FINDING) && L.seen[0].includes('alpha.mjs@sha256:111111111111'), 'the planner was shown the finding with its source and version');
@@ -119,10 +122,14 @@ test('A REQUEST DURING THE LIFECYCLE PUTS THE APPROVED PLAN IN QUESTION: the pla
     w.recordResearch({phase: 'team', ...team, request: null, trigger: 'contradiction', role: 'explorer', coordinator: seat, subordinate: {...seat, model: 'gemini-4-hydrogen'}, selection: null, limits: {max_depth: 10}, root: 'rn-0000000000000000'});
     const conclusion = phase => ({phase: 'conclusion', request: null, status: 'satisfied', stop_reason: 'SATISFIED', satisfied: true, summary: 'ok is read by a consumer', findings_text: '- ok is read by beta.mjs [beta.mjs@sha256:2222]', findings: null,
       telemetry: {depth_reached: 1}, contributors: [], ...phase});
+    // A team has at least one member on the ledger before it concludes (the ledger refuses a conclusion of none).
+    const member = t => { for (const state of ['admitted', 'finished']) w.recordResearch({phase: 'node', ...t, node: 'rn-0000000000000000', kind: 'coordinator', parent: null, depth: 1, round: 1, state, seat, question: 'what reads ok?'}); };
+    member(team);
     w.recordResearch({...conclusion({material: false}), ...team});
     assert.equal(L.gate('alpha').gate, 'implement', 'a conclusion that changes nothing a plan rests on leaves the plan standing');
     const other = {item: 'alpha', team: 'rt-00000000000000bb'};
     w.recordResearch({phase: 'team', ...other, request: null, trigger: 'contradiction', role: 'explorer', coordinator: seat, subordinate: {...seat, model: 'gemini-4-hydrogen'}, selection: null, limits: {max_depth: 10}, root: 'rn-0000000000000001'});
+    member(other);
     w.recordResearch({...conclusion({material: true}), ...other});
     const stale = L.gate('alpha');
     // (stale[0] is the newest plan: it was given the lifecycle's own research, and not this one.)
@@ -220,5 +227,21 @@ test('WHERE THE TRANSPORT CANNOT START A SESSION nothing is simulated: the plann
     assert.deepEqual([t.dispatched.map(d => [d.stage, d.status]), stopped.blocker.code, stopped.outputs.transport_blocker.codes, L.seen.length, L.w().billings().length, r.open.map(x => x.hash), r.teams.length, r.conclusions],
       [[['plan', 'blocked']], 'RESEARCH_TRANSPORT', ['SANDBOX_UNAVAILABLE'], 0, 0, [request], 1, []]);
     assert.match(stopped.blocker.what, /bubblewrap is not usable here/);
+  });
+});
+
+// ---- Finding 3 of the independent review of ea858a6..af23623, the lifecycle side (2026-11-20) --------------------------
+test('GAP RESEARCH IS BOUNDED PER ITEM: a planner that words its gaps differently every time gets a bounded number of teams on its say; after that nothing more is requested, and the record says why', {timeout: 300_000}, async () => {
+  // "Once per set of gaps" was an exact match of the text: a new wording was a new team, without end (20 teams and 60 billed
+  // requests in one tick, in the reviewer's run).
+  const {GAP_RESEARCH_MAX} = await import('./stages.mjs');
+  await withDispatch(async ctx => {
+    const L = lifecycle(ctx, {planner: (_, n) => json({insufficient: {gaps: [`gap number ${n}: whether anything reads the ok export`], needed: [`a search of the repository, attempt ${n}`]}})});
+    await tick(L.at); await tick(L.at);
+    const r = researchOf(L.w(), 'alpha'), plans = L.plans('alpha');
+    assert.deepEqual([r.requests.filter(x => x.trigger === 'insufficient-evidence' && x.by === 'plan stage').length, r.teams.length], [GAP_RESEARCH_MAX, GAP_RESEARCH_MAX]);
+    assert.deepEqual([plans.at(-1).status, plans.at(-1).blocker.code, plans.at(-1).outputs.research_on_gaps.ran], ['blocked', 'EVIDENCE_INSUFFICIENT', false]);
+    assert.match(plans.at(-1).outputs.research_on_gaps.why, /already asked for research on this item's evidence 3 time\(s\) \(at most 3\): no further team is started on the planner's say/);
+    assert.equal(plans.length, GAP_RESEARCH_MAX + 1, 'each team\'s findings woke the plan once; the attempt after the last asked for nothing and the item now waits');
   });
 });

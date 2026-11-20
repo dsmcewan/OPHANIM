@@ -110,7 +110,7 @@ export async function providerAvailability({ upstream = SDK_CONFIG.api.base_url,
   const notHere = upstreamRefusal(upstream);
   if (notHere) return { ...out, kind: "bad_request", why: `${GATEWAY_REFUSALS.UPSTREAM}: ${notHere}: the key was not sent` };
   try {
-    const r = await fetchImpl(`${String(upstream).replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(model)}`, { headers: { [keyHeader]: apiKey }, signal: AbortSignal.timeout(timeoutMs) });
+    const r = await fetchImpl(`${String(upstream).replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(model)}`, { headers: { [keyHeader]: apiKey }, signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
     out.status = r.status;
     const j = await r.json().catch(() => null);
     if (r.status === 200) {
@@ -196,7 +196,7 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
     { const q = [...url.searchParams.entries()], stream = m[2] === "streamGenerateContent";
       if (!(q.length === 0 || (stream && q.length === 1 && q[0][0] === "alt" && q[0][1] === "sse"))) { req.resume(); refuse(res, rec, 404, GATEWAY_REFUSALS.PATH, `${m[2]} is served with ${stream ? "no query, or alt=sse alone" : "no query"}`, "NOT_FOUND"); return done(); } }
     // THE SESSION'S BOUNDS, before a body is read or anything is charged: its lifetime and idle time, its requests in flight.
-    if (expiry()) { req.resume(); refuse(res, rec, 503, GATEWAY_REFUSALS.EXPIRED, `${expiry()}: nothing is charged or sent, and its token is worth nothing now`, "UNAVAILABLE"); return done(); }
+    if (expiry()) { req.resume(); refuse(res, rec, 401, GATEWAY_REFUSALS.EXPIRED, `${expiry()}: nothing is charged or sent, and its token is worth nothing now`, "UNAUTHENTICATED"); return done(); }
     last = Date.now();
     if (maxConcurrent !== null && active >= maxConcurrent) { req.resume(); refuse(res, rec, 429, GATEWAY_REFUSALS.BUSY, `the session has ${active} request(s) in flight, its bound is ${maxConcurrent}`, "RESOURCE_EXHAUSTED"); return done(); }
     active += 1;
@@ -227,7 +227,10 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
     // one session cannot both take the last unit. It counts admissions: a request the provider failed was still made.
     if (maxRequests !== null && admitted >= maxRequests) {
       capRefusals += 1;
-      refuse(res, rec, 429, GATEWAY_REFUSALS.SESSION_CAP, `the session has made ${admitted} of its ${maxRequests} permitted request(s): ${m[2]} for ${model} is not charged and not sent`, "RESOURCE_EXHAUSTED");
+      // FINAL REFUSALS ARE NOT ANSWERED WITH A STATUS THE SDK'S HARNESS RETRIES (429, 500, 503): the cap is 403 and an
+      // expired session 401, as the refused charge is 403 (independent review of f4bd6bc, finding 2: the seat retried
+      // each of them several times; the relay had answered 403 and 401).
+      refuse(res, rec, 403, GATEWAY_REFUSALS.SESSION_CAP, `the session has made ${admitted} of its ${maxRequests} permitted request(s): ${m[2]} for ${model} is not charged and not sent`, "PERMISSION_DENIED");
       return done();
     }
     // ADMITTED BEFORE IT IS FORWARDED: the caller's charge. A refused charge is a refused request. The session's unit is
@@ -243,6 +246,7 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
       refuse(res, rec, 403, GATEWAY_REFUSALS.BUDGET, String(e?.message ?? e).slice(0, 900), "PERMISSION_DENIED");
       return done();
     }
+    rec.charged = true;   // from here on, whatever happens to the request, it was charged: the account says so
     // Admitted (and charged), and the session was stopped meanwhile: the charge stands on the caller's record, and the
     // request is still not sent.
     if (stopped()) { refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
@@ -257,7 +261,9 @@ export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, ap
     try {
       const headers = Object.fromEntries(FORWARD_HEADERS.filter(h => req.headers[h] !== undefined).map(h => [h, req.headers[h]]));
       headers[keyHeader] = apiKey;
-      const up = await fetchImpl(`${base}${url.pathname}${url.search}`, { method: "POST", headers, body: raw, signal: ac.signal });
+      // A REDIRECT IS NOT FOLLOWED: the upstream was checked when the gateway started (UPSTREAM), and a redirect would carry
+      // the real key to an origin nobody checked (independent review of f4bd6bc, finding 1). The session is given the 3xx.
+      const up = await fetchImpl(`${base}${url.pathname}${url.search}`, { method: "POST", headers, body: raw, signal: ac.signal, redirect: "manual" });
       rec.forwarded = true; rec.status = up.status;
       res.writeHead(up.status, { "content-type": up.headers.get("content-type") ?? "application/json", "cache-control": "no-cache" });
       const dec = new TextDecoder();

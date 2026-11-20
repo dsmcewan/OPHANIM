@@ -195,7 +195,7 @@ test("gateway session cap: the session's maximum request count is enforced besid
   const fake = await startFakeGemini({ mode: "text", failFirst: 2, usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
   const { s, url, token } = await open(t, { dir, billing, fake, over: { maxRequests: 2 } });
   const got = [await post(url, token), await post(url, token), await post(url, token)];
-  assert.deepEqual(got.map(g => g.status), [503, 503, 429], "two admitted (their provider answered 503), the third refused");
+  assert.deepEqual(got.map(g => g.status), [503, 503, 403], "two admitted (their provider answered 503), the third refused with a status the harness does not retry");
   assert.equal(got[2].reason, SESSION_CAP);
   assert.deepEqual([fake.requests.length, jsonl(join(dir, "usage.jsonl")).length, s.admitted], [2, 2, 2], "an admitted request counts whatever its outcome");
   assert.deepEqual(s.summary().refused.map(x => [x.code, /new launch opens a new session/.test(x.recovery)]), [[SESSION_CAP, true]]);
@@ -450,7 +450,7 @@ test("gateway session idle and lifetime bounds: a session idle past its bound, o
   assert.equal((await post(idle.url, idle.token)).status, 200);
   await sleep(400);
   const late = await post(idle.url, idle.token);
-  assert.deepEqual([late.status, late.reason], [503, "PANTHEON_SESSION_EXPIRED"], "a session idle past its bound is over");
+  assert.deepEqual([late.status, late.reason], [401, "PANTHEON_SESSION_EXPIRED"], "a session idle past its bound is over");
   assert.equal(fake.requests.length, 1, "the refused request was not forwarded");
   assert.equal(jsonl(join(dir, "usage.jsonl")).length, 1, "the refused request was not charged");
   // Lifetime: requests every 60 ms keep the session from idling; past its lifetime it is over all the same.
@@ -458,7 +458,7 @@ test("gateway session idle and lifetime bounds: a session idle past its bound, o
   const statuses = [];
   for (const end = Date.now() + 700; Date.now() < end;) { statuses.push((await post(life.url, life.token)).status); await sleep(60); }
   assert.equal(statuses[0], 200, "a request inside the lifetime is served");
-  assert.equal(statuses.at(-1), 503, "past its lifetime the session is over although it never idled");
+  assert.equal(statuses.at(-1), 401, "past its lifetime the session is over although it never idled");
   const served = statuses.filter(x => x === 200).length;
   assert.equal(fake.requests.length, 1 + served, "only the requests inside the lifetime were forwarded");
   assert.equal(jsonl(join(dir, "usage.jsonl")).length, 1 + served, "only the requests inside the lifetime were charged");

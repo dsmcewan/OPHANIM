@@ -188,7 +188,7 @@ For each request the gateway, in this order:
    404): **fail closed**;
 3. bounds the channel: the session's lifetime (the seat's timeout plus 60 s) and its idle time (15 minutes), after which
    it is over (`PANTHEON_SESSION_EXPIRED`, 503); at most 8 requests in flight (`PANTHEON_SESSION_BUSY`, 429); a body of at
-   most 32 MiB (`PANTHEON_REQUEST_TOO_LARGE`, 413), which must be a JSON object (`PANTHEON_REQUEST_MALFORMED`, 400);
+   most 32 MiB (`PANTHEON_REQUEST_TOO_LARGE`; the connection is cut as soon as the bound is passed, so the session usually sees a reset and not the 413), which must be a JSON object (`PANTHEON_REQUEST_MALFORMED`, 400);
 4. serves the seat's own model only (`PANTHEON_MODEL_NOT_ALLOWED`, 403);
 5. admits the request: first the session's own **maximum request count** (the `--max-model-calls` the seat's Agent is
    given, 40 on the board; `PANTHEON_SESSION_CAP`, 429), then `spendGemini` -- the policy, then the caller's admission (the

@@ -25,15 +25,22 @@
 //                directory, cited by digest on the ledger. The conclusion carries the findings concisely, source-linked.
 //   KNOWLEDGE    The findings enter the item's DOSSIER as one derived view (context.mjs): the planner is shown them, can
 //                cite them, and a plan that rests on them is stale when they change, by the existing evidence check.
-//   RECOVERY     A team's identity is a function of the item and its request. A run that was stopped, or refused a charge,
-//                records no conclusion: the request stays open, and the next run reuses every finished member from the
-//                ledger and its file (re-checked by digest) and pays only for the rest.
+//   RECOVERY     A team's identity is a function of the item and its request. A run that was cancelled, failed or was
+//                refused a charge records no conclusion: the request stays open, and the next run reuses every finished
+//                member from the ledger and its file (re-checked by digest) and pays only for the rest. A member whose
+//                file no longer matches is run again and recorded again, once. A team that spent ITS OWN bound of rounds
+//                or requests does conclude, as stopped and not satisfied: resuming it could do nothing more, and the
+//                requests of every run of the team count against the one bound.
+//   HIDDEN       The session reads the live repository, which may hold the controller's own records: the work ledger
+//                and its private key, the item's state, the owner's status keys. They are not research sources: the
+//                transport is told to hide them (a tool decision refuses the read; the jail covers the paths).
 //   INDEPENDENCE Every member that answered is a CONTRIBUTOR (researchContributors: the model asked and the model that
 //                answered). The plan stage adds them to the plan's contributions, so the review panels exclude them like
 //                any other contributor. Several Hydrogen members are one model of one lab, not several reviewers.
 //
 // Must never: run a team with no recorded request or trigger; send a billed request the policy did not admit; record a
-// conclusion for a team that was stopped or refused a charge; or let a research session write, run or delegate.
+// conclusion for a team that was cancelled, failed or refused a charge; let a research session write, run or delegate;
+// or let one read the controller's keys or ledgers.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -84,7 +91,7 @@ export const teamIdOf = ({item, request = null, trigger, question}) => 'rt-' + c
 export function findingsText(result, bytes = 6000) {
   const v = s => (str(s) ? s.slice(0, 19) : 'unversioned');
   const rows = [
-    ...result.knowledge.observations.map(o => `- ${o.text} [${o.evidence.map(e => `${e.ref}@${v(e.version)}${e.nodes.length > 1 ? ` (examined by ${e.nodes.length} members)` : ''}`).join('; ')}]`),
+    ...result.knowledge.observations.map(o => `- ${o.text} [${o.evidence.map(e => `${e.ref}@${e.absent ? 'ABSENT' : v(e.version)}${e.nodes.length > 1 ? ` (examined by ${e.nodes.length} members)` : ''}`).join('; ')}]`),
     ...result.knowledge.hypotheses.map(h => `- hypothesis (${h.status ?? 'open'}, ${h.node}): ${h.text}`),
     ...result.knowledge.dependencies.map(d => `- depends: ${d.from} -> ${d.to}${d.kind ? ` (${d.kind})` : ''}${d.contract ? `; contract: ${d.contract}` : ''}`),
     ...result.knowledge.unresolved.map(u => `- unresolved (${u.node} ${u.id}): ${u.question}${u.why ? ` (${u.why})` : ''}`),
@@ -111,7 +118,7 @@ export function findingsText(result, bytes = 6000) {
  * billing policy's refusal before anything was prepared) | null}.
  */
 export async function runResearch({work, item, claim = null, request = null, trigger = request?.trigger, question = request?.question, scope = request?.scope ?? ['.'], role = request?.role ?? ROLE_OF_TRIGGER[trigger], repo, dir, billing,
-  admitRequest = () => {}, context = null, head = null, limits = {}, sdk = runAntigravitySdkTurn, antigravity = {}, controlRoot = os.tmpdir(), signal = null, qualified = undefined, now = () => new Date().toISOString(), progress = () => {}}) {
+  admitRequest = () => {}, context = null, head = null, limits = {}, sdk = runAntigravitySdkTurn, antigravity = {}, controlRoot = os.tmpdir(), signal = null, qualified = undefined, hide = [], now = () => new Date().toISOString(), progress = () => {}}) {
   if (!RESEARCH_TRIGGERS.includes(trigger)) throw Object.assign(new Error(`"${trigger}" is not a research trigger (${RESEARCH_TRIGGERS.join(', ')})`), {code: 'RESEARCH_TRIGGER'});
   if (!RESEARCH_ROLES.includes(role)) throw Object.assign(new Error(`"${role}" is not a research role (${RESEARCH_ROLES.join(', ')})`), {code: 'RESEARCH_ROLE'});
   const coordinator = researchSeat(role, qualified ? {qualified} : {}), subordinate = researchSubordinate();
@@ -125,17 +132,28 @@ export async function runResearch({work, item, claim = null, request = null, tri
 
   fs.mkdirSync(dir, {recursive: true});
   const mine = () => work.research(item).filter(r => r.team === team);
-  // RESUME: a finished member recorded with its file is reused when the file still has the digest the ledger recorded.
-  const resume = [];
-  for (const n of mine().filter(r => r.phase === 'node' && r.state === 'finished' && r.evidence)) {
+  // WHAT THE CONTROLLER KEEPS IN THE REPOSITORY IS HIDDEN FROM THE SESSION: always the work ledger (its private key is
+  // under it) and this team's own directory; the caller adds the rest (the item's state, the owner's status keys).
+  const hidden = [...new Set([work.root, dir, ...hide].filter(p => typeof p === 'string' && path.isAbsolute(p)))];
+  const nodeRows = () => mine().filter(r => r.phase === 'node');
+  // RESUME: a finished member recorded with its file is reused when the file still has the digest the ledger recorded
+  // (its LAST finished record: a member run again is recorded again). One whose file is gone or changed is run again,
+  // and its new outcome is recorded with its new file (independent review, lifecycle finding 5: it was paid for on
+  // every resume and never recorded again).
+  const resume = [], lastFinished = new Map();
+  for (const n of nodeRows().filter(r => r.state === 'finished' && r.evidence)) lastFinished.set(`${n.node}|${n.round ?? ''}`, n);
+  const recorded = new Set(nodeRows().filter(r => r.state === 'admitted').map(r => `${r.node}|${r.round ?? ''}|admitted`));
+  for (const [key, n] of lastFinished) {
+    let ok = false;
     try {
       const raw = fs.readFileSync(path.join(dir, n.evidence.file));
-      if (sha(raw) !== n.evidence.sha256) continue;
-      const rec = JSON.parse(raw.toString('utf8'));
-      if (rec?.schema === RESEARCH_EVIDENCE_SCHEMA && rec.node?.id === n.node) resume.push(rec.node);
+      if (sha(raw) === n.evidence.sha256) { const rec = JSON.parse(raw.toString('utf8')); if (rec?.schema === RESEARCH_EVIDENCE_SCHEMA && rec.node?.id === n.node) { resume.push(rec.node); ok = true; } }
     } catch { /* a missing or unreadable file: the member is run again */ }
+    if (ok) recorded.add(`${key}|finished`);
   }
-  const recorded = new Set(mine().filter(r => r.phase === 'node').map(r => `${r.node}|${r.round ?? ''}|${r.state}`));
+  // WHAT EARLIER RUNS OF THIS TEAM BILLED, from the ledger: the requests of every member's recorded outcome, finished or
+  // not. They count against the team's one request bound (independent review, controller finding 3).
+  const spent = nodeRows().filter(r => r.state !== 'admitted').reduce((a, r) => a + (Number.isInteger(r.usage?.requests) ? r.usage.requests : 0), 0);
   let n = 0;
   const record = async ev => {
     if (ev.event === 'team') {
@@ -143,7 +161,8 @@ export async function runResearch({work, item, claim = null, request = null, tri
         selection: ev.selection, limits: ev.limits, root: ev.root, head, at: ev.at});
     } else if (ev.event === 'node') {
       const x = ev.node, key = `${x.id}|${x.round ?? ''}|${x.state}`;
-      if (recorded.has(key) || !['admitted', 'finished', 'failed', 'cancelled'].includes(x.state)) return;
+      // An admission is recorded once. An outcome is recorded for every run of the member (a reused member has none).
+      if (!['admitted', 'finished', 'failed', 'cancelled'].includes(x.state) || (recorded.has(key) && (x.state === 'admitted' || x.state === 'finished'))) return;
       recorded.add(key);
       let evidence = null;
       if (x.state === 'finished') {
@@ -170,7 +189,7 @@ export async function runResearch({work, item, claim = null, request = null, tri
     const control_dir = fs.mkdtempSync(path.join(controlRoot, `ophanim-research-${node.id}-`));
     try {
       const r = await sdk({seat, prompt, worktree: repo, control_dir, unit: {unit_id: node.id}, admit: charge, signal: stop,
-        research: {system: SYSTEM(node.kind === 'coordinator' ? role : `${node.specialty} specialist`), tools: [...node.tools], scope: [...node.scope]},
+        research: {system: SYSTEM(node.kind === 'coordinator' ? role : `${node.specialty} specialist`), tools: [...node.tools], scope: [...node.scope], ...(hidden.length ? {hide: hidden} : {})},
         budget: {max_model_calls: bounds.model_calls, max_tool_calls: bounds.tool_calls}, timeoutS: bounds.timeout_s, ...antigravity});
       return {text: r.text, structured_output: r.structured_output ?? null, examined: r.examined ?? [], served_model: r.served_model ?? null, served_model_source: r.served_model_source ?? null, usage: r.usage ?? null};
     } catch (e) {
@@ -180,7 +199,7 @@ export async function runResearch({work, item, claim = null, request = null, tri
       throw blocker && e.code !== blocker ? Object.assign(e, {code: blocker}) : e;
     } finally { fs.rmSync(control_dir, {recursive: true, force: true}); }
   };
-  const result = await runResearchTeam({team: {id: team, item, role, trigger, question, scope, head, ...(str(context) ? {context} : {})}, coordinator, subordinate, limits: L, runNode, admit, record, resume, signal, now});
+  const result = await runResearchTeam({team: {id: team, item, role, trigger, question, scope, head, ...(str(context) ? {context} : {})}, coordinator, subordinate, limits: L, runNode, admit, record, resume, spent, signal, now});
   const concluded = !RESUMABLE(result.status, result.stop_reason);
   let conclusion = null;
   if (concluded) {

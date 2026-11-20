@@ -54,7 +54,7 @@ import {createHash} from 'node:crypto';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {statusHistory, MARKER} from './reconcile.mjs';
 import {bundlesOf} from './evidence-recovery.mjs';
-import {researchView} from './research-view.mjs';
+import {researchView, RESEARCH_VIEW_BYTES} from './research-view.mjs';
 
 export const DOSSIER_SCHEMA = 'ophanim.dossier/v1';
 export const KINDS = Object.freeze(['authoritative-requirement', 'observation', 'derived', 'hypothesis']);
@@ -430,7 +430,7 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // share and inside `stable`, so new findings (or a new request) are a change of the evidence a waiting plan is woken
   // by, and a plan that cites the view is stale when the findings change (gates.mjs evidenceCheck re-derives it).
   const research = work?.research ? researchView(work, item) : null;
-  if (research) add('derived', `Research on ${item}: findings with their sources and versions, and requests not yet answered (the full records are on the work ledger and in the item's state)`, `research:${item}`, research.as_of, research.text, 6000);
+  if (research) add('derived', `Research on ${item}: findings with their sources and versions, and requests not yet answered (the full records are on the work ledger and in the item's state)`, `research:${item}`, research.as_of, research.text, RESEARCH_VIEW_BYTES);
   const stages = work ? work.stages(item) : [];
   // THE WORK LEDGER'S SHARE OF THE BUDGET IS RESERVED whether or not it has records, and whatever it uses: so recording
   // an attempt never changes how the evidence after it is cut or omitted, and `stable` (which leaves the work ledger

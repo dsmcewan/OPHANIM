@@ -87,7 +87,7 @@ import { bindWorktree, lockConflicts, releaseWorktree, rubricHash, runDispatcher
 import { runImplementer, sameRung, checkpointWrites, MCP_SERVER_PATH } from "./implement.mjs";
 import { matchesOwned } from "./paths.mjs";
 import { isSdkSeat } from "../antigravity/config.mjs";
-import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint, partialFile, partialRefusal, readPartial, removePartial, writePartial } from "./checkpoint.mjs";
+import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint, partialFile, partialRefusal, readPartial, removePartial, writePartial, stalePartials } from "./checkpoint.mjs";
 import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
@@ -592,7 +592,11 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       if (run.checkpoints) {
         await keep(u, { patch, unit_base_commit: wt.base_commit, upstream: upstreamTrees() });
         // The approved checkpoint stands in the partial one's place: a later run resumes the approval, not the start.
-        if (u.checkpoint?.written) await removePartial({ dir: run.checkpoints.dir, unit_key: u.unit_key }).catch(() => {});
+        if (u.checkpoint?.written) {
+          await removePartial({ dir: run.checkpoints.dir, unit_key: u.unit_key }).catch(() => {});
+          // ...and any earlier partial checkpoint of this unit under another key: the unit is approved, nothing resumes from them.
+          for (const s of await stalePartials({ dir: run.checkpoints.dir, unit_id: u.unit_id, unit_key: u.unit_key }).catch(() => [])) await removePartial({ dir: run.checkpoints.dir, unit_key: s.unit_key }).catch(() => {});
+        }
       }
     } finally {
       if (shim) { u.a2a.usage = shim.usage(); await shim.close(); }
@@ -643,7 +647,17 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
    */
   async function restorePartial(u, { path, base_commit, upstream, unit }) {
     const got = await readPartial({ dir: run.checkpoints.dir, unit_key: u.unit_key });
-    if (!got.found) return null;
+    if (!got.found) {
+      // NOT FOUND UNDER THIS KEY IS NOT "THERE IS NONE" (independent review of af23623, finding 1.1): the unit's key
+      // follows the base and the plan, so an earlier partial checkpoint of this unit may be filed under another key.
+      // It is not restored (it was made for another base or plan), and the record says so instead of saying nothing.
+      const stale = await stalePartials({ dir: run.checkpoints.dir, unit_id: u.unit_id, unit_key: u.unit_key });
+      if (stale.length) {
+        u.partial_rejected = { unit_key: stale.at(-1).unit_key, why: `a partial checkpoint of unit ${u.unit_id} was recorded for another unit key (the base or the plan changed since): it is not restored`, stale: stale.map(s => s.unit_key), at: now() };
+        run.checkpoints.partial_rejected.push(u.unit_id);
+      }
+      return null;
+    }
     const reject = async why => {
       await git(path, ["reset", "-q", "--hard", base_commit], { allowFail: true });
       await git(path, ["clean", "-ffdxq"], { allowFail: true });

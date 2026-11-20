@@ -74,7 +74,7 @@
 // Must never: accept a checkpoint whose upstream trees differ from this run's; accept patch bytes that do not hash
 // to the recorded digest; leave a half-written checkpoint where a reader would find it; resume an approval whose seal,
 // review or rubric does not re-derive; take a partial checkpoint as an approval, or restore one that does not re-verify.
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile, readdir } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -193,6 +193,19 @@ export async function readPartial({ dir, unit_key }) {
 }
 
 /** Remove a unit's partial checkpoint (it was approved, so the approved checkpoint stands in its place). */
+/**
+ * The partial checkpoints in `dir` that are of unit `unit_id` under ANOTHER key than `unit_key`: [{unit_key, recorded_at}].
+ * A unit's key follows its base, its plan and what is upstream of it, so a partial checkpoint made before any of them
+ * changed is filed under a key no later run looks up. They are found by the unit's id, to be named and removed.
+ */
+export async function stalePartials({ dir, unit_id, unit_key }) {
+  let names = []; try { names = await readdir(dir); } catch { return []; }
+  const out = [];
+  for (const n of names.filter(x => x.endsWith(".partial.json")).sort()) {
+    try { const r = JSON.parse(await readFile(join(dir, n), "utf8")); if (r?.schema === PARTIAL_SCHEMA && r.unit_id === unit_id && str(r.unit_key) && r.unit_key !== unit_key) out.push({ unit_key: r.unit_key, recorded_at: r.recorded_at ?? null }); } catch { /* not a record: not this unit's */ }
+  }
+  return out;
+}
 export async function removePartial({ dir, unit_key }) {
   await rm(partialFile(dir, unit_key), { force: true });
   await rm(join(dir, partialPatchName(unit_key)), { force: true });
