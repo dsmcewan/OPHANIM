@@ -125,6 +125,12 @@ test('extract: mutation runners are read as TEXT, never imported -- every commit
   assert.deepEqual([g1.files, g1.tests], [['packages/graph/schema.mjs'], ['packages/graph/tests/ledger.test.mjs', 'packages/graph/tests/schema.test.mjs']], 'helper calls are evaluated as text');
   const k3 = mutationTable(git(ROOT, 'show', 'HEAD:ophanim/operate/wave3-evidence.mutate.mjs')).mutations.find(x => x.id === 'K3');
   assert.deepEqual([k3.what, k3.files, k3.tests], ['the status comparison is dropped for review', ['ophanim/operate/gates.mjs'], ['ophanim/operate/wave3-wake.test.mjs']], 'a generated family is expanded as text');
+  // Template-literal constants (`GRAPH = `${C}graph.mjs``, pantheon/tests/capability.mutate.mjs) resolve through the
+  // earlier constants; a substitution of anything that is not a constant is left unread, never guessed.
+  const c4 = mutationTable(git(ROOT, 'show', 'HEAD:pantheon/tests/capability.mutate.mjs')).mutations.find(x => x.id === 'C4');
+  assert.deepEqual([c4.files, c4.tests], [['pantheon/src/capability/graph.mjs'], ['pantheon/tests/capability-graph.test.mjs']], 'template-literal constants are resolved');
+  const tl = mutationTable("const D = 'lib/', A = `${D}a.mjs`, B = `${dir}b.mjs`;\nconst SUITES = [`${D}a.test.mjs`];\nconst MUTATIONS = [{id: 'X1', file: A}, {id: 'X2', file: B}];");
+  assert.deepEqual(tl.mutations.map(x => [x.id, x.files, x.tests]), [['X1', ['lib/a.mjs'], ['lib/a.test.mjs']], ['X2', [], ['lib/a.test.mjs']]], 'an unresolvable substitution is not read');
   t.diagnostic(`${runners.length} runners, ${mutations} mutations read as text, each with its target and deciding tests`);
 });
 

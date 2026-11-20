@@ -44,7 +44,7 @@ const TEST_FILE = /\.test\.(mjs|js|cjs)$/;
 // and shared edit constants), helper calls that build a test path (`t('schema', ...)`) are evaluated, name patterns are
 // kept apart from files, and a runner's default deciding tests (`m.tests ?? SUITES`, or its SUITE/SUITES) are applied to
 // a mutation that names none -- and SAID so (`defaulted`).
-const CONST = /\b([A-Z][A-Z0-9_]*)\s*=\s*'([^'\n]+)'/g;
+const CONST = /\b([A-Z][A-Z0-9_]*)\s*=\s*(?:'([^'\n]+)'|`([^`\n]*)`)/g;
 const LIST = /\b([A-Z][A-Z0-9_]*)\s*=\s*\[/g;
 const OBJ = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*\{/g;
 const HELPER = /\bconst\s+([a-z][\w]*)\s*=\s*\(?\s*([a-z]\w*)(?:\s*,\s*[a-z]\w*)*\s*\)?\s*=>\s*\[\s*(`[^`]*`|'[^']*'|[A-Z]\w*)/g;
@@ -71,7 +71,14 @@ export function mutationTable(text) {
   const startAt = text.search(/\bMUTATIONS\s*=\s*\[/);
   if (startAt === -1) return {listed: 0, mutations: []};
   const open = text.indexOf('[', startAt), region = balanced(text, open) ?? text.slice(open), head = text.slice(0, startAt);
-  const consts = new Map([...head.matchAll(CONST)].map(m => [m[1], m[2]]));
+  // Constants in source order: `NAME = 'text'`, and `NAME = `${OTHER}text`` whose every substitution is an earlier constant
+  // (pantheon/tests/capability.mutate.mjs; coordinator fix at integration). One that substitutes anything else is not read.
+  const consts = new Map();
+  const tmpl = body => { let ok = true; const v = body.replace(/\$\{\s*([A-Z][A-Z0-9_]*)\s*\}/g, (_, k) => (consts.has(k) ? consts.get(k) : (ok = false, ''))); return ok && !v.includes('${') ? v : null; };
+  for (const m of head.matchAll(CONST)) {
+    const v = m[2] !== undefined ? m[2] : tmpl(m[3]);
+    if (v !== null) consts.set(m[1], v);
+  }
   // Lists `NAME = [...]` (multi-line, with spreads), objects `const T = {k: '^pattern' | ['file', ...]}`.
   const rawLists = new Map(), objects = new Map();
   for (const m of head.matchAll(LIST)) { const body = balanced(head, m.index + m[0].length - 1); if (body) rawLists.set(m[1], body); }
@@ -111,7 +118,7 @@ export function mutationTable(text) {
   // The values of a list literal's elements: strings, constants, spreads, `T.key` and helper calls (a call's
   // arguments are read to their balanced close, so a parenthesis inside a string argument does not end it).
   function elements(body, depth = 0) {
-    const out = [], inner = body.slice(1, -1), TOKEN = /\.\.\.([A-Z]\w*)|([a-z]\w*)\(|'((?:[^'\\\n]|\\.)*)'|\b([A-Z]\w*(?:\.\w+)?)\b/y;
+    const out = [], inner = body.slice(1, -1), TOKEN = /\.\.\.([A-Z]\w*)|([a-z]\w*)\(|'((?:[^'\\\n]|\\.)*)'|\b([A-Z]\w*(?:\.\w+)?)\b|`([^`\n]*)`/y;
     for (let i = 0; i < inner.length;) {
       TOKEN.lastIndex = i;
       const m = TOKEN.exec(inner);
@@ -124,6 +131,7 @@ export function mutationTable(text) {
         continue;
       } else if (m[3] !== undefined) out.push(m[3].replace(/\\(.)/g, '$1'));
       else if (m[4]) out.push(...valueOf(m[4], depth));
+      else if (m[5] !== undefined) { const v = tmpl(m[5]); if (v !== null) out.push(v); }
       i = TOKEN.lastIndex;
     }
     return out;
