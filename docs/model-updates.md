@@ -64,6 +64,24 @@ Each step has a check that fails until the step is done.
 
 `registered-ended` and `registered-not-published` mean a seat may stop answering. Decide its replacement (steps 3 and 4 for the replacement), then remove the old name from the registry and from every lane and route that names it. `registered-legacy` is a warning with no date: the lab's deprecations page, named in `docs/vendor-labs.md`, says when.
 
+## Looking something up through Context7
+
+A session that has the Context7 connector can ask it about any lab's documentation. The library ids are in `pantheon/src/config/vendor-context7.json`, among them the Codex repository, whose documentation site is not captured directly.
+
+Context7 is a third party's index of snippets taken from the labs' pages. It is for a question and for a cross-check. It cannot supply a lab's documentation whole. Measured on 2026-11-20, after the owner asked for it to be used to get everything:
+
+| What was tried | Result |
+|---|---|
+| Downloading a library (`llms.txt`) | about 200,000 tokens, some 400 snippets, per request. The page number is ignored: every page is the first |
+| A topic word on the request | changes which snippets come back for a documentation-site library; made no difference on the Codex repository library |
+| 37 topic words on each lab's main library (148 requests, 66 MB, kept beside the capture under `context7/`) | 12% to 36% of the snippets Context7 lists for the lab; 29% to 42% of the pages the direct capture holds whole |
+| The Codex repository library, one download | 317 of the 3,241 snippets it lists |
+| Its query method with no key | refused ("Monthly quota exceeded"). Through the connector it answers one question at a time |
+
+The cross-check found something the capture alone could not: pages the labs' own indexes do not list (register L-811).
+
+A figure is cited from the lab's own page (`show <lab> <address>`), never from a Context7 snippet.
+
 ## What this does not do
 
 - It reads documentation. It does not ask a lab's API which models a given key is served; that needs a key the lab accepts.

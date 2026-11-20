@@ -1,0 +1,63 @@
+{
+ "schema": "pantheon.vendor-context7/v1",
+ "note": "Context7 library ids for each lab's documentation, as Context7 listed them on the day read. Context7 is a third party's index of snippets taken from the labs' pages and repositories: it answers a question with ranked snippets, each naming its source. It is a way to look something up from a session that has the Context7 connector. It is not the record: nothing in the catalogue, the check or the reference reads it, and it cannot hand over a library whole (see docs/model-updates.md).",
+ "read": "2026-11-20",
+ "libraries": {
+  "openai": [
+   {
+    "id": "/websites/developers_openai_api",
+    "what": "guides and concepts of the API documentation"
+   },
+   {
+    "id": "/websites/developers_openai_api_reference",
+    "what": "the API reference"
+   },
+   {
+    "id": "/openai/openai-openapi",
+    "what": "the OpenAPI description of the API"
+   },
+   {
+    "id": "/openai/codex",
+    "what": "the Codex CLI and SDK repository, whose documentation site is not captured directly (register L-804)"
+   }
+  ],
+  "xai": [
+   {
+    "id": "/llmstxt/x_ai_llms_txt",
+    "what": "built from the index this repository's capture reads"
+   },
+   {
+    "id": "/websites/x_ai_developers",
+    "what": "the developer documentation"
+   },
+   {
+    "id": "/xai-org/xai-sdk-python",
+    "what": "the Python SDK repository"
+   }
+  ],
+  "google": [
+   {
+    "id": "/llmstxt/aistudio_google_llms_txt",
+    "what": "built from the index this repository's capture reads"
+   },
+   {
+    "id": "/websites/ai_google_dev_gemini-api",
+    "what": "the Gemini API documentation"
+   }
+  ],
+  "anthropic": [
+   {
+    "id": "/llmstxt/platform_claude_llms_txt",
+    "what": "built from the index this repository's capture reads"
+   },
+   {
+    "id": "/websites/platform_claude_en",
+    "what": "the platform documentation in English"
+   },
+   {
+    "id": "/websites/platform_claude_en_api",
+    "what": "the API reference"
+   }
+  ]
+ }
+}

@@ -101,3 +101,13 @@ test("THE PAGE IN THE REPOSITORY IS THE ONE THE KEPT DATA GENERATES: docs/vendor
   assert.deepEqual(Object.keys(kept.labs), labs);
   for (const lab of labs) assert.deepEqual(Object.keys(kept.labs[lab].topics), topics.topics.map(t => t.id), `${lab}: every topic is answered or says it is not`);
 });
+
+test("the Context7 library ids kept for lookups name every lab, and each is an id of the form Context7 uses", () => {
+  const c7 = json(join(CONFIG, "vendor-context7.json")), labs = Object.keys(json(join(CONFIG, "vendor-docs.json")).labs);
+  assert.deepEqual(Object.keys(c7.libraries), labs);
+  for (const lab of labs) {
+    assert.ok(c7.libraries[lab].length > 0, `${lab}: no library`);
+    for (const l of c7.libraries[lab]) { assert.match(l.id, /^\/[\w.-]+\/[\w.-]+$/, `${lab}: ${l.id}`); assert.ok(l.what.length > 0, `${lab} ${l.id}: says what it is`); }
+  }
+  assert.match(c7.read, /^\d{4}-\d{2}-\d{2}$/);
+});
