@@ -8,7 +8,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, pythonRoots, IMPLEMENTER_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
+import { createHash } from "node:crypto";
+import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, pythonRoots, IMPLEMENTER_TOOLS, RESEARCH_TOOLS, READ_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
+import { SDK_READ_TOOLS } from "../src/antigravity/config.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { startFakeGemini, text, QUOTA, notFound } from "./fixtures/fake-gemini.mjs";
@@ -486,6 +488,69 @@ test("a model the provider stops serving DURING the session is reported as unava
     assert.deepEqual([e.code, e.status, e.model, e.gateway.stop.kind], ["model_unavailable", 404, "gemini-4-neon", "model_unavailable"]);
     return true;
   });
+});
+
+// ---- THE READ-ONLY RESEARCH SESSION (owner direction 2026-11-20: the Carbon 4 research and exploration team) ----------
+const RESEARCH = { system: "You are a research specialist. Read what the question needs and report it with its sources. You change nothing." };
+const sha = text => "sha256:" + createHash("sha256").update(text).digest("hex");
+
+test("A RESEARCH SESSION READS ONLY: a read inside the repository passes and is recorded with the content the controller saw; a write, a command, a native delegation and any other tool are refused before they happen", async t => {
+  const { env, control_dir, run, note } = await setup(t);
+  const inWt = p => join(env.repo, p);
+  const r = await run(CARBON, [
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("README.md") } } },                                                      // 1 a file
+    { hook: { tool: "list_directory", args: { DirectoryPath: inWt("src") } } },                                                      // 2 a listing
+    { hook: { tool: "view_file", args: { AbsolutePath: "/etc/passwd" } } },                                                          // 3 outside
+    { hook: { tool: "create_file", args: { TargetFile: inWt("src/u1/impl.mjs"), CodeContent: "export const id = 'u1';\n" } } },     // 4 a write (a path an implementer of u1 would own)
+    { write: { path: inWt("src/u1/impl.mjs"), content: "export const id = 'u1';\n" }, if: 4 },
+    { hook: { tool: "edit_file", args: { TargetFile: inWt("README.md"), ReplacementContent: "x" } } },                               // 5 a write
+    { hook: { tool: "run_command", args: { CommandLine: join(control_dir, "pantheon-verify") } } },                                  // 6 a command (the launcher an implementer may run)
+    invoke(1),                                                                                                                         // 7 a native delegation
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("README.md") } } },                                                      // 8 the same file again
+    { hook: { tool: "finish", args: { summary: "ok" } } },                                                                            // 9 finish
+  ], { research: RESEARCH });
+  assert.deepEqual(r.tool_log.map(x => [x.n, x.tool, x.allow, x.code]), [[1, "view_file", true, null], [2, "list_directory", true, null], [3, "view_file", false, "READ_OUTSIDE"],
+    [4, "create_file", false, "RESEARCH_READ_ONLY"], [5, "edit_file", false, "RESEARCH_READ_ONLY"], [6, "run_command", false, "RESEARCH_READ_ONLY"], [7, "invoke_subagent", false, "RESEARCH_READ_ONLY"],
+    [8, "view_file", true, null], [9, "finish", true, null]]);
+  assert.ok(r.tool_log.every(x => x.who === "researcher"), "the log names a researcher, not an implementer");
+  assert.equal(existsSync(inWt("src/u1/impl.mjs")), false, "the refused write never happened");
+  assert.equal(existsSync(join(control_dir, "pantheon-verify")), false, "a research session is given no verify launcher");
+  assert.match(note(r).decisions.find(x => x.n === 7).message, /^RESEARCH_READ_ONLY: .*delegation is the controller's/);
+  // WHAT IT EXAMINED, as the controller saw it: each file once, with the digest of its bytes at the read; a listing by its path.
+  assert.deepEqual(r.examined, [{ tool: "view_file", path: "README.md", kind: "file", sha256: sha("base\n"), bytes: 5 }, { tool: "list_directory", path: "src", kind: "listing", sha256: null, bytes: null }]);
+  assert.deepEqual(r.tool_log[0].sources, [{ path: "README.md", kind: "file", sha256: sha("base\n"), bytes: 5 }]);
+  assert.deepEqual(r.subagents.instances, [], "no native subagent exists in a research session");
+});
+
+test("a research session is configured with the read tools only, no subagent types and its own instructions; an implementer session is as it was", async t => {
+  const { run, note } = await setup(t);
+  const p = note(await run(CARBON, [{ probe: true }], { research: RESEARCH })).probes[0];
+  assert.deepEqual([...p.enabled_tools].sort(), [...RESEARCH_TOOLS].sort());
+  assert.deepEqual([...RESEARCH_TOOLS].sort(), [...SDK_READ_TOOLS, "finish"].sort());
+  assert.deepEqual([...READ_TOOLS], [...SDK_READ_TOOLS], "the transport's read tools are one list");
+  assert.deepEqual(p.subagents, []);
+  assert.ok(p.system.startsWith(RESEARCH.system) && /\[pantheon-agent:[0-9a-f]+:implementer\]/.test(p.system), "its instructions, with the marker the gateway attributes its requests by");
+  assert.doesNotMatch(p.system, /single implementer of one work unit/);
+  const i = note(await run(CARBON, [{ probe: true }])).probes[0];
+  assert.ok(i.enabled_tools.includes("create_file") && i.enabled_tools.includes("run_command") && /single implementer of one work unit/.test(i.system));
+  await assert.rejects(run(CARBON, [{ probe: true }], { research: {} }), { code: "BAD_INPUT" });
+});
+
+test("a read-only workspace owns no path and has no verify command; the read-only rule is the policy's, not the absence of owned paths", async t => {
+  const env = await tempRepo({ "a.txt": "a\n" });
+  t.after(env.cleanup);
+  const control_dir = join(env.root, "control", "research");
+  const { policy, paths } = await prepareSdkWorkspace({ control_dir, worktree: env.repo, read_only: true });
+  assert.deepEqual([policy.read_only, policy.owned_paths, policy.verify_cmd, paths.verify_launcher], [true, [], null, null]);
+  await assert.rejects(prepareSdkWorkspace({ control_dir, worktree: env.repo, read_only: true, owned_paths: ["src/**"] }), { code: "READ_ONLY_OWNS_NOTHING" });
+  await assert.rejects(prepareSdkWorkspace({ control_dir, worktree: env.repo, read_only: true, verify_cmd: "true" }), { code: "READ_ONLY_OWNS_NOTHING" });
+  const governor = subagentGovernor({ implementer: { vendor: "agy_google", model: "gemini-4-carbon" }, unit_id: "r" });
+  // The same policy with owned paths added by hand still refuses the write: read_only decides, not the empty list.
+  const forged = { ...policy, owned_paths: ["**"] };
+  const d = toolDecision({ policy: forged, governor }, { tool: "create_file", args: { TargetFile: join(env.repo, "a.txt"), CodeContent: "x" } });
+  assert.deepEqual([d.allow, d.code], [false, "RESEARCH_READ_ONLY"]);
+  const undeclared = toolDecision({ policy, governor }, { tool: "view_file", args: { AbsolutePath: join(env.repo, "a.txt"), absolutepath: "/etc/passwd" } });
+  assert.deepEqual([undeclared.allow, undeclared.code], [false, "ARGS_UNDECLARED"], "the declared-names rule comes first here too");
 });
 
 test("a read that names no path is refused: there is nothing for the controller to check it against", () => {

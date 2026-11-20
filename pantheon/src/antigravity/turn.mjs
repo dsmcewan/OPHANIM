@@ -61,14 +61,14 @@
 // environment, argv or files; let a tool call run without a decision; forward a request the caller did not admit; treat
 // the model asked for as evidence of the model that answered; invoke the agy CLI.
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, SDK_THINKING, undeclaredArg } from "./config.mjs";
+import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, SDK_THINKING, RESEARCH, undeclaredArg } from "./config.mjs";
 import { subagentGovernor, SUBAGENT_MODEL, SUBAGENT_TYPES, SUBAGENT_MAX_DEPTH, ceilingFor } from "./subagents.mjs";
 import { startModelGateway, keyRefusal } from "./gateway.mjs";
 import { bwrapArgs, sandboxAvailable } from "../agy/sandbox.mjs";
@@ -83,6 +83,8 @@ export const READ_TOOLS = Object.freeze(["view_file", "list_directory", "search_
 export const WRITE_TOOLS = Object.freeze(["create_file", "edit_file"]);
 /** The built-in tools the implementer is given (the SDK's names). Everything else the SDK offers is left off. */
 export const IMPLEMENTER_TOOLS = Object.freeze([...READ_TOOLS, ...WRITE_TOOLS, "run_command", "finish"]);
+/** The tools a RESEARCH session is given: the read tools of config `research.tools`, and the structured answer. */
+export const RESEARCH_TOOLS = Object.freeze([...RESEARCH.tools, "finish"]);
 const TOOL_LOG_CAP = 400;
 const STDERR_CAP = 64 * 1024;
 const str = v => typeof v === "string" && v.trim() !== "";
@@ -124,9 +126,13 @@ export function bridgeEnvOf({ base = process.env, home } = {}) {
  * the unit's verify launcher <control_dir>/pantheon-verify, and the tool policy <control_dir>/sdk-jail.json (the record
  * of what the controller decides against; the controller holds the object, the file is evidence). Returns {policy, paths}.
  */
-export async function prepareSdkWorkspace({ control_dir, worktree, unit_id = null, owned_paths, verify_cmd = null, verify_hide = [], node = process.execPath }) {
+export async function prepareSdkWorkspace({ control_dir, worktree, unit_id = null, owned_paths, verify_cmd = null, verify_hide = [], node = process.execPath, read_only = false }) {
   if (!str(control_dir) || !str(worktree)) throw fail("NO_WORKSPACE", "prepareSdkWorkspace: pass control_dir and worktree");
-  if (!Array.isArray(owned_paths) || !owned_paths.length) throw fail("NO_OWNED_PATHS", "prepareSdkWorkspace: the unit owns no paths");
+  // A READ-ONLY workspace (a research session) owns nothing and verifies nothing; the rule is `policy.read_only`, which
+  // toolDecision reads, never the mere absence of owned paths.
+  if (read_only && ((Array.isArray(owned_paths) && owned_paths.length) || str(verify_cmd))) throw fail("READ_ONLY_OWNS_NOTHING", "prepareSdkWorkspace: a read-only workspace owns no path and has no verify command");
+  if (read_only) owned_paths = [];
+  else if (!Array.isArray(owned_paths) || !owned_paths.length) throw fail("NO_OWNED_PATHS", "prepareSdkWorkspace: the unit owns no paths");
   await mkdir(control_dir, { recursive: true });
   const ctl = real(control_dir), wt = real(worktree);
   if (inside(wt, ctl) || inside(ctl, wt)) throw fail("CONTROL_IN_WORKTREE", `the control dir ${ctl} and the worktree ${wt} must be disjoint`);
@@ -136,12 +142,28 @@ export async function prepareSdkWorkspace({ control_dir, worktree, unit_id = nul
   const script = verify ? workerVerifyCommand(wt, verify) : null;
   const launcher = verify ? writeVerifyLauncher({ control_dir: ctl, worktree: wt, script, node, hide: verify_hide.filter(p => str(p) && isAbsolute(p)) }).command : null;
   const policy = { schema: SDK_POLICY_SCHEMA, unit_id, worktree: wt, worktree_given: resolve(worktree), control_dir: ctl, owned_paths: [...owned_paths], verify_cmd: verify, worker_verify_cmd: launcher, worker_verify_script: script,
-    read_tools: [...READ_TOOLS], write_tools: [...WRITE_TOOLS] };
+    read_tools: [...READ_TOOLS], write_tools: [...WRITE_TOOLS], ...(read_only ? { read_only: true } : {}) };
   await writeFile(paths.policy_file, JSON.stringify(policy, null, 2) + "\n");
   return { policy, paths: { ...paths, verify_launcher: launcher } };
 }
 
 const dec = (allow, code, reason, more = {}) => ({ allow, code, reason: String(reason).slice(0, 600), ...more });
+/**
+ * WHAT A READ EXAMINED, as the controller saw it when it allowed the call: the path inside the repository, and for a
+ * file the digest and size of its bytes at that moment (its content identifier); a directory is a listing, by path.
+ * A research report may cite only what is recorded here (research.mjs): the model's own account of what it read is
+ * not the record.
+ */
+function sourcesOf(policy, paths) {
+  return paths.map(({ value }) => {
+    const abs = real(resolve(String(value))), path = relative(policy.worktree, abs) || ".";
+    try {
+      if (!statSync(abs).isFile()) return { path, kind: "listing", sha256: null, bytes: null };
+      const b = readFileSync(abs);
+      return { path, kind: "file", sha256: "sha256:" + createHash("sha256").update(b).digest("hex"), bytes: b.length };
+    } catch { return { path, kind: "missing", sha256: null, bytes: null }; }
+  });
+}
 /**
  * The controller's decision for one tool call the SDK is about to run (see TOOL DECISIONS in the header).
  *   policy     the unit's tool policy (prepareSdkWorkspace)
@@ -153,7 +175,7 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
     const name = String(tool ?? "");
     const child = governor.isChild(trajectory_id);
     const sub = child ? governor.subagentOf(trajectory_id) : null;
-    const who = child ? (sub ? sub.id : "unattributed-child") : "implementer";
+    const who = child ? (sub ? sub.id : "unattributed-child") : policy?.read_only ? "researcher" : "implementer";
     const a = args !== null && typeof args === "object" && !Array.isArray(args) ? args : {};
     if (server_name) return dec(false, "TOOL_NOT_ALLOWED", `MCP tool ${server_name}/${name} is not served to this session`, { who });
     if (name === "finish") return dec(true, null, "the structured-output tool", { who });
@@ -161,6 +183,22 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
     // spellings of a declared name, so a call carrying any other key is refused whole.
     const undeclared = undeclaredArg(name, a);
     if (undeclared) return dec(false, "ARGS_UNDECLARED", undeclared, { who });
+    // A RESEARCH SESSION READS ONLY (owner direction 2026-11-20). Reads inside the repository, each recorded with what
+    // it examined; nothing else is served: no write, no command, and no native delegation (a research team's levels are
+    // opened by the controller, research.mjs: Hydrogen does not delegate, and the runtime reports no child's end).
+    if (policy?.read_only) {
+      if (!READ_TOOLS.includes(name)) {
+        return dec(false, "RESEARCH_READ_ONLY", name === "invoke_subagent" ? "a research session does not delegate natively: delegation is the controller's, on the coordinator's request"
+          : `a research session reads only: ${name} is not served`, { who });
+      }
+      const paths = writePathArgsOf(a);
+      if (!paths.length) return dec(false, "READ_NO_PATH", `${name} names no path the controller can check`, { who });
+      for (const { key, value } of paths) {
+        const d = decideRead(policy, { AbsolutePath: value });
+        if (d.decision !== "auto_approve") return dec(false, "READ_OUTSIDE", `${key}: ${d.reason}`, { who });
+      }
+      return dec(true, null, "a read inside the repository", { who, sources: sourcesOf(policy, paths) });
+    }
     if (name === "invoke_subagent") {
       const r = governor.admit({ call_id, trajectory_id, args: a });
       return dec(r.allow, r.code, r.reason, { who, ...(r.allow ? { admitted: r.admitted } : {}) });
@@ -231,8 +269,10 @@ export function sdkVersionRefusal(runtime, { allow = null } = {}) {
  */
 export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_dir, unit = {}, apiKey = process.env[SDK_CONFIG.api.key_env] ?? null, admit = () => {}, signal = null,
   timeoutS = 1800, graceS = 15, sandbox = {}, upstream = SDK_CONFIG.api.base_url, python = sdkPython(), bridge = BRIDGE_SCRIPT, verify_hide = [], schema = null, budget = {},
-  base_env = process.env, fetchImpl = fetch, allowSdkVersion = process.env.PANTHEON_ANTIGRAVITY_SDK_ALLOW ?? null, checkAvailability = true, now = () => new Date().toISOString() } = {}) {
+  base_env = process.env, fetchImpl = fetch, allowSdkVersion = process.env.PANTHEON_ANTIGRAVITY_SDK_ALLOW ?? null, checkAvailability = true, now = () => new Date().toISOString(), research = null } = {}) {
   const model = seat?.model, effort = seat?.effort ?? null;
+  // A RESEARCH SESSION ({system}): read-only (see toolDecision), with its own instructions and no subagent type.
+  if (research !== null && !str(research?.system)) throw fail("BAD_INPUT", "runAntigravitySdkTurn: a research session is given its instructions (research.system)");
   if (!str(model)) throw fail("BAD_SEAT", "runAntigravitySdkTurn: pass the implementer seat {vendor, model}");
   if (effort !== null && !SDK_THINKING.includes(effort)) throw fail("BAD_SEAT", `effort "${effort}" is not a thinking level the SDK accepts (${SDK_THINKING.join(", ")})`);
   if (!str(prompt)) throw fail("BAD_INPUT", "runAntigravitySdkTurn: pass the unit prompt");
@@ -243,17 +283,20 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   if (python.includes("/") && !existsSync(python)) throw laneFailure("spawn", `the Antigravity SDK's python is absent at ${python} (set PANTHEON_ANTIGRAVITY_PYTHON to the venv that has google-antigravity ${SDK_CONFIG.sdk.version})`, { sdk_unavailable: true });
   if (!existsSync(bridge)) throw laneFailure("spawn", `the bridge script is absent at ${bridge}`, { sdk_unavailable: true });
 
-  const { policy, paths } = await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, owned_paths: unit.owned_paths ?? [], verify_cmd: unit.verify_cmd ?? null, verify_hide });
+  const { policy, paths } = research
+    ? await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, read_only: true })
+    : await prepareSdkWorkspace({ control_dir, worktree, unit_id: unit.unit_id ?? null, owned_paths: unit.owned_paths ?? [], verify_cmd: unit.verify_cmd ?? null, verify_hide });
   const box = { enabled: sandbox.enabled !== false, allowUnsandboxed: sandbox.allowUnsandboxed === true, bwrap: sandbox.bwrap ?? "bwrap", home: sandbox.home ?? null };
   const nonce = randomBytes(6).toString("hex");
   const rootMarker = `[pantheon-agent:${nonce}:implementer]`;
-  let ceiling = ceilingFor(model);
+  let ceiling = research ? 0 : ceilingFor(model);
   let types = ceiling > 0 ? (unit.allowed_subagents ?? []).filter(n => Object.hasOwn(SUBAGENT_TYPES, n)) : [];
   const markers = Object.fromEntries(Object.keys(SUBAGENT_TYPES).map(t => [t, `[pantheon-agent:${nonce}:subagent:${t}]`]));
-  const tool_log = [];
+  const tool_log = [], examined = [];
   let dropped_decisions = 0;
   const record = { transport: SDK_TRANSPORT, requested_model: model, effort, subagents: null, gateway: null, tool_log, usage: null, runtime: null, sandbox: null, launch: null, availability: [] };
-  const carry = e => Object.assign(e, { subagents: record.subagents, gateway: record.gateway, tool_log: record.tool_log, usage: record.usage, runtime: record.runtime, availability: record.availability, transport: SDK_TRANSPORT });
+  const carry = e => Object.assign(e, { subagents: record.subagents, gateway: record.gateway, tool_log: record.tool_log, usage: record.usage, runtime: record.runtime, availability: record.availability, transport: SDK_TRANSPORT,
+    ...(research ? { examined } : {}) });
 
   // ---- the jail, before anything is spent
   let argvPrefix = [], sandboxRecord = { enabled: false, why: "disabled by the caller" };
@@ -268,6 +311,11 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
       // bound back read-only, alone; the rest of the host's /tmp stays hidden.
       const underTmp = [...new Set(keep.map(real).filter(p => p !== "/tmp" && inside("/tmp", p)))];
       const jail = bwrapArgs({ worktree: paths.worktree, control_dir: paths.control_dir, bwrap: box.bwrap, keep_visible: keep, extra_ro: underTmp });
+      // A research session cannot write the repository even past its tool decisions: its bind is read-only.
+      if (research) {
+        for (let i = 0; i + 2 < jail.argv.length; i++) if (jail.argv[i] === "--bind" && jail.argv[i + 2] === paths.worktree) jail.argv[i] = "--ro-bind";
+        for (const b of jail.binds ?? []) if (b.path === paths.worktree) b.mode = "ro";
+      }
       // THE USER'S HOME. The bridge needs no credential from it (the key is the gateway's), so every credential-bearing
       // directory of the home (verify-jail.mjs HOME_SECRET_DIRS: .ssh, .gemini, .codex, .config, .local/share, ...) is
       // covered with an empty tmpfs; a path the session itself runs from that lies inside one (the SDK's venv under
@@ -328,8 +376,8 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
     }
     const subagents = types.map(t => ({ name: t, description: SUBAGENT_TYPES[t].description, system: subagentSystem(SUBAGENT_TYPES[t], markers[t]), model: SUBAGENT_MODEL, tools: [...SUBAGENT_TYPES[t].tools] }));
     const start = { type: "start", model, thinking: effort, gateway: { url: gw.url, token: gw.token }, workspace: paths.worktree, save_dir: paths.save_dir, app_data_dir: paths.app_data_dir,
-      system: sdkWorkerInstructions({ marker: rootMarker, ceiling: types.length ? ceiling : 0, types }), prompt, schema: schema ?? null,
-      enabled_tools: [...IMPLEMENTER_TOOLS, ...(subagents.length ? ["invoke_subagent"] : [])], subagents, max_subagent_depth: SUBAGENT_MAX_DEPTH,
+      system: research ? `${research.system.trim()}\n${rootMarker}` : sdkWorkerInstructions({ marker: rootMarker, ceiling: types.length ? ceiling : 0, types }), prompt, schema: schema ?? null,
+      enabled_tools: research ? [...RESEARCH_TOOLS] : [...IMPLEMENTER_TOOLS, ...(subagents.length ? ["invoke_subagent"] : [])], subagents, max_subagent_depth: SUBAGENT_MAX_DEPTH,
       budget: { max_model_calls: budget.max_model_calls ?? 80, max_tool_calls: budget.max_tool_calls ?? 200, ...(budget.max_output_tokens ? { max_output_tokens: budget.max_output_tokens } : {}) },
       hook_timeout_s: 30, turn_timeout_s: Math.max(1, Math.floor(timeoutS)), command_timeout_s: Math.max(1, Math.min(600, Math.floor(timeoutS))), disable_define_subagent: true };
     const argv = [...argvPrefix, python, bridge];
@@ -361,8 +409,11 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
         } else if (m?.type === "ready") { record.capabilities = m.capabilities ?? null; record.conversation_id = m.conversation_id ?? null; }
         else if (m?.type === "hook") {
           const d = toolDecision({ policy, governor }, m);
-          if (tool_log.length < TOOL_LOG_CAP) tool_log.push({ n: m.id, at: now(), tool: m.tool, who: d.who ?? null, allow: d.allow, code: d.code ?? null, reason: d.reason.slice(0, 240) });
+          if (tool_log.length < TOOL_LOG_CAP) tool_log.push({ n: m.id, at: now(), tool: m.tool, who: d.who ?? null, allow: d.allow, code: d.code ?? null, reason: d.reason.slice(0, 240), ...(d.sources ? { sources: d.sources } : {}) });
           else dropped_decisions += 1;
+          // What the session examined: each source once (a file by its bytes at the read, so a file that changed between
+          // two reads is two sources), whether or not the log's cap has been reached.
+          for (const src of d.allow ? d.sources ?? [] : []) if (!examined.some(x => x.path === src.path && x.kind === src.kind && x.sha256 === src.sha256)) examined.push({ tool: m.tool, ...src });
           send({ type: "decision", id: m.id, allow: d.allow, message: d.allow ? undefined : `${d.code}: ${d.reason}` });
         } else if (m?.type === "event") governor.observe(m);
         else if (m?.type === "result") final = m;
@@ -432,7 +483,8 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
       served_model: names[0], served_model_source: "provider",
       transport: SDK_TRANSPORT, requested_model: model, effort, conversation_id: final.conversation_id ?? record.conversation_id ?? null, tool_calls: final.tool_calls ?? tool_log.length,
       subagents: record.subagents, usage: record.usage, trajectory_usages: final.trajectory_usages ?? null, gateway: g, availability: record.availability, tool_log, ...(record.tool_log_dropped ? { tool_log_dropped: record.tool_log_dropped } : {}),
-      capabilities: final.capabilities ?? record.capabilities ?? null, runtime: record.runtime, sandbox: record.sandbox, launch: record.launch, duration_s: final.duration_s ?? null };
+      capabilities: final.capabilities ?? record.capabilities ?? null, runtime: record.runtime, sandbox: record.sandbox, launch: record.launch, duration_s: final.duration_s ?? null,
+      ...(research ? { examined } : {}) };
   }
 }
 

@@ -329,3 +329,35 @@ contract("nothing the runtime wrote holds the key or its session token", async t
   assert.ok(!JSON.stringify(r).includes(KEY) && !token.test(JSON.stringify(r)), "nor does the turn's record");
   assert.ok(readdirSync(join(s.control_dir, "run", "sdk-save")).length > 0, "the runtime's session state is in the control dir, outside the worktree");
 });
+
+// ---- THE READ-ONLY RESEARCH SESSION ON THE INSTALLED RUNTIME (owner direction 2026-11-20) --------------------------------
+contract("A RESEARCH SESSION ON THE INSTALLED RUNTIME reads only: the model is offered no write, command or subagent tool; a read is recorded with the digest the controller saw; a write and a command it asks for all the same change nothing; the repository is read-only inside the jail", async t => {
+  const ref = {};
+  const s = await session(t, { over: { research: { system: "You are a research specialist. Read what the question needs and report it with its sources. You change nothing." } },
+    decide: ({ body }) => {
+      const n = responsesIn(body);
+      if (n === 0) return { parts: [fc("view_file", { AbsolutePath: join(ref.repo, "README.md") })] };
+      if (n === 1) return { parts: [fc("create_file", { TargetFile: join(ref.repo, "src/u1/impl.mjs"), CodeContent: "export const pwned = 1;\n" })] };
+      if (n === 2) return { parts: [fc("run_command", { CommandLine: `touch ${join(ref.repo, "pwned-by-command")}` })] };
+      return { parts: [text("REPORT: README.md says base")] };
+    } });
+  ref.repo = s.env.repo;
+  const r = await s.run();
+  const offered = s.gen()[0].body.tools.flatMap(x => (x.functionDeclarations ?? []).map(f => f.name));
+  for (const tool of ["create_file", "edit_file", "run_command", "invoke_subagent", "define_subagent"]) assert.ok(!offered.includes(tool), `${tool} is offered to a research session (offered: ${offered.join(", ")})`);
+  assert.ok(offered.includes("view_file"), `offered: ${offered.join(", ")}`);
+  // The read: allowed, and recorded with the bytes the controller saw at that moment.
+  const read = r.tool_log.find(x => x.tool === "view_file");
+  assert.deepEqual([read.allow, read.who, read.sources.map(x => [x.path, x.kind, x.bytes])], [true, "researcher", [["README.md", "file", 5]]]);
+  assert.match(read.sources[0].sha256, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(r.examined.map(x => [x.tool, x.path, x.sha256]), [["view_file", "README.md", read.sources[0].sha256]]);
+  // The write and the command: whatever the runtime did with a tool it was never offered, nothing was allowed and nothing changed.
+  assert.deepEqual(r.tool_log.filter(x => x.tool !== "view_file" && x.tool !== "finish").filter(x => x.allow), [], JSON.stringify(r.tool_log));
+  assert.equal(existsSync(join(s.env.repo, "src/u1/impl.mjs")), false);
+  assert.equal(existsSync(join(s.env.repo, "pwned-by-command")), false);
+  assert.equal(readFileSync(join(s.env.repo, "README.md"), "utf8"), "base\n");
+  assert.equal(execFileSync("git", ["-C", s.env.repo, "status", "--porcelain"], { encoding: "utf8" }), "", "the repository is as it was");
+  assert.deepEqual(r.subagents.instances, []);
+  assert.deepEqual([r.served_model, r.requested_model], ["gemini-4-carbon", "gemini-4-carbon"]);
+  if (BWRAP.ok) assert.deepEqual(r.sandbox.binds.filter(b => b.path === s.env.repo).map(b => b.mode), ["ro"], "the repository's bind in the jail is read-only");
+});

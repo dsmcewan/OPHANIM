@@ -81,7 +81,7 @@ for (const s of steps) {
     const canWrite = (s.probe.write ?? []).map(p => { try { writeFileSync(p, "x"); return [p, true]; } catch { return [p, false]; } });
     probes.push({ env_names: Object.keys(env).sort(), needles_found: hunt, pid1, tmp, start_keys, can_read: Object.fromEntries(canRead), can_write: Object.fromEntries(canWrite), cwd: process.cwd(),
       gateway_token_is_key: (s.probe.needles ?? []).includes(start.gateway.token), enabled_tools: start.enabled_tools, subagents: (start.subagents ?? []).map(x => ({ name: x.name, model: x.model, tools: x.tools })),
-      model: start.model, thinking: start.thinking ?? null, start_has_needle: (s.probe.needles ?? []).some(n => JSON.stringify({ ...start, prompt: null }).includes(n)), budget: start.budget });   // the prompt IS this script, needles included
+      model: start.model, thinking: start.thinking ?? null, system: start.system ?? null, start_has_needle: (s.probe.needles ?? []).some(n => JSON.stringify({ ...start, prompt: null }).includes(n)), budget: start.budget });   // the prompt IS this script, needles included
   } else if (s.sleep) await sleep(s.sleep);
   else if (s.hang) { await new Promise(r => { const t = setInterval(() => { if (cancelled) { clearInterval(t); r(); } }, 50); }); }
   else if (s.crash !== undefined) process.exit(s.crash);
