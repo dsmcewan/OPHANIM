@@ -36,6 +36,7 @@ import {authoritySource, AUTHORITY_SOURCE, AUTHORITY_EXTRACTOR, AUTHORITY_ORIGIN
 import {boardSource, BOARD_SOURCE, BOARD_EXTRACTOR, BOARD_ORIGIN} from './board.mjs';
 import {resolveCommit} from './git.mjs';
 import {IMPACT_RULE} from '../impact.mjs';
+import {D1_ORIGIN_SPEC, D1_MODULES, d1Sources, LEARNING_SOURCE, WORK_GRAPH_SOURCE, CYCLE_LEARNING_SOURCE} from '../d1-sources.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export {IMPACT_RULE};
@@ -48,7 +49,7 @@ export const DEPENDENCY_SOURCES = Object.freeze([PACKAGES_SOURCE, PINS_SOURCE, I
  * B2's: the packages before the imports that resolve to them; the pins after the workflows of the verification source;
  * the literals, whose mentions name what the others hold, last of the repository-backed; the board with the ledgers).
  */
-export const ORDER = Object.freeze([REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, ...DEPENDENCY_SOURCES, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE, BOARD_SOURCE]);
+export const ORDER = Object.freeze([REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, LEARNING_SOURCE, ...DEPENDENCY_SOURCES, STATUS_SOURCE, WORK_SOURCE, WORK_GRAPH_SOURCE, CYCLE_SOURCE, CYCLE_LEARNING_SOURCE, BOARD_SOURCE]);
 
 /** The origins of Slice B (and Slice A's lessons extractor), each with the key id that may write as it. */
 export const ORIGIN_SPEC = Object.freeze({
@@ -66,6 +67,7 @@ export const ORIGIN_SPEC = Object.freeze({
   [AUTHORITY_EXTRACTOR]: {...AUTHORITY_ORIGIN, keys: ['graph-extractor']},
   [BOARD_EXTRACTOR]: {...BOARD_ORIGIN, keys: ['graph-extractor']},
   [IMPACT_RULE]: {kind: 'rule', basis: 'structural', keys: ['graph-rule']},
+  ...D1_ORIGIN_SPEC,
 });
 /** The composed origin registry; `extra` adds origins (a test's synthetic tools and models). */
 export const originsOf = (extra = {}) => defineOrigins({...ORIGIN_SPEC, ...extra});
@@ -101,6 +103,7 @@ export const EXTRACTOR_MODULES = Object.freeze({
   [ENVIRONMENT_SOURCE]: {factory: environmentSource, module: here('./needs.mjs')}, [PATHS_SOURCE]: {factory: pathsSource, module: here('./needs.mjs')},
   [LITERALS_SOURCE]: {factory: literalsSource, module: here('./needs.mjs')}, [PINS_SOURCE]: {factory: pinsSource, module: here('./pins.mjs')},
   [AUTHORITY_SOURCE]: {factory: authoritySource, module: here('./authority.mjs')}, [BOARD_SOURCE]: {factory: boardSource, module: here('./board.mjs')},
+  ...D1_MODULES,
 });
 // Read once per process: the version of the code this process loaded when it first composed its sources.
 const versions = new Map();
@@ -125,7 +128,7 @@ export function sourcesOf({repo = ROOT, commit, status = {root: path.join(repo, 
     ...(deps ? [packagesSource({repo, ref: pinned}), pinsSource({repo, ref: pinned}), importsSource({repo, ref: pinned}), environmentSource({repo, ref: pinned}),
       pathsSource({repo, ref: pinned}), authoritySource({repo, ref: pinned}), literalsSource({repo, ref: pinned})] : []),
     ...(status ? [statusSource(status)] : []), ...(work ? [workSource(work)] : []), ...(cycle ? [cycleSource(cycle)] : []),
-    ...(board ? [boardSource(board)] : []),
+    ...(board ? [boardSource(board)] : []), ...d1Sources({repo, lessons, work, cycle}),
   ].map(declared);
   return {commit: pinned, sources: only ? all.filter(s => only.includes(s.id)) : all};
 }
