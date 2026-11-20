@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { runAgyWorkerTurn, AGY_CLEANUP, workerArgv, assertWorkerArgv } from "../src/board/agy-cli.mjs";
 import { prepareWorkerWorkspace, workerVerifyPromptLines } from "../src/agy/workspace.mjs";
 import { bwrapArgs, sandboxAvailable } from "../src/agy/sandbox.mjs";
-import { FD_EXEC_MODULE } from "../src/agy/fd-exec.mjs";
+import { FD_EXEC_MODULE, fdExecArgv, fdExecPrefix, fdExecPython } from "../src/agy/fd-exec.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
 import { MCP_SERVER_PATH } from "../src/pipeline/index.mjs";
@@ -269,10 +269,11 @@ test("(f) argv has --mode=accept-edits and no --dangerously-skip-permissions or 
     assert.deepEqual(inner, [turn.cli, "--agent", "pantheon-unit-worker", "--model", LANE, "--mode=accept-edits", "--add-dir", f.units.a.wt, "--disable-slash-commands", "--output-format", "stream-json", "--print-timeout", "60s",
       "--log-file", join(f.units.a.ctl, "run", "agy.log"), "--print", "<prompt>"]);
     assert.match(readFileSync(join(f.units.a.ctl, "run", "agy.log"), "utf8"), /^fake-agy start agent=pantheon-unit-worker /m, "the CLI's --log-file landed in the writable run dir");
-    // KG-11: bwrap starts through the descriptor closer (this node running src/agy/fd-exec.mjs), so the CLI inherits no
-    // descriptor the controller was handed but stdio.
-    assert.deepEqual([r.launch.cmd, r.launch.args[0], r.launch.args[1]], [process.execPath, FD_EXEC_MODULE, "bwrap"]);
-    assert.deepEqual(r.sandbox.descriptors, { passed: [0, 1, 2], closer: { node: process.execPath, module: FD_EXEC_MODULE } });
+    // KG-11: bwrap starts through the descriptor closer (python3 -I -S -c FD_EXEC_PY, src/agy/fd-exec.mjs, single-threaded),
+    // so the CLI inherits no descriptor the controller was handed but stdio.
+    // test-lint: allow truncated-sequence -- the closer's WHOLE argv and the command it starts; what follows "bwrap" is bwrapArgs' argv, asserted item by item in agy-sandbox.test.mjs, and the CLI's, asserted whole above (inner)
+    assert.deepEqual([r.launch.cmd, ...r.launch.args.slice(0, fdExecPrefix().length)], fdExecArgv(["bwrap"]));
+    assert.deepEqual(r.sandbox.descriptors, { passed: [0, 1, 2], closer: { python: fdExecPython(), module: FD_EXEC_MODULE } });
     assert.equal(r.launch.cwd, f.units.a.ctl);
     assert.deepEqual(r.cleanup_env, AGY_CLEANUP);
     assert.equal(AGY_CLEANUP.documented, false);

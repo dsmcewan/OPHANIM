@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { sandboxAvailable, sdkSeatJail, sdkSeatEnv, sdkSeatHidden, interpreterPaths, SDK_JAIL_ENV_ALLOW } from "../src/agy/sandbox.mjs";
-import { FD_EXEC_MODULE } from "../src/agy/fd-exec.mjs";
+import { fdExecPrefix } from "../src/agy/fd-exec.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { capabilitySnapshot } from "../src/capability/graph.mjs";
 import { extractMetrics } from "../src/capability/metrics.mjs";
@@ -158,8 +158,8 @@ test("the builder: the host read-only, a PID namespace with a fresh /proc, the c
   // THE WHOLE ARGV: the descriptor closer (KG-11: bwrap starts through it, so no descriptor the controller inherited reaches
   // the seat), the jail's flags, the workspace and the end of options last, and every operation between them.
   const a = j.prefix;
-  assert.deepEqual([j.fds.argv, j.fds.passed, j.record.descriptors.passed], [[process.execPath, FD_EXEC_MODULE], [0, 1, 2], [0, 1, 2]], "the closer runs with this node; only stdio is passed");
-  const HEAD = [process.execPath, FD_EXEC_MODULE, "bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
+  assert.deepEqual([j.fds.argv, j.fds.passed, j.record.descriptors.passed], [fdExecPrefix(), [0, 1, 2], [0, 1, 2]], "the closer runs with this host's python3; only stdio is passed");
+  const HEAD = [...fdExecPrefix(), "bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
   const TAIL = ["--chdir", realpathSync(ws), "--"];
   const middle = a.filter((_, i) => i >= HEAD.length && i < a.length - TAIL.length);
   assert.deepEqual(a, [...HEAD, ...middle, ...TAIL]);

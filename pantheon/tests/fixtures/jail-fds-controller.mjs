@@ -20,7 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
-import { fdExecArgv } from "../../src/agy/fd-exec.mjs";
+import { fdExecArgv, fdExecPrefix } from "../../src/agy/fd-exec.mjs";
 import { seatStub } from "./jail-fds-helpers.mjs";
 
 const cfg = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -80,7 +80,8 @@ reply=''
         prompt: ["PATHS YOU OWN", "- src/**", "Do not commit", "", "VERIFY COMMAND", `  ${ws.worker_verify_cmd}`].join("\n"), timeoutS: 60,
         env: { HOME: home }, sandbox: { agy_state_dirs: [fx], home } });
     } catch (e) { error = { message: String(e?.message ?? e).slice(0, 2000), code: e?.code ?? null, stderr_tail: e?.stderr_tail ?? null }; }
-    return { error, launch: r ? { cmd: r.launch.cmd, args0: r.launch.args.slice(0, 2) } : null, descriptors: r?.sandbox?.descriptors ?? null,
+    // args0: the closer's own arguments (fdExecPrefix less its interpreter) and the command it starts, bwrap.
+    return { error, launch: r ? { cmd: r.launch.cmd, args0: r.launch.args.slice(0, fdExecPrefix().length) } : null, descriptors: r?.sandbox?.descriptors ?? null,
       approved: r ? r.jail_log.some(l => l.tool === "run_command" && l.decision === "auto_approve" && l.args?.CommandLine === ws.worker_verify_cmd) : false,
       verify_out: existsSync(join(fx, "verify.out")) ? readFileSync(join(fx, "verify.out"), "utf8").slice(-2000) : null,
       agy: readJson(join(fx, "jail-fds-agy.json")), agy_held: readJson(join(fx, "jail-fds-agy-held.json")), verify: readJson(join(wt, "jail-fds-verify.json")) };

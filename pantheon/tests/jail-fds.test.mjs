@@ -10,17 +10,20 @@
 // inheritable (the precondition). Agy's side leaks fd 20 again (bash: a POSIX sh cannot name it) when it runs the verify
 // launcher. The PROBE (fixtures/jail-fds-probe.py) lists its /proc/self/fd and its parent's, resolves each target and reads
 // each regular file through its descriptor for the needle. POSITIVE CONTROLS: the probe spawned by node, and under bwrap
-// without the closer, holds fd 20 and reads the secret. The mutation runner (agy-sdk-jail.mutate.mjs, F1-F8) removes the
-// closer at each spawn point and replaces its refusal with an unprotected run; these tests fail each time.
+// without the closer, holds fd 20 and reads the secret. THE CLOSER is a single-threaded python3 program (FD_EXEC_PY); its
+// refusals are shown on real cases: no /proc, its closing sabotaged, a second thread in its process (FD_EXEC_PY run after
+// a prelude, the program text itself unchanged). The mutation runner (agy-sdk-jail.mutate.mjs, F1-F11) removes the closer
+// at each spawn point, replaces its refusal with an unprotected run, drops a gate's check of it, its single-thread check,
+// its environment or its signal restoration; these tests fail each time.
 // Real bwrap; the jailed cells skip only where bwrap does not work (the test gate then reports UNVERIFIED, never PASS).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { sandboxAvailable, sdkSeatJailGate } from "../src/agy/sandbox.mjs";
-import { establishNoInheritedFds, inheritableFds, fdExecArgv, fdExecAvailable, resolveCommand, FD_EXEC_MODULE, FDS_REFUSED, FDS_PASSED } from "../src/agy/fd-exec.mjs";
+import { fdExecArgv, fdExecAvailable, fdExecPrefix, fdExecPython, resolveCommand, FD_EXEC_PY, FD_EXEC_PY_FLAGS, FDS_REFUSED, FDS_PASSED } from "../src/agy/fd-exec.mjs";
 import { prepareWorkerJail } from "../src/board/agy-cli.mjs";
 import { startFakeGemini } from "./fixtures/l150-fake-gemini.mjs";
 import { PROBE, hexRev, leaking, seatStub } from "./fixtures/jail-fds-helpers.mjs";
@@ -29,7 +32,8 @@ const HERE = import.meta.dirname, REPO = join(HERE, ".."), CONTROLLER = join(HER
 const have = await sandboxAvailable("bwrap");
 const jailed = { skip: have.ok ? false : `bwrap unavailable: ${have.why}`, timeout: 300_000 };
 const MODEL_CLI = "gemini-4-hydrogen-medium", MODEL_SDK = "gemini-3.6-flash", KEY = "AIza-kg11-synthetic-controller-key-000000000";
-const CLOEXEC = 0o2000000;
+/** The shell that lists its own open descriptors (the glob's own directory descriptor is closed by the time it tests). */
+const LIST_FDS = ["/bin/sh", "-c", 'for f in /proc/$$/fd/*; do n=${f##*/}; [ -L "/proc/$$/fd/$n" ] && echo "$n"; done; true'];
 
 /** A root of its own under /var/tmp (outside /tmp, which every jail replaces) holding a SYNTHETIC secret file. */
 function world(t) {
@@ -52,6 +56,18 @@ async function withLeak(w, cmd, args, opts = {}) {
     return { code, stdout, stderr };
   } finally { closeSync(fd); }
 }
+/** spawnSync of `argv` with the secret open, without close-on-exec, at each descriptor of `at` (default 9 and 20). */
+function withFds(w, argv, at = [9, 20], opts = {}) {
+  const fd = openSync(w.secret, "r");
+  try {
+    const stdio = ["ignore", "pipe", "pipe"];
+    for (const n of at) stdio[n] = fd;
+    for (let i = 0; i < stdio.length; i++) stdio[i] ??= "ignore";
+    return spawnSync(argv[0], argv.slice(1), { encoding: "utf8", env: w.env, ...opts, stdio });
+  } finally { closeSync(fd); }
+}
+/** The closer's program run after `prelude` (the program text itself unchanged): how its refusals are shown on real cases. */
+const closerAfter = prelude => [fdExecPython(), ...FD_EXEC_PY_FLAGS, "-c", `${prelude}\n${FD_EXEC_PY}`];
 const readJson = f => (existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : null);
 /** One controller run (fixtures/jail-fds-controller.mjs), with the leak: its report. */
 async function controller(w, mode, more = {}, env = {}) {
@@ -88,27 +104,27 @@ function leaked(rep, w, what) {
 }
 
 // ---- the closer itself -------------------------------------------------------------------------------------------------
-test("closer: closes every descriptor above 2 that lacks close-on-exec and checks none is left; refuses when the table cannot be read or one stays open; never touches stdio or a close-on-exec descriptor", () => {
-  const io = (table, { failClose = [], listThrows = false, flagsThrow = null } = {}) => {
-    const t = new Map(Object.entries(table).map(([k, v]) => [Number(k), v])), closed = [];
-    return { closed, list: () => { if (listThrows) throw Object.assign(new Error("no /proc here"), { code: "ENOENT" }); return [...t.keys()]; },
-      flags: fd => { if (fd === flagsThrow) throw Object.assign(new Error(`the flags of descriptor ${fd} cannot be read`), { code: "FDS_UNREADABLE" }); return t.get(fd) ?? null; },
-      close: fd => { if (failClose.includes(fd)) throw new Error("EIO"); closed.push(fd); t.delete(fd); } };
-  };
-  const a = io({ 0: 0o100000, 1: 1, 2: 1, 3: CLOEXEC | 2, 9: CLOEXEC | 0o100000, 10: CLOEXEC, 20: 0o100000, 255: 0 });
-  assert.deepEqual(establishNoInheritedFds(a), { closed: [20, 255] });
-  assert.deepEqual(a.closed, [20, 255], "only the inheritable ones above 2 are closed: never stdio, never a close-on-exec one (node's own)");
-  assert.throws(() => establishNoInheritedFds(io({ 0: 0, 20: 0, 21: 0 }, { failClose: [21] })), e => e.code === "FDS_INHERITED" && JSON.stringify(e.left) === "[21]" && JSON.stringify(e.closed) === "[20]");
-  assert.throws(() => establishNoInheritedFds(io({}, { listThrows: true })), e => e.code === "FDS_UNREADABLE" && /cannot be listed \(ENOENT\)/.test(e.message));
-  assert.throws(() => establishNoInheritedFds(io({ 0: 0, 7: 0 }, { flagsThrow: 7 })), e => e.code === "FDS_UNREADABLE");
-  assert.deepEqual(inheritableFds(io({ 0: 0, 3: null, 4: 0, 30: 0, 31: CLOEXEC })), [4, 30], "one gone between the listing and its flags is not open");
-  assert.deepEqual(fdExecArgv(["bwrap", "--ro-bind", "/", "/", "--", "x"]), [process.execPath, FD_EXEC_MODULE, "bwrap", "--ro-bind", "/", "/", "--", "x"]);
-  assert.deepEqual(fdExecArgv(["bwrap"], { node: "/opt/n/bin/node" }), ["/opt/n/bin/node", FD_EXEC_MODULE, "bwrap"]);
+test("closer: python3 -I -S -c FD_EXEC_PY in front of the command; on a real table it closes EVERY descriptor above 2 it was handed (3, 9, 20, 255) and keeps stdio, where node's spawn alone hands all four over; no python3 is no closer", t => {
+  const py = fdExecPython();
+  assert.ok(py, "python3 is on this host's PATH (the closer needs it; without it every gate refuses)");
+  assert.equal(py, resolveCommand("python3", process.env.PATH));
+  assert.deepEqual(fdExecPrefix(), [py, "-I", "-S", "-c", FD_EXEC_PY]);
+  assert.deepEqual(fdExecArgv(["bwrap", "--ro-bind", "/", "/", "--", "x"]), [py, "-I", "-S", "-c", FD_EXEC_PY, "bwrap", "--ro-bind", "/", "/", "--", "x"]);
+  assert.deepEqual(fdExecArgv(["bwrap"], { closerPython: "/opt/p/bin/python3" }), ["/opt/p/bin/python3", "-I", "-S", "-c", FD_EXEC_PY, "bwrap"]);
+  assert.throws(() => fdExecArgv(["bwrap"], { closerPython: null }), e => e.code === "FDS_NO_PYTHON");
+  assert.throws(() => fdExecArgv([]), /pass the argv to start/);
   assert.deepEqual(FDS_PASSED, [0, 1, 2]);
   assert.equal(FDS_REFUSED, 125);
   assert.equal(resolveCommand("sh", "/nonexistent-dir:/bin"), "/bin/sh");
   assert.equal(resolveCommand("no-such-command-kg11", "/bin:/usr/bin"), null);
   assert.equal(resolveCommand("/bin/sh"), "/bin/sh");
+  const w = world(t), at = [3, 9, 20, 255];
+  const direct = withFds(w, LIST_FDS, at);
+  assert.equal(direct.status, 0, direct.stderr);
+  assert.deepEqual(direct.stdout.trim().split("\n").map(Number).sort((a, b) => a - b), [0, 1, 2, ...at], "node's spawn alone hands every one over (the positive control)");
+  const via = withFds(w, fdExecArgv(LIST_FDS), at);
+  assert.equal(via.status, 0, via.stderr);
+  assert.deepEqual(via.stdout.trim().split("\n").map(Number).sort((a, b) => a - b), [0, 1, 2], "through the closer: stdio only");
 });
 
 test("closer on the host: the command it execs holds neither fd 9 nor fd 20 of the process that started it, where node's spawn alone hands both over (the positive control)", async t => {
@@ -124,45 +140,86 @@ test("closer on the host: the command it execs holds neither fd 9 nor fd 20 of t
   assert.deepEqual(await fdExecAvailable(), { ok: true }, "the gates' probe of the closer passes here");
 });
 
-test("closer fails closed: without /proc, or on a node without process.execve, it exits 125 and the command never runs; a missing command exits 127", jailed, async t => {
-  const w = world(t), mark = join(w.root, "the-command-ran");
-  const run = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8", env: w.env });
-  const noProc = run("bwrap", ["--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--tmpfs", "/proc", "--bind", w.root, w.root, "--",
-    process.execPath, FD_EXEC_MODULE, "/bin/sh", "-c", `touch '${mark}'`]);
-  assert.equal(noProc.status, FDS_REFUSED, noProc.stderr);
-  assert.match(noProc.stderr, /^pantheon-fds: refused: the descriptor table cannot be listed \(ENOENT\); the jail was not started$/m);
-  assert.equal(existsSync(mark), false, "without /proc, the command never ran");
-  const shim = join(w.root, "no-execve.cjs");
-  writeFileSync(shim, "delete process.execve;\n");
-  const noExec = run(process.execPath, ["--require", shim, FD_EXEC_MODULE, "/bin/sh", "-c", `touch '${mark}'`]);
-  assert.equal(noExec.status, FDS_REFUSED, noExec.stderr);
-  assert.match(noExec.stderr, /^pantheon-fds: refused: this node \(v[0-9.]+\) has no process\.execve/m);
-  assert.equal(existsSync(mark), false, "without process.execve, the command never ran");
-  const missing = run(process.execPath, [FD_EXEC_MODULE, join(w.root, "no-such-program")]);
-  assert.deepEqual([missing.status, /not an executable file/.test(missing.stderr)], [127, true], missing.stderr);
+test("closer fidelity: the command it execs gets exactly the environment, the signal dispositions and the open-file soft limit the closer was given, as a direct spawn does -- python's startup (LC_CTYPE coerced under the C locale, SIGPIPE and SIGXFSZ ignored) leaks into none of them", t => {
+  const w = world(t);
+  // LANG=C: python coerces LC_CTYPE at startup (PEP 538). A value holding "=" and a non-ASCII value travel as given.
+  const env = { PATH: process.env.PATH, LANG: "C", KG11_SYNTHETIC: "a=b c", KG11_BYTES: "café" };
+  // Each command reports on ITSELF, exec'd directly (by the closer, or by the shell below): a shell reading its own
+  // /proc/$$/status through a child would show the mask it blocks while it waits for that child (dash's sigblockall).
+  const shows = { env: ["/usr/bin/env"], signals: ["grep", "-E", "^Sig(Ign|Blk):", "/proc/self/status"], limit: ["/bin/sh", "-c", "ulimit -Sn"] };
+  // A shell lowers the soft open-file limit and execs what follows: the same for the direct spawn and the closer.
+  const lowered = argv => ["/bin/sh", "-c", 'ulimit -Sn 1024 && exec "$@"', "sh", ...argv];
+  const lines = r => r.stdout.split("\n").filter(Boolean).sort();
+  const got = {};
+  for (const [k, show] of Object.entries(shows)) {
+    const direct = withFds(w, lowered(show), [9, 20], { env }), via = withFds(w, lowered(fdExecArgv(show)), [9, 20], { env });
+    assert.equal(direct.status, 0, direct.stderr);
+    assert.equal(via.status, 0, via.stderr);
+    assert.deepEqual(lines(via), lines(direct), `${k}: the closer hands over what a direct spawn does`);
+    got[k] = via.stdout;
+  }
+  assert.doesNotMatch(got.env, /^LC_CTYPE=/m, "no locale coerced into the command's environment");
+  assert.match(got.env, /^KG11_SYNTHETIC=a=b c$/m);
+  assert.match(got.env, /^KG11_BYTES=café$/m);
+  assert.match(got.signals, /^SigIgn:\s+0+$/m, "no signal left ignored (python ignores SIGPIPE and SIGXFSZ at its startup)");
+  assert.match(got.signals, /^SigBlk:\s+0+$/m, "no signal left blocked");
+  assert.equal(got.limit.trim(), "1024", "the soft open-file limit it was started with");
 });
 
-test("gates fail closed: a descriptor closer that does not work here is the sandbox being unavailable -- the CLI worker's jail and the SDK seat's jail (the gate of the board's and the launcher's spawn) refuse (SANDBOX_UNAVAILABLE) before anything is built, admitted, charged or spawned", jailed, async t => {
-  const w = world(t), shim = join(w.root, "no-execve.cjs"), broken = join(w.root, "node-without-execve");
-  writeFileSync(shim, "delete process.execve;\n");
-  writeFileSync(broken, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --require ${JSON.stringify(shim)} "$@"\n`, { mode: 0o755 });
-  const probe = await fdExecAvailable({ node: broken });
+test("closer fails closed: without /proc, with its closing sabotaged, or with a second thread in its process, it exits 125 and the command never runs; a missing command exits 127, one the kernel will not execute 126", jailed, async t => {
+  const w = world(t), mark = join(w.root, "the-command-ran"), touch = ["/bin/sh", "-c", `touch '${mark}'`];
+  const run = argv => spawnSync(argv[0], argv.slice(1), { encoding: "utf8", env: w.env });
+  const noProc = run(["bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--tmpfs", "/proc", "--bind", w.root, w.root, "--", ...fdExecArgv(touch)]);
+  assert.equal(noProc.status, FDS_REFUSED, noProc.stderr);
+  assert.match(noProc.stderr, /^pantheon-fds: refused: the thread list cannot be listed \(ENOENT\); the jail was not started$/m);
+  assert.equal(existsSync(mark), false, "without /proc, the command never ran");
+  // Its closing sabotaged (os.closerange a no-op): the check after it finds fd 9 and fd 20 still open.
+  const sabotaged = withFds(w, [...closerAfter("import os\nos.closerange = lambda low, high: None"), ...touch]);
+  assert.equal(sabotaged.status, FDS_REFUSED, sabotaged.stderr);
+  assert.match(sabotaged.stderr, /^pantheon-fds: refused: descriptor\(s\) 9, 20 still open after closing; the jail was not started$/m);
+  assert.equal(existsSync(mark), false, "a descriptor still open: the command never ran");
+  // A second thread (what a node closer always has): it could open a descriptor between the check and the exec.
+  const threaded = withFds(w, [...closerAfter("import _thread, time\n_thread.start_new_thread(time.sleep, (30,))"), ...touch]);
+  assert.equal(threaded.status, FDS_REFUSED, threaded.stderr);
+  assert.match(threaded.stderr, /^pantheon-fds: refused: the closer is not single-threaded \(2 threads\): a descriptor could be opened between its check and its exec; the jail was not started$/m);
+  assert.equal(existsSync(mark), false, "another thread: the command never ran");
+  const none = run(fdExecPrefix());
+  assert.deepEqual([none.status, /^pantheon-fds: refused: no command was given/m.test(none.stderr)], [FDS_REFUSED, true], none.stderr);
+  const missing = run(fdExecArgv([join(w.root, "no-such-program")]));
+  assert.deepEqual([missing.status, /^pantheon-fds: .*no-such-program: not an executable file$/m.test(missing.stderr)], [127, true], missing.stderr);
+  const garbage = join(w.root, "not-a-program");
+  writeFileSync(garbage, Buffer.from([0x7f, 0x00, 0x01, 0x02])); chmodSync(garbage, 0o755);
+  const noexec = run(fdExecArgv([garbage]));
+  assert.deepEqual([noexec.status, /^pantheon-fds: .*not-a-program: cannot be executed \(ENOEXEC\)$/m.test(noexec.stderr)], [126, true], noexec.stderr);
+});
+
+test("gates fail closed: a descriptor closer that does not work here (no python3, or a python3 that runs the command without closing) is the sandbox being unavailable -- the CLI worker's jail and the SDK seat's jail (the gate of the board's and the launcher's spawn) refuse (SANDBOX_UNAVAILABLE) before anything is built, admitted, charged or spawned", jailed, async t => {
+  const w = world(t), leaky = join(w.root, "python3-that-leaks");
+  // A "python3" that skips -I -S -c FD_EXEC_PY and execs the command as it is: the probe's fd 20 reaches it.
+  writeFileSync(leaky, "#!/bin/sh\nshift 4\nexec \"$@\"\n", { mode: 0o755 });
+  const probe = await fdExecAvailable({ closerPython: leaky });
   assert.equal(probe.ok, false);
-  assert.match(probe.why, /exited 125 .*has no process\.execve/);
+  assert.match(probe.why, /exited 0 with "LEAKED 20"/);
+  assert.deepEqual(await fdExecAvailable({ closerPython: null }), { ok: false, why: "no python3 was found on PATH to run the descriptor closer" });
   // THE CLI WORKER'S JAIL (prepareWorkerJail: every agy CLI lane, the preflight and the quota probe build it).
   const ctl = join(w.root, "ctl"), wt = join(w.root, "wt");
   mkdirSync(ctl); mkdirSync(wt);
   const spec = { cli: "/bin/true", control_dir: ctl, worktree: wt, env: w.env };
-  await assert.rejects(prepareWorkerJail({ ...spec, sandbox: { node: broken } }), e => e.code === "SANDBOX_UNAVAILABLE" && /no descriptor beyond 0, 1 and 2 can be guaranteed/.test(e.message));
-  const un = await prepareWorkerJail({ ...spec, sandbox: { node: broken, allowUnsandboxed: true } });
+  for (const closerPython of [leaky, null]) {
+    await assert.rejects(prepareWorkerJail({ ...spec, sandbox: { closerPython } }), e => e.code === "SANDBOX_UNAVAILABLE" && /no descriptor beyond 0, 1 and 2 can be guaranteed/.test(e.message), String(closerPython));
+  }
+  const un = await prepareWorkerJail({ ...spec, sandbox: { closerPython: leaky, allowUnsandboxed: true } });
   assert.deepEqual([un.prefix, un.sandboxRec.enabled, un.sandboxRec.allowUnsandboxed], [[], false, true], "only the explicit override runs without the jail, and it is recorded");
   assert.match(un.sandboxRec.reason, /no descriptor beyond 0, 1 and 2 can be guaranteed/);
   const ok = await prepareWorkerJail({ ...spec, sandbox: {} });
-  assert.deepEqual([ok.prefix[0], ok.prefix[1], ok.prefix[2]], [process.execPath, FD_EXEC_MODULE, "bwrap"], "with a working closer, bwrap starts through it");
+  // test-lint: allow truncated-sequence -- the closer's WHOLE argv and the command it starts; what follows "bwrap" is bwrapArgs' argv, asserted item by item in agy-sandbox.test.mjs
+  assert.deepEqual(ok.prefix.slice(0, fdExecPrefix().length + 1), fdExecArgv(["bwrap"]), "with a working closer, bwrap starts through it");
   // THE SDK SEAT'S JAIL: the one gate both spawn points call (run-item.mjs, bin/agy-seat.mjs); no override.
-  await assert.rejects(sdkSeatJailGate({ node: broken }), e => e.code === "SANDBOX_UNAVAILABLE" && e.provider_requests === 0 && /no descriptor beyond 0, 1 and 2 can be guaranteed/.test(e.message) && /there is no override/.test(e.message));
+  for (const closerPython of [leaky, null]) {
+    await assert.rejects(sdkSeatJailGate({ closerPython }), e => e.code === "SANDBOX_UNAVAILABLE" && e.provider_requests === 0 && /no descriptor beyond 0, 1 and 2 can be guaranteed/.test(e.message) && /there is no override/.test(e.message), String(closerPython));
+  }
   const gate = await sdkSeatJailGate();
-  assert.equal(gate.node, process.execPath, "with a working closer the gate opens, with this node");
+  assert.equal(gate.closerPython, fdExecPython(), "with a working closer the gate opens, with this host's python3");
 });
 
 // ---- the CLI lane: the agy worker, the verify_cmd its run_command launches, and runVerify --------------------------------
@@ -182,7 +239,7 @@ test("CLI worker: started from a controller holding fd 20 on a secret, the agy w
   assert.equal(c.worker.approved, true, "the verify launcher ran through run_command, approved by the hook");
   clean(c.worker.verify, w, "the verify_cmd agy's run_command launched");
   // How: bwrap started through the closer, stdio the only descriptors passed.
-  assert.deepEqual([c.worker.launch.cmd, ...c.worker.launch.args0], [process.execPath, FD_EXEC_MODULE, "bwrap"]);
+  assert.deepEqual([c.worker.launch.cmd, ...c.worker.launch.args0], fdExecArgv(["bwrap"]));
   assert.deepEqual(c.worker.descriptors?.passed, [0, 1, 2]);
   // THE CONTROLLER'S runVerify, this controller still holding fd 20.
   assert.deepEqual([c.runverify.exit_code, c.runverify.passed, c.runverify.jail], [0, true, { kind: "verify-jail", refused: false }], c.runverify.output);

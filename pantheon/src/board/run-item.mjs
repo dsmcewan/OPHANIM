@@ -639,9 +639,9 @@ export async function runOpenItem(spec, opts = {}) {
       // dir writable, an allowlisted environment. No bwrap, or a failing probe of the jail, refuses the seat HERE, before the
       // relay exists: nothing admitted, charged or spawned. There is no override. (`opts.sdkJail.bwrap` names the binary,
       // as runAgyCliTurn's sandbox.bwrap does; a binary that is missing or fails the probe refuses.) NO DESCRIPTOR BEYOND 0,
-      // 1 AND 2 (register KG-11): the jail's prefix starts bwrap through the descriptor closer (src/agy/fd-exec.mjs, run by
-      // this node), so the seat inherits nothing this controller was handed but its stdio; a closer that does not work here
-      // refuses the seat at this gate, as a missing bwrap does.
+      // 1 AND 2 (register KG-11): the jail's prefix starts bwrap through the descriptor closer (src/agy/fd-exec.mjs, a
+      // single-threaded python3 program), so the seat inherits nothing this controller was handed but its stdio; a closer
+      // that does not work here (no python3 included) refuses the seat at this gate, as a missing bwrap does.
       let jailGate;
       try { jailGate = await sdkSeatJailGate({ bwrap: opts.sdkJail?.bwrap ?? "bwrap" }); }
       catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: String(refusal.message).slice(0, 300) }); record(); throw Object.assign(refusal, { provider_requests: 0 }); }

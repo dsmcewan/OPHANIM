@@ -62,8 +62,9 @@ export function agyModelMismatch(identity, { transport = "agy-cli", ...more } = 
 //         from `env`), plus ANTIGRAVITY_AGY_CLEANUP=all and AGY_CLI_DISABLE_AUTO_UPDATE=true;
 //   JAIL  prepareWorkerJail: the worker's bwrap (host read-only, /tmp a fresh tmpfs, --unshare-pid, --new-session,
 //         --die-with-parent, the Gemini state as a per-run scratch copy dropped afterwards, the worktree and the control
-//         dir's run/ writable); bwrap started through the descriptor closer (src/agy/fd-exec.mjs: no descriptor beyond
-//         0, 1 and 2, KG-11); SANDBOX_UNAVAILABLE without bwrap or a working closer -- never a silent unjailed run;
+//         dir's run/ writable); bwrap started through the descriptor closer (src/agy/fd-exec.mjs, a single-threaded
+//         python3 program: no descriptor beyond 0, 1 and 2, KG-11); SANDBOX_UNAVAILABLE without bwrap or a working
+//         closer -- never a silent unjailed run;
 //   ARGV  workerArgv (--mode=accept-edits, --add-dir <abs worktree>, --disable-slash-commands, --log-file
 //         <control>/run/agy.log) + --json-schema, through assertWorkerArgv: NO --sandbox (never inside bwrap,
 //         owner-stated) and NO --dangerously-skip-permissions (it skips the hook);
@@ -277,7 +278,7 @@ import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
 import { extendVerifyPolicy, writeVerifyLauncher } from "../agy/verify-jail.mjs";
-import { fdExecArgv, fdExecAvailable, FD_EXEC_MODULE, FDS_PASSED } from "../agy/fd-exec.mjs";
+import { fdExecArgv, fdExecAvailable, fdExecPython, FD_EXEC_MODULE, FDS_PASSED } from "../agy/fd-exec.mjs";
 import { workerVerifyCommand } from "../agy/jail-hook.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
 import { MCP_SERVER as MCP_SERVER_NAME, toolDrift } from "../agy/jail-hook.mjs";
@@ -428,15 +429,16 @@ const SANDBOX_START_FAILED = /^(bwrap|pantheon-fds): /m;
  * one. Returns {prefix, sandboxRec, gstate}; throws SANDBOX_UNAVAILABLE (never a silent unjailed run) or
  * AGY_STATE_LAYOUT (src/agy/sandbox.mjs geminiState). `env` is the child env (workerEnv); its HOME is the default home.
  * NO DESCRIPTOR BEYOND 0, 1 AND 2 (register KG-11): the prefix starts bwrap through the descriptor closer
- * (src/agy/fd-exec.mjs, run by `sandbox.node`, default this node), so the CLI, and everything it starts, inherits nothing the
- * controller was handed but stdin, stdout and stderr; a closer that does not work here is the sandbox being unavailable.
+ * (src/agy/fd-exec.mjs: a single-threaded python3 program, run by `sandbox.closerPython`, default the first python3 on
+ * PATH), so the CLI, and everything it starts, inherits nothing the controller was handed but stdin, stdout and stderr. A
+ * closer that does not work here (no python3 included) is the sandbox being unavailable.
  */
 export async function prepareWorkerJail({ cli, control_dir, worktree, env = workerEnv(), sandbox = {}, a2a_socket = null }) {
   const wantSandbox = sandbox.enabled !== false;
   if (wantSandbox) {
-    const node = sandbox.node ?? process.execPath;
+    const closerPython = sandbox.closerPython === undefined ? fdExecPython() : sandbox.closerPython;
     const box = await sandboxAvailable(sandbox.bwrap ?? "bwrap");
-    const fds = box.ok ? await fdExecAvailable({ node }) : null;
+    const fds = box.ok ? await fdExecAvailable({ closerPython }) : null;
     const probe = !box.ok ? box : fds.ok ? { ok: true } : { ok: false, why: `no descriptor beyond 0, 1 and 2 can be guaranteed: ${fds.why}` };
     if (probe.ok) {
       const extra_ro = [...(sandbox.extra_ro ?? [])];
@@ -458,8 +460,8 @@ export async function prepareWorkerJail({ cli, control_dir, worktree, env = work
           ...(a2a_socket ? [dirOf(resolveOf(a2a_socket))] : [])].filter(p => existsSync(p)) });
       }
       catch (e) { await dropGeminiState(gstate).catch(() => null); throw e; }   // the scratch holds the OAuth token: never leave it behind
-      return { prefix: fdExecArgv(b.argv, { node }), gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
-        descriptors: { passed: [...FDS_PASSED], closer: { node, module: FD_EXEC_MODULE } },
+      return { prefix: fdExecArgv(b.argv, { closerPython }), gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
+        descriptors: { passed: [...FDS_PASSED], closer: { python: closerPython, module: FD_EXEC_MODULE } },
         gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, cli_dir: gstate.cli_dir, mounts: gstate.mounts, copied: gstate.copied,
           withheld: gstate.withheld, skipped: gstate.skipped, hidden_state: gstate.hidden_state, readonly_subdirs: gstate.readonly_subdirs,
           writable_copies: (gstate.writable_copies ?? []).map(w => ({ path: w.path, dest: w.dest, status: w.status, ...(w.copied ? { copied: w.copied } : {}), ...(w.readonly_subdirs?.length ? { readonly_subdirs: w.readonly_subdirs } : {}), ...(w.why ? { why: w.why } : {}) })),

@@ -31,9 +31,10 @@
 //              fds through (observed with bubblewrap 0.9.0: an `exec 7<file` shell's fd 7 was open in the jailed command),
 //              and node marks only a LOW range of inherited fds close-on-exec at startup (observed on node 24.22: 0..16;
 //              an inherited fd 20 above a gap stays inheritable). So the launcher starts bwrap THROUGH THE DESCRIPTOR
-//              CLOSER (src/agy/fd-exec.mjs): a fresh process that closes every descriptor above 2 without close-on-exec,
-//              checks that none is left, and execs bwrap in its place; when it cannot, it exits VERIFY_JAIL_REFUSED and
-//              nothing runs. The script is given stdin, stdout and stderr on purpose, and nothing else.
+//              CLOSER (src/agy/fd-exec.mjs): a single-threaded python3 program that closes every descriptor above 2,
+//              checks that none is left, and execs bwrap in its place; when it cannot (no python3 included), it exits
+//              VERIFY_JAIL_REFUSED and nothing runs. The script is given stdin, stdout and stderr on purpose, and nothing
+//              else.
 //   /proc      its own PID namespace (--unshare-pid) and a fresh /proc: no credential-bearing process is visible, so
 //              no /proc/<pid>/{environ,cmdline,fd,mem,root} of one can be opened, and none can be signalled or traced.
 //              Also --unshare-ipc, --unshare-uts, --cap-drop ALL and --new-session (no TIOCSTI into a terminal).
@@ -357,12 +358,13 @@ export function launch(policy, { log = m => process.stderr.write(`pantheon-verif
     };
     const run = (cmd, args, cwd, jailed) => {
       // NO DESCRIPTOR BEYOND 0, 1 AND 2 (KG-11): the command starts through the descriptor closer (src/agy/fd-exec.mjs),
-      // which closes what this launcher inherited and execs it in its place. A command that is not there is bwrap missing.
+      // which closes what this launcher inherited and execs it in its place. A command that is not there is bwrap missing;
+      // no python3 for the closer is a refusal, never an unjailed run (the unjailed run needs the closer too).
       const file = resolveCommand(cmd, env.PATH);
       if (!file) { if (jailed && unjailed()) return; log(`the verify jail could not start (ENOENT: ${cmd}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); return; }
       let child;
       try { const [closer, ...argv] = fdExecArgv([file, ...args]); child = spawn(closer, argv, { cwd, env, stdio: "inherit" }); }
-      catch (e) { if (jailed && unjailed()) return; log(`the verify jail could not start (${e?.code ?? e?.message ?? e}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); return; }
+      catch (e) { if (jailed && e?.code !== "FDS_NO_PYTHON" && unjailed()) return; log(`the verify jail could not start (${e?.code ?? e?.message ?? e}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); return; }
       const fwd = sig => { try { child.kill(sig); } catch { /* gone */ } };
       for (const s of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(s, () => fwd(s));
       child.on("error", e => { if (jailed && e?.code === "ENOENT" && unjailed()) return; log(`the verify jail could not start (${e?.code ?? e?.message ?? e}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); });

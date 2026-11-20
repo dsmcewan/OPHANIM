@@ -153,19 +153,58 @@ Register KG-11: the jails passed through descriptors the controller inherited. O
 
 No jail passes any other descriptor on purpose. The command gets its stdin, stdout and stderr (the controller's pipes, or what the launcher was given), recorded as `descriptors.passed: [0, 1, 2]` on the CLI jail's sandbox record and the SDK jail's record.
 
-**The mechanism** (`src/agy/fd-exec.mjs`, choice (a) of the decision, placed in front of bwrap). Every jail's argv is `[node, fd-exec.mjs, bwrap, ...]`. The closer is a fresh process. It:
-1. closes every descriptor above 2 that lacks O_CLOEXEC in `/proc/self/fdinfo`;
-2. checks again that none is left;
-3. replaces itself with bwrap (`process.execve`).
+**The mechanism** (`src/agy/fd-exec.mjs`, choice (a) of the decision, placed in front of bwrap). Every jail's argv is `[python3, -I, -S, -c, FD_EXEC_PY, bwrap, ...]`. The closer is a single-threaded process. It:
+1. checks that it is the only thread of its process (`/proc/self/task`);
+2. lists `/proc/self/fd` and closes every descriptor above 2 (`os.closerange`), its own included;
+3. lists the table again and checks that none above 2 is open;
+4. replaces itself with bwrap (`os.execve`).
 
-Because it replaces itself, the pid, the process group and the kill path are those bwrap had before. Its own descriptors (node's event loop, the module it loaded) are close-on-exec and close at the exec. The work is done in the child and not in the controller, choice (b), for three reasons, each observed here:
-- The controller runs other threads: node opens `/proc/self/maps` and its own binary without O_CLOEXEC, and its TLS stack opens CA files the same way (KG-11's descriptor was a CA bundle). A scan made in the controller cannot exclude a descriptor opened between the scan and the fork. Closing one there could pull a file out from under another thread.
-- Node marks only a low range of inherited descriptors close-on-exec at startup. On node 24.22, strace shows `fcntl(fd, F_SETFD, FD_CLOEXEC)` on 0..16, and an inherited fd 20 above a gap stays inheritable. The verify launcher's earlier comment ("node marks every inherited fd above 2") was wrong for such a descriptor.
+The command gets the environment the closer was given, byte for byte: it is read back from `/proc/self/environ`, because python's startup adds `LC_CTYPE` under the C locale (PEP 538). It also gets default SIGPIPE and SIGXFSZ, which python ignores at startup and the closer sets back, as node's spawn hands every child. `-I` keeps every `PYTHON*` variable and the user site out; `-S` keeps the site module out. The program imports only built-in or frozen modules, so the only files it opens are `/proc/self/{task,fd,environ}`.
+
+Because it replaces itself, the pid, the process group and the kill path are those bwrap had before. The work is done in the child and not in the controller, choice (b), for three reasons, each observed here:
+- The controller runs other threads. Node opens `/proc/self/maps` and its own binary without O_CLOEXEC when a Worker's isolate starts, and its TLS stack opens CA files the same way (KG-11's descriptor was a CA bundle). A scan made in the controller cannot exclude a descriptor opened between the scan and the fork. A child spawned while Worker threads were starting held the controller's `/proc/<pid>/maps` (fd 94, once in 400 launches). Closing such a descriptor in the controller could pull a file out from under another thread.
+- Node marks only a low range of inherited descriptors close-on-exec at startup. On node 24.22, strace shows `fcntl(fd, F_SETFD, FD_CLOEXEC)` on 0..16, and an inherited fd 20 above a gap stays inheritable.
 - bwrap 0.9 has no option to close descriptors, and a POSIX sh cannot name one above 9.
 
-The closer runs on the host, before bwrap, so it needs nothing visible inside any jail. No new dependency is added: the closer is the controller's own node binary.
+**The closer race (2026-11-20), and why the closer is single-threaded.** The closer was first a node program (`node fd-exec.mjs`, `process.execve`). It closed the descriptors above 2 that lacked O_CLOEXEC, then checked again. At integration with Slice D2 it refused intermittently under parallel load: exit 125, so the jailed command never ran.
+- One full `npm test` failed `wave3-agy-guard.test.mjs` B1, "failover true, answer": no launch, in 87 ms.
+- One of three parallel `node --test` runs failed `review-runner-subscription.test.mjs` "agy dry run, assignment 1": "/usage did not print the JSON envelope (exit 125)".
 
-**Fail closed.** The gates refuse with SANDBOX_UNAVAILABLE before anything is built, admitted, charged or spawned when the closer does not work here: `sdkJailAvailable` for the SDK seat (no override), `prepareWorkerJail` for the CLI (only the existing explicit `allowUnsandboxed` override, recorded). Each gate's probe (`fdExecAvailable`, cached per node binary) runs the closer on a real case: fd 20 handed over without close-on-exec, and the exec'd command must hold no descriptor on its file. If the closer cannot establish the property at the spawn itself, it exits 125 and the command never runs. That happens with no `/proc`, an unreadable fdinfo, a descriptor still open after its close, or a node without `process.execve`. 125 is the verify launcher's `VERIFY_JAIL_REFUSED`, and the CLI reads the closer's `pantheon-fds:` line as the sandbox failing to start, as it reads bwrap's own.
+The hypothesis was a transient descriptor, opened by one of node's own threads between the scan and the re-check. It was **not reproduced here**. With the node closer, nothing refused:
+- the stress probe below: 2,600 launches in its table, and 250 more under strace;
+- four parallel suite runs and sixteen targeted runs of the two files above with `jail-fds.test.mjs`, with the closer temporarily instrumented to record any refusal: no refusal was recorded, in 3,758 host-side closer launches counted, plus one run uncounted.
+
+What was observed in the node closer:
+- After startup, the only thread that creates a descriptor is node's delayed-task scheduler. Its event loop (epoll, io_uring, a pipe, an eventfd, all close-on-exec) is set up before the main thread continues.
+- The opens without O_CLOEXEC (`openssl.cnf`, `/proc/self/maps`, the node binary) are made by the main thread during startup and closed before the module runs.
+- In a traced stress of 150 launches, every descriptor a non-main thread created came before the scan.
+- `process.execve` failing aborts node (exit 134, not a `pantheon-fds:` line).
+
+The interleaving behind the two refusals therefore remains unknown. The coordinator's decision was a closer that cannot race: no other thread exists in its process from the scan to the exec, and it refuses if one does.
+
+The candidates were each spawned from node, as every call site does. "Bare" is the interpreter execing the command with nothing else done; the shipped closer is the python3 row. The cost is the mean of 50 sequential launches of `/bin/true`. The first figure was measured on a quiet host; the second was measured while the suite ran (load about 10), when a direct spawn took 3.8 ms.
+
+| Closer | Per launch | Environment of the exec'd command | Signals ignored in it | RLIMIT_NOFILE soft (started at 1024) |
+|---|---|---|---|---|
+| node (before) | 51 ms; 56.3 ms | as given | SIGPIPE, SIGXFSZ (SigIgn 0x1001000) | raised to 20000 |
+| bash `--norc --noprofile -p`, bare | 4.4 ms | `PWD` (the host cwd) and `SHLVL=0` added; without `--norc`, `~/.bashrc` sourced when stdin is a socket (node's `pipe`) | none | 1024 |
+| python3 `-I -S` | bare 14.8 ms; shipped 23.5 ms | as given (bare: `LC_CTYPE=C.UTF-8` added; the closer reads `/proc/self/environ` back) | none (bare: SIGPIPE and SIGXFSZ; the closer resets both) | 1024 |
+
+python3 was chosen. It is the only candidate whose exec'd command matched a direct spawn on all three counts. The closer's own `closer fidelity` cell asserts that match.
+
+**Fail closed.** The gates refuse with SANDBOX_UNAVAILABLE before anything is built, admitted, charged or spawned when the closer does not work here:
+- `sdkJailAvailable` for the SDK seat (no override);
+- `prepareWorkerJail` for the CLI (only the existing explicit `allowUnsandboxed` override, recorded).
+
+Each gate's probe (`fdExecAvailable`, cached per interpreter) runs the closer on a real case: fd 20 handed over without close-on-exec, and the exec'd command must hold no descriptor on its file. With no python3 on PATH, or with a python3 that runs the command without closing, the probe fails and both gates refuse: no closer, no jail. The verify launcher has no gate of its own. With no python3 it refuses (VERIFY_JAIL_REFUSED), even under a policy that allows an unjailed run, because that run needs the closer too.
+
+At the spawn itself, the closer exits 125 and the command never runs when:
+- its process has another thread;
+- `/proc` is missing, or the table or the environment cannot be read;
+- a descriptor is still open after closing;
+- anything unexpected happens.
+
+125 is the verify launcher's `VERIFY_JAIL_REFUSED`, and the CLI reads the closer's `pantheon-fds:` line as the sandbox failing to start, as it reads bwrap's own. A missing command exits 127; one the kernel will not execute exits 126.
 
 **The test** (`pantheon/tests/jail-fds.test.mjs`, real-bwrap, gated on `sandboxAvailable("bwrap")`). It is deterministic: it does not depend on what the environment leaks.
 - Each controller (`fixtures/jail-fds-controller.mjs`, or the launcher itself) is started with fd 9 and fd 20 open on a synthetic secret without close-on-exec. It first records that its fd 20 is still inheritable.
@@ -173,14 +212,39 @@ The closer runs on the host, before bwrap, so it needs nothing visible inside an
 - The probe (`fixtures/jail-fds-probe.py`) lists its own `/proc/self/fd` and its parent's, resolves every target, and reads every regular file through its descriptor for the needle.
 - Positive controls: the probe spawned by node, and the probe under a bare bwrap, hold fd 20 and read the secret.
 
-Also covered:
-- the closer's decisions on an injected table;
-- its refusal without `/proc` and without `process.execve`;
-- both gates' refusals with a closer that does not work, the board's SDK seat included.
+The closer's own cells work on real tables, not an injected one:
+- it closes fds 3, 9, 20 and 255 handed to it and keeps stdio, where node's spawn alone hands all four over;
+- `closer fidelity`: the environment (under `LANG=C`), the signal masks and a lowered soft open-file limit reach the command exactly as a direct spawn hands them over;
+- `closer fails closed`, each case at 125 with the command never run:
+  - no `/proc`;
+  - its closing sabotaged (`os.closerange` a no-op; the check finds fds 9 and 20);
+  - a second thread in its process;
+  - no command;
+- also in `closer fails closed`: 127 for a missing command and 126 for ENOEXEC. The sabotaged and the second-thread cases run `FD_EXEC_PY` after a prelude, the program text itself unchanged.
+- `gates fail closed`: both gates, with no python3 and with a python3 that leaks, the board's SDK seat included.
 
-`verify-jail-credential-isolation.test.mjs` now leaks fd 20 on purpose at each launcher entry (agy's shell, a shell exec'ing the launcher, the controller calling runVerify). Its "no inherited descriptor beyond stdio" assertion therefore passes whatever the environment leaks, and fails when the closer is removed.
+`verify-jail-credential-isolation.test.mjs` leaks fd 20 on purpose at each launcher entry (agy's shell, a shell exec'ing the launcher, the controller calling runVerify). Its "no inherited descriptor beyond stdio" assertion therefore passes whatever the environment leaks, and fails when the closer is removed.
 
-**The mutations** (`agy-sdk-jail.mutate.mjs`, its suites now including `jail-fds.test.mjs` and the isolation test):
+**The stress probe** (outside the tree). Each launch hands the closer fd 9 and fd 20 on a synthetic secret without close-on-exec. The closer execs a python checker that reports every descriptor above 2 it holds and whether any reads the secret. Busy loops run on the 4 CPUs throughout. "Churn" adds 4 Worker threads in the launching process that keep starting isolates, and passes the full environment.
+
+| Configuration | Launches | node closer: refused / leaked, p50 | python3 closer: refused / leaked, p50 |
+|---|---|---|---|
+| 16 at a time, 8 busy loops | 200 | 0 / 0, 489 ms | 0 / 0, 290 ms |
+| 32 at a time, 16 busy loops | 1,000 | 0 / 0, 971 ms | 0 / 0, 592 ms |
+| 16 at a time, 8 busy loops, full environment | 400 | 0 / 0, 496 ms | 0 / 0, 277 ms |
+| 16 at a time, 4 busy loops, churn, full environment | 1,000 | 0 / 0, 653 ms | 0 / 0, 276 ms |
+
+Positive control, churn with no closer (`env` in its place): all 400 launches leaked fds 9 and 20, and one also held the launcher's `/proc/<pid>/maps`.
+
+The suite in parallel (`cd pantheon && node --test`, its default file concurrency):
+- before, node closer: one run, 1,749 of 1,749;
+- before, three runs at once: 4, 4 and 5 failures, none from the closer and none a refusal. Four are the same in each run: `agy-layout-bisect.test.mjs` (two cells) and `agy-worker-probe.test.mjs` (two cells) assert that no `pantheon-agy-*` directory of theirs is left in the shared tmpdir, and they see the other runs'. The fifth is `pipeline-review.test.mjs` "a verify_cmd that times out ...", which has 300 ms to print "started" through node, the node closer and bwrap;
+- after, python3 closer: three runs, 1,750 of 1,750 each (the new cell is `closer fidelity`);
+- after, three runs at once: 4 failures in each, the same four shared-tmpdir cells. The 300 ms verify timeout did not recur;
+- after, the targeted loop as before (sixteen runs of the two integration files with `jail-fds.test.mjs`, four at a time, four busy loops): 112 of 112 each;
+- the first version of the fidelity cell failed once, in an earlier after run. Its shell read its own masks through a child, while dash blocked every signal waiting for that child (`sigblockall`: SigBlk `fffffffe7ffbfeff`). Each command now reports on itself, exec'd directly. The file then passed 32 of 32 runs under load (four at a time, four busy loops). Two other runs with that first version passed 1,750 of 1,750.
+
+**The mutations** (`agy-sdk-jail.mutate.mjs`, its suites including `jail-fds.test.mjs` and the isolation test):
 
 | ID | Mutation | Killed by |
 |---|---|---|
@@ -192,12 +256,19 @@ Also covered:
 | F6 | the SDK gate stops checking the closer | gates fail closed |
 | F7 | the CLI gate stops checking the closer | gates fail closed |
 | F8 | the closer closes only 3 to 9 (what a POSIX sh can name) | closer, host, CLI worker, SDK board, SDK launcher |
+| F9 | the closer's single-thread check dropped (the race-prone closer) | closer fails closed |
+| F10 | the command handed python's own environment (`LC_CTYPE` coerced) | closer fidelity |
+| F11 | SIGPIPE left ignored across the exec | closer fidelity |
+
+F5 and F8 were retargeted onto the python program, and F4 onto the CLI prefix's new option. F9 to F11 are new. The full run on the final tree killed all 25 of the runner's mutations (J1 to J14 and F1 to F11), on a green baseline of 33 of 33. The other runners that target `agy-cli.mjs` or `run-item.mjs` also kill everything: `l150-billing.mutate.mjs` 20 of 20, `wave3-agy-spend.mutate.mjs` 25 of 25, `l136-billing.mutate.mjs` 26 of 26.
 
 **What remains.**
-- The exact route of the observed failure was not reproduced. In this container the launcher of 42052d1 already closed an injected fd 20 (its `closeInheritedFds`, in the launcher's own process), and a strace of it under the real environment shows no CA bundle opened. The closer now stands in a fresh process in front of every bwrap, the launcher's included, so a descriptor that reached the jail by any route through the starting process is closed. A route inside bwrap itself would not be: none is known, and bwrap passed only stdio in every test here.
+- The two refusals at integration were not reproduced, so their exact route is unknown. What is established is that no other thread exists in the closer's process from its scan to its exec, and that it refuses if one does.
+- The first observed leak's exact route was not reproduced either. In this container, the launcher of 42052d1 already closed an injected fd 20, and a strace of it under the real environment shows no CA bundle opened. The closer stands in a fresh process in front of every bwrap, so a descriptor that reached the jail by any route through the starting process is closed. A route inside bwrap itself would not be: none is known, and bwrap passed only stdio in every test here.
+- The closer needs python3 (3.4 or later) on PATH where each jail starts: the host for the CLI and SDK jails, and inside the CLI worker's jail for the verify launcher. The CLI jail binds the host read-only, so a python3 that is visible on the host is visible there. A python3 under a location a jail hides (a home directory, for instance) would make that jail's closer refuse.
+- The program is passed as an argument (`-c`), so it appears in the CLI's launch record and in `ps` for the closer's few milliseconds. A separate `fd-exec.py` would need an ownership grant: the manifest grants `pantheon/src/agy/fd-*.mjs` only.
 - Other bwrap jails start bwrap directly, without the closer: the board's acceptance jail (`board/acceptance.mjs`) and the review runner's grok and codex jails. KG-11 named the two jails above.
-- `process.execve` is marked experimental in node 24. Where it is missing (node before 22.15 or 23.11), every jail refuses rather than running without the property. `pantheon/package.json` still says node >= 20; the root pins 24.
 - `docs/routing-task-profile.md` ("Inherited descriptors") still states that node marks inherited fds close-on-exec at startup. It is the coordinator's to correct.
 - An explicitly unsandboxed CLI run (`allowUnsandboxed`) starts the CLI without the closer, as it starts it without bwrap. It is recorded as such.
 - The capability graph's bubble evidence (`runtimes.json`) does not yet quote the closer.
-- `agy-sdk-jail.mutate.mjs` now copies the tree under `/var/tmp` by default. Its CLI worker suites cannot see a source tree under `/tmp`, which the CLI jail replaces with a tmpfs.
+- `agy-sdk-jail.mutate.mjs` copies the tree under `/var/tmp` by default. Its CLI worker suites cannot see a source tree under `/tmp`, which the CLI jail replaces with a tmpfs.
