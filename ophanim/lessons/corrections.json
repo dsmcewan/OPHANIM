@@ -153,6 +153,14 @@
           "date": "2026-11-17",
           "ref": "4221a94",
           "note": "CI synthetic-proof (WF4 guard) detected paths in a new review record before anyone pointed it out; the owner corrected it (a364832), so this is a detection, not a correction by the mechanism"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "ophanim/knowledge-graphs at c14fed0 (docs/knowledge-graph/inventory.md:300, inventory.json:153)",
+          "detected_by": "ophanim/tests/machine-paths.test.mjs (WF4), the class's registered detector, in CI after the push",
+          "note": "the knowledge-graph inventory named its scratch probe by an absolute home path; the coordinator pushed a documents-only commit without running the cheap proof checks first. Fixed by naming the script without its path. Not counted as mechanism success: the detection came from CI after the push, not before it, and the correction was the integrator's. Next step: run the proof suite's machine-paths and corrections tests before pushing any documents-only commit"
         }
       ],
       "fixed_in": "a364832",

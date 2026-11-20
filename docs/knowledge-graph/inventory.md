@@ -297,7 +297,7 @@ The insertion points named here keep the existing contracts in force:
 
 ### Probe
 
-One synthetic probe, `/home/user/kg-tmp/sqlite-probe.mjs`, ran on 60,000 nodes and 240,000 random edges, about 10 to 20 times the estimate. No repository data and no provider were used. Results on 4 CPUs:
+One synthetic probe, a scratch script outside the repository (`sqlite-probe.mjs`), ran on 60,000 nodes and 240,000 random edges, about 10 to 20 times the estimate. No repository data and no provider were used. Results on 4 CPUs:
 
 | Operation | (1) JSONL replay + in-memory index | (2) `node:sqlite` |
 |---|---|---|

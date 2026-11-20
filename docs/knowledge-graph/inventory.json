@@ -150,7 +150,7 @@
     {"role": "seat-selection", "decision": ["pantheon/src/route/frontier.mjs:215", "pantheon/src/route/frontier.mjs:192", "pantheon/src/route/protocol.mjs:185"], "graph_entry": ["capability eligibility with its snapshot digest hashed into selectionPolicy and recorded as a ledger input beside facts/seating (pantheon/src/ledger/kinds.mjs:46)"], "contract": "recorded escalations re-derive from cited inputs"}
   ],
   "technology": {
-    "probe": "/home/user/kg-tmp/sqlite-probe.mjs (synthetic; 60000 nodes, 240000 edges; 4 CPUs)",
+    "probe": "sqlite-probe.mjs, a scratch script outside the repository (synthetic; 60000 nodes, 240000 edges; 4 CPUs)",
     "results": {
       "jsonl_replay_index_ms": 265.6, "jsonl_bytes": 12519885, "js_3hop_ms": 0.2, "js_reverse_closure_ms": 35.3, "js_reverse_closure_nodes": 58803,
       "sqlite_insert_ms": 1210.4, "sqlite_3hop_ms": 0.4, "sqlite_reverse_closure_ms": 470.8, "sqlite_db_bytes": 10276864,
