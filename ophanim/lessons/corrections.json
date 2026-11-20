@@ -406,7 +406,7 @@
     },
     {
       "id": "brief-manifest-disagree",
-      "class": "The coordinator's brief and the ownership manifest for the same work disagree (a file the brief allows that the manifest omits; a region limit that forbids what the brief requires), so a correct change reads as a violation and the agent must choose which document to obey.",
+      "class": "The coordinator's dispatch documents for the same work contradict each other or themselves (a file the brief allows that the manifest omits; a region limit that forbids what the brief requires; a brief that says to read a file it also forbids), so a correct change reads as a violation and the agent must choose which instruction to obey.",
       "source": "self-observed at the L-136 and L-146 integrations (2026-11-20)",
       "instances": [
         {
@@ -424,12 +424,20 @@
           "ref": "docs/execution/l146-ownership.json (amended at integration)",
           "detected_by": "the L-146 agent, in its report",
           "note": "the region limit kept cycle-review-http-turn.mjs's use through --turn unchanged; the brief required the fix that changes it"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the L-136, L-146 and L-148 briefs (scratch, not committed)",
+          "detected_by": "the L-148 agent, in its report",
+          "note": "each brief said to read the owner decision verbatim in docs/OPEN-LIMITATIONS.md and also listed that file as never to be read; the L-148 agent read only the decision's diff hunk. The L-148 manifest itself was written from the brief and its check found no conflict; the launcher label repair fell outside it (amended)"
         }
       ],
       "detector": {
         "kind": "none",
         "why": "the brief is prose; check-ownership checks files, not region limits against the brief",
-        "next": "write each region limit from the brief's DESIGN section and list in the manifest every file the design names before dispatch"
+        "next": "write each region limit from the brief's DESIGN section, list every file the design names, and quote the owner decision into the brief instead of pointing at a file the brief forbids"
       }
     }
   ]
