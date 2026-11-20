@@ -25,9 +25,10 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const LANE_TEST = 'ophanim/operate/self-repair.test.mjs', VERIFY_TEST = 'ophanim/operate/self-repair-verify.test.mjs', PEN_TEST = 'ophanim/operate/pentest/g-self-repair.test.mjs';
-const FEED_TEST = 'ophanim/operate/self-repair-feed.test.mjs', LOOP_TEST = 'ophanim/operate/self-repair-inspect.test.mjs';
+const FEED_TEST = 'ophanim/operate/self-repair-feed.test.mjs', LOOP_TEST = 'ophanim/operate/self-repair-inspect.test.mjs', LEARN_TEST = 'ophanim/operate/self-repair-learning.test.mjs';
+const STAGES_MOD = 'ophanim/operate/stages.mjs';
 const INSPECTOR = 'ophanim/operate/self-repair-inspect.mjs';
-const SUITES = [LANE_TEST, VERIFY_TEST, PEN_TEST, FEED_TEST, LOOP_TEST];
+const SUITES = [LANE_TEST, VERIFY_TEST, PEN_TEST, FEED_TEST, LOOP_TEST, LEARN_TEST];
 const LANE = 'ophanim/operate/self-repair.mjs', LEDGER = 'ophanim/operate/work-ledger.mjs', SCHED = 'ophanim/operate/scheduler.mjs';
 const WITHHELD = /(^|\/)findings-[^/]*(\/|$)/;
 const one = (file, from, to) => ({file, from, to});
@@ -129,6 +130,17 @@ export const MUTATIONS = [
     edits: [one(LANE, "    if (last?.commit === head) return {state: 'already-inspected',", "    if (false) return {state: 'already-inspected',")]},
   {id: 'SR31', what: 'the inspector never stresses the tests changed since the last inspection', tests: [[LOOP_TEST, '^inspector: the gate run']],
     edits: [one(INSPECTOR, '    const files = plan.since ? changedTests(co.dir, plan.since, plan.commit) : [];', '    const files = [];')]},
+  // ---- learning: the lane's own history and recurrence (owner, 2026-11-20: "Recursive") ----------------------------------
+  {id: 'SR32', what: "a round's Diagnose is not handed the lane's history", tests: [[LEARN_TEST, '^learning: a defect back after']],
+    edits: [one(LANE, '        history: r.open.history ?? [], recurrence: r.open.recurrence ?? null} : null;', '        history: [], recurrence: null} : null;'), one(LANE, 'history: history.slice(-20), recurrence, paths: d.site,', 'paths: d.site,')]},
+  {id: 'SR33', what: 'a defect back after its landed repair is not recurring', tests: [[LEARN_TEST, '^learning: recurrence is']],
+    edits: [one(LANE, "  if (returned.length) return {kind: 'returned',", "  if (false) return {kind: 'returned',")]},
+  {id: 'SR34', what: 'no lesson candidate is routed for a recurring defect', tests: [[LEARN_TEST, '^learning: a defect back after']],
+    edits: [one(LANE, '      if (recurrence) { const c = writeLessonCandidate(', '      if (false) { const c = writeLessonCandidate(')]},
+  {id: 'SR35', what: 'a defect back after its repair landed is skipped as awaiting the merge (the lane never repairs it again)', tests: [[LEARN_TEST, '^learning: a failing test measured at a commit']],
+    edits: [one(LANE, "      : landed.has(d.id) && !back(d, landed.get(d.id)) ? {route: 'landed',", "      : landed.has(d.id) ? {route: 'landed',")]},
+  {id: 'SR36', what: "the planner prompt drops the lane's history", tests: [[LEARN_TEST, '^learning: Diagnose is shown']],
+    edits: [one(STAGES_MOD, '      ...(selfRepair.history?.length ? [', '      ...(false ? [')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

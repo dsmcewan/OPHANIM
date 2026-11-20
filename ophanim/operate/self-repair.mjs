@@ -164,6 +164,8 @@ export function roundPaths(r, stages = []) {
 // ---- git -------------------------------------------------------------------------------------------------------------
 const git = (repo, args, opts = {}) => execFileSync('git', ['-C', repo, '-c', 'user.name=ophanim-self-repair', '-c', 'user.email=self-repair@ophanim.invalid', '-c', 'commit.gpgsign=false', ...args],
   {encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['pipe', 'pipe', 'pipe'], ...opts});
+/** Whether commit `a` is `b` or an ancestor of it. */
+export const isAncestor = (repo, a, b) => { try { git(repo, ['merge-base', '--is-ancestor', a, b]); return true; } catch { return false; } };
 export const revOf = (repo, ref) => { try { return git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).trim() || null; } catch { return null; } };
 const parentOf = (repo, c) => revOf(repo, `${c}^`);
 /** The files a commit range changes (renames as a delete and an add), withheld paths never listed. */
@@ -386,11 +388,16 @@ export function protectedSite(d, config = DEFAULT_CONFIG) {
  *   waiting   its site overlaps the paths of an open round (two rounds never edit overlapping paths at once).
  * ROTATION: a defect whose round ended blocked or failed goes to the back of the queue, oldest attempt first.
  */
-export function select({defects, rounds, board, config = DEFAULT_CONFIG, stagesOf = () => [], routed = new Map()}) {
+export function select({defects, rounds, board, config = DEFAULT_CONFIG, stagesOf = () => [], routed = new Map(), after = () => false}) {
   const skipped = [], eligible = [];
   const open = rounds.filter(r => !r.close);
   const reverted = new Set(rounds.filter(r => r.open.kind === 'rollback' && r.close?.outcome === 'landed').map(r => r.open.culprit?.defect).filter(Boolean));
-  const landed = new Map(rounds.filter(r => r.open.kind === 'repair' && r.close?.outcome === 'landed').map(r => [r.open.defect.id, r.n]));
+  const landed = new Map(rounds.filter(r => r.open.kind === 'repair' && r.close?.outcome === 'landed').map(r => [r.open.defect.id, {n: r.n, commit: r.land?.commit ?? null}]));
+  // BACK AFTER ITS REPAIR (learning, 2026-11-20): a failing test or a measured flake whose evidence was taken at a commit that
+  // CONTAINS the landed repair is not awaiting the owner's merge: the repair did not hold, and it is eligible again (its
+  // round carries the recurrence). A register entry stays as it was until the owner updates it. `after(a, b)`: commit a
+  // is b or an ancestor of it.
+  const back = (d, l) => ['regression', 'flake'].includes(d.kind) && Boolean(l.commit && d.evidence?.commit) && after(l.commit, d.evidence.commit);
   const lastTry = new Map();
   for (const r of rounds) if (r.open.kind === 'repair' && r.close && r.close.outcome !== 'landed') lastTry.set(r.open.defect.id, r.n);
   const items = (board?.items ?? []).filter(i => i.item !== LANE_ITEM);
@@ -405,7 +412,7 @@ export function select({defects, rounds, board, config = DEFAULT_CONFIG, stagesO
       : d.pending_owner ? {route: 'owner-decision', why: `the register says: ${d.status}`}
       : !d.site.length ? {route: 'unlocated', why: 'the entry names no path of the tree, so it cannot be located on an unprotected surface'}
       : open.some(r => r.open.defect.id === d.id) ? {route: 'deduped', why: `round ${open.find(r => r.open.defect.id === d.id).n} is open for it`}
-      : landed.has(d.id) ? {route: 'landed', why: `round ${landed.get(d.id)} landed its repair on the line; it awaits the owner's merge`}
+      : landed.has(d.id) && !back(d, landed.get(d.id)) ? {route: 'landed', why: `round ${landed.get(d.id).n} landed its repair on the line; it awaits the owner's merge`}
       : owner ? {route: 'deduped', why: `the owner-signed item "${owner.item}" names it`}
       : overlap ? {route: 'waiting', why: `its site overlaps the paths of open round ${overlap.n}: two rounds never edit overlapping paths at once`}
       : null;
@@ -715,6 +722,43 @@ export function lineLandings(work, line) {
   });
 }
 
+// ---- LEARNING: the lane's own history and recurrence (owner, 2026-11-20: "Recursive") ----------------------------------
+/**
+ * The lane's earlier rounds on a defect: the same defect id, or a site overlapping it, each with how it ended (landed,
+ * blocked, failed, or still open), the commit it landed and the rollback that reverted it, if any. A round's Diagnose is
+ * handed this (ctx.selfRepair.history, and the planner prompt), so it starts from what was tried before instead of
+ * patching blind; the open event records it.
+ */
+export function laneHistory(rounds, defect) {
+  const reverted = new Map(rounds.filter(r => r.open.kind === 'rollback').map(r => [r.open.culprit?.round, {round: r.n, outcome: r.close?.outcome ?? 'open'}]));
+  return rounds.filter(r => r.open.kind === 'repair' && (r.open.defect?.id === defect.id || (r.open.defect?.site ?? []).some(a => (defect.site ?? []).some(b => pathsOverlap(a, b)))))
+    .map(r => ({round: r.n, defect: r.open.defect.id, same_defect: r.open.defect.id === defect.id, outcome: r.close?.outcome ?? 'open', why: r.close?.why ? cut(r.close.why, 200) : null,
+      landed: r.land?.commit ?? null, reverted_by: reverted.get(r.n) ?? null}));
+}
+/**
+ * RECURRENCE: the defect is back after a repair of it LANDED, or it has failed to be repaired twice or more. Patching it
+ * once more treats the instance, not the mechanism. The lane still repairs the instance, and routes the owner a LESSON
+ * candidate: a lessons class with a mechanical detector is needed. It never writes the lessons registry (an outer wheel).
+ */
+export function recurrenceOf(history) {
+  const same = history.filter(h => h.same_defect);
+  const returned = same.filter(h => h.landed), failed = same.filter(h => h.outcome === 'blocked' || h.outcome === 'failed');
+  if (returned.length) return {kind: 'returned', rounds: returned.map(h => h.round), why: `repaired in round(s) ${returned.map(h => h.round).join(', ')} (landed ${returned.map(h => h.landed.slice(0, 12)).join(', ')}) and back again`};
+  if (failed.length >= 2) return {kind: 'unrepaired', rounds: failed.map(h => h.round), why: `not repaired in ${failed.length} earlier rounds (${failed.map(h => `r${h.round} ${h.outcome}`).join(', ')})`};
+  return null;
+}
+/** The owner's lesson candidate for a recurring defect (never executed; one per defect and set of rounds). */
+export function writeLessonCandidate(stateDir, {defect, recurrence, lane}) {
+  const d = path.join(stateDir, 'self-repair', 'candidates'), f = path.join(d, `lesson-${digest(`${defect.id}|${recurrence.rounds.join(',')}`).slice(0, 32)}.json`);
+  if (fs.existsSync(f)) return null;
+  writeJsonAtomic(f, {schema: CANDIDATE_SCHEMA, classification: 'candidate', state: CANDIDATE_STATE.open, executable: false, ref: `self-repair-lesson:${defect.id}`, kind: 'self-repair-lesson',
+    defect: {id: defect.id, kind: defect.kind, title: defect.title, site: defect.site}, recurrence,
+    why: `RECURRING: ${recurrence.why}. Repairing the instance again treats the symptom; the mechanism needs a lessons class with a mechanical detector (ophanim/lessons/corrections.json), which only the owner or the coordinator writes.`,
+    authority: 'none: a candidate is never executed; the lessons registry is an outer wheel the lane never edits',
+    lane: {item: LANE_ITEM, entry: lane?.entry ?? null}});
+  return f;
+}
+
 // ---- THE RECURSIVE LOOP: self-inspection (owner, 2026-11-20) ---------------------------------------------------------
 // "If it needs repairs it fixes itself; if not, it does a recursive loop ... in parallel with the ticket." When Detect
 // finds nothing to select and no round is open, the idle lane inspects itself: a whole gate run, a stress run of the
@@ -776,7 +820,7 @@ export function createLane({repo, statusRoot, workRoot, work, board = null, conf
   const hide = [workRoot, state];
   const at = () => new Date(clock()).toISOString();
   const recordEvent = x => work.recordRepair(clean(x));
-  const log = {state: 'dormant', opened: null, landed: [], closed: [], routed: [], revalidated: [], rollback: null, refused: []};
+  const log = {state: 'dormant', opened: null, landed: [], closed: [], routed: [], revalidated: [], rollback: null, refused: [], lessons: []};
   let sw = null;
   const readBoard = () => board ?? openStatusLedger({root: statusRoot, create: false}).board();
   const rounds = () => roundsOf(work);
@@ -909,7 +953,7 @@ export function createLane({repo, statusRoot, workRoot, work, board = null, conf
         if (bis) { await rollback(bis.culprit, d, bis); return log; }
       }
       const b = readBoard();
-      const sel = select({defects: det.defects, rounds: rounds(), board: b, config, stagesOf: i => work.stages(i), routed: routedOf(work)});
+      const sel = select({defects: det.defects, rounds: rounds(), board: b, config, stagesOf: i => work.stages(i), routed: routedOf(work), after: (a, c) => isAncestor(repo, a, c)});
       for (const s of sel.skipped.filter(x => x.route === 'owner')) route(det.defects.find(d => d.id === s.id), s.why);
       log.selection = {selected: sel.selected?.id ?? null, queue: sel.queue.length, skipped: sel.skipped.length};
       if (!sel.selected) {
@@ -920,8 +964,11 @@ export function createLane({repo, statusRoot, workRoot, work, board = null, conf
       }
       const d = sel.selected, base = ensureLine();
       const n = 1 + Math.max(0, ...rounds().map(x => x.n));
+      // LEARNING: what the lane tried before on this defect or its files, and whether it is recurring (a lesson candidate).
+      const history = laneHistory(rounds(), d), recurrence = recurrenceOf(history);
+      if (recurrence) { const c = writeLessonCandidate(state, {defect: d, recurrence, lane: sw}); log.lessons.push({defect: d.id, ...recurrence, candidate: c ? path.relative(state, c) : null}); }
       const ev = recordEvent({event: 'open', round: n, kind: 'repair', defect: {id: d.id, kind: d.kind, title: cut(d.title, 200), site: d.site, reproduction: d.reproduction ?? null},
-        evidence: {detect: det.digest, commit: head, defect: d.evidence ?? null, ignored: det.ignored.slice(0, 20)}, paths: d.site, base, line: config.line, lane_entry: sw.entry,
+        evidence: {detect: det.digest, commit: head, defect: d.evidence ?? null, ignored: det.ignored.slice(0, 20)}, history: history.slice(-20), recurrence, paths: d.site, base, line: config.line, lane_entry: sw.entry,
         queue: sel.queue.slice(0, 200).map(q => q.id), skipped: sel.skipped.slice(0, 200).map(s => ({id: s.id, route: s.route, why: cut(s.why, 200)})), at: at()});
       log.opened = {round: n, item: roundId(n), defect: d.id, base, record: ev};
       return log;
@@ -929,7 +976,8 @@ export function createLane({repo, statusRoot, workRoot, work, board = null, conf
     /** The round's context for its stages (ctx.selfRepair): its defect, base, line and claimed paths. */
     ctxOf(item) {
       const r = roundBy(item);
-      return r ? {round: r.n, item: r.item, kind: r.open.kind, defect: r.open.defect, base: r.open.base, line: r.open.line, paths: roundPaths(r, work.stages(item)), lane_entry: r.open.lane_entry} : null;
+      return r ? {round: r.n, item: r.item, kind: r.open.kind, defect: r.open.defect, base: r.open.base, line: r.open.line, paths: roundPaths(r, work.stages(item)), lane_entry: r.open.lane_entry,
+        history: r.open.history ?? [], recurrence: r.open.recurrence ?? null} : null;
     },
     claimPaths(item) { const r = roundBy(item); return r ? roundPaths(r, work.stages(item)) : null; },
     /** The stage executor of a round: the plan's reproduction check (decision 4) and validate's mechanical checks (5, 6, 9). */
