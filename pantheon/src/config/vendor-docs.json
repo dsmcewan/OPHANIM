@@ -1,6 +1,6 @@
 {
   "schema": "pantheon.vendor-docs/v1",
-  "note": "Where each lab publishes its own documentation index (the llms.txt form: every page listed, each available as markdown). `hosts` are the only hosts a capture may ask: a listed link elsewhere is recorded and not read. These are documentation sites, not API hosts, and no key is sent to them (src/vendor-docs/capture.mjs). `models` says where a lab's per-model pages are found when its index does not list them: the links of a listing page that match `link`, and the page (`page`, with {name}) of each name the `names` patterns find in it.",
+  "note": "Where each lab publishes its own documentation index (the llms.txt form: every page listed, each available as markdown). `hosts` are the only hosts a capture may ask: a listed link elsewhere is recorded and not read. These are documentation sites, not API hosts, and no key is sent to them (src/vendor-docs/capture.mjs). `models` says where a lab's per-model pages are found when its index does not list them: the links of a listing page that match `link`, and the page (`page`, with {name}) of each name the `names` patterns find in it. `server` names a lab's own documentation server (the MCP form over HTTP): the tool that lists the documents it holds, the tool that returns one, and the lab's sites its documents may be on. It is asked at its own address, which is on `hosts`, for what the index did not supply; the other sites are never asked directly.",
   "labs": {
     "openai": {
       "hosts": [
@@ -14,6 +14,16 @@
           "https://developers.openai.com/api/docs/models/all.md"
         ],
         "link": "^https://developers\\.openai\\.com/api/docs/models/(?!all\\.md$|compare\\.md$)[^/?#]+\\.md$"
+      },
+      "server": {
+        "url": "https://developers.openai.com/mcp",
+        "list": "list_openai_docs",
+        "fetch": "fetch_openai_doc",
+        "hosts": [
+          "developers.openai.com",
+          "platform.openai.com",
+          "learn.chatgpt.com"
+        ]
       }
     },
     "xai": {

@@ -18,6 +18,9 @@ export const CLIENT = "docs-reader/1.0";
 // The listed links already name the markdown form of each page. Asking for markdown as well makes one lab's site look for
 // the markdown of the markdown and answer 404, so nothing is preferred here.
 const HEADERS = Object.freeze({ "user-agent": CLIENT, accept: "*/*" });
+const RPC_HEADERS = Object.freeze({ "user-agent": CLIENT, accept: "application/json, text/event-stream", "content-type": "application/json" });
+const MAX_LISTS = 200;
+const MAX_FOLLOWED = 3000, FOLLOW_DEPTH = 5;
 const MAX_HOPS = 3;
 const MAX_INDEXES = 64;
 const INDEX_BYTES = 4_000_000;
@@ -89,7 +92,7 @@ async function get(url, { def, fetch, retries, sleep }) {
       let next;
       try { next = new URL(location, at); } catch { return { ok: false, status: "failed", why: `HTTP ${res.status} with no usable location` }; }
       if (next.protocol !== "https:" || !def.hosts.includes(next.hostname))
-        return { ok: false, status: "refused", why: `redirects to ${next.hostname}, outside the lab's documentation hosts` };
+        return { ok: false, status: "refused", why: `redirects to ${next.hostname}, outside the lab's documentation hosts`, to: next.href };
       at = next.href;
       continue;
     }
@@ -98,6 +101,23 @@ async function get(url, { def, fetch, retries, sleep }) {
   }
   return { ok: false, status: "failed", why: `more than ${MAX_HOPS} redirects` };
 }
+
+/** One call of a tool of the lab's documentation server (the MCP form, over HTTP). → {text} | {error} */
+async function ask(server, fetch, name, args, id) {
+  let res;
+  try { res = await fetch(server.url, { method: "POST", headers: { ...RPC_HEADERS }, redirect: "manual", body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) }); }
+  catch (e) { return { error: `no answer (${e?.cause?.code ?? e?.code ?? e?.name ?? "error"})` }; }
+  if (res.status !== 200) return { error: `HTTP ${res.status}` };
+  const raw = await res.text(), event = /^data: (.*)$/m.exec(raw);
+  let message;
+  try { message = JSON.parse(event ? event[1] : raw); } catch { return { error: "an answer that is not JSON" }; }
+  if (message.error) return { error: String(message.error.message ?? "an error") };
+  const text = message.result?.content?.find(c => c.type === "text")?.text ?? "";
+  return message.result?.isError ? { error: text.split(/\r?\n/)[0].slice(0, 300) } : { text };
+}
+
+/** A page's address without what does not change which page it is: the markdown ending, a closing slash, a fragment. */
+const same = url => { const u = new URL(url); return u.origin + u.pathname.replace(/\.md$/, "").replace(/\/$/, "") + u.search; };
 
 async function pool(items, size, work) {
   let next = 0;
@@ -142,7 +162,7 @@ export async function captureLab({ lab, def, store, fetch = globalThis.fetch, no
   mkdirSync(blobs, { recursive: true });
   const read = async page => {
     const got = await get(page.url, io);
-    if (!got.ok) { page.status = got.status; page.why = got.why; return; }
+    if (!got.ok) { page.status = got.status; page.why = got.why; if (got.to) page.redirects_to = got.to; return; }
     if (got.bytes.length > maxBytes) { page.status = "skipped"; page.why = `larger than the bound of ${maxBytes} bytes (${got.bytes.length})`; return; }
     const digest = sha256(got.bytes);
     if (!existsSync(join(blobs, digest))) writeFileSync(join(blobs, digest), got.bytes);
@@ -166,9 +186,81 @@ export async function captureLab({ lab, def, store, fetch = globalThis.fetch, no
     }
   }
   await pool(derived, concurrency, read);
+  // The lab's own documentation server, where it runs one, holds documents its index does not list, some on other sites
+  // of the lab. It is asked at its own address, which must be on the lab's documentation hosts, and only for what the
+  // index did not already supply. It is an addition: when it does not answer, that is recorded and the capture stands.
+  let server;
+  if (def.server) {
+    const at = new URL(def.server.url);
+    if (at.protocol !== "https:" || !def.hosts.includes(at.hostname)) throw fail("VENDOR_SERVER_ELSEWHERE", `${lab}: the documentation server ${def.server.url} is on ${at.hostname}, outside the lab's documentation hosts`);
+    server = { url: def.server.url, status: "read", held: null, listed: 0, added: 0, followed: 0 };
+    const have = new Set([...listed.keys()].map(same)), wanted = [];
+    let cursor, id = 0;
+    for (let n = 0; n < MAX_LISTS; n++) {
+      const got = await ask(def.server, fetch, def.server.list, { limit: 50, ...(cursor ? { cursor } : {}) }, ++id);
+      let page;
+      try { page = got.error ? null : JSON.parse(got.text); } catch { got.error = "a list that is not JSON"; }
+      if (!page) { Object.assign(server, { status: "failed", why: got.error }); break; }
+      server.held = typeof page.nbHits === "number" ? page.nbHits : server.held;
+      for (const hit of page.hits ?? []) {
+        server.listed++;
+        let url;
+        try { url = new URL(hit.url_without_anchor ?? hit.url); url.hash = ""; } catch { continue; }
+        if (have.has(same(url.href))) continue;
+        have.add(same(url.href));
+        const entry = { section: hit.hierarchy?.lvl0 ?? null, title: hit.hierarchy?.lvl1 ?? null, url: url.href, description: null, index: null, via: def.server.url };
+        if (url.protocol !== "https:" || !(def.server.hosts ?? def.hosts).includes(url.hostname))
+          Object.assign(entry, { status: "skipped", why: `the lab's documentation server lists it on ${url.hostname}, which is not one of the lab's sites` });
+        else wanted.push(entry);
+        listed.set(entry.url, entry);
+      }
+      cursor = page.nextCursor;
+      if (!cursor || !(page.hits ?? []).length) break;
+    }
+    server.added = wanted.length;
+    const through = async page => {
+      const got = await ask(def.server, fetch, def.server.fetch, { url: page.url }, ++id);
+      if (got.error) { page.status = "skipped"; page.why = `${page.derived_from ? `${page.derived_from} links to it and the lab's documentation server` : "the lab's documentation server lists it and"} did not return it (${got.error})`; return; }
+      const bytes = Buffer.from(got.text, "utf8");
+      if (bytes.length > maxBytes) { page.status = "skipped"; page.why = `larger than the bound of ${maxBytes} bytes (${bytes.length})`; return; }
+      const digest = sha256(bytes);
+      if (!existsSync(join(blobs, digest))) writeFileSync(join(blobs, digest), bytes);
+      Object.assign(page, { status: "captured", sha256: digest, bytes: bytes.length, read: now(), title: page.title ?? /^# (.+?)\s*$/m.exec(got.text)?.[1] ?? null });
+      texts.set(page.url, got.text);
+    };
+    const texts = new Map();
+    await pool(wanted, concurrency, through);
+    // A site of the lab that is read only through the server has no index here, and the server's list is bounded. So on
+    // such a site a captured page's own links are followed, through the server, a bounded number of steps; and a listed
+    // page that moved there is read where it went. Nothing off those sites is followed.
+    const only = new Set((def.server.hosts ?? []).filter(h => !def.hosts.includes(h)));
+    const add = (url, from) => {
+      if (server.status !== "read" || server.followed >= MAX_FOLLOWED || !only.has(url.hostname) || url.protocol !== "https:") return null;
+      url.hash = ""; url.pathname = url.pathname.replace(/\.md$/, "");
+      if (/\.[a-z0-9]{2,5}$/i.test(url.pathname) || have.has(same(url.href))) return null;
+      have.add(same(url.href)); server.followed++;
+      const entry = { section: from.section ?? null, title: null, url: url.href, description: null, index: null, via: def.server.url, derived_from: from.url };
+      listed.set(entry.url, entry);
+      return entry;
+    };
+    let frontier = [...listed.values()].filter(p => p.status === "refused" && p.redirects_to).map(p => add(new URL(p.redirects_to), p)).filter(Boolean);
+    await pool(frontier, concurrency, through);
+    frontier = [...wanted, ...frontier].filter(p => p.status === "captured" && only.has(new URL(p.url).hostname));
+    for (let depth = 0; depth < FOLLOW_DEPTH && frontier.length; depth++) {
+      const next = [];
+      for (const page of frontier) for (const m of (texts.get(page.url) ?? "").matchAll(/\]\(([^)\s]+)\)/g)) {
+        let url;
+        try { url = new URL(m[1], page.url); } catch { continue; }
+        const entry = add(url, page);
+        if (entry) next.push(entry);
+      }
+      await pool(next, concurrency, through);
+      frontier = next.filter(p => p.status === "captured");
+    }
+  }
   const pages = [...listed.values()].sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
   const count = status => pages.filter(p => p.status === status).length;
-  const manifest = { schema: SCHEMA, lab, client: CLIENT, read: now(), hosts: [...def.hosts], indexes, pages,
+  const manifest = { schema: SCHEMA, lab, client: CLIENT, read: now(), hosts: [...def.hosts], indexes, ...(server ? { server } : {}), pages,
     summary: { listed: pages.length, captured: count("captured"), skipped: count("skipped"), refused: count("refused"), failed: count("failed") } };
   const file = join(dir, "manifest.json");
   writeFileSync(`${file}.tmp`, JSON.stringify(manifest, null, 1) + "\n");

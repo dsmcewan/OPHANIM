@@ -31,6 +31,8 @@ This reads every page each lab's documentation lists (about a minute for the fou
 
 The four documentation hosts must be reachable: `developers.openai.com`, `docs.x.ai`, `aistudio.google.com`, `platform.claude.com`. No key is sent to them.
 
+OpenAI also runs its own documentation server (`developers.openai.com/mcp`). The capture asks it for what OpenAI's index does not list, which is how the Codex documentation (on `learn.chatgpt.com`, never asked directly) is read: the server's list, then that site's own links, each page through the server.
+
 ## 2. Record that it was seen
 
 ```
@@ -66,7 +68,7 @@ Each step has a check that fails until the step is done.
 
 ## Looking something up through Context7
 
-A session that has the Context7 connector can ask it about any lab's documentation. The library ids are in `pantheon/src/config/vendor-context7.json`, among them the Codex repository, whose documentation site is not captured directly.
+A session that has the Context7 connector can ask it about any lab's documentation. The library ids are in `pantheon/src/config/vendor-context7.json`, among them the Codex repository.
 
 Context7 is a third party's index of snippets taken from the labs' pages. It is for a question and for a cross-check. It cannot supply a lab's documentation whole. Measured on 2026-11-20, after the owner asked for it to be used to get everything:
 

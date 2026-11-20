@@ -18,7 +18,7 @@
    },
    {
     "id": "/openai/codex",
-    "what": "the Codex CLI and SDK repository, whose documentation site is not captured directly (register L-804)"
+    "what": "the Codex CLI and SDK repository (its documentation site is read through OpenAI's own documentation server, register L-804)"
    }
   ],
   "xai": [

@@ -61,6 +61,7 @@ function reportCapture(lab, before, m) {
   if (before) console.log(`  since ${before.read}: ${c.added.length} added, ${c.removed.length} removed, ${c.changed.length} changed`);
   for (const p of m.pages.filter(p => p.status === "failed" || p.status === "refused")) console.log(`  ${p.status}: ${p.url} (${p.why})`);
   for (const i of m.indexes.filter(i => i.status !== "captured")) console.log(`  index ${i.status}: ${i.url} (${i.why})`);
+  if (m.server) console.log(`  documentation server ${m.server.url}: ${m.server.status}${m.server.why ? ` (${m.server.why})` : ""}; it says it holds ${m.server.held ?? "an unstated number of"} documents, listed ${m.server.listed}, and ${m.server.added} not in the index were asked through it`);
 }
 
 async function capture(a) {

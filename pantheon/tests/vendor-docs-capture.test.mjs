@@ -215,3 +215,110 @@ test("a model listing that was not captured is an error: without it the lab's mo
   await assert.rejects(captureLab({ lab: "lab", def, store: store(t), fetch: site().fetch, now: NOW, sleep: async () => {}, retries: 0 }),
     { code: "VENDOR_LISTING_UNREADABLE", message: /https:\/\/docs\.lab\.test\/models\/all\.md/ });
 });
+
+// A lab's own documentation server (the MCP form): it lists the documents it holds and returns one by its address. It is
+// asked at an address on the lab's documentation hosts, for pages the index does not list, some of them on other sites of
+// the lab that are never asked directly.
+const SERVER = "https://docs.lab.test/mcp";
+const HELD = [
+  { url: "https://docs.lab.test/models/one#limits", url_without_anchor: "https://docs.lab.test/models/one", hierarchy: { lvl0: "Documentation", lvl1: "Model One" } },
+  { url: "https://help.lab.test/agent/config", url_without_anchor: "https://help.lab.test/agent/config", hierarchy: { lvl0: "Agent", lvl1: "Configuration reference" } },
+  { url: "https://help.lab.test/agent/config#keys", url_without_anchor: "https://help.lab.test/agent/config", hierarchy: { lvl0: "Agent", lvl1: "Configuration reference" } },
+  { url: "https://help.lab.test/agent", url_without_anchor: "https://help.lab.test/agent", hierarchy: { lvl0: "Agent", lvl1: "Agent" } },
+  { url: "https://docs.lab.test/guides/unlisted", url_without_anchor: "https://docs.lab.test/guides/unlisted", hierarchy: { lvl0: "Documentation", lvl1: "A guide the index omits" } },
+  { url: "https://videos.elsewhere.test/intro", url_without_anchor: "https://videos.elsewhere.test/intro", hierarchy: { lvl0: "Videos", lvl1: "Intro" } },
+];
+const BODIES = {
+  "https://help.lab.test/agent/config": "# Configuration reference\n\nSee [advanced](/agent/advanced), ![a picture](/img/keys.png), [Model One](https://docs.lab.test/models/one) and [elsewhere](https://other.test/x).\n",
+  "https://help.lab.test/agent/advanced": "# Advanced configuration\n\n[Deeper](https://help.lab.test/agent/deeper#section) and back to [the reference](/agent/config.md).\n",
+  "https://help.lab.test/agent/deeper": "# Deeper\n\n[A page that is not there](/agent/gone)\n",
+  "https://help.lab.test/agent/redirected": "# Where the old address went\n",
+  "https://docs.lab.test/guides/unlisted": "# A guide the index omits\n\n[Another guide](https://docs.lab.test/guides/another) and [the agent](https://help.lab.test/agent/from-the-guide).\n",
+};
+function served({ pages = PAGES, held = HELD, perPage = 2, total = held.length, down = false } = {}) {
+  const s = site(pages), posts = [];
+  const answer = (id, result) => new Response(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result })}\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+  const fetch = async (url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") return s.fetch(url, init);
+    posts.push({ url: String(url), headers: { ...(init.headers ?? {}) }, redirect: init.redirect, body: JSON.parse(init.body) });
+    if (down || String(url) !== SERVER) return new Response("no", { status: 503 });
+    const { id, method, params } = JSON.parse(init.body);
+    assert.equal(method, "tools/call");
+    if (params.name === "list_docs") {
+      const from = params.arguments.cursor ? Number(params.arguments.cursor) : 0, hits = held.slice(from, from + perPage);
+      return answer(id, { content: [{ type: "text", text: JSON.stringify({ hits, nbHits: total, ...(from + perPage < held.length ? { nextCursor: String(from + perPage) } : {}) }) }] });
+    }
+    const body = BODIES[params.arguments.url];
+    return answer(id, body === undefined ? { isError: true, content: [{ type: "text", text: `Failed to fetch ${params.arguments.url}.md: 404 Not Found\nmore detail` }] } : { content: [{ type: "text", text: body }] });
+  };
+  return { fetch, asked: s.asked, posts };
+}
+const WITH_SERVER = { ...LAB, server: { url: SERVER, list: "list_docs", fetch: "fetch_doc", hosts: ["docs.lab.test", "help.lab.test"] } };
+const viaServer = (t, over = {}) => { const s = served(over); return captureLab({ lab: "lab", def: over.def ?? WITH_SERVER, store: store(t), fetch: s.fetch, now: NOW, sleep: async () => {}, retries: 0 }).then(manifest => ({ manifest, ...s })); };
+
+test("THE LAB'S OWN DOCUMENTATION SERVER SUPPLIES WHAT ITS INDEX DOES NOT LIST: every document it holds is paged through, and each one not already captured is read through it", async t => {
+  const { manifest, posts, asked } = await viaServer(t);
+  const config = byUrl(manifest, "https://help.lab.test/agent/config");
+  assert.deepEqual({ status: config.status, title: config.title, section: config.section, via: config.via, index: config.index, sha256: config.sha256, bytes: config.bytes },
+    { status: "captured", title: "Configuration reference", section: "Agent", via: SERVER, index: null, sha256: sha(BODIES[config.url]), bytes: Buffer.byteLength(BODIES[config.url]) });
+  assert.equal(byUrl(manifest, "https://docs.lab.test/guides/unlisted").status, "captured");
+  assert.deepEqual(posts.filter(p => p.body.params.name === "list_docs").map(p => p.body.params.arguments), [{ limit: 50 }, { limit: 50, cursor: "2" }, { limit: 50, cursor: "4" }]);
+  assert.deepEqual(posts.filter(p => p.body.params.name === "fetch_doc").map(p => p.body.params.arguments.url).sort(),
+    ["https://docs.lab.test/guides/unlisted", "https://help.lab.test/agent", "https://help.lab.test/agent/advanced", "https://help.lab.test/agent/config", "https://help.lab.test/agent/deeper", "https://help.lab.test/agent/gone"],
+    "a document the index already supplied is not read again, a document listed twice is read once, and one on a site that is not the lab's is not read");
+  assert.equal(manifest.pages.filter(p => p.url.startsWith("https://docs.lab.test/models/one")).length, 1, "the same page under its markdown address and its plain one is one page");
+  assert.deepEqual(manifest.server, { url: SERVER, status: "read", held: 6, listed: 6, added: 3, followed: 3 });
+  assert.equal(asked.some(a => a.url.includes("help.lab.test")), false, "the lab's other site is never asked directly: its pages come through the server");
+});
+
+test("what the server holds and cannot return, or holds on a site that is not the lab's, is recorded with the reason and is not a failed page", async t => {
+  const { manifest } = await viaServer(t);
+  const lost = byUrl(manifest, "https://help.lab.test/agent"), video = byUrl(manifest, "https://videos.elsewhere.test/intro");
+  assert.deepEqual([lost.status, lost.why, lost.sha256 ?? null], ["skipped", "the lab's documentation server lists it and did not return it (Failed to fetch https://help.lab.test/agent.md: 404 Not Found)", null]);
+  assert.deepEqual([video.status, video.why], ["skipped", "the lab's documentation server lists it on videos.elsewhere.test, which is not one of the lab's sites"]);
+  assert.equal(manifest.summary.failed, 1, "only the index's own broken page is a failure");
+});
+
+test("THE SERVER IS ASKED WITH NO KEY, only at its own address, and never follows a redirect by itself", async t => {
+  const { posts } = await viaServer(t);
+  assert.ok(posts.length >= 6);
+  for (const p of posts) {
+    assert.deepEqual(Object.keys(p.headers).map(h => h.toLowerCase()).sort(), ["accept", "content-type", "user-agent"]);
+    assert.deepEqual([p.url, p.redirect, p.headers["user-agent"]], [SERVER, "manual", CLIENT]);
+  }
+  await assert.rejects(viaServer(t, { def: { ...WITH_SERVER, server: { ...WITH_SERVER.server, url: "https://mcp.elsewhere.test/mcp" } } }),
+    { code: "VENDOR_SERVER_ELSEWHERE", message: /mcp\.elsewhere\.test/ });
+});
+
+test("a server that does not answer, or that says it holds more than it lists, is recorded as such, and the index's pages are still captured", async t => {
+  const down = await viaServer(t, { down: true });
+  assert.deepEqual(down.manifest.server, { url: SERVER, status: "failed", why: "HTTP 503", held: null, listed: 0, added: 0, followed: 0 });
+  assert.equal(byUrl(down.manifest, "https://docs.lab.test/models/one.md").status, "captured");
+  const short = await viaServer(t, { total: 9 });
+  assert.deepEqual(short.manifest.server, { url: SERVER, status: "read", held: 9, listed: 6, added: 3, followed: 3 }, "the number the server says it holds is kept beside the number it listed");
+});
+
+test("A SITE OF THE LAB THAT IS READ ONLY THROUGH THE SERVER HAS NO INDEX HERE, so its pages' own links are followed: a page the server's list omits is still found, and nothing off that site is followed", async t => {
+  const { manifest, posts } = await viaServer(t);
+  const advanced = byUrl(manifest, "https://help.lab.test/agent/advanced"), deeper = byUrl(manifest, "https://help.lab.test/agent/deeper");
+  assert.deepEqual([advanced.status, advanced.title, advanced.derived_from, advanced.via, advanced.sha256], ["captured", "Advanced configuration", "https://help.lab.test/agent/config", SERVER, sha(BODIES[advanced.url])]);
+  assert.deepEqual([deeper.status, deeper.title, deeper.derived_from], ["captured", "Deeper", "https://help.lab.test/agent/advanced"]);
+  const gone = byUrl(manifest, "https://help.lab.test/agent/gone");
+  assert.deepEqual([gone.status, gone.why], ["skipped", "https://help.lab.test/agent/deeper links to it and the lab's documentation server did not return it (Failed to fetch https://help.lab.test/agent/gone.md: 404 Not Found)"]);
+  const fetched = posts.filter(p => p.body.params.name === "fetch_doc").map(p => p.body.params.arguments.url);
+  assert.deepEqual(fetched.filter(u => /keys\.png|other\.test|guides\/another|from-the-guide|models\/one/.test(u)), [],
+    "a picture, another site, a page the index holds, and the links of a page on a site that has an index are not followed");
+  assert.equal(fetched.filter(u => u === "https://help.lab.test/agent/config").length, 1, "a link back to a page already held is not asked again");
+});
+
+test("a listed page that moved to a site read only through the server is read there through the server, and the old address keeps saying where it went", async t => {
+  const pages = { ...PAGES,
+    "https://docs.lab.test/api/llms.txt": { body: API + "- [Agent configuration](https://docs.lab.test/reference/agent-config.md)\n", type: "text/plain" },
+    "https://docs.lab.test/reference/agent-config.md": { status: 308, location: "https://help.lab.test/agent/redirected" } };
+  const { manifest, asked } = await viaServer(t, { pages });
+  const old = byUrl(manifest, "https://docs.lab.test/reference/agent-config.md"), moved = byUrl(manifest, "https://help.lab.test/agent/redirected");
+  assert.deepEqual([old.status, old.redirects_to], ["refused", "https://help.lab.test/agent/redirected"]);
+  assert.deepEqual([moved.status, moved.title, moved.derived_from, moved.sha256], ["captured", "Where the old address went", old.url, sha(BODIES[moved.url])]);
+  assert.equal(asked.some(a => a.url.includes("help.lab.test")), false);
+  assert.equal(byUrl(manifest, "https://accounts.elsewhere.test/signin") ?? null, null, "a move to a site that is not the lab's is still only refused");
+});

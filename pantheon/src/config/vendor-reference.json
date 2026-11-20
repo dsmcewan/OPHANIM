@@ -2,10 +2,10 @@
  "schema": "pantheon.vendor-reference/v1",
  "labs": {
   "openai": {
-   "read": "2026-11-20T07:10:14.447Z",
+   "read": "2026-11-20T07:50:51.006Z",
    "pages": {
-    "listed": 1003,
-    "captured": 892
+    "listed": 1642,
+    "captured": 1474
    },
    "indexes": [
     {
@@ -63,6 +63,10 @@
    ],
    "sections": [
     {
+     "section": "Documentation",
+     "pages": 638
+    },
+    {
      "section": "Guides",
      "pages": 233
     },
@@ -104,7 +108,7 @@
     },
     {
      "section": "Common tasks",
-     "pages": 15
+     "pages": 16
     },
     {
      "section": "Documentation sets",
