@@ -225,9 +225,10 @@ test("L-306 (self-audit round 3, assignment 3 (sealed bb1287a)): an aborted runO
 function fakePython(dir) {
   const file = join(dir, "fake-python");
   writeFileSync(file, `#!/bin/sh
-env > "${join(dir, "sdk-env.txt")}"
 out=""; model=""; prev=""
 for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; [ "$prev" = "--model" ] && model="$a"; prev="$a"; done
+# The seat runs in its jail (knowledge graphs, Slice C2): its out dir is the only place it may write besides its workspace.
+env > "$out/sdk-env.txt"
 if [ -n "$FAKE_SDK_HANG" ]; then sleep 60; fi
 printf 'VERDICT: approve\\n' > "$out/response.md"
 # The envelope names the model the seat ran, as scripts/agy-seat.py's does ("model": its --model); the board compares it
@@ -246,14 +247,15 @@ test("L-410 (self-audit round 3, assignment 3 (sealed bb1287a)), tightened by L-
       const r = await runOpenItem(spec("sdkEnv"), { ...opts(), maxProviderCalls: 50, billing: optIn({ primary: 100 }), seatOverrides: { reviewer: seat("agy_google", "gemini-3.8-flash", { transport: "agy" }) } });
       const run = readRun(r);
       assert.ok(run.turns.some(t => t.vendor === "agy_google" && t.purpose === "critique"), JSON.stringify(run.turns.map(t => [t.purpose, t.vendor])));
-      const env = Object.fromEntries(lines(join(dir, "sdk-env.txt")).map(l => /^([^=]*)=(.*)$/s.exec(l)).filter(Boolean).map(m => [m[1], m[2]]));
+      const sdkEnvFile = join(dir, "outputs", "open-items", "sdkEnv", "agy_google", "critique-1", "sdk-env.txt");
+      const env = Object.fromEntries(lines(sdkEnvFile).map(l => /^([^=]*)=(.*)$/s.exec(l)).filter(Boolean).map(m => [m[1], m[2]]));
       // L-150: the seat holds NO credential. The Gemini key stays with the controller's metering relay, which charges each
       // request before it forwards it; the seat gets the relay's URL and a per-session capability instead.
       assert.equal(env.GEMINI_API_KEY, undefined, "the Gemini credential is withheld from the SDK seat");
       assert.match(env.PANTHEON_AGY_RELAY_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/, "the relay's loopback URL is passed");
       assert.match(env.PANTHEON_AGY_RELAY_CAPABILITY ?? "", /^ophanim-relay-[0-9a-f]{64}$/, "the session's capability is passed");
       for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "CONTROLLER_SECRET_TOKEN"]) assert.equal(env[k], undefined, `${k} never reaches the SDK seat`);
-      const text = readFileSync(join(dir, "sdk-env.txt"), "utf8");
+      const text = readFileSync(sdkEnvFile, "utf8");
       for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "CONTROLLER_SECRET_TOKEN", "GEMINI_API_KEY"]) assert.equal(text.includes(SYNTHETIC[k]), false, `no value of ${k} anywhere in its env`);
       assert.deepEqual(agySdkEnvOf({ ...SYNTHETIC, PATH: "/bin" }).credentials, []);
       assert.equal(agySdkEnvOf({ ...SYNTHETIC, PATH: "/bin", PANTHEON_AGY_ENV_PASS: "GEMINI_API_KEY,GOOGLE_API_KEY" }).env.GEMINI_API_KEY, undefined, "not even when PANTHEON_AGY_ENV_PASS names it");

@@ -22,6 +22,8 @@
     "pantheon/tests/review-runner-round2.test.mjs",
     "pantheon/tests/review-runner-subscription.test.mjs",
     "pantheon/tests/verify-deadline-r2a3-f9.test.mjs",
-    "pantheon/tests/verify-jail-credential-isolation.test.mjs"
+    "pantheon/tests/verify-jail-credential-isolation.test.mjs",
+    "pantheon/tests/wave3-agy-guard.test.mjs",
+    "pantheon/tests/wave3-spend.test.mjs"
   ]
 }

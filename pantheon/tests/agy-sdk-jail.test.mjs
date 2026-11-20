@@ -61,7 +61,9 @@ function world(t) {
   const secrets = [put(join(home, ".config", "gcloud", "application_default_credentials.json"), JSON.stringify({ type: "authorized_user", refresh_token: KEY })),
     put(join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), `oauth ${KEY}\n`), put(join(home, "secret.txt"), `${KEY}\n`)];
   const gac = put(join(root, "service-account.json"), JSON.stringify({ private_key: KEY }));
-  const writes = [join(root, "outside-the-jail.txt"), join(home, ".config", "gcloud", "planted.json"), repoWrite];
+  // The hidden HOME's root exists inside the jail (an empty tmpfs): only --remount-ro stops a write there (J11), where a write
+  // under a missing subdirectory fails either way (coordinator fix at integration).
+  const writes = [join(root, "outside-the-jail.txt"), join(home, ".config", "gcloud", "planted.json"), join(home, "planted-at-home-root.txt"), repoWrite];
   return { root, home, tag, gac, writes, plan: { secrets: [...secrets, gac], writes, tag },
     env: { PATH: process.env.PATH, HOME: home, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, AGY_C2_JAIL_CANARY: CANARY, GOOGLE_APPLICATION_CREDENTIALS: gac } };
 }
