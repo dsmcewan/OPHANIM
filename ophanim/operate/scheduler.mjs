@@ -92,14 +92,22 @@ export function verifyHandoff(work, gate) {
  */
 // `capacity` (optional): the stage executors' reviewer-pool signature (capacityOf below), so a change of the pool wakes a
 // capacity-pending item as it wakes a tick.
-export function inputSignature({repo, statusRoot, workRoot, issues = null, bundlesDir = null, now = Date.now(), capacity = null}) {
+// `graph` (optional; knowledge graphs, Slice D part 2, KD2-1): the graph loop (graph-loop.mjs createGraphLoop). Its CURSOR
+// -- the graph ledger's head and every source's observed version -- is part of the signature, so a change in the graph
+// (a new implemented-by, a newly established capability, a reassessment) wakes a tick as a ledger or ticket change does;
+// an unchanged graph does not. The routing is read through the graph's gate inputs, read only (nothing is recorded).
+export function inputSignature({repo, statusRoot, workRoot, issues = null, bundlesDir = null, now = Date.now(), capacity = null, graph = null}) {
   const head = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').at(-1) ?? '' : '');
   const tdir = path.join(repo, 'tickets');
   const tickets = fs.existsSync(tdir) ? fs.readdirSync(tdir).filter(f => f.endsWith('.json')).sort().map(f => [f, fs.readFileSync(path.join(tdir, f), 'utf8')]) : [];
+  // THE GRAPH CURSOR (KD2-1), read FIRST: it brings the loop's graph to the graph ledger's head, so the routing below is
+  // reconciled on the graph as it is now.
+  let cursor = null;
+  if (graph) { try { cursor = graph.cursor(); } catch (e) { cursor = {unreadable: String(e.message).slice(0, 200)}; } }
   let routing = null;
   try {
     const work = openWorkLedger({root: workRoot, create: false});
-    const rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now, capacity});
+    const rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now, capacity, ...(graph ? {graph: graph.context({write: false})} : {})});
     routing = rec.items.map(i => ({item: i.item, gate: i.gate.gate, mode: i.gate.mode ?? null, from: i.gate.from ?? null, retry_of: i.gate.retry_of ?? null,
       claim: i.gate.claim ?? null, recovery: i.gate.recovery ?? null, stale: (i.gate.stale ?? []).map(x => [x.record, x.why]),
       // The routing basis (gates.mjs attemptInputs) and a block's code: a re-route on new state, or a collision, is a change.
@@ -107,6 +115,8 @@ export function inputSignature({repo, statusRoot, workRoot, issues = null, bundl
       // An item with an evidence gap is searched again when its recovery sources change (tick, below): the same digest.
       ...(i.gate.gate === 'evidence-gap' ? {sources: sourcesDigest({repo, item: i.item, bundles: bundlesOf({item: i.item, bundlesDir, work}), work})} : {})}));
   } catch { routing = null; }   // no work ledger yet (the first tick makes it) or an unreadable status ledger: the heads decide
+  // The cursor rides with the routing it decides: absent without a graph, so the signature is as before.
+  if (graph) routing = {routing, graph: cursor};
   return 'sha256:' + digest({status: head(path.join(statusRoot, 'chain.jsonl')), work: head(path.join(workRoot, 'chain.jsonl')), tickets,
     issues: (issues ?? []).map(i => [i.number, i.state, i.title ?? '', i.body ?? '']).sort((a, b) => a[0] - b[0]), routing});
 }
@@ -162,15 +172,27 @@ export function releaseInterrupted(work, {claim, item, stage, why, at = new Date
   try { work.release({claim, item, stage, outcome: 'interrupted', why: `INTERRUPTED: ${why}`.slice(0, 600), at}); return true; }
   catch (e) { if (e?.code === 'LEDGER_REFUSED' && /that claim is already released/.test(String(e.message))) return false; throw e; }
 }
+// `graph` (optional; knowledge graphs, Slice D part 2, KD2-1 to KD2-6): the graph loop (graph-loop.mjs createGraphLoop).
+// The tick opens it ONCE, from its signed snapshot; observes the sources it is configured to observe at the start, and
+// the work source after every append (the write-back, idempotent); reconciles through its gate inputs (a stage after the
+// plan is blocked while a required prerequisite is MISSING, and unlocked when it is established); hands the stage
+// executors its handle (ctx.graph: the planner's graph and learning views, the team proposals); records discoveries only
+// as candidates and proposals; and writes a snapshot at the end. It reports the queue: eligible, blocked (with the
+// reason), runnable concurrently, unlocked, and the shared prerequisites (never merged). Without it the tick is as before.
 export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDir = null, executors = {}, limits = {}, holder = 'controller',
-  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null, billing = GEMINI_BILLING_OFF}) {
+  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null, billing = GEMINI_BILLING_OFF, graph = null}) {
   if (only !== null && (typeof only !== 'string' || !only)) fail('tick: `only` names one status item id', 'USAGE');
+  if (graph !== null && (typeof graph?.open !== 'function' || typeof graph?.context !== 'function')) fail('tick: `graph` is the graph loop (ophanim/operate/graph-loop.mjs createGraphLoop)', 'USAGE');
   if (!isPolicy(billing)) fail('tick: `billing` is the resolved Gemini billing policy (pantheon/src/route/gemini-billing.mjs resolveGeminiBilling)', 'USAGE');
   const L = {...DEFAULT_LIMITS, ...limits};
   const started = clock();
   const work = openWorkLedger({root: workRoot});
   const capacity = capacityOf(executors);
   const log = {dispatched: [], released_expired: [], intake: [], recovery: [], blocked: [], skipped: [], stopped: null, stop: null, interrupted: []};
+  // THE GRAPH OF THIS TICK (KD2-1, KD2-6): one open, from the snapshot; the configured sources and the work source observed.
+  const loop = graph;
+  if (loop) { loop.open(); loop.observeStart(); loop.observeWork(); }
+  const gctx = loop ? {graph: loop.context({write: true})} : {};
   const stopWith = (code, why) => { if (log.stopped === null) { log.stopped = why; log.stop = {code, why}; } };
   // Interrupted work: a claim past its lease is released as expired; its item resumes from its last valid stage.
   // BOOKKEEPING UNDER A RACE (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
@@ -187,7 +209,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     const r = raced(() => work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted', at: new Date(clock()).toISOString()}), /that claim is already released/);
     log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt, ...(r.done ? {} : {by_another: true})});
   }
-  let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
+  let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
   // Intake: every source of work is recorded once (by source and ref): status items, published issues (linked to an
   // item by its marker, or candidates), and tickets (an item's, or an orphan). Candidates and orphans are recorded and
   // never executed. (Independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 7.)
@@ -218,7 +240,10 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       ...(r.proposal ? {proposal: {digest: r.proposal.digest, commit: r.proposal.commit, in_head: r.proposal.in_head}} : {}), at: new Date(clock()).toISOString()}), /against these sources and this status is already recorded/);
     log.recovery.push({item: r.item, outcome: r.outcome, ...(r.proposal ? {proposal: r.proposal.file, digest: r.proposal.digest} : {}), searched: r.searched.length, ...(recorded.done ? {} : {by_another: true})});
   }
-  if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
+  if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
+  // The intake and recovery entries just appended are observed into the work graph (the write-back, idempotent).
+  if (loop && loop.observeWork().some(o => o.recorded)) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
+  if (loop) log.graph = {};
   const order = dependencyOrder(rec.items);
   let iterations = 0;
   // THE BILLING WAKE (see the header): a stage pending on a billing refusal whose refused kind's setting the launcher has
@@ -228,7 +253,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     if (gate?.gate !== 'blocked' || !gate.blocker?.transient || !billingChanged(gate.blocker, billing)) return gate;
     const due = Date.parse(gate.blocker.retry_at ?? '');
     if (!Number.isFinite(due)) return gate;
-    const woken = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: Math.max(clock(), due), capacity}).items.find(i => i.item === gate.item)?.gate;
+    const woken = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: Math.max(clock(), due), capacity, ...gctx}).items.find(i => i.item === gate.item)?.gate;
     return woken && STAGES.includes(woken.gate) ? {...woken, billing_wake: {refused_under: gate.blocker.billing.policy, now: billing.digest}} : gate;
   };
   // THE STAGE'S BILLING RECORD (see the header): the policy in force and every billed request and refusal of the stage, on
@@ -260,7 +285,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       if (interrupt?.aborted) { stopWith(STOP_CODES.INTERRUPTED, `interrupted: ${interrupt.reason?.message ?? 'the launcher was stopped'}`); return; }
       if (iterations >= L.iterations) { stopWith(STOP_CODES.ITERATIONS, `iterations limit ${L.iterations} reached`); return; }
       if (clock() - started > L.elapsed_ms) { stopWith(STOP_CODES.ELAPSED, `elapsed limit ${L.elapsed_ms} ms reached`); return; }
-      rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
+      rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
       const gate = billingWake(rec.items.find(i => i.item === item).gate);
       if (!STAGES.includes(gate.gate)) { if (gate.blocker) log.blocked.push({item, gate: gate.gate, blocker: gate.blocker}); return; }
       // The inputs of this attempt, its ATTEMPT IDENTITY (gates.mjs attemptInputs): what it received, the requirement, the
@@ -338,7 +363,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const fence = () => { const why = work.leaseRefusal(claim, new Date(clock()).toISOString()); if (why) fail(why, 'LEASE_FENCED'); };
       // THE STAGE'S BILLING CONTEXT (see the header): the declared policy over the work ledger under this claim.
       const stageBilling = geminiBilling({policy: billing, ledger: workBillingLedger(work, claim, clock)});
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, claim, billing: stageBilling}); }
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, ...(loop ? {graph: loop.executor()} : {}), claim, billing: stageBilling}); }
       catch (e) {
         // THE ACTUAL SPEND (self-audit round 3, assignment 3 (sealed bb1287a), L-302): every provider call is charged on the
         // work ledger before it is made (the executor contract above), so `charged` IS what this attempt spent, 0 included;
@@ -398,7 +423,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const stageAt = new Date(clock()).toISOString();
       let stageHash;
       try { stageHash = work.recordStage({claim, from: upstream?.hash ?? null, at: stageAt, stage: gate.gate, attempt, status: result.status, identity,
-        inputs: {...inputs, ...(result.inputs ?? {})}, outputs: result.outputs ?? {}, team: result.team ?? [], contributions: result.contributions ?? [],
+        // THE UNLOCK, RECORDED (KD2-2): a prerequisite the plan cited as missing that the graph now shows established.
+        inputs: {...inputs, ...(gate.graph?.unlocked?.length ? {graph_unlocked: gate.graph.unlocked.map(u => ({prerequisite: u.prerequisite, line: u.line, basis: u.basis, established_at: u.established_at}))} : {}),
+          ...(result.inputs ?? {})}, outputs: result.outputs ?? {}, team: result.team ?? [], contributions: result.contributions ?? [],
         findings: result.findings ?? [], usage: result.usage ?? {provider_calls: null}, next: result.next ?? null,
         // A transient pending (an unavailable reviewer) is retried when due, bounded by stage_attempts on the same inputs;
         // a structural one (capacity, a missing prerequisite) waits for a change of inputs.
@@ -416,8 +443,11 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const outcome = {passed: 'completed', returned: 'returned', failed: 'failed', pending: 'blocked', blocked: 'blocked'}[result.status];
       // Another process may have released the claim as expired between the record and this release (finding 3.2b).
       raced(() => work.release({claim, item, stage: gate.gate, outcome, why: result.next?.why ?? result.status, at: stageAt}), /that claim is already released/);
+      // THE WRITE-BACK (KD2-5): the record is observed into the work graph; a finding the learning graph relates to an
+      // established failure class becomes a proposal to the coordinator.
+      if (loop) { const wb = loop.writeBack(work.stages(item).find(x => x.hash === stageHash) ?? null); if (wb.proposals.length) (log.graph.proposals ??= []).push(...wb.proposals.map(x => x.file)); }
       log.dispatched.push({item, stage: gate.gate, attempt, status: result.status, record: stageHash, next: result.next?.stage ?? null,
-        provider_calls: result.usage?.provider_calls ?? null});
+        provider_calls: result.usage?.provider_calls ?? null, ...(gate.graph?.unlocked?.length ? {unlocked: gate.graph.unlocked.map(u => u.prerequisite)} : {})});
       progress({event: 'stage', item, stage: gate.gate, status: result.status});
       if (result.status === 'failed' || stopped) return;
     }
@@ -433,8 +463,21 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     queue = queue.filter(i => i === only);
   }
   for (const i of rec.items) if (!runnable(i) && i.gate.blocker) log.blocked.push({item: i.item, gate: i.gate.gate, blocker: i.gate.blocker});
+  // THE QUEUE, AS THE GRAPH SEES IT (Graph E's operational use; KD2-2): eligible, blocked with the reason, runnable
+  // concurrently (disjoint claimed paths), unlocked, and the shared prerequisites (reported, never merged).
+  if (loop) log.queue = queueReport(rec, order, queue, runnable);
   const workers = Array.from({length: Math.max(1, L.concurrency)}, async () => { for (let it = queue.shift(); it; it = queue.shift()) await runItem(it); });
   await Promise.all(workers);
+  // THE END OF THE TICK, WITH THE GRAPH (KD2-1, KD2-5): the last appends observed; a missing prerequisite that no item's plan
+  // implements, now that every item had its turn to plan, is an intake CANDIDATE, recorded unsigned and never executed;
+  // the snapshot the next tick opens from.
+  if (loop) {
+    loop.observeWork();
+    const fin = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
+    const candidates = loop.recordCandidates(fin.graph?.candidates ?? []);
+    log.graph = {...log.graph, candidates: (fin.graph?.candidates ?? []).map(c => ({ref: c.ref, prerequisite: c.prerequisite, required_by: c.items})), recorded_candidates: candidates,
+      snapshot: loop.checkpoint(), stats: loop.stats()};
+  }
   return {...log, spent: spent(work, {now: clock()}), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}, billing: billingStatus(work, billing)};
 }
 
@@ -446,10 +489,34 @@ export function capacityOf(executors) {
   return stage => { try { const f = executors?.[stage]?.capacity; return typeof f === 'function' ? f() ?? null : null; } catch { return null; } };
 }
 
-/** Items in dependency order (a dependency before its dependents), then by id. */
+/**
+ * THE QUEUE REPORT of a tick with the graph (KD2-2): what is eligible (dispatched in this order), blocked (with the gate's
+ * code, the prerequisite and the plan line), runnable concurrently (groups of eligible items whose claimed paths are
+ * disjoint, as the work ledger's per-item claims allow), unlocked, and the shared prerequisites. Two items sharing a
+ * prerequisite stay two entries: nothing is merged, each keeps its own claims and ownership.
+ */
+export function queueReport(rec, order, queue, runnable = i => STAGES.includes(i.gate.gate)) {
+  const eligible = [...queue];
+  const blocked = rec.items.filter(i => !runnable(i) && i.gate.blocker).map(i => ({item: i.item, gate: i.gate.gate, stage: i.gate.stage ?? null, code: i.gate.blocker.code ?? null,
+    ...(i.gate.blocker.prerequisite ? {prerequisite: i.gate.blocker.prerequisite, line: i.gate.blocker.line, implementers: i.gate.blocker.implementers ?? []} : {}),
+    ...(i.gate.blocker.cycle ? {cycle: i.gate.blocker.cycle} : {}), why: String(i.gate.blocker.what ?? '').slice(0, 300)}));
+  const unlocked = rec.items.filter(i => i.gate.graph?.unlocked?.length).map(i => ({item: i.item, gate: i.gate.gate, unlocked: i.gate.graph.unlocked.map(u => u.prerequisite)}));
+  const paths = new Map(rec.items.map(i => [i.item, i.claimed_paths ?? []]));
+  const clash = (a, b) => (paths.get(a) ?? []).some(x => (paths.get(b) ?? []).includes(x));
+  const concurrent = [];
+  for (const it of eligible) { const g = concurrent.find(grp => grp.every(o => !clash(o, it))); if (g) g.push(it); else concurrent.push([it]); }
+  return {eligible, blocked, concurrent, unlocked, order: order.map(i => i.item), shared: rec.graph?.shared ?? [], cycles: rec.graph?.cycles ?? [],
+    candidates: (rec.graph?.candidates ?? []).map(c => c.ref)};
+}
+
+/**
+ * Items in dependency order (a dependency before its dependents), then by id. An item that waits for another because that
+ * one IMPLEMENTS a prerequisite it requires (reconcile.mjs `graph_depends_on`, KD2-2) is ordered after it, as a status
+ * dependency is.
+ */
 export function dependencyOrder(items) {
   const by = new Map(items.map(i => [i.item, i])), out = [], seen = new Set();
-  const visit = i => { if (seen.has(i.item)) return; seen.add(i.item); for (const d of i.depends_on ?? []) if (by.has(d)) visit(by.get(d)); out.push(i); };
+  const visit = i => { if (seen.has(i.item)) return; seen.add(i.item); for (const d of [...(i.depends_on ?? []), ...(i.graph_depends_on ?? [])]) if (by.has(d)) visit(by.get(d)); out.push(i); };
   for (const i of [...items].sort((a, b) => a.item.localeCompare(b.item))) visit(i);
   return out;
 }
@@ -462,7 +529,7 @@ export async function watch({repo, statusRoot, workRoot, fetchIssues = async () 
   const ticks = [];
   for (;;) {
     const issues = await fetchIssues();
-    const sigOf = () => inputSignature({repo, statusRoot, workRoot, issues, bundlesDir: rest.bundlesDir ?? null, now: (rest.clock ?? Date.now)(), capacity: capacityOf(rest.executors)});
+    const sigOf = () => inputSignature({repo, statusRoot, workRoot, issues, bundlesDir: rest.bundlesDir ?? null, now: (rest.clock ?? Date.now)(), capacity: capacityOf(rest.executors), graph: rest.graph ?? null});
     const sig = sigOf();
     // A tick runs when an input changed, or when a transient pending's retry is due (time is not an input).
     const now = (rest.clock ?? Date.now)();

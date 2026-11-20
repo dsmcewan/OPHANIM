@@ -63,7 +63,8 @@ import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
-import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
+import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, GRAPH_RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
+import {requiresRefusal} from './gates.mjs';
 
 export const PLAN_SCHEMA = 'ophanim.plan/v1';
 export const VERDICTS = Object.freeze(['accept', 'implementation_defect', 'plan_defect', 'diagnosis_defect', 'missing_evidence']);
@@ -187,9 +188,13 @@ const jsonOf = text => {
  * Why the planner's answer is not a plan (a list; empty when it is one). Deterministic: shape, substance and
  * consistency with the repository, the requirement's dependencies, the mode and the ticket it would write.
  */
-export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional', declared = {}} = {}) {
+// `graph` (optional; knowledge graphs, Slice D part 2, KD2-3): {stateOf(id)} -- the graph the planner was given. A plan's
+// typed `requires` is checked against it (gates.mjs requiresRefusal): graph ids of what a work item can require, each
+// version it cites the one the graph states. Without a graph a typed requirement is refused (it could not be bound).
+export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional', declared = {}, graph = null} = {}) {
   if (!plain(j)) return ['the answer is not one JSON plan object (a title or prose is not a plan)'];
   const why = [];
+  why.push(...requiresRefusal(j.requires, {stateOf: graph?.stateOf ?? null}));
   // What the planner was actually given (dossier entries and retrieved records). A citation of anything else is refused.
   const given = delivered ?? new Map(shown.map(f => [`file:${f}`, {via: 'supplied'}]));
   const has = r => typeof r === 'string' && given.has(refOf(r));
@@ -317,7 +322,7 @@ const findingLine = f => `- ${f.id} [${f.severity}${f.cause ? `, ${f.cause}` : '
 // Stage 1 planner are told the same thing.
 const UNIT_RULES = (() => { const t = PLANNER_PROMPT({task: '-'}); return t.slice(t.indexOf('WHAT A WORK UNIT IS'), t.indexOf('OUTPUT:')).trim(); })();
 
-function plannerPrompt({mode, requirement, deps, ticket, previous, findings, refusals, dossier, limits, units = false}) {
+function plannerPrompt({mode, requirement, deps, ticket, previous, findings, refusals, dossier, limits, units = false, graph = false}) {
   return [
     'You are the planner for one work item of this repository (Ophanim operate, plan stage). Write a PLAN, not a title.',
     `Mode: ${mode}. ${mode === 'revalidate' ? 'A ticket exists: check that its assumptions, scope, dependencies and acceptance criteria are still valid against the evidence; say so in ticket_assessment.' : mode === 'revise' ? 'Revise the previous plan to answer every finding below.' : 'There is no ticket: plan the work from the requirement.'}`,
@@ -333,6 +338,13 @@ function plannerPrompt({mode, requirement, deps, ticket, previous, findings, ref
         'units should change and how; answer it with {finding, response, justification: {why: your own reason, sources: [evidence you were given]}}.'] : [])] : []),
     ...(refusals.length ? ['', '## Your previous answer was refused', ...refusals.map(r => `- ${r}`)] : []),
     '', renderDossier(dossier), '', RETRIEVAL_HELP(limits),
+    // THE KNOWLEDGE GRAPH (KD2-3), only when one is supplied: its retrieval op and the typed requirements. It informs the
+    // plan; it never constrains it to what the graph already holds, and the original records stay retrievable.
+    ...(graph ? [GRAPH_RETRIEVAL_HELP, '', '## Typed requirements (the knowledge graph)',
+      'Name what the work REQUIRES that it does not itself build, as graph entity ids (a capability, feature, runtime, tool, component, service, api, interface, contract or module):',
+      ' requires: [{id: <graph entity id>, why: <a sentence>, version?: <its version as a graph view showed it>, implements?: true when this plan BUILDS the prerequisite}].',
+      'Each is bound to the version the graph states now. A prerequisite the graph shows MISSING holds the work after planning until it is established (or until the',
+      'item that implements it has built it); keep the free-text capabilities as well. The graph is a projection: retrieve the records it names, and challenge it.'] : []),
     '', '## Questions that guide the investigation (examine the ones the work needs; do not invent answers for the rest)',
     ...Object.entries(QUESTIONS).map(([k, q]) => `- ${k}: ${q}`),
     ...(units ? ['', '## Work units (required: the implement stage runs them as a supervised pipeline)',
@@ -343,7 +355,7 @@ function plannerPrompt({mode, requirement, deps, ticket, previous, findings, ref
     ' context: {sufficient: true, gaps: [what you could not see], uncertainty: [what remains unproven]},',
     ' investigation: {historical_cause, operational_position, change_impact, success_adequacy}: each {examined: true, finding, sources: [refs]} or {examined: false, why},',
     ' relevance?: [{ref, decision: "used" | "dismissed", why}], scope: [..], exclusions: [..],',
-    ' dependencies: [item ids], capabilities: [..], acceptance: [{id, criterion, test: {cmd}}], regression: {cmd} | null,',
+    ' dependencies: [item ids], capabilities: [..],' + (graph ? ' requires?: [{id, why, version?, implements?}],' : '') + ' acceptance: [{id, criterion, test: {cmd}}], regression: {cmd} | null,',
     ' slices: [{id, title, slot, path}], copy: [repo paths the work reads], difficulty?: easy|medium|hard, proposes: {state, basis},',
     ...(units ? [' work_units: [{unit_id, depends_on: [unit ids], owned_paths: [path or glob], difficulty: easy|medium|hard, specialist_role, allowed_subagents: [role ids], verify_cmd, invariants: [..]}],'] : []),
     ' limits: {provider_calls, revisions, elapsed_ms}, stopping: [..], recovery, rollback, unresolved: [..], evidence: [{ref, why}],',
@@ -554,9 +566,14 @@ const findingContribution = (f, via) => ({purpose: isAdvisory(f) ? 'dispatcher-r
 // `profile` defaults to `fit` (owner direction 2026-11-17): the lifecycle routes by the fit matrix
 // (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
 // selectSeat and runOpenItem still default to `argo` when called without one.
+// `graph` (optional; knowledge graphs, Slice D part 2): a graph handle as the graph loop gives a stage (graph-loop.mjs
+// executor(): {graph, cursor, stateOf, at, teamProposal}); the scheduler hands one per stage as ctx.graph, which wins.
+// With it the planner is given the graph's and the learning graph's views and binds its typed requirements (KD2-3), and
+// every stage records an ADVISORY team proposal beside its live seats, which it never changes (KD2-4). Without it
+// every executor is exactly as before.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
   seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
-  pipelineLimits = {}, ...rest} = {}) {
+  pipelineLimits = {}, graph: graphHandle = null, ...rest} = {}) {
   independence ??= independenceFor(profile);
   if (Object.hasOwn(rest, 'meteredFailover')) throw new Error('makeExecutors: meteredFailover is replaced by the Gemini billing policy, which the scheduler hands every stage (ctx.billing; tick({billing}))');
   if (!repo) throw new Error('makeExecutors: pass the repository');
@@ -600,8 +617,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   const needsUnits = profile === 'fit';
   // Evidence for every judging seat (context.mjs): the dossier of the item, and bounded read-only retrieval.
   const INV = {...DEFAULT_INVESTIGATION, ...investigation};
-  const evidenceFor = (ctx, extra = {}) => {
-    const dossier = buildDossier({repo, statusRoot: statusAt, item: ctx.item, work: ctx.work, issues: ctx.issues ?? null, bundlesDir: ctx.bundlesDir ?? bundlesDir, limits: INV});
+  // `G` (the plan stage's graph handle, KD2-3): the dossier ends with the graph's view of the item and the learning graph's
+  // view of the files in play, inside the same budget; the retriever serves the `graph` op.
+  const evidenceFor = (ctx, extra = {}, G = null) => {
+    const dossier = buildDossier({repo, statusRoot: statusAt, item: ctx.item, work: ctx.work, issues: ctx.issues ?? null, bundlesDir: ctx.bundlesDir ?? bundlesDir, limits: INV,
+      ...(G ? {graph: G.graph, learning: G.graph} : {})});
+    if (G) extra = {...extra, graph: G.graph};
     // The seats' retriever serves the dossier's DERIVED views too ({"op":"dossier"}), so a cut derived view can be continued
     // by the seat it was shown to (self-audit round 3, assignment 1 (sealed 323361a), question 6: no stage's retriever
     // could serve the continuation every cut derived view names).
@@ -745,7 +766,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // `built` is the dossier a planner answering in THIS attempt is shown. `dossier` is the one the version under review
     // was made and reviewed with: `built` for a version planned now, and for a resumed cycle the dossier bound with its
     // brief when it opened (independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 5).
-    const {dossier: built, retriever} = evidenceFor(ctx);
+    // THE GRAPH OF THIS PLAN (KD2-3): the handle the scheduler gave the stage, at the cursor the dossier is built at.
+    const GR = ctx.graph ?? graphHandle ?? null, graphAt = GR ? GR.cursor : null;
+    const {dossier: built, retriever} = evidenceFor(ctx, {}, GR);
     let dossier = built;
     const investigations = Object.assign([], {dossier});
     // What the planner was given only in part stays an unresolved gap on the record, with the request that continues it.
@@ -845,7 +868,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       for (let k = 0; k < PLANNER_TRIES && !doc; k++) {
         if (m.left() < 1 + n) return stop(`stage budget: ${m.left()} provider call(s) left, a plan and its review need ${1 + n}`);
         const first = plannerPrompt({mode, requirement: gate.requirement, deps, ticket: ticket?.ticket ?? null, previous: prevDoc, findings,
-          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier: built, limits: INV, units: needsUnits});
+          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier: built, limits: INV, units: needsUnits, graph: Boolean(GR)});
         let reply, prompt = first, inv = null, rounds = [];
         try {
           // The planner investigates before it answers: each retrieval round is a counted call, and the review's calls are kept in reserve.
@@ -883,7 +906,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
             next: {stage: 'plan', why: 'the evidence does not yet support a plan'}});
         }
         const delivered = deliveryOf(built, inv);
-        const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional', declared: ownerDeclared});
+        const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional', declared: ownerDeclared,
+          ...(GR ? {graph: {stateOf: GR.stateOf}} : {})});
         progress({event: 'plan.answer', item, version: v, try: k + 1, refused: why.length});
         if (why.length) { refused.push({version: v, try: k + 1, why}); continue; }
         // The accepted answer's retrieval rounds are AUTHOR TURNS of the version too (L-202): each is on the plan ledger with
@@ -923,6 +947,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
               : {ref, source: got.source, version: got.version ?? null, ...(got.request ? {request: got.request} : {}), why: e.why, ...part};
           }),
           bound_sources: [...new Map(bound.map(x => [x.path ? `file:${x.path}` : x.source, x])).values()],
+          // THE TYPED REQUIREMENTS, BOUND (KD2-3): each to the version the graph states now (GRAPH_ABSENT for a missing
+          // prerequisite), as each cited file is bound to the bytes the planner was given. planValidity re-checks them.
+          ...(GR && Array.isArray(j.requires) ? {requires: j.requires.map(r => ({id: r.id, why: r.why, ...(r.implements === true ? {implements: true} : {}), version: GR.stateOf(r.id).version}))} : {}),
           version: {n: versions.length + 1, previous: prevDigest},
           // A plan made again because a reassessment disqualified its earlier review names that reassessment.
           ...(gate.rereview ? {rereview_of: gate.rereview.reassessment} : {}),
@@ -1035,6 +1062,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
             // whether the version's panel shares a lab with them (the panel's own shared labs are in plan_review).
             ...(advisory.length ? {advisory_returns: advisory.map(a => ({...a, panel_shares_lab: planSeats.some(x => x.lab === a.dispatcher.lab)}))} : {}),
             ticket_given: givenText === null ? null : {digest: sha256(givenText), text: givenText},
+            // The graph cursor the plan's dossier views were built at (reconcile.mjs re-derives them there) and its bound
+            // typed requirements (KD2-3).
+            ...(graphAt ? {graph: {cursor: graphAt.seq, head: graphAt.head, requires: doc.requires ?? []}} : {}),
             context: ctxOut(), carry: carryForward(doc, planDigest)},
           team: [...team, ...planSeats.map(s => reviewerRow('plan-reviewer', s))], contributions: dedupe(contributions), findings: rows, usage: usage(),
           next: {stage: 'implement', why: `plan v${doc.version.n} approved by ${closed.labs.join(', ')}`}});
@@ -1950,8 +1980,27 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       next: {stage: null, why: 'the unsigned status proposal awaits the owner'}});
   }
 
+  // THE TEAM PROPOSAL (knowledge graphs, Slice D part 2, KD2-4; directive section 5), ADVISORY. With a graph, every
+  // stage's record carries `outputs.team_proposal`: the seven queries over the work, systems, evidence, learning and
+  // capability graphs (graph-loop.mjs teamProposal). It is computed AFTER the stage returned, from the team the stage
+  // recorded: the live seats are chosen inside the stage by the owner-directed tables, exactly as without a graph
+  // (owner decision 2026-11-20: "Keep the seats as we have them for now until we better understand the metrics").
+  const planDocOf = ctx => (ctx.gate?.reuse?.plan ? ctx.work?.stages(ctx.item).find(x => x.hash === ctx.gate.reuse.plan)?.outputs?.plan ?? null : null);
+  const advised = (stage, f) => async ctx => {
+    const r = await f(ctx);
+    const G = ctx?.graph ?? graphHandle ?? null;
+    if (!G || !r || typeof r !== 'object' || typeof G.teamProposal !== 'function') return r;
+    let proposal;
+    try {
+      proposal = G.teamProposal({item: ctx.item, stage, team: r.team ?? [], doc: stage === 'plan' ? r.outputs?.plan ?? null : planDocOf(ctx), requirement: ctx.gate?.requirement ?? null,
+        difficulty: (stage === 'plan' ? r.outputs?.plan?.difficulty : planDocOf(ctx)?.difficulty) ?? 'medium'});
+    } catch (e) { proposal = {schema: 'ophanim.team-proposal/v1', advisory: true, error: String(e?.message ?? e).slice(0, 300)}; }
+    return {...r, outputs: {...(r.outputs ?? {}), team_proposal: proposal}};
+  };
   // Each executor carries the reviewer pool's signature, so the scheduler (scheduler.mjs capacityOf) can tell the gate
   // when a capacity-pending stage can be dispatched again, whichever subset of the executors a caller passes.
   for (const f of [plan, implement, review, validate, outcome]) f.capacity = capacitySig;
-  return {plan, implement, review, validate, outcome};
+  const out = {plan, implement, review, validate, outcome};
+  for (const [k, f] of Object.entries(out)) { out[k] = advised(k, f); out[k].capacity = capacitySig; }
+  return out;
 }
