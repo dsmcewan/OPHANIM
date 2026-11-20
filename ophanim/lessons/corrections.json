@@ -573,6 +573,34 @@
         "name": "affected runners: a changed DECIDING test lists its runner; a changed target lists its runner"
       },
       "fixed_in": "1f6e2ae"
+    },
+    {
+      "id": "test-asserts-whole-environment",
+      "class": "A test asserts about the whole host environment (every open descriptor, every directory in the shared tmpdir) rather than about what it created, so it passes on the machine it was written on and fails where the environment differs: a CI runner that leaks descriptors into its jobs, or two suites sharing one tmpdir.",
+      "source": "self-observed at the jail integration (2026-11-20): CI at d9d626f, and the KG-11 agent's simultaneous suite runs",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "pantheon/tests/jail-fds.test.mjs (CI d9d626f; fixed in 90407d3)",
+          "detected_by": "CI: the GitHub Actions runner leaks descriptors 142 and 145 into every job",
+          "note": "two closer cells expected an exact descriptor list; they now measure the descriptors the host hands down (ambientFds) and expect the handed set plus those, while the closer must still leave stdio only"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": null,
+          "date": "2026-11-20",
+          "ref": "register KG-20",
+          "detected_by": "three simultaneous `cd pantheon && node --test` runs (the KG-11 agent)",
+          "note": "four cells assert that no pantheon-agy-* directory of theirs is left in the shared tmpdir and see the other runs' directories; open"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "no gate runs the suites in an environment that differs on purpose; CI differed by accident here",
+        "next": "a toolkit mode that runs the real-bwrap suites with planted inherited descriptors (a shell holding high fds open) and a pre-populated tmpdir, so a cell that asserts about the whole environment fails at integration rather than in CI"
+      }
     }
   ]
 }
