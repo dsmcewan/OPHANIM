@@ -403,6 +403,34 @@
         "why": "execution conduct and test-infrastructure cost, not a code property",
         "next": "the coordinator's briefs state a verification budget (one full verification on the final commit; after a fix, re-run only the affected tests and mutations); a runner that maps each mutation to the suites that decide it is future work (docs/execution/l136-report.md)"
       }
+    },
+    {
+      "id": "brief-manifest-disagree",
+      "class": "The coordinator's brief and the ownership manifest for the same work disagree (a file the brief allows that the manifest omits; a region limit that forbids what the brief requires), so a correct change reads as a violation and the agent must choose which document to obey.",
+      "source": "self-observed at the L-136 and L-146 integrations (2026-11-20)",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "docs/execution/l136-ownership.json (amended at fd9f001)",
+          "detected_by": "check-ownership.mjs: UNOWNED pantheon/src/route/gemini-billing.mjs",
+          "note": "the brief allowed \"a module beside it that it re-exports\"; the manifest listed quota-failover.mjs only"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "docs/execution/l146-ownership.json (amended at integration)",
+          "detected_by": "the L-146 agent, in its report",
+          "note": "the region limit kept cycle-review-http-turn.mjs's use through --turn unchanged; the brief required the fix that changes it"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "the brief is prose; check-ownership checks files, not region limits against the brief",
+        "next": "write each region limit from the brief's DESIGN section and list in the manifest every file the design names before dispatch"
+      }
     }
   ]
 }
