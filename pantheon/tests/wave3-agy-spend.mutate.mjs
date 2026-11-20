@@ -43,7 +43,7 @@ export const MUTATIONS = [
     edits: [one(AGY, '    throw agyModelMismatch({ requested: { agent, model }, reported: { agent: init?.agent ?? null, model: init?.model ?? null } }, { detail: "identity", ...more });',
       '    throw laneFailure("stream", `agy CLI identity mismatch: expected ${agent}/${model}, got none/none`, { detail: "identity", ...more });')]},
   {id: 'G6', path: 'C the python SDK seat', what: 'the SDK seat\'s reported model is not compared: the request is stamped as served (the base)',
-    edits: [one(RUN, 'if ((reported !== null && reported !== model) || (reported === null && run.status === 0 && out?.ok === true)) {', 'if (false) {')]},
+    edits: [one(RUN, 'if ((reported !== null && reported !== model) || (reported === null && sdkRun.status === 0 && out?.ok === true)) {', 'if (false) {')]},
   {id: 'G7', path: 'B2 the review runner', what: 'a mismatched review run is an ordinary incomplete run again (continuable, its session kept)',
     edits: [one(SUB, '    if (e.code === AGY_MODEL_MISMATCH) {', '    if (false) {')]},
   {id: 'G8', path: 'B2 the review runner', what: 'the findings header stamps the lane as served even for a mismatch',
@@ -76,7 +76,9 @@ export const MUTATIONS = [
     edits: RUN_API_GUARD},
   {id: 'S6', path: 'B(sdk) the python SDK seat (L-124)', what: 'the SDK seat\'s point-of-spend guard removed (before the venv check and at the spawn)',
     edits: [one(RUN, '      try { geminiAdmission(BILLING, spend); }\n      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }\n', ''),
-      one(RUN, '      try { spendGemini(BILLING, spend, () => admit()); }', '      try { admit(); }')]},
+      // L-150: the one charge at the spawn became the metering relay's charge of each request; the guard removed there
+      // keeps the run's own admission (as the old mutation kept admit()) but skips the policy and the usage row.
+      one('pantheon/src/route/gemini-relay.mjs', '          row = spendGemini(session.billing, {', '          row = ((b, a, f) => (f(a), a))(session.billing, {')]},
   {id: 'S7', path: 'B(sdk) the python SDK seat (L-124, split by L-136)', what: 'the SDK seat is classified as a failover: the failover switch admits a primary seat',
     edits: [one(RUN, '      const spend = { kind: "primary", vendor: "agy_google", model, purpose, role, transport: "sdk" };', '      const spend = { kind: "failover", vendor: "agy_google", model, purpose, role, transport: "sdk" };')]},
   {id: 'S8', path: 'B(spare) the walk\'s quota-failover candidate', what: 'both protections of the spare removed: the walk reaches it and the seat is not refused at spend',

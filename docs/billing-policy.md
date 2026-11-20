@@ -12,7 +12,7 @@ re-exported by `pantheon/src/route/quota-failover.mjs` (the L-124 mechanism it e
 | Setting | Kind | What it admits | Default |
 |---|---|---|---|
 | `metered_gemini_failover` | `failover` | the metered Gemini API answering an Antigravity lane's **proven quota refusal** (and every further request of that answer: a long-decode hop, a compaction) | off |
-| `gemini_api_primary` | `primary` | **primary Gemini API or SDK execution**: a Gemini API id seat with no lane in front of it, an operator's or a ticket's Gemini API pin, the `fit` implementer's Antigravity SDK session in the pipeline (`src/antigravity/`: each model request of the session, its native subagents' included), the board's python Antigravity SDK seat (`scripts/agy-seat.py`, billed to `GEMINI_API_KEY` or Vertex), a Google seat of an injected `--turn` module that is not a declared lane (every Google call of a module that declares its Gemini calls metered), an operator script's Google seat (L-146, below) | off |
+| `gemini_api_primary` | `primary` | **primary Gemini API or SDK execution**: a Gemini API id seat with no lane in front of it, an operator's or a ticket's Gemini API pin, the `fit` implementer's Antigravity SDK session in the pipeline (`src/antigravity/`: each model request of the session, its native subagents' included), every member of a research team on the same transport (purpose `research`), the board's python Antigravity SDK seat (`scripts/agy-seat.py`: each of its requests, through the controller's metering relay, billed to `GEMINI_API_KEY`; L-150), a Google seat of an injected `--turn` module that is not a declared lane (every Google call of a module that declares its Gemini calls metered), an operator script's Google seat (L-146, below) | off |
 
 - Both are **off when absent**. Each is enabled only by an explicit CLI flag or a supported configuration setting.
 - **No environment variable and no credential authorizes spend.** A `GEMINI_API_KEY`, `GOOGLE_API_KEY` or Vertex project in
@@ -51,7 +51,7 @@ declared. The policy every billed request ran under is recorded with it (below),
 ## At the point of spend
 
 Before **every** billed Gemini request (the first request of a turn, each continuation hop, a retry after a 429 or a 5xx,
-the spawn of the python SDK seat), in this order (`spendGemini`):
+each request the python SDK seat's agent or its subagents make, at its metering relay), in this order (`spendGemini`):
 
 1. **The policy admits it** (`geminiAdmission`): refused when the kind is off, or when the persisted usage of that kind has
    reached its budget. Nothing is admitted, charged, spawned or sent.
@@ -150,6 +150,70 @@ failover behind it:
 The board's reviewer and scout now default to the Antigravity **CLI lane** (the subscription), as the planner and the
 implementer always did. `PANTHEON_AGY_TRANSPORT=sdk` still selects the python SDK seat for those two roles, and that seat
 is primary Gemini execution: refused unless `gemini_api_primary` is enabled with a budget.
+
+## The python SDK seat's metering relay (L-150, L-151)
+
+A launch of the python SDK seat is **not** one request. Its `google-antigravity` Agent sends its Gemini requests from the
+SDK's bundled harness (`google/antigravity/bin/localharness`, the Go `google-genai` client): every model call, every retry
+of a 429 or 5xx, each continuation after a tool call, a subagent's own conversation, the harness's context summarization,
+the web-search tool's grounded call. All of them go to the endpoint's base URL as plain HTTP (observed with
+`google-antigravity` 0.1.24): `POST /v1beta/models/{model}:streamGenerateContent?alt=sse` (server-sent events) and
+`:generateContent` (the web search), the endpoint's key in `x-goog-api-key`.
+
+So the controller runs a **metering relay** (`src/route/gemini-relay.mjs`) for every SDK launch: a loopback HTTP endpoint
+(`127.0.0.1`, an ephemeral port) that holds the real `GEMINI_API_KEY` and the run's billing context (the same
+`geminiBilling` context and usage record as the run's other points of spend). The python process gets a **scoped
+capability** in its environment, `PANTHEON_AGY_RELAY_URL` and `PANTHEON_AGY_RELAY_CAPABILITY` (a random token valid for
+one session), and nothing else: never `GEMINI_API_KEY`, `GOOGLE_API_KEY`, a Vertex project or an ADC variable (withheld
+even when `PANTHEON_AGY_ENV_PASS` names them), and a `HOME` of the session's own (no `~/.config/gcloud` ADC file, no
+`~/.gemini` login). `scripts/agy-seat.py` points every model the Agent may call (its text model, the image model) at the
+relay with the capability as the key. A request that bypassed the relay would carry no credential: it is refused by
+Google and billed nothing.
+
+For each request the relay, in this order:
+
+1. checks the capability names an open session (`GEMINI_RELAY_CAPABILITY_REFUSED`, 401: nothing charged or forwarded);
+2. matches the method against its **allowlist**: the billed `:streamGenerateContent` (`?alt=sse` or none) and
+   `:generateContent` under `/v1`, `/v1beta` or `/v1alpha` `models/{model}`, and `:countTokens`, which Google does not bill
+   (forwarded, not charged). Anything else -- another method, a cache, a file upload, a tuned model, a Vertex path, a
+   websocket upgrade (the Live API) -- is refused and recorded (`GEMINI_RELAY_METHOD_REFUSED`, 403): **fail closed**;
+3. bounds the channel: a body of at most 32 MiB (`GEMINI_RELAY_BOUND`, 400), at most 8 requests in flight per session
+   (`GEMINI_RELAY_BOUND`, 429), an idle bound and a total lifetime per session (the seat's timeout plus 60 s), after which
+   the capability is refused (`GEMINI_RELAY_SESSION_CLOSED`, 401);
+4. admits a billed request, with no await between the count and the append: first the session's own **maximum request
+   count** (the `--max-model-calls` the seat's Agent is given, 40 on the board; `GEMINI_RELAY_SESSION_CAP`, 403), then
+   `spendGemini` -- the policy, then the caller's admission (the board's per-request provider-call bound and its charge:
+   `admitProviderCall`), then the usage row persisted -- kind `primary`, the model from the request path, transport `sdk`;
+5. only then forwards it upstream with the real key, the response streamed through as it arrives;
+6. records the outcome separately (`relay-outcomes.jsonl` in the seat's directory on the board, `FILE.outcomes.jsonl`
+   beside the launcher's record): status, the provider's response id, the usage it reported. The outcome never changes
+   the count.
+
+A refusal is an HTTP error whose message starts `GEMINI_RELAY_REFUSED <CODE>:` and ends with its recovery condition, with
+a `google.rpc.ErrorInfo` detail (`reason` the code, `metadata.recovery`); the SDK raises it, and the seat ends its turn on
+it (exit 5) with its result, progress and partial output (`response.partial.md`) kept. The board throws the refusal it
+made (a billing refusal is `refused_metered`, recoverable as every L-136 refusal; the run's bound is `PROVIDER_CALL_LIMIT`),
+the attempt's `provider_requests` being the requests the relay admitted.
+
+Each usage row carries `identity` (`relay_session`, `request_id`, `seq`, `method`, the SDK's own `sdk_session` id) and
+`lineage` (the board run and seat, or the launcher; `parent_session`, the root agent's SDK session, the first one the relay
+sees; `conversation`: `root`, `subagent` for another SDK session, `unattributed` for a request that names none, such as the
+web search). The subagent's **name** is not in the request; it is not recorded.
+
+**Crash and restart.** A row is persisted before its request is forwarded: a session killed after admission, a cancelled
+one, a controller killed in flight all leave it counted, its outcome unknown when none was written; a restart counts it.
+
+**Concurrency.** Sessions of one controller share its billing context, admitted synchronously; relays of different
+processes share the record and its lock (L-148). Of two sessions competing for the last request, exactly one is admitted.
+
+**Vertex** through the SDK seat is refused (`GEMINI_RELAY_VERTEX_UNSUPPORTED`): the relay holds no Vertex credential it
+could forward with.
+
+**Direct execution (L-151).** `scripts/agy-seat.py` without a capability refuses before any Agent or client exists
+(`GEMINI_RELAY_CAPABILITY_ABSENT`, exit 2): zero requests, whatever key its environment holds; a capability whose URL is
+not a loopback relay is refused the same way. A governed standalone run is `node pantheon/bin/agy-seat.mjs
+--gemini-api-primary N --gemini-usage FILE -- <agy-seat.py arguments>`: the same relay and `spendGemini`, refused before
+the spawn when `gemini_api_primary` is off or its budget spent.
 
 ## Injected modules
 
@@ -258,14 +322,15 @@ read-only sessions of the same SDK transport: a coordinator on the role's seat (
 | The SDK transport's model metadata requests (`GET models/<id>`: the availability check before a session; the dry run of `ophanim/operate/live-run.mjs`, `sdkPreflight`) | none (not a generation request) | the availability check is made only for a seat the policy admitted; the dry run sends them with the manifest's key and spends nothing. Not observed against the live provider (L-701) |
 | `board/run-item.mjs` walk (`routeSeats`): the lane's quota-failover candidate | failover | skipped unless admitted |
 | `board/run-item.mjs turn()`: a Gemini API seat (failover candidate, operator seat, ticket pin) | failover or primary | refused up front unless admitted; then per request |
-| `board/run-item.mjs agyTurn` python SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`) | primary | refused before the venv and key checks unless admitted; admitted again at the spawn, **one billed request per spawn**: the seat's agent may then make up to `--max-model-calls` (default 40) model calls, and its subagent its own, which the record does not count (L-148 inventory) |
+| `board/run-item.mjs agyTurn` python SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`) | primary | refused before the venv and key checks unless admitted; then **per request at its metering relay** (every model call, retry, continuation, subagent call, summarization and web search of the session), bounded by the session's maximum request count (40) and the run's provider-call bound; nothing charged for the launch (L-150) |
 | `review-runner/index.mjs --via api`, Google reviewer | primary | per request, retries included |
 | `pantheon/scripts/open-items-run.mjs`, `bin/pantheon-build.mjs` / `view/build-server.mjs` (runOpenItem, not among the seven) | either | both kinds off: refused; no opt-in is exposed there |
 | `bin/cross-lab-review.mjs` (the HTTPS module through `billedTurnModule`) | primary | one billed request per Google seat, charged before it is sent; refused up front unless admitted (L-146) |
 | `scripts/live-check.mjs`, `live-ship.mjs`, `stream-check.mjs`, `view-check.mjs` (`sdk/live.mjs operatorGemini clientFor`) | primary | refused before the client is made unless admitted; then per request, hops and retries included (L-146) |
 | `bin/pantheon-view.mjs` (`POST /turn` on an `agy_google` seat, from the view page, `scripts/swarm-run.mjs`, `discuss-run.mjs` or any local client) | primary | refused before the client is made unless admitted; then per request, charged on the seat home's record before it is sent, under its lock across processes (L-148) |
 | `scripts/delegate-run.mjs` (a client of the same server) | none | no Google seat (anthropic, openai, xai); a Google seat added there would be gated by the server as above. Its labels are refused with 400 (the defect the two launchers had) |
-| `scripts/agy-seat.py` run **directly** (`.venv-antigravity/bin/python scripts/agy-seat.py --role …`, as its header shows) | primary | **not gated**: the script checks only that `GEMINI_API_KEY` or `PANTHEON_AGY_VERTEX_PROJECT` is set, then runs up to `--max-model-calls` billed model calls (L-148 inventory; reported, not changed) |
+| `scripts/agy-seat.py` run **directly** (`.venv-antigravity/bin/python scripts/agy-seat.py --role …`) | primary | **no metered execution**: without the controller's capability it refuses before any Agent exists, zero requests, keys present or not (L-151) |
+| `bin/agy-seat.mjs` (a governed standalone run of the SDK seat) | primary | refused before the spawn unless admitted; then per request at its metering relay, on `--gemini-usage FILE` (L-151) |
 | token counts (`countTokens`, through `packages/model-client` `providerTokenCounter` and `google-count.mjs`, and `sdk/adapter.mjs admitDirect`) | none (not billed by the provider, L-604) | sent only by a client the policy already admitted, so never while a kind is off; not charged, so a turn refused at its generation request may already have counted its tokens (a concurrent turn that loses the last request, for one) |
 | Vertex AI (`aiplatform.googleapis.com`): every `@google/genai` client that `sdk/adapter.mjs makeClient` builds goes there when `GOOGLE_GENAI_USE_VERTEXAI` is set | as its seat | the gate of the seat whose client it is: refused before the client is made. The L-136 test recorder's `billed` flag counts only `generativelanguage.googleapis.com`, so the L-146 and L-148 tests count every Google host |
 | Antigravity CLI lanes (`agy`, every role), and the quota probe `agy --print /usage` (`src/agy/quota.mjs`) | none | subscription (OAuth); never refused; their egress is the CLI's own (L-004) |
