@@ -13,11 +13,28 @@
 //
 // The kinds (kinds.mjs) call sync() as their re-derivation, so the ledger's own verify() is the replay: an entry is
 // checked against the state before it (duplicates, references, supersession, admission) and then applied.
+import {createHash} from 'node:crypto';
 import {digest, canonical} from '../ledger/canonical.mjs';
 import {DEFAULT_INSTANCE, SHA256_REF} from './identity.mjs';
 import {KINDS, GRAPH_SCHEMA, overrides, assertion, recordRefusal, factDigestOf, isSourceNode, sourceIdOf, changeDigest} from './schema.mjs';
 
 const H = value => 'sha256:' + digest(value);
+// THE PROJECTION DIGEST, computed without canonical()'s generic walk over every row (KG-9). It is the same digest, byte
+// for byte: H({assertions: rows, ...rest}). canonical() writes a string or a finite number as JSON.stringify writes it,
+// null as null and an array as [a,b,...], so for a dense array of rows whose every cell is a string, a finite number or
+// null, canonical(rows) === JSON.stringify(rows); a row with any other cell is written by canonical() itself. "assertions"
+// sorts before every other key of the digest (contract, head, retractions, schema, seq, sources; none is integer-like),
+// so the canonical object is {"assertions":<rows>, followed by the rest's canonical members.
+const plainCell = v => v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
+function rowsText(rows) {
+  for (let i = 0; i < rows.length; i++) { const r = rows[i]; for (let j = 0; j < r.length; j++) if (!plainCell(r[j])) return canonical(rows); }
+  return JSON.stringify(rows);
+}
+const DIGEST_KEYS = ['contract', 'head', 'retractions', 'schema', 'seq', 'sources'];
+export function projectionDigest(rows, rest) {
+  if (Object.keys(rest).sort().join() !== DIGEST_KEYS.join()) throw new TypeError(`the projection digest is over ${DIGEST_KEYS.join(', ')} and the assertions`);
+  return 'sha256:' + createHash('sha256').update('{"assertions":').update(rowsText(rows)).update(',' + canonical(rest).slice(1)).digest('hex');
+}
 const GRAPH_KINDS = new Set(KINDS);
 /** The entry as the chain stores it (without the payload the ledger attaches for re-derivation), and its hash. */
 const storedOf = e => { const {payload, ...rest} = e; return rest; };
@@ -26,7 +43,7 @@ const EPOCH = '1970-01-01T00:00:00Z';
 const byString = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const RANK = Object.freeze({authoritative: 0, observed: 1, derived: 2, hypothetical: 3});
 /** The schema of a serialized projection state (serialize / restore). */
-export const STATE_SCHEMA = 'ophanim.graph.projection-state/v1';
+export const STATE_SCHEMA = 'ophanim.graph.projection-state/v2';
 
 /**
  * A projection over one graph ledger. `origins` is the composed origin registry (schema.mjs defineOrigins);
@@ -379,19 +396,27 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
     return notes;
   }
 
-  // ---- the state as a restorable value (KG-1; checkpoint.mjs) ---------------------------------------------------------
-  // A DERIVED cache, never authoritative: the state replay built, as JSON. Assertions are kept in admission order, so
-  // the restored indexes (by subject, incident) list them in the order replay pushed them. The materialized facts and
-  // fact keys are caches and are not part of it.
+  // ---- the state as a restorable value (KG-1, KG-9; checkpoint.mjs) --------------------------------------------------
+  // A DERIVED cache, never authoritative: the state replay built, as a JSON value. Assertions are kept in admission
+  // order, so the restored indexes (by subject, incident) list them in the order replay pushed them; `order` lists their
+  // positions in id order, the order the projection digest writes them in, so a restore need not sort them again: it
+  // checks the order instead (a permutation, strictly increasing by id). The materialized facts and fact keys are
+  // caches and are not part of it.
   /** The projection state as a JSON value (refused while a write is being checked). */
   function serialize() {
     if (st.pending.size || st.expected !== null) throw Object.assign(new Error('the projection is in the middle of a write'), {code: 'GRAPH_REFUSED'});
+    const ids = [...st.assertions.keys()];
     return {schema: STATE_SCHEMA, seq: st.seq, head: st.head, log: st.log,
       assertions: [...st.assertions.values()].map(a => [a.record, a.admitted, a.retired]),
+      order: ids.map((_, i) => i).sort((i, j) => byString(ids[i], ids[j])),
       retractions: [...st.retractions.values()].map(x => [x.record, x.seq]),
       sourceLog: [...st.sourceLog], factsBySource: [...st.factsBySource].map(([s, ids]) => [s, [...ids]]), gap: [...st.gap]};
   }
-  /** Replace the state with `x` (a serialize() value); throws, leaving an empty projection, if it does not restore. */
+  /**
+   * Replace the state with `x` (a serialize() value); throws, leaving an empty projection, if it does not restore. The
+   * indexes are rebuilt as admit() builds them, in admission order: by subject, and by incidence (each distinct endpoint
+   * of a relationship, from then to). One pass, without admit()'s per-edge Set (KG-9: the open from a snapshot).
+   */
   function restore(x) {
     reset();
     try {
@@ -400,10 +425,16 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
       if (last.seq !== x.seq || last.hash !== x.head) throw new Error('its cursor is not its last entry');
       for (const item of x.log) st.bySeq.set(item.seq, item);
       st.log = x.log;
-      for (const [record, admitted, retired] of x.assertions) {
-        if (st.assertions.has(record.id)) throw new Error(`assertion ${record.id} is listed twice`);
-        admit(record, admitted); st.assertions.get(record.id).retired = retired;
+      const {assertions, bySubject, incident} = st, rows = x.assertions;
+      const index = (map, key, id) => { const l = map.get(key); if (l === undefined) map.set(key, [id]); else l.push(id); };
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i], record = row[0], id = record.id, size = assertions.size;
+        assertions.set(id, {record, admitted: row[1], retired: row[2]});
+        if (assertions.size === size) throw new Error(`assertion ${id} is listed twice`);
+        index(bySubject, record.subject, id);
+        if (record.kind === 'relationship') { index(incident, record.from, id); if (record.to !== record.from) index(incident, record.to, id); }
       }
+      st.order = idOrder(x.order, rows);
       for (const [record, seq] of x.retractions) st.retractions.set(record.id, {record, seq});
       st.sourceLog = new Map(x.sourceLog);
       st.factsBySource = new Map(x.factsBySource.map(([s, ids]) => [s, new Set(ids)]));
@@ -411,6 +442,25 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
       st.seq = x.seq; st.head = x.head;
       st.restored = {seq: x.seq, head: x.head};
     } catch (e) { reset(); throw Object.assign(new Error(`the projection state does not restore: ${e.message}`), {code: 'GRAPH_REFUSED'}); }
+  }
+
+  /**
+   * The ids of `rows` in the order `order` lists them, checked: `order` is a permutation of the rows' positions and the
+   * ids it lists are strictly increasing (code-unit order, as the digest sorts them). Throws otherwise.
+   */
+  function idOrder(order, rows) {
+    if (!Array.isArray(order) || order.length !== rows.length) throw new Error('its id order does not list each assertion once');
+    const seen = new Uint8Array(rows.length), ids = new Array(rows.length);
+    let prev = null;
+    for (let i = 0; i < order.length; i++) {
+      const k = order[i];
+      if (!Number.isInteger(k) || k < 0 || k >= rows.length || seen[k]) throw new Error('its id order does not list each assertion once');
+      seen[k] = 1;
+      const id = rows[k][0].id;
+      if (typeof id !== 'string' || (prev !== null && !(prev < id))) throw new Error('its id order is not the order of its ids');
+      ids[i] = prev = id;
+    }
+    return ids;
   }
 
   // ---- views at a cursor ----------------------------------------------------------------------------------------------
@@ -529,11 +579,14 @@ function makeView(st, c, origins) {
     sources: sourcesAt,
     /** The projection digest at this cursor: cursor, head and every assertion's interval, sorted by id. */
     digest() {
-      const rows = [];
-      for (const [id, a] of st.assertions) if (a.admitted <= c) { const r = retiredAt(a); rows.push([id, a.admitted, r?.seq ?? null, r?.how ?? null, r?.by ?? null]); }
-      rows.sort((x, y) => byString(x[0], y[0]));
+      let rows = sortedRows();
+      if (rows === null) {
+        rows = [];
+        for (const [id, a] of st.assertions) if (a.admitted <= c) { const r = retiredAt(a); rows.push([id, a.admitted, r?.seq ?? null, r?.how ?? null, r?.by ?? null]); }
+        rows.sort((x, y) => byString(x[0], y[0]));
+      }
       const retractions = [...st.retractions].filter(([, x]) => x.seq <= c).map(([id]) => id).sort(byString);
-      return H({schema: 'ophanim.graph.projection/v1', contract: GRAPH_SCHEMA, seq: c, head: headAt(), assertions: rows, retractions,
+      return projectionDigest(rows, {schema: 'ophanim.graph.projection/v1', contract: GRAPH_SCHEMA, seq: c, head: headAt(), retractions,
         sources: sourcesAt().map(s => [s.id, s.seq, s.version, s.state, s.replay])});
     },
     /** Counts at this cursor. */
@@ -544,6 +597,22 @@ function makeView(st, c, origins) {
     },
   };
 
+  /**
+   * The digest's rows in id order without sorting them, from the id order a restore checked (st.order), or null. The
+   * order is used only while it is exactly the ids held: as many as the assertions, each held (it is strictly increasing,
+   * so its ids are distinct). An assertion admitted since the restore makes it null, and the rows are sorted instead.
+   */
+  function sortedRows() {
+    const order = st.order;
+    if (!order || order.length !== st.assertions.size) return null;
+    const rows = [];
+    for (let i = 0; i < order.length; i++) {
+      const id = order[i], a = st.assertions.get(id);
+      if (a === undefined) return null;
+      if (a.admitted <= c) { const r = retiredAt(a); rows.push([id, a.admitted, r?.seq ?? null, r?.how ?? null, r?.by ?? null]); }
+    }
+    return rows;
+  }
   function whyNot(id) {
     const r = st.assertions.get(id).record;
     if (r.classification === 'hypothetical') return 'hypothetical: proposed, never established until a registered extractor, tool or rule admits it';

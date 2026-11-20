@@ -1,4 +1,4 @@
-// THE REPLAY CHECKPOINT (register KG-1; docs/knowledge-graph/checkpoint.md).
+// THE REPLAY CHECKPOINT (register KG-1; its compact format, KG-9; docs/knowledge-graph/checkpoint.md).
 //
 // Purpose   Open a graph without re-deriving what has not changed. A SNAPSHOT is the projection state replay built, at
 //           one ledger position, signed. It is a DERIVED cache, never authoritative, and may be deleted at any time: the
@@ -14,14 +14,18 @@
 //           A source adapter may declare `extractorVersion`, an opaque string naming the code its extractor runs (the
 //           domain decides what it digests; this file only records and compares it): a snapshot derived by another
 //           version of any source's extractor is refused. An adapter that declares none relies on verifySnapshot.
-// Outputs   A file per snapshot, `graph-snapshot-<seq>-<state digest>.json`: one header line (the signed record) and the
-//           serialized state. The graph's verification says which open was taken: {snapshot: {used, seq, refused, reason}}.
+// Outputs   A file per snapshot, `graph-snapshot-<seq>-<state digest>.json`: one header line (the signed record,
+//           ophanim.graph.snapshot/v2) and the serialized state in the compact encoding (encodeState below). A record of
+//           an older format is refused as such ("older snapshot format"), never decoded. The graph's verification says
+//           which open was taken: {snapshot: {used, seq, refused, reason}}.
 // Must never  Write the ledger; let a reader see a partial file (a temporary file, then a rename in the same
-//           directory); load a source better than the snapshot recorded it; accept a key the reader did not pin.
+//           directory); load a source better than the snapshot recorded it; accept a key the reader did not pin; read
+//           a state as anything but exactly what was encoded.
 //
 // verifySnapshot imports openGraph (kinds.mjs), and openGraph calls openSnapshot: a module cycle of function
 // declarations only, used at call time, never at evaluation.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {createHash, randomBytes, sign as edSign, verify as edVerify, createPrivateKey, createPublicKey} from 'node:crypto';
 import {canonical, digest} from '../ledger/canonical.mjs';
@@ -31,7 +35,9 @@ import {GRAPH_SCHEMA, CONTRACT_VERSION, DOMAINS, RELATIONSHIPS, CLASSIFICATIONS,
 import {entryHash} from './projection.mjs';
 import {openGraph} from './kinds.mjs';
 
-export const SNAPSHOT_SCHEMA = 'ophanim.graph.snapshot/v1';
+export const SNAPSHOT_SCHEMA = 'ophanim.graph.snapshot/v2';
+/** The formats this reader recognizes as older than its own: refused as such, never decoded (KC-4). */
+export const OLDER_SNAPSHOT_SCHEMAS = Object.freeze(['ophanim.graph.snapshot/v1']);
 export const SNAPSHOT_FILE = /^graph-snapshot-(\d{12})-([0-9a-f]{16})\.json$/;
 const H = value => 'sha256:' + digest(value);
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -88,6 +94,154 @@ function syncDir(dir) {
   try { fd = fs.openSync(dir, 'r'); fs.fsyncSync(fd); } catch {} finally { if (fd !== null) fs.closeSync(fd); }
 }
 
+// ---- the state's compact encoding (register KG-9; docs/knowledge-graph/checkpoint.md section 4a) ------------------------
+// The projection state (projection.serialize(): a JSON value) as a STRING TABLE, a SHAPE TABLE and a stream of 32-bit
+// words, instead of a JSON object per fact. Every distinct string (an id, a subject, a source's authority and version, a
+// digest) is stored once; every object is a shape (its keys, in its own order) followed by its values; every value is
+// one word: (payload << 3) | tag. The decoded value is the serialized value exactly: the same strings (latin1 or UTF-16
+// code units as given, so a lone surrogate survives), the same numbers (-0 and fractions in a float64 table), the same
+// key order, arrays dense. Layout, little-endian, the typed sections aligned:
+//   u32 L | preamble (L bytes of JSON) | pad to 8 | numbers: f64 x N | offsets: u32 x (S + 1) | words: i32 x W |
+//   latin1 text | UTF-16LE text
+// The offsets are byte offsets into the latin1 text followed by the UTF-16LE text: the strings whose every code unit
+// fits one byte first (`narrow` of them), then the rest. The decoder refuses (throws) anything else: another encoding,
+// sections that do not add up to the bytes, an index out of its table, a word stream not consumed exactly, nesting past
+// the bound. It never guesses.
+export const STATE_ENCODING = 'ophanim.graph.compact-state/v1';
+const T_STRING = 0, T_INT = 1, T_ARRAY = 2, T_OBJECT = 3, T_CONST = 4, T_NUMBER = 5;
+const PAYLOAD = 2 ** 28, MAX_NESTING = 128, LITTLE = os.endianness() === 'LE';
+const pad8 = n => (8 - (n % 8)) % 8;
+const encodingFail = why => fail(`the state cannot be encoded: ${why}`);
+
+/** The state value as the compact encoding's bytes (writeSnapshot). Refuses a value that is not plain JSON. */
+export function encodeState(value) {
+  if (!LITTLE) encodingFail('the compact state is written on little-endian platforms only');
+  const strings = new Map(), shapes = new Map(), shapeKeys = [], numbers = [];
+  let words = new Int32Array(1 << 16), n = 0;
+  const word = w => { if (n === words.length) { const x = new Int32Array(words.length * 2); x.set(words); words = x; } words[n++] = w; };
+  const index = (count, what) => { if (count >= PAYLOAD) encodingFail(`more than ${PAYLOAD} ${what}`); return count; };
+  const put = (v, depth) => {
+    if (depth > MAX_NESTING) encodingFail(`it nests deeper than ${MAX_NESTING}`);
+    if (v === null) return word(T_CONST);
+    switch (typeof v) {
+      case 'boolean': return word(((v ? 2 : 1) << 3) | T_CONST);
+      case 'string': { let i = strings.get(v); if (i === undefined) strings.set(v, i = index(strings.size, 'strings')); return word((i << 3) | T_STRING); }
+      case 'number':
+        if (!Number.isFinite(v)) encodingFail(`it holds a number that is not finite (${v})`);
+        if (Number.isInteger(v) && v >= 0 && v < PAYLOAD && !Object.is(v, -0)) return word((v << 3) | T_INT);
+        numbers.push(v);
+        return word((index(numbers.length - 1, 'numbers') << 3) | T_NUMBER);
+      case 'object': {
+        if (Array.isArray(v)) {
+          word((index(v.length, 'array elements') << 3) | T_ARRAY);
+          for (let i = 0; i < v.length; i++) { if (!Object.hasOwn(v, i)) encodingFail('it holds a sparse array'); put(v[i], depth + 1); }
+          return;
+        }
+        const proto = Object.getPrototypeOf(v);
+        if (proto !== Object.prototype && proto !== null) encodingFail('it holds an object that is not plain');
+        const keys = Object.keys(v), name = JSON.stringify(keys);
+        let s = shapes.get(name);
+        if (s === undefined) { shapes.set(name, s = index(shapes.size, 'shapes')); shapeKeys.push(keys); }
+        word((s << 3) | T_OBJECT);
+        for (const k of keys) put(v[k], depth + 1);
+        return;
+      }
+    }
+    encodingFail(`it holds a ${typeof v}, which is not JSON`);
+  };
+  put(value, 0);
+  // The string table: the strings whose every code unit fits one byte first (latin1), then the rest (UTF-16LE).
+  const all = [...strings.keys()], narrow = [], wide = [];
+  for (const s of all) (/[^\u0000-ÿ]/.test(s) ? wide : narrow).push(s);
+  const order = [...narrow, ...wide], remap = new Int32Array(all.length);
+  order.forEach((s, i) => { remap[strings.get(s)] = i; });
+  for (let i = 0; i < n; i++) if ((words[i] & 7) === T_STRING) words[i] = (remap[words[i] >>> 3] << 3) | T_STRING;
+  const offsets = new Uint32Array(order.length + 1);
+  for (let i = 0, at = 0; i < order.length; i++) { offsets[i] = at; at += order[i].length * (i < narrow.length ? 1 : 2); offsets[i + 1] = at; }
+  const latin1 = Buffer.from(narrow.join(''), 'latin1'), utf16 = Buffer.from(wide.join(''), 'utf16le');
+  const preamble = Buffer.from(JSON.stringify({encoding: STATE_ENCODING, numbers: numbers.length, strings: order.length, narrow: narrow.length, words: n,
+    latin1: latin1.length, utf16: utf16.length, shapes: shapeKeys}));
+  const head = Buffer.alloc(4);
+  head.writeUInt32LE(preamble.length);
+  return Buffer.concat([head, preamble, Buffer.alloc(pad8(4 + preamble.length)), Buffer.from(Float64Array.from(numbers).buffer),
+    Buffer.from(offsets.buffer), Buffer.from(words.buffer, 0, n * 4), latin1, utf16]);
+}
+
+/** The state value the compact encoding's `bytes` hold; throws, saying why, if they are not exactly that encoding. */
+export function decodeState(bytes) {
+  const bad = why => { throw new Error(`its state is not ${STATE_ENCODING}: ${why}`); };
+  if (!LITTLE) bad('the compact state is read on little-endian platforms only');
+  if (bytes.length < 4) bad('it is shorter than its preamble');
+  const L = bytes.readUInt32LE(0);
+  if (4 + L > bytes.length) bad('its preamble runs past its end');
+  let pre = null;
+  try { pre = JSON.parse(bytes.toString('utf8', 4, 4 + L)); } catch {}
+  if (!plain(pre) || pre.encoding !== STATE_ENCODING) bad('its preamble does not name the encoding');
+  const count = k => (Number.isInteger(pre[k]) && pre[k] >= 0 && pre[k] < PAYLOAD ? pre[k] : bad(`its preamble's ${k} is not a count`));
+  const N = count('numbers'), S = count('strings'), S1 = count('narrow'), W = count('words'), B1 = count('latin1'), B2 = count('utf16');
+  if (S1 > S) bad('it has more latin1 strings than strings');
+  if (!Array.isArray(pre.shapes) || pre.shapes.length >= PAYLOAD) bad('its shapes are not a list');
+  let at = 4 + L + pad8(4 + L);
+  if (at + 8 * N + 4 * (S + 1) + 4 * W + B1 + B2 !== bytes.length) bad('its sections do not add up to its length');
+  const view = (Type, length) => {
+    const offset = bytes.byteOffset + at, size = length * Type.BYTES_PER_ELEMENT;
+    const v = offset % Type.BYTES_PER_ELEMENT === 0 ? new Type(bytes.buffer, offset, length) : new Type(new Uint8Array(bytes.subarray(at, at + size)).buffer);
+    at += size;
+    return v;
+  };
+  const numbers = view(Float64Array, N), offsets = view(Uint32Array, S + 1), words = view(Int32Array, W);
+  for (let i = 0; i < N; i++) if (!Number.isFinite(numbers[i])) bad('a number is not finite');
+  // Each string is its own (flat) string, read from its bytes: the first S1 as latin1, one byte a code unit, the rest as
+  // UTF-16LE, two bytes a code unit. (Slices of one large string would compare and serialize slower.)
+  if (offsets[0] !== 0 || offsets[S1] !== B1 || offsets[S] !== B1 + B2) bad('its string offsets do not span its texts');
+  const table = new Array(S);
+  for (let i = 0; i < S; i++) {
+    const from = offsets[i], to = offsets[i + 1];
+    if (to < from) bad('its string offsets go backwards');
+    if (i < S1) table[i] = bytes.toString('latin1', at + from, at + to);
+    else if ((to - from) % 2) bad('a UTF-16 string is not whole code units');
+    else table[i] = bytes.toString('utf16le', at + from, at + to);
+  }
+  // One template per shape, its keys in its order (own data properties, "__proto__" included): an object is a copy of
+  // its template with its values written in.
+  const keysOf = pre.shapes, templates = keysOf.map(keys => {
+    if (!Array.isArray(keys) || !keys.every(k => typeof k === 'string') || new Set(keys).size !== keys.length) bad('a shape is not a list of distinct keys');
+    const t = {};
+    for (const k of keys) Object.defineProperty(t, k, {value: null, writable: true, enumerable: true, configurable: true});
+    return t;
+  });
+  let p = 0;
+  const get = depth => {
+    if (p >= W) bad('its words end inside a value');
+    if (depth > MAX_NESTING) bad(`it nests deeper than ${MAX_NESTING}`);
+    const w = words[p++], x = w >>> 3;
+    if (w < 0) bad('a word is out of range');
+    switch (w & 7) {
+      case T_STRING: return x < S ? table[x] : bad('a string index is out of its table');
+      case T_INT: return x;
+      case T_ARRAY: {
+        if (x > W - p) bad('an array is longer than the words left');
+        if (x === 0) return [];
+        const a = new Array(x);
+        for (let i = 0; i < x; i++) a[i] = get(depth + 1);
+        return a;
+      }
+      case T_OBJECT: {
+        if (x >= templates.length) bad('a shape index is out of its table');
+        const keys = keysOf[x], o = {...templates[x]};
+        for (let i = 0; i < keys.length; i++) o[keys[i]] = get(depth + 1);
+        return o;
+      }
+      case T_CONST: return x === 0 ? null : x === 1 ? false : x === 2 ? true : bad('a constant is not null, false or true');
+      case T_NUMBER: return x < N ? numbers[x] : bad('a number index is out of its table');
+    }
+    return bad('a word has no tag');
+  };
+  const value = get(0);
+  if (p !== W) bad('words are left after its value');
+  return value;
+}
+
 /** The snapshot files in `dir`, newest first (by the seq they cover, then by name). */
 export function listSnapshots(dir) {
   let names = [];
@@ -119,12 +273,15 @@ export function writeSnapshot(graph, {dir, signer, retain = 2} = {}) {
   if (p.seq === 0) fail('the graph has applied no entry: there is nothing to snapshot');
   const at = graph.ledger.read()[p.seq - 1];
   if (!at || entryHash(at) !== p.head) fail(`the projection's position (seq ${p.seq}) is not an entry of its ledger; refresh the graph first`);
-  const bytes = Buffer.from(JSON.stringify(p.serialize()));
+  const bytes = encodeState(p.serialize());
   const body = {schema: SNAPSHOT_SCHEMA, anchor: graph.anchor, instance: p.instance, position: {seq: p.seq, hash: p.head}, contract: contractOf(),
     origins: originsDigest(p.origins), adapters: adaptersOf(p.adapters), extractors: extractorsOf(p.adapters), sources: sourcesHeld(p), projection_digest: p.digest(p.seq),
-    state_digest: sha(bytes), state_bytes: bytes.length};
+    state_encoding: STATE_ENCODING, state_digest: sha(bytes), state_bytes: bytes.length};
   const signature = {key_id: signer.key_id, public: createPublicKey(createPrivateKey(signer.privatePem)).export({format: 'jwk'}), sig: signBody(body, signer.privatePem)};
-  const header = Buffer.from(JSON.stringify({schema: SNAPSHOT_SCHEMA, body, signature}) + '\n');
+  // The header line is padded with JSON whitespace so that the state starts at a multiple of 8 bytes: a reader then
+  // views its typed sections in place (decodeState copies a section that is not aligned).
+  const line = JSON.stringify({schema: SNAPSHOT_SCHEMA, body, signature});
+  const header = Buffer.from(line + ' '.repeat(pad8(Buffer.byteLength(line) + 1)) + '\n');
   fs.mkdirSync(dir, {recursive: true});
   const name = `graph-snapshot-${String(p.seq).padStart(12, '0')}-${body.state_digest.slice(7, 23)}.json`, file = path.join(dir, name);
   const tmp = path.join(dir, `.tmp-${process.pid}-${randomBytes(6).toString('hex')}-${name}`);
@@ -148,9 +305,12 @@ export function writeSnapshot(graph, {dir, signer, retain = 2} = {}) {
 // ---- reading ----------------------------------------------------------------------------------------------------------
 /** Why a snapshot's signed record is refused by this reader, or null. Decided from the record alone. */
 function headerRefusal(head, {keys, anchor, contract, origins, instance, adapters, extractors}) {
+  // An older format is refused as such before anything of it is read: its state is never decoded as this format's (KC-4).
+  const older = [head?.schema, head?.body?.schema].find(s => OLDER_SNAPSHOT_SCHEMAS.includes(s));
+  if (older) return `older snapshot format: ${older}, not ${SNAPSHOT_SCHEMA} (the next writeSnapshot writes this reader's format)`;
   if (!plain(head) || head.schema !== SNAPSHOT_SCHEMA || !plain(head.body) || !plain(head.signature)) return `the record is not ${SNAPSHOT_SCHEMA}`;
   const {body, signature} = head;
-  if (body.schema !== SNAPSHOT_SCHEMA) return `the record is not ${SNAPSHOT_SCHEMA}`;
+  if (body.schema !== SNAPSHOT_SCHEMA || body.state_encoding !== STATE_ENCODING) return `the record is not ${SNAPSHOT_SCHEMA}`;
   const pinned = typeof signature.key_id === 'string' && Object.hasOwn(keys, signature.key_id) ? keys[signature.key_id] : null;
   if (!pinned) return `it is signed by key "${signature.key_id}", which this reader has not pinned`;
   if (typeof signature.sig !== 'string' || !verifyBody(body, signature.sig, pinned)) return `its signature does not verify under the pinned key "${signature.key_id}"`;
@@ -178,12 +338,15 @@ function positionRefusal({seq, hash} = {}, entries, kinds) {
 function stateRefusal(body, state, projection) {
   if (state.length !== body.state_bytes || sha(state) !== body.state_digest) return 'its state is not the state it signed';
   let x;
-  try { x = JSON.parse(state.toString('utf8')); } catch { return 'its state is not JSON'; }
+  try { x = decodeState(state); } catch (e) { return e.message; }
   try { projection.restore(x); } catch (e) { return e.message; }
-  const why = projection.seq !== body.position.seq || projection.head !== body.position.hash ? 'its state is not at the position it covers'
+  let why;
+  try {
+    why = projection.seq !== body.position.seq || projection.head !== body.position.hash ? 'its state is not at the position it covers'
     : projection.digest(body.position.seq) !== body.projection_digest ? 'its state does not reproduce its recorded projection digest'
       : canonical(sourcesHeld(projection)) !== canonical(body.sources) ? 'its state does not hold the sources it records'
         : null;
+  } catch (e) { why = `its restored state cannot be checked: ${e.message}`; }
   if (why) projection.reset();
   return why;
 }
