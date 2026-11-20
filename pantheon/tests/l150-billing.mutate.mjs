@@ -31,7 +31,7 @@ const one = (file, from, to) => ({file, from, to});
 const T = {relay3: '^relay three requests', methods: '^relay unsupported methods', cap: '^relay capability', sesscap: '^relay session cap',
   conc: '^relay concurrent', bounds: '^relay bounds', direct: '^seat direct run', governed: '^seat governed run', search: '^seat web search',
   exhaust: '^seat exhaustion', procs: '^seat concurrency across processes', crash: '^seat crash cancel restart', board: '^board sdk seat: each request',
-  bexh: '^board sdk seat exhaustion', seeded: '^board sdk seat seeded', bound: '^board sdk seat provider-call bound', vertex: '^board sdk seat vertex'};
+  bexh: '^board sdk seat exhaustion', seeded: '^board sdk seat seeded', bound: '^board sdk seat provider-call bound', vertex: '^board sdk seat vertex', life: '^relay idle and lifetime bounds'};
 const CHARGE = '      if (m.billed && !charge()) return;\n';
 const CAP = '        if (session.admitted >= session.maxRequests) {';
 const OPEN = '      const session = relay.openSession({ billing: BILLING, admit: () => admit(),';
@@ -46,6 +46,12 @@ export const MUTATIONS = [
   {id: 'M11', path: 'run-item SDK seat', what: 'the run\'s provider-call bound is charged once at the spawn, not per request', tests: [T.board, T.bound],
     edits: [one(ITEM, OPEN, '      admit();\n      const session = relay.openSession({ billing: BILLING, admit: () => {},')]},
   // ---- the session's own bound (owner items 3, 4) ----------------------------------------------------------------------
+  // ---- the channel's idle and lifetime bounds (owner item 4; added by the coordinator at integration) ------------------
+  {id: 'M20', path: 'relay', what: 'the idle bound is ignored: a session idle past it still admits', tests: [T.life],
+    edits: [one(RELAY, '    if (session.closed || now > session.expires || now - session.last > session.idleMs) {', '    if (session.closed || now > session.expires) {')]},
+  {id: 'M21', path: 'relay', what: 'the lifetime bound is ignored: an active session never expires', tests: [T.life],
+    edits: [one(RELAY, '    if (session.closed || now > session.expires || now - session.last > session.idleMs) {', '    if (session.closed || now - session.last > session.idleMs) {'),
+      one(RELAY, '    const timer = setTimeout(() => session.close(), lifetimeMs); timer.unref?.();', '    const timer = setTimeout(() => {}, lifetimeMs); timer.unref?.();')]},
   {id: 'M3', path: 'relay', what: 'the session\'s maximum request count is ignored', tests: [T.sesscap],
     edits: [one(RELAY, CAP, '        if (false) {')]},
   {id: 'M9', path: 'relay', what: 'the session cap counts completed outcomes instead of admissions', tests: [T.sesscap],

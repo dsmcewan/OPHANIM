@@ -434,3 +434,28 @@ test("board sdk seat vertex: Vertex through the SDK seat is refused before anyth
   assert.deepEqual([b.fake.requests.length, b.usage.length, b.spawned], [0, 0, false]);
   assert.deepEqual(critique(b.run).map(a => [a.code, a.provider_requests]), [[VERTEX, 0]]);
 });
+
+// ---- the channel's idle and lifetime bounds (owner item 4; added by the coordinator at integration) --------------------
+test("relay idle and lifetime bounds: a session idle past its bound, or past its lifetime while active, is closed: the next request is refused with GEMINI_RELAY_SESSION_CLOSED, nothing charged or forwarded", async t => {
+  const { startGeminiRelay } = await relay();
+  const dir = scratch(t), billing = billingOf(dir, 10);
+  const fake = await startFakeGemini({ mode: "text", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
+  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url }); t.after(() => r.close());
+  // Idle: one request inside the bound, then a pause longer than it.
+  const idle = r.openSession({ billing, idleMs: 150, lifetimeMs: 60_000 });
+  assert.equal((await post(r.url, idle.token)).status, 200);
+  await sleep(400);
+  const late = await post(r.url, idle.token);
+  assert.deepEqual([late.status, late.reason], [401, "GEMINI_RELAY_SESSION_CLOSED"], "a session idle past its bound is closed");
+  assert.equal(fake.requests.length, 1, "the refused request was not forwarded");
+  assert.equal(jsonl(join(dir, "usage.jsonl")).length, 1, "the refused request was not charged");
+  // Lifetime: requests every 60 ms keep the session from idling; past its lifetime it closes all the same.
+  const life = r.openSession({ billing, idleMs: 60_000, lifetimeMs: 300 });
+  const statuses = [];
+  for (const end = Date.now() + 700; Date.now() < end;) { statuses.push((await post(r.url, life.token)).status); await sleep(60); }
+  assert.equal(statuses[0], 200, "a request inside the lifetime is served");
+  assert.equal(statuses.at(-1), 401, "past its lifetime the session is closed although it never idled");
+  const served = statuses.filter(s => s === 200).length;
+  assert.equal(fake.requests.length, 1 + served, "only the requests inside the lifetime were forwarded");
+  assert.equal(jsonl(join(dir, "usage.jsonl")).length, 1 + served, "only the requests inside the lifetime were charged");
+});
