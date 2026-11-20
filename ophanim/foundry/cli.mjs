@@ -15,17 +15,19 @@
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {claudeCliClients} from './claude-cli.mjs';
+import {composeSeats} from './seats.mjs';
+import {realTransports} from './transports.mjs';
 import {runFoundry, readTrials} from './foundry.mjs';
 import {rankSetups} from './setups.mjs';
 import {foundryGraph, measuredSetups} from './graph.mjs';
 
-const USAGE = `usage: node ophanim/foundry/cli.mjs build --request FILE --state DIR [--arms N] [--repetitions N] [--rework N] [--implementers a,b] [--planner M] [--reviewer M] [--efforts low,high] [--max-usd X] [--per-call-usd X]
+const USAGE = `usage: node ophanim/foundry/cli.mjs build --request FILE --state DIR [--arms N] [--repetitions N] [--rework N] [--seats claude-cli|all] [--implementers a,b] [--planner M] [--reviewer M] [--efforts low,high] [--max-usd X] [--per-call-usd X]
        node ophanim/foundry/cli.mjs status --state DIR [--class CLASS]`;
-const VALUED = ['request', 'state', 'arms', 'repetitions', 'rework', 'implementers', 'planner', 'reviewer', 'efforts', 'max-usd', 'per-call-usd', 'class'];
+const VALUED = ['request', 'state', 'arms', 'repetitions', 'rework', 'seats', 'implementers', 'planner', 'reviewer', 'efforts', 'max-usd', 'per-call-usd', 'class'];
 /** Where the Claude command line is the transport, the capabilities it reaches are the Anthropic models of the api profile. */
 export const reachableByClaudeCli = seat => seat.vendor === 'anthropic' && seat.profile === 'api';
 
-export async function main(argv, {out = s => process.stdout.write(s), err = s => process.stderr.write(s), clients = null, live = true, progress = () => {}} = {}) {
+export async function main(argv, {out = s => process.stdout.write(s), err = s => process.stderr.write(s), clients = null, transports = null, live = true, progress = () => {}} = {}) {
   const [command, ...rest] = argv, flags = {};
   for (let i = 0; i < rest.length; i++) {
     const k = rest[i].startsWith('--') ? rest[i].slice(2) : null;
@@ -44,14 +46,19 @@ export async function main(argv, {out = s => process.stdout.write(s), err = s =>
     return 0;
   }
   const arms = int('arms', 2), repetitions = int('repetitions', 1), rework = int('rework', 0), maxUsd = usd('max-usd', 2), perCallUsd = usd('per-call-usd', 0.5);
-  if (command !== 'build' || !flags.request || !flags.state || [arms, repetitions, rework, maxUsd, perCallUsd].some(Number.isNaN)) { err(USAGE + '\n'); return 2; }
-  // One spending cap for the whole build: the clients of every trial share one meter. An effort applies to the trial's own clients.
-  const meter = clients ?? (() => { const made = new Map(); let spentBy = [];
+  const seats = flags.seats ?? 'claude-cli';
+  if (command !== 'build' || !flags.request || !flags.state || [arms, repetitions, rework, maxUsd, perCallUsd].some(Number.isNaN) || !['claude-cli', 'all'].includes(seats)) { err(USAGE + '\n'); return 2; }
+  // One spending cap for the whole build, shared by every trial's clients; an effort applies to the trial's own clients.
+  // `--seats all` composes every lab the capability graph admits and this environment reaches (seats.mjs + transports.mjs);
+  // the default is the Claude command line alone, so a build never reaches beyond it without being asked.
+  const composed = seats === 'all' ? composeSeats({transports: transports ?? realTransports({live}), maxUsd, perCallUsd}) : null;
+  const meter = clients ?? composed?.makeClients ?? (() => { const made = new Map(); let spentBy = [];
     return ({setup}) => { const key = setup.effort ?? '';
       if (!made.has(key)) { const prior = () => spentBy.reduce((a, m) => a + m.spent().usd, 0); const m = claudeCliClients({live, effort: setup.effort, perCallUsd, maxUsd: Math.max(maxUsd - prior(), 0)}); made.set(key, m); spentBy = [...made.values()]; }
       return made.get(key); }; })();
+  const reachable = composed?.reachable ?? reachableByClaudeCli;
   try {
-    const record = await runFoundry({requestFile: path.resolve(flags.request), state: path.resolve(flags.state), makeClients: meter, reachable: reachableByClaudeCli, arms, repetitions, rework,
+    const record = await runFoundry({requestFile: path.resolve(flags.request), state: path.resolve(flags.state), makeClients: meter, reachable, arms, repetitions, rework,
       implementers: flags.implementers ? flags.implementers.split(',') : null, planner: flags.planner ?? null, reviewer: flags.reviewer ?? null, efforts: flags.efforts ? flags.efforts.split(',') : [null], onStage: progress});
     out(JSON.stringify(record, null, 1) + '\n');
     return record.product ? 0 : 1;

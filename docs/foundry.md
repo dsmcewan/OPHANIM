@@ -6,7 +6,7 @@ capabilities, verify outcomes, operate systems, and improve its own processes" (
 one request, and lets the knowledge graph decide who builds (owner direction, 2026-11-20: "Use the knowledge_graph";
 "A/B test and keep metrics of the best and fastest set up").
 
-Every limit of what follows is in `docs/OPEN-LIMITATIONS.md`, rows F-1 to F-13. Four of them (F-10 to F-13) are where
+Every limit of what follows is in `docs/OPEN-LIMITATIONS.md`, rows F-1 to F-14. Four of them (F-10 to F-13) are where
 the foundry, as built, sits outside rules the rest of the system keeps: one lifecycle and its work ledger,
 owner-directed seats, one store of measurements, and the central billing policy. F-10 and F-11 wait on the owner.
 
@@ -38,10 +38,20 @@ request defines one; the median wall time of the accepted trials; the median rep
 trials for any setup and the ranking says the order is not established. The criterion orders. It qualifies nothing: no
 `qualified-for` is emitted, because that needs a criterion the owner defines (`metrics.mjs`).
 
-**The model seat here** is the Claude command line (`claude-cli.mjs`): a client in the shape Pantheon's pipeline is
-given, serving each turn with one `claude -p` process that has no tools, no settings, no saved session, an empty
-directory and a spending cap. Where only that command line is signed in, one lab is reachable: every review is by
-another model of the maker's lab, Pantheon's REVIEW gate refuses to ship, and a product is `accepted`, never `shipped`.
+**The model seats.** The capability graph admits planner, implementer and reviewer seats across every lab it lists
+(anthropic, openai, xai, agy_google); `candidateSetups` keeps the ones `reachable(seat)` says this environment can serve.
+Two transports supply that reachability (`transports.mjs`): the Claude command line (`claude-cli.mjs`), one `claude -p`
+process per turn with no tools, no settings, no saved session, an empty directory and a spending cap; and pantheon's live
+SDK seats (`sdk/live.mjs` `liveClients`) for the OpenAI/xAI API and for agy_google. `composeSeats` (`seats.mjs`) joins
+them into one `makeClientFor(vendor)` that dispatches each lab to the transport serving it, under one shared spending
+cap, and reports a trial `live` only when every reachable transport is live. `build --seats all` uses the composed
+provider; the default (`--seats claude-cli`) uses the command line alone, so a run never reaches beyond it unasked.
+
+A transport is reachable only when it can actually serve here: the Claude CLI on `PATH`, or a vendor SDK installed with a
+credential present. This repository ships with no vendor SDK and no API key a provider accepts, so **only the Claude
+command line is reachable**: one lab, every review by another model of its own lab, Pantheon's REVIEW gate refusing to
+ship, and a product `accepted`, never `shipped`. The other three labs are wired and admitted by the graph; they build the
+moment their SDK and a working key are present (F-1, F-3).
 
 **Authority.** The trial records in the state directory are the authority. The graph is re-derived from them on every
 run with keys made for the run; nothing is kept in it that the records do not hold.

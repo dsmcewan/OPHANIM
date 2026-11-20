@@ -152,3 +152,20 @@ test('the command line: build prints the run record and exits 0 with a product; 
   const usage = await call('build', '--state', w.state);
   assert.deepEqual([usage.code, usage.out, /^usage: node ophanim\/foundry\/cli\.mjs build /.test(usage.err), (await call('build', '--request', ADDER, '--state', w.state, '--arms', 'two')).code], [2, '', true, 2]);
 });
+
+test('--seats all drives the build through the composed multi-lab provider: a reachable lab builds, an unreachable one is admitted by the graph but never served; --seats bogus is a usage error', async t => {
+  const {main} = await import('../foundry/cli.mjs');
+  const w = world(t, {files: {'*': {'add.mjs': GOOD}}, cost_usd: {'*': 0.01}});
+  const make = claudeCliClients({cli: FAKE, env: {...process.env, FAKE_CLAUDE_SCRIPT: path.join(w.dir, 'script.json')}, maxUsd: 100});
+  // Two transports: the Claude seat reachable, the API seat present but not reachable here (no SDK/key). composeSeats
+  // must build only through the reachable one; the openai/xai setups the graph admits are left unserved.
+  const transports = [
+    {id: 'claude-cli', vendors: ['anthropic'], live: false, reachable: () => true, make: () => make},
+    {id: 'live-api', vendors: ['openai', 'xai'], live: true, reachable: () => false, make: () => { throw new Error('the API seat must not be built when unreachable'); }},
+  ];
+  const call = async (...argv) => { let out = '', err = ''; const code = await main(argv, {out: s => { out += s; }, err: s => { err += s; }, transports, live: false, progress: () => {}}); return {code, out, err}; };
+  const built = await call('build', '--seats', 'all', '--request', ADDER, '--state', w.state, '--arms', '1', '--implementers', SONNET, '--reviewer', OPUS);
+  assert.deepEqual([built.code, JSON.parse(built.out).winner], [0, idOf(SONNET)], 'the composed provider built the product through the one reachable lab');
+  const bogus = await call('build', '--seats', 'bogus', '--request', ADDER, '--state', path.join(w.dir, 'o2'));
+  assert.deepEqual([bogus.code, /^usage:/.test(bogus.err)], [2, true]);
+});
