@@ -638,7 +638,10 @@ export async function runOpenItem(spec, opts = {}) {
       // its own PID namespace and /proc (the controller's environment out of reach), only the worktree and this seat's out
       // dir writable, an allowlisted environment. No bwrap, or a failing probe of the jail, refuses the seat HERE, before the
       // relay exists: nothing admitted, charged or spawned. There is no override. (`opts.sdkJail.bwrap` names the binary,
-      // as runAgyCliTurn's sandbox.bwrap does; a binary that is missing or fails the probe refuses.)
+      // as runAgyCliTurn's sandbox.bwrap does; a binary that is missing or fails the probe refuses.) NO DESCRIPTOR BEYOND 0,
+      // 1 AND 2 (register KG-11): the jail's prefix starts bwrap through the descriptor closer (src/agy/fd-exec.mjs, a
+      // single-threaded python3 program), so the seat inherits nothing this controller was handed but its stdio; a closer
+      // that does not work here (no python3 included) refuses the seat at this gate, as a missing bwrap does.
       let jailGate;
       try { jailGate = await sdkSeatJailGate({ bwrap: opts.sdkJail?.bwrap ?? "bwrap" }); }
       catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: String(refusal.message).slice(0, 300) }); record(); throw Object.assign(refusal, { provider_requests: 0 }); }
@@ -681,7 +684,7 @@ export async function runOpenItem(spec, opts = {}) {
         // A jail that cannot be built (a path that would expose a hidden location, a credential-named variable) refuses the
         // seat: nothing is spawned, and the relay session below is closed with nothing admitted.
         jail = jailGate.build({ python, script: args[0], repo: REPO, workspace: worktree, out_dir: dir, env: sdkEnv.env, read: [join(dir, "brief.txt"), ...(schemaPath ? [schemaPath] : [])] });
-        progress({ event: "seat.jail", seat: "agy_google", model, detail: `python SDK seat jailed (bwrap): ${jail.hidden.length} host location(s) hidden, writable: ${jail.writable.join(", ")}; environment: ${jail.record.env.join(", ")}; network shared (retained)` });
+        progress({ event: "seat.jail", seat: "agy_google", model, detail: `python SDK seat jailed (bwrap): ${jail.hidden.length} host location(s) hidden, writable: ${jail.writable.join(", ")}; environment: ${jail.record.env.join(", ")}; descriptors: ${jail.fds.passed.join(", ")} only; network shared (retained)` });
         const [cmd, ...argv] = [...jail.prefix, python, ...args];
         sdkRun = await spawnPromise(cmd, argv, { env: jail.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });
       }

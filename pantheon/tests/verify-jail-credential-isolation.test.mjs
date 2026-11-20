@@ -12,6 +12,10 @@
 // across every readable path under the homes, /tmp, /var/tmp (the whole fixture), /run, /dev/shm, /mnt and /srv, in its
 // inherited fds, in /proc/<pid>/{environ,cmdline,fd} of every process it can see, and by connecting to the A2A sockets.
 // A POSITIVE CONTROL runs the same probe without the jail and must find every one of them: the probe can see a leak.
+// INHERITED DESCRIPTORS (register KG-11) are leaked ON PURPOSE, at fd 20 (above the low range node marks close-on-exec at
+// startup; a POSIX sh cannot name it, so bash opens it), at every entry of the verify launcher: agy's shell when it runs the
+// launcher, a shell exec'ing it, the controller calling runVerify. So the descriptor assertion does not depend on what the
+// environment leaks: it passes whatever that is (the jails close it), and fails when the launcher's closer is removed.
 // Real bwrap; nothing is skipped when bwrap works.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -199,7 +203,8 @@ test("credential isolation, WORKER path: the verify_cmd run by agy's run_command
     // The fake CLI (credential-bearing, in agy's jail): it CAN read the OAuth scratch copy and the token file (written down
     // as the positive control of the layer below), holds fd 9 on the token file and runs a long-lived process with the
     // token in its env and argv (as the relay does); asks two legitimate questions, a third (over the bound), a forbidden
-    // role; then runs the ONE verify command.
+    // role; then runs the ONE verify command, from a shell that holds fd 20 on the token file (KG-11: what reaches the
+    // verify_cmd is then decided by the launcher's descriptor closer alone).
     agy.agyWorker(`cat "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" > "${f.fx}/agy-saw-oauth" 2>/dev/null
 cat "${ws.a2a_token}" > "${f.fx}/agy-saw-token" 2>/dev/null
 exec 9< "${ws.a2a_token}"
@@ -208,7 +213,7 @@ agy_ask math "q1" > "${f.fx}/ask1" || exit 11
 agy_ask math "q2" > "${f.fx}/ask2" || exit 12
 agy_ask math "q3" > "${f.fx}/ask3" 2>&1 && exit 13
 agy_ask release-manager "q4" > /dev/null 2>&1 && exit 14
-agy_verify > "${f.fx}/verify.out" 2>&1 || { kill $bp; exit 15; }
+bash -c 'exec 20<"$0"; exec node "$1" run "$2" "$3"' "${ws.a2a_token}" "$tools" "$dir" "$wverify" > "${f.fx}/verify.out" 2>&1 || { kill $bp; exit 15; }
 kill $bp
 reply=''
 `);
@@ -238,19 +243,20 @@ reply=''
     for (const p of f.gitKnown) assert.notEqual(rep.known[p], "READABLE-WITH-SECRET", `${p}: the git config is the sanitized one`);
     assert.equal(rep.sockets.find(x => x.path === shim.socket)?.result, "ENOENT", "the A2A socket does not exist in the verify jail");
   });
-  // INHERITED DESCRIPTORS AT THE LAUNCHER. agy's run_command shell need not be node (whose spawn drops stray fds): here a
-  // shell holding fd 9 on the token file execs the unit's verify launcher, as agy's shell runs it. POSITIVE CONTROL: the
-  // same shell exec'ing the probe itself hands it fd 9 (and so the token).
+  // INHERITED DESCRIPTORS AT THE LAUNCHER (KG-11). Neither a shell nor node's spawn closes a descriptor it was handed: here a
+  // shell holding fd 9 and fd 20 on the token file execs the unit's verify launcher, as agy's shell runs it. POSITIVE
+  // CONTROL: the same shell exec'ing the probe itself hands it both (and so the token).
   const report = join(f.wt, "report.json"), env = { PATH: process.env.PATH, HOME: f.home, OPENAI_API_KEY: f.s.openai, PANTHEON_A2A_TOKEN: shim.token };
   rmSync(report);
-  const viaLauncher = await run("/bin/sh", ["-c", `exec 9< '${ws.a2a_token}'; exec '${ws.worker_verify_cmd}'`], { env, cwd: f.ctl });
+  const viaLauncher = await run("/bin/bash", ["-c", `exec 9< '${ws.a2a_token}'; exec 20< '${ws.a2a_token}'; exec '${ws.worker_verify_cmd}'`], { env, cwd: f.ctl });
   assert.equal(viaLauncher.code, 0, viaLauncher.err);
-  nothingFound(JSON.parse(readFileSync(report, "utf8")), "the launcher started from a shell holding fd 9 and the keys in its env");
+  nothingFound(JSON.parse(readFileSync(report, "utf8")), "the launcher started from a shell holding fd 9 and fd 20 and the keys in its env");
   rmSync(report);
-  const direct = await run("/bin/sh", ["-c", `exec 9< '${ws.a2a_token}'; cd '${f.wt}' && exec node probe.mjs`], { env });
+  const direct = await run("/bin/bash", ["-c", `exec 9< '${ws.a2a_token}'; exec 20< '${ws.a2a_token}'; cd '${f.wt}' && exec node probe.mjs`], { env });
   assert.equal(direct.code, 0, direct.err);
   const leak = JSON.parse(readFileSync(report, "utf8"));
   assert.ok(leak.fds.some(x => x.fd === "9" && (x.found ?? []).includes("a2a")), "unjailed, fd 9 hands over the token");
+  assert.ok(leak.fds.some(x => x.fd === "20" && (x.found ?? []).includes("a2a")), "unjailed, fd 20 hands over the token");
   assert.ok(leak.env.some(h => h.found.includes("openai")), "unjailed, the env hands over the provider key");
 });
 
@@ -267,9 +273,9 @@ test("credential isolation, CONTROLLER path: runVerify runs the verify_cmd with 
   const needles = { ...f.s, a2a: shim.token, __net: await hostNet(t),
     __sockets: [shim.socket], __known: [join(f.ctl, "a2a.token"), join(f.home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), join(f.ctl2, "a2a.token"), `${f.ck}.seal-key`, ...f.gitKnown, ...f.planted] };
   writeFileSync(join(f.wt, "probe.mjs"), PROBE(needles));
-  // The CONTROLLER: a process with the provider key in its env, HOME at the fake home, and fd 3 open on the token file
-  // without close-on-exec (a descriptor a parent handed down). It calls runVerify as the pipeline does (index.mjs hides
-  // the run dir and the checkpoints with their key).
+  // The CONTROLLER: a process with the provider key in its env, HOME at the fake home, and fd 3 and fd 20 open on the token
+  // file without close-on-exec (descriptors a parent handed down; node marks the low one close-on-exec at startup, not fd 20,
+  // KG-11). It calls runVerify as the pipeline does (index.mjs hides the run dir and the checkpoints with their key).
   const controller = join(f.root, "controller.mjs");
   writeFileSync(controller, `import { runVerify } from ${JSON.stringify(REVIEW)};
 const v = await runVerify({ worktree: ${JSON.stringify(f.wt)}, verify_cmd: "node probe.mjs", jail: { hide: ${JSON.stringify([join(f.root, "run"), f.ck, `${f.ck}.seal-key`])} } });
@@ -278,7 +284,7 @@ process.stdout.write(JSON.stringify(v));
   const env = { PATH: process.env.PATH, HOME: f.home, OPENAI_API_KEY: f.s.openai, PANTHEON_A2A_TOKEN: shim.token, LANG: "C.UTF-8" };
   const fd = openSync(join(f.ctl, "a2a.token"), "r");
   let c;
-  try { c = await run(process.execPath, [controller], { env, cwd: f.root, stdio: ["ignore", "pipe", "pipe", fd] }); } finally { closeSync(fd); }
+  try { c = await run(process.execPath, [controller], { env, cwd: f.root, stdio: ["ignore", "pipe", "pipe", fd, ...Array(16).fill("ignore"), fd] }); } finally { closeSync(fd); }
   assert.equal(c.code, 0, c.err);
   const v = JSON.parse(c.out);
   assert.deepEqual([v.exit_code, v.passed, v.jail], [0, true, { kind: "verify-jail", refused: false }], v.output);
@@ -289,11 +295,11 @@ process.stdout.write(JSON.stringify(v));
   for (const p of f.gitKnown) assert.notEqual(rep.known[p], "READABLE-WITH-SECRET", `${p}: the git config is the sanitized one`);
   assert.equal(rep.sockets.find(x => x.path === shim.socket)?.result, "ENOENT", "the A2A socket does not exist in the verify jail");
 
-  // POSITIVE CONTROL: the same probe, the same controller-shaped env and fd 3, WITHOUT the jail. It must find them all.
+  // POSITIVE CONTROL: the same probe, the same controller-shaped env and fd 3 and fd 20, WITHOUT the jail. It must find them all.
   rmSync(join(f.wt, "report.json"));
   const fd2 = openSync(join(f.ctl, "a2a.token"), "r");
   let u;
-  try { u = await run(process.execPath, ["probe.mjs"], { env, cwd: f.wt, stdio: ["ignore", "pipe", "pipe", fd2] }); } finally { closeSync(fd2); }
+  try { u = await run(process.execPath, ["probe.mjs"], { env, cwd: f.wt, stdio: ["ignore", "pipe", "pipe", fd2, ...Array(16).fill("ignore"), fd2] }); } finally { closeSync(fd2); }
   assert.equal(u.code, 0, u.err);
   const leak = JSON.parse(readFileSync(join(f.wt, "report.json"), "utf8"));
   const kinds = new Set([...leak.env, ...leak.fs, ...leak.proc].flatMap(h => h.found));
@@ -302,6 +308,7 @@ process.stdout.write(JSON.stringify(v));
   assert.deepEqual(leak.net.filter(n => n.kind !== "metadata").map(n => [n.kind, n.result]), [["host-loopback", "CONNECTED"], ["abstract", "CONNECTED"]], "unjailed, the host's loopback and abstract sockets are reachable");
   assert.ok(leak.env.some(h => h.found.includes("openai")) && leak.env.some(h => h.found.includes("a2a")), "through the env");
   assert.ok(leak.fds.some(x => x.fd === "3" && (x.found ?? []).includes("a2a")), "through the inherited fd 3");
+  assert.ok(leak.fds.some(x => x.fd === "20" && (x.found ?? []).includes("a2a")), "through the inherited fd 20");
   assert.ok(leak.proc.some(h => h.found.includes("a2a") && /environ|cmdline/.test(h.where)), "through /proc of the credential-bearing process");
   assert.ok(leak.sockets.some(x => x.path === shim.socket && x.result === "CONNECTED" && /401/.test(x.reply)), "the socket is reachable unjailed (and still demands the token)");
 });

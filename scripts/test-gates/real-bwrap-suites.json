@@ -14,6 +14,7 @@
     "pantheon/tests/agy-tool-drift.test.mjs",
     "pantheon/tests/agy-worker-probe.test.mjs",
     "pantheon/tests/agy-worker.test.mjs",
+    "pantheon/tests/jail-fds.test.mjs",
     "pantheon/tests/l150-billing.test.mjs",
     "pantheon/tests/pentest/a-jail-escape-live.test.mjs",
     "pantheon/tests/reliability-r3-a3.test.mjs",

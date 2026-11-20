@@ -22,8 +22,10 @@
 //
 // THE SEAT RUNS IN ITS JAIL (register L-155; owner decision 2026-11-20 "Yes, bubble per seat"; src/agy/sandbox.mjs
 // sdkSeatJail), the same one the board's SDK seat runs in: its whole process in bwrap, the controller's HOME and credential
-// locations hidden, its own PID namespace and /proc, only --workspace and --out writable, an allowlisted environment. No
-// bwrap (on PATH), or a failing probe of the jail, refuses before the relay exists (SANDBOX_UNAVAILABLE, exit 2); there is
+// locations hidden, its own PID namespace and /proc, only --workspace and --out writable, an allowlisted environment, and
+// no descriptor beyond 0, 1 and 2 (register KG-11: the jail's prefix starts bwrap through the descriptor closer,
+// src/agy/fd-exec.mjs, so nothing this launcher was handed reaches the seat but its stdio). No bwrap (on PATH), or a failing
+// probe of the jail or of its descriptor closer, refuses before the relay exists (SANDBOX_UNAVAILABLE, exit 2); there is
 // no override. The seat's path arguments are made absolute (the jail starts in the workspace), and a --progress outside
 // --workspace and --out is refused (the jail could not write it). The seat's HOME is removed after it ends, on every path.
 import { spawn } from "node:child_process";

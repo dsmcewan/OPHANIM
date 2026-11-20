@@ -27,11 +27,14 @@
 //              directory, the agy state dirs, the Gemini layout (prepareWorkerJail adds them) and the caller's list (the
 //              controller: the run dir, the checkpoints and their seal key) are hidden again should a bound path
 //              contain them, and a bind inside one of them (or a home's secret dir) is refused.
-//   FDS        no inherited descriptor but 0, 1 and 2 reaches the script. bwrap itself passes inherited fds through
-//              (observed with bubblewrap 0.9.0: an `exec 7<file` shell's fd 7 was open in the jailed command), so the
-//              launcher is a node process: node marks every inherited fd above 2 close-on-exec at startup (observed on
-//              node 24.22: a shell's `exec 9<file` arrives as flags 02100000), so they close at the exec of bwrap; and
-//              closeInheritedFds closes any one still without close-on-exec before that (defense in depth).
+//   FDS        no inherited descriptor but 0, 1 and 2 reaches the script (register KG-11). bwrap itself passes inherited
+//              fds through (observed with bubblewrap 0.9.0: an `exec 7<file` shell's fd 7 was open in the jailed command),
+//              and node marks only a LOW range of inherited fds close-on-exec at startup (observed on node 24.22: 0..16;
+//              an inherited fd 20 above a gap stays inheritable). So the launcher starts bwrap THROUGH THE DESCRIPTOR
+//              CLOSER (src/agy/fd-exec.mjs): a single-threaded python3 program that closes every descriptor above 2,
+//              checks that none is left, and execs bwrap in its place; when it cannot (no python3 included), it exits
+//              VERIFY_JAIL_REFUSED and nothing runs. The script is given stdin, stdout and stderr on purpose, and nothing
+//              else.
 //   /proc      its own PID namespace (--unshare-pid) and a fresh /proc: no credential-bearing process is visible, so
 //              no /proc/<pid>/{environ,cmdline,fd,mem,root} of one can be opened, and none can be signalled or traced.
 //              Also --unshare-ipc, --unshare-uts, --cap-drop ALL and --new-session (no TIOCSTI into a terminal).
@@ -39,8 +42,9 @@
 //              metadata address (169.254.169.254) and the host's ABSTRACT Unix sockets (they belong to a network
 //              namespace) are unreachable; no path socket exists in the jail but under the worktree. A policy asking for
 //              network (`network`) is REFUSED, never granted: a verify that needs it fails, explicitly.
-// The launcher refuses (exit VERIFY_JAIL_REFUSED) when bwrap cannot start the jail; it never falls back to running
-// unjailed unless the policy says `allow_unjailed: true` (then still a clean env and closed fds, recorded as such).
+// The launcher refuses (exit VERIFY_JAIL_REFUSED) when bwrap cannot start the jail or the descriptor closer cannot close
+// the inherited descriptors; it never falls back to running unjailed unless the policy says `allow_unjailed: true` (then
+// still a clean env and, through the same closer, no descriptor beyond 0, 1 and 2, recorded as such).
 //
 // Used as:
 //   node verify-jail.mjs <policy.json>          the worker's command, through the per-unit wrapper <control_dir>/pantheon-verify
@@ -53,13 +57,14 @@
 // Must never: run the script with an inherited descriptor beyond stdio, with an env variable outside the allowlist,
 // with a host path outside the allowlist visible, or with network; write anything but its private scratch dir (the
 // generated passwd/group/hosts and git configs, removed when the script ends).
-import { closeSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { repoGitDirs, siblingsHidden } from "./sandbox.mjs";
 import { VERIFY_LAUNCHER_NAME } from "./jail-hook.mjs";
+import { fdExecArgv, resolveCommand } from "./fd-exec.mjs";
 
 export const VERIFY_JAIL_SCHEMA = "pantheon.verify-jail/v1";
 export const VERIFY_JAIL_MODULE = fileURLToPath(import.meta.url);
@@ -115,26 +120,6 @@ export function verifyEnvOf(base = process.env) {
  */
 export function launcherEnv(base = process.env) {
   return { ...verifyEnvOf(base).env, ...(base?.PANTHEON_VERIFY_ENV_PASS ? { PANTHEON_VERIFY_ENV_PASS: String(base.PANTHEON_VERIFY_ENV_PASS) } : {}) };
-}
-
-// ---- FDS ------------------------------------------------------------------------------------------------------------
-const O_CLOEXEC = 0o2000000;
-/**
- * Close every descriptor of this process above 2 that would survive an exec (no O_CLOEXEC in /proc/self/fdinfo):
- * those are the ones a parent left open for us (agy's, the controller's). Node's own descriptors are all O_CLOEXEC,
- * so they are left alone and close at exec anyway. Returns the closed fd numbers. Linux only (/proc); elsewhere [].
- */
-export function closeInheritedFds() {
-  const closed = [];
-  let fds = [];
-  try { fds = readdirSync("/proc/self/fd").map(Number).filter(n => Number.isInteger(n) && n > 2); } catch { return closed; }
-  for (const fd of fds) {
-    let flags = null;
-    try { flags = parseInt(/^flags:\s*([0-7]+)/m.exec(readFileSync(`/proc/self/fdinfo/${fd}`, "utf8"))?.[1] ?? "", 8); } catch { continue; }   // gone (the readdir's own fd)
-    if (Number.isNaN(flags) || (flags & O_CLOEXEC)) continue;
-    try { closeSync(fd); closed.push(fd); } catch { /* already closed */ }
-  }
-  return closed;
 }
 
 // ---- FILESYSTEM -----------------------------------------------------------------------------------------------------
@@ -337,8 +322,9 @@ export function extendVerifyPolicy(control_dir, { hide = [] } = {}) {
 
 // ---- THE LAUNCHER ---------------------------------------------------------------------------------------------------
 /**
- * Run `policy` in a verify jail: close inherited fds, build the clean env and the bwrap argv, run it with stdio
- * inherited, resolve with the exit code (128 + n for a signal; VERIFY_JAIL_REFUSED when no jail could start).
+ * Run `policy` in a verify jail: build the clean env and the bwrap argv, start bwrap through the descriptor closer with
+ * stdio inherited, resolve with the exit code (128 + n for a signal; VERIFY_JAIL_REFUSED when no jail could start, the
+ * closer's refusal included).
  */
 /** A review test-file argument: a plain worktree-relative path (jail-hook.mjs decideReviewCommand checks it too). */
 const TEST_FILE = /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/;
@@ -356,7 +342,6 @@ export function launch(policy, { log = m => process.stderr.write(`pantheon-verif
     const done = code => { cleanup(); resolveExit(code); };
     try {
       checkPolicy(policy);
-      closeInheritedFds();
       const script = scriptWithFiles(policy, args);
       env = verifyEnvOf(process.env).env;
       scratch = mkdtempSync(join(tmpdir(), "pantheon-verify-"));
@@ -367,14 +352,19 @@ export function launch(policy, { log = m => process.stderr.write(`pantheon-verif
     } catch (e) { log(`refused: ${e?.message ?? e}`); done(VERIFY_JAIL_REFUSED); return; }
     const unjailed = () => {
       if (policy.allow_unjailed !== true) return false;
-      log("bwrap is unavailable and the policy allows an UNJAILED run: clean env and closed fds only; the filesystem and the network are NOT isolated");
+      log("bwrap is unavailable and the policy allows an UNJAILED run: clean env and no descriptor beyond 0, 1 and 2 only; the filesystem and the network are NOT isolated");
       run("/bin/sh", ["-c", policy.script], policy.cwd ?? policy.worktree, false);
       return true;
     };
     const run = (cmd, args, cwd, jailed) => {
+      // NO DESCRIPTOR BEYOND 0, 1 AND 2 (KG-11): the command starts through the descriptor closer (src/agy/fd-exec.mjs),
+      // which closes what this launcher inherited and execs it in its place. A command that is not there is bwrap missing;
+      // no python3 for the closer is a refusal, never an unjailed run (the unjailed run needs the closer too).
+      const file = resolveCommand(cmd, env.PATH);
+      if (!file) { if (jailed && unjailed()) return; log(`the verify jail could not start (ENOENT: ${cmd}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); return; }
       let child;
-      try { child = spawn(cmd, args, { cwd, env, stdio: "inherit" }); }
-      catch (e) { if (jailed && unjailed()) return; log(`the verify jail could not start (${e?.code ?? e?.message ?? e}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); return; }
+      try { const [closer, ...argv] = fdExecArgv([file, ...args]); child = spawn(closer, argv, { cwd, env, stdio: "inherit" }); }
+      catch (e) { if (jailed && e?.code !== "FDS_NO_PYTHON" && unjailed()) return; log(`the verify jail could not start (${e?.code ?? e?.message ?? e}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); return; }
       const fwd = sig => { try { child.kill(sig); } catch { /* gone */ } };
       for (const s of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(s, () => fwd(s));
       child.on("error", e => { if (jailed && e?.code === "ENOENT" && unjailed()) return; log(`the verify jail could not start (${e?.code ?? e?.message ?? e}); refusing to run worker-controlled code unjailed`); done(VERIFY_JAIL_REFUSED); });
