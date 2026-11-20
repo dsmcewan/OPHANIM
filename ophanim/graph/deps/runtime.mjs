@@ -1,23 +1,39 @@
-// THE RUNTIME'S RECORD IN ONE STATE DIRECTORY as a graph source: what OPHANIM's runtime was obliged to do there, what
-// depended on what, which worker attempted it, what was accepted and what effect was applied.
+// THE RUNTIME'S RECORD IN ONE STATE DIRECTORY as a graph source: which worker attempted each obligation, what was
+// accepted, what effect was applied, and the state it all stands in. What the obligations ARE and what each depends on
+// is another source's: ophanim.board.
 //
 // Purpose   The controller (ophanim/runtime.mjs) keeps its state -- `ophanim.runtime/v1`: obligations, effects,
 //           repairs, releases, an append-only event list -- as controller commits on the board ref refs/board/ophanim
 //           under <stateDir>/pantheon (ophanim/board.mjs). That record is the record of a system OPHANIM built. It is
-//           projected here with a DECLARED basis: every fact is what the record itself states (a spec's dependsOn, a
-//           history entry's worker, an accepted digest), never a reading of code and never a match by resemblance.
-//           Declared is also the one basis from which an extractor may assert every relationship used below
-//           (depends-on, produces, consumes, contributed-to; packages/graph/schema.mjs).
-// Inputs    A state directory and a short lowercase NAME for it (the name, never the machine's path, is in every id and
-//           reference, so two state directories never share a node). Read through board.mjs's read-only readers and a
-//           read-only walk of the board's commits; nothing else.
-// Outputs   runtimeSource(); runtimeFacts(state, {name, commit}) (pure: a materialized state in, drafts out);
-//           versionOfCommit(); the id helpers.
-// Version   A board commit id is `commit:<64 hex>`, which is not an admissible version as written, so the version is
-//           `sha256:` + the sha256 of that id's text; the real id is the `commit` attribute of the state node. readAt
-//           finds the commit a version names by walking the chain back from the head (the digest cannot be inverted)
-//           and reads THAT commit's state; a version that names no commit of the head's chain is refused, never
-//           answered from the head.
+//           projected here with a DECLARED basis: every fact is what the record itself states (a history entry's
+//           worker, an accepted digest, an effect's obligation), never a reading of code and never a match by
+//           resemblance. Declared is also the one basis from which an extractor may assert every relationship used
+//           below (depends-on, produces, consumes, contributed-to; packages/graph/schema.mjs).
+// Two sources, one board. No two sources state the same fact:
+//           ophanim.board (ophanim/graph/extract/board.mjs) STATES each obligation as work/obligation/<id> (the bare
+//             obligation id) with its kind, scope, output_key, status, attempt, release_attempts, max_attempts,
+//             input_names, depends_on, revision and chain; one depends-on edge obligation -> obligation per
+//             dependsOn; and the unresolved obligation a dependsOn names when the state holds none.
+//           This source ADDS, on those SAME obligation nodes (the board source's obligationId), only what the board
+//             source does not hold -- the state's name, the reason, the spec's digest, the effect key, the accepted
+//             digest -- and everything below that is not an obligation: attempts, outputs, effects, workers, plans,
+//             the state node and their edges. It states no depends-on between obligations and no obligation a
+//             dependsOn names. The one attribute both state on an obligation is its own `id`, with the same value.
+//           ORDER: this source needs ophanim.board, over the same state directory, observed FIRST when its facts are
+//             to be established in a graph. An attempt's depends-on and an obligation's produces end at an obligation
+//             node, and the board source is what states that obligation. This source's own assertion of the node
+//             carries only the extra attributes; it does make the node present, so observed alone its edges are
+//             still admitted -- to an obligation with no kind, no status and no dependency.
+// Inputs    A state directory and a short lowercase NAME for it. The name, never the machine's path, is in every id
+//           and reference except an obligation's id, which is the board source's. Read through board.mjs's read-only
+//           readers; nothing else.
+// Outputs   runtimeSource(); runtimeFacts(state, {name, commit}) (pure: a materialized state in, drafts out); the id
+//           helpers (an obligation's id is extract/board.mjs's obligationId).
+// Version   The controller commit's 64 hex: the board commit id `commit:<64 hex>` without its prefix, the same version
+//           ophanim.board gives the same head. The id as the board writes it is the `commit` attribute of the state
+//           node. readAt(version) reads the state at `commit:<version>`, after that commit's own chain verifies; a
+//           version that is not 64 hex, or names a commit the board does not hold, is refused, never answered from
+//           the head.
 // Verified  Nothing is read from a chain that does not verify (board.mjs verifyRuntimeChain: one transition per
 //           commit, nothing accepted or confirmed ever rewritten). current() verifies the head's chain and throws the
 //           verifier's reason, which the graph records as the source being UNAVAILABLE (packages/graph/events.mjs);
@@ -29,8 +45,9 @@
 //                                                              worker count), the release history (each change with
 //                                                              the digest of its decision). Releases are attributes
 //                                                              here: no registered type is a release.
-//           work/obligation   runtime/<name>/obligation/<id>   kind, scope, status, reason, the spec's digest, the
-//                                                              KEYS of its inputs, attempt counts, accepted digest
+//           work/obligation   <id> (the board source's node)   state, id, reason, the spec's digest, effect_key, the
+//                                                              accepted digest; attempts_not_listed when it counts
+//                                                              more attempts than become executions
 //           work/execution    runtime/<name>/execution/<id>/<n>  one attempt: outcome (accepted, gate-rejected,
 //                                                              worker-failed, interrupted, or the row's status while
 //                                                              in flight), worker id, candidate digest, its repair
@@ -42,22 +59,30 @@
 //                                                              version any release gives it
 //           work/plan         runtime/<name>/plan/<id>         an admitted plan: its planner and digests, no edge (the
 //                                                              record does not list a plan's obligations by id)
-//           depends-on        obligation -> obligation (each spec.dependsOn); execution -> its obligation
+//           depends-on        execution -> its obligation (obligation -> obligation is the board source's)
 //           produces          obligation -> its accepted output and its effects; the accepted execution -> the output
 //           consumes          the retained candidate's execution -> the accepted output of each dependency, when the
 //                             digest the candidate recorded for it is the accepted one
 //           contributed-to    worker -> each execution the record names it for
-//           What a record names but the state does not hold -- a dependsOn or an effect naming no obligation, a worker
-//           in no release, an attempt counted with no outcome -- is an `unresolved` entity with the reason, and the
-//           edge to it is kept.
+//           What a record names but the state does not hold -- an EFFECT naming no obligation, a worker in no
+//           release, an attempt counted with no outcome -- is an `unresolved` entity with the reason, and the edge to
+//           it is kept. (A dependsOn naming no obligation is the board source's unresolved obligation, not this one's;
+//           an obligation both a dependsOn and an effect name is stated unresolved by each source, each with what
+//           names it: `named_by` there, `named_by_effects` here.)
+// Limits    Obligation nodes are SHARED across state directories whose obligations have the same ids, as the board
+//           source's bare ids make them: two runtime sources over two such directories put their attributes on one
+//           node, where `state` always differs and `reason`, the digests and `effect_key` may, each listed as a
+//           conflict and none resolved. Executions, artifacts, workers, plans and state nodes are per state name.
+//           ophanim.board has one id and reads one state directory, so in one graph only that directory's obligations
+//           have the board source's attributes and dependencies.
 // Must never  Write the state or take its lock; start a worker or import a worker's `run`; put a VALUE of the state in
 //           a fact (an input, an output, a payload, a proposal, a failure message: only digests, ids, kinds, statuses
-//           and counts); read a commit whose chain does not verify; answer a version from another commit.
+//           and counts); read a commit whose chain does not verify; answer a version from another commit; state a
+//           fact ophanim.board states.
 import fs from 'node:fs';
-import {createHash} from 'node:crypto';
 import {entityId, encodeKey} from '../../../packages/graph/index.mjs';
-import {openStore} from '../../../pantheon/src/board/cas.mjs';
-import {STATE_SCHEMA, CHAIN_LIMIT, boardPath, readRuntimeSnapshot, verifyRuntimeChain, canonical, digest} from '../../board.mjs';
+import {obligationId} from '../extract/board.mjs';
+import {STATE_SCHEMA, boardPath, readRuntimeSnapshot, verifyRuntimeChain, canonical, digest} from '../../board.mjs';
 
 export const SOURCE_ID = 'ophanim.runtime';
 export const EXTRACTOR = 'ophanim.runtime.extractor';
@@ -65,7 +90,7 @@ export const EXTRACTOR = 'ophanim.runtime.extractor';
 export const RUNTIME_ORIGIN = Object.freeze({kind: 'extractor', basis: 'declared', sources: [SOURCE_ID]});
 /** Attempts of one obligation that become executions; a row counting more is said so on the obligation. */
 export const MAX_ATTEMPTS = 64;
-const NAME = /^[a-z][a-z0-9-]{0,31}$/;
+const NAME = /^[a-z][a-z0-9-]{0,31}$/, HEX = /^[0-9a-f]{64}$/;
 const IN_FLIGHT = ['running', 'gating', 'effect_pending'];
 const refuse = why => Object.assign(new Error(why), {code: 'RUNTIME_SOURCE_REFUSED'});
 const need = (ok, why) => { if (!ok) throw refuse(why); };
@@ -87,14 +112,10 @@ const tally = xs => {
 };
 const sha256Of = v => (v === undefined ? null : digest(v));
 
-/** The version a board commit id is observed as: the digest of the id's text (`commit:<hex>` is not a version). */
-export const versionOfCommit = commit => 'sha256:' + createHash('sha256').update(String(commit)).digest('hex');
-
 // One key segment: the record's own id, with `/` escaped too, so an id never reaches into another id's key.
 const seg = raw => encodeKey(String(raw)).replace(/\//g, '%2F');
 const keyed = (domain, type, name, ...rest) => { need(NAME.test(name ?? ''), `"${name}" is not a state name (a short lowercase name, e.g. proof-ops)`); return entityId({domain, type, key: ['runtime', name, ...rest].join('/'), encoded: true}); };
 export const stateId = name => keyed('evidence', 'record', name, 'state');
-export const obligationId = (name, id) => keyed('work', 'obligation', name, 'obligation', seg(id));
 export const executionId = (name, id, attempt) => keyed('work', 'execution', name, 'execution', seg(id), String(attempt));
 export const outputId = (name, id) => keyed('work', 'artifact', name, 'output', seg(id));
 /** An effect by its key; a key too long for an id is named by its digest (the key itself stays an attribute). */
@@ -113,7 +134,7 @@ export function runtimeFacts(state, {name, commit = null} = {}) {
   const nodes = new Map(), links = new Map();
   const node = d => { if (!nodes.has(d.entity)) nodes.set(d.entity, d); };
   const link = (type, from, to, ref, attributes = {}) => { const k = `${type}\0${from}\0${to}`; if (!links.has(k)) links.set(k, {type, from, to, ref, attributes}); };
-  // What a record names that the state may not hold: id -> who names it.
+  // What a record names that the state may not hold: an obligation -> the effects that name it; a worker -> its attempts.
   const namedObligations = new Map(), namedWorkers = new Map();
   const names = (map, id, by) => (map.get(id) ?? map.set(id, []).get(id)).push(by);
 
@@ -137,7 +158,7 @@ export function runtimeFacts(state, {name, commit = null} = {}) {
 
   let executions = 0, unread = 0;
   for (const [id, row] of rows) {
-    const spec = row.spec, me = obligationId(name, id), where = `obligations/${id}`;
+    const spec = row.spec, me = obligationId(id), where = `obligations/${id}`;
     const accepted = plain(row.accepted) ? row.accepted : null, candidate = plain(row.candidate) ? row.candidate : null;
     const count = Math.max(int(row.attempt) ?? 0, 0);
     // The attempts: every one the row counts, and every one its history records.
@@ -147,14 +168,11 @@ export function runtimeFacts(state, {name, commit = null} = {}) {
     }
     const numbers = [...new Set([...history.keys(), ...Array.from({length: Math.min(count, MAX_ATTEMPTS)}, (_, i) => i + 1)])].sort((a, b) => a - b);
     const listed = numbers.slice(0, MAX_ATTEMPTS);
-    node({entity: me, ref: at(where), attributes: {state: name, id, kind: word(spec.kind), scope: word(spec.scope), status: word(row.status, 32), reason: word(row.reason, 64),
-      spec_sha256: digest(spec), output_key: word(spec.outputKey, 256), effect_key: word(spec.effectKey, 256), max_attempts: int(spec.maxAttempts), attempts: count,
-      release_attempts: int(row.releaseAttempts), depends_on: bounded(list(spec.dependsOn).map(d => word(d))), input_keys: bounded(Object.keys(plain(spec.inputs) ? spec.inputs : {}).sort(byString).map(k => cut(k, 128))),
+    // On the board source's node, only what that source does not state. Its kind, scope, status, output key, attempt
+    // counts, input names and dependsOn -- and the depends-on edge to each dependency, and the unresolved obligation
+    // a dependsOn names when the state holds none -- are the board source's facts and are not repeated here.
+    node({entity: me, ref: at(where), attributes: {state: name, id, reason: word(row.reason, 64), spec_sha256: digest(spec), effect_key: word(spec.effectKey, 256),
       accepted_sha256: word(accepted?.sha256, 80), ...(numbers.length > listed.length ? {attempts_not_listed: numbers.length - listed.length} : {})}});
-    for (const dep of new Set(list(spec.dependsOn).filter(d => typeof d === 'string' && d))) {
-      if (!obligations.has(dep)) names(namedObligations, dep, `dependsOn of ${id}`);
-      link('depends-on', me, obligationId(name, dep), at(where), {basis: 'the obligation\'s spec names this dependency'});
-    }
     if (accepted) {
       // The publication is the retained candidate's, when that candidate is the accepted one.
       const published = candidate?.candidate?.sha256 === accepted.sha256 && plain(candidate.published) ? candidate.published : null;
@@ -201,8 +219,8 @@ export function runtimeFacts(state, {name, commit = null} = {}) {
       ...(confirmed ? {} : {status: 'unresolved', missing_evidence: [`the state records this effect as "${word(e?.status, 32) ?? 'no status'}", not as confirmed`]}),
       attributes: {state: name, artifact: 'effect', key: cut(k, 256), obligation: word(e?.obligationId), sha256: word(e?.sha256, 80), effect_status: word(e?.status, 32), receipt_sha256: sha256Of(e?.receipt)}});
     if (typeof e?.obligationId === 'string' && e.obligationId) {
-      if (!obligations.has(e.obligationId)) names(namedObligations, e.obligationId, `effect ${cut(k, 128)}`);
-      link('produces', obligationId(name, e.obligationId), effectId(name, k), at(where), {basis: 'the effect names this obligation'});
+      if (!obligations.has(e.obligationId)) names(namedObligations, e.obligationId, cut(k, 128));
+      link('produces', obligationId(e.obligationId), effectId(name, k), at(where), {basis: 'the effect names this obligation'});
     }
   }
 
@@ -219,8 +237,8 @@ export function runtimeFacts(state, {name, commit = null} = {}) {
       attributes: {state: name, id, named_by: bounded(by.sort(byString))}});
   }
   for (const [id, by] of namedObligations) {
-    node({entity: obligationId(name, id), ref: at(`obligations/${cut(id, 300)}`), status: 'unresolved', missing_evidence: [`named by ${by.length} record(s) of the state but not an obligation of the state at this commit`],
-      attributes: {state: name, id: cut(id, 128), named_by: bounded(by.sort(byString))}});
+    node({entity: obligationId(id), ref: at(`obligations/${cut(id, 300)}`), status: 'unresolved', missing_evidence: [`named by ${by.length} effect(s) of the state but not an obligation of the state at this commit`],
+      attributes: {state: name, id: cut(id, 128), named_by_effects: bounded(by.sort(byString))}});
   }
   for (const [id, p] of entries(state.plans)) {
     node({entity: planId(name, id), ref: at(`plans/${cut(id, 300)}`), attributes: {state: name, id: cut(id, 128), planner: word(p?.planner?.id), planner_version: word(p?.planner?.version, 64),
@@ -246,7 +264,8 @@ export function runtimeFacts(state, {name, commit = null} = {}) {
 
 /**
  * The adapter: the state directory `stateDir` under the name `name`, at the commit its board ref names now. `id` lets a
- * second state directory be a second source of the same extractor (whose origin then lists both ids).
+ * second state directory be a second source of the same extractor (whose origin then lists both ids); the two share
+ * the obligation nodes whose ids are equal (the header's limits).
  */
 export function runtimeSource({stateDir, name, id = SOURCE_ID, extractor = EXTRACTOR} = {}) {
   need(typeof stateDir === 'string' && stateDir.length > 0, 'a runtime source reads a state directory');
@@ -255,26 +274,24 @@ export function runtimeSource({stateDir, name, id = SOURCE_ID, extractor = EXTRA
   // commit id is verified for that id; the head moving is a new id and a new verification.
   const verified = new Set();
   const verify = commit => { if (!verified.has(commit)) { verifyRuntimeChain(stateDir, {head: commit}); verified.add(commit); } };
+  const board = () => need(fs.existsSync(boardPath(stateDir)), `the runtime state "${name}" has no runtime board at its state directory`);
   const head = () => {
-    need(fs.existsSync(boardPath(stateDir)), `the runtime state "${name}" has no runtime board at its state directory`);
+    board();
     const {commit} = readRuntimeSnapshot(stateDir);
     need(commit, `the runtime state "${name}" has no commit on its board ref`);
     return commit;
   };
-  // The commit a version names: found on the chain of the head, or refused (never the head in its place).
-  const commitOf = version => {
-    const store = openStore(boardPath(stateDir), {readOnly: true});
-    let steps = 0;
-    for (let commit = head(); commit; commit = store.get(commit).parents?.[0] ?? null) {
-      if (versionOfCommit(commit) === version) return commit;
-      need(++steps < CHAIN_LIMIT, `the runtime state "${name}" has a chain longer than ${CHAIN_LIMIT} commits`);
-    }
-    throw refuse(`${version} names no commit on the chain of the state's head: it was never a version of the runtime state "${name}", or the state no longer holds it`);
-  };
   return {
     id, extractor, ref: `runtime/${name}`,
     authority: `the runtime state "${name}" (${STATE_SCHEMA}: obligations, effects, repairs, releases and events, as controller commits on the board ref refs/board/ophanim), read only, at a commit whose chain verifies`,
-    current: () => { const commit = head(); verify(commit); return {version: versionOfCommit(commit)}; },
-    readAt: version => { const commit = commitOf(version); verify(commit); return runtimeFacts(readRuntimeSnapshot(stateDir, commit).state, {name, commit}); },
+    current: () => { const commit = head(); verify(commit); return {version: commit.split(':')[1]}; },
+    // The version is the commit's 64 hex, so it names that commit or none: never the head in its place.
+    readAt: version => {
+      need(HEX.test(version ?? ''), `${version} is not a controller commit id (64 hex, the commit id without "commit:")`);
+      board();
+      const commit = `commit:${version}`;
+      verify(commit);
+      return runtimeFacts(readRuntimeSnapshot(stateDir, commit).state, {name, commit});
+    },
   };
 }

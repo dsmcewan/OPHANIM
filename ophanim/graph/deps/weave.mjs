@@ -27,7 +27,7 @@
 //           identity; state a stale record as current.
 import {createHash, createPublicKey, verify as edVerify} from 'node:crypto';
 import {treeAt, blobsAt, resolveCommit} from '../extract/git.mjs';
-import {repositoryId, fileIdIn, symbolIdIn, checkIdIn, changeIdIn} from './ids.mjs';
+import {repositoryId, fileIdIn, symbolIdIn, checkIdIn, commitId} from './ids.mjs';
 
 export const WEAVE_PATH = 'docs/runs/clotho-self-weave/thread-ledger.snapshot.jsonl';
 export const WEAVE_EXTRACTOR = 'sibling.weave.extractor';
@@ -68,7 +68,7 @@ function refusal(lines, records) {
 /** The facts the sibling's weave declares at `commit`, as the extractor's drafts. */
 export function weaveFacts(repo, commit, {name = 'telos', path = WEAVE_PATH} = {}) {
   const tree = treeAt(repo, commit), entries = new Map(tree.entries.map(e => [e.path, e])), at = entries.get(path);
-  const failed = why => [{entity: repositoryId(name), ref: path, status: 'unresolved', missing_evidence: [why], attributes: {commit, weave: {path}}}];
+  const failed = why => [{entity: repositoryId(name), ref: path, status: 'unresolved', missing_evidence: [why], attributes: {read_at: commit, weave: {path}}}];
   if (!at) return failed(`${path} is not in the tree at this commit`);
   const lines = blobsAt(repo, [at.blob]).get(at.blob).toString('utf8').split('\n').filter(Boolean), records = [];
   const why = refusal(lines, records);
@@ -90,7 +90,7 @@ export function weaveFacts(repo, commit, {name = 'telos', path = WEAVE_PATH} = {
       case 'doc-section': case 'contract-clause':
         return {id: fileIdIn(name, l.path), path: l.path, changed: here ? null : {path: l.path, woven_from: null, now: null}, make: fileNode,
           section: {heading_path: l.heading_path, text_sha256: l.text_sha256, checked: false, ...(loc.kind === 'contract-clause' ? {clause: true} : {})}};
-      case 'commit': return /^[0-9a-f]{40}$/.test(l.sha ?? '') ? {id: changeIdIn(name, l.sha), changed: null, make: () => entity(changeIdIn(name, l.sha), `git:${l.sha}`, {commit: l.sha, repository: name})} : null;
+      case 'commit': return /^[0-9a-f]{40}$/.test(l.sha ?? '') ? {id: commitId(l.sha), changed: null, make: () => entity(commitId(l.sha), `git:${l.sha}`, {commit: l.sha, repository: name})} : null;
       default: return null;
     }
   };
@@ -120,7 +120,7 @@ export function weaveFacts(repo, commit, {name = 'telos', path = WEAVE_PATH} = {
   }
   const gaps = [...(stale ? [`${stale} record(s) were woven from files that have since changed and are not stated`] : []),
     ...(Object.keys(unmapped).length ? [`${Object.values(unmapped).reduce((a, b) => a + b, 0)} record(s) have no registered counterpart and are counted only`] : [])];
-  const root = {entity: repositoryId(name), ref: path, attributes: {commit, weave: {path, records: records.length, verified: 'the hash chain, each record hash and each signature',
+  const root = {entity: repositoryId(name), ref: path, attributes: {read_at: commit, weave: {path, records: records.length, verified: 'the hash chain, each record hash and each signature',
     key: 'carried in the weave\'s own header: evidence against tampering, not of who signed', woven_at: header.woven_at ?? null, woven_from: header.repo_head ?? null,
     stated, stale, unmapped: sortKeys(unmapped)}, ...(staleExamples.length ? {stale_examples: staleExamples} : {})}, ...(gaps.length ? {missing_evidence: gaps} : {})};
   const byId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {createHash, generateKeyPairSync, sign} from 'node:crypto';
 import {weaveFacts, weaveSource, WEAVE_ORIGIN, WEAVE_EXTRACTOR, WEAVE_PATH, weaveSourceIdOf, canonical} from './deps/weave.mjs';
 import {codeSource, codeOrigin, CODE_EXTRACTOR, sourceIdOf} from './deps/code.mjs';
-import {fileIdIn, symbolIdIn, checkIdIn, changeIdIn, repositoryId} from './deps/ids.mjs';
+import {fileIdIn, symbolIdIn, checkIdIn, commitId, repositoryId} from './deps/ids.mjs';
 import {openSystemsGraph} from './extract/index.mjs';
 import {tempRepo, git, T0, at} from './fixtures/repo.mjs';
 
@@ -70,7 +70,7 @@ test('WHAT THE WEAVE CALLS A TEST is its own check node, the documented section 
   assert.ok(rel(facts, 'verified-by', a, check));
   assert.deepEqual(rel(facts, 'derived-from', check, fileIdIn('telos', 'scripts/test-a.mjs')).attributes, {basis: 'the weave names this file as a test'});
   assert.deepEqual(rel(facts, 'documented-in', a, fileIdIn('telos', 'docs/a.md')).attributes.section, {heading_path: ['A', 'Use'], text_sha256: 'd'.repeat(64), checked: false});
-  assert.ok(rel(facts, 'derived-from', fileIdIn('telos', 'lib/b.mjs'), changeIdIn('telos', COMMIT)));
+  assert.ok(rel(facts, 'derived-from', fileIdIn('telos', 'lib/b.mjs'), commitId(COMMIT)));
 });
 
 test('A WEAVE THAT DOES NOT VERIFY gives no facts but the reason: a line that is not canonical, a changed record, a broken chain, a bad signature', t => {

@@ -1,29 +1,30 @@
-// WHAT A REPOSITORY'S CODE NAMES IN ITS STRINGS, at a commit, as a graph source with a TEXTUAL basis.
+// WHAT A SIBLING REPOSITORY'S CODE NAMES IN ITS STRINGS, at a commit, as an opt-in graph source with a TEXTUAL basis.
 //
 // Purpose   A URL or a path written in a string says the file NAMES a host or another file; it does not say the file
 //           calls the host or reads the path (code.mjs states a read only where the path is the argument of a read). Per
-//           the relationship registry a mention is never a dependency: impact does not follow it, and a change to a named
-//           file lists the files that name it for reassessment without declaring them affected.
-// Inputs    A repository root, a commit, and the repository's name in the graph. The same parse as code.mjs (read.mjs).
+//           the relationship registry a mention is never a dependency: impact does not follow it. For THIS repository
+//           the mentions are Slice B2's (`ophanim.literals`, extract/needs.mjs); this source is for the siblings.
+// Inputs    A sibling's repository root, a commit, and its name in the graph. The same parse as code.mjs (read.mjs).
 // Outputs   textSource(); textFacts(); textOrigin(names); textSourceIdOf(name).
-// Facts     systems/service host:<host>   a host some string of the code names
+// Facts     systems/host <host>   a host some string of the code names (B2's id)
 //           mentions   file -> host (with the lines); file -> a tracked file whose path a string IS, exactly, from the
 //                      repository root, or beside the file when the string starts with ./ or ../
 // Must never  Admit a mention as depends-on; match a path by its ending or by resemblance; read a comment as a string;
-//           read the working tree.
+//           read the working tree; restate this repository's mentions.
 import path from 'node:path';
 import {resolveCommit} from '../extract/git.mjs';
 import {readTree} from './read.mjs';
 import {HOME, fileIdIn, hostId} from './ids.mjs';
 
-export const TEXT_EXTRACTOR = 'ophanim.code-text.extractor';
-export const textSourceIdOf = name => (name === HOME ? 'ophanim.code-text' : `sibling.${name}.code-text`);
+export const TEXT_EXTRACTOR = 'sibling.code-text.extractor';
+export const textSourceIdOf = name => `sibling.${name}.code-text`;
 /** TEXTUAL: what this extractor admits are mentions (the registry admits nothing else from a textual basis). */
-export const textOrigin = (names = [HOME]) => Object.freeze({kind: 'extractor', basis: 'textual', sources: names.map(textSourceIdOf)});
+export const textOrigin = names => Object.freeze({kind: 'extractor', basis: 'textual', sources: names.map(textSourceIdOf)});
 const bounded = (xs, n = 16) => (xs.length > n ? [...xs.slice(0, n), `... ${xs.length - n} more`] : xs);
 
 /** The mentions in the code of `repo` at `commit`, as the extractor's drafts. */
-export function textFacts(repo, commit, {name = HOME} = {}) {
+export function textFacts(repo, commit, {name} = {}) {
+  if (name === HOME) throw Object.assign(new Error('this repository\'s mentions are stated by Slice B2 (ophanim.literals)'), {code: 'DEPS_REFUSED'});
   const tree = readTree(repo, commit), fid = p => fileIdIn(name, p);
   const hosts = new Map(), mentions = new Map(), files = new Set();
   const note = (from, to, attributes, line) => {
@@ -50,17 +51,15 @@ export function textFacts(repo, commit, {name = HOME} = {}) {
   }
   const drafts = [];
   for (const [host, v] of [...hosts].sort()) drafts.push({entity: hostId(host), ref: v.first, attributes: {host, named_by: v.files.size}});
-  if (name !== HOME) {
-    for (const h of hosts.values()) for (const f of h.files) files.add(f);
-    for (const p of [...files].sort()) drafts.push({entity: fid(p), ref: p, attributes: {path: p, blob: tree.entries.get(p).blob, bytes: tree.entries.get(p).size}});
-  }
+  for (const h of hosts.values()) for (const f of h.files) files.add(f);
+  for (const p of [...files].sort()) drafts.push({entity: fid(p), ref: p, attributes: {path: p, blob: tree.entries.get(p).blob, bytes: tree.entries.get(p).size}});
   const edges = [...mentions.values()].map(m => ({type: 'mentions', from: fid(m.from), to: m.to.host ? hostId(m.to.host) : fid(m.to.path), ref: m.from,
     attributes: {...m.attributes, lines: bounded([...m.lines].sort((a, b) => a - b))}}));
   return [...drafts, ...edges.sort((a, b) => (`${a.from}\0${a.to}` < `${b.from}\0${b.to}` ? -1 : 1))];
 }
 
 /** The adapter: what the code names in its strings at the commit `ref` names now (readAt: that commit's objects). */
-export function textSource({repo, ref = 'HEAD', name = HOME, extractor = TEXT_EXTRACTOR} = {}) {
+export function textSource({repo, ref = 'HEAD', name, extractor = TEXT_EXTRACTOR} = {}) {
   return {
     id: textSourceIdOf(name), extractor, ref: 'git',
     authority: `the strings in the code of the ${name} repository at a commit: what the text names, never what the code does`,

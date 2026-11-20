@@ -10,7 +10,7 @@
 //           SHAPE (manifests.mjs readers for the first three); a file whose shape is not the one its name promises is
 //           listed as unread with why, and states nothing.
 // Outputs   declaredSource(); declaredFacts(); declaredOrigin(names); declaredSourceIdOf(name).
-// Facts     requirements*.txt         file depends-on pypi:<distribution> (specifier, line); file depends-on an included file
+// Facts     requirements*.txt         file depends-on the distribution (specifier, line; ids.mjs pypiPackageId); file depends-on an included file
 //           docker-compose*.y(a)ml    the file produces each service; a service depends-on the services it waits for, the
 //                                     image it runs (tag apart) and the Dockerfile it is built from; a service consumes
 //                                     each environment variable it is given, by NAME
@@ -28,7 +28,7 @@ import path from 'node:path';
 import {entityId} from '../../../packages/graph/index.mjs';
 import {treeAt, blobsAt, resolveCommit} from '../extract/git.mjs';
 import {readRequirements, readCompose, readWorkflow} from './manifests.mjs';
-import {HOME, repositoryId, fileIdIn, packageId, envId, serviceId, changeIdIn, workflowIdIn} from './ids.mjs';
+import {HOME, repositoryId, fileIdIn, pypiPackageId, imageId, actionId, envId, serviceId, commitId, workflowIdIn} from './ids.mjs';
 
 export const DECLARED_EXTRACTOR = 'sibling.declared.extractor';
 export const declaredSourceIdOf = name => `sibling.${name}.declared`;
@@ -62,9 +62,11 @@ export function declaredFacts(repo, commit, {name} = {}) {
       found.requirements++;
       const node = file(p), missing = [];
       for (const q of r.requirements) {
-        const pkg = entity(packageId('pypi', q.name), p, {ecosystem: 'pypi', name: q.name, written: []});
+        // A version is part of the package's id only where the requirement pins exactly one (==), as a lockfile would.
+        const pinned = /^==\s*([A-Za-z0-9][A-Za-z0-9.!+_-]*)$/.exec(q.specifier ?? '')?.[1] ?? null, id = pypiPackageId(q.name, pinned);
+        const pkg = entity(id, p, {name: q.name, ecosystem: 'pypi', written: [], ...(pinned ? {version: pinned} : {})});
         if (!pkg.attributes.written.includes(q.written)) pkg.attributes.written.push(q.written);
-        edge('depends-on', node.entity, packageId('pypi', q.name), p, {basis: 'declared requirement', specifier: q.specifier, line: q.line,
+        edge('depends-on', node.entity, id, p, {basis: 'declared requirement', specifier: q.specifier, line: q.line,
           ...(q.extras?.length ? {extras: q.extras} : {}), ...(q.marker ? {marker: q.marker} : {})});
       }
       for (const i of r.includes) {
@@ -86,9 +88,9 @@ export function declaredFacts(repo, commit, {name} = {}) {
         for (const d of s.depends_on) if (names.has(d)) edge('depends-on', svc.entity, serviceId(name, d), p, {basis: 'compose depends_on', composition: p});
         if (typeof s.image === 'string' && s.image && !s.image.includes('${')) {
           const [bare, digest] = s.image.split('@'), colon = bare.lastIndexOf(':'), tagged = colon > bare.lastIndexOf('/');
-          const image = tagged ? bare.slice(0, colon) : bare;
-          entity(packageId('image', image), p, {ecosystem: 'image', name: image});
-          edge('depends-on', svc.entity, packageId('image', image), p, {basis: 'compose image', ...(tagged ? {tag: bare.slice(colon + 1)} : {}), ...(digest ? {digest} : {}), composition: p});
+          const image = tagged ? bare.slice(0, colon) : bare, tag = tagged ? bare.slice(colon + 1) : null, id = imageId(image, tag);
+          entity(id, p, {name: image, ecosystem: 'image', ...(tag ? {tag} : {})});
+          edge('depends-on', svc.entity, id, p, {basis: 'compose image', ...(digest ? {digest} : {}), composition: p});
         }
         const context = typeof s.build === 'string' ? s.build : s.build?.context;
         if (typeof context === 'string') {
@@ -109,8 +111,8 @@ export function declaredFacts(repo, commit, {name} = {}) {
         if (u.ref) g.refs.add(u.ref); g.lines.push(u.line);
       }
       for (const [action, g] of [...used].sort()) {
-        entity(packageId('action', action), p, {ecosystem: 'action', name: action});
-        edge('depends-on', wf.entity, packageId('action', action), p, {basis: 'workflow uses', refs: [...g.refs].sort(), lines: g.lines.sort((a, b) => a - b)});
+        entity(actionId(action), p, {name: action, host: 'github.com', kind: 'a GitHub Action'});
+        edge('depends-on', wf.entity, actionId(action), p, {basis: 'workflow uses', refs: [...g.refs].sort(), lines: g.lines.sort((a, b) => a - b)});
       }
     } else if (p === 'OWNERSHIP.json') {
       const j = json(p), owners = Array.isArray(j?.owners) ? j.owners.filter(o => typeof o?.lane === 'string' && Array.isArray(o.paths)) : [];
@@ -157,8 +159,8 @@ export function declaredFacts(repo, commit, {name} = {}) {
         const m = INVENTORY_ROW.exec(line), other = m?.[1].toLowerCase();
         if (m && /^[a-z][a-z0-9-]{0,31}$/.test(other) && other !== HOME) {
           if (other !== name) entity(repositoryId(other), p, {name: other});      // this repository's own node is the root fact below
-          entity(changeIdIn(other, m[2]), p, {commit: m[2], repository: other});
-          edge('derived-from', node.entity, changeIdIn(other, m[2]), p, {basis: 'the inventory names this commit as a source it audited', retained: Number(m[3]), catalogued: Number(m[4]), line: i + 1});
+          entity(commitId(m[2]), p, {commit: m[2], repository: other});
+          edge('derived-from', node.entity, commitId(m[2]), p, {basis: 'the inventory names this commit as a source it audited', retained: Number(m[3]), catalogued: Number(m[4]), line: i + 1});
           stated++;
         } else if (line.startsWith('|') && line.includes('`')) rows.push({line: i + 1, why: 'the row names no repository link with a 40-hex commit'});
       });
@@ -178,13 +180,13 @@ export function declaredFacts(repo, commit, {name} = {}) {
       entity(id, p, {...attributes, signed: Boolean(j.signature)});
       edge('derived-from', id, fileIdIn(name, p), p, {basis: 'the record is this file'});
       if (/^[0-9a-f]{40}$/.test(j.source_commit ?? '')) {
-        entity(changeIdIn(name, j.source_commit), p, {commit: j.source_commit, repository: name});
-        edge('derived-from', id, changeIdIn(name, j.source_commit), p, {basis: 'the gate record names this commit'});
+        entity(commitId(j.source_commit), p, {commit: j.source_commit, repository: name});
+        edge('derived-from', id, commitId(j.source_commit), p, {basis: 'the gate record names this commit'});
       }
     }
   }
   unread.sort((a, b) => (a.file < b.file ? -1 : 1));
-  const root = {entity: repositoryId(name), ref: 'git', attributes: {commit, declared: found, ...(unread.length ? {unread} : {})},
+  const root = {entity: repositoryId(name), ref: 'git', attributes: {read_at: commit, declared: found, ...(unread.length ? {unread} : {})},
     ...(unread.length ? {missing_evidence: [`${unread.length} file(s) are not the shape their name promises and state nothing`]} : {})};
   const byId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   return [root, ...[...entities.values()].sort((a, b) => byId(a.entity, b.entity)), ...[...edges.values()].sort((a, b) => byId(`${a.type}\0${a.from}\0${a.to}`, `${b.type}\0${b.from}\0${b.to}`))];

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {entityId} from '../../packages/graph/index.mjs';
 import {declaredFacts, declaredSource, declaredOrigin, DECLARED_EXTRACTOR, declaredSourceIdOf} from './deps/declared.mjs';
 import {codeSource, codeOrigin, CODE_EXTRACTOR, sourceIdOf} from './deps/code.mjs';
-import {packageId, envId, fileIdIn, serviceId, changeIdIn, workflowIdIn, repositoryId} from './deps/ids.mjs';
+import {pypiPackageId, imageId, actionId, envId, fileIdIn, serviceId, commitId, workflowIdIn, repositoryId} from './deps/ids.mjs';
 import {openSystemsGraph} from './extract/index.mjs';
 import {tempRepo, T0, at} from './fixtures/repo.mjs';
 
@@ -37,9 +37,10 @@ const F = p => fileIdIn('lexi', p);
 
 test('REQUIREMENTS: each requirement is a declared dependency on a distribution, with its specifier and line; an include is a dependency on the file it names', t => {
   const {facts} = setup(t), req = F('backend/requirements.txt');
-  assert.deepEqual(rel(facts, 'depends-on', req, packageId('pypi', 'fastapi')).attributes, {basis: 'declared requirement', specifier: '==0.110.0', line: 1});
-  assert.deepEqual(rel(facts, 'depends-on', req, packageId('pypi', 'pyyaml')).attributes, {basis: 'declared requirement', specifier: '>=6', line: 2});
-  assert.deepEqual(ent(facts, packageId('pypi', 'pyyaml')).attributes, {ecosystem: 'pypi', name: 'pyyaml', written: ['PyYAML']});
+  assert.deepEqual(rel(facts, 'depends-on', req, pypiPackageId('fastapi', '0.110.0')).attributes, {basis: 'declared requirement', specifier: '==0.110.0', line: 1});
+  assert.deepEqual(rel(facts, 'depends-on', req, pypiPackageId('pyyaml')).attributes, {basis: 'declared requirement', specifier: '>=6', line: 2});
+  assert.deepEqual([ent(facts, pypiPackageId('pyyaml')).attributes, ent(facts, pypiPackageId('fastapi', '0.110.0')).attributes],
+    [{name: 'pyyaml', ecosystem: 'pypi', written: ['PyYAML']}, {name: 'fastapi', ecosystem: 'pypi', written: ['fastapi'], version: '0.110.0'}], 'a version is in the id only where the requirement pins one with ==');
   assert.deepEqual(rel(facts, 'depends-on', F('requirements.txt'), req).attributes, {basis: 'requirements include', line: 1});
   assert.deepEqual(ent(facts, req).attributes.unresolved_includes, [{path: 'missing.txt', line: 3, why: 'not in the tree at this commit'}]);
 });
@@ -48,7 +49,8 @@ test('A COMPOSITION: each service with what it is built from, the image it runs,
   const {facts} = setup(t), backend = serviceId('lexi', 'backend'), db = serviceId('lexi', 'db'), compose = F('docker-compose.yml');
   assert.deepEqual(rel(facts, 'produces', compose, backend).attributes, {basis: 'the composition defines it', line: 2});
   assert.deepEqual(rel(facts, 'depends-on', backend, db).attributes, {basis: 'compose depends_on', composition: 'docker-compose.yml'});
-  assert.deepEqual(rel(facts, 'depends-on', db, packageId('image', 'postgres')).attributes, {basis: 'compose image', tag: '16', composition: 'docker-compose.yml'});
+  assert.deepEqual(rel(facts, 'depends-on', db, imageId('postgres', '16')).attributes, {basis: 'compose image', composition: 'docker-compose.yml'});
+  assert.deepEqual(ent(facts, imageId('postgres', '16')).attributes, {name: 'postgres', ecosystem: 'image', tag: '16'});
   assert.deepEqual(rel(facts, 'depends-on', backend, F('backend/Dockerfile')).attributes, {basis: 'compose build', context: './backend', composition: 'docker-compose.yml'});
   assert.deepEqual([envId('DATABASE_URL'), envId('LOG_LEVEL')].map(e => rel(facts, 'consumes', backend, e).attributes), [
     {basis: 'compose environment', composition: 'docker-compose.yml'}, {basis: 'compose environment', composition: 'docker-compose.yml'}]);
@@ -57,7 +59,8 @@ test('A COMPOSITION: each service with what it is built from, the image it runs,
 
 test('A WORKFLOW names the actions it uses', t => {
   const {facts} = setup(t), wf = workflowIdIn('lexi', '.github/workflows/ci.yml');
-  assert.deepEqual(rel(facts, 'depends-on', wf, packageId('action', 'actions/checkout')).attributes, {basis: 'workflow uses', refs: ['v4'], lines: [5]});
+  assert.deepEqual(rel(facts, 'depends-on', wf, actionId('actions/checkout')).attributes, {basis: 'workflow uses', refs: ['v4'], lines: [5]});
+  assert.deepEqual([actionId('actions/checkout'), ent(facts, actionId('actions/checkout')).attributes], ['ophanim/systems/repository/github.com/actions/checkout', {name: 'actions/checkout', host: 'github.com', kind: 'a GitHub Action'}]);
   assert.deepEqual(rel(facts, 'derived-from', wf, F('.github/workflows/ci.yml')).attributes, {basis: 'the workflow is this file'});
 });
 
@@ -71,7 +74,7 @@ test('OWNERSHIP: each lane is an authorization that governs the files under its 
 
 test('THE INVENTORY names the commit of each source it audited; a row that names no full commit is listed, not guessed', t => {
   const {facts} = setup(t), inv = F('REPO_INVENTORY.md');
-  assert.deepEqual(rel(facts, 'derived-from', inv, changeIdIn('lexi', C1)).attributes, {basis: 'the inventory names this commit as a source it audited', retained: 288, catalogued: 239, line: 5});
+  assert.deepEqual(rel(facts, 'derived-from', inv, commitId(C1)).attributes, {basis: 'the inventory names this commit as a source it audited', retained: 288, catalogued: 239, line: 5});
   assert.deepEqual(ent(facts, inv).attributes.unread_rows, [{line: 6, why: 'the row names no repository link with a 40-hex commit'}]);
 });
 
@@ -86,7 +89,7 @@ test('CURRENT AUTHORITY: the active authorization authorizes the active plan, an
 test('A GATE RECORD names the commit it was taken at, with what it says it checked', t => {
   const {facts} = setup(t), gate = entityId({domain: 'evidence', type: 'record', key: 'lexi:gate/G0'});
   assert.deepEqual(ent(facts, gate).attributes, {gate: 'G0', file: 'records/gates/G0/reference.v1.json', schema_version: 1, source_commit: C2, clone_commit: C2, clone_fsck: 'pass', zip_integrity: 'pass', tools: ['git'], signed: false});
-  assert.deepEqual(rel(facts, 'derived-from', gate, changeIdIn('lexi', C2)).attributes, {basis: 'the gate record names this commit'});
+  assert.deepEqual(rel(facts, 'derived-from', gate, commitId(C2)).attributes, {basis: 'the gate record names this commit'});
 });
 
 test('A FILE THAT IS NOT WHAT ITS NAME PROMISES is listed with why and gives no facts of its own; the same commit gives the same facts', t => {
