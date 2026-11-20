@@ -18,9 +18,9 @@
     "packages/**",
     "scripts/**"
   ],
-  "wave": "Hub-and-spoke assessment: OPHANIM determines from its own graph whether a hub-and-spoke split into three domains is appropriate (advisory)",
+  "wave": "Hub readiness: OPHANIM determines whether it is fit to run as the central hub of the collective knowledge graph over three departmental spokes (directive section 6; advisory)",
   "base_commit": "01ac30a",
-  "authorization": "owner, 2026-11-20: \"I want Ophanim to determine if its appropriate to Hub and Spoke. Say into three domains.\"",
+  "authorization": "owner, 2026-11-20: \"I want Ophanim to determine if its appropriate to Hub and Spoke. Say into three domains.\"; clarified: \"But being the central one that runs the collective knowledge graph.\"",
   "dependencies": [
     "concurrent with the self-repair lane (ophanim/operate/**) and the jail integration verification (pantheon/**); disjoint",
     "reach: T1 over ophanim/graph/cli.mjs at the base: ophanim/graph/cli.test.mjs only, granted; no overlap with kg-self-repair-ownership.json"
@@ -40,7 +40,11 @@
           "ophanim/graph/fixtures/partition*",
           "ophanim/graph/cli.mjs",
           "ophanim/graph/cli.test.mjs",
-          "docs/knowledge-graph/hub-and-spoke.md"
+          "docs/knowledge-graph/hub-and-spoke.md",
+          "ophanim/graph/hub*.mjs",
+          "ophanim/graph/hub*.test.mjs",
+          "ophanim/graph/hub.mutate.mjs",
+          "ophanim/graph/fixtures/hub*"
         ]
       }
     }
