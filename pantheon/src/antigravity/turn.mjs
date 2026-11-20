@@ -183,21 +183,12 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
     // spellings of a declared name, so a call carrying any other key is refused whole.
     const undeclared = undeclaredArg(name, a);
     if (undeclared) return dec(false, "ARGS_UNDECLARED", undeclared, { who });
-    // A RESEARCH SESSION READS ONLY (owner direction 2026-11-20). Reads inside the repository, each recorded with what
-    // it examined; nothing else is served: no write, no command, and no native delegation (a research team's levels are
-    // opened by the controller, research.mjs: Hydrogen does not delegate, and the runtime reports no child's end).
-    if (policy?.read_only) {
-      if (!READ_TOOLS.includes(name)) {
-        return dec(false, "RESEARCH_READ_ONLY", name === "invoke_subagent" ? "a research session does not delegate natively: delegation is the controller's, on the coordinator's request"
-          : `a research session reads only: ${name} is not served`, { who });
-      }
-      const paths = writePathArgsOf(a);
-      if (!paths.length) return dec(false, "READ_NO_PATH", `${name} names no path the controller can check`, { who });
-      for (const { key, value } of paths) {
-        const d = decideRead(policy, { AbsolutePath: value });
-        if (d.decision !== "auto_approve") return dec(false, "READ_OUTSIDE", `${key}: ${d.reason}`, { who });
-      }
-      return dec(true, null, "a read inside the repository", { who, sources: sourcesOf(policy, paths) });
+    // A RESEARCH SESSION READS ONLY (owner direction 2026-11-20): nothing but a read is served. No write, no command,
+    // and no native delegation (a research team's levels are opened by the controller, research.mjs: Hydrogen does not
+    // delegate, and the runtime reports no child's end). Its reads are decided below, like every read.
+    if (policy?.read_only && !READ_TOOLS.includes(name)) {
+      return dec(false, "RESEARCH_READ_ONLY", name === "invoke_subagent" ? "a research session does not delegate natively: delegation is the controller's, on the coordinator's request"
+        : `a research session reads only: ${name} is not served`, { who });
     }
     if (name === "invoke_subagent") {
       const r = governor.admit({ call_id, trajectory_id, args: a });
@@ -211,7 +202,8 @@ export function toolDecision({ policy, governor }, { tool, args, trajectory_id =
         const d = decideRead(policy, { AbsolutePath: value });
         if (d.decision !== "auto_approve") return dec(false, "READ_OUTSIDE", `${key}: ${d.reason}`, { who });
       }
-      return dec(true, null, "a read inside the worktree", { who });
+      // A research session's read is recorded with what it examined (sourcesOf): its report may cite only that.
+      return policy?.read_only ? dec(true, null, "a read inside the repository", { who, sources: sourcesOf(policy, paths) }) : dec(true, null, "a read inside the worktree", { who });
     }
     if (WRITE_TOOLS.includes(name)) {
       if (child && !sub) return dec(false, "SUBAGENT_SCOPE", "a child the controller cannot attribute to an admitted subagent may not write", { who });

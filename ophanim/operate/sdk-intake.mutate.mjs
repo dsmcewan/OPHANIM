@@ -280,7 +280,7 @@ export const MUTATIONS = [
   {id: 'S25', what: 'a workspace is prepared without its control directory or its worktree', file: TURN, tests: T.turn,
     from: '  if (!str(control_dir) || !str(worktree)) throw fail("NO_WORKSPACE",', to: '  if (false) throw fail("NO_WORKSPACE",'},
   {id: 'S26', what: 'a workspace is prepared for a unit that owns no path', file: TURN, tests: T.turn,
-    from: '  if (!Array.isArray(owned_paths) || !owned_paths.length) throw fail("NO_OWNED_PATHS",', to: '  if (false) throw fail("NO_OWNED_PATHS",'},
+    from: '  else if (!Array.isArray(owned_paths) || !owned_paths.length) throw fail("NO_OWNED_PATHS",', to: '  else if (false) throw fail("NO_OWNED_PATHS",'},
   {id: 'S27', what: 'a read that names no path is allowed', file: TURN, tests: T.turn,
     from: '      if (!paths.length) return dec(false, "READ_NO_PATH",', to: '      if (false) return dec(false, "READ_NO_PATH",'},
   {id: 'S28', what: 'a decision that throws allows the call', file: TURN, tests: T.turn,
