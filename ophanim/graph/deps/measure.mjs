@@ -4,7 +4,7 @@
 //           ADVISORY risk class. These are the same definitions over OPHANIM's graph view, so the two systems mean the
 //           same thing by "blast radius". A measure reads established relationships only; it authorizes nothing.
 // Inputs    A view of a graph at a cursor (packages/graph projection view) and a node id.
-// Outputs   dependencies(), blastRadius(), relevance(), riskClass(), assess(), coverageOf(); RISK (the thresholds).
+// Outputs   dependencies(), blastRadius(), relevance(), riskClass(), classOf(), assess(), coverageOf(); RISK (the thresholds).
 // Ported as written
 //           dependencies(id)        the transitive forward closure of dependency edges, without id; a cycle ends.
 //           blastRadius(id, depth)  the dependents by reverse dependency edges to `depth` hops, without id.
@@ -82,7 +82,10 @@ export function relevance(view, id, {types = DEPENDENCY_TYPES} = {}) {
 
 /** The advisory class of `id`: blast-driven, with the coverage floor. */
 export function riskClass(view, id, {coverage = 'unverified', types = DEPENDENCY_TYPES} = {}) {
-  const blast = blastRadius(view, id, {types}).count;
+  return classOf(blastRadius(view, id, {types}).count, coverage);
+}
+/** The class of a number of dependents under a coverage: Lachesis's thresholds and floor. */
+export function classOf(blast, coverage = 'unverified') {
   let cls = blast >= RISK.high ? 'high' : blast >= RISK.medium ? 'medium' : 'low';
   if (cls === 'low' && coverage !== 'attested-complete') cls = 'medium';
   return {class: cls, blast_radius: blast, coverage, advisory: true};

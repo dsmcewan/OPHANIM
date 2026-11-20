@@ -18,7 +18,7 @@
 //                        repository source cannot: through a local package's exports, or a TypeScript-style specifier;
 //                        every relative import for a sibling repository), symbol -> symbol and symbol -> package (a call)
 //           consumes     file -> environment variable; file -> file read by path
-//           produces     file -> file written by path
+//           produces     file -> file written by path; for a sibling, file -> each symbol it defines
 // Invariants  Read from git's object store at the commit, never the working tree. A fact names the lines it was read
 //           from. A path joined to a root the file computes becomes an edge only when exactly ONE tracked file fits, and
 //           the edge says the anchor was assumed. What is seen and not resolved is listed or counted on the file or the
@@ -228,8 +228,11 @@ export function codeFacts(repo, commit, {name = HOME} = {}) {
     if (r.unresolved.programs.length) node.attributes.computed_programs = r.unresolved.programs.length;
 
     // Symbols: every top-level function and class, and every exported name.
-    for (const f of r.functions) entity(sid(file, f.name), file, {module: file, name: f.name, kind: f.kind, line: f.line, exported: f.exported});
-    for (const x of r.exports) if (x.kind !== 'reexport' && x.name !== '*') entity(sid(file, x.name), file, {module: file, name: x.name, kind: x.kind, line: x.line, exported: true});
+    const symbols = new Set();
+    for (const f of r.functions) { symbols.add(f.name); entity(sid(file, f.name), file, {module: file, name: f.name, kind: f.kind, line: f.line, exported: f.exported}); }
+    for (const x of r.exports) if (x.kind !== 'reexport' && x.name !== '*') { symbols.add(x.name); entity(sid(file, x.name), file, {module: file, name: x.name, kind: x.kind, line: x.line, exported: true}); }
+    // For this repository the repository source states which file defines a symbol; for a sibling nothing else does.
+    if (name !== HOME) for (const n of symbols) edge('produces', fid(file), sid(file, n), file, () => ({attributes: {basis: 'the file defines it'}}));
   }
 
   // Calls, once every file's symbols are known.

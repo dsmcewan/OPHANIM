@@ -42,6 +42,12 @@ test('A TRACKED PATH NAMED IN A STRING is a mention only when the string is exac
   assert.ok(facts.every(d => !d.type || d.type === 'mentions'), 'this source states mentions and nothing else');
 });
 
+test('A PATH THE CODE READS is already stated as a read by the structural source: it is not repeated here as a mention', t => {
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'a.mjs': lines("import fs from 'node:fs';", "const t = fs.readFileSync(new URL('./t.json', import.meta.url));", "const again = './t.json';", "export const x = [t, again];"), 't.json': '[]\n'}, 'read');
+  assert.deepEqual(textFacts(repo, head).filter(d => d.type === 'mentions').map(d => d.attributes.lines), [[3]], 'the string on line 2 is the read; the string on line 3 is a mention');
+});
+
 test('IN THE GRAPH a mention is established and is NOT a dependency: a change to the named file does not affect the file that names it', t => {
   const {repo, commit} = tempRepo(t), head = commit(FILES, 'fixture');
   const g = openSystemsGraph({sources: [repoSource({repo}), textSource({repo})], extraOrigins: {[TEXT_EXTRACTOR]: {...textOrigin(['ophanim']), keys: ['graph-extractor']}}});

@@ -137,6 +137,7 @@ test('READ AT THE COMMIT, never the working tree, and the same commit gives the 
   const facts = codeFacts(repo, head);
   assert.ok(!ent(facts, packageId('npm', 'only-in-the-working-tree')), 'an uncommitted import is not in the commit');
   assert.deepEqual(codeFacts(repo, head), facts);
+  assert.ok(!facts.some(d => d.type === 'produces' && d.attributes.basis === 'the file defines it'), 'for this repository the repository source states which file defines a symbol');
 });
 
 test('IN THE GRAPH: observed after the repository, the facts are established and a change to a configuration file reaches the code that reads it', t => {
@@ -168,6 +169,7 @@ test('A SIBLING REPOSITORY is read the same way under its own name: its files ar
   assert.deepEqual(ent(facts, a).attributes.path, 'src/a.ts');
   assert.deepEqual(rel(facts, 'depends-on', a, b).attributes, {basis: 'import', specifiers: ['./b.js'], lines: [1], resolved_as: 'src/b.ts'});
   assert.deepEqual(rel(facts, 'depends-on', symbolIdIn('telos', 'src/a.ts', 'a'), symbolIdIn('telos', 'src/b.ts', 'b')).attributes, {basis: 'call', line: 2});
+  assert.deepEqual(rel(facts, 'produces', b, symbolIdIn('telos', 'src/b.ts', 'b')).attributes, {basis: 'the file defines it'});
   assert.ok(ent(facts, repositoryId('telos')), 'the sibling has its own repository node');
   assert.ok(!facts.some(d => (d.entity ?? d.from).includes('/systems/module/src/')), 'nothing of the sibling is written under this repository\'s file ids');
   assert.equal(codeSource({repo, name: 'telos'}).id, 'sibling.telos.code');

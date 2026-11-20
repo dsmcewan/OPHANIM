@@ -37,7 +37,10 @@ export function textFacts(repo, commit, {name = HOME} = {}) {
       (hosts.get(h.host) ?? hosts.set(h.host, {first: file, files: new Set()}).get(h.host)).files.add(file);
       note(file, {host: h.host}, {basis: 'the file names this host in a string'}, h.line);
     }
+    // A path that is the argument of a read or a write is stated by the structural source (code.mjs), not repeated here.
+    const stated = new Set([...r.reads, ...r.writes].map(x => `${x.line}\0${x.path}`));
     for (const s of r.strings) {
+      if (stated.has(`${s.line}\0${s.value}`)) continue;
       const beside = s.value.startsWith('./') || s.value.startsWith('../');
       const dir = path.posix.dirname(file), target = path.posix.normalize(beside ? (dir === '.' ? s.value : `${dir}/${s.value}`) : s.value);
       if (target === file || !tree.paths.has(target)) continue;
