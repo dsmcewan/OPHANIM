@@ -20,7 +20,8 @@
   "authorization": "owner, 2026-11-20: \"wire GLM 5.3 will take a guest_seat as a seat\"; roles: any, probationary; Zhipu a full lab but its review does not count toward the three-lab floor on probation; \"Nothing its a trial period\"; spend off by default, opt-in budget",
   "dependencies": [
     "runs concurrently with the jail-descriptor fix (pantheon/src/agy/**, pantheon/src/board/agy-cli.mjs, pantheon/src/board/run-item.mjs, pantheon/bin/agy-seat.mjs, the jail tests); disjoint",
-    "reach: every test and runner importing stages, gemini-billing, the model client, the board schema or the capability modules (git grep at 11f9503); jail tests held by the other agent and not granted: ['pantheon/tests/agy-sdk-jail.mutate.mjs', 'pantheon/tests/agy-sdk-jail.test.mjs']"
+    "reach: every test and runner importing stages, gemini-billing, the model client, the board schema or the capability modules (git grep at 11f9503); jail tests held by the other agent and not granted: ['pantheon/tests/agy-sdk-jail.mutate.mjs', 'pantheon/tests/agy-sdk-jail.test.mjs']",
+    "manifest-reach (toolkit T3) flagged capability.mutate.mjs as a target-edit gap in the hand-written manifest; added 2026-11-20"
   ],
   "subwaves": {
     "KGG": {
@@ -111,7 +112,8 @@
           "ophanim/operate/wave3-identity.mutate.mjs",
           "pantheon/tests/l136-billing.mutate.mjs",
           "pantheon/tests/l146-billing.mutate.mjs",
-          "pantheon/tests/l148-billing.mutate.mjs"
+          "pantheon/tests/l148-billing.mutate.mjs",
+          "pantheon/tests/capability.mutate.mjs"
         ],
         "new_files": [
           "pantheon/src/route/guest-*.mjs",
@@ -190,8 +192,10 @@
           "pantheon/tests/l136-billing.mutate.mjs": "add or retarget mutations; none removed",
           "pantheon/tests/l146-billing.mutate.mjs": "add or retarget mutations; none removed",
           "pantheon/tests/l148-billing.mutate.mjs": "add or retarget mutations; none removed",
-          "docs/guest-seat.md": "KG8"
-        }
+          "docs/guest-seat.md": "KG8",
+          "pantheon/tests/capability.mutate.mjs": "KG6: retarget the capability mutations whose target text moves (eligibility/graph/metrics); add the guest's trial-eligibility mutation; run it in full; none removed"
+        },
+        "dependencies": null
       }
     }
   }
