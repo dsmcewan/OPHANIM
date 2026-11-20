@@ -36,6 +36,7 @@ test('WHAT THE REQUEST TELLS THE BUILDER WAS MEASURED holds on the two acceptanc
   const two = blocks(loadTape()).slice(0, ACCEPTANCE_BLOCKS);
   const persistence = two.map(b => b.slice(1).filter((t, i) => t.side === b[i].side).length / (b.length - 1));
   const buys = two.map(b => b.filter(t => t.side === 'buy').length / b.length);
+  // test-lint: allow truncated-sequence -- blocks(...).slice(0, ACCEPTANCE_BLOCKS) builds the INPUT (the two blocks the acceptance replays, which is what the request's claim is about); every value computed from those two blocks is compared whole
   assert.deepEqual([persistence.map(x => Math.round(x * 100)), buys.map(x => Math.round(x * 100))], [[82, 81], [81, 76]]);
   assert.match(request.goal, /The next taker is on the SAME side as the last one about 81% of the time\. About four trades in five are taker buys\./);
   assert.match(request.goal, /nothing below comes from the blocks you are scored on/);
@@ -53,6 +54,7 @@ test('THE OPERATION runs on the four blocks the acceptance never replayed, repor
   assert.deepEqual([o.exit, o.report.paper, o.report.window, o.report.pnl_by_block_usd.length, o.report.trades, o.report.violations], [0, true, 'blocks 3 to 6 of 6, not replayed by the acceptance', 4, 4 * 2230, 0]);
   assert.equal(o.report.score, Number(o.report.pnl_by_block_usd.reduce((a, b) => a + b, 0).toFixed(6)));
   const direct = blocks(loadTape()).slice(ACCEPTANCE_BLOCKS).map(w => replay(() => ({quote: () => ({bid: null, ask: null})}), w).pnl_usd);
+  // test-lint: allow truncated-sequence -- blocks(...).slice(ACCEPTANCE_BLOCKS) builds the INPUT (the four blocks the operation replays); the result of every one of the four is compared
   assert.deepEqual(direct, [0, 0, 0, 0], 'a strategy that never quotes neither gains nor loses');
 });
 
