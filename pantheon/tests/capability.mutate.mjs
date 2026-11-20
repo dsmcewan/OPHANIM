@@ -2,7 +2,7 @@
 // MUTATION RUNNER for the capability and model/runtime graph (knowledge graphs, Slice C1; docs/knowledge-graph/slice-c1.md).
 // Every mutation re-introduces a plausible regression of a property the slice states -- advisory eligibility moving a live
 // seat, lab restricting a producer or no longer excluding a contributing lab's reviewer, owner direction recorded as a
-// measurement or read as evidence, qualified-for without a criterion, the SDK seat recorded as isolated, isolation without
+// measurement or read as evidence, qualified-for without a criterion, a seat whose bubble does not hold recorded as isolated, isolation without
 // code evidence, a would-be-refused pin not reported, a data change not producing a new decision, the explanation or the
 // snapshot digest dropped, model and runtime collapsed, a hypothetical counted as established, an unobserved metric as 0, a
 // tampered snapshot admitted, an unknown model resolved to another -- on a DISPOSABLE COPY of this tree (never the tree
@@ -53,10 +53,10 @@ export const MUTATIONS = [
   {id: 'C15', what: 'an unobserved metric reported as 0 (tokens of attempts that reported no usage)', tests: [t('metrics', '^metrics:')],
     edits: [one(METRICS, '{input: null, output: null, n: 0, missing: m.tokens.missing}', '{input: 0, output: 0, n: 0, missing: m.tokens.missing}')]},
   // ---- the bubble (owner decision 1, KC2) -------------------------------------------------------------------------------
-  {id: 'C6', what: 'the SDK seat recorded as isolated (a component that does not hold counted as holding)', tests: [t('graph', '^the bubble: the SDK seat')],
+  {id: 'C6', what: 'a seat whose bubble does not hold recorded as isolated (a component that does not hold counted as holding: the API seat\'s lifetime; the SDK seat, jailed since Slice C2, is no longer the example)', tests: [t('graph', '^the bubble: each profile')],
     edits: [one(GRAPH, "export const bubbleHolds = b => BUBBLE.every(k => b?.[k]?.holds === true || b?.[k]?.holds === 'not-applicable');",
       "export const bubbleHolds = b => BUBBLE.every(k => b?.[k]?.holds !== 'unresolved');")]},
-  {id: 'C7', what: 'isolation claimed without code evidence (the declared value taken without its quotes)', tests: [t('graph', '^the bubble: isolation is never claimed'), t('graph', '^the bubble: the SDK seat')],
+  {id: 'C7', what: 'isolation claimed without code evidence (the declared value taken without its quotes)', tests: [t('graph', '^the bubble: isolation is never claimed'), t('graph', '^the bubble: the SDK seat\'s jail is its evidence')],
     edits: [one(GRAPH, "    : (declared === true || declared === 'not-applicable') && evidence.length && !missing.length ? declared : 'unresolved';",
       "    : (declared === true || declared === 'not-applicable') ? declared : 'unresolved';")]},
   // ---- eligibility: modes and explanation (KC3) -------------------------------------------------------------------------

@@ -18,15 +18,23 @@
 //
 // The real GEMINI_API_KEY stays in THIS process (the relay forwards with it); the seat gets the relay's capability and a
 // HOME of its own under --out, and no credential. Exit: the seat's own exit code; 2 for a refusal before the spawn (the
-// policy, a malformed flag, Vertex, no key). One JSON line on stderr and <out>/relay-session.json report the session.
+// policy, a malformed flag, Vertex, no key, no jail). One JSON line on stderr and <out>/relay-session.json report the session.
+//
+// THE SEAT RUNS IN ITS JAIL (register L-155; owner decision 2026-11-20 "Yes, bubble per seat"; src/agy/sandbox.mjs
+// sdkSeatJail), the same one the board's SDK seat runs in: its whole process in bwrap, the controller's HOME and credential
+// locations hidden, its own PID namespace and /proc, only --workspace and --out writable, an allowlisted environment. No
+// bwrap (on PATH), or a failing probe of the jail, refuses before the relay exists (SANDBOX_UNAVAILABLE, exit 2); there is
+// no override. The seat's path arguments are made absolute (the jail starts in the workspace), and a --progress outside
+// --workspace and --out is refused (the jail could not write it). The seat's HOME is removed after it ends, on every path.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep as SEP } from "node:path";
 import { fileURLToPath } from "node:url";
 import { billingFlagsFromArgv, billingRecord, geminiAdmission, geminiBilling, geminiUsageFile } from "../src/route/gemini-billing.mjs";
 import { startGeminiRelay, relayUpstreamOf, RELAY_VERTEX_UNSUPPORTED } from "../src/route/gemini-relay.mjs";
 import { agySdkEnvOf } from "../src/board/agy-cli.mjs";
+import { sdkSeatJailGate, dropSdkSeatScratch } from "../src/agy/sandbox.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SEAT = resolve(HERE, "..", "scripts", "agy-seat.py");
@@ -57,21 +65,46 @@ if (process.env.PANTHEON_AGY_VERTEX_PROJECT) refuseEarly(RELAY_VERTEX_UNSUPPORTE
 if (!process.env.GEMINI_API_KEY) refuseEarly("GEMINI_RELAY_NO_CREDENTIAL", "GEMINI_API_KEY is not in this launcher's environment (the relay holds it; the seat never does)");
 const python = opt("--python") ?? process.env.PANTHEON_AGY_PYTHON ?? join(homedir(), "Projects", "agentic-pipeline", "sdk", ".venv-antigravity", "bin", "python");
 if (!existsSync(python)) refuseEarly("USAGE", `python absent at ${python} (--python or PANTHEON_AGY_PYTHON)`);
+// The seat's paths, absolute (the jail starts in the workspace, and the launcher's cwd may be a location it hides).
+const abs = v => { const r = resolve(v); try { return realpathSync(r); } catch { return r; } };
+const PATH_FLAGS = ["--workspace", "--out", "--brief", "--schema", "--progress", "--repo"];
+const seatPaths = seatArgs.map((a, i) => (PATH_FLAGS.includes(seatArgs[i - 1]) && !(seatArgs[i - 1] === "--brief" && a === "-") ? abs(a) : a));
+const pathOpt = name => { const i = seatPaths.indexOf(name); return i >= 0 ? seatPaths[i + 1] : undefined; };
+const workspace = pathOpt("--workspace"), outDir = abs(out);
+if (!workspace || !existsSync(workspace)) refuseEarly("USAGE", `agy-seat.py's --workspace is required (after --) and must exist: the jail binds it writable${workspace ? ` (${workspace} does not exist)` : ""}`);
+const within = (root, p) => p === root || p.startsWith(root + SEP);
+const progressAt = pathOpt("--progress");
+if (progressAt && !within(outDir, progressAt) && !within(workspace, progressAt)) refuseEarly("SDK_JAIL_LAYOUT", `--progress ${progressAt} is outside --workspace and --out: the jailed seat writes nothing else`);
+// THE JAIL'S GATE, before the relay exists: nothing admitted, charged or spawned without it.
+let jailGate;
+try { jailGate = await sdkSeatJailGate(); }
+catch (e) { refuseEarly(e.code ?? "SANDBOX_UNAVAILABLE", String(e.message)); }
 
 const relay = await startGeminiRelay({ apiKey: process.env.GEMINI_API_KEY, upstream: relayUpstreamOf(process.env),
   outcomes: parsed.usage ? `${resolve(parsed.usage)}.outcomes.jsonl` : null });
 const session = relay.openSession({ billing, spend: { vendor: "agy_google", purpose: spend.purpose, role }, maxRequests,
   lineage: { launcher: "bin/agy-seat.mjs", pid: process.pid, seat: { vendor: "agy_google", model, role } } });
 const home = join(resolve(out), "home"); mkdirSync(home, { recursive: true });
-const args = seatArgs.includes("--max-model-calls") ? seatArgs : [...seatArgs, "--max-model-calls", String(maxRequests)];
+const args = seatPaths.includes("--max-model-calls") ? seatPaths : [...seatPaths, "--max-model-calls", String(maxRequests)];
 const env = agySdkEnvOf(process.env, { capability: session.env, home }).env;
-const child = spawn(python, [SEAT, ...args], { env, stdio: ["ignore", "inherit", "inherit"] });
+let jail;
+try {
+  jail = jailGate.build({ python, script: SEAT, repo: pathOpt("--repo") ?? resolve(HERE, ".."), workspace, out_dir: outDir, env,
+    read: [pathOpt("--brief"), pathOpt("--schema")].filter(p => p && p !== "-") });
+} catch (e) {
+  session.close(); await relay.close(); await dropSdkSeatScratch({ home });
+  refuseEarly(e.code ?? "SDK_JAIL_LAYOUT", String(e.message));
+}
+const [cmd, ...argv] = [...jail.prefix, python, SEAT, ...args];
+const child = spawn(cmd, argv, { env: jail.env, stdio: ["ignore", "inherit", "inherit"] });
 let stopping = false;
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { stopping = true; child.kill("SIGTERM"); });
 const code = await new Promise(r => child.on("exit", (c, s) => r(c ?? (s ? 128 : 1))));
+// THE SINGLE-ASSIGNMENT TEARDOWN, on every path: the relay session closed (its capability revoked), the seat's HOME removed.
 session.close();
 await relay.close();
-const report = { ok: code === 0, exit: code, stopped: stopping, relay: session.summary(), billing: billingRecord(billing) };
+const teardown = await dropSdkSeatScratch(jail);
+const report = { ok: code === 0, exit: code, stopped: stopping, relay: session.summary(), billing: billingRecord(billing), jail: jail.record, teardown };
 try { writeFileSync(join(resolve(out), "relay-session.json"), JSON.stringify(report, null, 1) + "\n"); } catch { /* the stderr line still carries it */ }
 say(report);
 process.exit(code);

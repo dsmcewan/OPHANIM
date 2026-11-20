@@ -106,6 +106,8 @@ test('cli: the report prints the metrics per capability with sources and coverag
     assert.doesNotMatch(out, /SYNTHETIC/, 'not labelled synthetic unless it says so; the run itself declares what answered it');
     out = '';
     assert.equal(run(['snapshot'], {write, snapshot: SNAP}), 0);
-    assert.match(out, /agy-sdk\/agy_google\/gemini-3\.6-flash +available; bubble: sandbox DOES NOT HOLD \(L-155\)/);
+    // The SDK seat's bubble as the code now provides it (Slice C2: its jail); an API seat's lifetime does not hold.
+    assert.match(out, /agy-sdk\/agy_google\/gemini-3\.6-flash +available; bubble: sandbox holds, credentials holds, tools holds, lifetime holds\n/);
+    assert.match(out, /api\/openai\/gpt-6-astra +available; bubble: sandbox not-applicable, credentials holds, tools holds, lifetime DOES NOT HOLD\n/);
   } finally { fs.rmSync(home, {recursive: true, force: true}); }
 });
