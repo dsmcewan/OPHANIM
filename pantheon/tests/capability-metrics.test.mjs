@@ -1,7 +1,8 @@
 // The metrics per executable capability (knowledge graphs, Slice C1, KC5): each defined metric extracted from SYNTHETIC
-// fixture records (pantheon/tests/fixtures/capability-records, every record marked synthetic), with its sources and
-// coverage; no qualified-for without an owner-defined criterion; the metrics as observed assertions a registered tool
-// admits; the command-line report, on fixtures and on an owner's PANTHEON_HOME.
+// fixture records (pantheon/tests/fixtures/capability-records.json, every record marked synthetic, laid out on disk in a
+// temporary directory as the real records are), with its sources and coverage; no qualified-for without an owner-defined
+// criterion; the metrics as observed assertions a registered tool admits; the command-line report, on fixtures and on an
+// owner's PANTHEON_HOME.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,14 +12,13 @@ import {capabilitySnapshot, E} from '../src/capability/graph.mjs';
 import {extractMetrics, loadRecords, observedAssertions, qualificationsOf, METRIC_DEFINITIONS, QUALIFICATION_CRITERION} from '../src/capability/metrics.mjs';
 import {run} from '../src/capability/cli.mjs';
 import {recordRefusal} from '../../packages/graph/schema.mjs';
-import {registries, capabilityWorld, RECORDS, KEYS, T0} from './fixtures/capability-helpers.mjs';
+import {registries, capabilityWorld, writeRecords, KEYS, T0} from './fixtures/capability-helpers.mjs';
 
 const SNAP = capabilitySnapshot(registries());
-const R = p => path.join(RECORDS, p);
-// The JSON-lines fixtures are named .ndjson and the transcripts' directory review-transcripts/: pantheon/.gitignore keeps
-// real receipts (*.jsonl, transcripts/) out of the repository, and these are synthetic stand-ins for them.
-const SPEC = {boards: R('boards'), practice: R('practice'), workStages: R('work-stages.ndjson'), transcripts: R('review-transcripts'),
-  geminiUsage: R('gemini-usage.ndjson'), relayOutcomes: R('relay-outcomes.ndjson')};
+const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'capability-records-'));
+process.on('exit', () => fs.rmSync(DIR, {recursive: true, force: true}));
+const SPEC = writeRecords(DIR);
+const R = p => path.join(DIR, p);
 const M = extractMetrics(loadRecords(SPEC), {snapshot: SNAP});
 const zero = {answered: 0, accepted: 0, revised: 0, refused: 0, failed: 0, 'identity-mismatch': 0};
 const counts = over => ({...zero, ...over});
@@ -34,7 +34,7 @@ test('metrics: each defined metric is extracted per executable capability from t
   assert.deepEqual(lane.tokens, {input: 800, output: 1500, n: 1, missing: 2});
   assert.deepEqual(lane.latency_ms, {n: 2, median: 5000, p90: 6000, max: 6000});
   assert.equal(lane.cost_usd.value, null, 'no cost is stated: unknown, never estimated');
-  assert.deepEqual(lane.sources, ['pantheon/tests/fixtures/capability-records/boards/board-a/run.json', 'pantheon/tests/fixtures/capability-records/work-stages.ndjson']);
+  assert.deepEqual(lane.sources.map(s => path.relative(DIR, s)), ['boards/board-a/run.json', 'work-stages.jsonl']);
   assert.deepEqual(M.capabilities['api/openai/gpt-6.1-sol'].outcomes, {reviewer: {'stakes:normal/depth:standard': counts({answered: 2})}});
   assert.deepEqual(M.capabilities['api/openai/gpt-6.1-sol'].tokens, {input: 1350, output: 190, n: 2, missing: 0});
   const scout = M.capabilities['api/xai/grok-4.3'];
@@ -92,7 +92,7 @@ test('cli: the report prints the metrics per capability with sources and coverag
   assert.match(out, /agy-cli\/agy_google\/gemini-4-hydrogen-high\n {4}attempts 3; provider requests 6 \(1 unknown, counted as one\)/);
   assert.match(out, /implementer @ stakes:normal\/depth:standard: answered 2, accepted 1, revised 1, identity-mismatch 1/);
   assert.match(out, /coverage: 3 run\(s\) \(0 live, 3 synthetic or undeclared; 1 from practice pairs\)/);
-  assert.match(out, /sources: pantheon\/tests\/fixtures\/capability-records\/boards\/board-a\/run\.json/);
+  assert.ok(out.includes(`sources: ${R('boards/board-a/run.json')}, ${R('work-stages.jsonl')}`), 'each capability names the records it was read from');
   assert.match(out, /qualified-for: none\. no owner-defined qualification criterion exists/);
   // The owner's records: every run.json under $PANTHEON_HOME/boards, read with no flag.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capability-home-'));

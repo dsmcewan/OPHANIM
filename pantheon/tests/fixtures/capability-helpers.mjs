@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {generateSigner} from '../../../packages/ledger/chain.mjs';
 import {createGraphLedger, openGraph} from '../../../packages/graph/kinds.mjs';
@@ -11,8 +12,30 @@ import {capabilityOrigins, capabilitySources, currentRegistries, DECLARED, STRUC
 import {ARGO_SEATS} from '../../src/route/frontier.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-export const RECORDS = path.join(ROOT, 'pantheon/tests/fixtures/capability-records');
+/** The SYNTHETIC execution records (one file: every record marked synthetic), laid out on disk by writeRecords. */
+export const RECORDS = path.join(ROOT, 'pantheon/tests/fixtures/capability-records.json');
 export const T0 = '2026-11-20T10:00:00.000Z';
+
+/**
+ * Lay the synthetic records out under `dir` as the real ones are laid out -- boards/<name>/run.json, a practice pair
+ * (pairs/<id>/pair.json beside primary.run.json, its digest computed over the bytes written), the work-ledger stage
+ * payloads, review transcripts, the Gemini usage record and the relay outcomes as JSON lines -- and return the paths the
+ * metrics reader is given (metrics.mjs loadRecords).
+ */
+export function writeRecords(dir) {
+  const r = JSON.parse(fs.readFileSync(RECORDS, 'utf8'));
+  const w = (rel, text) => { const f = path.join(dir, rel); fs.mkdirSync(path.dirname(f), {recursive: true}); fs.writeFileSync(f, text); return f; };
+  const jsonl = rows => rows.map(x => JSON.stringify(x)).join('\n') + '\n';
+  for (const [name, run] of Object.entries(r.boards)) w(`boards/${name}/run.json`, JSON.stringify(run, null, 2) + '\n');
+  for (const [id, p] of Object.entries(r.practice_pairs)) {
+    const bytes = JSON.stringify(p.primary, null, 2) + '\n';
+    w(`practice/pairs/${id}/primary.run.json`, bytes);
+    w(`practice/pairs/${id}/pair.json`, JSON.stringify({...p.pair, primary: {run_digest: 'sha256:' + createHash('sha256').update(Buffer.from(bytes)).digest('hex')}}, null, 2) + '\n');
+  }
+  for (const [name, t] of Object.entries(r.transcripts)) w(`transcripts/${name}`, JSON.stringify(t, null, 2) + '\n');
+  return {boards: path.join(dir, 'boards'), practice: path.join(dir, 'practice'), workStages: w('work-stages.jsonl', jsonl(r.work_stages)),
+    transcripts: path.join(dir, 'transcripts'), geminiUsage: w('gemini-usage.jsonl', jsonl(r.gemini_usage)), relayOutcomes: w('relay-outcomes.jsonl', jsonl(r.relay_outcomes))};
+}
 export const registries = () => currentRegistries({argo: ARGO_SEATS});
 const copy = v => structuredClone(v);
 /** A data change: lane `name` retired (its availability flag), on a copy of `reg`. */
