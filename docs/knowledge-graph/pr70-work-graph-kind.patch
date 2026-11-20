@@ -1,0 +1,86 @@
+diff --git a/ophanim/operate/work-ledger.mjs b/ophanim/operate/work-ledger.mjs
+index ddb12f0..a451ecb 100644
+--- a/ophanim/operate/work-ledger.mjs
++++ b/ophanim/operate/work-ledger.mjs
+@@ -72,6 +72,7 @@ import {openLedger, createLedger, defineKinds, generateSigner} from '../../packa
+ import {keyStore} from '../../packages/ledger/home.mjs';
+ import {digest} from '../../packages/ledger/canonical.mjs';
+ import {GEMINI_KINDS, SETTING_OF, budgetRefusal as geminiBudgetRefusal} from '../../pantheon/src/route/gemini-billing.mjs';
++import {assertionRefusal, recordAssertion, subjectDigest} from '../graph/contract.mjs';
+ 
+ export const WORK_SCHEMA = 'ophanim.work/v1';
+ // The governed lifecycle, in order. `plan` is evaluation and planning (evidence, problem, plan, independent
+@@ -100,6 +101,19 @@ export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
+ //               should rest on, the findings (concise text here, the full record by digest), the telemetry, and every
+ //               contributor with the model asked and the model that answered. Once per team. It answers its request.
+ // The level of a node is bounded HERE as well as in the controller: a record of an eleventh level is not taken.
++// work.graph   A FACT OR A RELATIONSHIP NO OTHER RECORD CARRIES, put to the knowledge graph through this ledger (owner
++//               specification "Federated Knowledge Graph Architecture", 2026-11-20; ophanim/graph). The graph is a
++//               projection: nothing is written to it directly. What an agent or a model proposes, what the controller
++//               admits and what it observes are records HERE, in order, under the controller key:
++//   proposed    a hypothesis: {subject, class: hypothetical, by}. It changes nothing but what a query may show as a guess.
++//   admitted    a relationship or fact the controller admits, with the evidence it rests on; `proposal` names the
++//               proposal it answers, when there is one. Only an admission or an observation is consequential.
++//   observed    something the controller itself saw (a probe's answer, a provider's refusal), with what showed it.
++//   withdrawn   the end of an earlier record (`target`), with why. The earlier record stays on the ledger.
++// The subject passes the graph contract (contract.mjs) as it would in the graph. The same subject is recorded once per
++// phase while it stands (a repeated event makes no second obligation), and an admitted dependency between two work
++// items or units is refused when it would close a cycle.
++export const GRAPH_PHASES = Object.freeze(['proposed', 'admitted', 'observed', 'withdrawn']);
+ export const RESEARCH_PHASES = Object.freeze(['request', 'team', 'node', 'refusal', 'conclusion']);
+ export const RESEARCH_NODE_STATES = Object.freeze(['admitted', 'finished', 'failed', 'cancelled']);
+ export const RESEARCH_DEPTH_MAX = 10;
+@@ -181,6 +195,42 @@ function kinds({operators}) {
+         return q.item === e.payload.item && q.status_entry === e.payload.status_entry && q.sources === e.payload.sources;
+       }) ? `a recovery of "${e.payload.item}" against these sources and this status is already recorded` : null,
+     },
++    'work.graph': {
++      authors: byController,
++      validate: p => {
++        if (p?.schema !== WORK_SCHEMA || !GRAPH_PHASES.includes(p.phase) || !ISO(p.at) || !plain(p.by) || !str(p.by.kind) || !str(p.by.name) || !str(p.why) || !(p.item === null || ID.test(p.item ?? '')) || !str(p.instance)) {
++          return 'a graph record names {instance, phase, item|null, by {kind, name}, why, at}';
++        }
++        if (p.phase === 'withdrawn') return SHA.test(p.target ?? '') ? null : 'a withdrawal names the record it ends (target)';
++        if (!plain(p.subject)) return 'a graph record names its subject';
++        const bad = assertionRefusal(recordAssertion(p, 'sha256:' + '0'.repeat(64)), {instance: p.instance});
++        if (bad) return `[${bad.code}] ${bad.why}`;
++        if (p.phase === 'proposed') return p.class === 'hypothetical' ? null : 'a proposal is a hypothesis: its class is hypothetical';
++        if (p.by.kind !== 'operator' && p.by.kind !== 'tool') return `[GRAPH_UNAUTHORIZED] only the controller admits or observes; ${p.by.kind} ${p.by.name} may propose`;
++        if (p.class === 'hypothetical') return `what is ${p.phase} is not a hypothesis`;
++        if (!(Array.isArray(p.evidence) && p.evidence.length)) return `[GRAPH_EVIDENCE] what is ${p.phase} names the evidence it rests on`;
++        return p.proposal === undefined || SHA.test(p.proposal) ? null : 'proposal is the hash of the proposal this answers';
++      },
++      rederive: (e, view) => {
++        const p = e.payload, all = entriesOf(view, 'work.graph').filter(h => h !== e.hash).map(h => ({hash: h, ...view.payload(h)}));
++        const ended = new Set(all.filter(q => q.phase === 'withdrawn').map(q => q.target));
++        if (p.phase === 'withdrawn') {
++          if (!all.some(q => q.hash === p.target && q.phase !== 'withdrawn')) return 'the record it withdraws is not a graph record of this ledger';
++          return ended.has(p.target) ? 'that record is already withdrawn' : null;
++        }
++        const live = all.filter(q => q.phase !== 'withdrawn' && !ended.has(q.hash)), key = subjectDigest(p.subject);
++        if (live.some(q => q.phase === p.phase && q.instance === p.instance && subjectDigest(q.subject) === key)) return `[GRAPH_DUPLICATE] this is already ${p.phase}: the same subject is recorded once while it stands`;
++        if (p.proposal !== undefined && !all.some(q => q.hash === p.proposal && q.phase === 'proposed' && subjectDigest(q.subject) === key)) return 'the proposal it names is not a proposal of this subject';
++        // NO CIRCULAR EXECUTION: an admitted dependency may not close a cycle over the dependencies admitted before it.
++        if (p.phase === 'admitted' && p.subject.kind === 'relation' && p.subject.rel === 'depends-on') {
++          const next = new Map();
++          for (const q of live) if (q.phase === 'admitted' && q.subject.kind === 'relation' && q.subject.rel === 'depends-on') { if (!next.has(q.subject.from)) next.set(q.subject.from, []); next.get(q.subject.from).push(q.subject.to); }
++          const seen = new Set(), stack = [p.subject.to];
++          while (stack.length) { const x = stack.pop(); if (x === p.subject.from) return `[GRAPH_CYCLE] ${p.subject.from} would depend on itself through ${p.subject.to}`; if (seen.has(x)) continue; seen.add(x); stack.push(...(next.get(x) ?? [])); }
++        }
++        return null;
++      },
++    },
+     'work.research': {
+       authors: byController,
+       validate: p => {
+@@ -519,6 +569,10 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
+     /** Record one research record (see RESEARCH above). `claim`: the stage claim it was made under, when there is one. */
+     recordResearch: ({claim = null, at = new Date().toISOString(), ...p}) => append('work.research', {...p, at}, claim ? [claim] : []),
+     research: item => of('work.research', r => item === undefined || r.item === item),
++    /** Record one graph record (see GRAPH_PHASES above): a proposal, an admission, an observation or a withdrawal. */
++    recordGraph: ({at = new Date().toISOString(), item = null, ...p}) => append('work.graph', {...p, item, at}),
++    /** The graph records, in order; `live` leaves out the withdrawn ones and the withdrawals themselves. */
++    graphs: ({live = false} = {}) => { const all = of('work.graph'); if (!live) return all; const ended = new Set(all.filter(g => g.phase === 'withdrawn').map(g => g.target)); return all.filter(g => g.phase !== 'withdrawn' && !ended.has(g.hash)); },
+     intakes: () => of('work.intake'),
+     claims: item => of('work.claim', c => item === undefined || c.item === item),
+     stages: item => of('work.stage', s => item === undefined || s.identity.item === item),

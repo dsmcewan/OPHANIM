@@ -300,6 +300,8 @@ export function readWork({repo, instance, work}) {
   for (const [item, b] of [...billed.entries()].sort()) { const {last, ...counts} = b; assertions.push({kind: 'entity', id: W('budget', item), attrs: {item, billed_requests: counts}, ...meta(last)}); assertions.push({kind: 'relation', rel: 'part-of', from: W('budget', item), to: I(item), ...meta(last)}); }
   // GRAPH RECORDS: what the controller admitted or observed, and what was proposed. Withdrawn ones are left out; the
   // ledger keeps them, and the graph's own history keeps what they said while they stood.
-  for (const g of work.graphs({live: true}).filter(x => x.instance === instance)) assertions.push(recordAssertion(g, g.hash));
+  // The `work.graph` kind is a sketch that was never committed (docs/knowledge-graph/pr70-work-graph-kind.patch): a work
+  // ledger without it has no such records.
+  for (const g of (work.graphs?.({live: true}) ?? []).filter(x => x.instance === instance)) assertions.push(recordAssertion(g, g.hash));
   return {cursor: v.head ?? 'empty', assertions};
 }
