@@ -1,6 +1,6 @@
 # Knowledge graphs: the architecture and relationship contract
 
-**Contract** `ophanim.graph/v1`, contract version 1.1.0 (`packages/graph/schema.mjs` `GRAPH_SCHEMA`, `CONTRACT_VERSION`).
+**Contract** `ophanim.graph/v1`, contract version 1.2.0 (`packages/graph/schema.mjs` `GRAPH_SCHEMA`, `CONTRACT_VERSION`).
 **Slice** A of the program the owner's directive of 2026-11-20 sets (`docs/knowledge-graph/directive-2026-11-20.md`): the shared graph foundation (its deliverable 2, and the foundation part of deliverable 3).
 **Base** branch `kg/slice-a`, from `c14fed0` (the inventory `docs/knowledge-graph/inventory.md` and the Slice A ownership manifest).
 **Decisions** KD1 to KD13 are the coordinator's (the Slice A brief). This document says how each is implemented; it does not reopen them.
@@ -104,6 +104,10 @@ Five logical domains share one identity grammar, one assertion record and one re
 | `systems` | B | `workflow` | a CI or operating workflow |
 | `systems` | B | `deployment` | a deployment environment |
 | `systems` | B | `change` | a commit or change set |
+| `systems` | B | `package` | a package code imports or a manifest declares: an npm package at the version its lockfile resolved, a workspace package, or a runtime built-in |
+| `systems` | B | `environment-variable` | an environment variable, by its NAME only (never its value) |
+| `systems` | B | `executable` | a program code runs by name |
+| `systems` | B | `host` | a network host a request names |
 | `evidence` | C | `requirement` | an original requirement |
 | `evidence` | C | `document` | a source document |
 | `evidence` | C | `source` | a registered source and the version last observed of it |
