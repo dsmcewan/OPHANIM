@@ -60,7 +60,7 @@
   "self_graph_estimate": {"nodes": 5400, "edges": 11000, "growth_note": "about 20-30 work-ledger entries per item attempt, 12-20 per review cycle; plausibly under 1e5 edges per instance over the program"},
   "sources": [
     {"id": "A1", "graph": "A", "path": "pantheon/src/config/models.json", "kind": "model-registry", "owner": "human commit", "format": "json", "mutable": true, "signed": false, "identity": "provider model id string", "counts": {"models": 19, "vendors": 4}, "queries": ["pantheon/src/config/models.mjs:30", "pantheon/src/config/models.mjs:45", "pantheon/src/config/models.mjs:60"]},
-    {"id": "A2", "graph": "A", "path": "packages/model-client/registry.mjs", "kind": "frontier-capabilities", "owner": "human commit", "format": "code+json (own models.json copy)", "mutable": true, "signed": false, "identity": "model id", "counts": {"models": 13}, "queries": ["packages/model-client/registry.mjs:32"]},
+    {"id": "A2", "graph": "A", "path": "packages/model-client/registry.mjs", "kind": "frontier-capabilities", "owner": "human commit", "format": "code+json (models.json; pantheon/src/config/models.json is a symlink to it)", "mutable": true, "signed": false, "identity": "model id", "counts": {"models": 13}, "queries": ["packages/model-client/registry.mjs:32"]},
     {"id": "A3", "graph": "A", "path": "pantheon/src/config/lanes.json", "kind": "runtime-lanes", "owner": "owner direction via commit", "format": "json", "mutable": true, "signed": false, "identity": "lane name", "counts": {"lanes": 15, "live": 13}, "queries": ["pantheon/src/route/fit-matrix.mjs:97", "pantheon/src/route/fit-matrix.mjs:110", "pantheon/src/route/fit-matrix.mjs:119"]},
     {"id": "A4", "graph": "A", "path": "pantheon/src/config/capability-facts.json", "kind": "cited-capability-facts", "owner": "human commit; operator records snapshot as ledger `facts`", "format": "json; ledger entry", "mutable": true, "signed": "snapshot only", "identity": "model id; entry hash", "counts": {"records": 22}, "queries": ["pantheon/src/config/facts.mjs:18", "pantheon/src/config/tiers.mjs:27", "pantheon/src/ledger/kinds.mjs:46"]},
     {"id": "A5", "graph": "A", "path": "pantheon/src/config/classes.json", "kind": "routing-classes", "owner": "owner/operator", "format": "json", "mutable": true, "signed": false, "identity": "model id", "queries": ["pantheon/src/route/frontier.mjs:348"]},
@@ -105,7 +105,7 @@
     {"id": "E13", "graph": "E", "path": "computed per tick", "kind": "scheduler-gates", "owner": "scheduler", "format": "in memory", "identity": "route digest; ATTEMPT_IDENTITY 2", "queries": ["ophanim/operate/gates.mjs:176", "ophanim/operate/gates.mjs:130", "ophanim/operate/scheduler.mjs:165", "ophanim/operate/scheduler.mjs:450", "ophanim/operate/scheduler.mjs:95"]}
   ],
   "duplicates": [
-    {"fact": "model ids", "stores": ["pantheon/src/config/models.json", "packages/model-client/models.json"], "consistency": "none found"},
+    {"fact": "model ids", "stores": ["packages/model-client/models.json"], "consistency": "one file: pantheon/src/config/models.json is a git symlink to it (coordinator correction)"},
     {"fact": "window/output/efforts", "stores": ["capability-facts.json", "packages/model-client/registry.mjs:8", "pantheon/src/route/router.mjs:31", "lanes.json"], "consistency": "capabilityDrift pantheon/src/config/facts.mjs:18, pinned by pantheon/tests/capability-facts.test.mjs:33"},
     {"fact": "model lab", "stores": ["pantheon/src/config/models.mjs:60", "pantheon/src/review/identity.mjs:56", "lanes.json"], "consistency": "built from the same files; conflict throws"},
     {"fact": "status dependency order", "stores": ["pantheon/src/board/operate.mjs:229", "ophanim/operate/scheduler.mjs:450"], "consistency": "none; both break cycles silently"},
@@ -190,7 +190,7 @@
     "live state of the owner's work, run and cycle ledgers, evidence stores and service operation",
     "contents of findings-* records",
     "Node's documented stability index for node:sqlite in v24.22.1",
-    "whether anything outside tests keeps the two models.json copies in sync (none found)",
+    "(resolved by the coordinator: the two models.json paths are one file through a git symlink)",
     "whether the 337 local boards are test leftovers"
   ]
 }
