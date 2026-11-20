@@ -11,7 +11,16 @@
 //
 // Inputs are entries, never edits: a changed fact is a new `facts` entry, and decisions cite the one
 // they used. That is the Merkle cascade, applied to routing.
+//
+//   capability    (knowledge graphs, Slice C1; an addition: the kinds above are unchanged) the capability snapshot an
+//                 ADVISORY eligibility decision was made on (capability/graph.mjs): each source's id, version, facts
+//                 digest and count, and the snapshot digest a selection's `advisory.snapshot` names. Re-derived: the
+//                 digest is the digest of its sources, and a source at the version this checkout holds re-derives to the
+//                 recorded facts digest; a source at another version is noted, never assumed
 import {verifyEscalation, PROTOCOLS} from '../route/protocol.mjs';
+import {SNAPSHOT_SCHEMA, snapshotPayload, snapshotDigestOf} from '../capability/graph.mjs';
+import {defaultSnapshot} from '../capability/advisory.mjs';
+import {ARGO_SEATS} from '../route/frontier.mjs';
 import {chairContributions, CONTRIBUTIONS_SCHEMA} from '../board/contributions.mjs';
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {LANES} from '../config/models.mjs';
@@ -30,6 +39,13 @@ const one = (view, hashes, kind) => {
 
 /** The current inputs, as payloads ready to record. */
 export function currentFacts() { return JSON.parse(JSON.stringify(FACTS)); }
+/** The capability snapshot the live selections' advisory records name (capability/advisory.mjs defaultSnapshot), as a payload. */
+export function currentCapability() { return snapshotPayload(defaultSnapshot({argo: ARGO_SEATS})); }
+const SHA = /^sha256:[0-9a-f]{64}$/;
+const capabilityRefusal = p => (p?.schema === SNAPSHOT_SCHEMA && typeof p.graph === 'string' && typeof p.contract === 'string' && SHA.test(p.digest ?? '')
+  && Array.isArray(p.sources) && p.sources.length > 0 && Object.keys(p).length === 5
+  && p.sources.every(s => typeof s?.id === 'string' && typeof s.extractor === 'string' && SHA.test(s.version ?? '') && SHA.test(s.digest ?? '') && Number.isInteger(s.count) && s.count >= 0)
+  ? null : 'a capability snapshot is {schema, graph, contract, sources: [{id, extractor, version, digest, count}], digest}');
 export function currentSeating() {
   return Object.fromEntries(Object.keys(SEATING).map(role => [role,
     candidatesFor(role).map(({vendor, model, band = null, basis, why}) => ({vendor, model, ...(band ? {band} : {}), basis, why}))]));
@@ -97,6 +113,23 @@ export function pantheonKinds({authors = {}, board = null, scopes = boardScopes(
         try { again = chairContributions({store: b.store, refs}); } catch (err) { return `the named heads are not on this board: ${err.message}`; }
         return again.projectionSha === e.payload.projection.projectionSha && canonical(again) === canonical(e.payload.projection)
           ? null : 'the projection is not the one these heads produce';
+      },
+    },
+    // The capability snapshot (Slice C1): an input beside facts and seating. It decides nothing live (the eligibility it
+    // feeds is advisory); recorded so the snapshot digest a selection names resolves to what it was decided on.
+    capability: {
+      authors: inputs,
+      validate: capabilityRefusal,
+      rederive: (e, view) => {
+        if (snapshotDigestOf(e.payload) !== e.payload.digest) return 'the capability snapshot digest is not the digest of its sources';
+        const here = currentCapability(), at = new Map(here.sources.map(s => [s.id, s]));
+        for (const s of e.payload.sources) {
+          const c = at.get(s.id);
+          if (c && c.version === s.version && (c.digest !== s.digest || c.count !== s.count)) return `${s.id} at ${s.version} re-derives to ${c.digest} (${c.count} facts), not the recorded ${s.digest} (${s.count})`;
+        }
+        const other = e.payload.sources.filter(s => at.get(s.id)?.version !== s.version).map(s => s.id);
+        if (other.length) view?.note?.(`capability sources not at their recorded versions on this checkout, not re-derived: ${other.join(', ')}`);
+        return null;
       },
     },
   };

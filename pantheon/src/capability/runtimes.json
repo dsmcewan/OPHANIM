@@ -1,0 +1,154 @@
+{
+  "schema": "pantheon.capability-runtimes/v1",
+  "rule": "The runtimes, transports, sandbox profiles (environments), credential scopes (pools), tools, features and known limitations a Pantheon seat is served through, as the CODE provides them. Every claim cites the code: evidence {file, quote}, the quote read verbatim in that file at the checkout observed (pantheon/src/capability/graph.mjs). A claim whose quote is not found is recorded unresolved, never established. An isolation property holds only where it is declared and its evidence is found: nothing is recorded as isolated that the code does not isolate. A model is not its runtime: models are pantheon.models facts; this file never names one.",
+  "runtimes": {
+    "model-client": {
+      "title": "the shared provider API client (packages/model-client) and the vendor adapters it is reached through",
+      "roles": "any",
+      "effort": "carried",
+      "delegation": {"native_subagents": false, "depth": 0, "why": "the API seat is one request/response conversation; Pantheon's own subagents are separate seats (role/seating.mjs DEPTH_LIMIT), not a feature of this runtime"},
+      "evidence": [
+        {"file": "pantheon/src/route/frontier.mjs", "quote": "return isFrontier(model)||vendor!=='agy_google'?'api':'agy';"},
+        {"file": "pantheon/src/role/seating.mjs", "quote": "export const DEPTH_LIMIT = 2;"}
+      ]
+    },
+    "antigravity-cli": {
+      "title": "the Antigravity CLI (agy) on the operator's subscription OAuth session, one role card per role",
+      "roles": ["reviewer", "scout", "fact-checker", "planner", "implementer"],
+      "effort": "fixed-by-lane",
+      "delegation": {"native_subagents": false, "depth": 0, "pantheon_subagents": true, "why": "native subagents are hard-denied by the jail hook; the unit's Pantheon subagents are reached through the ask_subagent MCP tool only"},
+      "evidence": [
+        {"file": "pantheon/src/role/seating.mjs", "quote": "agents: [\"pantheon-reviewer\", \"pantheon-scout\", \"pantheon-fact-checker\", \"pantheon-planner\", \"pantheon-implementer\"],"},
+        {"file": "pantheon/src/agy/jail-hook.mjs", "quote": "invoke_subagent, define_subagent (native subagents would escape the jail) -> hard deny."},
+        {"file": "pantheon/src/agy/jail-hook.mjs", "quote": "BOTH forms are auto_approved ONLY"}
+      ]
+    },
+    "antigravity-sdk": {
+      "title": "the python google-antigravity SDK seat (pantheon/scripts/agy-seat.py), its Gemini requests carried by the controller's metering relay",
+      "roles": ["reviewer", "scout", "fact-checker"],
+      "effort": "not-carried",
+      "delegation": {"native_subagents": true, "depth": 1, "subagents": ["pantheon-fact-checker"], "roles_with_subagents": ["reviewer"], "max_model_calls": 40, "why": "a reviewer seat may start ONE bounded fact-checker subagent (max_subagent_depth 1); the session is capped at 40 model calls"},
+      "evidence": [
+        {"file": "pantheon/scripts/agy-seat.py", "quote": "ap.add_argument(\"--role\", required=True, choices=[\"reviewer\", \"scout\", \"fact-checker\"])"},
+        {"file": "pantheon/scripts/agy-seat.py", "quote": "max_subagent_depth=1 if subagents else None, allowed_subagents=allowed),"},
+        {"file": "pantheon/src/board/run-item.mjs", "quote": "const SDK_MAX_MODEL_CALLS = 40;"},
+        {"file": "pantheon/src/board/run-item.mjs", "quote": "const transport = (role === \"planner\" || role === \"implementer\" || declared === \"agy-cli\") ? \"cli\" : (process.env.PANTHEON_AGY_TRANSPORT ?? \"cli\");"}
+      ]
+    }
+  },
+  "transports": {
+    "api": {"title": "the provider's HTTPS API, through the shared client", "billing": "the provider's own API billing, per configured credential pool",
+      "evidence": [{"file": "pantheon/src/route/frontier.mjs", "quote": "export function seatPools(vendor,{pools=[],pool=null,transport='api'}={}){"}]},
+    "agy-cli": {"title": "the Antigravity CLI subscription (OAuth); not a billed Gemini API request", "billing": "the subscription pool",
+      "evidence": [{"file": "pantheon/src/config/lanes.json", "quote": "\"transport\": \"agy-cli\""}]},
+    "agy-sdk": {"title": "the python SDK's Gemini API requests, each admitted, charged and persisted by the controller's metering relay before it is forwarded", "billing": "primary metered Gemini execution: admitted only by gemini_api_primary with a budget",
+      "evidence": [{"file": "pantheon/src/route/gemini-relay.mjs", "quote": "THE METERING RELAY OF THE PYTHON ANTIGRAVITY SDK SEAT"},
+        {"file": "pantheon/src/board/run-item.mjs", "quote": "try { geminiAdmission(BILLING, spend); }"}]}
+  },
+  "environments": {
+    "provider-hosted": {"title": "the model runs at the provider; on the board no tool of the seat executes on this host", "local_execution": false,
+      "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const NO_TOOLS = \"You have NO tools in this seat: nothing you write executes and you cannot read files. \" +"}]},
+    "bwrap-jail": {"title": "the worker's bubblewrap jail around the agy CLI: host read-only, the worktree and the control dir's run/ writable, its own PID namespace, the pre-mutation jail hook deciding every tool call; never a silent unjailed run", "local_execution": true, "sandboxed": true,
+      "limitations": ["L-004"],
+      "evidence": [{"file": "pantheon/src/agy/sandbox.mjs", "quote": "THE WORKER'S CONTAINMENT: a bubblewrap (bwrap) mount namespace around the agy CLI process."},
+        {"file": "pantheon/src/board/agy-cli.mjs", "quote": "refusing to run the worker unjailed (pass sandbox.allowUnsandboxed: true to override)"},
+        {"file": "pantheon/src/agy/jail-hook.mjs", "quote": "THE PRE-MUTATION JAIL"}]},
+    "verify-jail": {"title": "the verify launcher's jail: the one command the CLI's jail hook approves runs here, with no credential and no network", "local_execution": true, "sandboxed": true,
+      "evidence": [{"file": "pantheon/src/agy/verify-jail.mjs", "quote": "THE INVARIANT. No process spawned from worker-controlled content can obtain, or disclose, a credential."},
+        {"file": "pantheon/src/agy/jail-hook.mjs", "quote": "auto_approve ONLY when args.CommandLine (trimmed) equals the unit's WORKER verify command exactly"}]},
+    "host-process": {"title": "a plain child process of the controller, as the controller's user, with no sandbox around it", "local_execution": true, "sandboxed": false,
+      "limitations": ["L-155"],
+      "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "sdkRun = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });"}]}
+  },
+  "pools": {
+    "vendor-api": {"title": "the vendor's API credential pool, configured on the controller (PANTHEON_POOLS_FILE) or the vendor's default; the key stays in the controller", "credentials_in_seat": [],
+      "evidence": [{"file": "pantheon/src/route/frontier.mjs", "quote": "const credential=env[row.credential_env];"}]},
+    "antigravity-oauth": {"title": "the subscription's cached OAuth login, as a per-run scratch copy dropped afterwards; the environment is the worker allowlist (no provider key, no secret-named variable)", "credentials_in_seat": ["the cached OAuth token (scratch copy)"],
+      "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "await dropGeminiState(gstate).catch(() => null);   // the scratch holds the OAuth token: never left behind"},
+        {"file": "pantheon/src/board/agy-cli.mjs", "quote": "export function workerEnvOf(extra = {}, base = null) {"}]},
+    "gemini-relay": {"title": "the metering relay's scoped capability (its loopback URL and the session's random token); no Gemini, Vertex or ADC credential in the seat's environment", "credentials_in_seat": [],
+      "limitations": ["L-155"],
+      "evidence": [{"file": "pantheon/src/route/gemini-relay.mjs", "quote": "/** The scoped capability the python process gets: the relay's URL and the session's random token, nothing else. */"},
+        {"file": "pantheon/src/board/agy-cli.mjs", "quote": "export const AGY_SDK_CREDENTIALS = Object.freeze([]);"}]}
+  },
+  "tools": {
+    "agy-cli/read": {"runtime": "antigravity-cli", "environment": "bwrap-jail", "executes": false, "policy": "reads inside the worktree only",
+      "evidence": [{"file": "pantheon/src/agy/jail-hook.mjs", "quote": "read tools (READ_TOOLS, read_file included: observed on agy 1.5.11)"}]},
+    "agy-cli/write": {"runtime": "antigravity-cli", "environment": "bwrap-jail", "executes": false, "policy": "the worker only: every target inside the worktree and matched by the unit's owned paths",
+      "evidence": [{"file": "pantheon/src/agy/jail-hook.mjs", "quote": "write tools (WRITE_TOOLS: write_file, write_to_file, replace_file_content, multi_replace_file_content)"}]},
+    "agy-cli/run_command": {"runtime": "antigravity-cli", "environment": "verify-jail", "executes": true, "policy": "exactly the unit's verify launcher, which runs in the verify jail; every other command denied",
+      "evidence": [{"file": "pantheon/src/agy/jail-hook.mjs", "quote": "auto_approve ONLY when args.CommandLine (trimmed) equals the unit's WORKER verify command exactly"}]},
+    "agy-cli/ask_subagent": {"runtime": "antigravity-cli", "environment": "bwrap-jail", "executes": false, "policy": "server pantheon-subagents, tool ask_subagent, a role in the unit's roles; native subagents denied",
+      "evidence": [{"file": "pantheon/src/agy/jail-hook.mjs", "quote": "BOTH forms are auto_approved ONLY"}]},
+    "agy-sdk/read": {"runtime": "antigravity-sdk", "environment": "host-process", "executes": false, "policy": "the SDK's read-only built-in tools over the workspace",
+      "evidence": [{"file": "pantheon/scripts/agy-seat.py", "quote": "READ_ONLY = ([types.BuiltinTools.VIEW_FILE, types.BuiltinTools.LIST_DIR, types.BuiltinTools.SEARCH_DIR,"}]},
+    "agy-sdk/run_command": {"runtime": "antigravity-sdk", "environment": "host-process", "executes": true, "policy": "any command but the ones the seat's _destructive predicate denies, run on the host as the controller's user",
+      "limitations": ["L-155"],
+      "evidence": [{"file": "pantheon/scripts/agy-seat.py", "quote": "enabled = READ_ONLY + [types.BuiltinTools.RUN_COMMAND, types.BuiltinTools.FINISH]"},
+        {"file": "pantheon/scripts/agy-seat.py", "quote": "policy.deny(types.BuiltinTools.RUN_COMMAND.value, when=_destructive, name=\"no-destructive-commands\")],"}]},
+    "agy-sdk/web": {"runtime": "antigravity-sdk", "environment": "host-process", "executes": false, "policy": "the scout only: web search and URL reads",
+      "evidence": [{"file": "pantheon/scripts/agy-seat.py", "quote": "enabled += [types.BuiltinTools.SEARCH_WEB, types.BuiltinTools.READ_URL_CONTENT]"}]},
+    "agy-sdk/start_subagent": {"runtime": "antigravity-sdk", "environment": "host-process", "executes": false, "policy": "the reviewer only: the one fact-checker subagent",
+      "evidence": [{"file": "pantheon/scripts/agy-seat.py", "quote": "enabled.append(types.BuiltinTools.START_SUBAGENT)"}]}
+  },
+  "features": {
+    "native-subagents": {"title": "the runtime itself starts a subagent of the seat (depth limited)", "providers": ["antigravity-sdk"]},
+    "pantheon-subagents": {"title": "the seat asks Pantheon's own subagents through the A2A ask_subagent tool", "providers": ["antigravity-cli"]},
+    "effort-control": {"title": "a reasoning effort is carried on the request", "providers": ["model-client"]},
+    "tool-execution": {"title": "the seat can run a command", "providers": ["antigravity-cli", "antigravity-sdk"]},
+    "read-tools": {"title": "the seat can read files of its workspace", "providers": ["antigravity-cli", "antigravity-sdk"]},
+    "web-search": {"title": "the seat can search the web and read URLs", "providers": ["antigravity-sdk"]}
+  },
+  "limitations": {
+    "L-155": {"title": "the python SDK seat's run_command is unsandboxed: running as the controller's user it can read the controller's environment (which holds GEMINI_API_KEY) and send Gemini requests itself, outside the relay",
+      "status": "open", "planned": "knowledge graphs, Slice C2 (owner decision 2026-11-20, \"Yes, bubble per seat\")",
+      "breaks": ["sandbox", "tools"],
+      "register": {"file": "docs/OPEN-LIMITATIONS.md", "quote": "The python SDK seat's agent has an unsandboxed `run_command`"},
+      "evidence": [{"file": "pantheon/scripts/agy-seat.py", "quote": "policies=[policy.allow_all(),"},
+        {"file": "pantheon/src/board/run-item.mjs", "quote": "sdkRun = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });"}]},
+    "L-004": {"title": "the jailed Antigravity CLI keeps the worker's egress and a read-only view of the whole host (owner constraint, retained)",
+      "status": "retained", "breaks": [],
+      "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "REMAINING (owner constraint L-004, explicitly UNRESOLVED): the jailed CLI itself still has the worker's egress and"}]},
+    "agy-effort-not-carried": {"title": "the Antigravity transports carry no effort: a lane's thinking level is its name", "status": "by design", "breaks": [], "excludes": ["effort-control"],
+      "evidence": [{"file": "pantheon/src/route/task-profile.mjs", "quote": "none: effort is not carried by the agy transport for"}]},
+    "gemini-api-quota-failover-only": {"title": "a metered Gemini API id whose base model has an Antigravity lane is served only as that lane's quota failover (owner direction 2026-11-17)", "status": "owner direction", "breaks": [], "use": "quota-failover",
+      "evidence": [{"file": "pantheon/src/route/frontier.mjs", "quote": "GEMINI GOES THROUGH ANTIGRAVITY FIRST (owner direction 2026-11-17)"}]},
+    "sdk-seat-metered": {"title": "the SDK seat is primary metered Gemini execution: refused unless the billing policy's gemini_api_primary admits it, with a budget", "status": "by design", "breaks": [], "requires": "gemini_api_primary",
+      "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "try { geminiAdmission(BILLING, spend); }"}]}
+  },
+  "profiles": {
+    "api": {"runtime": "model-client", "transport": "api", "environment": "provider-hosted", "pool": "vendor-api", "tools": [],
+      "bubble": {
+        "sandbox": {"holds": "not-applicable", "why": "no tool of the seat executes on this host: the board's API seats are given no tools", "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const NO_TOOLS = \"You have NO tools in this seat: nothing you write executes and you cannot read files. \" +"}]},
+        "credentials": {"holds": true, "why": "the model is given no credential; the controller holds the pool's key", "evidence": [{"file": "pantheon/src/route/frontier.mjs", "quote": "const credential=env[row.credential_env];"}]},
+        "tools": {"holds": true, "why": "no tool is given", "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const NO_TOOLS = \"You have NO tools in this seat: nothing you write executes and you cannot read files. \" +"}]},
+        "lifetime": {"holds": false, "why": "a seat's records persist under $PANTHEON_HOME across its turns for continuity; no teardown per assignment is enforced by the code", "evidence": [{"file": "pantheon/src/seat/store.mjs", "quote": "Seat records live ONLY under $PANTHEON_HOME."}]}
+      }},
+    "agy-cli": {"runtime": "antigravity-cli", "transport": "agy-cli", "environment": "bwrap-jail", "pool": "antigravity-oauth", "tools": ["agy-cli/read", "agy-cli/write", "agy-cli/run_command", "agy-cli/ask_subagent"],
+      "limitations": ["agy-effort-not-carried", "L-004"],
+      "bubble": {
+        "sandbox": {"holds": true, "why": "the bwrap jail; refused rather than run unjailed", "limitation": "L-004", "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "refusing to run the worker unjailed (pass sandbox.allowUnsandboxed: true to override)"}]},
+        "credentials": {"holds": true, "why": "the worker allowlist environment (no provider key) and a per-run scratch copy of the OAuth login, dropped afterwards", "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "export function workerEnvOf(extra = {}, base = null) {"}, {"file": "pantheon/src/board/agy-cli.mjs", "quote": "await dropGeminiState(gstate).catch(() => null);   // the scratch holds the OAuth token: never left behind"}]},
+        "tools": {"holds": true, "why": "the jail hook decides every tool call: reads in the worktree, writes to owned paths, one verify command, no native subagent", "evidence": [{"file": "pantheon/src/agy/jail-hook.mjs", "quote": "invoke_subagent, define_subagent (native subagents would escape the jail) -> hard deny."}]},
+        "lifetime": {"holds": true, "why": "a fresh control dir per turn, removed on every path", "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "const control_dir = await mkdtempP(join(tmpdirOf(), \"pantheon-agy-turn-\"));"}, {"file": "pantheon/src/board/agy-cli.mjs", "quote": "await rmP(control_dir, { recursive: true, force: true }).catch(() => {});"}]}
+      }},
+    "agy-sdk": {"runtime": "antigravity-sdk", "transport": "agy-sdk", "environment": "host-process", "pool": "gemini-relay", "tools": ["agy-sdk/read", "agy-sdk/run_command", "agy-sdk/web", "agy-sdk/start_subagent"],
+      "limitations": ["L-155", "agy-effort-not-carried", "sdk-seat-metered"],
+      "bubble": {
+        "sandbox": {"holds": false, "why": "the seat is a plain child process of the controller; its run_command executes on the host", "limitation": "L-155", "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "sdkRun = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });"}]},
+        "credentials": {"holds": true, "why": "only the relay's scoped capability; no Gemini, Vertex or ADC credential in its environment (the unsandboxed run_command can still read the controller's environment: L-155)", "limitation": "L-155", "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "export const AGY_SDK_CREDENTIALS = Object.freeze([]);"}, {"file": "pantheon/src/route/gemini-relay.mjs", "quote": "/** The scoped capability the python process gets: the relay's URL and the session's random token, nothing else. */"}]},
+        "tools": {"holds": false, "why": "run_command is allowed for every command its _destructive predicate does not deny, outside any sandbox", "limitation": "L-155", "evidence": [{"file": "pantheon/scripts/agy-seat.py", "quote": "policies=[policy.allow_all(),"}]},
+        "lifetime": {"holds": true, "why": "one process per launch; the relay session is closed and its capability revoked when the turn ends", "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "finally { session.close(); await relay.close(); record(); }"}, {"file": "pantheon/src/route/gemini-relay.mjs", "quote": "revoked when the session closes"}]}
+      }}
+  },
+  "serving": [
+    {"profile": "api", "select": "registry-frontier-or-not-agy", "why": "a frontier model (packages/model-client registry.mjs) or any non-agy vendor is served by the shared API client",
+      "evidence": [{"file": "pantheon/src/route/frontier.mjs", "quote": "return isFrontier(model)||vendor!=='agy_google'?'api':'agy';"}]},
+    {"profile": "agy-cli", "select": "lanes", "why": "a declared lane is served by its own transport (lanes.json transport agy-cli)",
+      "evidence": [{"file": "pantheon/src/route/frontier.mjs", "quote": "if(lane)return lane.transport;"}]},
+    {"profile": "agy-cli", "select": "registry-agy-not-frontier", "why": "a non-frontier agy_google model goes through the agy transports; the CLI is the default for every role",
+      "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const transport = (role === \"planner\" || role === \"implementer\" || declared === \"agy-cli\") ? \"cli\" : (process.env.PANTHEON_AGY_TRANSPORT ?? \"cli\");"}]},
+    {"profile": "agy-sdk", "select": "registry-agy-not-frontier", "why": "PANTHEON_AGY_TRANSPORT=sdk selects the python SDK seat for the reviewer and the scout",
+      "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const transport = (role === \"planner\" || role === \"implementer\" || declared === \"agy-cli\") ? \"cli\" : (process.env.PANTHEON_AGY_TRANSPORT ?? \"cli\");"}]}
+  ]
+}

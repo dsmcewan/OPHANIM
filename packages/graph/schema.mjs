@@ -13,7 +13,9 @@ import {canonical, digest} from '../ledger/canonical.mjs';
 import {grammarRefusal, parseId, decodeKey, relationshipSubject, assertionId, contentOf, VERSION, SHA256_REF, DEFAULT_INSTANCE, INSTANCE_NAME} from './identity.mjs';
 
 export const GRAPH_SCHEMA = 'ophanim.graph/v1';
-export const CONTRACT_VERSION = '1.0.0';
+// 1.1.0 (Slice C1): capability-domain entity types (lane, chair, placement) and relationship types (made-by, served-by,
+// alias-of, limited-by, combines, holds, places, measures) ADDED; no existing type changed.
+export const CONTRACT_VERSION = '1.1.0';
 
 // ---- domains and entity types (KD3) ---------------------------------------------------------------------------------
 const types = spec => Object.freeze(Object.fromEntries(spec.map(([t, meaning]) => [t, Object.freeze({meaning})])));
@@ -33,6 +35,9 @@ export const DOMAINS = Object.freeze({
     ['qualification', 'a qualification record, established only from measured evidence'],
     ['limitation', 'a known limitation or constraint'],
     ['pool', 'an availability or quota pool'],
+    ['lane', 'a named serving variant of a model on one transport at a fixed setting (an Antigravity lane name); not a model of its own'],
+    ['chair', 'a roster chair: a named seat position, the roles it holds and the vendors that may occupy it'],
+    ['placement', 'an owner- or operator-directed placement of a model in a role (a seating-table row, an ARGO seat, a fit-matrix cell), with its declared basis; a direction, never a measurement'],
   ])}),
   systems: Object.freeze({graph: 'B', title: 'Systems, components and dependencies', types: types([
     ['enterprise', 'an enterprise'], ['department', 'a department'], ['process', 'a business process'],
@@ -210,6 +215,29 @@ export const RELATIONSHIPS = Object.freeze({
     {authoritative: ['declared'], observed: ['measured'], derived: ['declared'], hypothetical: ANY}),
   'mentions': R('the source text names the target; a textual relation, never a dependency, cause or qualification',
     [ANY], [ANY], null, {authoritative: ['textual', 'declared'], derived: ['textual', 'structural'], hypothetical: ANY}),
+  // ---- added in contract 1.1.0 (Slice C1, the capability and model/runtime graph) -------------------------------------
+  'made-by': R('the source model was made by the target laboratory: lineage and the reviewer-exclusion input, never a restriction on who may do the work',
+    ['capability/model'], ['capability/lab'], null, {authoritative: ['declared'], derived: ['declared'], hypothetical: ANY}),
+  'served-by': R('the source model, lane or executable capability is served through the target provider, transport or credential pool',
+    ['capability/model', 'capability/lane', 'capability/capability'], ['capability/provider', 'capability/transport', 'capability/pool'], 'to->from',
+    {authoritative: STRUCT, observed: ['measured'], derived: STRUCT, hypothetical: ANY}),
+  'alias-of': R('the source name denotes the target model (a thinking or effort variant, a lane name, an alias); it is not another model',
+    ['capability/lane', 'capability/model'], ['capability/model'], 'to->from', {authoritative: STRUCT, derived: STRUCT, hypothetical: ANY}),
+  'limited-by': R('the source is constrained by the target known limitation, which carries its source and quote; a limitation is never read as a capability',
+    ['capability/capability', 'capability/runtime', 'capability/transport', 'capability/tool', 'capability/environment', 'capability/model', 'capability/lane',
+      'capability/pool', 'capability/agent'], ['capability/limitation'], 'to->from',
+    {authoritative: STRUCT, observed: ['measured'], derived: ['declared', 'structural', 'measured'], hypothetical: ANY}),
+  'combines': R('the source executable capability is the combination of the target model or lane, runtime, transport, tool, sandbox profile (environment) or credential scope (pool); each stays its own entity',
+    ['capability/capability'], ['capability/model', 'capability/lane', 'capability/runtime', 'capability/transport', 'capability/tool', 'capability/environment', 'capability/pool'],
+    'to->from', {authoritative: STRUCT, derived: STRUCT, hypothetical: ANY}),
+  'holds': R('the source roster chair holds the target role',
+    ['capability/chair'], ['capability/role'], null, {authoritative: ['declared'], derived: ['declared'], hypothetical: ANY}),
+  'places': R('the source owner- or operator-directed placement names the target role, or the model, lane or executable capability placed in it; a direction, never a measurement or a qualification',
+    ['capability/placement'], ['capability/role', 'capability/model', 'capability/lane', 'capability/capability'], 'to->from',
+    {authoritative: ['declared'], derived: ['declared'], hypothetical: ANY}),
+  'measures': R('the source observation is a defined metric over the recorded executions of the target (its sources and coverage stated); never a qualification',
+    ['evidence/observation'], ['capability/capability', 'capability/model', 'capability/lane', 'capability/runtime', 'capability/transport', 'capability/role'], null,
+    {observed: ['measured'], derived: ['measured'], hypothetical: ANY}),
 });
 export const RELATIONSHIP_TYPES = Object.freeze(Object.keys(RELATIONSHIPS));
 export const IMPACT_TYPES = Object.freeze(RELATIONSHIP_TYPES.filter(t => RELATIONSHIPS[t].impact));

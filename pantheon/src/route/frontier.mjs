@@ -10,6 +10,7 @@ import {routeFor,documentedWindow} from './protocol.mjs';
 import {taskProfile,classFloor,requirementsOf,effortForDepth,PROFILE_MAPPING,LATENCY_CLIMB} from './task-profile.mjs';
 import {FIT_MATRIX,FIT_MATRIX_BODY,FIT_DIFFICULTIES,FIT_ROLES,REVIEWER_ESCALATION,IMPLEMENTER_LADDERS,fitMatrix,fitLadder,
   pinnedReviewer,reviewerEscalation,implementerEscalation,laneFor,laneParts,laneLevels,quotaFailoverFor} from './fit-matrix.mjs';
+import {adviseSelection} from '../capability/advisory.mjs';
 
 // The fit matrix (fit-matrix.mjs), re-exported so a caller of the selector imports one module.
 export {FIT_MATRIX,FIT_DIFFICULTIES,FIT_ROLES,REVIEWER_ESCALATION,IMPLEMENTER_LADDERS,fitMatrix,fitLadder,pinnedReviewer,
@@ -25,6 +26,9 @@ const seats={
   scout:[['xai','grok-4.3']],reviewer:[['xai','grok-4.7'],['google','carbon']],
   synthesis:[['google','carbon']],fast_loop:[['google','argon']],
 };
+/** The ARGO seat table as {role: [{vendor, model}]}, read only: what the capability graph projects as operator placements. */
+export const ARGO_SEATS=Object.freeze(Object.fromEntries(Object.entries(seats).map(([role,rows])=>[role,Object.freeze(rows.map(([v,n])=>
+  Object.freeze({vendor:v==='google'?'agy_google':v,model:modelId(v,n)})))])));
 
 export function readPools({rows,env=process.env}={}){
   rows??=env.PANTHEON_POOLS_FILE?JSON.parse(readFileSync(env.PANTHEON_POOLS_FILE,'utf8')):[];
@@ -211,8 +215,21 @@ const windowOf=model=>documentedWindow(model)??CAPABILITIES[model]?.window??null
 /**
  * The seat for a role, its ordered transport-failover candidates, and the recorded selection. Pure over its
  * inputs; it performs no call. Throws when nothing is admitted.
+ *
+ * THE CAPABILITY GRAPH IS ADVISORY HERE (knowledge graphs, Slice C1; owner decision 2026-11-20, "Keep the seats as we
+ * have them for now until we better understand the metrics"). The live choice is made by liveSelection below, from the
+ * owner-directed tables and the fit matrix, exactly as before; only then does adviseSelection add, beside every
+ * candidate's selection, the graph-derived eligibility verdict, the decision's digest and the capability snapshot's
+ * digest (capability/advisory.mjs). Nothing it computes reaches the live choice: not the seat, the candidates, their
+ * order, their pools or the policy hash (the snapshot is NOT hashed into selectionPolicy: the graph chose nothing).
+ * `advisory: false` returns the live choice alone; `capability` (a snapshot) replaces the default one.
  */
-export function selectSeat(role,{profile='argo',difficulty='medium',needsContext=null,avoid=[],avoidLabs=[],pools=[],
+export function selectSeat(role,opts={}){
+  const choice=liveSelection(role,opts);
+  return opts.advisory===false?choice:adviseSelection(choice,role,{...opts,argo:ARGO_SEATS});
+}
+
+function liveSelection(role,{profile='argo',difficulty='medium',needsContext=null,avoid=[],avoidLabs=[],pools=[],
   pin=null,slotOverride=null,roleOverride=null,explicit=null,task=null}={}){
   if(!PROFILES.includes(profile))throw new Error(`unknown routing profile "${profile}" (known: ${PROFILES.join(', ')})`);
   const id=selectionPolicy(profile,{pools});
