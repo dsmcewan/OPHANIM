@@ -62,13 +62,22 @@ const DECISION6_POOL = {...SEATING, reviewer: [...SEATING.reviewer, ...OPENAI_RE
 const THREE = {work_units: UNITS, slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}, {id: 's2', title: 'beta.mjs', slot: 'beta', path: 'beta.mjs'}, {id: 's3', title: 'gamma.mjs', slot: 'gamma', path: 'gamma/gamma.mjs'}]};
 // The scripted worker for those units (sourced with $dir = the unit's worktree, $unit, $model, $prompt): it writes the
 // unit's files, logs when it started and ended, and unit c asks for one native subagent (sdk_subagent).
+//
+// HOW a AND c ARE SHOWN TO RUN TOGETHER: a rendezvous, not a stopwatch. Each marks that it has started and holds its work
+// until the other has started too (for at most 30 s). Two units that run at once always meet, however late one of them
+// reaches its work, so their spans overlap by construction. Units run one after the other never meet: the first waits
+// out its bound and ends before the second starts, and the overlap assertion below fails. The earlier form slept 0.3 s
+// in each and asserted the two sleeps overlapped; that measured how evenly two sessions started, and failed on a loaded
+// CI runner with both units running concurrently (one of two runs of d6c6d29).
 const SPAN = 'printf \'%s %s %s %s\\n\' "$dir" "$unit" "$1" "$(date +%s%N)" >> "$FAKE_AGY_LOG.spans"';
 const WORKER = `span() { ${SPAN}; }
+case "$dir" in */fresh/*) it=fresh ;; */ticketed/*) it=ticketed ;; *) it=other ;; esac
+meet() { : > "$FAKE_AGY_LOG.started.$it.$unit"; n=0; while [ ! -e "$FAKE_AGY_LOG.started.$it.$1" ] && [ "$n" -lt 600 ]; do sleep 0.05; n=$((n + 1)); done; }
 span start
 case "$unit" in
-  a) sleep 0.3; printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;;
+  a) meet c; printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;;
   b) printf 'import {ok} from "./alpha.mjs";\\nexport const both = ok === true;\\n' > "$dir/beta.mjs" ;;
-  c) sleep 0.3; sdk_subagent code-explorer "Find where g is read and what value it must have; report file paths and lines."; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
+  c) meet a; sdk_subagent code-explorer "Find where g is read and what value it must have; report file paths and lines."; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
 esac
 span end
 `;
