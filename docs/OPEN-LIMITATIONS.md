@@ -107,6 +107,14 @@ L-001 and L-002 were investigated read-only in wave 1. The brief is in `docs/exe
 - Verification: "Default-off behavior at all three entry points. Attempts with environment or proxy credentials available. Explicit opt-in and budget exhaustion. Concurrent requests competing for the remaining budget. Restart and recovery without budget reset. No metered provider request occurring before admission and charging." "Use targeted regression and mutation tests. Preserve existing orchestration, authorization, and isolation contracts."
 - "Additional requirement: Inventory all remaining Google API egress paths and identify whether each is protected by this billing boundary. Do not silently expand implementation scope; report any uncovered paths as findings."
 - "Close L-148 only when its identified paths are verified. Keep L-147 and L-149 separately tracked."
+- **Requirement 7 confirmed (2026-11-20), the coordinator's proposed design kept:**
+  - "Authorization: Must be explicitly declared on each server startup. No flag means metered Gemini execution is OFF, regardless of previous authorization."
+  - "Usage: Persist across restarts and remain bound to the same billing ledger."
+  - "Budget: "--gemini-api-primary N" defines the cumulative spending ceiling, not an additional allowance each time the server starts."
+  - "Restart: If 6 calls were previously charged and the server restarts with "N=10", only 4 calls remain."
+  - "Increase: A larger budget requires an explicit new authorization. Historical usage is never erased."
+  - "Concurrency: Atomic admission must prevent simultaneous requests or server processes from overspending the shared allowance."
+  - "Do not infer authorization from previous runs, credential availability, or persisted usage. Continue with the existing implementation and verification scope. No redesign required."
 
 ## Open, planned or active
 
