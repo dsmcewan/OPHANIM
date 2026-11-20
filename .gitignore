@@ -15,3 +15,6 @@ status/ledger/keys/
 # The work ledger controller keys never enter the repository (public chain only).
 status/work/keys/
 status/operate/
+# The knowledge graph's projection ledger: derived from the sources above and rebuilt from them (ophanim/graph).
+status/graph/
+status/graph.set-aside-*/
