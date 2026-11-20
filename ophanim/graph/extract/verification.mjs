@@ -47,7 +47,7 @@ const TEST_FILE = /\.test\.(mjs|js|cjs)$/;
 const CONST = /\b([A-Z][A-Z0-9_]*)\s*=\s*'([^'\n]+)'/g;
 const LIST = /\b([A-Z][A-Z0-9_]*)\s*=\s*\[/g;
 const OBJ = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*\{/g;
-const HELPER = /\bconst\s+([a-z][\w]*)\s*=\s*\(?\s*([a-z]\w*)(?:\s*,\s*[a-z]\w*)*\s*\)?\s*=>\s*\[\s*(`[^`]*`|'[^']*')/g;
+const HELPER = /\bconst\s+([a-z][\w]*)\s*=\s*\(?\s*([a-z]\w*)(?:\s*,\s*[a-z]\w*)*\s*\)?\s*=>\s*\[\s*(`[^`]*`|'[^']*'|[A-Z]\w*)/g;
 
 /** The text from `open` (an opening bracket) to its match, skipping quoted strings; null when unbalanced. */
 function balanced(text, open) {
@@ -101,6 +101,9 @@ export function mutationTable(text) {
     const h = helpers.get(name);
     if (!h) return [];
     const arg = strings(args)[0] ?? '';
+    // A helper whose first element is a CONSTANT (`t = pattern => [TEST, pattern]`, federation.mutate.mjs): the file is the
+    // constant and every argument of the call is a pattern (coordinator fix at integration).
+    if (/^[A-Z]\w*$/.test(h.first)) return [consts.get(h.first) ?? '', ...strings(args)];
     const first = h.first.startsWith("'") ? strings(h.first)[0]
       : h.first.slice(1, -1).replace(/\$\{(\w+)\}/g, (_, v) => (v === h.param ? arg : consts.get(v) ?? ''));
     return [first, ...strings(args).slice(1)];
@@ -125,11 +128,37 @@ export function mutationTable(text) {
     }
     return out;
   }
+  // THE EDIT HELPER'S SHAPE, read from its own definition (coordinator fix at integration): most runners write
+  // `one(FILE, from, to)`, but a runner may write `one(from, to, file = DEFAULT)` (packages/graph/tests/federation.mutate.mjs),
+  // so the argument that names the file, and its default, come from `const one = (...) =>`, never from position alone.
+  const sig = /\bconst\s+one\s*=\s*\(([^)]*)\)\s*=>/.exec(head);
+  const params = sig ? sig[1].split(',').map(x => x.trim()) : [];
+  const fileAt = Math.max(0, params.findIndex(x => /^file\b/.test(x)));
+  const fileDefault = /=\s*([A-Z]\w*|'[^'\n]+')/.exec(params[fileAt] ?? '')?.[1] ?? null;
+  // One JS argument at `i`: a string literal (with escapes), a constant or a bare word; returns [text, next index].
+  const argAt = (t, i) => {
+    while (/\s/.test(t[i] ?? '')) i++;
+    const q = t[i];
+    if (q === "'" || q === '"' || q === '`') { let j = i + 1; while (j < t.length && t[j] !== q) j += t[j] === '\\' ? 2 : 1; return [t.slice(i, j + 1), j + 1]; }
+    const m = /^[\w.$]+/.exec(t.slice(i)); return m ? [m[0], i + m[0].length] : [null, i];
+  };
+  // The file each `one(...)` call in `t` edits.
+  const oneFiles = t => {
+    if (fileAt === 0) return [...t.matchAll(/\bone\(\s*([A-Z]\w*|'[^'\n]+')/g)].flatMap(x => valueOf(x[1]));
+    const out = [];
+    for (const m of t.matchAll(/\bone\(/g)) {
+      let i = m.index + m[0].length, args = [], a;
+      for (let k = 0; k <= fileAt; k++) { [a, i] = argAt(t, i); if (a === null) break; args.push(a); while (/\s/.test(t[i] ?? '')) i++; if (t[i] !== ',') break; i++; }
+      const f = args[fileAt] ?? fileDefault;
+      if (f && /^([A-Z]\w*|'[^'\n]+')$/.test(f)) out.push(...valueOf(f));
+    }
+    return out;
+  };
   // Shared edits: `NAME = one(FILE, ...)` or `NAME = [one(FILE, ...), ...]`.
   const editFiles = new Map();
   for (const m of head.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*(\[\s*)?one\(/g)) {
     const at = m.index + m[0].length - 1, body = m[2] ? balanced(head, head.indexOf('[', m.index)) : balanced(head, at);
-    if (body) editFiles.set(m[1], [...body.matchAll(/\bone\(\s*([A-Z]\w*|'[^'\n]+')/g)].flatMap(x => valueOf(x[1])));
+    if (body) editFiles.set(m[1], oneFiles(body));
   }
   // The runner's default deciding tests.
   const dflt = /\bm\.tests\s*\?\?\s*([A-Z]\w*)/.exec(text)?.[1] ?? (rawLists.has('SUITES') ? 'SUITES' : consts.has('SUITE') ? 'SUITE' : rawLists.has('SUITE') ? 'SUITE' : null);
@@ -155,7 +184,7 @@ export function mutationTable(text) {
     const what = (/\bwhat:\s*'((?:[^'\\\n]|\\.)*)'/.exec(c)?.[1] ?? '').replace(/\\(.)/g, '$1');
     const files = new Set();
     for (const m of c.matchAll(/\bfile:\s*([A-Z]\w*|'[^'\n]+')/g)) for (const v of valueOf(m[1])) files.add(v);
-    for (const m of c.matchAll(/\bone\(\s*([A-Z]\w*|'[^'\n]+')/g)) for (const v of valueOf(m[1])) files.add(v);
+    for (const v of oneFiles(c)) files.add(v);
     for (const m of c.matchAll(/\b([A-Z][A-Z0-9_]*)\b/g)) for (const v of editFiles.get(m[1]) ?? []) files.add(v);
     const t = /\btests:\s*/.exec(c);
     let named = null;

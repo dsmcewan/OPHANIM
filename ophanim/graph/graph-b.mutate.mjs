@@ -62,7 +62,7 @@ export const MUTATIONS = [
   // ---- KB3: traceability -------------------------------------------------------------------------------------------------
   {id: 'B10', what: 'a traceability gap is filled by inference: a status item whose name resembles the file is taken as its requirement', tests: [[IMPACT_TEST, '^trace:']],
     edits: [one(IMPACT, "  if (!requirements.length) gaps.push({category: 'requirement', why: 'no source states the requirement that introduced it: no ticket names it as its slot, and no introduced-because-of relationship is recorded'});",
-      "  if (!requirements.length) for (const s of view.subjects().filter(x => x.includes('/work/item/') && keyOf(subject).split('/').pop().split('.')[0].split('-').some(w => w.length > 3 && keyOf(x).includes(w)))) requirements.push({kind: 'status item (by name)', id: s, sources: []});")]},
+      "  if (!requirements.length) for (const s of view.subjects().filter(x => x.includes('/work/item/') && !x.includes('(') && keyOf(subject).split('/').pop().split('.')[0].split('-').some(w => w.length > 3 && keyOf(x).includes(w)))) requirements.push({kind: 'status item (by name)', id: s, sources: []});")]},
   // ---- KB4: the context operation ----------------------------------------------------------------------------------------
   {id: 'B7', what: 'the graph op returns a summary of each node without its source references, versions or retrieval', tests: [[CONTEXT_TEST, '^graph op: references with source']],
     edits: [one(CONTEXT, '    ...r.rows.map(x => JSON.stringify(x)),', '    ...r.rows.map(x => JSON.stringify({node: x.node, kind: x.kind, why: x.why})),')]},
