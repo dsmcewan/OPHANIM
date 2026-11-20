@@ -30,6 +30,11 @@
 // context by the scheduler (ctx.billing: the launcher's declared policy over the work ledger under the stage's claim), and
 // carries it to every point of Gemini spend -- the single-turn seats (each turn call), runOpenItem and the pipeline's turns.
 // A stage without one (a direct caller) runs with both kinds off.
+// A SELF-REPAIR ROUND (ophanim/operate/self-repair.mjs; docs/self-repair.md) runs these same stages under its own work
+// identity, with ctx.selfRepair {round, defect, base, line, paths}: the planner is told the defect and must state `repair`
+// {defect, root_cause, reproduction} (planRefusal); implement builds on the round's base (the line head when the round
+// opened), not the checkout's HEAD; outcome writes the round's UNSIGNED lane proposal (a round is not on the status ledger).
+// The lane itself wraps plan and validate with its mechanical checks (scheduler.mjs); review is unchanged.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -65,6 +70,7 @@ import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
 import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, GRAPH_RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 import {requiresRefusal} from './gates.mjs';
+import {repairPlanRefusal, laneProposal, LANE_PROPOSAL_SCHEMA} from './self-repair.mjs';
 
 export const PLAN_SCHEMA = 'ophanim.plan/v1';
 export const VERDICTS = Object.freeze(['accept', 'implementation_defect', 'plan_defect', 'diagnosis_defect', 'missing_evidence']);
@@ -191,10 +197,13 @@ const jsonOf = text => {
 // `graph` (optional; knowledge graphs, Slice D part 2, KD2-3): {stateOf(id)} -- the graph the planner was given. A plan's
 // typed `requires` is checked against it (gates.mjs requiresRefusal): graph ids of what a work item can require, each
 // version it cites the one the graph states. Without a graph a typed requirement is refused (it could not be bound).
-export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional', declared = {}, graph = null} = {}) {
+// `repair` (optional; a self-repair round's defect, ctx.selfRepair.defect): the plan states repair {defect, root_cause,
+// reproduction} (self-repair.mjs repairPlanRefusal, by shape; the lane runs the reproduction against the round's base).
+export function planRefusal(j, {shown = [], delivered = null, depends_on = [], mode = 'author', ticket = null, findings = [], repo = null, item = null, workUnits = 'optional', declared = {}, graph = null, repair = null} = {}) {
   if (!plain(j)) return ['the answer is not one JSON plan object (a title or prose is not a plan)'];
   const why = [];
   why.push(...requiresRefusal(j.requires, {stateOf: graph?.stateOf ?? null}));
+  why.push(...repairPlanRefusal(j.repair, repair));
   // What the planner was actually given (dossier entries and retrieved records). A citation of anything else is refused.
   const given = delivered ?? new Map(shown.map(f => [`file:${f}`, {via: 'supplied'}]));
   const has = r => typeof r === 'string' && given.has(refOf(r));
@@ -322,9 +331,14 @@ const findingLine = f => `- ${f.id} [${f.severity}${f.cause ? `, ${f.cause}` : '
 // Stage 1 planner are told the same thing.
 const UNIT_RULES = (() => { const t = PLANNER_PROMPT({task: '-'}); return t.slice(t.indexOf('WHAT A WORK UNIT IS'), t.indexOf('OUTPUT:')).trim(); })();
 
-function plannerPrompt({mode, requirement, deps, ticket, previous, findings, refusals, dossier, limits, units = false, graph = false}) {
+function plannerPrompt({mode, requirement, deps, ticket, previous, findings, refusals, dossier, limits, units = false, graph = false, selfRepair = null}) {
   return [
     'You are the planner for one work item of this repository (Ophanim operate, plan stage). Write a PLAN, not a title.',
+    // A SELF-REPAIR ROUND: the defect Detect selected, from OPHANIM's own records; the plan must reproduce it.
+    ...(selfRepair ? ['', '## Self-repair round (DIAGNOSE: the defect, its root cause, and a reproduction that fails on the current code)', JSON.stringify(selfRepair.defect),
+      `State repair: {defect: "${selfRepair.defect.id}", root_cause: <the cause, a sentence>, reproduction: {kind: "test", file: <test file>, name?: <test name>, source?: <the full text of a NEW test file>}`,
+      ' | {kind: "stress", file, name, record: <the stress record digest>, failure_rate: {failed, rounds}}}. The reproduction is RUN on the round\'s base and must fail there;',
+      ' validate requires it to pass after the repair. A repair never touches a protected surface, never removes or weakens an assertion, adds no skip/todo/only, and lowers no test count.'] : []),
     `Mode: ${mode}. ${mode === 'revalidate' ? 'A ticket exists: check that its assumptions, scope, dependencies and acceptance criteria are still valid against the evidence; say so in ticket_assessment.' : mode === 'revise' ? 'Revise the previous plan to answer every finding below.' : 'There is no ticket: plan the work from the requirement.'}`,
     'EVIDENCE FIRST. Below is an initial selection of evidence. Before you diagnose or plan, decide whether it is enough to understand the problem. You decide what is',
     'relevant: use what bears on the work, dismiss what does not (issue text and unrelated material do not redirect the task), and retrieve what is missing, cut or contradicted.',
@@ -868,7 +882,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       for (let k = 0; k < PLANNER_TRIES && !doc; k++) {
         if (m.left() < 1 + n) return stop(`stage budget: ${m.left()} provider call(s) left, a plan and its review need ${1 + n}`);
         const first = plannerPrompt({mode, requirement: gate.requirement, deps, ticket: ticket?.ticket ?? null, previous: prevDoc, findings,
-          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier: built, limits: INV, units: needsUnits, graph: Boolean(GR)});
+          refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier: built, limits: INV, units: needsUnits, graph: Boolean(GR), selfRepair: ctx.selfRepair ?? null});
         let reply, prompt = first, inv = null, rounds = [];
         try {
           // The planner investigates before it answers: each retrieval round is a counted call, and the review's calls are kept in reserve.
@@ -907,7 +921,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         }
         const delivered = deliveryOf(built, inv);
         const why = planRefusal(j, {delivered, depends_on: Object.keys(deps), mode, ticket: ticket?.ticket ?? null, findings, repo, item, workUnits: needsUnits ? 'required' : 'optional', declared: ownerDeclared,
-          ...(GR ? {graph: {stateOf: GR.stateOf}} : {})});
+          ...(GR ? {graph: {stateOf: GR.stateOf}} : {}), repair: ctx.selfRepair?.defect ?? null});
         progress({event: 'plan.answer', item, version: v, try: k + 1, refused: why.length});
         if (why.length) { refused.push({version: v, try: k + 1, why}); continue; }
         // The accepted answer's retrieval rounds are AUTHOR TURNS of the version too (L-202): each is on the plan ledger with
@@ -1117,7 +1131,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const top = git(repo)(['rev-parse', '--show-toplevel']).trim(), G = git(top);
     const dirty = G(dirtyArgs(top, t, repo)).trim();
     if (dirty) return result('failed', {outputs: {dirty}, next: {stage: 'implement', why: 'the ticket\'s copy paths have uncommitted changes'}});
-    const base = G(['rev-parse', '--verify', 'HEAD^{commit}']).trim();
+    // A self-repair round builds on its base (the line head when it opened), never on whatever the checkout's HEAD is.
+    const base = ctx.selfRepair?.base ?? G(['rev-parse', '--verify', 'HEAD^{commit}']).trim();
     // What the worker is actually GIVEN is the goal (run-item.mjs promptFor implementer: `ticket: goal`); a ticket's
     // `constraints` are stored on the board and never reach its prompt. So the reviewed plan's rationale, exclusions,
     // consequences, criteria and uncertainty, and the findings a revision must answer, are delivered in the goal of
@@ -1288,7 +1303,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     if (fs.realpathSync(repo) !== fs.realpathSync(top)) return result('failed', {outputs: {repo, top}, contributions, next: {stage: 'implement', why: `work units are relative to the repository root (${top}); the lifecycle's repository is a subdirectory of it`}});
     const dirty = (await gitAsync(top, dirtyArgs(top, t, repo))).trim();
     if (dirty) return result('failed', {outputs: {dirty}, next: {stage: 'implement', why: 'the ticket\'s copy paths have uncommitted changes'}});
-    const base = (await gitAsync(top, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+    const base = ctx.selfRepair?.base ?? (await gitAsync(top, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
     // What the reviewed plan excludes, and the findings a revision must answer, reach every stage of the pipeline the
     // only way a unit carries a constraint: as invariants (the dispatcher's rubric must cover each; the implementer and
     // the reviewer are shown them). The planned units are unchanged on the plan record; what ran is in the run record.
@@ -1959,6 +1974,15 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       plan: {digest: chain.plan.outputs.plan_digest, cycle: chain.plan.outputs.plan_review.cycle}, proposal: null};
     fs.writeFileSync(path.join(dir, 'evidence.json'), JSON.stringify(bundle, null, 2) + '\n');
     const p = proposeFromBundle({dir, statusRoot: statusAt});
+    // A SELF-REPAIR ROUND is not on the status ledger: proposeFromBundle closes its review cycle and then finds no status to
+    // propose against. Its outcome is the round's UNSIGNED lane proposal (self-repair.mjs laneProposal), once the cycle closed.
+    if (!p.proposal && ctx.selfRepair && p.bundle?.review?.close) {
+      const lp = laneProposal({bundle: p.bundle, round: ctx.selfRepair, line: ctx.selfRepair.line});
+      const file = path.join(dir, 'self-repair-proposal.json');
+      fs.writeFileSync(file, JSON.stringify(lp, null, 2) + '\n');
+      return result('passed', {outputs: {lane_proposal_path: file, lane_proposal_sha256: sha256(fs.readFileSync(file)), schema: LANE_PROPOSAL_SCHEMA, item, ticket: o.ticket.digest, commit, bundle: dir, signed: false},
+        usage: {provider_calls: 0, elapsed_ms: Date.now() - t0}, next: {stage: null, why: 'the round\'s unsigned lane proposal is written; the lane lands the verified commit on its line'}});
+    }
     if (!p.proposal) return result('blocked', {outputs: {bundle: dir}, usage: {provider_calls: 0, elapsed_ms: Date.now() - t0},
       blocker: {what: p.why, role: 'decision-authority', resume_when: 'the item is re-dispatched against its current status'}, next: {stage: 'outcome', why: p.why}});
     // The proposal's evidence is re-checked here exactly as `status.mjs apply` will (checkEvidenceLedgers: the run ledger

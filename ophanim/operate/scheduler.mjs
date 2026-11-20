@@ -21,6 +21,7 @@ import {requirementDigest, attemptInputs, sameAttempt} from './gates.mjs';
 import {GEMINI_BILLING_OFF, GEMINI_BILLING_SCHEMA, GEMINI_KINDS, SETTING_OF, geminiBilling, policyRecord} from '../../pantheon/src/route/gemini-billing.mjs';
 import {pathsOverlap} from '../../pantheon/src/pipeline/paths.mjs';
 import {reconcile} from './reconcile.mjs';
+import {createLane, isRound} from './self-repair.mjs';
 import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import fs from 'node:fs';
@@ -180,8 +181,17 @@ export function releaseInterrupted(work, {claim, item, stage, why, at = new Date
 // executors its handle (ctx.graph: the planner's graph and learning views, the team proposals); records discoveries only
 // as candidates and proposals; and writes a snapshot at the end. It reports the queue: eligible, blocked (with the
 // reason), runnable concurrently, unlocked, and the shared prerequisites (never merged). Without it the tick is as before.
+// THE SELF-REPAIR LANE (ophanim/operate/self-repair.mjs; docs/self-repair.md). Every tick consults the lane: DORMANT -- nothing
+// read beyond the status board, nothing recorded, the tick exactly as before -- unless the owner-signed board carries the
+// `self-repair` item In progress (the switch; nothing is bound to it). While it is on, the tick opens at most ONE new round
+// before reconciling (Detect over OPHANIM's own records, never `issues`), dispatches every open round as an item of its own
+// with its stage executors wrapped by the lane (the plan's failing reproduction; validate's mechanical checks), each claim
+// of a round carrying its paths (the work ledger refuses a claim while another item's live claim holds overlapping paths),
+// and at the end lands every round whose outcome passed (one commit on the line, re-validated first when its base moved)
+// and closes the rounds that ended. The global limits and billing policy apply to rounds unchanged. `selfRepair` (optional):
+// the lane's options ({config, stateDir, records, register}), or false to leave the lane out of this tick.
 export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDir = null, executors = {}, limits = {}, holder = 'controller',
-  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null, billing = GEMINI_BILLING_OFF, graph = null}) {
+  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null, billing = GEMINI_BILLING_OFF, graph = null, selfRepair = {}}) {
   if (only !== null && (typeof only !== 'string' || !only)) fail('tick: `only` names one status item id', 'USAGE');
   if (graph !== null && (typeof graph?.open !== 'function' || typeof graph?.context !== 'function')) fail('tick: `graph` is the graph loop (ophanim/operate/graph-loop.mjs createGraphLoop)', 'USAGE');
   if (!isPolicy(billing)) fail('tick: `billing` is the resolved Gemini billing policy (pantheon/src/route/gemini-billing.mjs resolveGeminiBilling)', 'USAGE');
@@ -210,6 +220,11 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     const r = raced(() => work.release({claim: c.hash, item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: interrupted', at: new Date(clock()).toISOString()}), /that claim is already released/);
     log.released_expired.push({item: c.item, stage: c.stage, attempt: c.attempt, ...(r.done ? {} : {by_another: true})});
   }
+  // THE LANE (see the header): settle, Detect, open at most one round -- or nothing at all while it is dormant.
+  const lane = selfRepair === false ? null : createLane({repo, statusRoot, workRoot, work, clock, ...(selfRepair ?? {})});
+  // Dormant, begin() is synchronous and returns null: nothing is awaited, the tick's bookkeeping is exactly as before.
+  const opening = lane ? lane.begin() : null;
+  if (opening) await opening;
   let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
   // Intake: every source of work is recorded once (by source and ref): status items, published issues (linked to an
   // item by its marker, or candidates), and tickets (an item's, or an orphan). Candidates and orphans are recorded and
@@ -221,6 +236,8 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     if (raced(() => work.intake(x), /intake is recorded once per source/).done) log.intake.push(x.ref);
   };
   for (const i of rec.items) {
+    // A self-repair round is recorded by its own open event (work.repair), not as a status item it is not.
+    if (isRound(i.item)) continue;
     intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item'});
     if (i.ticket) intake({source: 'ticket', ref: `ticket:${i.item}`, item: i.item, classification: 'item', why: i.ticket.invalid ? `the ticket of a status ledger item (invalid: ${String(i.ticket.invalid).slice(0, 200)})` : 'the ticket of a status ledger item'});
     for (const n of i.issues ?? []) intake({source: 'issue', ref: `issue:${n}`, item: i.item, classification: 'item', why: 'a published issue carrying the item\'s marker (issue text is data, never authority)'});
@@ -303,7 +320,8 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         return;
       }
       if (budgetLeft() < L.stage_provider_calls) { stopWith(STOP_CODES.BUDGET, `provider-call budget: ${budgetLeft()} left of ${L.total_provider_calls}, a stage needs up to ${L.stage_provider_calls}`); return; }
-      const exec = executors[gate.gate];
+      // A round's stage executor is the lane's wrapper of it (the plan's reproduction, validate's mechanical checks).
+      const exec = isRound(item) && lane?.on ? lane.wrap(gate.gate, executors[gate.gate]) : executors[gate.gate];
       if (typeof exec !== 'function') { log.skipped.push({item, gate: gate.gate, why: `no executor for ${gate.gate}`}); return; }
       const upstream = verifyHandoff(work, gate);
       // The stage's elapsed budget: what is left of the tick's, and never past the lease (a result recorded after the
@@ -317,11 +335,15 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       // lock, when the total less every other claim's spend and live reservation cannot cover it, so two scheduler
       // processes that both passed the check above cannot both start (independent review, assignment 3 (OpenAI
       // gpt-6-astra extra review, 09d490f), questions 1 and 3).
-      try { claim = work.claim({item, stage: gate.gate, attempt, inputs, holder, budget, lease_ms: L.lease_ms, at: new Date(clock()).toISOString(), total_provider_calls: L.total_provider_calls}); }
+      // A round's claim carries its paths: refused while another item's live claim holds overlapping ones (work-ledger.mjs).
+      const round = isRound(item) && lane?.on ? lane.ctxOf(item) : null;
+      try { claim = work.claim({item, stage: gate.gate, attempt, inputs, holder, budget, lease_ms: L.lease_ms, at: new Date(clock()).toISOString(), total_provider_calls: L.total_provider_calls,
+        ...(round ? {paths: lane.claimPaths(item)} : {})}); }
       // Missing authority is a block on the whole tick, never a quiet skip of one item.
       catch (e) {
         if (e.code === 'NO_AUTHORITY') throw e;
         if (e.code === 'PROVIDER_CALL_BUDGET') { stopWith(STOP_CODES.BUDGET, `provider-call budget: ${e.message.slice(0, 300)}`); return; }
+        if (e.code === 'PATHS_CLAIMED') { log.skipped.push({item, gate: gate.gate, code: 'PATHS_CLAIMED', why: e.message.slice(0, 600)}); return; }
         // "Already completed for these exact inputs": another holder completed this very attempt between this tick's read
         // and its claim (reconciliation reports a standing collision as a block before any claim). Read again once; the
         // same refusal twice is reported as a block with its reason, never a silent skip (self-audit round 3,
@@ -364,7 +386,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const fence = () => { const why = work.leaseRefusal(claim, new Date(clock()).toISOString()); if (why) fail(why, 'LEASE_FENCED'); };
       // THE STAGE'S BILLING CONTEXT (see the header): the declared policy over the work ledger under this claim.
       const stageBilling = geminiBilling({policy: billing, ledger: workBillingLedger(work, claim, clock)});
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, ...(loop ? {graph: loop.executor()} : {}), claim, billing: stageBilling}); }
+      // A round's stage is handed its round (ctx.selfRepair: defect, base, line, paths); other items' contexts are as before.
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, ...(loop ? {graph: loop.executor()} : {}),
+        ...(round ? {selfRepair: round} : {}), claim, billing: stageBilling}); }
       catch (e) {
         // THE ACTUAL SPEND (self-audit round 3, assignment 3 (sealed bb1287a), L-302): every provider call is charged on the
         // work ledger before it is made (the executor contract above), so `charged` IS what this attempt spent, 0 included;
@@ -479,6 +503,12 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     log.graph = {...log.graph, candidates: (fin.graph?.candidates ?? []).map(c => ({ref: c.ref, prerequisite: c.prerequisite, required_by: c.items})), recorded_candidates: candidates,
       snapshot: loop.checkpoint(), stats: loop.stats()};
   }
+  // THE LANE'S END (see the header): land what passed its outcome; close what ended. Reported only when the switch exists.
+  if (lane?.on) {
+    const fin = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
+    await lane.end({rec: fin, blocked: log.blocked});
+  }
+  if (lane && (lane.on || lane.log.present)) log.self_repair = lane.log;
   return {...log, spent: spent(work, {now: clock()}), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}, billing: billingStatus(work, billing)};
 }
 
