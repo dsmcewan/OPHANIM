@@ -15,7 +15,10 @@ import {grammarRefusal, parseId, decodeKey, relationshipSubject, assertionId, co
 export const GRAPH_SCHEMA = 'ophanim.graph/v1';
 // 1.1.0 (Slice C1): capability-domain entity types (lane, chair, placement) and relationship types (made-by, served-by,
 // alias-of, limited-by, combines, holds, places, measures) ADDED; no existing type changed.
-export const CONTRACT_VERSION = '1.1.0';
+// 1.2.0 (Slice B2, the dependency sources of Graph B): systems-domain entity types (package, environment-variable,
+// executable, host) ADDED; no relationship type added (the registered depends-on, consumes, produces, governs,
+// authorizes, mentions and derived-from carry their facts); no existing type changed.
+export const CONTRACT_VERSION = '1.2.0';
 
 // ---- domains and entity types (KD3) ---------------------------------------------------------------------------------
 const types = spec => Object.freeze(Object.fromEntries(spec.map(([t, meaning]) => [t, Object.freeze({meaning})])));
@@ -49,6 +52,11 @@ export const DOMAINS = Object.freeze({
     ['contract', 'a contract'], ['invariant', 'an invariant'], ['test', 'a test or acceptance check'], ['suite', 'a test suite'],
     ['mutation', 'a mutation target'], ['workflow', 'a CI or operating workflow'], ['deployment', 'a deployment environment'],
     ['change', 'a commit or change set'],
+    // added in contract 1.2.0 (Slice B2)
+    ['package', 'a package code imports or a manifest declares: an npm package at the version its lockfile resolved, a workspace package, or a runtime built-in'],
+    ['environment-variable', 'an environment variable, by its NAME only (never its value)'],
+    ['executable', 'a program code runs by name'],
+    ['host', 'a network host a request names'],
   ])}),
   evidence: Object.freeze({graph: 'C', title: 'Evidence, decisions and provenance', types: types([
     ['requirement', 'an original requirement'], ['document', 'a source document'],

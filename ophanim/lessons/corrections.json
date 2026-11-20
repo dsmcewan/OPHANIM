@@ -499,6 +499,26 @@
         "file": "ophanim/graph/extract.test.mjs",
         "name": "mutation runners are read as TEXT"
       }
+    },
+    {
+      "id": "withheld-path-read",
+      "class": "A repository-wide search or listing run by an agent displays content from withheld paths (the independent reviewers' findings-* directories), which no agent may read; the exposure is accidental, through a command that names no exclusion.",
+      "source": "the coordinator's standing rule that findings-* paths are withheld and must never be read by agents (reviewers must not see each other's findings); disclosed by the Slice B2 agent in its report, 2026-11-20",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/slice-b2 (dd2b578)",
+          "detected_by": "the Slice B2 agent itself, disclosed in its report",
+          "note": "a git grep run without the findings-* exclusion displayed about 6 code lines from 4 tracked files under docs/reviews/.../findings-*/, and tree listings and a test's cited paths showed findings-* path names; nothing was used, no fact, file or commit names a withheld path, and the slice added a test (mutation D12) that no fact does. Not counted as mechanism success: the rule was broken before anything detected it. Next step: every brief gives the exact exclusion for repository-wide searches (git grep ... -- ':(exclude,glob)**/findings-*/**'), and the agent lists only paths outside them"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "command conduct inside an agent's session; the slice's own test guards only what reaches the graph",
+        "next": "the exclusion pathspec in every brief; a later check could scan agent transcripts for withheld paths before integration"
+      }
     }
   ]
 }

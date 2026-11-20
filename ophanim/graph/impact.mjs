@@ -28,6 +28,7 @@ import {digest} from '../../packages/ledger/canonical.mjs';
 import {changedBetween, COMMIT} from './extract/git.mjs';
 import {fileId, changeId, contractId, itemId} from './extract/repo.mjs';
 import {recordId} from './extract/records.mjs';
+import {globMatches, regionLimitsFor, authorizationId} from './extract/authority.mjs';
 
 /** The registered rule that records a reassessment set: derived from the source observation that caused it. */
 export const IMPACT_RULE = 'ophanim.impact.rule';
@@ -57,6 +58,8 @@ export function subjectOf(view, s) {
   if (s.startsWith('commit:') && COMMIT.test(s.slice(7))) return tryId(changeId(s.slice(7))) ?? {error: 'NOT_FOUND', why: `commit ${s.slice(7)} is not in the graph`};
   const schema = s.startsWith('schema:') ? s.slice(7) : /^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+\/v\d+$/.test(s) ? s : null;
   if (schema) return tryId(contractId(schema)) ?? {error: 'NOT_FOUND', why: `contract ${schema} is not in the graph`};
+  const dep = dependencySubject(view, s);
+  if (dep) return dep;
   try { return tryId(fileId(s)) ?? {error: 'NOT_FOUND', why: `${s} is not a file of the repository at the graph's commit`}; }
   catch { return {error: 'BAD_REQUEST', why: `${s} is not a subject the graph can name`}; }
 }
@@ -312,7 +315,12 @@ export const QUERIES = Object.freeze(['why', 'requirement', 'governs', 'dependen
  * Each answer is bounded (traversal bounds, LIST_MAX per list), explained, and names its sources and versions.
  */
 export function answer(graph, query, subject, opts = {}) {
-  try { return answerOf(graph, query, subject, opts); }
+  try {
+    if (query === 'package') return packageDependents(graph, subject, opts);
+    if (query === 'needs') return needsOf(graph, subject, opts);
+    if (query === 'authority') return authorityOf(graph, subject, opts);
+    return answerOf(graph, query, subject, opts);
+  }
   catch (e) { if (e instanceof RangeError) return {error: 'BAD_REQUEST', why: e.message}; throw e; }
 }
 function answerOf(graph, query, subject, opts) {
@@ -445,6 +453,144 @@ export function graphReferences(graph, request) {
   }
   const sources = sourcesTable(view, new Set(rows.flatMap(r => r.sources.map(s => s.source))));
   return {query: q, subject, cursor: view.seq, digest: view.digest(), rows, coverage, continuation, sources, ...extra};
+}
+
+// ---- the dependency queries (Slice B2, KD2-8; docs/knowledge-graph/slice-b2.md) -----------------------------------------
+// Over the dependency sources (extract/packages.mjs, needs.mjs, pins.mjs, authority.mjs, board.mjs): what depends on a
+// package; what a component needs from its environment; which manifest authorized changes to a file, under which region
+// limit; and (through `impact`, whose change-carrying types already hold depends-on, consumes, produces, derived-from,
+// governs and authorizes) what a change to a lockfile entry or to the TELOS pin reaches. Each answer names its sources,
+// versions and lines; a match the graph does not hold as an edge (a path against a manifest glob) is labelled a JOIN.
+export const DEPENDENCY_QUERIES = Object.freeze(['package', 'needs', 'authority']);
+const SUBJECT_PREFIXES = {
+  'npm:': k => [`npm/${k}`], 'node:': k => [`node/${k}`], 'workspace:': k => [`workspace/${k}`],
+};
+/** A dependency-graph subject: npm:<name>@<version>, package:<name>, lock:<lockfile>#<entry>, node:<builtin>, workspace:<name>,
+ * repository:<name>, env:<NAME>, exec:<command>, host:<host>, runtime:<name>. {id}, {error}, or null when `s` is none of them. */
+export function dependencySubject(view, s) {
+  const tryKind = (domain, type, key) => { const id = entityId({domain, type, key}); return view.nodeIn(id, 'recorded') ? {id} : {error: 'NOT_FOUND', why: `${s} is not in the graph at cursor ${view.seq}`}; };
+  for (const [p, keys] of Object.entries(SUBJECT_PREFIXES)) if (s.startsWith(p) && s.length > p.length) return tryKind('systems', 'package', keys(s.slice(p.length))[0]);
+  if (s.startsWith('package:')) {
+    const ids = packagesNamed(view, s.slice(8));
+    return ids.length === 1 ? {id: ids[0]} : ids.length ? {error: 'AMBIGUOUS', why: `${s.slice(8)} names ${ids.length} packages; name one`, candidates: ids} : {error: 'NOT_FOUND', why: `no package ${s.slice(8)} in the graph`};
+  }
+  if (s.startsWith('lock:')) {
+    const [lockfile, entry] = s.slice(5).split('#');
+    for (const id of view.subjects()) if (id.includes('/systems/package/npm/') && !id.includes('(')) {
+      if ((view.node(id).attributes.locks ?? []).some(l => l && l.lockfile === lockfile && l.entry === entry)) return {id};
+    }
+    return {error: 'NOT_FOUND', why: `${lockfile} has no installed entry ${entry} in the graph`};
+  }
+  const kinds = {'repository:': ['systems', 'repository'], 'env:': ['systems', 'environment-variable'], 'exec:': ['systems', 'executable'], 'host:': ['systems', 'host'], 'runtime:': ['capability', 'runtime']};
+  for (const [p, [d, t]] of Object.entries(kinds)) if (s.startsWith(p) && s.length > p.length) return tryKind(d, t, s.slice(p.length));
+  return null;
+}
+/** Every package node named `name`: each installed version, the unresolved name, the workspace package. */
+export function packagesNamed(view, name) {
+  const keys = new Set([`npm/${name}`, `workspace/${name}`]);
+  return view.subjects().filter(id => !id.includes('(') && id.includes('/systems/package/') && view.nodeIn(id, 'recorded'))
+    .filter(id => { const k = keyOf(id); return keys.has(k) || (k.startsWith(`npm/${name}@`) && !k.slice(`npm/${name}@`.length).includes('/')); }).sort(byString);
+}
+const attrsOf = (view, e) => view.assertion(e.assertions[0])?.record.attributes ?? {};
+
+/** What depends on the package `name` (every version of it): direct importers, declarations, packages, then the reach. */
+export function packageDependents(graph, name, opts = {}) {
+  const view = graph.view(opts.cursor), ids = packagesNamed(view, name);
+  if (!ids.length) return {error: 'NOT_FOUND', why: `no package ${name} in the graph at cursor ${view.seq}`};
+  const direct = {imports: {'run-time': [], test: []}, declarations: [], packages: [], other: []}, used = new Set();
+  for (const id of ids) for (const e of view.edgesOf(id, {mode: 'possible', types: ['depends-on']})) {
+    if (e.to !== id) continue;
+    const a = attrsOf(view, e), row = link(view, e, {id: e.from, package: id, lines: a.lines ?? (a.declarations ?? []).map(d => d.line), specifiers: a.specifiers, declarations: a.declarations, declared: a.declared, established: view.nodeIn(e.from, 'established') && view.nodeIn(id, 'established')});
+    for (const s of row.sources) used.add(s.source);
+    const k = kindOf(e.from);
+    if (a.need) direct.imports[a.need].push(row);
+    else if (a.declarations) direct.declarations.push(row);
+    else if (k === 'systems/package') direct.packages.push(row);
+    else direct.other.push(row);
+  }
+  const reach = impact(view, ids, opts);
+  for (const s of reach.sources ?? []) used.add(s.source);
+  return {query: 'package', name, cursor: view.seq, digest: view.digest(),
+    packages: ids.map(id => ({id, ...Object.fromEntries(Object.entries(view.node(id).attributes).filter(([k]) => ['name', 'version', 'integrity', 'locks', 'imported_by', 'declared_by', 'dir'].includes(k))),
+      established: view.nodeIn(id, 'established'), sources: view.node(id).assertions.map(sourceOf)})),
+    direct: {imports: {'run-time': cap(direct.imports['run-time']), test: cap(direct.imports.test)}, declarations: direct.declarations, packages: direct.packages, other: direct.other},
+    reach: reach.error ? reach : {counts: reach.counts, affected: Object.fromEntries(Object.entries(reach.affected).map(([g, xs]) => [g, cap(xs)])), coverage: reach.coverage, continuation: reach.continuation},
+    sources: sourcesTable(view, used), note: 'the version is the lockfile\'s RESOLVED one; a declaration\'s range is listed apart; test needs and run-time needs are never merged'};
+}
+
+const NEED_KINDS = {'systems/environment-variable': 'environment', 'systems/executable': 'executables', 'systems/host': 'hosts', 'capability/runtime': 'runtime',
+  'systems/package': 'packages', 'systems/file': 'files', 'systems/module': 'files', 'systems/test': 'files'};
+/**
+ * What `subject` (a code file) needs from its environment, from the dependency sources: variable names it reads or sets,
+ * programs, hosts, the runtime, files read by path, packages -- run-time needs and test needs apart -- and the gaps its
+ * node carries. `transitive`: also the needs of the code files it imports, forward along depends-on (bounded), each with
+ * the path from the subject.
+ */
+export function needsOf(graph, subject, opts = {}) {
+  const view = graph.view(opts.cursor), s = subjectOf(view, subject);
+  if (s.error) return s;
+  const code = k => k === 'systems/module' || k === 'systems/test';
+  if (!code(kindOf(s.id))) return {error: 'BAD_REQUEST', why: `${subject} is not a code file`};
+  let files = [{id: s.id, via: []}], coverage = {truncated: false};
+  if (opts.transitive) {
+    const r = closure(view, s.id, {direction: 'forward', types: ['depends-on'], depth: opts.depth, maxNodes: opts.maxNodes, maxEdges: opts.maxEdges, mode: 'established'});
+    files = [...files, ...r.nodes.filter(n => n.id !== s.id && code(kindOf(n.id))).map(n => ({id: n.id, via: explain(view, n).via}))];
+    coverage = r.coverage;
+  }
+  const out = {'run-time': {}, test: {}}, gaps = [], used = new Set();
+  for (const f of files) {
+    for (const e of view.edgesOf(f.id, {mode: 'possible', types: ['consumes', 'produces', 'depends-on']})) {
+      if (e.from !== f.id) continue;
+      const a = attrsOf(view, e), k = kindOf(e.to), group = NEED_KINDS[k];
+      const src = edgeSources(view, e).map(x => x.source);
+      if (!group || !src.some(x => ['ophanim.imports', 'ophanim.environment', 'ophanim.paths'].includes(x))) continue;
+      if (group === 'files' && e.type === 'depends-on') { if (opts.transitive) continue; }
+      const need = a.need ?? 'run-time', bucket = out[need][group === 'files' && e.type === 'depends-on' ? 'modules' : group] ??= [];
+      for (const x of src) used.add(x);
+      bucket.push({id: e.to, name: keyOf(e.to), relationship: e.type, ...(e.type === 'produces' ? {op: a.ops ?? null} : {}), by: f.id, lines: a.lines ?? [], ...(a.how ? {how: a.how} : {}),
+        ...(a.specifiers ? {specifiers: a.specifiers, via: a.via} : {}), established: view.nodeIn(e.to, 'established'), ...(f.via.length ? {path: f.via} : {}), sources: edgeSources(view, e)});
+    }
+    const attrs = view.node(f.id).attributes;
+    for (const key of ['environment_gaps', 'path_gaps', 'import_gaps']) for (const g of attrs[key] ?? []) gaps.push({file: f.id, kind: key, ...g});
+  }
+  const shape = o => Object.fromEntries(Object.entries(o).map(([g, xs]) => [g, cap(xs.sort((a, b) => byString(a.id, b.id) || byString(a.by, b.by)))]));
+  return {query: 'needs', subject: s.id, cursor: view.seq, digest: view.digest(), transitive: Boolean(opts.transitive), files: files.length,
+    needs: {'run-time': shape(out['run-time']), test: shape(out.test)}, gaps: cap(gaps), coverage, sources: sourcesTable(view, used),
+    note: 'variables are named, never valued; a host is named, never contacted; a test need (a test file, a runner, a fixture) is never a run-time need'};
+}
+
+/**
+ * Which manifest authorized changes to `filePath`, under which region limit, and which governs it as coordinator-only:
+ * each authorization or governing manifest, its words quoted, with the relationship and its source. The path is matched
+ * against each change set's glob as docs/execution/check-ownership.mjs matches it (a JOIN, labelled as one).
+ */
+export function authorityOf(graph, filePath, opts = {}) {
+  const view = graph.view(opts.cursor);
+  if (typeof filePath !== 'string' || !filePath) return {error: 'BAD_REQUEST', why: 'a repository path'};
+  const sets = view.subjects().filter(id => !id.includes('(') && id.includes('/systems/change/paths') && view.nodeIn(id, 'established'));
+  const authorized = [], governed = [], used = new Set();
+  const JOIN = 'the path matches the change set\'s glob as docs/execution/check-ownership.mjs matches it (path.matchesGlob of an entry\'s first word): a join, not an edge';
+  for (const cs of sets) {
+    const glob = view.node(cs).attributes.glob;
+    if (typeof glob !== 'string' || !globMatches(filePath, glob)) continue;
+    for (const e of view.edgesOf(cs, {mode: 'established', types: ['authorizes', 'governs']})) {
+      if (e.to !== cs) continue;
+      const a = attrsOf(view, e), g = view.node(e.from).attributes, sources = edgeSources(view, e);
+      for (const x of sources) used.add(x.source);
+      if (e.type === 'authorizes') {
+        const m = view.node(authorizationId(g.manifest)).attributes;
+        authorized.push({grant: e.from, manifest: g.manifest, wave: m.wave ?? null, authorization: m.authorization ?? null, subwave: g.subwave, agent: g.agent, branch: g.branch ?? null,
+          glob, entries: a.entries, region_limits: regionLimitsFor(g, filePath), line: g.line ?? null, relationship: {type: e.type, from: e.from, to: e.to}, sources, join: JOIN});
+      } else {
+        governed.push({manifest: g.manifest, wave: g.wave ?? null, authorization: g.authorization ?? null, entry: a.entry, glob, line: a.line ?? null, rule: 'coordinator_only: only the coordinator changes it',
+          relationship: {type: e.type, from: e.from, to: e.to}, sources, join: JOIN});
+      }
+    }
+  }
+  authorized.sort((a, b) => byString(a.grant, b.grant)); governed.sort((a, b) => byString(a.manifest, b.manifest));
+  return {query: 'authority', subject: filePath, cursor: view.seq, digest: view.digest(), authorized_by: authorized, governed_by: governed,
+    gaps: authorized.length || governed.length ? [] : [{category: 'authority', why: 'no ownership manifest at this commit names a glob that matches this path'}],
+    sources: sourcesTable(view, used), note: 'the manifests\' words, quoted; no authority is inferred from who committed what'};
 }
 
 /** The bounds no graph retrieval may exceed (the context operation clamps a request to them). */

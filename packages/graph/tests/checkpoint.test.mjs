@@ -12,7 +12,7 @@ import {createHash, sign as edSign, createPrivateKey} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {generateSigner} from '../../ledger/chain.mjs';
 import {canonical} from '../../ledger/canonical.mjs';
-import {assertion, createProjection, defineOrigins, writeSnapshot, listSnapshots, GRAPH_SCHEMA} from '../index.mjs';
+import {assertion, createProjection, defineOrigins, writeSnapshot, listSnapshots, GRAPH_SCHEMA, CONTRACT_VERSION} from '../index.mjs';
 import {world, ORIGINS, SYSTEM, SYSTEM_SNAPSHOT, C, id, src, RUN, T0, at, V1, dirSource, publish} from './fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -117,7 +117,8 @@ test('trust: a snapshot derived under another contract registry, origin registry
   forge(written.file, {body: b => { b.contract = {...b.contract, registry: 'sha256:' + '0'.repeat(64)}; }, signer: s.signer});
   const c = w.open(s.opts);
   assert.equal(used(c), false);
-  assert.match(c.verification.snapshot.reason, /derived under contract 1\.1\.0 \(registry sha256:0+\), not this reader's/);
+  // The contract version the snapshot was derived under, whatever the current one is (Slice B2 raised it to 1.2.0).
+  assert.match(c.verification.snapshot.reason, new RegExp(`derived under contract ${CONTRACT_VERSION.replace(/\./g, '\\.')} \\(registry sha256:0+\\), not this reader's`));
   assert.equal(c.digest(), g.digest());
 });
 

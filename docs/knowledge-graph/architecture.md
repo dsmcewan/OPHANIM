@@ -1,6 +1,6 @@
 # Knowledge graphs: the architecture and relationship contract
 
-**Contract** `ophanim.graph/v1`, contract version 1.1.0 (`packages/graph/schema.mjs` `GRAPH_SCHEMA`, `CONTRACT_VERSION`).
+**Contract** `ophanim.graph/v1`, contract version 1.2.0 (`packages/graph/schema.mjs` `GRAPH_SCHEMA`, `CONTRACT_VERSION`).
 **Slice** A of the program the owner's directive of 2026-11-20 sets (`docs/knowledge-graph/directive-2026-11-20.md`): the shared graph foundation (its deliverable 2, and the foundation part of deliverable 3).
 **Base** branch `kg/slice-a`, from `c14fed0` (the inventory `docs/knowledge-graph/inventory.md` and the Slice A ownership manifest).
 **Decisions** KD1 to KD13 are the coordinator's (the Slice A brief). This document says how each is implemented; it does not reopen them.
@@ -104,6 +104,10 @@ Five logical domains share one identity grammar, one assertion record and one re
 | `systems` | B | `workflow` | a CI or operating workflow |
 | `systems` | B | `deployment` | a deployment environment |
 | `systems` | B | `change` | a commit or change set |
+| `systems` | B | `package` | a package code imports or a manifest declares: an npm package at the version its lockfile resolved, a workspace package, or a runtime built-in |
+| `systems` | B | `environment-variable` | an environment variable, by its NAME only (never its value) |
+| `systems` | B | `executable` | a program code runs by name |
+| `systems` | B | `host` | a network host a request names |
 | `evidence` | C | `requirement` | an original requirement |
 | `evidence` | C | `document` | a source document |
 | `evidence` | C | `source` | a registered source and the version last observed of it |
@@ -406,6 +410,7 @@ Each slice's own document is its detailed record (extractors, decisions as imple
 | E, federation | `slice-e.md` | 23a0cf4, bb25b5b | instance identity from ledger anchors; exports under an access policy (`scope` enforced); a read-only central projection; freshness and stale marking; catch-up by version; propagation with provenance; synthetic departments | KG-3 (qualified, synthetic), KG-8, KG-4 |
 | C2, the SDK seat's bubble | `slice-c2.md` | e20e0cf (e0902da), 8df1c4c | the python SDK seat's whole process jailed in bwrap at both spawn points, fail closed with no override, torn down after its assignment; its bubble recorded as holding with the jail's quotes, so the SDK capability is now isolated under C1's rule; each agy attempt's transport recorded as agy-cli or agy-sdk | L-155 (qualified), KG-6 (partly done), KG-10, KG-4 |
 | Replay checkpoint | `checkpoint.md` | dded52f (8b2f2fd) | a signed projection snapshot over the ledger's own checkpoints; open from it in 0.35-0.44 s instead of 2.1 s on the real graph, falling back to the full open on any mismatch, extractor code included | KG-1 (qualified), KG-9, KG-4 |
+| B2, dependency sources | `slice-b2.md` | d4446f8 (dd2b578, 8a1c79e), d2d7c04 | external packages at their locked versions, import edges, environment variable names, executables and hosts by recognized calls only, files read by path, pinned external sources, the ownership manifests as `governs` and `authorizes`, the board's `dependsOn`; contract 1.2.0 (four systems-domain entity types added) | KG-7 (partly done), KG-9 |
 | D, work and learning | not started | | section 15's row D | the checkpoint is in place |
 
 Fixed by the coordinator at integration, each with a failing-first test: Slice E's freshness check gave a false reason for an import replayed as `recorded` (bb25b5b); Slice B's runner reader missed Slice E's helper shapes (dcecdc9) and Slice C1's template-literal constants (e6c4fe0), recorded as the lessons class `text-reader-misses-new-shape`.

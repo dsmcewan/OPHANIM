@@ -20,6 +20,7 @@ import {sourcesOf, openSystemsGraph, observeAll, ORIGIN_SPEC, ORDER, EXTRACTOR_M
 import {pathToFileURL} from 'node:url';
 import {treeAt, WITHHELD} from './extract/git.mjs';
 import {fixtureWorkLedger, fixtureCycleLedger} from './fixtures/ledgers.mjs';
+import {fixtureBoard} from './fixtures/board.mjs';
 import {tempRepo, realGraph, closeRealGraph, git, ROOT, T0, at, PACKAGE, LIB_PACKAGE, WORKFLOW} from './fixtures/repo.mjs';
 
 after(closeRealGraph);
@@ -107,9 +108,9 @@ test('extract: the real graph opened from a signed snapshot equals its full open
 });
 
 test('extract: every source of the systems graph declares its extractor\'s version: its module and local imports, transitively, from disk', async t => {
-  const w = fixtureWorkLedger(), c = await fixtureCycleLedger();
-  t.after(() => { fs.rmSync(w.dir, {recursive: true, force: true}); fs.rmSync(c.dir, {recursive: true, force: true}); });
-  const {sources} = sourcesOf({repo: ROOT, commit: 'HEAD', work: {root: w.root, anchor: w.anchor}, cycle: {root: c.root, anchor: c.anchor}});
+  const w = fixtureWorkLedger(), c = await fixtureCycleLedger(), b = await fixtureBoard();
+  t.after(() => { fs.rmSync(w.dir, {recursive: true, force: true}); fs.rmSync(c.dir, {recursive: true, force: true}); fs.rmSync(b.dir, {recursive: true, force: true}); });
+  const {sources} = sourcesOf({repo: ROOT, commit: 'HEAD', work: {root: w.root, anchor: w.anchor}, cycle: {root: c.root, anchor: c.anchor}, board: {stateDir: b.stateDir}});
   assert.deepEqual(sources.map(s => s.id).sort(), [...ORDER].sort(), 'every source of the systems graph');
   for (const s of sources) {
     const {factory, module} = EXTRACTOR_MODULES[s.id];
