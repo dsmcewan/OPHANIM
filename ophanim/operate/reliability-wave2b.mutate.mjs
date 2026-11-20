@@ -4,7 +4,8 @@
 // L-121 the CLI's and the service's stop). Built like wave2-identity.mutate.mjs: every mutation is made on a DISPOSABLE
 // COPY of this tree (never on the tree itself), the suites run there, and the mutation is undone.
 //
-//   node ophanim/operate/reliability-wave2b.mutate.mjs [--only K1,C2] [--log DIR] [--copy-root DIR] [--check]
+//   node ophanim/operate/reliability-wave2b.mutate.mjs [--only K1,C2] [--log DIR] [--copy-root DIR] [--run-bound-ms N] [--check]
+//   (a run of the suites that does not end within --run-bound-ms, 20 minutes unless given, is killed and reported as HUNG: exit 4)
 //
 // Each mutation names its file, the EXACT text it replaces and the replacement. The runner EXITS NON-ZERO when a target
 // does not occur exactly once, when the unmutated suites are not green, or when any mutation SURVIVES (every suite
@@ -117,12 +118,41 @@ function copyTree(dest) {
   g('init', '-q', '-b', 'main'); g('-c', 'user.name=mutation', '-c', 'user.email=mutation@example.invalid', 'add', '-A');
   g('-c', 'user.name=mutation', '-c', 'user.email=mutation@example.invalid', 'commit', '-q', '-m', 'mutation copy');
 }
+/** The longest ONE run of the suites may take (--run-bound-ms). A run that does not end is not a result: it is HUNG. */
+const RUN_BOUND_MS = 20 * 60_000;
+const bound = Number(arg('--run-bound-ms', RUN_BOUND_MS));
+if (!Number.isInteger(bound) || bound < 1) { console.error('--run-bound-ms is a positive whole number of milliseconds'); process.exit(2); }
+/** After a run that was cut: kill what it left working in the copy (best effort; found through /proc, so on Linux). */
+const reap = dir => {
+  let n = 0;
+  try {
+    for (const p of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(p) || Number(p) === process.pid) continue;
+      let cwd; try { cwd = fs.readlinkSync(`/proc/${p}/cwd`); } catch { continue; }
+      if (cwd === dir || cwd.startsWith(dir + path.sep)) { try { process.kill(Number(p), 'SIGKILL'); n += 1; } catch { /* gone */ } }
+    }
+  } catch { /* no /proc here */ }
+  return n;
+};
+// A test that fails and leaves a listener or a child behind keeps `node --test` from ending. That is a defect of the
+// TEST (the same hang would hold up CI on a real regression), and it is reported as one, not waited for forever.
+const bounded = (dir, r) => {
+  const hung = r.error?.code === 'ETIMEDOUT';
+  const reaped = hung ? reap(dir) : 0;
+  return {hung, out: `${r.stdout ?? ''}${r.stderr ?? ''}${hung ? `\n[runner] the run did not end within ${bound} ms and was killed; ${reaped} process(es) left in the copy were killed too\n` : ''}`};
+};
+// KILLED means a test FAILED. A run that only timed a test out, or ended without a count, went red too, and says so; a
+// run that did not end is not a result at all.
+const outcomeOf = (r, red) => r.hung ? 'hung' : !red ? 'survived' : r.fail > 0 ? 'killed' : r.cancelled > 0 ? 'killed-by-timeout' : 'killed-no-count';
+const LABEL = {killed: 'KILLED  ', survived: 'SURVIVED', hung: 'HUNG    ', 'killed-by-timeout': 'KILLED (a test timed out; none failed)', 'killed-no-count': 'KILLED (the run ended without a count)'};
+const tally = summary => { const n = k => summary.filter(x => x.outcome === k).length;
+  return `${n('killed-by-timeout') + n('killed-no-count') ? ` (${n('killed-by-timeout')} by a timeout only, ${n('killed-no-count')} without a count)` : ''}${n('hung') ? `, ${n('hung')} HUNG` : ''}`; };
 const runSuites = (dir, tests, logFile) => {
-  const r = spawnSync(process.execPath, ['--test', '--test-concurrency=4', ...tests], {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env: {...process.env}});
-  const out = `${r.stdout}${r.stderr}`;
+  const r = spawnSync(process.execPath, ['--test', '--test-concurrency=4', ...tests], {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env: {...process.env}, timeout: bound, killSignal: 'SIGKILL'});
+  const {hung, out} = bounded(dir, r);
   fs.writeFileSync(logFile, out);
   const count = k => Number(new RegExp(`^ℹ ${k} (\\d+)`, 'm').exec(out)?.[1] ?? NaN);
-  return {status: r.status, tests: count('tests'), pass: count('pass'), fail: count('fail'), cancelled: count('cancelled'),
+  return {status: r.status, hung, tests: count('tests'), pass: count('pass'), fail: count('fail'), cancelled: count('cancelled'),
     failed: [...new Set(out.split('\n').filter(l => /^✖ /.test(l) && !/failing tests/.test(l)).map(l => l.replace(/ \(\d+(\.\d+)?ms\)$/, '')))]};
 };
 
@@ -146,23 +176,25 @@ const summary = [];
 try {
   copyTree(copy);
   const baseline = runSuites(copy, SUITES, path.join(logDir, 'baseline.log'));
-  console.log(`baseline: ${baseline.pass}/${baseline.tests} pass, ${baseline.fail} fail, ${baseline.cancelled} cancelled`);
-  if (baseline.status !== 0 || baseline.fail || baseline.cancelled) { console.error('the unmutated suites are not green: no mutation result would mean anything'); process.exit(3); }
+  console.log(`baseline: ${baseline.pass}/${baseline.tests} pass, ${baseline.fail} fail, ${baseline.cancelled} cancelled${baseline.hung ? `; DID NOT END within ${bound} ms` : ''}`);
+  if (baseline.hung || baseline.status !== 0 || baseline.fail || baseline.cancelled) { console.error('the unmutated suites are not green: no mutation result would mean anything'); process.exit(3); }
   for (const m of chosen) {
     const file = path.join(copy, m.file), orig = fs.readFileSync(file, 'utf8');
     fs.writeFileSync(file, orig.replace(m.from, () => m.to));
     if (fs.readFileSync(file, 'utf8') === orig) { console.error(`${m.id}: MUTATION DID NOT APPLY`); exit = 2; continue; }
     const r = runSuites(copy, m.tests ?? SUITES, path.join(logDir, `${m.id}.log`));
     fs.writeFileSync(file, orig);
-    const killed = r.status !== 0 && (r.fail > 0 || r.cancelled > 0 || !Number.isFinite(r.tests));
-    summary.push({id: m.id, what: m.what, file: m.file, killed, tests: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
-    console.log(`${m.id} ${killed ? 'KILLED  ' : 'SURVIVED'} ${r.pass}/${r.tests} pass, ${r.fail} fail  (${m.what})`);
+    const killed = !r.hung && r.status !== 0 && (r.fail > 0 || r.cancelled > 0 || !Number.isFinite(r.tests));
+    const outcome = outcomeOf(r, killed);
+    summary.push({id: m.id, what: m.what, file: m.file, killed, outcome, tests: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
+    console.log(`${m.id} ${LABEL[outcome]} ${r.pass}/${r.tests} pass, ${r.fail} fail  (${m.what})`);
     for (const f of r.failed.slice(0, 4)) console.log(`    ${f.slice(0, 200)}`);
-    if (!killed) exit = 1;
+    if (r.hung) { console.log(`    the suites did not end within ${bound} ms: a test that fails here leaves something running (a listener, a child); fix the test`); exit = Math.max(exit, 4); }
+    else if (!killed) exit = Math.max(exit, 1);
   }
 } finally {
   fs.writeFileSync(path.join(logDir, 'summary.json'), JSON.stringify({root: ROOT, mutations: summary}, null, 2) + '\n');
   fs.rmSync(copy, {recursive: true, force: true});
 }
-console.log(`${summary.filter(x => x.killed).length}/${summary.length} killed; logs in ${logDir}`);
+console.log(`${summary.filter(x => x.killed).length}/${summary.length} killed${tally(summary)}; logs in ${logDir}`);
 process.exit(exit);
