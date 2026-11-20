@@ -1,5 +1,7 @@
 # L-150 and L-151 integration report: per-request charging in the python SDK seat; governed direct execution
 
+> **Superseded in part, 2026-11-20 (register L-724).** The owner made the SDK transport's model gateway (`pantheon/src/antigravity/gateway.mjs`) the one mechanism and had the metering relay this report describes retired. The seat is served by the gateway through `pantheon/src/antigravity/seat-session.mjs`; the environment names, refusal codes and file names below changed with it (`docs/billing-policy.md` has the current ones). What this report shows about L-150 and L-151 was re-run against the gateway: the test file and the real-SDK proof give the same results. The report is kept as it was written.
+
 **Work.**
 - Branch `l150/sdk-relay`, from `12b02ec`:
   - `c7d3653`: the agent's change.

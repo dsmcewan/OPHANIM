@@ -4,6 +4,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startModelGateway, providerAvailability, GATEWAY_REFUSALS } from "../src/antigravity/gateway.mjs";
 import { startFakeGemini, text, QUOTA, notFound } from "./fixtures/fake-gemini.mjs";
 
@@ -117,7 +120,7 @@ test("every request is admitted BEFORE it is forwarded, and a refused admission 
   assert.equal((await post("gemini-4-carbon", body(ROOT.marker))).status, 200);
   assert.equal((await post("gemini-4-hydrogen", body(SUBS.markers["code-explorer"], "s-1"))).status, 200);
   const refused = await post("gemini-4-carbon", body(ROOT.marker));
-  assert.equal(refused.status, 429);
+  assert.equal(refused.status, 403, "a refused charge is final: it is not answered with a status the SDK's harness retries (429, 500, 503)");
   const err = (await refused.json()).error;
   assert.match(err.message, /^PANTHEON_PROVIDER_LIMIT/);
   assert.deepEqual(order, ["admit:root:1", "provider", "admit:subagent:1", "provider"], "the charge precedes each call, and the refused one made none");
@@ -308,4 +311,140 @@ test("availability is asked of the provider with the controller's key: a model i
   const no = await gw.availability("gemini-4-neon");
   assert.deepEqual({ available: no.available, status: no.status, kind: no.kind }, { available: false, status: 404, kind: "model_unavailable" });
   assert.deepEqual(gw.record().availability.map(a => [a.model, a.available]), [["gemini-4-carbon", true], ["gemini-4-neon", false]]);
+});
+
+// ---- PROTECTIONS TAKEN OVER FROM THE L-150 METERING RELAY (owner decision 2026-11-20, register L-724) ----------------
+// The owner made this gateway the one mechanism and had the relay retired. What the relay protected and the gateway did
+// not is tested here: where the real key may be sent, a session's own request count, its concurrency, its idle and
+// lifetime bounds, the exact query a call may carry, a body that is not a request, a durable record of each request's
+// outcome, and the session's own account for the seat.
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const outcomeRows = file => (existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)) : []);
+
+test("the real key is forwarded only to a Google API host over https, or to a loopback provider: any other upstream is refused before the gateway starts, and the availability question is not asked of it", async () => {
+  const start = upstream => startModelGateway({ upstream, apiKey: KEY, root: ROOT });
+  for (const bad of ["https://evil.example.com", "http://generativelanguage.googleapis.com", "https://googleapis.com.evil.example", "https://user:pw@generativelanguage.googleapis.com", "https://generativelanguage.googleapis.com/?x=1", "not a url"]) {
+    // A gateway that starts all the same is closed here, so that this test fails instead of holding the process open.
+    const got = await start(bad).then(gw => gw.close().then(() => ({ code: "STARTED", message: "" })), e => e);
+    assert.deepEqual([got.code, String(got.message).includes(KEY)], [GATEWAY_REFUSALS.UPSTREAM, false], bad);
+  }
+  for (const good of ["https://generativelanguage.googleapis.com", "https://generativelanguage.googleapis.com/", "http://127.0.0.1:9", "http://localhost:9"]) { const gw = await start(good); await gw.close(); }
+  let asked = 0;
+  const a = await providerAvailability({ upstream: "https://evil.example.com", apiKey: KEY, model: "gemini-4-carbon", fetchImpl: async () => { asked += 1; return new Response("{}"); } });
+  assert.deepEqual([a.available, asked, /only to a Google API host/.test(a.why)], [false, 0, true]);
+});
+
+test("a session's own maximum request count is enforced on the wire, beside the caller's charge: the request past it is refused before it is charged or sent, and the count is of admissions, not of answers", async t => {
+  const charged = [];
+  const { upstream, gw, post } = await setup(t, { decide: ({ seq }) => (seq === 1 ? { status: 500, error: { code: 500, message: "boom", status: "INTERNAL" } } : { parts: [text("ok")] }),
+    admit: info => { charged.push(info.n); }, over: { maxRequests: 2 } });
+  assert.deepEqual([(await post("gemini-4-carbon", body(ROOT.marker))).status, (await post("gemini-4-carbon", body(ROOT.marker))).status], [500, 200], "a request the provider failed was still admitted: it counts");
+  const third = await post("gemini-4-carbon", body(ROOT.marker));
+  assert.equal(third.status, 429);
+  assert.match((await third.json()).error.message, /^PANTHEON_SESSION_CAP: the session has made 2 of its 2 permitted request\(s\)/);
+  assert.deepEqual([charged.length, upstream.requests.length, gw.record().session_cap], [2, 2, { max_requests: 2, admitted: 2, refused: 1 }]);
+  // A request whose CHARGE was refused was not made: it takes no unit of the session's count.
+  let calls = 0;
+  const one = await setup(t, { admit: () => { if (++calls === 1) throw Object.assign(new Error("refused once"), { code: "PROVIDER_LIMIT" }); }, over: { maxRequests: 1 } });
+  const statuses = [];
+  for (let i = 0; i < 3; i++) statuses.push((await one.post("gemini-4-carbon", body(ROOT.marker))).status);
+  assert.deepEqual([statuses, one.upstream.requests.length], [[403, 200, 429], 1], "refused charge, then the one permitted request, then the cap");
+});
+
+test("a session's requests in flight are bounded: the one over the bound is refused, not charged and not sent, and the bound frees when a request ends", async t => {
+  let release; const held = new Promise(r => { release = r; });
+  const charged = [];
+  // The scripted provider holds its answer until released, and never longer than two seconds: a gateway that does not
+  // enforce the bound fails this test, it does not hang it.
+  const { upstream, gw, post } = await setup(t, { decide: async () => { await Promise.race([held, sleep(2000)]); return { parts: [text("ok")] }; }, admit: () => { charged.push(1); }, over: { maxConcurrent: 1 } });
+  t.after(() => release());
+  const first = post("gemini-4-carbon", body(ROOT.marker));
+  while (upstream.requests.length < 1) await sleep(5);
+  const second = await post("gemini-4-carbon", body(ROOT.marker));
+  assert.equal(second.status, 429);
+  assert.match((await second.json()).error.message, /^PANTHEON_SESSION_BUSY: the session has 1 request\(s\) in flight, its bound is 1/);
+  assert.deepEqual([charged.length, upstream.requests.length], [1, 1]);
+  release(); await (await first).text();
+  assert.equal((await post("gemini-4-carbon", body(ROOT.marker))).status, 200, "the bound is of requests in flight");
+});
+
+test("a session idle past its bound, or past its lifetime while active, is over: the next request is refused, nothing is charged or sent, and the token is worth nothing afterwards", async t => {
+  const charged = [];
+  const idle = await setup(t, { admit: () => { charged.push("idle"); }, over: { idleMs: 60 } });
+  assert.equal((await idle.post("gemini-4-carbon", body(ROOT.marker))).status, 200);
+  await sleep(120);
+  const late = await idle.post("gemini-4-carbon", body(ROOT.marker));
+  assert.equal(late.status, 503);
+  assert.match((await late.json()).error.message, /^PANTHEON_SESSION_EXPIRED: the session was idle for more than 60 ms/);
+  assert.equal((await idle.post("gemini-4-carbon", body(ROOT.marker))).status, 503, "an expired session stays expired");
+  const life = await setup(t, { admit: () => { charged.push("life"); }, over: { lifetimeMs: 150, idleMs: 10_000 } });
+  assert.equal((await life.post("gemini-4-carbon", body(ROOT.marker))).status, 200);
+  await sleep(90);
+  assert.equal((await life.post("gemini-4-carbon", body(ROOT.marker))).status, 200, "active, inside its lifetime");
+  await sleep(90);
+  const over = await life.post("gemini-4-carbon", body(ROOT.marker));
+  assert.match((await over.json()).error.message, /^PANTHEON_SESSION_EXPIRED: the session is past its lifetime of 150 ms/);
+  assert.deepEqual([charged, idle.upstream.requests.length, life.upstream.requests.length], [["idle", "life", "life"], 1, 2]);
+});
+
+test("a call carries exactly the query its verb takes: a stream may say alt=sse and nothing else, a whole answer says nothing; any other query is refused before it is charged", async t => {
+  const charged = [];
+  const { upstream, post } = await setup(t, { admit: () => { charged.push(1); } });
+  for (const verb of ["streamGenerateContent?alt=json", "streamGenerateContent?alt=sse&key=abc", "streamGenerateContent?alt=sse&alt=sse", "generateContent?alt=sse", "generateContent?key=abc"]) {
+    const r = await post("gemini-4-carbon", body(ROOT.marker), { verb });
+    assert.equal(r.status, 404, verb);
+    assert.match((await r.json()).error.message, /^PANTHEON_PATH_NOT_SERVED/, verb);
+  }
+  assert.deepEqual([charged.length, upstream.requests.length], [0, 0]);
+  for (const verb of ["streamGenerateContent?alt=sse", "streamGenerateContent", "generateContent"]) assert.equal((await post("gemini-4-carbon", body(ROOT.marker), { verb })).status, 200, verb);
+  assert.deepEqual(upstream.requests.map(r => r.path), ["/v1beta/models/gemini-4-carbon:streamGenerateContent?alt=sse", "/v1beta/models/gemini-4-carbon:streamGenerateContent", "/v1beta/models/gemini-4-carbon:generateContent"]);
+});
+
+test("a body that is not a JSON object is not a request: it is refused before it is charged, and nothing is sent", async t => {
+  const charged = [];
+  const { upstream, gw } = await setup(t, { admit: () => { charged.push(1); } });
+  for (const raw of ["not json", "[1,2]", "\"text\"", "null", ""]) {
+    const r = await fetch(`${gw.url}/v1beta/models/gemini-4-carbon:streamGenerateContent?alt=sse`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": gw.token }, body: raw });
+    assert.equal(r.status, 400, JSON.stringify(raw));
+    assert.match((await r.json()).error.message, /^PANTHEON_REQUEST_MALFORMED: the request body is not a JSON object/);
+  }
+  assert.deepEqual([charged.length, upstream.requests.length, gw.record().requests.map(r => r.refusal)], [0, 0, Array(5).fill(GATEWAY_REFUSALS.MALFORMED)]);
+});
+
+test("each request's outcome is written as it ends, to a record of its own that no count reads: an answered request, a refused one and one the provider failed; neither the key nor the token is in it", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "gw-outcomes-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "run", "outcomes.jsonl");
+  const { gw, post } = await setup(t, { decide: ({ seq }) => (seq === 2 ? QUOTA : { parts: [text("ok")] }), over: { outcomes: file } });
+  await (await post("gemini-4-carbon", body(ROOT.marker))).text();
+  assert.equal(outcomeRows(file).length, 1, "written when the request ended, not when the session did");
+  await (await post("gemini-4-carbon", body(ROOT.marker))).text();
+  await (await post("gemini-4-argon", body(ROOT.marker))).text();
+  const rows = outcomeRows(file);
+  assert.deepEqual(rows.map(r => [r.seq, r.model, r.class, r.forwarded, r.status, r.refusal, r.served_model, r.usage?.total_token_count ?? null]), [
+    [1, "gemini-4-carbon", "root", true, 200, null, "gemini-4-carbon", 115], [2, "gemini-4-carbon", "root", true, 429, null, null, null], [3, "gemini-4-argon", "root", false, 403, GATEWAY_REFUSALS.MODEL, null, null]]);
+  assert.ok(rows.every(r => r.schema === "pantheon.gateway-outcome/v1" && typeof r.at === "string"));
+  const text_ = readFileSync(file, "utf8");
+  assert.ok(!text_.includes(KEY) && !text_.includes(gw.token));
+});
+
+test("a websocket upgrade is not a transport the gateway carries: it is refused and recorded, and nothing is sent", async t => {
+  const { upstream, gw } = await setup(t);
+  const status = await new Promise((resolve, reject) => {
+    const req = request(`${gw.url}/v1beta/models/gemini-4-carbon:streamGenerateContent`, { method: "GET", headers: { connection: "Upgrade", upgrade: "websocket", "x-goog-api-key": gw.token, "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13" } });
+    req.on("response", res => { res.resume(); resolve(res.statusCode); }); req.on("upgrade", res => resolve(res.statusCode)); req.on("error", reject); req.end();
+  });
+  assert.notEqual(status, 101);
+  assert.deepEqual([upstream.requests.length, gw.record().requests.map(r => r.refusal)], [0, [GATEWAY_REFUSALS.PATH]]);
+});
+
+test("the session's own account is served to the holder of its token and to nobody else: it is no provider request, and it is not counted as one", async t => {
+  const { upstream, gw } = await setup(t, { over: { status: () => ({ admitted: 3, refused: [{ code: "METERED_GEMINI_BUDGET_EXHAUSTED" }] }) } });
+  const get = token => fetch(`${gw.url}/_pantheon/session`, { headers: token ? { "x-goog-api-key": token } : {} });
+  const ok = await get(gw.token);
+  assert.deepEqual([ok.status, await ok.json()], [200, { admitted: 3, refused: [{ code: "METERED_GEMINI_BUDGET_EXHAUSTED" }] }]);
+  assert.equal((await get("wrong")).status, 401);
+  assert.equal((await get(null)).status, 401);
+  assert.deepEqual([upstream.requests.length, gw.record().totals.received], [0, 2], "the two callers without the token are on the record; the account itself is not a request");
+  const none = await setup(t);
+  assert.equal((await fetch(`${none.gw.url}/_pantheon/session`, { headers: { "x-goog-api-key": none.gw.token } })).status, 404, "a gateway given no account serves none");
 });

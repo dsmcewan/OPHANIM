@@ -8,7 +8,7 @@
 #   POST {base}/v1beta/models/{model}:generateContent                  the web search tool (googleSearch, no sessionId)
 # An HTTP 400/401/403 ends the turn with AntigravityConnectionError carrying the response's message, as the real SDK
 # does; BudgetConfig.max_model_calls stops the session (StopReason.MAX_MODEL_CALLS_EXCEEDED). No real provider is ever
-# reachable from it in a test: its base URL is the metering relay, whose upstream is a local fake.
+# reachable from it in a test: its base URL is the model gateway, whose upstream is a local fake.
 import asyncio
 import json
 import os

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // THE REAL-SDK PROOF OF REGISTER L-150 / L-151 (not a CI test: the CI runner has no SDK). It runs the REAL
 // scripts/agy-seat.py with the REAL google-antigravity SDK (its bundled Go harness sends the requests) through the governed
-// launcher bin/agy-seat.mjs and the board's SDK seat, against the metering relay, whose upstream is the LOCAL fake Gemini
-// API of fixtures/l150-fake-gemini.mjs. NEVER a real provider: every credential is synthetic, the relay's upstream is
+// launcher bin/agy-seat.mjs and the board's SDK seat, against the model gateway, whose upstream is the LOCAL fake Gemini
+// API of fixtures/l150-fake-gemini.mjs. NEVER a real provider: every credential is synthetic, the gateway's upstream is
 // loopback, and the seat's HTTPS_PROXY is a local trap that records (and refuses) any request that would leave the host.
 //
 //   node pantheon/tests/fixtures/l150-real-sdk-proof.mjs --python <venv python with google-antigravity> --work <scratch dir>
@@ -14,7 +14,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSyn
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startFakeGemini } from "./l150-fake-gemini.mjs";
-import { relayAccounting, readRelayOutcomes } from "../../src/route/gemini-relay.mjs";
+import { seatAccounting, readSeatOutcomes } from "../../src/antigravity/seat-session.mjs";
 import { billingFromFlags, geminiBilling, geminiUsageFile } from "../../src/route/gemini-billing.mjs";
 import { runOpenItem } from "../../src/board/run-item.mjs";
 import { withDispatch, seat } from "./dispatch.mjs";
@@ -60,7 +60,7 @@ const envOf = dir => Object.fromEntries((existsSync(join(dir, "env.txt")) ? read
 const args = (t, { role = "reviewer", out = join(t.dir, "out"), more = [] } = {}) => ["--role", role, "--workspace", t.ws, "--model", "gemini-3.7-flash", "--brief", join(t.dir, "brief.txt"), "--out", out, "--timeout", "120", ...more];
 function launch(t, { budget, usage = join(t.dir, "usage.jsonl"), upstream, seatArgs, onSpawn = null }) {
   const child = spawn(process.execPath, [LAUNCHER, "--gemini-api-primary", String(budget), "--gemini-usage", usage, "--python", t.py, "--", ...seatArgs],
-    { env: { PATH: process.env.PATH, HOME: t.dir, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, PANTHEON_AGY_RELAY_UPSTREAM: upstream, ...SEAT_NET }, stdio: ["ignore", "pipe", "pipe"] });
+    { env: { PATH: process.env.PATH, HOME: t.dir, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, PANTHEON_AGY_GATEWAY_UPSTREAM: upstream, ...SEAT_NET }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", d => { stdout += d; }); child.stderr.on("data", d => { stderr += d; });
   onSpawn?.(child);
@@ -77,7 +77,7 @@ const edgeView = fake => fake.requests.map(q => ({ method: q.path.split(":").pop
   const fake = await startFakeGemini({ mode: "review", workspace: t.ws, usage });
   const r = await launch(t, { budget: 3, upstream: fake.url, seatArgs: args(t) });
   cell("P1 three requests with budget 3: exactly three admitted, the fourth refused", {
-    "exit 5 (ended on the relay's refusal)": r.code === 5, "the provider saw exactly 3": fake.requests.length === 3, "each charged before it was sent": chargedBefore(fake.requests),
+    "exit 5 (ended on the gateway's refusal)": r.code === 5, "the provider saw exactly 3": fake.requests.length === 3, "each charged before it was sent": chargedBefore(fake.requests),
     "the refusal is METERED_GEMINI_BUDGET_EXHAUSTED": r.result?.refused?.code === "METERED_GEMINI_BUDGET_EXHAUSTED", "3 usage rows": jsonl(usage).length === 3,
     "partial output kept": existsSync(join(t.dir, "out", "response.partial.md")) || r.result?.refused?.partial_output_chars === 0,
   }, { edge: edgeView(fake), refused: r.result?.refused, error: r.result?.error?.slice(0, 600) });
@@ -122,7 +122,7 @@ const edgeView = fake => fake.requests.map(q => ({ method: q.path.split(":").pop
   const cancel = await inFlight("launcher-sigterm", ({ launcher }) => launcher.kill("SIGTERM"));
   const afterCancel = jsonl(usage).length;
   const killed = await inFlight("launcher-sigkill", ({ launcher, seatPid }) => { launcher.kill("SIGKILL"); try { process.kill(seatPid, "SIGKILL"); } catch { /* gone */ } });
-  const rows = jsonl(usage), acc = relayAccounting({ usage: rows, outcomes: readRelayOutcomes(`${usage}.outcomes.jsonl`) });
+  const rows = jsonl(usage), acc = seatAccounting({ usage: rows, outcomes: readSeatOutcomes(`${usage}.outcomes.jsonl`) });
   const before = fake.requests.length, rt = tree("p4-crash-restart");
   const restart = await launch(rt, { budget: 3, usage, upstream: fake.url, seatArgs: args(rt) });
   cell("P4 cancellation, crash (SIGKILL) and restart preserve the recorded spending", {
@@ -141,8 +141,8 @@ const edgeView = fake => fake.requests.map(q => ({ method: q.path.split(":").pop
   const withKeys = await runDirect({ GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, GOOGLE_GEMINI_BASE_URL: fake.url });
   const without = await runDirect({ GOOGLE_GEMINI_BASE_URL: fake.url });
   cell("P5 direct agy-seat.py without authorization sends zero requests", {
-    "keys present: exit 2, GEMINI_RELAY_CAPABILITY_ABSENT": withKeys.code === 2 && withKeys.last?.refused?.code === "GEMINI_RELAY_CAPABILITY_ABSENT",
-    "no keys: exit 2, GEMINI_RELAY_CAPABILITY_ABSENT": without.code === 2 && without.last?.refused?.code === "GEMINI_RELAY_CAPABILITY_ABSENT", "the provider saw nothing": fake.requests.length === 0,
+    "keys present: exit 2, PANTHEON_GATEWAY_CAPABILITY_ABSENT": withKeys.code === 2 && withKeys.last?.refused?.code === "PANTHEON_GATEWAY_CAPABILITY_ABSENT",
+    "no keys: exit 2, PANTHEON_GATEWAY_CAPABILITY_ABSENT": without.code === 2 && without.last?.refused?.code === "PANTHEON_GATEWAY_CAPABILITY_ABSENT", "the provider saw nothing": fake.requests.length === 0,
   }, { with_keys: withKeys.last?.refused, without: without.last?.refused, runtime: withKeys.last?.runtime?.sdk });
   await fake.close();
 }
@@ -159,7 +159,7 @@ const edgeView = fake => fake.requests.map(q => ({ method: q.path.split(":").pop
     "a subagent request, attributed to its own session": rows.some(u => u.lineage.conversation === "subagent" && u.identity.sdk_session !== u.lineage.parent_session),
     "the provider saw the controller's key": fake.requests.every(q => q.key === KEY),
     "no key in the seat's environment": env.GEMINI_API_KEY === undefined && env.GOOGLE_API_KEY === undefined && !readFileSync(join(t.dir, "env.txt"), "utf8").includes(KEY),
-    "the capability is in it": /^ophanim-relay-/.test(env.PANTHEON_AGY_RELAY_CAPABILITY ?? ""), "its HOME is the session's": env.HOME === join(t.dir, "out", "home"),
+    "the capability is in it": /^pantheon-gw-/.test(env.PANTHEON_AGY_GATEWAY_TOKEN ?? ""), "its HOME is the session's": env.HOME === join(t.dir, "out", "home"),
   }, { edge: edgeView(fake), lineage: rows.map(u => [u.request, u.identity.method, u.lineage.conversation]), env_names: Object.keys(env).filter(k => /KEY|RELAY|HOME|GOOGLE|GEMINI/.test(k)).sort() });
   await fake.close();
   const s = tree("p6-scout"), su = join(s.dir, "usage.jsonl");
@@ -173,7 +173,7 @@ const edgeView = fake => fake.requests.map(q => ({ method: q.path.split(":").pop
   const c = tree("p6-compaction"), cu = join(c.dir, "usage.jsonl");
   const cf = await startFakeGemini({ mode: "loop", workspace: c.ws, usage: cu, promptTokens: 3_000_000 });
   const cr = await launch(c, { budget: 12, upstream: cf.url, seatArgs: args(c, { role: "scout", more: ["--max-model-calls", "12"] }) });
-  cell("P6c the harness's own context summarization requests go through the relay and are charged", {
+  cell("P6c the harness's own context summarization requests go through the gateway and are charged", {
     "every request at the provider was charged before it was sent": chargedBefore(cf.requests), "rows = requests": jsonl(cu).length === cf.requests.length,
     "the seat's error names the summarization (its requests were among those charged)": /summarization/.test(cr.result?.error ?? "") || cf.requests.length > 1,
   }, { exit: cr.code, requests: cf.requests.length, error: (cr.result?.error ?? "").slice(0, 400) });
@@ -183,7 +183,7 @@ const edgeView = fake => fake.requests.map(q => ({ method: q.path.split(":").pop
 for (const budget of [100, 3]) {
   const t = tree(`p7-board-${budget}`), usage = join(t.dir, "usage.jsonl");
   const fake = await startFakeGemini({ mode: "review", workspace: t.ws, usage });
-  const vars = { PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: t.py, PANTHEON_AGY_RELAY_UPSTREAM: fake.url, GEMINI_API_KEY: KEY, ...SEAT_NET };
+  const vars = { PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: t.py, PANTHEON_AGY_GATEWAY_UPSTREAM: fake.url, GEMINI_API_KEY: KEY, ...SEAT_NET };
   let run = null;
   await withDispatch(async ({ spec, opts }) => {
     const saved = Object.fromEntries(Object.keys(vars).map(k => [k, process.env[k]]));

@@ -86,9 +86,10 @@ export const MUTATIONS = [
     edits: [one(RUN, '(process.env.PANTHEON_AGY_TRANSPORT ?? "cli")', '(process.env.PANTHEON_AGY_TRANSPORT ?? "sdk")')]},
   {id: 'T2', path: 'pantheon-board (run-item.mjs agyTurn, the SDK seat)', what: 'the SDK seat\'s point-of-spend guard removed (L-124)',
     edits: [one(RUN, '      try { geminiAdmission(BILLING, spend); }\n      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }\n', ''),
-      // L-150: the one charge at the spawn became the metering relay's charge of each request; the guard removed there
+      // L-150: the one charge at the spawn became the charge of each request at the seat's gateway session (seat-session.mjs,
+      // since the relay's retirement, L-724); the guard removed there
       // keeps the run's own admission (as the old mutation kept admit()) but skips the policy and the usage row.
-      one('pantheon/src/route/gemini-relay.mjs', '          row = spendGemini(session.billing, {', '          row = ((b, a, f) => (f(a), a))(session.billing, {')]},
+      one('pantheon/src/antigravity/seat-session.mjs', '      row = spendGemini(billing, {', '      row = ((b, a, f) => (f(a), a))(billing, {')]},
   // ---- an enabled setting accepted without a budget (owner item 5: declared budgets) -----------------------------------
   {id: 'E1', path: 'the central resolution (flags and configuration)', what: 'enabling without a positive-integer budget is accepted',
     edits: [one(GB, '    if (!(Number.isSafeInteger(d.budget) && d.budget > 0)) {', '    if (false) {'),

@@ -233,8 +233,8 @@ function refusal(ctx, code, info, message) {
 /**
  * THE CHECK AT THE POINT OF SPEND, before a billed Gemini request of `kind` is admitted: throws the refusal, or returns
  * the usage row the request will be recorded with. Records nothing.
- * `identity` and `lineage` (optional, register L-150: the python SDK seat's metering relay, route/gemini-relay.mjs) are
- * carried on the row and on a refusal as given: which request this is (the relay session, its sequence, the SDK's own
+ * `identity` and `lineage` (optional, register L-150: the python SDK seat's gateway session, antigravity/seat-session.mjs)
+ * are carried on the row and on a refusal as given: which request this is (the gateway session, its sequence, the SDK's own
  * session id) and where it came from (the board run and seat, the parent session, a subagent's). They never change the
  * count: consumption is the number of rows of a kind, whatever they carry. A caller that passes neither gets the row it
  * always got.
@@ -245,7 +245,7 @@ export function geminiAdmission(billing, { kind, vendor, model, purpose = null, 
   if (!name) throw new Error(`geminiAdmission: the billing kind is ${GEMINI_KINDS.join(" or ")}, got ${kind}`);
   const set = policy[name];
   const via = kind === "failover" ? "the metered Gemini API as an Antigravity lane's quota failover"
-    : transport === "sdk" ? "primary Gemini execution on the python Antigravity SDK seat (each of its requests, through the controller's metering relay, billed to GEMINI_API_KEY)" : "primary Gemini API execution (billed to GEMINI_API_KEY)";
+    : transport === "sdk" ? "primary Gemini execution on the python Antigravity SDK seat (each request billed to GEMINI_API_KEY)" : "primary Gemini API execution (billed to GEMINI_API_KEY)";
   const info = { kind, setting: name, vendor, model, purpose, role, transport, source: set.source, budget: set.budget, policy: policy.digest,
     ...(identity ? { identity: structuredClone(identity) } : {}), ...(lineage ? { lineage: structuredClone(lineage) } : {}) };
   const who = `${vendor}/${model}${purpose ? ` (${purpose})` : ""}`;

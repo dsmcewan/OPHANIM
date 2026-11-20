@@ -76,9 +76,10 @@ export const MUTATIONS = [
     edits: RUN_API_GUARD},
   {id: 'S6', path: 'B(sdk) the python SDK seat (L-124)', what: 'the SDK seat\'s point-of-spend guard removed (before the venv check and at the spawn)',
     edits: [one(RUN, '      try { geminiAdmission(BILLING, spend); }\n      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }\n', ''),
-      // L-150: the one charge at the spawn became the metering relay's charge of each request; the guard removed there
+      // L-150: the one charge at the spawn became the charge of each request at the seat's gateway session (seat-session.mjs,
+      // since the relay's retirement, L-724); the guard removed there
       // keeps the run's own admission (as the old mutation kept admit()) but skips the policy and the usage row.
-      one('pantheon/src/route/gemini-relay.mjs', '          row = spendGemini(session.billing, {', '          row = ((b, a, f) => (f(a), a))(session.billing, {')]},
+      one('pantheon/src/antigravity/seat-session.mjs', '      row = spendGemini(billing, {', '      row = ((b, a, f) => (f(a), a))(billing, {')]},
   {id: 'S7', path: 'B(sdk) the python SDK seat (L-124, split by L-136)', what: 'the SDK seat is classified as a failover: the failover switch admits a primary seat',
     edits: [one(RUN, '      const spend = { kind: "primary", vendor: "agy_google", model, purpose, role, transport: "sdk" };', '      const spend = { kind: "failover", vendor: "agy_google", model, purpose, role, transport: "sdk" };')]},
   {id: 'S8', path: 'B(spare) the walk\'s quota-failover candidate', what: 'both protections of the spare removed: the walk reaches it and the seat is not refused at spend',
