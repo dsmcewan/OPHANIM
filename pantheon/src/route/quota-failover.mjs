@@ -16,49 +16,51 @@ import { laneParts } from "./fit-matrix.mjs";
 
 export const cooldownKeyOf = c => (c.transport === "agy-cli" ? `agy_cli_oauth:${laneParts(c.model)?.base ?? c.model}` : c.pool);
 
-// METERED GEMINI AT THE POINT OF SPEND (L-504 invariant 4, L-124). With the metered Gemini failover OFF (the live-run
-// manifest's billing.metered_gemini_failover: false, carried as meteredFailover / METERED_FAILOVER) NO seat makes a
-// metered Google call: not the quota failover of a lane (skipped in the walk below), and not any other Google-billed seat
-// either -- an operator's or a ticket pin's Gemini API seat (agy_google over the API: sdk/adapter.mjs's genai client,
-// billed to GEMINI_API_KEY), or the python Antigravity SDK seat (scripts/agy-seat.py, billed to GEMINI_API_KEY or
-// Vertex). The seat refuses itself immediately before the billed request or spawn, before it is admitted or charged,
-// whatever key the environment holds: withholding the key upstream (ophanim/operate/live-run.mjs "not-used") is not what
-// protects it. The Antigravity CLI lanes are the subscription (OAuth) and are never refused here.
+// METERED GEMINI AT THE POINT OF SPEND (L-504 invariant 4, L-124; extended by L-136). THE BILLING POLICY is resolved
+// in ./gemini-billing.mjs (re-exported here: this is the one mechanism, not a second one) and enforced at every point of
+// Gemini spend: a lane's quota failover (kind "failover", setting metered_gemini_failover) and PRIMARY Gemini execution
+// (kind "primary", setting gemini_api_primary): an operator's or a ticket pin's Gemini API id seat (agy_google over the
+// API: sdk/adapter.mjs's genai client, billed to GEMINI_API_KEY), a Gemini seat with no lane, and the python Antigravity
+// SDK seat (scripts/agy-seat.py, billed to GEMINI_API_KEY or Vertex). Both default OFF; each is enabled only by an
+// explicit flag or setting with a declared budget, never by a key in the environment. The seat refuses itself
+// immediately before the billed request or spawn, before it is admitted or charged: withholding the key upstream
+// (ophanim/operate/live-run.mjs "not-used") is not what protects it. The Antigravity CLI lanes are the subscription
+// (OAuth) and are never refused here.
+export * from "./gemini-billing.mjs";
+import { geminiAdmission, isGeminiBillingRefusal } from "./gemini-billing.mjs";
 /** The vendors whose API seat is billed to the metered Gemini key (sdk/adapter.mjs ADAPTERS: key_env GEMINI_API_KEY). */
 export const METERED_GEMINI_VENDORS = Object.freeze(["agy_google"]);
-export const METERED_GEMINI_DISABLED = "METERED_GEMINI_DISABLED";
-export const METERED_GEMINI_RULE = "metered Gemini spend disabled by the caller (meteredFailover: false): no Google-billed seat is called";
 /** Is a call on `vendor` over `transport` ("api": the vendor SDK; "sdk": the python Antigravity SDK seat) a metered Gemini call? */
 export const isMeteredGemini = ({ vendor, transport = "api" }) => METERED_GEMINI_VENDORS.includes(vendor) && (transport === "api" || transport === "sdk");
-/** The refusal of a metered Gemini call with the failover off: code METERED_GEMINI_DISABLED, nothing was sent or charged. */
-export function meteredGeminiRefusal({ vendor, model, purpose = null, transport = "api" }) {
-  const via = transport === "sdk" ? "the python Antigravity SDK seat (API key or Vertex billed)" : "the metered Gemini API";
-  return Object.assign(new Error(`${vendor}/${model}${purpose ? ` (${purpose})` : ""} would be served by ${via}, and metered Gemini spend is disabled for this run (meteredFailover: false): the seat is refused before it is admitted, charged or called`),
-    { code: METERED_GEMINI_DISABLED, provider_requests: 0, transport, quota_failover: { used: false, disabled: true, lanes: [], rule: METERED_GEMINI_RULE } });
-}
 
 //
-// `meteredFailover: false` (the caller's budget allows no metered Gemini spend): a `quota_failover` candidate is never
-// reached, even after its lane's quota refusal; it is skipped (onSkip says why) and the walk goes on past it. The
-// switch existed for the pipeline and the single-turn seats but not here, so runOpenItem's walk could still call the
-// metered API (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6).
+// `billing` (the run's billing context, gemini-billing.mjs geminiBilling; default: both kinds off): a `quota_failover`
+// candidate is reached only after a quota refusal of a lane it stands behind AND only while the policy admits a failover
+// request (metered_gemini_failover enabled, its budget not spent); otherwise it is skipped (onSkip says why; a billing
+// refusal is also on billing.refusals) and the walk goes on past it. The switch existed for the pipeline and the
+// single-turn seats but not here, so runOpenItem's walk could still call the metered API (independent review round 2,
+// assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6). The seat is checked again at its point of spend,
+// request by request (board/run-item.mjs turn()).
 // `admit` is routeCall's: called before every attempt, retries included (finding 1.1).
-export async function routeSeats({ candidates, invoke, cooldown = null, signal, deadline, maxAttempts, onSkip = () => {}, meteredFailover = true, admit = undefined }) {
+export async function routeSeats({ candidates, invoke, cooldown = null, signal, deadline, maxAttempts, onSkip = () => {}, billing = null, admit = undefined, ...rest }) {
   if (!Array.isArray(candidates) || !candidates.length || typeof invoke !== "function") throw new Error("Routing needs candidates and invoke");
-  if (typeof meteredFailover !== "boolean") throw new Error("meteredFailover is true or false");
+  if (Object.hasOwn(rest, "meteredFailover")) throw new Error("routeSeats: meteredFailover is replaced by `billing` (the Gemini billing policy, route/gemini-billing.mjs)");
   const quota = new Map();      // lane model -> the quota refusal observed for it
   const closed = new Set(), attempts = [];
   for (const c of candidates) {
     const key = cooldownKeyOf(c);
     let seat = c;
-    if (c.quota_failover && !meteredFailover) {
-      onSkip({ seat: c, why: `quota failover of ${c.quota_failover.lanes.join(", ")} not used: the metered Gemini API failover is disabled for this run` });
-      continue;
-    }
     if (c.quota_failover) {
       const evidence = c.quota_failover.lanes.map(m => quota.get(m)).filter(Boolean);
       if (!evidence.length) {
         onSkip({ seat: c, why: `quota failover of ${c.quota_failover.lanes.join(", ")} not used: no quota refusal of that lane` });
+        continue;
+      }
+      // The lane WAS refused for quota: the failover is a billed request, admitted only by the policy (off by default).
+      try { geminiAdmission(billing, { kind: "failover", vendor: c.vendor, model: c.model, purpose: c.role ?? null, role: c.role ?? null, transport: "api" }); }
+      catch (e) {
+        if (!isGeminiBillingRefusal(e)) throw e;
+        onSkip({ seat: c, code: e.code, why: `quota failover of ${c.quota_failover.lanes.join(", ")} not used: ${e.message}` });
         continue;
       }
       const used = { ...c.quota_failover, used: true, after: evidence };

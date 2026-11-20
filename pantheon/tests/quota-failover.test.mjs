@@ -15,6 +15,8 @@ import { selectSeat, antigravityFirst } from "../src/route/frontier.mjs";
 import { agySingleTurn, laneFirstTurn } from "../src/sdk/agy-turn.mjs";
 import { classifyFailure, openCooldownStore } from "../../packages/model-client/index.mjs";
 import { withDispatch, WORK, seat } from "./fixtures/dispatch.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const runJson = r => JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
@@ -26,7 +28,7 @@ const NEXT = { vendor: "openai", model: "gpt-6-astra", transport: "api", pool: "
 
 test("the walk: the metered API is reached only after its lane was refused for QUOTA, and the result says so", async () => {
   const asked = [];
-  const routed = await routeSeats({ candidates: [LANE, SPARE, NEXT], invoke: async c => { asked.push(c.model); if (c.transport === "agy-cli") throw quota(); return `answer from ${c.model}`; } });
+  const routed = await routeSeats({ candidates: [LANE, SPARE, NEXT], billing: optIn({ failover: 100 }), invoke: async c => { asked.push(c.model); if (c.transport === "agy-cli") throw quota(); return `answer from ${c.model}`; } });
   assert.deepEqual(asked, ["gemini-4-carbon-high", "gemini-4-carbon"]);
   assert.equal(routed.value, "answer from gemini-4-carbon");
   assert.equal(routed.seat.quota_failover.used, true);
@@ -63,12 +65,13 @@ test("the walk: a lane's quota cooldown is its own authority, counts as quota ev
     assert.equal(cooldownKeyOf(SPARE), "agy_google", "an API seat keeps its pool");
     const asked = [];
     const invoke = async c => { asked.push(c.model); if (c.transport === "agy-cli") throw quota(); return c.model; };
-    const first = await routeSeats({ candidates: [LANE, SPARE], invoke, cooldown });
+    const billing = optIn({ failover: 100 });
+    const first = await routeSeats({ candidates: [LANE, SPARE], invoke, cooldown, billing });
     assert.equal(first.value, "gemini-4-carbon", "the lane's refusal did not close the API pool of the same vendor name");
     assert.equal((await cooldown.get("agy_cli_oauth:gemini-4-carbon")).reason, "quota");
     assert.equal(await cooldown.get("agy_google"), null);
     // Next turn: the lane is still in its quota cooldown. It is not called again, and that recorded refusal is the evidence.
-    const again = await routeSeats({ candidates: [LANE, SPARE], invoke, cooldown });
+    const again = await routeSeats({ candidates: [LANE, SPARE], invoke, cooldown, billing });
     assert.deepEqual(asked, ["gemini-4-carbon-high", "gemini-4-carbon", "gemini-4-carbon"]);
     assert.deepEqual(again.quota_failover.after.map(a => [a.lane, a.source]), [["gemini-4-carbon-high", "cooldown"]]);
     // Another lane of the same base model is not offered while that authority is closed; a different base model is.
@@ -114,7 +117,7 @@ test("argo through the real dispatcher: the Google seat's lane answers; on a lan
   // 2. The lane is refused for quota: the API id answers, and the turn, its attempt and its selection say why.
   await withDispatch(async ({ spec, opts, calls, agy, agyQuota, fault }) => {
     fault(anthropicDown); agyQuota(["gemini-4-carbon-high"]);
-    const r = await runOpenItem(spec("argoQuota"), opts());
+    const r = await runOpenItem(spec("argoQuota"), opts({ billing: optIn({ failover: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = runJson(r);
     const plan = run.turns.find(t => t.purpose === "plan");
@@ -157,7 +160,7 @@ test("fit through the real dispatcher: the implementer walks its lane ladder; th
   // Every lane of the hard ladder is refused for quota: the API id of the PICK's base model answers.
   await withDispatch(async ({ spec, opts, calls, agyQuota }) => {
     agyQuota(["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"]);
-    const r = await runOpenItem(spec("fitSpare", { difficulty: "hard" }), opts({ profile: "fit", seatOverrides: { planner: seat("agy_google", "gemini-4-carbon-low") } }));
+    const r = await runOpenItem(spec("fitSpare", { difficulty: "hard" }), opts({ profile: "fit", seatOverrides: { planner: seat("agy_google", "gemini-4-carbon-low") }, billing: optIn({ failover: 100 }) }));
     const run = runJson(r);
     const work = run.turns.find(t => t.purpose === "work");
     assert.deepEqual([work?.model, work?.transport, work?.quota_failover?.used, work?.settings.effort], ["gemini-4-carbon", "api", true, "high"], JSON.stringify(r.error));
@@ -187,16 +190,16 @@ test("a single-turn seat: lane first; the API only as the lane's quota failover,
   // Quota on the lane: the API id of the same model answers, marked.
   asked.length = 0;
   const laneQuota = async ({ model }) => { asked.push(`lane:${model}`); throw quota(); };
-  const q = await laneFirstTurn({ vendor: "agy_google", model: "gemini-4-hydrogen-xhigh", prompt: "p" }, { lane: laneQuota, api });
+  const q = await laneFirstTurn({ vendor: "agy_google", model: "gemini-4-hydrogen-xhigh", prompt: "p", billing: optIn({ failover: 100 }) }, { lane: laneQuota, api });
   assert.deepEqual(asked, ["lane:gemini-4-hydrogen-xhigh", "api:agy_google/gemini-4-hydrogen"]);
   assert.deepEqual([q.text, q.transport, q.quota_failover.used, q.quota_failover.lanes, q.quota_failover.after[0].outcome], ["from api", "api", true, ["gemini-4-hydrogen-xhigh"], "quota"]);
   // Any other lane failure is thrown; the API is not asked.
   asked.length = 0;
   await assert.rejects(laneFirstTurn({ vendor: "agy_google", model: "gemini-4-carbon", prompt: "p" }, { lane: async () => { throw new Error("agy CLI timed out after 900s"); }, api }), /timed out/);
   assert.deepEqual(asked, []);
-  // failover: false (a run that allows no metered Gemini spend): the quota refusal is thrown, marked; the API is not asked.
+  // The failover not declared (both billing kinds off by default, L-136): the quota refusal is thrown, marked; the API is not asked.
   asked.length = 0;
-  await assert.rejects(laneFirstTurn({ vendor: "agy_google", model: "gemini-4-hydrogen-xhigh", prompt: "p" }, { lane: laneQuota, api, failover: false }),
+  await assert.rejects(laneFirstTurn({ vendor: "agy_google", model: "gemini-4-hydrogen-xhigh", prompt: "p" }, { lane: laneQuota, api }),
     e => e.status === 429 && e.quota_failover?.used === false && e.quota_failover.disabled === true && e.quota_failover.lanes[0] === "gemini-4-hydrogen-xhigh");
   assert.deepEqual(asked, ["lane:gemini-4-hydrogen-xhigh"]);
   // A lane whose base model has no API id has no failover, even on quota.
@@ -207,7 +210,7 @@ test("a single-turn seat: lane first; the API only as the lane's quota failover,
     assert.deepEqual([r.text, r.served_model, r.served_model_source], ["VERDICT: approve", "gemini-4-carbon-high", "input"]);
     assert.deepEqual(agy(), [{ agent: "pantheon-reviewer", model: "gemini-4-carbon-high" }]);
     agyQuota(["gemini-4-carbon-high"]);
-    const f = await laneFirstTurn({ vendor: "agy_google", model: "gemini-4-carbon", prompt: "review this", seat: { role: "cycle-reviewer" } }, { lane: agySingleTurn, api });
+    const f = await laneFirstTurn({ vendor: "agy_google", model: "gemini-4-carbon", prompt: "review this", seat: { role: "cycle-reviewer" }, billing: optIn({ failover: 100 }) }, { lane: agySingleTurn, api });
     assert.deepEqual([f.text, f.served_model, f.quota_failover.used], ["from api", "gemini-4-carbon", true]);
   });
 });

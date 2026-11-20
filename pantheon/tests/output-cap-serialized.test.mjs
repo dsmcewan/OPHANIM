@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { outputBudgetFor, FRONTIER_DEFAULT_OUTPUT } from "../src/config/tiers.mjs";
 import { withDispatch, WORK } from "./fixtures/dispatch.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const REVIEW = /VERDICT/;
 const PLAN = /TITLE:/;
@@ -22,7 +23,8 @@ for (const output of ["xs", "xl"]) {
       // observable on the work request only when the metered API answers, so both ladder lanes are refused for quota
       // here and the quota failover (gemini-4-hydrogen through the API) carries the declared cap.
       agyQuota(["gemini-4-hydrogen-high", "gemini-4-argon-high"]);
-      const r = await runOpenItem(spec(`fitCap_${output}`, { output }), opts({ profile: "fit" }));
+      // The metered failover is OFF by default (register L-136): this row exercises it, so it opts in explicitly.
+      const r = await runOpenItem(spec(`fitCap_${output}`, { output }), opts({ profile: "fit", billing: optIn({ failover: 100 }) }));
       assert.equal(r.shipped, true, JSON.stringify(r.error));
       const sent = [...capsOf(calls, PLAN), ...capsOf(calls, WORK)];
       assert.ok(sent.length >= 2, JSON.stringify(sent));

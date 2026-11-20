@@ -26,7 +26,10 @@ async function api({ repo, outDir, vendor, n, script, args = [], commit }) {
   const env = { openai: { OPENAI_API_KEY: FAKE_KEY }, xai: { XAI_API_KEY: FAKE_KEY }, gemini: { GEMINI_API_KEY: FAKE_KEY } }[vendor];
   const out = capture(), fetch = fakeFetch(script);
   const d = await deps({ root: repo.root, env, fetch, out });
-  const code = await main(["--assignment", String(n), "--commit", commit ?? repo.commit, ...LIMITS, "--out", outDir, ...args], d);
+  // A Google reviewer over the API is primary Gemini API execution, OFF by default (register L-136): these runs opt in
+  // explicitly, with a budget, as the owner would.
+  const optIn = vendor === "gemini" ? ["--gemini-api-primary", "100"] : [];
+  const code = await main(["--assignment", String(n), "--commit", commit ?? repo.commit, ...LIMITS, "--out", outDir, ...optIn, ...args], d);
   return { code, out, fetch, d };
 }
 const header = md => md.split("<!-- reviewer's final message, verbatim, follows -->\n\n")[0];

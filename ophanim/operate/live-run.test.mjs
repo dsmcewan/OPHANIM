@@ -141,7 +141,9 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     await refused(write({ledgers: {...manifest.ledgers, work_root: path.join(f.statusRoot, 'work')}}), /work_root and status_root are separate/);
     const noX = {...env}; delete noX.XAI_API_KEY;
     await refused(write(), /credential XAI_API_KEY is not present/, {env: noX});
-    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true}, credentials: {...manifest.credentials, gemini_api_key: 'required'}}), /GEMINI_API_KEY is not present/);
+    // Enabling the failover declares its budget (register L-136); without one the manifest itself is refused.
+    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true}, credentials: {...manifest.credentials, gemini_api_key: 'required'}}), /metered_gemini_failover is enabled .* without a declared budget/);
+    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true, metered_gemini_budget: 3}, credentials: {...manifest.credentials, gemini_api_key: 'required'}}), /GEMINI_API_KEY is not present/);
     await refused(write({item: 'nope'}), /item "nope" is not on the status ledger/);
     const m = await run(['--manifest', write({limits: {...LIMITS, total_provider_calls: null}})]);
     assert.deepEqual([m.code, m.json.refused, m.json.refusals], [1, 'manifest', ['limits.total_provider_calls is null: the owner must choose it (no default is filled in)']]);
@@ -224,7 +226,7 @@ test('CONFIRMED: require_subagent unmet (the plan allowed no subagent) -> exit 3
   });
 });
 
-test('CONFIRMED with metered_gemini_failover: false: a quota refusal on every lane of the unit\'s ladder BLOCKS the unit; the metered Gemini API is never called -> exit 3', needBwrap, async () => {
+test('CONFIRMED with metered_gemini_failover: false: a quota refusal on every lane of the unit\'s ladder BLOCKS the unit; the metered Gemini API is never called; the stage waits pending on the billing refusal, its work kept -> exit 3', needBwrap, async () => {
   await withLiveFixture(async ({ctx, manifest, write, run, head, repo}) => {
     ctx.agyQuota(implementerPath('easy').map(s => s.model));
     const r = await run(['--manifest', write(), '--confirm-spend', `${ITEM}@${head.slice(0, 7)}`]);
@@ -232,9 +234,15 @@ test('CONFIRMED with metered_gemini_failover: false: a quota refusal on every la
     assert.equal(r.code, 3, JSON.stringify(rec.acceptance));
     assert.equal(ctx.calls.length, 0, 'no metered API call');
     const impl = rec.stages.find(s => s.stage === 'implement');
-    assert.equal(impl.status, 'blocked');
-    assert.match(impl.blocker.what, /PIPELINE_UNITS_UNRESOLVED/);
-    assert.ok(rec.blockers.some(b => b.blocker?.code === 'PIPELINE_UNITS_UNRESOLVED'));
+    // A stage the billing policy refused a request in is PENDING on that refusal, transient and woken by a changed policy
+    // (register L-136, owner decision item 4: the recoverable work state is preserved); the unit's block it reported is
+    // kept beside it, with the run record and its work.
+    assert.equal(impl.status, 'pending');
+    assert.deepEqual([impl.blocker.code, impl.blocker.transient, impl.blocker.billing?.settings?.failover], ['METERED_GEMINI_DISABLED', true, {enabled: false, budget: null}]);
+    const work = openWorkLedger({root: manifest.ledgers.work_root}).stages(ITEM).find(s => s.stage === 'implement');
+    assert.equal(work.outputs.billing_refused.status_reported, 'blocked');
+    assert.match(work.outputs.billing_refused.blocker_reported.what, /PIPELINE_UNITS_UNRESOLVED/);
+    assert.ok(rec.blockers.some(b => b.blocker?.code === 'METERED_GEMINI_DISABLED'), JSON.stringify(rec.blockers));
     const attempts = rec.served_identities.filter(s => s.source === 'pipeline.json' && s.role === 'implementer');
     assert.ok(attempts.length && attempts.every(a => a.quota_failover?.used === false && a.quota_failover.disabled === true), JSON.stringify(attempts));
     // Each subscription BASE MODEL once, then blocked: after a quota refusal the same base model's other thinking levels

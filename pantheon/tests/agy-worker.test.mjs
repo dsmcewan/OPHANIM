@@ -15,6 +15,7 @@ import { startA2AShim } from "../src/pipeline/a2a-shim.mjs";
 import { MCP_SERVER_PATH } from "../src/pipeline/index.mjs";
 import { withFakeAgy } from "./fixtures/dispatch.mjs";
 import { sh } from "./fixtures/pipeline-stages.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const LANE = "gemini-4-hydrogen-medium";
 const have = await sandboxAvailable("bwrap");
@@ -167,7 +168,8 @@ test("(c) two worker turns run concurrently: they overlap in time and the event 
 /** The pipeline's implementer turn (turns.mjs) on unit a, with a recording metered API. */
 async function implementerTurn(f, { api = async () => ({ text: JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), served_model: "gemini-4-hydrogen" }) } = {}) {
   const calls = [];
-  const turns = pipelineTurns({ turn: async () => ({ text: "" }), agy: { sandbox: sandbox(f.fx), api: async a => { calls.push(a); return api(a); } } });
+  // The metered failover is OFF by default (register L-136): this helper exercises it, so it opts in explicitly.
+  const turns = pipelineTurns({ turn: async () => ({ text: "" }), agy: { sandbox: sandbox(f.fx), billing: optIn({ failover: 100 }), api: async a => { calls.push(a); return api(a); } } });
   const { wt, ctl } = f.units.a;
   const go = () => turns.implementer({ vendor: "agy_google", model: LANE, prompt: PROMPT("a", ["src/a/**"], verifyOf("a"), ctl), cwd: wt, control_dir: ctl, owned_paths: ["src/a/**"], verify_cmd: verifyOf("a"),
     unit_id: "a", env: {}, attempt: 1 });

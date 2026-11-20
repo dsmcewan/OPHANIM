@@ -55,6 +55,14 @@
 //                 (an alias or lab correction), which of its recorded reviews would not qualify, and why. It names
 //                 the cycle, the policy the cycle recorded and the policy it was reassessed under. The cycle's own
 //                 ledger keeps verifying under its recorded policy; what follows from the evidence is the owner's.
+//   work.billing  ONE BILLED GEMINI REQUEST (register L-136; pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md),
+//                 recorded (signed) under the claim it was made under, AFTER the billing policy and the stage's own charge
+//                 admitted it and BEFORE it is sent: {item, stage, attempt, kind (failover | primary), setting, vendor,
+//                 model, purpose, role, transport, source, budget, policy (digest), used_before, at}. Its re-derivation
+//                 checks the claim (the lease fence, as a spend) and THE BUDGET, under the ledger's append lock: the
+//                 billing entries of the same kind before it, on the whole ledger, are fewer than its declared budget.
+//                 The budget's consumption is therefore derived from this record, never from a process's memory: a
+//                 restart, a resumed attempt or a later service tick cannot reset it.
 //
 // Inputs: an absolute root (default <repo>/status/work). Outputs: the API below. Must never: sign a status, read
 // the owner's keys, or accept a stage whose handoff does not re-derive.
@@ -63,6 +71,7 @@ import path from 'node:path';
 import {openLedger, createLedger, defineKinds, generateSigner} from '../../packages/ledger/chain.mjs';
 import {keyStore} from '../../packages/ledger/home.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
+import {GEMINI_KINDS, SETTING_OF, budgetRefusal as geminiBudgetRefusal} from '../../pantheon/src/route/gemini-billing.mjs';
 
 export const WORK_SCHEMA = 'ophanim.work/v1';
 // The governed lifecycle, in order. `plan` is evaluation and planning (evidence, problem, plan, independent
@@ -232,6 +241,30 @@ function kinds({operators}) {
         if (p.provider_calls > c.budget.provider_calls) return `a spend of ${p.provider_calls} is over its claim's budget of ${c.budget.provider_calls} provider call(s)`;
         const prev = entriesOf(view, 'work.spend').filter(h => h !== e.hash && view.entry(h).derived_from.includes(claims[0])).map(h => view.payload(h).provider_calls);
         return prev.some(n => n >= p.provider_calls) ? 'a spend is cumulative: it only grows under its claim' : null;
+      },
+    },
+    'work.billing': {
+      authors: byController,
+      validate: p => {
+        if (p?.schema !== WORK_SCHEMA || !ID.test(p.item ?? '') || !STAGES.includes(p.stage) || !(Number.isInteger(p.attempt) && p.attempt >= 1) || !ISO(p.at)) {
+          return 'a billing entry names {item, stage, attempt, kind, setting, vendor, model, source, budget, policy, at}';
+        }
+        if (!GEMINI_KINDS.includes(p.kind) || p.setting !== SETTING_OF[p.kind]) return `a billing entry's kind is ${GEMINI_KINDS.join(' or ')}, with its own setting`;
+        if (!str(p.vendor) || !str(p.model) || !str(p.source) || !str(p.policy)) return 'a billing entry names the seat (vendor, model), the source of its policy and the policy digest';
+        if (!(Number.isSafeInteger(p.budget) && p.budget > 0)) return 'a billing entry names the declared budget it was admitted under (a positive integer)';
+        return null;
+      },
+      rederive: (e, view) => {
+        const claims = e.derived_from.filter(h => view.entry(h)?.kind === 'work.claim');
+        if (claims.length !== 1) return 'a billing entry cites the claim it was charged under';
+        const c = view.payload(claims[0]), p = e.payload;
+        if (c.item !== p.item || c.stage !== p.stage || c.attempt !== p.attempt) return 'a billing entry matches its claim (item, stage, attempt)';
+        const rel = releaseOf(view, claims[0]);
+        const why = fenceRefusal(c, {released: rel ? view.payload(rel) : null, at: Date.parse(p.at)});
+        if (why) return why;
+        // THE BUDGET, under the append lock: every billed request of this kind on the ledger before this one counts.
+        const used = entriesOf(view, 'work.billing').filter(h => h !== e.hash && view.payload(h).kind === p.kind).length;
+        return geminiBudgetRefusal({kind: p.kind, budget: p.budget, used});
       },
     },
     'work.stage': {
@@ -411,6 +444,17 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
       const c = fence(claim, at);
       return append('work.spend', {item: c.item, stage: c.stage, attempt: c.attempt, provider_calls, at}, [claim]);
     },
+    /**
+     * Record ONE billed Gemini request under a live claim, BEFORE it is sent (register L-136): the usage row the billing
+     * policy admitted (pantheon/src/route/gemini-billing.mjs). Refused when the claim is fenced or the declared budget of
+     * the row's kind is already spent on this ledger (its re-derivation, under the append lock).
+     */
+    recordBilling: ({claim, kind, setting, vendor, model, purpose = null, role = null, transport = 'api', request = 1, source, budget, policy, used_before = null, at = new Date().toISOString()}) => {
+      const c = fence(claim, at);
+      return append('work.billing', {item: c.item, stage: c.stage, attempt: c.attempt, kind, setting, vendor, model, purpose, role, transport, request, source, budget, policy, used_before, at}, [claim]);
+    },
+    /** The billed Gemini requests recorded on this ledger (of `kind`, when given), in order. */
+    billings: kind => of('work.billing', b => kind === undefined || b.kind === kind),
     releases: () => of('work.release'),
     spends: claimHash => of('work.spend', s => claimHash === undefined || s.derived_from.includes(claimHash)),
     /** Record an evidence-recovery attempt (evidence-recovery.mjs). Writes nothing to the status ledger. */

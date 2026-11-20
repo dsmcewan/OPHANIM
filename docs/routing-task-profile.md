@@ -348,6 +348,7 @@ Gemini goes through Antigravity first under both `argo` and `fit`:
 - A policy seat naming a metered Gemini API id is served by that model's Antigravity lane first (`-high` unless the seat carries an effort).
 - The API id stays in the order only as the lane's quota failover. The dispatcher reaches it only after a lane of the same base model was refused for quota: HTTP 429 or a quota-exhausted code, as `packages/model-client` `classifyFailure` classifies it (`pantheon/src/route/quota-failover.mjs`). Any other lane failure does not reach it.
 - When the API answers this way, the turn, its attempts and its `selection` carry `quota_failover` with the lane refusal it followed. An unused failover is a `quota_failover.skipped` progress event.
+- **The failover is billed and off by default** (register L-136, [docs/billing-policy.md](billing-policy.md)). It is sent only when the invocation enabled `metered_gemini_failover` with a budget (`--metered-gemini-failover N`, or the service config's `billing`); otherwise the quota refusal is recorded with `METERED_GEMINI_DISABLED` and the turn steps down or fails as it would without a spare. A Gemini API seat with no lane in front of it (a ticket's pin, the python SDK seat, the Google reviewer of `pantheon-review-cycle` and `run-review --via api`) is a primary request and needs `gemini_api_primary` instead: one setting never authorizes the other's kind. A key in the environment authorizes neither.
 - A lane and its API id resolve to one model identity, so review independence treats them as the same contributor.
 - Single-turn seats (`liveTurn`) follow the same rule (`laneFirstTurn`).
 - Explicit operator seats and ticket pins are used as named.
@@ -441,8 +442,8 @@ A **provider call** is one billed request to a model provider. Every bound count
 | Board SDK seat (`sdkTurn`, used by `runOpenItem`) | The same | `runOpenItem` passes `onRequest` with `chargeFirstRequest`. Each request is admitted against the run's bound and the caller's `onCharge` (the work ledger) before it is sent. |
 | Antigravity CLI, single turn (`runAgyCliTurn`: planner, reviewers, validator, subagents, the board's agy seat) | One CLI session. Antigravity bills its subscription per session, not per request. | `charge`, after the jail is built and before the CLI is spawned. A turn that fails before the spawn costs nothing. |
 | Antigravity CLI, unit worker (`runAgyWorkerTurn`) | One worker session, however many turns it takes inside | `charge`, after the jail is built and before the spawn |
-| Python agy SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`) | One seat process | Right before the spawn |
-| Metered Gemini failover of a lane | A provider call of its own, plus each further request of the API turn | Before the API is asked (`charge`, or `admitRequest` with kind `failover`) |
+| Python agy SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`; the board's reviewer and scout default to the CLI lane) | One seat process, a billed Gemini API primary request (`gemini_api_primary`) | Right before the spawn, after the Gemini billing policy admitted it and its usage row was persisted |
+| Metered Gemini failover of a lane | A provider call of its own, plus each further request of the API turn | Before the API is asked (`charge`, or `admitRequest` with kind `failover`), after the Gemini billing policy admitted it (`metered_gemini_failover`) and its usage row was persisted |
 
 **Two contracts for a single-turn `turn`** (`pantheon/src/sdk/live.mjs`):
 
@@ -480,7 +481,7 @@ An elapsed stop is never listed as a provider-call stop.
 
 **Quota and lane failover.**
 
-- A lane failure that looks like quota triggers one `agy -p /quota` probe (`pantheon/src/agy/quota.mjs`). The metered Gemini API is used only if the failure was an explicit 429 or `RESOURCE_EXHAUSTED`, or the probe reads the quota as exhausted. An unreadable report counts as unknown, never as exhausted.
+- A lane failure that looks like quota triggers one `agy -p /quota` probe (`pantheon/src/agy/quota.mjs`). The metered Gemini API is used only if the failure was an explicit 429 or `RESOURCE_EXHAUSTED`, or the probe reads the quota as exhausted, and only when the invocation enabled `metered_gemini_failover` with a budget that is not used up ([docs/billing-policy.md](billing-policy.md)). An unreadable report counts as unknown, never as exhausted.
 - Any other lane failure (timeout, non-zero exit, stream drop, spawn) is retried once on the same lane, then the unit steps down its Antigravity ladder. Lane failures spend no review revision. An exhausted ladder blocks the unit with every failure recorded.
 
 **Resume.** Each approved unit is checkpointed: its key, the Stage 5 verdict, the rubric hash, the commit and the tree. A retried implement stage re-verifies each checkpoint by patch digest and resulting tree, skips units that pass with no provider calls, and runs the rest. A tampered or stale checkpoint is rejected and the unit re-runs.

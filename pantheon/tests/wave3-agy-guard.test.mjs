@@ -19,6 +19,9 @@
 // timeout); a fake python seat (PANTHEON_AGY_PYTHON) that reports a model the same way; and globalThis.fetch replaced by a
 // recorder under the REAL @google/genai client (sdk/live.mjs liveClients / liveTurn), with a synthetic GEMINI_API_KEY in
 // the environment so that no path is protected by a missing key. The jail is real: these tests need bwrap.
+// THE BILLING POLICY (register L-136): "failover on" rows declare metered_gemini_failover with a budget (the policy is OFF
+// by default now); the python SDK seat (C) is asked for with PANTHEON_AGY_TRANSPORT=sdk (the board's reviewer defaults to
+// the CLI lane) and declares gemini_api_primary, the setting that seat is billed under.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -36,6 +39,10 @@ import { scriptedClients, fakeAgy } from "./fixtures/dispatch.mjs";
 import { tempRepo, seats, unit, RUBRIC, approve, PLANNER } from "./fixtures/pipeline-stages.mjs";
 import { main, EXIT } from "../src/review-runner/index.mjs";
 import { fixtureRepo, fakeFetch, capture, deps, mkdtemp as rrTemp, cleanup as rrCleanup } from "./review-runner-helper.mjs";
+// THE BILLING POLICY (register L-136): both kinds default OFF. A row with the failover (or primary execution) ON declares
+// it explicitly, with a budget, over a usage record of its own; a row with it OFF declares nothing (the default).
+import { optIn } from "./fixtures/billing.mjs";
+const failoverOn = () => optIn({ failover: 100 });
 
 // The distinct refusal code (board/agy-cli.mjs AGY_MODEL_MISMATCH), spelled out so this file also loads on a tree without it.
 const AGY_MODEL_MISMATCH = "AGY_MODEL_MISMATCH";
@@ -143,7 +150,7 @@ function isMismatch(e, want, at) {
 
 test("A1 the single-turn seats (liveTurn -> laneFirstTurn -> agySingleTurn -> runAgyCliTurn): another model in init is refused before its answer, failure or quota refusal is used; the metered failover is never asked, with it on or off", async t => {
   for (const meteredFailover of [true, false]) {
-    const turn = await liveTurn({ label: "wave3-guard", meteredFailover });
+    const turn = await liveTurn({ label: "wave3-guard", billing: meteredFailover ? failoverOn() : null });
     // A lane seat (its quota failover is the API id of its base model), and a Gemini API id served by its lane first.
     for (const [model, role, card] of [[LANE, "cycle-reviewer", "pantheon-reviewer"], [API_ID, "planner", "pantheon-planner"], [LANE, "validator", "pantheon-reviewer"]]) {
       for (const mode of MODES) {
@@ -167,7 +174,7 @@ test("A1 the single-turn seats (liveTurn -> laneFirstTurn -> agySingleTurn -> ru
 });
 
 test("A1 the pipeline's single-turn seats (dispatcher, reviewer, subagent) on a lane through liveTurn: the mismatch is refused, the quota refusal of another model reaches no failover", async t => {
-  const turns = pipelineTurns({ turn: await liveTurn({ label: "wave3-guard", meteredFailover: true }) });
+  const turns = pipelineTurns({ turn: await liveTurn({ label: "wave3-guard", billing: failoverOn() }) });
   for (const role of ["dispatcher", "reviewer", "subagent"]) {
     for (const mode of MODES) {
       await t.test(`${role}, ${mode}`, async () => {
@@ -196,7 +203,7 @@ test("A1 runAgyCliTurn itself, in each terminal mode and a print timeout: the mi
 
 // ---- A2 / C: the board ---------------------------------------------------------------------------------------------
 let boards = 0;
-async function board({ seatOverrides = {}, meteredFailover = true, scouts = ["xai"], planTitle = "ticket", spec = {} } = {}) {
+async function board({ seatOverrides = {}, billing = failoverOn(), scouts = ["xai"], planTitle = "ticket", spec = {} } = {}) {
   const dir = join(fx.root, `board-${++boards}`); mkdirSync(dir);
   const calls = [], scripted = scriptedClients(calls), google = await liveClients();
   // The board's Google seats get the REAL client (its fetch is the recorder); every other vendor is scripted.
@@ -204,7 +211,7 @@ async function board({ seatOverrides = {}, meteredFailover = true, scouts = ["xa
   const cooldown = openCooldownStore(join(dir, "cooldowns"));
   const progress = [];
   const result = await runOpenItem({ key: `wave3-guard-${boards}`, repo_root: dir, title: "fixture", goal: "fixture goal", question: "q", copy: [], acceptance_cmd: "true", slot: "code", path: "code.mjs", ...spec },
-    { dir: join(dir, "board"), makeClientFor, scouts, planTitle, seatOverrides, meteredFailover, cooldown, ledger: false, progress: ev => progress.push(ev) });
+    { dir: join(dir, "board"), makeClientFor, scouts, planTitle, seatOverrides, billing, cooldown, ledger: false, progress: ev => progress.push(ev) });
   const run = JSON.parse(readFileSync(join(dir, "board", "run.json"), "utf8"));
   return { result, run, calls, cooldown, progress };
 }
@@ -216,7 +223,7 @@ test("A2 the board's critique on [Antigravity lane, its metered quota failover]:
     for (const mode of MODES) {
       await t.test(`failover ${meteredFailover}, ${mode}`, async () => {
         arm(mode);
-        const { result, run, cooldown, progress } = await board({ seatOverrides: XAI_WORKER, meteredFailover });
+        const { result, run, cooldown, progress } = await board({ seatOverrides: XAI_WORKER, billing: meteredFailover ? failoverOn() : null });
         assert.deepEqual(fetched, [], "the metered Gemini API was never asked");
         assert.deepEqual(progress.filter(p => p.event === "quota_failover"), [], "no quota failover was taken");
         assert.equal(await cooldown.get(`agy_cli_oauth:${API_ID}`), null, "the lane's quota authority was not put in cooldown on another model's refusal");
@@ -256,10 +263,14 @@ test("A2 the board's plan, work and scout seats on an Antigravity lane (operator
 
 test("C the python SDK seat (board reviewer, transport sdk): a reported model other than the one asked for is refused before its answer or failure is used, and nothing is stamped", async t => {
   const sdkSeat = { ...XAI_WORKER, reviewer: seat("agy_google", "gemini-3.8-flash") };
+  // The board's reviewer defaults to the CLI lane now (owner decision 2026-11-19, L-136): the SDK seat is asked for, and
+  // it is primary Gemini execution, so this row declares gemini_api_primary with a budget.
+  process.env.PANTHEON_AGY_TRANSPORT = "sdk";
+  t.after(() => { delete process.env.PANTHEON_AGY_TRANSPORT; });
   for (const mode of ["answer", "failure", "noinit"]) {
     await t.test(mode, async () => {
       arm(mode, "gemini-3.6-flash");
-      const { result, run } = await board({ seatOverrides: sdkSeat, meteredFailover: true });
+      const { result, run } = await board({ seatOverrides: sdkSeat, billing: optIn({ primary: 100 }) });
       assert.deepEqual(run.turns.filter(t => t.purpose === "critique"), [], "the request is not stamped as served");
       assert.equal(lines("python").length, 1, "the seat was spawned once, never re-asked");
       assert.equal(result.shipped, false);
@@ -270,7 +281,7 @@ test("C the python SDK seat (board reviewer, transport sdk): a reported model ot
   }
   await t.test("control: a seat reporting the model asked for answers, stamped as the input model (the owner's format rule)", async () => {
     arm("answer", null);
-    const { result, run } = await board({ seatOverrides: sdkSeat, meteredFailover: true });
+    const { result, run } = await board({ seatOverrides: sdkSeat, billing: optIn({ primary: 100 }) });
     assert.equal(result.error, null, JSON.stringify(result.error));
     assert.deepEqual(run.turns.filter(t => t.purpose === "critique").map(t => [t.model, t.served_model, t.served_model_source]), [["gemini-3.8-flash", "gemini-3.8-flash", "input"]]);
   });
@@ -328,7 +339,7 @@ test("B1 the pipeline implementer (pipelineTurns.implementer -> runAgyWorkerTurn
   const env = await tempRepo();
   t.after(env.cleanup);
   for (const meteredFailover of [true, false]) {
-    const turns = pipelineTurns({ turn: scriptedSingle(), makeClientFor: await liveClients(), agy: { meteredFailover } });
+    const turns = pipelineTurns({ turn: scriptedSingle(), makeClientFor: await liveClients(), agy: { billing: meteredFailover ? failoverOn() : null } });
     for (const mode of [...MODES, "timeout", "noinit"]) {
       const at = `failover ${meteredFailover}, ${mode}`;
       await t.test(at, async () => {
@@ -355,7 +366,7 @@ test("B1 runPipeline around it: a unit whose lane reports another model is never
         try {
           const s = seats({ implementer: () => ({ seat: { ...H0 }, ladder: [{ ...H0 }, { ...ARGON }] }) });
           const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: s, limits: { max_revisions: 0 }, dir: env.dir, planner: PLANNER,
-            turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: await liveClients(), agy: { meteredFailover } }) });
+            turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: await liveClients(), agy: { billing: meteredFailover ? failoverOn() : null } }) });
           const u = out.units.a;
           assert.deepEqual(fetched, [], "no metered request");
           assert.deepEqual(lines("probes"), [], "no quota probe");

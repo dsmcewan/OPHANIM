@@ -5,6 +5,11 @@
 //               interval and the limits. `limits.total_provider_calls` must be declared: it bounds the provider calls
 //               the work ledger may ever record (scheduler `spent` counts every stage on the ledger, failed and resumed
 //               ones included), so a service running for weeks cannot exceed it. Unknown keys are refused.
+//   billing     (optional) THE GEMINI BILLING POLICY of every tick (register L-136; docs/billing-policy.md):
+//               {metered_gemini_failover: {enabled, budget}, gemini_api_primary: {enabled, budget}}, both OFF when absent;
+//               enabling either needs a budget (positive integer of billed Gemini requests the work ledger may ever
+//               record of that kind, counted from its work.billing entries), or the config is refused and nothing runs.
+//               A Gemini key in the service's environment authorizes nothing. Every tick of the service runs under it.
 //   one process a lock file (O_EXCL) names the holder's pid and host. A second service on the same work ledger is
 //               refused (SERVICE_RUNNING). A lock left by a dead process on this host is taken over and the takeover
 //               recorded; a lock from another host is refused, never guessed at.
@@ -28,14 +33,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {watch} from './scheduler.mjs';
+import {watch, billingStatus} from './scheduler.mjs';
 import {spent} from './scheduler.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
 import {prepareDispatch, loadIssues, tickSummary, limitsOf} from './cli.mjs';
+import {billingFromConfig} from '../../pantheon/src/route/quota-failover.mjs';
 
 export const SERVICE_CONFIG_SCHEMA = 'ophanim.operate-service/v1';
 const refuse = (why, code = 'SERVICE_REFUSED') => { throw Object.assign(new Error(why), {code}); };
-const KEYS = ['schema', 'repo', 'status_ledger', 'work_ledger', 'bundles', 'state_dir', 'issues', 'seats', 'interval_s', 'limits', 'holder', 'max_consecutive_errors'];
+const KEYS = ['schema', 'repo', 'status_ledger', 'work_ledger', 'bundles', 'state_dir', 'issues', 'seats', 'interval_s', 'limits', 'holder', 'max_consecutive_errors', 'billing'];
 const LIMIT_KEYS = {total_provider_calls: 'total-provider-calls', stage_provider_calls: 'stage-provider-calls', iterations: 'iterations', concurrency: 'concurrency',
   elapsed_ms: 'elapsed-ms', lease_ms: 'lease-ms', stage_attempts: 'stage-attempts'};
 
@@ -66,6 +72,8 @@ export function readServiceConfig(file) {
     issues: issues.source === 'file' ? {...issues, path: abs(issues.path)} : issues,
     seats: {turn: abs(c.seats?.turn), clients: abs(c.seats?.clients)},
     interval_ms: c.interval_s * 1000, holder: c.holder ?? `service@${os.hostname()}`, max_consecutive_errors: c.max_consecutive_errors ?? 5,
+    // The Gemini billing policy, resolved once from the config (refused here, before anything runs, when malformed).
+    billing: billingFromConfig(c.billing, `service config ${path.resolve(file)} billing`),
     // The CLI's limit parser, so the service and `tick` mean the same thing by every limit.
     limits: limitsOf(Object.fromEntries(Object.entries(c.limits).map(([k, v]) => [LIMIT_KEYS[k], String(v)]))),
   };
@@ -136,7 +144,7 @@ export async function runService({config, executors = null, signal = null, maxTi
     const issueEnv = c.issues.source === 'github' ? {...env, GITHUB_REPOSITORY: c.issues.repository} : env;
     const fetchIssues = async () => (await loadIssues(opts, {fetchImpl, env: issueEnv})).issues;
     const state = {last: null, due: null};
-    event({event: 'started', limits: c.limits, interval_ms: c.interval_ms, issues: c.issues.source});
+    event({event: 'started', limits: c.limits, interval_ms: c.interval_ms, issues: c.issues.source, ...(c.billing ? {billing: {digest: c.billing.digest, metered_gemini_failover: c.billing.metered_gemini_failover, gemini_api_primary: c.billing.gemini_api_primary}} : {})});
     let errors = 0, turns = 0, stopped = 'signal';
     while (!signal?.aborted) {
       if (maxTicks !== null && turns >= maxTicks) { stopped = 'max-ticks'; break; }
@@ -144,15 +152,17 @@ export async function runService({config, executors = null, signal = null, maxTi
       try {
         // `interrupt`: the service's own stop reaches the stage in flight (L-121), not only the loop.
         const ran = await watch({repo: c.repo, statusRoot: c.statusRoot, workRoot: c.workRoot, bundlesDir: c.bundlesDir, executors: exec, limits: c.limits,
-          holder: c.holder, fetchIssues, once: true, state, clock, ...(signal ? {interrupt: signal} : {}),
+          holder: c.holder, fetchIssues, once: true, state, clock, ...(signal ? {interrupt: signal} : {}), ...(c.billing ? {billing: c.billing} : {}),
           progress: e => { if (typeof onProgress === 'function') onProgress(e); event({event: 'progress', ...e}); }});
         errors = 0;
         const t = ran.at(-1) ?? null;
         if (t) { ticks.push(t); event({event: 'tick', summary: tickSummary(t, c.limits)}); }
-        const used = spent(openWorkLedger({root: c.workRoot})).calls;
+        const ledgerNow = openWorkLedger({root: c.workRoot});
+        const used = spent(ledgerNow).calls;
         write({state: 'running', heartbeat: new Date(clock()).toISOString(), last_tick: t ? tickSummary(t, c.limits) : 'no input changed; nothing due',
           next_retry_due: state.due ? new Date(state.due).toISOString() : null,
-          provider_calls: {spent: used, cap: c.limits.total_provider_calls, left: Math.max(0, c.limits.total_provider_calls - used)}});
+          provider_calls: {spent: used, cap: c.limits.total_provider_calls, left: Math.max(0, c.limits.total_provider_calls - used)},
+          ...(c.billing ? {billing: billingStatus(ledgerNow, c.billing)} : {})});
       } catch (e) {
         if (e.code === 'NO_AUTHORITY') { event({event: 'blocked', code: e.code, why: e.message}); write({state: 'blocked', why: e.message}); return {code: 3, ticks}; }
         errors++;
@@ -163,7 +173,7 @@ export async function runService({config, executors = null, signal = null, maxTi
       if (signal?.aborted || (maxTicks !== null && turns >= maxTicks)) continue;
       await sleep(c.interval_ms, signal);
     }
-    write({state: 'stopped', at: new Date(clock()).toISOString(), why: stopped, ticks: ticks.length});
+    write({state: 'stopped', at: new Date(clock()).toISOString(), why: stopped, ticks: ticks.length, ...(c.billing ? {billing: billingStatus(openWorkLedger({root: c.workRoot}), c.billing)} : {})});
     event({event: 'stopped', why: stopped});
     return {code: stopped.includes('error') ? 1 : 0, ticks, stopped};
   } finally {

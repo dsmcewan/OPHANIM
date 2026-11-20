@@ -34,6 +34,7 @@ import {evidenceSection, workSection} from '../public/record.mjs';
 import {readWorkRecord} from '../public/work.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
 import {fixture, scriptedTurn, planFor, json, UNIT, APPROVE, LIMITS, unitApprove, unitReject} from './test-fixtures.mjs';
+import {optInPolicy} from '../../pantheon/tests/fixtures/billing.mjs';
 
 const L504 = 'wave 3, L-504 invariant 2';
 const DONE = ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'];
@@ -210,7 +211,8 @@ test(`${L504}: an implementer answer that named NO serving model (the metered Ge
     ctx.implement(() => JSON.stringify({files: [{path: 'alpha.mjs', content: 'export const ok = true;\n'}]}));
     const f = fixture(repo, [{item: 'unnamed'}]);
     const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir});
-    const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
+    // The metered failover is OFF by default (register L-136): this row exercises it, so the tick declares it, with a budget.
+    const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, billing: optInPolicy({failover: 100})});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'unnamed'), DONE, why(r));
     const stages = w.stages('unnamed');

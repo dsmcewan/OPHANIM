@@ -13,9 +13,13 @@
 //                         pipeline: {max_provider_calls, max_revisions, max_concurrent_units, verify_timeout_ms}}:
 //                         positive integers; stage_provider_calls <= total_provider_calls and
 //                         pipeline.max_provider_calls <= stage_provider_calls (a pipeline runs inside one stage)
-//   billing              {scope: owner text, metered_gemini_failover: true|false, note}. false DISABLES the metered
-//                         Gemini API failover of every Antigravity lane in the run (pipeline turns and single-turn
-//                         seats): a proven quota refusal is not answered by the API; the pipeline unit ends blocked
+//   billing              {scope: owner text, metered_gemini_failover: true|false, metered_gemini_budget?, note}. false
+//                         DISABLES the metered Gemini API failover of every Antigravity lane in the run (pipeline turns
+//                         and single-turn seats): a proven quota refusal is not answered by the API; the pipeline unit
+//                         ends blocked. true needs metered_gemini_budget, a positive integer of billed Gemini requests the
+//                         run's work ledger may record (register L-136); it is resolved through the one billing policy
+//                         (pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md), and primary Gemini API
+//                         execution (gemini_api_primary) stays off in a live run
 //   require_subagent     (optional) {role, model: grok-4.6|grok-4.7, min_calls >= 1}: the run is NOT accepted unless
 //                         that many ANSWERED subagent calls of that role, served by that model, are recorded
 //   ledgers              {status_root: opened READ-ONLY, never written (its files are digested before and after),
@@ -73,7 +77,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
-import {tick, spent, releaseInterrupted, STOP_CODES} from './scheduler.mjs';
+import {tick, spent, releaseInterrupted, STOP_CODES, billingStatus} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {openWorkReadOnly} from './cli.mjs';
 import {makeExecutors, implementerPath} from './stages.mjs';
@@ -92,8 +96,16 @@ import {probeQuota} from '../../pantheon/src/agy/quota.mjs';
 import {sandboxAvailable} from '../../pantheon/src/agy/sandbox.mjs';
 import {prepareWorkerWorkspace} from '../../pantheon/src/agy/workspace.mjs';
 import {spawnPromise} from '../../pantheon/src/board/spawn.mjs';
+import {billingFromConfig, policyRecord} from '../../pantheon/src/route/quota-failover.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+/**
+ * THE MANIFEST'S BILLING, through the one billing policy (register L-136): billing.metered_gemini_failover (unchanged in
+ * meaning) with its budget billing.metered_gemini_budget; primary Gemini API execution is not declared by a live run and
+ * stays off. Throws GEMINI_BILLING_INVALID (an enabled failover without a budget, a budget without the failover).
+ */
+export const manifestBilling = m => billingFromConfig({metered_gemini_failover: {enabled: m.billing.metered_gemini_failover,
+  ...(m.billing.metered_gemini_budget !== undefined ? {budget: m.billing.metered_gemini_budget} : {})}}, 'live-run manifest billing');
 export const REPO_ROOT = path.resolve(HERE, '../..');
 export const LIVE_RUN_SCHEMA = 'ophanim.live-run/v1';
 export const PLAN_SCHEMA = 'ophanim.live-run-plan/v1';
@@ -156,9 +168,14 @@ export function validateManifest(m, {baseDir = process.cwd()} = {}) {
       why.push('limits.pipeline.max_provider_calls is at most limits.stage_provider_calls (the pipeline runs inside the implement stage, whose budget bounds it)');
     }
   }
-  if (keys(m.billing, 'billing', ['scope', 'metered_gemini_failover', 'note'])) {
+  if (keys(m.billing, 'billing', ['scope', 'metered_gemini_failover', 'metered_gemini_budget', 'note'], new Set(['metered_gemini_budget']))) {
     if (!str(m.billing.scope)) why.push('billing.scope is the owner\'s text naming what may be billed');
     if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether a quota refusal of an Antigravity lane may be answered by the metered Gemini API');
+    // THE BUDGET (register L-136, owner decision 2026-11-19, item 5): enabling the failover declares how many billed Gemini
+    // requests it may make; resolved through the one billing policy (pantheon/src/route/gemini-billing.mjs).
+    else {
+      try { manifestBilling(m); } catch (e) { why.push(`billing: ${String(e.message).replace(/^GEMINI_BILLING_INVALID: /, '')} (billing.metered_gemini_budget is the budget: a positive integer, present exactly when billing.metered_gemini_failover is true)`); }
+    }
     if (typeof m.billing.note !== 'string') why.push('billing.note is a string (empty when there is nothing to add)');
   }
   if (m.require_subagent !== undefined && keys(m.require_subagent, 'require_subagent', ['role', 'model', 'min_calls'])) {
@@ -412,8 +429,8 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
     out_dir: m.out_dir,
     credentials: {required: [...creds.rows, agyLogin], gemini_api_key: creds.gemini, values: 'never read into the record: presence only'},
     preflight, gate, seats, policy: policyHashes(), profile: 'fit', independence: 'model',
-    limits: L, billing: m.billing, metered_gemini_failover: m.billing.metered_gemini_failover
-      ? 'ALLOWED: a proven quota refusal of an Antigravity lane may be answered by the metered Gemini API of the same base model'
+    limits: L, billing: m.billing, gemini_billing: policyRecord(manifestBilling(m)), metered_gemini_failover: m.billing.metered_gemini_failover
+      ? `ALLOWED: a proven quota refusal of an Antigravity lane may be answered by the metered Gemini API of the same base model, at most ${m.billing.metered_gemini_budget} billed request(s) on this run's work ledger`
       : 'DISABLED: a quota refusal of an Antigravity lane is not answered by the metered Gemini API; the unit steps down its subscription ladder and is blocked when it is spent',
     require_subagent: m.require_subagent ?? null,
     notes: ['The provider-call limits bound CALLS, not dollars. Inside the native agy CLI one call is a whole multi-turn worker session on the Antigravity subscription; its cost is not metered here.',
@@ -647,9 +664,11 @@ export const VERIFY_FLOOR_MS = 5_000;
 export const verifyTimeout = (deadline, now = Date.now()) => Math.max(VERIFY_FLOOR_MS, Math.min(120_000, deadline - now));
 
 // ---- the confirmed run ------------------------------------------------------------------------------------------
-async function liveSeats({meteredFailover}) {
+// The live seats carry no billing policy of their own: every stage hands its seats the manifest's policy over the work
+// ledger under its claim (scheduler.mjs, tick({billing}) below; register L-136).
+async function liveSeats() {
   const live = await import(pathToFileURL(path.join(REPO_ROOT, 'pantheon/src/sdk/live.mjs')).href);
-  return {turn: await live.liveTurn({label: 'live-run', meteredFailover}), makeClientFor: await live.liveClients()};
+  return {turn: await live.liveTurn({label: 'live-run'}), makeClientFor: await live.liveClients()};
 }
 const tickRow = t => ({dispatched: t.dispatched, skipped: t.skipped, blocked: t.blocked, intake: t.intake.length, recovery: t.recovery, released_expired: t.released_expired,
   stopped: t.stopped, stop: t.stop ?? null, interrupted: t.interrupted ?? [], spent: t.spent, scope: t.scope ?? null});
@@ -667,9 +686,11 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const progressFile = path.join(m.out_dir, 'progress.jsonl');
   const note = e => { fs.appendFileSync(progressFile, JSON.stringify({at: new Date().toISOString(), ...e}) + '\n'); progress(e); };
   if (m.credentials.gemini_api_key === 'not-used' && !seats) { delete process.env.GEMINI_API_KEY; delete process.env.GOOGLE_API_KEY; }
-  const s = seats ?? await liveSeats({meteredFailover: m.billing.metered_gemini_failover});
+  const s = seats ?? await liveSeats();
+  // THE ONE BILLING POLICY (register L-136): the manifest's billing, resolved centrally, handed to every tick below.
+  const billing = manifestBilling(m);
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
-    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, meteredFailover: m.billing.metered_gemini_failover, progress: note});
+    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note});
   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
   // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).
@@ -692,7 +713,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
       break;
     }
     note({event: 'tick', n, gate: gate.gate});
-    const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note,
+    const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note, billing,
       ...(interrupt ? {interrupt} : {})});
     ticks.push(tickRow(t));
     gate = gateOf();
@@ -731,7 +752,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const record = {schema: RECORD_SCHEMA, at: new Date().toISOString(), started_at: new Date(started).toISOString(), elapsed_ms: Date.now() - started,
     manifest: {file, digest: manifestDigest}, item: m.item, candidate_commit: m.candidate_commit, plan,
     work_ledger: {root: m.ledgers.work_root, anchor: work.anchor, created: workInfo.state !== 'resumable', marker: path.join(m.ledgers.work_root, WORK_MARKER)},
-    limits: L, billing: m.billing, spent: spent(work), ticks, stages: stages.map(stageRow), budget_stops: budgetStops(ticks, stages, launcherStops), blockers,
+    limits: L, billing: m.billing, gemini_billing: billingStatus(work, billing), spent: spent(work), ticks, stages: stages.map(stageRow), budget_stops: budgetStops(ticks, stages, launcherStops), blockers,
     served_identities: servedIdentities(stages), subagent_receipt: receipt, pipelines: pipelinesOf(stages),
     final_gate: {gate: gate.gate, reason: gate.reason ?? null, blocker: gate.blocker ?? null}, verification: null, proposal,
     // NOT ACCEPTED UNTIL VERIFIED (self-audit round 3, assignment 3 (sealed bb1287a), L-307): the record written before the

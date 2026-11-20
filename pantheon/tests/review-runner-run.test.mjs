@@ -43,7 +43,10 @@ async function run({ vendor, script, args = [], env, repo, out: outDir, assignme
   outDir ??= await mkdtemp(join(tmpdir(), "rr-out-"));
   const out = capture(), fetch = fakeFetch(script);
   const d = await deps({ root: repo.root, env: env ?? { [ENV_FOR[vendor]]: FAKE_KEY }, fetch, out });
-  const code = await main(["--assignment", assignment ?? ASSIGNMENT_FOR[vendor], "--commit", repo.commit, ...LIMITS, "--out", outDir, ...args], d);
+  // A Google reviewer over the API is primary Gemini API execution, OFF by default (register L-136): these runs opt in
+  // explicitly, with a budget, as the owner would.
+  const optIn = vendor === "gemini" ? ["--gemini-api-primary", "100"] : [];
+  const code = await main(["--assignment", assignment ?? ASSIGNMENT_FOR[vendor], "--commit", repo.commit, ...LIMITS, "--out", outDir, ...optIn, ...args], d);
   const files = await readdir(outDir);
   const read = async f => readFile(join(outDir, f), "utf8");
   return { code, out, fetch, d, repo, outDir, files, read };

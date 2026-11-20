@@ -226,7 +226,8 @@ test('finding 6: a validator refused for quota with the metered failover off is 
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'q'}]);
     const turn = scriptedTurn({validator: () => { throw Object.assign(new Error('agy: 429 RESOURCE_EXHAUSTED'), {status: 429, code: 'quota_exhausted', quota_failover: {used: false, disabled: true, lanes: ['x']}}); }});
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', meteredFailover: false, ...SIX});
+    // The metered failover is not declared: off by default (register L-136).
+    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const val = openWorkLedger({root: f.workRoot}).stages('q').find(s => s.stage === 'validate');
     assert.ok(val, 'the item reached validate');

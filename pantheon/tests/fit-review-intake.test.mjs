@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { labOf } from "../src/config/models.mjs";
 import { withDispatch, WORK, seat } from "./fixtures/dispatch.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 const runJson = r => JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
 const REVIEW = /VERDICT/;
@@ -140,7 +142,8 @@ test("fit: when a fallback answered, the effort escalation starts from the ANSWE
     // before the matrix; the property is the same: the escalation starts from what the ANSWERING seat ran with.
     agyQuota(["gemini-4-hydrogen-high", "gemini-4-argon-high"]);
     implement(p => /FAILED the executed acceptance/.test(p) ? "export const ok = true; // fixed\n" : "export const ok = true;\n");
-    const r = await runOpenItem(spec("fitFallbackEffort", { acceptance_cmd: "grep -q fixed code.mjs" }), opts({ profile: "fit" }));
+    // The metered failover is OFF by default (register L-136): this row exercises it, so it opts in explicitly.
+    const r = await runOpenItem(spec("fitFallbackEffort", { acceptance_cmd: "grep -q fixed code.mjs" }), opts({ profile: "fit", billing: optIn({ failover: 100 }) }));
     const run = runJson(r);
     const work = run.turns.filter(t => t.purpose === "work");
     assert.equal(work[0].model, "gemini-4-hydrogen", "a fallback answered the first revision");

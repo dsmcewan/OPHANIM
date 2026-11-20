@@ -12,6 +12,8 @@ import { pipelineTurns, apiFilesRefusal, writeApiFiles } from "../src/pipeline/t
 import { runAgyWorkerTurn } from "../src/board/agy-cli.mjs";
 import { withFakeAgy, scriptedClients } from "./fixtures/dispatch.mjs";
 import { tempRepo, seats, unit, sh, approve, RUBRIC, PLANNER } from "./fixtures/pipeline-stages.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 // The scripted single-turn seats: a dispatcher that keeps the plan, a reviewer that approves a passing verify_cmd,
 // and a subagent. Each call is logged as the transport saw it.
@@ -134,7 +136,7 @@ test("a QUOTA refusal of the lane falls over to the metered API of the same base
     agy.agyQuotaReport("Five-hour: 3% used\nWeekly: 9% used\n");
     const calls = [];
     const makeClientFor = scriptedClients(calls, () => JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), () => null, () => null, (_v, model) => model);
-    const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor }));
+    const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor, agy: { billing: optIn({ failover: 100 }) } }));
     assert.equal(out.status, "completed", out.units.a.reason);
     assert.deepEqual(agy.agy(), [{ agent: "pantheon-unit-worker", model: "gemini-4-hydrogen-medium" }], "the lane was tried first, once");
     assert.equal(agy.agyQuotaProbes(), 1, "the quota was probed once");
@@ -151,14 +153,14 @@ test("a QUOTA refusal of the lane falls over to the metered API of the same base
   });
 });
 
-test("meteredFailover: false -- a proven QUOTA refusal is NOT answered by the metered API: the turn throws quota_exhausted (disabled), the pipeline steps its subscription ladder and the unit ends blocked; no API call", async t => {
+test("the metered failover not declared (off by default, L-136) -- a proven QUOTA refusal is NOT answered by the metered API: the turn throws quota_exhausted (disabled), the pipeline steps its subscription ladder and the unit ends blocked; no API call", async t => {
   const env = await fixture(t);
   await withFakeAgy(env.root, async agy => {
     const ladder = seats().implementer(unit("a")).ladder.map(s => s.model);
     agy.agyQuota(ladder);
     agy.agyQuotaReport("Five-hour: 3% used\nWeekly: 9% used\n");
     const calls = [];
-    const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls), agy: { meteredFailover: false } }));
+    const out = await go(env, [unit("a")], pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls), agy: {} }));
     assert.equal(out.status, "incomplete");
     assert.equal(calls.length, 0, "the metered Gemini API was never called");
     assert.deepEqual([out.units.a.status, out.units.a.code], ["blocked", "LANE_LADDER_EXHAUSTED"]);
@@ -181,7 +183,7 @@ test("the API fallback's answer must be the strict files object: prose, or a pat
     for (const [answer, want] of [["Here is the file:\nexport const x = 1;", /not one JSON value/], [JSON.stringify({ files: [{ path: "README.md", content: "mine now\n" }] }), /not one of the unit's owned paths/]]) {
       const calls = [];
       const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: seats(), limits: { max_revisions: 0 }, dir: join(env.dir, String(calls.length) + answer.length), planner: PLANNER,
-        turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls, () => answer) }) });
+        turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls, () => answer), agy: { billing: optIn({ failover: 100 }) } }) });
       assert.equal(out.status, "incomplete");
       const at = out.units.a.attempts[0];
       assert.deepEqual([at.status, at.code], ["failed", "TURN_FAILED"]);
@@ -226,7 +228,7 @@ test("a SOFT quota phrase with a probe that does not read exhausted is a lane fa
     // The lane's own group is named: an unscoped exhaustion is not proof (finding 5.2 of independent review round 2, assignment 3).
     agy.agyQuotaReport("Gemini 4 Hydrogen\tWeekly: 100% used, limit reached\n");
     out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: [unit("a")] }, seats: seats(), limits: { max_revisions: 0 }, dir: join(env.dir, "soft-exhausted"), planner: PLANNER,
-      turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls, () => JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), () => null, () => null, (_v, m) => m) }) });
+      turns: pipelineTurns({ turn: scriptedSingle(), makeClientFor: scriptedClients(calls, () => JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const via = 'api';\n" }] }), () => null, () => null, (_v, m) => m), agy: { billing: optIn({ failover: 100 }) } }) });
     at = out.units.a.attempts[0];
     assert.deepEqual([at.status, at.quota_failover?.used, at.quota_failover?.probe?.state, at.quota_failover?.after?.[0]?.explicit], ["written", true, "exhausted", false]);
     assert.deepEqual(calls.map(c => c.model), ["gemini-4-hydrogen"]);
