@@ -1,4 +1,4 @@
-# The `foundry` profile: design
+# The Autonomous Systems Foundry: the `foundry` profile, first design
 
 Status: a proposal for the owner's approval. Nothing here is built. Written 2026-11-20 against
 `feature/antigravity-sdk-intake` at `bec9a99`.
@@ -6,7 +6,13 @@ Status: a proposal for the owner's approval. Nothing here is built. Written 2026
 Every statement about the present code was read from the file it names. None of it was traced through a run. A
 second reader checked the draft against the code and found five statements wrong; they are corrected here.
 
-Two questions are open for the owner (section 10). The design is written on the answer marked as assumed.
+The target is the owner's architecture diagram, "OPHANIM: Autonomous Systems Foundry Architecture". On 2026-11-20
+the owner said of it: "autonomous systems foundry. That's what you build." This document is the first design toward
+it: the lifecycle of blocks 2 to 6 and the reflection between blocks. Section 4 lists the blocks that need designs of
+their own.
+
+Two questions were put to the owner (section 10). The owner pointed to the diagram, and the diagram answers both the
+way this design had assumed. That is a reading of the diagram, not the owner's words.
 
 ## 1. Intent
 
@@ -56,10 +62,21 @@ Profiles today are `argo`, `legacy` and `fit` (`pantheon/src/route/frontier.mjs 
 4. Under `foundry`, the planner does not cut. The dispatcher reviews the approved plan, then cuts it.
 5. Under `foundry`, a coded check runs at every boundary and starts a reflection only when a named trigger fired.
 
-## 4. Non-goals
+## 4. Not in this first design
 
-- The diagram's guardrail gate (prompt-injection and PII scans), the governor layer and the improvement loop of
-  block 8 beyond the reflection step. No scan was found at intake today; each is a separate piece of work.
+Parts of the diagram that come later, each with a design of its own:
+
+| Block of the diagram | What exists today | What is missing |
+|---|---|---|
+| 1. Intake and guardrail gate | Authorized prompts become items; tickets are created and looked up. | A prompt-injection check and a PII scan at intake: none was found. |
+| 7. Governor layer | A billing policy and budgets, leases and resumed claims, the bubblewrap jails, limits on concurrency. | Not checked item by item against the diagram's six boxes. |
+| 8. Recursive investigation and improvement | The owner-corrections registry; research triggers. This design adds the reflection, which captures findings and proposes work. | The rest of the loop: turning proposals into planned and qualified improvements without the owner pointing at them. |
+
+Suggested order after this design: block 1's two checks (small, and they guard everything after them), then block 8,
+then a review of block 7 against what exists.
+
+Outside this design for other reasons:
+
 - `foundry` on the per-file board path (`pantheon-board run`, `runOpenItem`), and in the live-run launcher. `foundry`
   is the governed lifecycle run by `operate tick`, `watch` and `serve`. The other entry points refuse it by name.
 - A side-by-side comparison of `fit` and `foundry`. The existing paired runs drive the per-file board path only
@@ -318,18 +335,25 @@ Decided by the owner, 2026-11-20:
 - the researcher on the team makes it;
 - a new profile beside `fit`.
 
-Open for the owner. The design assumes the answer given:
+Put to the owner, and answered by the diagram the owner pointed to, as this document reads it:
 
-1. **What may the researcher choose from?** Assumed: the model within each role's lab, as the diagram draws the labs
-   (section 8.3). The other answer, any lab for any role, needs transports that do not exist: today only the
-   Antigravity SDK and the older Antigravity lanes can run an implementer.
-2. **Is the cut reviewed by an outside panel before the work starts?** Assumed: no. The plan keeps its panel review
-   before the ticket, and the cut is judged with the finished change (section 8.6). This is a reading of one unclear
-   message.
+1. **What may the researcher choose from?** The model within each role's lab (section 8.3). The diagram gives each
+   role one lab: an Anthropic planner, an OpenAI dispatcher, a Gemini implementer, an OpenAI unit reviewer. Any lab
+   for any role would need transports that do not exist: today only the Antigravity SDK and the older Antigravity
+   lanes can run an implementer.
+2. **Is the cut reviewed by an outside panel before the work starts?** No. The diagram has one independent review,
+   in block 6, after the work, with the validator beside it (section 8.6).
+
+Where this design differs from the diagram, on purpose:
+
+- **Subagents are Gemini Hydrogen.** The diagram says Grok; the owner decided Hydrogen on 2026-11-20.
+- **The plan keeps its panel review before the ticket.** The diagram shows no review before block 6. The review
+  exists today and was kept: it was stated to the owner twice and not corrected. Removing it would let a ticket be
+  written from a plan nobody outside has read.
 
 Calls made in writing this, for the owner to check:
 
-1. The profile's name, `foundry`.
+1. The profile's name, `foundry`, after the diagram's title.
 2. One model per role per ticket, with ordered fallbacks named in the proposal.
 3. The reported difficulty is recorded and shown; it selects nothing in code.
 4. Code refuses a proposal that breaks a rule. The re-ask is a round of the same team. With no admitted team the
