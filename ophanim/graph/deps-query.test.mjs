@@ -19,7 +19,7 @@ const HOME_FILES = {
     "const where = process.env.APP_HOME;", "const table = fs.readFileSync(new URL('./table.json', import.meta.url), 'utf8');",
     "export function run() { return leftpad(helper(table + where)); }", "const site = 'https://api.example.test/v1';", "export const s = site;"),
   'app/util.mjs': lines("export function helper(x) { return x; }"),
-  'app/table.json': '[]\n', 'app/broken.mjs': 'export const = ;\n',
+  'app/table.json': '[]\n', 'app/broken.mjs': 'export const = ;\n', 'app/config/deep/lanes.json': '{}\n',
 };
 const SIBLING_FILES = {'package.json': json({name: 'sib'}), 'lib/a.mjs': lines("import {b} from './b.mjs';", "export function a() { return b(); }"), 'lib/b.mjs': lines("export function b() { return 1; }")};
 const setup = t => {
@@ -66,6 +66,7 @@ test('A SUBJECT is named the way a person writes it: a path, a path#function, np
   const {v} = setup(t);
   assert.deepEqual(['app/main.mjs', 'app/main.mjs#run', 'npm:leftpad', 'env:APP_HOME', 'node:fs', 'telos:lib/a.mjs', 'telos:lib/a.mjs#a', fileId('app/util.mjs')].map(s => subjectOf(v, s).id),
     [fileId('app/main.mjs'), symbolId('app/main.mjs', 'run'), packageId('npm', 'leftpad'), envId('APP_HOME'), packageId('node', 'fs'), fileIdIn('telos', 'lib/a.mjs'), symbolIdIn('telos', 'lib/a.mjs', 'a'), fileId('app/util.mjs')]);
+  assert.equal(subjectOf(v, 'app/config/deep/lanes.json').id, fileId('app/config/deep/lanes.json'), 'a path of four segments has the shape of a graph id and is still a path');
   assert.deepEqual(subjectOf(v, 'npm:never-heard-of'), {error: 'NOT_FOUND', why: 'npm:never-heard-of names nothing the graph holds at cursor ' + v.seq});
 });
 

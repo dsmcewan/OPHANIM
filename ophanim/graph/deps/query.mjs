@@ -8,7 +8,7 @@
 // Outputs   subjectOf(), needs(), neededBy(), audit(), nameOf().
 // Must never  Follow a mention; report a subject the graph does not hold as an empty answer (it is NOT_FOUND); call an
 //           answer complete when a reading it rests on reported a gap.
-import {grammarRefusal, parseId, decodeKey} from '../../../packages/graph/index.mjs';
+import {grammarRefusal, idRefusal, parseId, decodeKey} from '../../../packages/graph/index.mjs';
 import {HOME, ECOSYSTEMS, repositoryId, fileIdIn, symbolIdIn, packageId, envId, hostId} from './ids.mjs';
 import {DEPENDENCY_TYPES, dependencies, relevance, classOf, coverageOf} from './measure.mjs';
 
@@ -35,7 +35,8 @@ export function subjectOf(view, s) {
   let id = null;
   try {
     const eco = new RegExp(`^(${ECOSYSTEMS.join('|')}):(.+)$`).exec(s), sib = /^([a-z][a-z0-9-]{0,31}):(.+)$/.exec(s);
-    if (grammarRefusal(s) === null) id = s;
+    // A graph id names a registered domain and type; a path of four segments only has an id's shape.
+    if (idRefusal(s) === null) id = s;
     else if (eco) id = packageId(eco[1], eco[2]);
     else if (s.startsWith('env:')) id = envId(s.slice(4));
     else if (s.startsWith('host:')) id = hostId(s.slice(5));
