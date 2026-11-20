@@ -47,6 +47,12 @@
 // `work` (the item's own records: every later record is a consequence of the stage that cited it, and the records it was
 // given are fixed by the append-only, verified work ledger) and `output` (a validate stage's own test output, bound by
 // its record's output_digest); their versions still identify their bodies.
+//   graph  (knowledge graphs, Slice B, KB4; docs/knowledge-graph/slice-b.md) version = sha256(body), like the others.
+//          The body is REFERENCES, never a summary: each row names a record of a registered source, why the graph
+//          includes it, the source and version that state it, and the existing op that retrieves the original; plus the
+//          traversal's coverage and continuation. It is served only when the caller supplies a graph (makeRetriever
+//          `graph`); without one it is UNAVAILABLE, so a citation of it cannot be re-read and its record is stale
+//          (gates.mjs evidenceCheck), never presumed unchanged. Every other op, its version and its re-check are as above.
 import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -54,13 +60,29 @@ import {createHash} from 'node:crypto';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {statusHistory, MARKER} from './reconcile.mjs';
 import {bundlesOf} from './evidence-recovery.mjs';
+import {graphReferences, RETRIEVAL_BOUNDS} from '../graph/impact.mjs';
 
 export const DOSSIER_SCHEMA = 'ophanim.dossier/v1';
 export const KINDS = Object.freeze(['authoritative-requirement', 'observation', 'derived', 'hypothesis']);
 // rounds and requests bound the calls; result_bytes bounds one result and total_bytes one seat's whole investigation, both in UTF-8 BYTES of delivered record text.
 // dossier_bytes bounds the whole initial view (the evidence text of all its entries).
 export const DEFAULT_INVESTIGATION = Object.freeze({rounds: 3, requests_per_round: 6, result_bytes: 16_000, total_bytes: 160_000, dossier_bytes: 80_000});
-export const OPS = Object.freeze(['file', 'list', 'grep', 'log', 'show', 'status', 'work', 'record', 'issue', 'output', 'dossier']);
+export const OPS = Object.freeze(['file', 'list', 'grep', 'log', 'show', 'status', 'work', 'record', 'issue', 'output', 'dossier', 'graph']);
+/**
+ * THE GRAPH VIEW'S BOUNDS (Slice B, KB4): a `graph` request is clamped to these whatever it asks (nodes, edges and depth
+ * of the traversal); its BYTES are bounded like every other op's (result_bytes, total_bytes, the dossier's budget).
+ */
+// dossier_bytes: the graph view's share of the initial view, the same cap a derived entry made by `add` has (4000).
+export const GRAPH_RETRIEVAL = Object.freeze({depth: 2, maxNodes: 60, maxEdges: 400, ceilings: RETRIEVAL_BOUNDS, dossier_bytes: 4000});
+/**
+ * The help line for the `graph` op, for a caller that supplies a graph. Kept OUT of RETRIEVAL_HELP: that text is part
+ * of review prompts bound by their digest (review-cycle.mjs prompt_sha), so adding to it would change every prompt.
+ */
+export const GRAPH_RETRIEVAL_HELP = [
+  ' {"op":"graph","query":"neighbourhood"|"impact"|"trace"|"contradictions"|"node","subject":ID|PATH|"L-504"|"item:ID","depth":N?,"maxNodes":N?,"types":[...]?} |',
+  ' {"op":"graph","continuation":TOKEN}: REFERENCES from the knowledge graph -- each row names a record, why it is included, the source and version that',
+  ' state it and the request that retrieves the original. It is a projection, not evidence: retrieve the records it names, and challenge it ("query":"node").',
+].join('\n');
 /**
  * A DISPATCHER'S FREE TEXT NEVER REACHES A JUDGE (owner decision L-001, 2026-11-19). Since dispatch v2 a returned unit is
  * recorded as a validated reason code and moves, and its finding's text is composed by the controller from them. A
@@ -158,6 +180,47 @@ export function windowBytes(text, offset = 0, cap = Infinity) {
   return {text: b.subarray(from, to).toString('utf8'), from, to, total};
 }
 
+// --- the knowledge graph's references (Slice B, KB4) -----------------------------------------------------------
+/**
+ * The traversal bounds of a `graph` request: the request's own, clamped to GRAPH_RETRIEVAL's ceilings; a continuation
+ * keeps the bounds it was cut under, and one that claims more than the ceilings is refused ({error}).
+ */
+export function graphBounds(req) {
+  const C = GRAPH_RETRIEVAL.ceilings, pick = (v, d, c, lo = 1) => Math.min(Number.isInteger(v) && v >= lo ? v : d, c);
+  if (req?.continuation !== undefined) {
+    let t = null;
+    try { t = JSON.parse(Buffer.from(String(req.continuation), 'base64url').toString('utf8')); } catch { t = null; }
+    const p = t?.params ?? {};
+    if (!t || [['depth', C.depth], ['maxNodes', C.maxNodes], ['maxEdges', C.maxEdges]].some(([k, c]) => p[k] !== undefined && p[k] !== null && !(Number.isInteger(p[k]) && p[k] <= c))) {
+      return {error: 'BAD_REQUEST', why: 'a graph continuation is a token a graph result returned, within the graph bounds'};
+    }
+    return {};
+  }
+  return {depth: pick(req?.depth, GRAPH_RETRIEVAL.depth, C.depth, 0), maxNodes: pick(req?.maxNodes, GRAPH_RETRIEVAL.maxNodes, C.maxNodes),
+    maxEdges: pick(req?.maxEdges, GRAPH_RETRIEVAL.maxEdges, C.maxEdges)};
+}
+/** The body a graph view delivers: a header (what it is, its coverage, continuation and sources) and one row per reference. */
+export function graphBody(r) {
+  const c = r.coverage ?? {};
+  const lines = [
+    '(knowledge-graph REFERENCES: a projection of the registered sources, NOT the evidence itself. Each row names a record, why it is included, the source and version that state it, and the request that retrieves the original record. Challenge it: retrieve the records it names; {"op":"graph","query":"node","subject":ID} lists every assertion of a node, disputed ones included.)',
+    `query: ${r.query}${r.subject ? ` of ${r.subject}` : ' (continued)'}`,
+    `coverage: ${c.truncated ? `TRUNCATED (${c.limit ?? 'lists'})` : 'complete within its bounds'}${c.depth !== undefined ? ` | depth ${c.depth}, at most ${c.maxNodes} nodes and ${c.maxEdges} steps` : ''}${c.returned ? ` | ${c.returned.nodes} nodes, ${c.returned.edges} relationships returned, ${c.examined} steps examined` : ''}`,
+    ...(r.continuation ? [`continue: ${JSON.stringify({op: 'graph', query: r.query, continuation: r.continuation})}`] : []),
+    `sources: ${r.sources.map(s => `${s.source}@${s.version} (${s.state})`).join(' | ') || '(none)'}`,
+    ...(r.gaps ?? []).map(g => `GAP ${g.category}: ${g.why}`),
+    ...(r.conflicts ?? []).map(x => `CONFLICT ${x.attribute}: ${JSON.stringify(x.values)}`),
+    ...r.rows.map(x => JSON.stringify(x)),
+  ];
+  return lines.join('\n') + (r.rows.length ? '' : '\n(no row)');
+}
+const graphSource = (r, req) => {
+  const q = Object.entries({depth: req.depth, maxNodes: req.maxNodes, maxEdges: req.maxEdges, types: Array.isArray(req.types) ? req.types.join(',') : undefined,
+    direction: req.direction, mode: req.mode, cont: req.continuation !== undefined ? sha(String(req.continuation)).slice(7, 23) : undefined})
+    .filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => `${k}=${v}`).join('&');
+  return `graph:${r.query}:${r.subject ?? 'continued'}${q ? `?${q}` : ''}`;
+};
+
 // --- the retriever ---------------------------------------------------------------------------------------------
 /**
  * Read-only retrieval over the repository and the ledgers. `run(request, {cap})` never throws for a bad request: the
@@ -169,7 +232,9 @@ export function windowBytes(text, offset = 0, cap = Infinity) {
  * `next`: the complete request that continues it. So any cut source -- a long history, a large record, a file that is
  * one line -- can be continued, and deliveries of the same view and version can be added up.
  */
-export function makeRetriever({repo, statusRoot, work = null, issues = null, outputsDir = null, limits = {}, dossierViews = null}) {
+// `graph` (optional): an opened knowledge graph (packages/graph openGraph over ophanim/graph/extract's sources), or a
+// function returning one; it serves the `graph` op and nothing else.
+export function makeRetriever({repo, statusRoot, work = null, issues = null, outputsDir = null, limits = {}, dossierViews = null, graph = null}) {
   const L = {...DEFAULT_INVESTIGATION, ...limits};
   const G = gitOf(repo);
   // A path given to list, grep, log or show is the repository's: never pathspec magic, never outside it as written or
@@ -299,6 +364,18 @@ export function makeRetriever({repo, statusRoot, work = null, issues = null, out
       if (!v) return no('NOT_FOUND', `${source} is not a view of the dossier given to this seat`);
       return {source, version: v.version, body: v.body};
     },
+    // The knowledge graph's REFERENCES (Slice B, KB4): a bounded traversal, its rows naming the records and the requests
+    // that retrieve them. The request's traversal bounds are clamped (GRAPH_RETRIEVAL); its bytes are windowed below.
+    graph(req) {
+      const g = typeof graph === 'function' ? graph() : graph;
+      if (!g) return no('UNAVAILABLE', 'no knowledge graph was supplied to this run: retrieve the records with the other ops');
+      const bounds = graphBounds(req);
+      if (bounds.error) return no(bounds.error, bounds.why);
+      const r = graphReferences(g, {...req, ...bounds});
+      if (r.error) return no(r.error, r.why);
+      const body = graphBody(r);
+      return {source: graphSource(r, {...req, ...bounds}), version: sha(body), body, rows: r.rows.length};
+    },
   };
   /**
    * Window a view's body: at most `cap` bytes from `offset` (within the view's own range, when it has one). `tail`
@@ -372,7 +449,9 @@ const words = s => [...new Set(String(s ?? '').match(/[A-Za-z0-9_][A-Za-z0-9_.\/
  */
 // `ticketText` (optional): the bytes of tickets/<item>.json to build from INSTEAD of the file (null: no ticket). Used to
 // re-derive a plan's dossier views as it was given them, without the ticket it wrote (reconcile.mjs ticketGiven).
-export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}, ticketText = undefined}) {
+// `graph` (optional, Slice B KB4): an opened knowledge graph (or a function returning one). When given, the view ends with
+// a DERIVED entry of its references around the item; without it the dossier is exactly as before (no entry, no omission).
+export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}, ticketText = undefined, graph = null}) {
   const G = gitOf(repo);
   // The full bytes of every view derived here, so a cut entry is continued from the same bytes ({"op":"dossier"}).
   const derived = new Map();
@@ -525,6 +604,26 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   for (const f of tracked) { const d = f.includes('/') ? f.split('/')[0] + '/' : '(root)'; top.set(d, (top.get(d) ?? 0) + 1); }
   add('derived', `Repository index: ${tracked.length} tracked files at ${head ? head.slice(0, 12) : 'no commit'} (a COUNT, not their contents: use list, grep and file)`, `index:${head ?? 'none'}`, null,
     [...top].sort((a, b) => b[1] - a[1]).map(([d, n]) => `${d} ${n}`).join('\n'));
+  // 6. The knowledge graph's view of the item (Slice B, KB4): REFERENCES around the item's node, a DERIVED view versioned
+  // by the digest of its bytes, inside the initial view's budget (cut with its continuation, or omitted with its request).
+  if (graph) {
+    const g = typeof graph === 'function' ? graph() : graph;
+    const r = g ? graphReferences(g, {query: 'neighbourhood', subject: `item:${item}`, depth: GRAPH_RETRIEVAL.depth, maxNodes: GRAPH_RETRIEVAL.maxNodes, maxEdges: GRAPH_RETRIEVAL.maxEdges})
+      : {error: 'UNAVAILABLE', why: 'the graph could not be opened'};
+    if (r.error) omissions.push(`the knowledge graph's view of ${item} is NOT shown: ${r.why}`);
+    else {
+      const source = `graph:${item}#neighbourhood`, body = graphBody(r), version = sha(body), request = {op: 'dossier', source};
+      derived.set(source, {version, body});
+      const room = Math.min(GRAPH_RETRIEVAL.dossier_bytes, left());
+      if (room < 200) omissions.push(`the knowledge graph's view of ${item} is NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent; retrieve it with ${JSON.stringify(request)}`);
+      else {
+        const w = windowBytes(body, 0, room);
+        push('derived', `Knowledge graph: references around ${item} (a projection of the registered sources at cursor ${r.cursor}, NOT evidence: retrieve the records it names)`, source, version, null, w.text,
+          {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total, rows: r.rows.length,
+            ...(w.to < w.total ? {note: `the first ${w.to} of ${w.total} bytes of this view; continue with next`, next: {...request, offset: w.to}} : {})}, request);
+      }
+    }
+  }
   const core = entries.map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, coverage: {complete: e.coverage.complete, from: e.coverage.from, to: e.coverage.to, total: e.coverage.total}}));
   // `stable` leaves out the work ledger's own records, so recording an attempt does not itself look like new evidence.
   const outside = core.filter(e => !e.source.startsWith('work:')).map(({id, ...e}) => e);
