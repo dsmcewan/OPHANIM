@@ -220,6 +220,9 @@ test('freshness: an import older than its bound, or of an instance that cannot b
   const f1 = central.freshness({now: at(7)});
   assert.deepEqual([f1.technology.state, f1.finance.state], ['stale', 'current']);
   assert.match(f1.technology.reasons.join('; '), /unreachable/);
+  // The reasons are true: an instance recorded unreachable is stale for that reason, not because its import failed to
+  // re-derive (coordinator fix at integration; the agent's caveat).
+  assert.deepEqual(f1.technology.reasons.filter(x => /could not be re-derived/.test(x)), [], f1.technology.reasons.join('; '));
   const d = central.dependencies({now: at(7)});
   assert.deepEqual([d.stale, d.links.map(l => l.stale)], [['technology'], [true]], 'the dependency answer says it rests on a stale import');
   const r = central.resolve(ref, {now: at(7)});

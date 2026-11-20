@@ -818,7 +818,7 @@ export function openCentral({dir, anchor, instance = 'central', departments, imp
       else {
         if (s.state === 'unavailable') reasons.push(`unreachable, as recorded at ${s.observed_at}: ${s.why}`);
         if (s.state === 'stale') reasons.push(`an export could not be imported: ${s.why}`);
-        if (s.replay !== 'applied') reasons.push(`its import could not be re-derived here (${s.replay})`);
+        if (s.replay !== 'applied' && s.replay !== 'recorded') reasons.push(`its import could not be re-derived here (${s.replay})`);
       }
       const r = reach.get(n);
       if (r && !r.ok && s?.state !== 'unavailable') reasons.push(`unreachable at ${r.at}: ${r.why}`);
