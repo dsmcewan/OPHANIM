@@ -82,3 +82,36 @@ test('affected runners: --run refuses a checkout whose HEAD is not <head>; a lis
   assert.equal(list.status, 0, list.stderr);
   assert.deepEqual(JSON.parse(list.stdout).runners.map(x => x.file), ['tests/a.mutate.mjs']);
 });
+
+// A runner with TWO mutations on different files: a change to one file touches one mutation.
+const TWO = ["import fs from 'node:fs';", "import path from 'node:path';", 'const one = (file, from, to) => ({file, from, to});', 'export const MUTATIONS = [',
+  "  {id: 'X1', what: 'a', tests: [['tests/a.test.mjs', '^synthetic']], edits: [one('lib/a.mjs', 'x', 'y')]},",
+  "  {id: 'X2', what: 'b', tests: [['tests/b.test.mjs', '^synthetic']], edits: [one('lib/b.mjs', 'x', 'y')]},", '];',
+  "if (process.argv.includes('--check')) { console.log('2 mutation(s)'); process.exit(0); }",
+  "if (process.env.TOOLKIT_RUNNER_RECORD) fs.writeFileSync(path.join(process.env.TOOLKIT_RUNNER_RECORD, 'two.json'), JSON.stringify(process.argv.slice(2)));", ''].join('\n');
+const PAIR = {'lib/a.mjs': 'export const a = 1;\n', 'lib/b.mjs': 'export const b = 1;\n', 'tests/a.test.mjs': '// a\n', 'tests/b.test.mjs': '// b\n', 'tests/two.mutate.mjs': TWO};
+const onlyOf = a => a.runners.map(r => [r.file, r.only]);
+
+test('affected runners: PER MUTATION -- only the mutations whose target or deciding test changed are listed; all touched, or the runner itself changed, is a full run', t => {
+  const repo = tempRepo(t, PAIR);
+  const target = repo.commit({'lib/a.mjs': 'export const a = 2;\n'});
+  assert.deepEqual(onlyOf(affected({root: repo.dir, base: repo.base, head: target})), [['tests/two.mutate.mjs', ['X1']]], 'a changed target: its mutation only');
+  const decides = repo.commit({'tests/b.test.mjs': '// b, a new case\n'});
+  assert.deepEqual(onlyOf(affected({root: repo.dir, base: target, head: decides})), [['tests/two.mutate.mjs', ['X2']]], 'a changed deciding test: its mutation only');
+  assert.deepEqual(onlyOf(affected({root: repo.dir, base: repo.base, head: decides})), [['tests/two.mutate.mjs', null]], 'both touched: in full');
+  const own = repo.commit({'tests/two.mutate.mjs': TWO + '// the harness changed\n', 'lib/a.mjs': 'export const a = 3;\n'});
+  assert.deepEqual(onlyOf(affected({root: repo.dir, base: decides, head: own})), [['tests/two.mutate.mjs', null]], 'the runner\'s own file changed: in full');
+});
+
+test('affected runners: --run passes --only with the touched mutations, and --full runs every listed runner in full', t => {
+  const repo = tempRepo(t, PAIR);
+  const head = repo.commit({'lib/a.mjs': 'export const a = 2;\n'});
+  const record = path.join(repo.dir, '.record');
+  fs.mkdirSync(record);
+  const run = extra => { const r = spawnSync(process.execPath, [TOOL, repo.base, head, '--root', repo.dir, '--run', ...extra], {encoding: 'utf8', env: {...CLEAN_ENV, TOOLKIT_RUNNER_RECORD: record}});
+    assert.equal(r.status, 0, r.stdout + r.stderr); return {out: r.stdout, argv: JSON.parse(fs.readFileSync(path.join(record, 'two.json'), 'utf8'))}; };
+  const some = run([]);
+  assert.deepEqual(some.argv, ['--only', 'X1']);
+  assert.match(some.out, /\(1 of 2 mutations: X1\)/);
+  assert.deepEqual(run(['--full']).argv, []);
+});

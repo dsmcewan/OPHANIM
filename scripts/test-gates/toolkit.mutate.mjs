@@ -54,6 +54,10 @@ export const MUTATIONS = [
     edits: [one(AFFECTED, '  return bad.length ? 1 : 0;', '  return 0;')]},
   {id: 'A4', what: 'a runner whose table cannot be read is cleared (not listed)', tests: [[AFFECTED_TEST, '^affected runners: a runner whose table cannot be read']],
     edits: [one(AFFECTED, '    if (!table.mutations.length) reasons.push(', '    if (false) reasons.push(')]},
+  {id: 'A5', what: 'every listed runner runs in full: the per-mutation selection is dropped', tests: [[AFFECTED_TEST, '^affected runners: PER MUTATION']],
+    edits: [one(AFFECTED, '    const only = changed.has(e.path) || !table.mutations.length || unread.length || touched.length === table.mutations.length ? null : touched;', '    const only = null;')]},
+  {id: 'A6', what: 'a runner whose own file changed runs only some mutations (its harness change is not run)', tests: [[AFFECTED_TEST, '^affected runners: PER MUTATION']],
+    edits: [one(AFFECTED, '    const only = changed.has(e.path) || !table.mutations.length', '    const only = false || !table.mutations.length')]},
   // ---- T3 manifest reach --------------------------------------------------------------------------------------------------
   {id: 'M1', what: 'a declared hold is ignored: a held test is reported missing', tests: [[MANIFEST_TEST, '^manifest reach: the reached test granted, or held']],
     edits: [one(MANIFEST, '    const h = holds.find(x => matches(file, [x.path]));', '    const h = null;')]},

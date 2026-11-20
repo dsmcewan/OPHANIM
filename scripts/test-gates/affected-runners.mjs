@@ -5,7 +5,8 @@
 // red at baseline because one of its deciding test files had changed; CI runs only --check).
 //
 //   node scripts/test-gates/affected-runners.mjs <base> <head> [--json] [--root DIR]
-//   node scripts/test-gates/affected-runners.mjs <base> <head> --run [--copy-root DIR] [--log DIR] [--root DIR]
+//   node scripts/test-gates/affected-runners.mjs <base> <head> --run [--full] [--copy-root DIR] [--log DIR] [--root DIR]
+//   (--run passes each runner --only with the mutations the change touches, unless its own file changed or --full)
 //
 // Each runner at <head> is read AS TEXT through mutationTable (ophanim/graph/extract/verification.mjs), never imported or
 // executed to be read. A runner is listed when
@@ -15,7 +16,7 @@
 // A runner whose table this reader cannot fully read (no MUTATIONS, or a mutation with no target or no deciding test)
 // is listed too, with that reason: what cannot be read cannot be cleared (lessons class text-reader-misses-new-shape).
 // A runner deleted between the two commits is reported as removed (there is nothing to run).
-// --run runs each listed runner IN FULL, one after another, from the checkout at --root (whose HEAD must be <head>:
+// --run runs each listed runner (in full, or --only its touched mutations: see `only` below), one after another, from the checkout at --root (whose HEAD must be <head>:
 // otherwise the runs would test another tree), passing --copy-root DIR through and --log DIR/<runner path> so the logs do
 // not collide; it exits 1 if any runner exits non-zero (or is killed), naming each.
 //
@@ -55,7 +56,13 @@ export function affected({root = ROOT, base, head}) {
     if (d.length) reasons.push({kind: 'decides', files: d});
     if (!table.mutations.length) reasons.push({kind: 'unread', files: [], note: 'no MUTATIONS table read: the runner cannot be cleared'});
     else if (unread.length) reasons.push({kind: 'unread', files: [], note: `mutation(s) ${unread.join(', ')} have no readable target or deciding test: the runner cannot be cleared`});
-    if (reasons.length) runners.push({file: e.path, mutations: table.mutations.length, reasons});
+    // PER MUTATION (2026-11-20, owner: "too long, look into it"): when the runner's own file is unchanged, only the
+    // mutations whose targets or deciding tests changed need running (passed as --only); the others keep the verdict an
+    // earlier full run gave them on these same files -- the rule this tool already applies per runner, made finer. A runner
+    // whose own file changed (its harness may have changed) or with an unreadable mutation runs in full.
+    const touched = table.mutations.filter(m => m.files.some(f => changed.has(f)) || m.tests.some(f => changed.has(f))).map(m => m.id);
+    const only = changed.has(e.path) || !table.mutations.length || unread.length || touched.length === table.mutations.length ? null : touched;
+    if (reasons.length) runners.push({file: e.path, mutations: table.mutations.length, only, reasons});
   }
   const removed = changes.filter(c => c.status === 'D' && isRunner(c.path)).map(c => c.path);
   return {base: b, head: h, changed: changes.length, runners, removed};
@@ -66,7 +73,7 @@ const describe = r => r.reasons.map(x => (x.kind === 'own' ? 'its own file chang
 
 function render(a) {
   const L = [`${a.base.slice(0, 12)}..${a.head.slice(0, 12)}: ${a.changed} changed file(s); ${a.runners.length} runner(s) affected`];
-  for (const r of a.runners) L.push(`  ${r.file}  [${describe(r)}]`);
+  for (const r of a.runners) L.push(`  ${r.file}  [${describe(r)}]${r.only ? `  (${r.only.length} of ${r.mutations} mutations: ${r.only.join(' ')})` : ''}`);
   for (const f of a.removed) L.push(`  removed: ${f} (deleted; nothing to run)`);
   return L.join('\n');
 }
@@ -77,7 +84,7 @@ export function runAll({root, runners, copyRoot = null, logDir = null, log = s =
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT'));
   const out = [];
   for (const r of runners) {
-    const args = [path.join(root, r.file), ...(copyRoot ? ['--copy-root', path.resolve(copyRoot)] : []),
+    const args = [path.join(root, r.file), ...(r.only ? ['--only', r.only.join(',')] : []), ...(copyRoot ? ['--copy-root', path.resolve(copyRoot)] : []),
       ...(logDir ? ['--log', path.join(path.resolve(logDir), r.file.replace(/[^\w.-]+/g, '_'))] : [])];
     log(`\n> affected runner: node ${[r.file, ...args.slice(1)].join(' ')}  (${describe(r)})`);
     const p = spawnSync(process.execPath, args, {cwd: root, env, stdio: 'inherit'});
@@ -89,13 +96,14 @@ export function runAll({root, runners, copyRoot = null, logDir = null, log = s =
 }
 
 export function main(argv, {out = s => console.log(s)} = {}) {
-  let root = ROOT, json = false, run = false, copyRoot = null, logDir = null;
+  let root = ROOT, json = false, run = false, copyRoot = null, logDir = null, full = false;
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--root') root = path.resolve(argv[++i]);
     else if (a === '--json') json = true;
     else if (a === '--run') run = true;
+    else if (a === '--full') full = true;
     else if (a === '--copy-root') copyRoot = argv[++i];
     else if (a === '--log') logDir = argv[++i];
     else if (a.startsWith('--')) throw new Error(`unknown option: ${a}`);
@@ -103,6 +111,7 @@ export function main(argv, {out = s => console.log(s)} = {}) {
   }
   if (pos.length !== 2 || ((copyRoot || logDir) && !run)) throw new Error('usage: affected-runners.mjs <base> <head> [--json] | <base> <head> --run [--copy-root DIR] [--log DIR]  [--root DIR]');
   const a = affected({root, base: pos[0], head: pos[1]});
+  if (full) for (const r of a.runners) r.only = null;   // --full: every listed runner in full, whatever changed
   if (!run) { out(json ? JSON.stringify({schema: SCHEMA, ...a}, null, 2) : render(a)); return 0; }
   const at = resolveCommit(root, 'HEAD');
   if (at !== a.head) { console.error(`--run: the checkout at ${root} is at ${at.slice(0, 12)}, not ${a.head.slice(0, 12)}: the runners would test another tree`); return 2; }
