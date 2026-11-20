@@ -492,6 +492,8 @@ An elapsed stop is never listed as a provider-call stop.
 
 **Resume.** Each approved unit is checkpointed: its key, the Stage 5 verdict, the rubric hash, the commit and the tree. A retried implement stage re-verifies each checkpoint by patch digest and resulting tree, skips units that pass with no provider calls, and runs the rest. A tampered or stale checkpoint is rejected and the unit re-runs.
 
+**A session stopped by a refused charge.** When the Gemini billing policy or the run's provider-call bound refuses a request inside an SDK implementer session, the files the session had written are kept as a partial checkpoint (`pantheon.unit-partial/v1`, beside the approved checkpoints). It is sealed with the same key, its verdict is `unverified`, and it records the refused request, the requests admitted before it, the session's evidence and who wrote the files. A later run restores it only when the seal, unit, base, upstream, patch digest, owned paths and resulting tree all hold; otherwise the unit starts from its base and the record says why. A restored partial checkpoint is where the next session starts. It approves nothing: the unit still runs its verify command and Stage 5, and the model that wrote the restored files stays a contributor. A session that failed for any other reason is discarded as before (register L-736).
+
 **Observed on the owner's machine (agy 1.5.10, 2026-11-18).**
 
 - The help lists every flag the worker uses (`--mode`, `--add-dir`, `--agent`, `--output-format`, `--print-timeout`), plus `--disable-slash-commands`, `--settings`, `--effort` and `--sandbox`.

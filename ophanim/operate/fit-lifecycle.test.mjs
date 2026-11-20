@@ -358,6 +358,53 @@ test('LIFECYCLE, default routing (fit): the SDK implementer is a primary Gemini 
   });
 });
 
+test('LIFECYCLE, default routing (fit): a primary budget that runs out INSIDE an SDK session keeps what the session wrote; the stage waits on the budget, and once the launcher raises it the next attempt starts from the kept work, is told so, and the item runs to its outcome', async () => {
+  // Owner decision 2026-11-20 (requirement 8 of the L-150 decision applies to the SDK implementer; register L-736).
+  await withDispatch(async ctx => {
+    const {dir: repo, makeClientFor} = ctx;
+    const f = fixture(repo, [{item: 'kept'}]);
+    // One hard unit whose implementer may delegate. The session's first request does the unit's work; its second (the
+    // specialist's own, on Hydrogen) is the one a budget of 1 refuses. The worker logs what it found when it started.
+    const unit = UNIT('alpha', {difficulty: 'hard', allowed_subagents: ['code-explorer']});
+    ctx.agyWorker(`found=$(tr -d '\\n' < "$dir/alpha.mjs")
+case "$prompt" in *"RESUMED FROM A PARTIAL CHECKPOINT"*) told=told ;; *) told=untold ;; esac
+printf '%s|%s\\n' "$found" "$told" >> "$FAKE_AGY_LOG.found"
+printf 'export const ok = true;\\n' > "$dir/alpha.mjs"
+sdk_subagent code-explorer "Find what reads ok and what value it must have."
+`);
+    const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, {work_units: [unit], difficulty: 'hard'}))});
+    const run = async billing => {
+      const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+      await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: 'kept', billing});
+      return openWorkLedger({root: f.workRoot});
+    };
+    // ---- A BUDGET OF ONE: the implementer's request is admitted and does its work; the specialist's is refused.
+    const w1 = await run(optInPolicy({primary: 1}));
+    assert.deepEqual(seq(w1, 'kept'), ['plan:passed', 'implement:pending']);
+    const stopped = w1.stages('kept')[1];
+    assert.deepEqual([stopped.blocker.code, stopped.blocker.transient], ['METERED_GEMINI_BUDGET_EXHAUSTED', true]);
+    assert.deepEqual(ctx.sdk().map(x => [x.agent, x.model]), [['sdk-implementer', 'gemini-4-carbon']], 'the refused request did not reach the provider');
+    assert.deepEqual(w1.billings('primary').map(r => [r.request, r.model, r.purpose]), [[1, 'gemini-4-carbon', 'implementer']]);
+    const u1 = recordOf(stopped).units.alpha;
+    assert.deepEqual([u1.status, u1.attempts.map(a => [a.status, a.partial.kept, a.partial.changed, a.stopped.request]), u1.partial.written, u1.partial.changed, fs.existsSync(u1.partial.file)],
+      ['blocked', [['failed', true, ['alpha.mjs'], 2]], true, ['alpha.mjs'], true], 'the session\'s write is kept as a partial checkpoint, refused at its second request');
+    assert.equal(JSON.parse(fs.readFileSync(u1.partial.file, 'utf8')).verdict, 'unverified');
+    assert.equal(stopped.outputs.shipped, false);
+    assert.equal(git(repo, 'show', 'HEAD:alpha.mjs'), 'export const ok = false;\n', 'nothing of it reached the repository\'s branch');
+    // ---- THE LAUNCHER RAISES THE BUDGET: the same stage is attempted again and starts from the kept work.
+    const w2 = await run(optInPolicy({primary: 50}));
+    assert.deepEqual(seq(w2, 'kept'), ['plan:passed', 'implement:pending', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], 'the stopped attempt stays on the record; the plan was not asked again');
+    const impl = w2.stages('kept')[2];
+    const u2 = recordOf(impl).units.alpha;
+    assert.deepEqual([u2.status, u2.resumed, u2.partial_resume.resumed, u2.partial_resume.changed, u2.partial_resume.stopped.code, u2.reviews.length], ['approved', false, true, ['alpha.mjs'], 'METERED_GEMINI_BUDGET_EXHAUSTED', 1],
+      'restored, then verified and reviewed like any attempt: a partial checkpoint approves nothing');
+    assert.deepEqual(lines(path.join(repo, 'agy.log.found')), ['export const ok = false;|untold', 'export const ok = true;|told'], 'the second session found the first one\'s work in its worktree, and its prompt said so');
+    assert.deepEqual(fs.existsSync(u1.partial.file), false, 'the approved checkpoint replaced the partial one');
+    // What was billed in all: the stopped session's one request, then the session that finished and its specialist.
+    assert.deepEqual(w2.billings('primary').map(r => [r.request, r.model, r.purpose]), [[1, 'gemini-4-carbon', 'implementer'], [1, 'gemini-4-carbon', 'implementer'], [2, 'gemini-4-hydrogen', 'subagent']]);
+  });
+});
+
 test('LIFECYCLE, default routing (fit): a plan whose units overlap without an order is returned to the planner by the controller; the revised units run to an outcome', async () => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor} = ctx;

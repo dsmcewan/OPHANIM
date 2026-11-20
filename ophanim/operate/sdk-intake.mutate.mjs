@@ -37,7 +37,7 @@ const T = {
 const SUITES = [...new Set(Object.values(T).flat())];
 const BR = 'pantheon/scripts/antigravity-bridge.py';
 const GOV = 'pantheon/src/antigravity/subagents.mjs', GW = 'pantheon/src/antigravity/gateway.mjs', TURN = 'pantheon/src/antigravity/turn.mjs', CFG = 'pantheon/src/config/antigravity-sdk.json';
-const PT = 'pantheon/src/pipeline/turns.mjs', IMP = 'pantheon/src/pipeline/implement.mjs', IDX = 'pantheon/src/pipeline/index.mjs', REC = 'pantheon/src/pipeline/record.mjs';
+const PT = 'pantheon/src/pipeline/turns.mjs', IMP = 'pantheon/src/pipeline/implement.mjs', IDX = 'pantheon/src/pipeline/index.mjs', REC = 'pantheon/src/pipeline/record.mjs', CK = 'pantheon/src/pipeline/checkpoint.mjs';
 const FM = 'pantheon/src/route/fit-matrix.mjs', FR = 'pantheon/src/route/frontier.mjs', RI = 'pantheon/src/board/run-item.mjs';
 const ACFG = 'pantheon/src/antigravity/config.mjs', RT = 'pantheon/src/antigravity/research.mjs', WL = 'ophanim/operate/work-ledger.mjs', OR = 'ophanim/operate/research.mjs';
 const GT = 'ophanim/operate/gates.mjs', CTX = 'ophanim/operate/context.mjs';
@@ -169,7 +169,7 @@ export const MUTATIONS = [
   {id: 'P19', what: 'the billing policy\'s refusal of the seat is not a blocker: the unit spends rungs and revisions on it', file: IMP, tests: T.pipe,
     from: '"SDK_VERSION", "SDK_UNAVAILABLE", "GEMINI_PRIMARY_DISABLED", "METERED_GEMINI_BUDGET_EXHAUSTED"]);', to: '"SDK_VERSION", "SDK_UNAVAILABLE"]);'},
   {id: 'P20', what: 'a session\'s billed requests are not put to the billing policy one by one: none is recorded, and the budget cannot run out inside a session', file: PT, tests: T.pipe,
-    from: '        spendGemini(billing, billed(info, ++requests), () => {', to: '        ((ctx, row, own) => own(row))(billing, billed(info, ++requests), () => {'},
+    from: '        const row = spendGemini(billing, billed(info, ++requests), () => {', to: '        const row = ((ctx, row, own) => (own(row), null))(billing, billed(info, ++requests), () => {'},
   {id: 'P21', what: 'a request the billing policy refused inside a session is reported as the run\'s own call bound', file: PT, tests: T.pipe,
     from: '      if (refusedByBilling && e?.code === "PROVIDER_LIMIT") throw', to: '      if (false) throw'},
   // ---- routing
@@ -381,7 +381,7 @@ export const MUTATIONS = [
     from: '  { const bad = keyRefusal(apiKey); if (bad) throw Object.assign(new Error(`the gateway was given', to: '  { const bad = null; if (bad) throw Object.assign(new Error(`the gateway was given'},
   // ---- the independent review of the billing merge (2026-11-20): what the documented outcome rested on
   {id: 'P24', what: 'a request the billing policy refused inside a session is forgotten when the session ends well: the unit takes its result', file: PT, tests: T.pipe,
-    from: '      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT });', to: '      if (false) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT });'},
+    from: '      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT, session_request: refusedAt });', to: '      if (false) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT, session_request: refusedAt });'},
   {id: 'L11', what: 'the launcher\'s plan reads only the plain gate: a stage the policy refused stays "nothing to dispatch" after the manifest declares another budget', file: LR, tests: T.live,
     from: 'runnable: STAGES.includes(g.gate) || wake !== null,', to: 'runnable: STAGES.includes(g.gate),'},
   {id: 'L12', what: 'the launcher\'s run does not tick on a billing wake (the plan says runnable, and nothing is dispatched)', file: LR, tests: T.live,
@@ -554,6 +554,52 @@ export const MUTATIONS = [
     from: '      refuse(res, rec, 403, GATEWAY_REFUSALS.BUDGET,', to: '      refuse(res, rec, 429, GATEWAY_REFUSALS.BUDGET,'},
   {id: 'GP14', what: 'the session\'s unit is not given back when its charge is refused (a refused request counts against the cap)', file: GW, tests: T.gw,
     from: '      admitted -= 1;\n', to: ''},
+  // ---- A BUDGET-EXHAUSTED SESSION KEEPS ITS WORK (owner decision 2026-11-20: requirement 8 of the L-150 decision; register L-736)
+  {id: 'PC1', what: 'a session a refused charge stopped has its writes discarded (the work of the attempt is not kept)', file: IMP, tests: T.pipe,
+    from: '    const stop = native ? budgetStopOf(e) : null;', to: '    const stop = null;'},
+  {id: 'PC2', what: 'a stopped session\'s writes are kept without passing the write jail', file: IMP, tests: T.pipe,
+    from: '      if (jail.ok && jail.changed.length) {', to: '      if (jail.changed.length) {'},
+  {id: 'PC3', what: 'a session that failed for any reason keeps its writes as candidate work', file: IMP, tests: T.pipe,
+    from: '  if (!(isGeminiBillingRefusal(e) || e?.code === "PROVIDER_LIMIT")) return null;', to: '  if (false) return null;'},
+  {id: 'PC4', what: 'a partial checkpoint is written with the verdict of an approval', file: CK, tests: T.pipe,
+    from: '{ schema: PARTIAL_SCHEMA, ...record, verdict: "unverified", patch_path,', to: '{ schema: PARTIAL_SCHEMA, ...record, verdict: "approve", patch_path,'},
+  {id: 'PC5', what: 'a partial checkpoint is restored without its seal being verified', file: CK, tests: T.pipe,
+    from: '  if (want.length !== have.length || !timingSafeEqual(want, have)) return "the partial checkpoint\'s seal does not verify', to: '  if (false) return "the partial checkpoint\'s seal does not verify'},
+  {id: 'PC6', what: 'a partial checkpoint marked approved is restored', file: CK, tests: T.pipe,
+    from: '  if (record.verdict !== "unverified") return', to: '  if (false) return'},
+  {id: 'PC7', what: 'a partial checkpoint that names a path outside the unit\'s own passes the record check', file: CK, tests: T.pipe,
+    from: '  for (const p of record.changed) if (!matchesOwned(p, expect.owned_paths ?? [])) return', to: '  for (const p of record.changed) if (false) return'},
+  {id: 'PC8', what: 'a restored patch may change a path the unit does not own', file: IDX, tests: T.pipe,
+    from: '    if (outside.length) return reject(`the partial checkpoint\'s patch changes', to: '    if (false) return reject(`the partial checkpoint\'s patch changes'},
+  {id: 'PC9', what: 'a partial checkpoint\'s patch is not checked against its recorded digest', file: CK, tests: T.pipe,
+    from: '  if (sha256(patch) !== record.patch_digest) return "the partial checkpoint\'s patch does not hash', to: '  if (false) return "the partial checkpoint\'s patch does not hash'},
+  {id: 'PC10', what: 'a restored patch need not yield the recorded tree', file: IDX, tests: T.pipe,
+    from: '    if (tree !== got.record.tree) return reject(`the partial checkpoint\'s patch applied', to: '    if (false) return reject(`the partial checkpoint\'s patch applied'},
+  {id: 'PC11', what: 'a partial checkpoint of another unit key, base or upstream is restored', file: CK, tests: T.pipe,
+    from: '  if (record.unit_key !== expect.unit_key) return "the partial checkpoint is for another unit key";', to: ''},
+  {id: 'PC12', what: 'a partial checkpoint recorded on another base is restored', file: CK, tests: T.pipe,
+    from: '  if (record.base_commit !== expect.base_commit) return `the partial checkpoint was recorded on base', to: '  if (false) return `the partial checkpoint was recorded on base'},
+  {id: 'PC13', what: 'a partial checkpoint whose upstream differs from this run\'s is restored', file: CK, tests: T.pipe,
+    from: 'got.some((x, i) => x !== now[i])) return "the partial checkpoint\'s upstream units', to: 'false) return "the partial checkpoint\'s upstream units'},
+  {id: 'PC14', what: 'the resumed session is not told what it starts from', file: IMP, tests: T.pipe,
+    from: '    ...(resumed ? ["", `RESUMED FROM A PARTIAL CHECKPOINT:', to: '    ...(false ? ["", `RESUMED FROM A PARTIAL CHECKPOINT:'},
+  {id: 'PC15', what: 'the lineage of a restored partial checkpoint is dropped (whoever wrote the restored work may review it)', file: REC, tests: T.pipe,
+    from: '    if (u.partial_resume?.resumed) for (const c of u.partial_resume.contributions ?? []) {', to: '    if (false) for (const c of u.partial_resume.contributions ?? []) {'},
+  {id: 'PC16', what: 'a stopped session whose writes were kept is not an author of them', file: REC, tests: T.pipe,
+    from: '    for (const a of u.attempts ?? []) if (a.status === "written" || a.partial?.kept === true) {', to: '    for (const a of u.attempts ?? []) if (a.status === "written") {'},
+  {id: 'PC17', what: 'an approved unit\'s partial checkpoint is left in place', file: IDX, tests: T.pipe,
+    from: '        if (u.checkpoint?.written) await removePartial(', to: '        if (false) await removePartial('},
+  {id: 'PC18', what: 'the number of the refused request is not recorded', file: PT, tests: T.pipe,
+    from: '      } catch (e) { refusedAt ??= requests; if (isGeminiBillingRefusal(e)) refusedByBilling ??= e; throw e; }', to: '      } catch (e) { if (isGeminiBillingRefusal(e)) refusedByBilling ??= e; throw e; }'},
+  {id: 'PC19', what: 'the requests admitted before a refusal are not recorded with the session', file: PT, tests: T.pipe,
+    from: '        spent.push({ request: row?.request ?? requests,', to: '        void ({ request: row?.request ?? requests,'},
+  {id: 'PC20', what: 'a session writes no on-disk record of its requests', file: TURN, tests: T.turn,
+    from: '    outcomes: requestsFile, outcomeTag: { unit_id: unit.unit_id ?? null } });', to: '    });'},
+  {id: 'PC21', what: 'a unit that starts from a restored partial checkpoint starts its first attempt from the base all the same', file: IDX, tests: T.pipe,
+    from: '      let checkpoint = restored ?? wt.base_commit, findings = [];', to: '      let checkpoint = wt.base_commit, findings = [];'},
+  // The same line as PC1, decided here by the LIFECYCLE test alone (the scheduler's retry of a stage that waited on the budget).
+  {id: 'PC22', what: 'through the lifecycle, a session a refused charge stopped has its writes discarded', file: IMP, tests: T.fit,
+    from: '    const stop = native ? budgetStopOf(e) : null;', to: '    const stop = null;'},
   // ---- A LANE-PINNED IMPLEMENTER UNDER FIT (owner decision 2026-11-20, register L-721)
   {id: 'LP1', what: 'a lane-pinned fit implementer is followed by the matrix\'s primary Gemini API seats (an exhausted lane switches transport)', file: FR, tests: [...T.route, ...T.board],
     from: "const lanePin=profile==='fit'&&role==='implementer'&&!roleOverride?lanePinFallback(pin,fitLevel(base.task,role).value):null;", to: 'const lanePin=null;'},

@@ -54,6 +54,7 @@ import { workerVerifyPromptLines } from "../agy/workspace.mjs";
 import { VERIFY_LAUNCHER_NAME } from "../agy/jail-hook.mjs";
 import { isSdkSeat, SDK_TRANSPORT } from "../antigravity/config.mjs";
 import { ceilingFor, SUBAGENT_MODEL, SUBAGENT_TYPES } from "../antigravity/subagents.mjs";
+import { isGeminiBillingRefusal } from "../route/gemini-billing.mjs";
 
 /** Absolute path of the stdio MCP relay the implementer's agent launches to reach the unit's subagent shim. */
 export const MCP_SERVER_PATH = fileURLToPath(new URL("./a2a-mcp-server.mjs", import.meta.url));
@@ -71,6 +72,17 @@ export function transportBlockerOf(e) {
   if (e?.transport !== SDK_TRANSPORT) return null;
   if (e?.sdk_unavailable === true) return "SDK_UNAVAILABLE";
   return TRANSPORT_BLOCKERS.includes(e?.code) ? e.code : null;
+}
+
+/**
+ * What stopped an SDK session, when it was a refused CHARGE: {code, request, used, budget}, or null. The billing policy's
+ * refusal (its budget spent, or the kind switched off under it), or the run's own provider-call bound. `request` is the
+ * session's request that was refused (turns.mjs counts them); `used` and `budget` are the policy's, when it refused.
+ */
+export function budgetStopOf(e) {
+  if (!(isGeminiBillingRefusal(e) || e?.code === "PROVIDER_LIMIT")) return null;
+  const b = e?.billing ?? null;
+  return { code: b?.code ?? e.code, request: Number.isInteger(e?.session_request) ? e.session_request : null, used: b?.used ?? null, budget: b?.budget ?? null, at: b?.at ?? new Date().toISOString() };
 }
 
 /** Is `b` the same RUNG as `a`: the same seat on the same transport at the same thinking level? */
@@ -94,7 +106,7 @@ export function laneFailureOf(e) {
  * (2026-11-18), run_command carries no working directory; the jail hook approves exactly that string. The GROUND TRUTH
  * line stays the plain verify_cmd: the controller's own run (in the same kind of jail).
  */
-export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, findings = [], worker_verify = null, seat = null }) {
+export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, findings = [], worker_verify = null, seat = null, resumed = null }) {
   const subs = unit.allowed_subagents ?? [];
   // AN SDK SEAT's subagents are the SDK's own (owner direction 2026-11-19): specialist types the controller pins to
   // gemini-4-hydrogen, within the ceiling of the implementer model in use. The controller enforces both; this says so.
@@ -115,6 +127,9 @@ export function IMPLEMENTER_PROMPT({ unit, rubric, a2a = null, attempt = 1, find
     `ROLE: ${unit.specialist_role} — the single implementer of work unit "${unit.unit_id}" (difficulty: ${unit.difficulty}). You own this whole unit: its types, its implementation and its tests, together, in one change.`,
     "",
     "YOUR WORKING DIRECTORY is an isolated git worktree that already contains the merged results of the units this one depends on. Work only there.",
+    // A RESTORED PARTIAL CHECKPOINT (checkpoint.mjs): where this session starts, said plainly, and never as finished work.
+    ...(resumed ? ["", `RESUMED FROM A PARTIAL CHECKPOINT: an earlier session on this unit was stopped (${resumed.code}) before it finished. What it had written is already in your working directory: ${resumed.changed.join(", ")}.`,
+      "  It is unverified: none of it has passed the verify command or a review. Read it first. Keep what is right, change what is not, and finish the unit; you answer for the whole change."] : []),
     "",
     "PATHS YOU OWN (the only paths you may create, change or delete; anything else you touch is detected from disk and the whole attempt is discarded):",
     ...unit.owned_paths.map(p => `- ${p}`),
@@ -296,7 +311,7 @@ export async function checkpointWrites({ worktree, message }) {
  *   findings  the findings this attempt must address (empty on the first)
  *   rubric    the frozen rubric (default unit.rubric); checkpoint: the commit the attempt starts from (default HEAD)
  */
-export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH, verify_jail = null, deadline = null }) {
+export async function runImplementer({ unit, worktree, seat, ladder = [seat], turn, a2a = null, attempt = 1, findings = [], rubric = unit.rubric, checkpoint = null, scratch_paths = [], signal = null, control_dir = null, mcp_server = MCP_SERVER_PATH, verify_jail = null, deadline = null, resumed = null }) {
   const start = checkpoint ?? (await git(worktree, ["rev-parse", "HEAD"])).trim();
   const native = isSdkSeat(seat);
   const level = ladder.findIndex(s => sameRung(s, seat));
@@ -307,7 +322,7 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
   // The worker's command is the unit's verify launcher in the REAL control dir: prepareWorkerWorkspace writes it there
   // and the same string into jail.json. Without a control dir (an older caller) the prompt names no command.
   const worker_verify = typeof unit.verify_cmd === "string" && unit.verify_cmd.trim() && control_dir ? join(await realpath(control_dir), VERIFY_LAUNCHER_NAME) : null;
-  const prompt = IMPLEMENTER_PROMPT({ unit, rubric, a2a, attempt, findings, worker_verify, seat });
+  const prompt = IMPLEMENTER_PROMPT({ unit, rubric, a2a, attempt, findings, worker_verify, seat, resumed });
   rec.prompt_digest = sha256(a2a ? prompt.split(a2a.token).join("<token>") : prompt);   // the digest must not depend on the secret
   // A tracked symlink that already leaves the worktree makes the jail unenforceable: a write THROUGH it lands outside
   // the worktree, where git — and so the controller — cannot see it. Refused before the turn is asked.
@@ -326,7 +341,24 @@ export async function runImplementer({ unit, worktree, seat, ladder = [seat], tu
       control_dir, mcp_server: native ? null : mcp_server, allowed_subagents: [...(unit.allowed_subagents ?? [])], role: "implementer", unit_id: unit.unit_id, attempt,
       ...(verify_jail?.hide?.length ? { verify_hide: [...verify_jail.hide] } : {}), ...(Number.isFinite(deadline) ? { deadline } : {}) });
   } catch (e) {
-    await discardWrites({ worktree, checkpoint: start });
+    // A SESSION STOPPED BY A REFUSED CHARGE KEEPS WHAT IT WROTE (owner decision 2026-11-20: requirement 8 of the L-150
+    // decision applies to the SDK implementer). The billing policy's budget, or the run's own provider-call bound, ran
+    // out inside an SDK session: its writes are candidate work, not waste. They pass the same write jail as any
+    // attempt's, and are then committed as a PARTIAL checkpoint of the attempt -- which stays a failed attempt: its
+    // `checkpoint` is where it started, nothing of it is "written", and the controller (index.mjs) keeps it as an
+    // unverified partial checkpoint. Writes that break the jail, and the writes of a session that failed for any other
+    // reason (a crash, a lane failure, a model the provider refused), are discarded as before.
+    const stop = native ? budgetStopOf(e) : null;
+    if (stop) {
+      rec.stopped = stop;
+      const jail = await inspectWrites({ worktree, owned_paths: unit.owned_paths, checkpoint: start, scratch_paths, before });
+      if (jail.ok && jail.changed.length) {
+        rec.partial = { kept: true, changed: jail.changed.map(c => c.path), commit: await checkpointWrites({ worktree, message: `pantheon pipeline: unit ${unit.unit_id} attempt ${attempt}: PARTIAL, unverified (the session was stopped: ${stop.code})` }) };
+      } else {
+        await discardWrites({ worktree, checkpoint: start });
+        if (!jail.ok) rec.partial = { kept: false, changed: jail.changed.map(c => c.path), violations: jail.violations };
+      }
+    } else await discardWrites({ worktree, checkpoint: start });
     if (e?.quota_failover) rec.quota_failover = clone(e.quota_failover);
     if (e?.session) rec.session = clone(e.session);   // what an SDK session recorded up to its failure
     // A fault no rung can cure: the unit blocks on it (index.mjs), with the transport's own code.

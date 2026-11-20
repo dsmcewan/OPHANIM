@@ -18,11 +18,12 @@
 // decisions) against a scripted bridge and a scripted provider.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPipeline } from "../src/pipeline/index.mjs";
+import { readPartial, partialFile, partialRefusal, checkpointFile, sealOf, PARTIAL_SCHEMA } from "../src/pipeline/checkpoint.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { IMPLEMENTER_PROMPT, laneFailureOf } from "../src/pipeline/implement.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
@@ -482,4 +483,151 @@ test("the real session inside the pipeline: gateway, governor and decisions agai
   // The key reached the provider from the controller's gateway and is in nothing the run wrote.
   assert.ok(gemini.requests.filter(q => q.verb).every(q => q.headers["x-goog-api-key"] === "AIza-synthetic-key-for-the-test"));
   assert.doesNotMatch(readFileSync(join(env.dir, "pipeline.json"), "utf8") + readFileSync(x.tool_decisions.log_file, "utf8"), /AIza-synthetic-key-for-the-test|pantheon-gw-/);
+});
+
+// ---- A BUDGET-EXHAUSTED SESSION KEEPS ITS WORK (owner decision 2026-11-20: requirement 8 of the L-150 decision applies to
+// the SDK implementer; register L-736). Extends the unit checkpoints (pipeline/checkpoint.mjs): a session stopped by a
+// refused charge leaves a sealed PARTIAL checkpoint (verdict "unverified") beside the approved ones; a later run restores
+// it only when it re-verifies, and the restored work still has to pass the unit's verify command and Stage 5.
+/** A session that makes `before` billed requests, writes `files`, and is then refused its next request (as turn.mjs ends such a session). */
+const stoppedAfter = (files, before = 2, tool_log = TOOL_LOG) => async args => {
+  const more = () => ({ subagents: governed(args), gateway: gatewayOf(args, { root: before, stop: { kind: "budget", status: 403 } }), tool_log, usage: { total_token_count: 100 * before }, runtime: RUNTIME, availability: [] });
+  await args.admit({ class: "root", type: null, model: args.seat.model, n: 1 });
+  for (const [p, t] of Object.entries(files)) await write(args.worktree, p, t);
+  for (let k = 1; k < before; k++) await args.admit({ class: "root", type: null, model: args.seat.model, n: k + 1 });
+  try { await args.admit({ class: "root", type: null, model: args.seat.model, n: before + 1 }); }
+  catch (e) { throw sdkError("PROVIDER_LIMIT", `a request of the implementer session was refused: ${e.message}`, more()); }
+  throw new Error("the script expected its last request to be refused");
+};
+const partialEnv = async t => { const env = await tempRepo(); t.after(env.cleanup); return { env, checkpoints: { dir: join(env.root, "checkpoints"), key: "k".repeat(64) }, usage: join(env.root, "usage.jsonl") }; };
+
+test("A BUDGET THAT RUNS OUT INSIDE AN SDK SESSION KEEPS THE SESSION'S WORK: the candidate changes are a sealed, UNVERIFIED partial checkpoint; the point of refusal and the requests admitted before it are on the record; the unit is blocked and nothing is approved", async t => {
+  const { env, checkpoints, usage } = await partialEnv(t);
+  const tight = optIn({ primary: 2, file: usage });
+  const r = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n" }), { env, checkpoints, agy: { billing: tight } });
+  assert.deepEqual([r.u.status, r.u.code, r.calls.length], ["blocked", "METERED_GEMINI_BUDGET_EXHAUSTED", 1], r.u.reason);
+  // THE ATTEMPT: failed, and its writes kept apart from an attempt that was "written".
+  const a = r.u.attempts[0];
+  assert.deepEqual([a.status, a.code, a.partial.kept, a.partial.changed, /^[0-9a-f]{40}$/.test(a.partial.commit), a.checkpoint === a.started_from], ["failed", "METERED_GEMINI_BUDGET_EXHAUSTED", true, ["src/a/part.mjs"], true, true],
+    "the attempt is not a written attempt: its own checkpoint is where it started");
+  // THE PARTIAL CHECKPOINT: sealed, unverified, with the candidate patch.
+  const got = await readPartial({ dir: checkpoints.dir, unit_key: r.u.unit_key });
+  assert.equal(got.found, true);
+  assert.deepEqual([got.record.schema, got.record.verdict, got.record.unit_id, got.record.changed, got.record.patch_digest === sha256(got.patch), got.record.seal === sealOf(got.record, Buffer.from(checkpoints.key))],
+    [PARTIAL_SCHEMA, "unverified", "a", ["src/a/part.mjs"], true, true]);
+  assert.match(got.patch, /\+export const part = 1;/);
+  // THE POINT OF REFUSAL, and what was admitted before it.
+  assert.deepEqual([got.record.stopped.code, got.record.stopped.attempt, got.record.stopped.request, got.record.stopped.used, got.record.stopped.budget, got.record.admitted.requests],
+    ["METERED_GEMINI_BUDGET_EXHAUSTED", 1, 3, 2, 2, 2], "refused at the session's third request, with two of a budget of two used; two requests were admitted before it");
+  assert.deepEqual(got.record.admitted.rows.map(x => [x.request, x.model, x.purpose]), [[1, "gemini-4-carbon", "implementer"], [2, "gemini-4-carbon", "implementer"]], "each admitted request, as the billing record has it");
+  assert.equal(got.record.session.tool_decisions.total, TOOL_LOG.length, "the session's evidence is kept with it");
+  // ON THE UNIT AND THE RUN: said, and not an approval.
+  assert.deepEqual([r.u.partial.written, r.u.partial.changed, r.u.partial.file === partialFile(checkpoints.dir, r.u.unit_key), r.out.checkpoints.written, r.out.checkpoints.partial, existsSync(checkpointFile(checkpoints.dir, r.u.unit_key))],
+    [true, ["src/a/part.mjs"], true, [], ["a"], false]);
+  assert.match(r.u.reason, /the session's candidate changes \(1 file\(s\), unverified\) are kept as a partial checkpoint/);
+  assert.deepEqual([r.out.status === "approved", r.u.commit ?? null, r.s.calls.filter(c => c.role === "reviewer").length], [false, null, 0], "nothing was approved, merged or reviewed");
+  assert.equal(r.disk().units.a.partial.written, true, "and it is on the run's record on disk");
+});
+
+test("THE NEXT RUN RESUMES FROM THE PARTIAL CHECKPOINT INSTEAD OF STARTING AGAIN: the candidate changes are restored after they re-verify, the session is told what it starts from, the work still has to pass verify and Stage 5, and the earlier session's model stays a contributor", async t => {
+  const { env, checkpoints, usage } = await partialEnv(t);
+  const first = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n" }), { env, checkpoints, agy: { billing: optIn({ primary: 2, file: usage }) } });
+  assert.equal(first.u.partial.written, true, first.u.reason);
+  // A LARGER BUDGET over the same usage record: the two requests already billed stay counted.
+  const more = optIn({ primary: 10, file: usage });
+  let seen = null;
+  const second = await pipeline(t, async args => {
+    seen = { part: existsSync(join(args.worktree, "src/a/part.mjs")) ? readFileSync(join(args.worktree, "src/a/part.mjs"), "utf8") : null, prompt: args.prompt };
+    return session(args, { root: 1 });
+    // Another model finishes the unit (the run's ladder starts on Argon): the unit key does not depend on the ladder.
+  }, { env: { ...env, dir: join(env.root, "run2") }, checkpoints, ladder: [ARGON], agy: { billing: more } });
+  assert.equal(second.u.status, "approved", second.u.reason);
+  // RESTORED BEFORE THE SESSION STARTED, and the session was told.
+  assert.equal(seen.part, "export const part = 1;\n", "the earlier session's file is in the worktree the new session starts in");
+  assert.match(seen.prompt, /RESUMED FROM A PARTIAL CHECKPOINT[\s\S]*src\/a\/part\.mjs[\s\S]*unverified/);
+  assert.deepEqual([second.u.partial_resume.resumed, second.u.partial_resume.changed, second.u.partial_resume.stopped.code, second.u.partial_resume.from === partialFile(checkpoints.dir, second.u.unit_key)], [true, ["src/a/part.mjs"], "METERED_GEMINI_BUDGET_EXHAUSTED", true]);
+  // NOT AN APPROVAL: the unit's own verify command and Stage 5 decided, on the whole change.
+  assert.equal(second.s.calls.filter(c => c.role === "reviewer").length, 1);
+  assert.equal(second.u.resumed, false, "a partial checkpoint never resumes a unit as approved");
+  const tree = second.u.tree;
+  assert.ok(typeof tree === "string" && tree.length === 40);
+  // ONE SESSION OF WORK WAS NOT PAID FOR TWICE: the second run billed its own request only, counted after the first two.
+  assert.deepEqual(more.ledger.rows().map(x => [x.request, x.model]), [[1, "gemini-4-carbon"], [2, "gemini-4-carbon"], [1, "gemini-4-argon"]], "two requests of the stopped session, then one of the session that finished the unit");
+  assert.equal(more.ledger.used("primary"), 3);
+  // LINEAGE: the model that wrote the restored part is a contributor of the approved unit, beside the one that finished it.
+  assert.deepEqual(second.out.contributions.filter(c => c.kind === "work").map(c => [c.model, c.served_model, c.from_partial ?? false]), [["gemini-4-argon", "gemini-4-argon", false], ["gemini-4-carbon", "gemini-4-carbon", true]]);
+  assert.deepEqual(contributorKeys(second.out.contributions.filter(c => c.kind === "work")).models, ["google/gemini-4-argon", "google/gemini-4-carbon"], "so no reviewer on the earlier session's model may judge the change");
+  // The approved checkpoint replaces the partial one.
+  assert.deepEqual([existsSync(checkpointFile(checkpoints.dir, second.u.unit_key)), existsSync(partialFile(checkpoints.dir, second.u.unit_key)), second.out.checkpoints.written], [true, false, ["a"]]);
+});
+
+test("A PARTIAL CHECKPOINT IS EVIDENCE TO RE-CHECK, NEVER AN APPROVAL: one whose seal, patch or paths do not hold is not restored, the unit starts from its base, and the record says why; work that broke the write jail is not kept at all", async t => {
+  const setup = async edit => {
+    const { env, checkpoints, usage } = await partialEnv(t);
+    const first = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n" }), { env, checkpoints, agy: { billing: optIn({ primary: 2, file: usage }) } });
+    const file = partialFile(checkpoints.dir, first.u.unit_key);
+    await edit({ file, record: JSON.parse(readFileSync(file, "utf8")), patch: join(checkpoints.dir, JSON.parse(readFileSync(file, "utf8")).patch_path), key: Buffer.from(checkpoints.key) });
+    let part = "unseen";
+    const second = await pipeline(t, async args => { part = existsSync(join(args.worktree, "src/a/part.mjs")); return session(args); }, { env: { ...env, dir: join(env.root, "run2") }, checkpoints, agy: { billing: optIn({ primary: 10, file: usage }) } });
+    return { second, part };
+  };
+  const cases = [
+    ["the patch was edited after it was sealed", ({ patch }) => { writeFileSync(patch, readFileSync(patch, "utf8").replace("part = 1", "part = 2")); }, /patch does not hash to the recorded digest/],
+    ["the record was edited after it was sealed", ({ file, record }) => { writeFileSync(file, JSON.stringify({ ...record, changed: ["src/a/other.mjs"] })); }, /seal does not verify/],
+    ["a record sealed by another key", ({ file, record }) => { const { seal, ...body } = record; writeFileSync(file, JSON.stringify({ ...body, seal: sealOf(body, Buffer.from("x".repeat(64))) })); }, /seal does not verify/],
+    ["a path outside the unit's own, sealed with the controller's key", ({ file, record, patch, key }) => {
+      const p = readFileSync(patch, "utf8").split("src/a/part.mjs").join("README.md"); writeFileSync(patch, p);
+      const { seal, ...body } = { ...record, changed: ["README.md"], patch_digest: sha256(p) }; writeFileSync(file, JSON.stringify({ ...body, seal: sealOf(body, key) })); }, /README\.md is outside the unit's owned paths/],
+    ["marked approved by hand", ({ file, record, key }) => { const { seal, ...body } = { ...record, verdict: "approve" }; writeFileSync(file, JSON.stringify({ ...body, seal: sealOf(body, key) })); }, /a partial checkpoint's verdict is "unverified"/],
+    // The record says an owned path and the PATCH changes another: what is applied is what is judged, not what the record says.
+    ["a patch that changes more than its record says, re-sealed with the controller's key", ({ file, record, patch, key }) => {
+      const p = readFileSync(patch, "utf8").split("src/a/part.mjs").join("elsewhere/part.mjs"); writeFileSync(patch, p);
+      const { seal, ...body } = { ...record, patch_digest: sha256(p) }; writeFileSync(file, JSON.stringify({ ...body, seal: sealOf(body, key) })); }, /patch changes elsewhere\/part\.mjs, outside the unit's owned paths/],
+    // A patch whose content is not the recorded tree's, re-sealed: the tree the controller rebuilds decides.
+    ["a patch that yields another tree than the recorded one, re-sealed with the controller's key", ({ file, record, patch, key }) => {
+      const p = readFileSync(patch, "utf8").replace("part = 1", "part = 2"); writeFileSync(patch, p);
+      const { seal, ...body } = { ...record, patch_digest: sha256(p) }; writeFileSync(file, JSON.stringify({ ...body, seal: sealOf(body, key) })); }, /applied on the unit's base yields tree [0-9a-f]{40}, not the recorded/],
+  ];
+  for (const [name, edit, why] of cases) {
+    const { second, part } = await setup(edit);
+    assert.deepEqual([part, second.u.partial_resume ?? null, second.u.status], [false, null, "approved"], `${name}: the unit ran from its base (${second.u.reason})`);
+    assert.match(second.u.partial_rejected.why, why, name);
+    assert.deepEqual(second.out.contributions.filter(c => c.from_partial), [], `${name}: no lineage is taken from a checkpoint that was not restored`);
+  }
+  // A stopped session that wrote outside its owned paths: the write jail discards it, as for any attempt.
+  const { env, checkpoints, usage } = await partialEnv(t);
+  const broke = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n", "README.md": "changed by the stopped session\n" }), { env, checkpoints, agy: { billing: optIn({ primary: 2, file: usage }) } });
+  assert.deepEqual([broke.u.status, broke.u.attempts[0].partial.kept, broke.u.attempts[0].partial.violations.map(v => v.path), broke.u.partial ?? null, existsSync(partialFile(checkpoints.dir, broke.u.unit_key))],
+    ["blocked", false, ["README.md"], null, false]);
+});
+
+test("ONLY A REFUSED CHARGE KEEPS A STOPPED SESSION'S WORK: a session that failed for another reason is discarded as before, and so is a stopped session of a run that keeps no checkpoints", async t => {
+  // A transport fault with files on disk: discarded, no partial checkpoint (the work of a crashed session is not candidate work).
+  const { env, checkpoints } = await partialEnv(t);
+  const crashed = await pipeline(t, async args => { await write(args.worktree, "src/a/part.mjs", "export const part = 1;\n"); throw sdkError("SANDBOX_UNAVAILABLE", "the jail is gone", { subagents: null, gateway: null, tool_log: [], usage: null, runtime: null, availability: [] }); }, { env, checkpoints });
+  assert.deepEqual([crashed.u.status, crashed.u.code, crashed.u.attempts[0].partial ?? null, crashed.u.partial ?? null, existsSync(partialFile(checkpoints.dir, crashed.u.unit_key))], ["blocked", "SANDBOX_UNAVAILABLE", null, null, false]);
+  // No checkpoint directory: the writes are still inspected and committed in the worktree's record, and the run says no partial checkpoint could be kept.
+  const none = await partialEnv(t);
+  const bare = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n" }), { env: none.env, agy: { billing: optIn({ primary: 2, file: none.usage }) } });
+  assert.deepEqual([bare.u.status, bare.u.attempts[0].partial.kept, bare.u.partial.written, /no checkpoint directory/.test(bare.u.partial.why)], ["blocked", true, false, true]);
+  assert.match(bare.u.reason, /not kept beyond this run: no checkpoint directory/);
+});
+
+test("a partial checkpoint is restored only into the run it was recorded for: another unit, another base or another upstream is refused, each by name", async t => {
+  const { env, checkpoints, usage } = await partialEnv(t);
+  const r = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n" }), { env, checkpoints, agy: { billing: optIn({ primary: 2, file: usage }) } });
+  const got = await readPartial({ dir: checkpoints.dir, unit_key: r.u.unit_key });
+  const expect = { key: Buffer.from(checkpoints.key), unit_key: r.u.unit_key, unit_id: "a", base_commit: got.record.base_commit, upstream: [], owned_paths: ["src/a/**"] };
+  assert.equal(partialRefusal(got, expect), null, "as recorded, it holds");
+  assert.match(partialRefusal(got, { ...expect, unit_key: "sha256:" + "0".repeat(64) }), /for another unit key/);
+  assert.match(partialRefusal(got, { ...expect, unit_id: "b" }), /is for unit a/);
+  assert.match(partialRefusal(got, { ...expect, base_commit: "f".repeat(40) }), /was recorded on base [0-9a-f]{40}, not f{40}/);
+  assert.match(partialRefusal(got, { ...expect, upstream: [{ unit_id: "z", unit_key: "k", tree: "t" }] }), /upstream units or their trees differ from this run's/);
+  assert.match(partialRefusal({ record: got.record, patch: null }, expect), /patch is missing/);
+  // THE SAME UPSTREAM UNIT ON ANOTHER TREE: a record made on top of unit z at tree t1 is not restored on top of z at t2
+  // (same count, another content), and is restored on top of z at t1.
+  const { seal, ...body } = { ...got.record, upstream: [{ unit_id: "z", unit_key: "k", tree: "t1" }] };
+  const onZ = { record: { ...body, seal: sealOf(body, expect.key) }, patch: got.patch };
+  assert.equal(partialRefusal(onZ, { ...expect, upstream: [{ unit_id: "z", unit_key: "k", tree: "t1" }] }), null);
+  assert.match(partialRefusal(onZ, { ...expect, upstream: [{ unit_id: "z", unit_key: "k", tree: "t2" }] }), /upstream units or their trees differ from this run's/);
 });

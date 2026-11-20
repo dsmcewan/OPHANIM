@@ -374,7 +374,12 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
 
   // ---- the gateway: the key stays here
   let governor = subagentGovernor({ implementer: { vendor: seat.vendor ?? SDK_VENDOR, model }, unit_id: unit.unit_id ?? null, allowed_types: types, now });
-  const makeGateway = () => startModelGateway({ upstream, apiKey, root: { model, marker: rootMarker }, subagents: { model: SUBAGENT_MODEL, ceiling: types.length ? ceiling : 0, markers }, admit, signal, fetchImpl });
+  // Each request's outcome is appended to <control_dir>/requests.jsonl as it ends (gateway.mjs OUTCOMES): the admitted
+  // ones and the refused one, in order, on disk whatever becomes of this process. A stopped session's exact point of
+  // refusal is read from it (requirement 8 of the L-150 decision).
+  const requestsFile = join(paths.control_dir, "requests.jsonl");
+  const makeGateway = () => startModelGateway({ upstream, apiKey, root: { model, marker: rootMarker }, subagents: { model: SUBAGENT_MODEL, ceiling: types.length ? ceiling : 0, markers }, admit, signal, fetchImpl,
+    outcomes: requestsFile, outcomeTag: { unit_id: unit.unit_id ?? null } });
   let gw = await makeGateway();
   const snapshot = () => { record.subagents = { ...governor.record(), blocked: record.subagents?.blocked ?? null }; record.gateway = summarise(gw.record()); record.availability = gw.record().availability; };
   let child = null;

@@ -318,16 +318,21 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
     // pipeline's own bound and charge, then the usage row persisted on the billing ledger (spendGemini). The session's
     // first request is the implementer's own call; an older caller's `charge` contract charged that one up front and
     // admits the others.
-    let own = 0, requests = 0, refusedByBilling = null;
+    // `spent`: the usage row of each request admitted, in order; `refusedAt`: the number of the first request refused.
+    // Both go on the session's record, so a stopped session says exactly where it stopped and what it had been admitted.
+    let own = 0, requests = 0, refusedByBilling = null, refusedAt = null;
+    const spent = [];
     const admit = (info = {}) => {
       const kind = info.class === "subagent" ? "subagent" : own++ === 0 ? "session" : "continuation";
       try {
-        spendGemini(billing, billed(info, ++requests), () => {
+        const row = spendGemini(billing, billed(info, ++requests), () => {
           if (typeof admitRequest === "function") admitRequest({ kind });
           else if (typeof charge === "function" && kind !== "session") charge("continuation");
         });
-      } catch (e) { if (isGeminiBillingRefusal(e)) refusedByBilling ??= e; throw e; }
+        spent.push({ request: row?.request ?? requests, kind: row?.kind ?? "primary", model: row?.model ?? null, purpose: row?.purpose ?? null, class: info.class ?? null, used_before: row?.used_before ?? null, at: row?.at ?? null });
+      } catch (e) { refusedAt ??= requests; if (isGeminiBillingRefusal(e)) refusedByBilling ??= e; throw e; }
     };
+    const billedOf = session => (session ? Object.assign(session, { billed: { requests: spent.length, rows: spent.map(x => ({ ...x })), refused_at: refusedAt } }) : session);
     let made = null;
     const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-sdk-control-")));
     const about = { control_dir: made ? null : ctl, seat: s, unit_id, attempt, timeout_s: turnS };
@@ -335,23 +340,24 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
       const r = await sdk({ seat: s, prompt, worktree: cwd, control_dir: ctl, unit: { unit_id, owned_paths: [...owned], verify_cmd, allowed_subagents: [...(allowed_subagents ?? [])] }, admit, signal: signal ?? null,
         timeoutS: turnS, graceS: grace, verify_hide: Array.isArray(verify_hide) ? verify_hide : [],
         ...Object.fromEntries(["python", "bridge", "upstream", "apiKey", "sandbox", "budget", "fetchImpl", "checkAvailability", "allowSdkVersion", "base_env"].filter(k => antigravity[k] !== undefined).map(k => [k, antigravity[k]])) });
-      const session = await sessionEvidence(r, about);
+      const session = billedOf(await sessionEvidence(r, about));
       // A REQUEST THE POLICY REFUSED INSIDE THE SESSION STANDS, HOWEVER THE SESSION ENDED. The runtime can end well after
       // one: the implementer's own request was already in flight when a subagent's was refused, and nothing more was
       // asked (the gateway forgets a stop once the implementer is answered again). The documented outcome is the
       // controller's to keep, not the runtime's: the unit is told the policy's refusal, with what the session recorded,
       // and the session's result is not taken as the unit's work.
-      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT });
+      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT, session_request: refusedAt });
       return { text: r?.text ?? "", served_model: str(r?.served_model) ? r.served_model : null, served_model_source: r?.served_model_source ?? (str(r?.served_model) ? "unknown" : null),
         transport: SDK_TRANSPORT, requested_model: s.model, effort: s.effort, response_id: r?.conversation_id ?? null, tool_calls: r?.tool_calls ?? null, session };
     } catch (e) {
       // What the session recorded up to its failure goes with the error (antigravity/turn.mjs carries it). A refusal
       // thrown above already carries the finished session's record.
-      if (e && typeof e === "object" && e.transport === SDK_TRANSPORT && !e.session) e.session = await sessionEvidence(e, about).catch(() => null);
+      if (e && typeof e === "object" && e.transport === SDK_TRANSPORT && !e.session) e.session = billedOf(await sessionEvidence(e, about).catch(() => null));
+      if (e && typeof e === "object" && refusedAt !== null && e.session_request === undefined) e.session_request = refusedAt;
       // A request the billing policy refused INSIDE the session (its budget was spent on the way): the gateway answered
       // it as a refused charge and the session ended on it. The pipeline is told the policy's own refusal, with what the
       // session recorded.
-      if (refusedByBilling && e?.code === "PROVIDER_LIMIT") throw Object.assign(refusedByBilling, { session: e.session ?? null, transport: SDK_TRANSPORT });
+      if (refusedByBilling && e?.code === "PROVIDER_LIMIT") throw Object.assign(refusedByBilling, { session: e.session ?? null, transport: SDK_TRANSPORT, session_request: refusedAt });
       throw e;
     } finally {
       if (made) await rm(made, { recursive: true, force: true }).catch(() => {});

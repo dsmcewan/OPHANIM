@@ -137,8 +137,12 @@ failover behind it:
   pipeline's own call bound, and the usage row is persisted before the request is forwarded.
 - A budget that runs out inside a session refuses that request (it is not sent) and blocks the unit, whether the
   session then fails or ends well: the controller keeps the refusal, and does not rest on what the runtime does next.
-  The work of that attempt is not kept; once the policy admits it again the session is asked for from the start
-  (register L-724).
+  What the session had written is kept (owner decision 2026-11-20, register L-736). Its files pass the write jail
+  like any attempt's and become an unverified partial checkpoint of the unit, sealed, with the request that was
+  refused and every request admitted before it. The unit stays blocked and nothing is approved. Once the policy admits
+  the unit again, the next session starts in a worktree that already holds those files and is told so; the whole
+  change must then pass the unit's verify command and its Stage 5 review. The requests already billed stay billed,
+  and the new session is a new conversation: only what reached a file is carried over.
 - The budget is not reserved per session. Concurrent sessions draw on it request by request, so a budget smaller than
   they need together can be spent with no unit completed.
 - A usage row that cannot be persisted (the record refuses the append, or a live process keeps it locked) means the

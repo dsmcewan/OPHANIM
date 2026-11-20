@@ -355,6 +355,11 @@ test("a quota refusal by the provider is a quota failure with the record kept; t
   await assert.rejects(b.run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { request: { model: "gemini-4-carbon", as: "root" } }, { result: { ok: false, message: "stopped" } }],
     { admit: () => { if (++calls > 1) throw Object.assign(new Error("the run's provider-call bound (1) is exhausted"), { code: "PROVIDER_LIMIT" }); } }), e => e.code === "PROVIDER_LIMIT" && e.gateway.budget_refusals === 1);
   assert.equal(b.upstream.requests.filter(x => x.verb).length, 1, "the refused request was not made");
+  // THE EXACT POINT OF REFUSAL IS ON DISK, written as each request ended (not only on the record a live controller
+  // returns): the admitted request with what the provider answered, then the refused one, in the session's own order.
+  const rows = readFileSync(join(b.control_dir, "requests.jsonl"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+  assert.deepEqual(rows.map(x => [x.seq, x.unit_id, x.class, x.model, x.forwarded, x.status, x.refusal]), [[1, "u1", "root", "gemini-4-carbon", true, 200, null], [2, "u1", "root", "gemini-4-carbon", false, 403, "PANTHEON_PROVIDER_LIMIT"]]);
+  assert.ok(!readFileSync(join(b.control_dir, "requests.jsonl"), "utf8").includes(KEY));
 });
 
 test("a model the provider does not serve is reported as unavailable before anything is spent; nothing is substituted", async t => {

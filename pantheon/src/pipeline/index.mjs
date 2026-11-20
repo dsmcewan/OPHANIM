@@ -84,9 +84,10 @@ import { randomBytes } from "node:crypto";
 import { CAPABILITIES, PIPELINE_SCHEMA, clone, digestOf, now, sameModelName, sameSeat, seatRefusal, sha256 } from "./util.mjs";
 import { validateWorkUnits } from "./work-units.mjs";
 import { bindWorktree, lockConflicts, releaseWorktree, rubricHash, runDispatcher, upstreamOf, waves, CONTROLLER } from "./dispatch.mjs";
-import { runImplementer, sameRung, MCP_SERVER_PATH } from "./implement.mjs";
+import { runImplementer, sameRung, checkpointWrites, MCP_SERVER_PATH } from "./implement.mjs";
+import { matchesOwned } from "./paths.mjs";
 import { isSdkSeat } from "../antigravity/config.mjs";
-import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint } from "./checkpoint.mjs";
+import { approvalRefusal, checkpointFile, checkpointKey, checkpointRefusal, readCheckpoint, unitKey, writeCheckpoint, partialFile, partialRefusal, readPartial, removePartial, writePartial } from "./checkpoint.mjs";
 import { startA2AShim } from "./a2a-shim.mjs";
 import { escalate, reviewerLadderRefusal, runReviewer, runVerify } from "./review.mjs";
 import { arbitersOf, contributionsOf } from "./record.mjs";
@@ -164,7 +165,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     controller: { ...CONTROLLER }, repo, base: { ref: base, commit: null }, integration: null, planner: planner ? clone(planner) : null,
     ...(stage5_excluded?.length ? { stage5_excluded: clone(stage5_excluded) } : {}),
     plan: clone(plan ?? null), refusals: [], waves: [], limits: clone(lim), units: {},
-    checkpoints: checkpoints?.dir ? { dir: checkpoints.dir, resumed: [], rejected: [], written: [] } : null,
+    checkpoints: checkpoints?.dir ? { dir: checkpoints.dir, resumed: [], rejected: [], written: [], partial: [], partial_resumed: [], partial_rejected: [] } : null,
     contributions: [], arbiters: [], provider_calls: { total: 0, refused_at_limit: 0, by_role: { dispatcher: 0, implementer: 0, subagent: 0, reviewer: 0 } },
   };
 
@@ -218,7 +219,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
     unit_id: u.unit_id, status: "pending", reason: null, wave: waveOf.get(u.unit_id), depends_on: [...u.depends_on].sort(), owned_paths: [...u.owned_paths], planned: clone(u),
     started_at: null, ended_at: null, worktree: null, worktree_removed: null, control_dir: null, base_commit: null, dispatch: null, implementer_ladder: null, reviewer_ladder: null,
     attempts: [], a2a: { calls: [], usage: null, socket: null }, reviews: [], escalations: [], findings: [], reviewer_fed_revision: false, commit: null, tree: null, patch_digest: null, merged: false,
-    unit_key: null, resumed: false, checkpoint: null, checkpoint_rejected: null,
+    unit_key: null, resumed: false, checkpoint: null, checkpoint_rejected: null, partial: null, partial_resume: null, partial_rejected: null,
   };
   const head = await git(repo, ["rev-parse", "--verify", `${base}^{commit}`], { allowFail: true });
   if (head.code !== 0) return refuse([{ code: "BASE", unit_id: null, message: `base "${base}" is not a commit of ${repo}` }]);
@@ -451,7 +452,11 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
 
       let state = { revisions: 0, implementer_level: iLadder.findIndex(s => sameRung(s, impl.seat)), reviewer_level: 0, consecutive_rejections: 0 };
       const cfg = { max_revisions: lim.max_revisions, reviewer_escalation_after: lim.reviewer_escalation_after, implementer_rungs: iLadder.length, reviewer_rungs: rLadder.length };
-      let checkpoint = wt.base_commit, findings = [];
+      // ---- A PARTIAL CHECKPOINT of this unit (an earlier session a refused charge stopped): restored when it re-verifies,
+      // and then this is where the first attempt STARTS. It is not an approval and not a written attempt.
+      const restored = run.checkpoints ? await restorePartial(u, { path, base_commit: wt.base_commit, upstream: upstreamTrees(), unit }) : null;
+      if (restored) await save();
+      let checkpoint = restored ?? wt.base_commit, findings = [];
       for (let n = 1; ; n++) {
         // ---- Stage 3, behind the lane failover ladder: a lane failure is retried once on the same lane, then the
         // unit steps down a rung; a quota refusal steps down at once. No revision is spent on either.
@@ -460,7 +465,8 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         for (;;) {
           const seat = iLadder[state.implementer_level];
           a = await runImplementer({ unit: frozen(), worktree: path, seat, ladder: iLadder, turn: T.implementer, a2a: shim ? { socket: shim.socket, token: shim.token, roles: [...shim.roles] } : null,
-            attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH, verify_jail: verifyJail, deadline });
+            attempt: n, findings: [...findings], rubric: [...u.dispatch.rubric], checkpoint, scratch_paths: lim.scratch_paths, signal, control_dir: control, mcp_server: MCP_SERVER_PATH, verify_jail: verifyJail, deadline,
+            ...(restored && n === 1 ? { resumed: { code: u.partial_resume.stopped.code, changed: [...u.partial_resume.changed] } } : {}) });
           // The lane was refused for quota and its metered failover was USED but its answer refused (API_FILES_REFUSED:
           // prose, malformed JSON, a path outside the unit): that is still the quota-exhausted lane failing, not the
           // implementer's work being refused. It steps the ladder like a quota refusal and spends no review revision
@@ -501,12 +507,15 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         }
         let event, review = null;
         if (a.status !== "written") {
+          // A SESSION A REFUSED CHARGE STOPPED, WHOSE WRITES PASSED THE JAIL: they are kept as an unverified partial
+          // checkpoint before the unit blocks (requirement 8 of the L-150 decision). The unit is blocked all the same.
+          const kept = a.partial?.kept ? await keepPartial(u, a, { path, unit_base_commit: wt.base_commit, upstream: upstreamTrees() }) : "";
           // A fault of the transport that no rung can cure (implement.mjs TRANSPORT_BLOCKERS): the unit blocks with
           // that code. No other rung is tried and no revision is spent on it.
-          if (a.transport_blocker) { u.code = a.code; return finish(u, "blocked", a.why); }
+          if (a.transport_blocker) { u.code = a.code; return finish(u, "blocked", a.why + kept); }
           // A model-guard refusal (L-504 invariant 3) ends the unit: another attempt would spend a revision and a provider call
           // on a CLI that has just reported a model other than the one asked for.
-          if (a.code === "PROVIDER_LIMIT" || a.code === "AGY_MODEL_MISMATCH" || a.code === "TURN_FAILED" && signal?.aborted) return finish(u, "blocked", a.why);
+          if (a.code === "PROVIDER_LIMIT" || a.code === "AGY_MODEL_MISMATCH" || a.code === "TURN_FAILED" && signal?.aborted) return finish(u, "blocked", a.why + kept);
           event = "attempt_refused"; findings = [a.why];
           u.findings.push({ attempt: n, source: "controller", code: a.code, findings: [a.why] });
         } else {
@@ -580,12 +589,84 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
       const tree = (await git(path, ["rev-parse", `${checkpoint}^{tree}`])).trim();
       Object.assign(u, { commit: checkpoint, tree, patch_digest: sha256(patch) });
       finish(u, "approved");
-      if (run.checkpoints) await keep(u, { patch, unit_base_commit: wt.base_commit, upstream: upstreamTrees() });
+      if (run.checkpoints) {
+        await keep(u, { patch, unit_base_commit: wt.base_commit, upstream: upstreamTrees() });
+        // The approved checkpoint stands in the partial one's place: a later run resumes the approval, not the start.
+        if (u.checkpoint?.written) await removePartial({ dir: run.checkpoints.dir, unit_key: u.unit_key }).catch(() => {});
+      }
     } finally {
       if (shim) { u.a2a.usage = shim.usage(); await shim.close(); }
       if (sockAt) { await rm(sockAt.file, { force: true }).catch(() => {}); if (sockAt.fallback) await rm(sockAt.dir, { recursive: true, force: true }).catch(() => {}); }
       if (bound) u.worktree_removed = await releaseWorktree({ repo, path, lock }).catch(() => false);
     }
+  }
+
+  /**
+   * KEEP A STOPPED SESSION'S CANDIDATE WORK (checkpoint.mjs, partial checkpoints): the patch from the unit's base to the
+   * commit implement.mjs made of the jail-checked writes, sealed, verdict "unverified", with the point of refusal, the
+   * requests admitted before it and the session's evidence. Returns the sentence the unit's reason ends with. A failure
+   * to write is recorded and said; it changes nothing else.
+   */
+  async function keepPartial(u, a, { path, unit_base_commit, upstream }) {
+    const n = a.partial.changed.length;
+    try {
+      const patch = await git(path, ["diff", "--binary", "--no-renames", "--no-color", "--no-ext-diff", unit_base_commit, a.partial.commit]);
+      const tree = (await git(path, ["rev-parse", `${a.partial.commit}^{tree}`])).trim();
+      const changed = (await git(path, ["diff", "--name-only", "--no-renames", "-z", unit_base_commit, a.partial.commit])).split("\0").filter(Boolean).sort();
+      const facts = { tree, changed, patch_digest: sha256(patch), stopped: { ...clone(a.stopped ?? {}), attempt: a.n } };
+      if (!run.checkpoints) {
+        u.partial = { written: false, why: "no checkpoint directory was given to this run (checkpoints.dir): the candidate changes exist only in this run's worktree record", ...facts };
+        return `; the session's candidate changes (${n} file(s), unverified) are not kept beyond this run: no checkpoint directory was given`;
+      }
+      const rec = await writePartial({ dir: run.checkpoints.dir, patch, key: ckKey, record: {
+        unit_key: u.unit_key, unit_id: u.unit_id, base_commit: run.base.commit, unit_base_commit, upstream, commit: a.partial.commit, tree, changed,
+        // THE EXACT POINT OF REFUSAL, and every request admitted before it (the usage rows turns.mjs collected).
+        stopped: { ...clone(a.stopped ?? {}), attempt: a.n, why: String(a.why ?? "").slice(0, 600) },
+        admitted: { requests: a.session?.billed?.requests ?? null, rows: clone(a.session?.billed?.rows ?? []) },
+        session: clone(a.session ?? null),
+        // The unit's authoring lineage up to the stop: whoever wrote what is kept stays a contributor of what it becomes.
+        contributions: contributionsOf({ units: { [u.unit_id]: u } }).filter(c => c.kind !== "plan").map(({ unit_id, ...c }) => c) } });
+      u.partial = { written: true, file: partialFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at, ...facts };
+      run.checkpoints.partial.push(u.unit_id);
+      return `; the session's candidate changes (${n} file(s), unverified) are kept as a partial checkpoint (${u.partial.file}): a later run of this unit starts from them, and they are approved by nothing`;
+    } catch (e) {
+      u.partial = { written: false, why: String(e?.message ?? e).slice(0, 400) };
+      return `; the session's candidate changes (${n} file(s)) could not be kept as a partial checkpoint: ${u.partial.why}`;
+    }
+  }
+
+  /**
+   * RESTORE `u`'s PARTIAL CHECKPOINT into its freshly bound worktree, if one exists and re-verifies: the commit the first
+   * attempt starts from, or null. Refused (and recorded as `partial_rejected`, the worktree left on its base) unless the
+   * record's seal, verdict, unit, base, upstream and patch digest hold (checkpoint.mjs partialRefusal), the patch applies
+   * on the bound base, everything it changes is a path the unit owns, and the result is exactly the recorded tree.
+   */
+  async function restorePartial(u, { path, base_commit, upstream, unit }) {
+    const got = await readPartial({ dir: run.checkpoints.dir, unit_key: u.unit_key });
+    if (!got.found) return null;
+    const reject = async why => {
+      await git(path, ["reset", "-q", "--hard", base_commit], { allowFail: true });
+      await git(path, ["clean", "-ffdxq"], { allowFail: true });
+      u.partial_rejected = { unit_key: u.unit_key, why, at: now() };
+      run.checkpoints.partial_rejected.push(u.unit_id);
+      return null;
+    };
+    if (got.why) return reject(got.why);
+    const why = partialRefusal(got, { key: ckKey, unit_key: u.unit_key, unit_id: u.unit_id, base_commit: run.base.commit, upstream, owned_paths: unit.owned_paths });
+    if (why) return reject(why);
+    const applied = await git(path, ["apply", "--index", "--whitespace=nowarn", "-"], { input: got.patch, allowFail: true });
+    if (applied.code !== 0) return reject(`the partial checkpoint's patch does not apply on the unit's base: ${applied.stderr.trim().slice(0, 400)}`);
+    // What the patch ACTUALLY changed, not what the record says it changes: every path is the unit's own.
+    const touched = (await git(path, ["diff", "--cached", "--name-only", "--no-renames", "-z"])).split("\0").filter(Boolean).sort();
+    const outside = touched.filter(p => !matchesOwned(p, unit.owned_paths));
+    if (outside.length) return reject(`the partial checkpoint's patch changes ${outside.join(", ")}, outside the unit's owned paths`);
+    const tree = (await git(path, ["write-tree"])).trim();
+    if (tree !== got.record.tree) return reject(`the partial checkpoint's patch applied on the unit's base yields tree ${tree}, not the recorded ${got.record.tree}`);
+    const commit = await checkpointWrites({ worktree: path, message: `pantheon pipeline: unit ${u.unit_id}: restored from a partial checkpoint (unverified)` });
+    u.partial_resume = { resumed: true, from: partialFile(run.checkpoints.dir, u.unit_key), recorded_at: got.record.recorded_at, commit, tree, changed: touched,
+      stopped: clone(got.record.stopped), admitted: got.record.admitted?.requests ?? null, contributions: clone(got.record.contributions ?? []) };
+    run.checkpoints.partial_resumed.push(u.unit_id);
+    return commit;
   }
 
   /** Write an approved unit's checkpoint. A failure to write is recorded; it does not change the unit's verdict. */
@@ -609,7 +690,7 @@ export async function runPipeline({ repo, base, plan, seats, turns, limits = {},
         // ...and an SDK implementer's NATIVE subagents, per attempt whose writes were kept: who the implementer was,
         // the governor's whole record (each specialist's identity, type, scope, tools, digests, states and usage, and
         // every rejection) and the names the provider answered under. A resumed unit restores them the same way.
-        native_subagents: (u.attempts ?? []).filter(a => a.status === "written" && a.session?.subagents).map(a => ({ attempt: a.n, implementer: { vendor: a.vendor, model: a.model, effort: a.effort ?? null },
+        native_subagents: (u.attempts ?? []).filter(a => (a.status === "written" || a.partial?.kept === true) && a.session?.subagents).map(a => ({ attempt: a.n, implementer: { vendor: a.vendor, model: a.model, effort: a.effort ?? null },
           served_models: clone(a.session.gateway?.served_models ?? {}), ...(a.session.gateway?.served_by_type ? { served_by_type: clone(a.session.gateway.served_by_type) } : {}), subagents: clone(a.session.subagents) })) } });
       u.checkpoint = { written: true, file: checkpointFile(run.checkpoints.dir, u.unit_key), recorded_at: rec.recorded_at };
       run.checkpoints.written.push(u.unit_id);

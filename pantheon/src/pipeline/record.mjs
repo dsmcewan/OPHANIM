@@ -61,8 +61,15 @@ export function contributionsOf(run) {
   out.push({ kind: "plan", unit_id: null, role: "planner", vendor: p?.vendor ?? null, model: p?.model ?? null, served_model: p?.served_model ?? null, ...src(p) });
   for (const u of units(run)) {
     const native = new Map();   // vendor, model, served name -> the specialist types that ran under it
-    for (const a of u.attempts ?? []) if (a.status === "written") {
-      out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: a.served_model ?? null, ...src(a) });
+    // An attempt whose writes reached the worktree: a written one, and one a refused charge stopped whose writes were
+    // KEPT as a partial checkpoint (implement.mjs: `partial.kept`). The stopped session returned no result, so the name
+    // it was answered under is what the gateway recorded for its model (every name; none: unnamed).
+    for (const a of u.attempts ?? []) if (a.status === "written" || a.partial?.kept === true) {
+      if (a.status === "written") out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: a.served_model ?? null, ...src(a) });
+      else {
+        const named = a.session?.gateway?.served_models?.[a.model] ?? [];
+        for (const served of named.length ? named : [null]) out.push({ kind: "work", unit_id: u.unit_id, role: "implementer", vendor: a.vendor, model: a.model, served_model: served, served_model_source: served ? "provider" : "unnamed" });
+      }
       for (const i of a.session?.subagents?.instances ?? []) {
         const named = a.session?.gateway?.served_models?.[i.model] ?? [];
         for (const served of named.length ? named : [null]) {
@@ -76,6 +83,11 @@ export function contributionsOf(run) {
     for (const r of u.reviews ?? []) if (r.fed_revision) out.push({ kind: "critique", unit_id: u.unit_id, role: "reviewer", vendor: r.vendor, model: r.model, served_model: r.served_model ?? null, ...src(r) });
     if (u.resumed) for (const c of u.checkpoint?.contributions ?? []) {
       out.push({ kind: c.kind, unit_id: u.unit_id, role: c.role, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, ...src(c), from_checkpoint: true });
+    }
+    // A unit that STARTED from a restored partial checkpoint (index.mjs): whoever wrote the restored work shaped the
+    // change this run finished. Their rows are restored from the sealed record, marked.
+    if (u.partial_resume?.resumed) for (const c of u.partial_resume.contributions ?? []) {
+      out.push({ kind: c.kind, unit_id: u.unit_id, role: c.role, vendor: c.vendor, model: c.model, served_model: c.served_model ?? null, ...src(c), from_partial: true });
     }
   }
   return sorted(out);
