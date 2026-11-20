@@ -23,7 +23,7 @@ import {createHash} from 'node:crypto';
 import {makeRetriever, investigate} from './context.mjs';
 import {evidenceCheck} from './gates.mjs';
 import {reconcile} from './reconcile.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {openWorkLedger} from './work-ledger.mjs';
 import {makeExecutors} from './stages.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
@@ -275,7 +275,7 @@ test(`${L504}, the validator's sources: a validation is reused while the views i
       const sources = [...prompt.matchAll(/^source: (\S+) \| version: /gm)].map(m => m[1]);
       return json({...JSON.parse(/```json\n([\s\S]*)\n```/.exec(ACCEPT)[1]), sources});
     }});
-    const ex = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const four = {plan: ex.plan, implement: ex.implement, review: ex.review, validate: ex.validate};
     assert.deepEqual(stagesOf(await tick({repo, ...f, executors: four, limits: LIMITS})).map(s => s.split(':')[0]), ['plan', 'implement', 'review', 'validate']);
     const w = openWorkLedger({root: f.workRoot});

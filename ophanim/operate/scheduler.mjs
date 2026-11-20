@@ -18,6 +18,7 @@
 // executor produces a recorded block or a refusal, never a skipped verification.
 import {openWorkLedger, handoffRefusal, STAGES} from './work-ledger.mjs';
 import {requirementDigest, attemptInputs, sameAttempt} from './gates.mjs';
+import {GEMINI_BILLING_OFF, GEMINI_BILLING_SCHEMA, GEMINI_KINDS, SETTING_OF, geminiBilling, policyRecord} from '../../pantheon/src/route/gemini-billing.mjs';
 import {reconcile} from './reconcile.mjs';
 import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
@@ -126,6 +127,35 @@ export function inputSignature({repo, statusRoot, workRoot, issues = null, bundl
 // not return can release it itself (releaseInterrupted). Fencing is unchanged: a released claim records and charges nothing.
 // THE STOP IS STRUCTURED (L-308): `stopped` (text, as before) is accompanied by `stop` {code, why}, code one of STOP_CODES.
 export const STOP_CODES = Object.freeze({ITERATIONS: 'ITERATIONS_LIMIT', ELAPSED: 'ELAPSED_LIMIT', BUDGET: 'PROVIDER_CALL_BUDGET', STAGE_ELAPSED: 'STAGE_ELAPSED', INTERRUPTED: 'INTERRUPTED'});
+
+// ---- THE GEMINI BILLING POLICY OF A TICK (register L-136; pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md) ----
+// `billing` (tick, watch) is the RESOLVED policy the launcher declared (cli.mjs flags, service.mjs config, live-run.mjs
+// manifest; absent: both kinds off). Every claimed stage is handed a billing context over the WORK LEDGER under its claim
+// (ctx.billing): consumption is counted from the ledger's work.billing entries -- all of them, every item and attempt --
+// and every admitted billed request is recorded there, under the claim, before it is sent. So a restart, a resumed attempt
+// or a later service tick applies the declared policy to the budget already consumed, never to a fresh one.
+// A STAGE REFUSED BY THE POLICY is recorded pending on a transient blocker carrying the policy it was refused under
+// (stages.mjs): it is retried when due under the same policy (and refused again while the policy is unchanged), and it is
+// WOKEN at once when the launcher's policy changed the refused kind's setting; refusals under another policy do not count
+// against the attempt bound of the policy now in force.
+/** The billing ledger of one claim: the work ledger, read and written under that claim. */
+export const workBillingLedger = (work, claim, clock = Date.now) => Object.freeze({
+  where: `the work ledger ${work.root} (work.billing)`,
+  used: kind => work.billings(kind).length,
+  record: row => work.recordBilling({...row, claim, at: new Date(clock()).toISOString()}),
+});
+const isPolicy = p => p && typeof p === 'object' && p.schema === GEMINI_BILLING_SCHEMA && typeof p.digest === 'string';
+/** The settings of the refused kinds changed since the attempt was refused: the owner's policy change wakes it. */
+export function billingChanged(blocker, policy) {
+  const b = blocker?.billing;
+  if (!b || !b.settings || typeof b.settings !== 'object') return false;
+  return Object.entries(b.settings).some(([kind, was]) => {
+    const now = policy[SETTING_OF[kind]];
+    return GEMINI_KINDS.includes(kind) && now && (now.enabled !== was?.enabled || now.budget !== was?.budget);
+  });
+}
+/** The policy and what the work ledger records against it (for the tick's summary and the service status). */
+export const billingStatus = (work, policy) => ({...policyRecord(policy), used: Object.fromEntries(GEMINI_KINDS.map(k => [SETTING_OF[k], work.billings(k).length]))});
 /** Release `claim` as `interrupted` (the launcher was stopped), unless already released. Returns true when this call released it. */
 export function releaseInterrupted(work, {claim, item, stage, why, at = new Date().toISOString()}) {
   if (work.released(claim)) return false;
@@ -133,8 +163,9 @@ export function releaseInterrupted(work, {claim, item, stage, why, at = new Date
   catch (e) { if (e?.code === 'LEDGER_REFUSED' && /that claim is already released/.test(String(e.message))) return false; throw e; }
 }
 export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDir = null, executors = {}, limits = {}, holder = 'controller',
-  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null}) {
+  clock = () => Date.now(), progress = () => {}, only = null, interrupt = null, billing = GEMINI_BILLING_OFF}) {
   if (only !== null && (typeof only !== 'string' || !only)) fail('tick: `only` names one status item id', 'USAGE');
+  if (!isPolicy(billing)) fail('tick: `billing` is the resolved Gemini billing policy (pantheon/src/route/gemini-billing.mjs resolveGeminiBilling)', 'USAGE');
   const L = {...DEFAULT_LIMITS, ...limits};
   const started = clock();
   const work = openWorkLedger({root: workRoot});
@@ -192,6 +223,37 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   if (searches) rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
   const order = dependencyOrder(rec.items);
   let iterations = 0;
+  // THE BILLING WAKE (see the header): a stage pending on a billing refusal whose refused kind's setting the launcher has
+  // since changed is dispatched again now, not when its retry falls due: the gate is read as of that retry (the transient
+  // pending's own retry route, gates.mjs), and the attempt bound counts only refusals under the settings now in force.
+  const billingWake = gate => {
+    if (gate?.gate !== 'blocked' || !gate.blocker?.transient || !billingChanged(gate.blocker, billing)) return gate;
+    const due = Date.parse(gate.blocker.retry_at ?? '');
+    if (!Number.isFinite(due)) return gate;
+    const woken = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: Math.max(clock(), due), capacity}).items.find(i => i.item === gate.item)?.gate;
+    return woken && STAGES.includes(woken.gate) ? {...woken, billing_wake: {refused_under: gate.blocker.billing.policy, now: billing.digest}} : gate;
+  };
+  // THE STAGE'S BILLING RECORD (see the header): the policy in force and every billed request and refusal of the stage, on
+  // its usage; and a stage the policy refused a billed request in that did not pass or return is PENDING on a transient
+  // billing blocker -- its outputs (the work so far) kept, the blocker carrying the settings it was refused under.
+  const withBilling = (result, ctx, stage) => {
+    const pick = r => ({kind: r.kind, vendor: r.vendor, model: r.model, purpose: r.purpose ?? null, role: r.role ?? null, transport: r.transport, ...(r.code ? {code: r.code, provider_requests: 0} : {request: r.request, used_before: r.used_before})});
+    const gemini = {policy: policyRecord(billing), billed: Object.fromEntries(GEMINI_KINDS.map(k => [SETTING_OF[k], ctx.rows.filter(r => r.kind === k).length])),
+      rows: ctx.rows.map(pick), refusals: ctx.refusals.map(pick)};
+    let out = {...result, usage: {...(result.usage ?? {provider_calls: null}), gemini}};
+    if (!ctx.refusals.length || ['passed', 'returned'].includes(out.status)) return out;
+    const kinds = [...new Set(ctx.refusals.map(r => r.kind))], codes = [...new Set(ctx.refusals.map(r => r.code))];
+    const tag = {policy: billing.digest, codes, settings: Object.fromEntries(kinds.map(k => [k, {enabled: billing[SETTING_OF[k]].enabled, budget: billing[SETTING_OF[k]].budget}]))};
+    const what = `${codes.join(', ')}: the Gemini billing policy refused ${ctx.refusals.length} billed request(s) of this ${stage} stage (${kinds.map(k => `${SETTING_OF[k]} ${billing[SETTING_OF[k]].enabled ? `enabled, budget ${billing[SETTING_OF[k]].budget}` : 'off'} (${billing[SETTING_OF[k]].source})`).join('; ')}); nothing billed was sent, and the work so far is kept`;
+    const refused = {status_reported: out.status, ...(out.blocker ? {blocker_reported: out.blocker} : {}), refusals: gemini.refusals};
+    // A transient pending the executor already named (the validator's METERED_FAILOVER_DISABLED, a seat pending its retry)
+    // keeps its code and gains the billing tag; anything else that did not complete becomes the billing pending.
+    if (out.status === 'pending' && out.blocker?.transient) return {...out, outputs: {...(out.outputs ?? {}), billing_refused: refused}, blocker: {...out.blocker, billing: tag}};
+    return {...out, status: 'pending', outputs: {...(out.outputs ?? {}), billing_refused: refused},
+      blocker: {code: codes[0], what, role: 'decision-authority', transient: true, billing: tag,
+        resume_when: 'the owner changes the Gemini billing policy (enables the refused kind with a budget, or raises its budget), or the refused lane\'s quota resets (a failover is then not needed)'},
+      next: {stage, why: what.slice(0, 300)}};
+  };
   // Recorded and charged calls, and the in-flight reservation of every live claim (spent() above).
   const budgetLeft = () => { const sp = spent(work, {now: clock()}); return L.total_provider_calls - sp.calls - sp.reserved; };
   const runItem = async item => {
@@ -201,14 +263,17 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       if (iterations >= L.iterations) { stopWith(STOP_CODES.ITERATIONS, `iterations limit ${L.iterations} reached`); return; }
       if (clock() - started > L.elapsed_ms) { stopWith(STOP_CODES.ELAPSED, `elapsed limit ${L.elapsed_ms} ms reached`); return; }
       rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity});
-      const gate = rec.items.find(i => i.item === item).gate;
+      const gate = billingWake(rec.items.find(i => i.item === item).gate);
       if (!STAGES.includes(gate.gate)) { if (gate.blocker) log.blocked.push({item, gate: gate.gate, blocker: gate.blocker}); return; }
       // The inputs of this attempt, its ATTEMPT IDENTITY (gates.mjs attemptInputs): what it received, the requirement, the
       // stage that returned the work, the reassessment it answers, the status entry, and the routing basis -- what made
       // the gate route it (the present ticket, dependencies, the evidence that staled a record, a wake). So a re-route on
       // changed state is new work, while a re-run on an identical routing basis is refused as already done.
       const inputs = attemptInputs(gate, work.stages(item));
-      const attempts = work.stages(item).filter(s => s.stage === gate.gate && sameAttempt(s.inputs, inputs)).length;
+      const same = work.stages(item).filter(s => s.stage === gate.gate && sameAttempt(s.inputs, inputs));
+      // An attempt the billing policy refused under OTHER settings of the refused kind does not count against the bound
+      // of the policy now in force (the owner changed it); one refused under the same settings does.
+      const attempts = same.filter(s => !billingChanged(s.blocker, billing)).length;
       if (attempts >= L.stage_attempts) {
         log.blocked.push({item, gate: gate.gate, blocker: {what: `${attempts} attempts of ${gate.gate} on the same inputs`, role: 'lead@orch', resume_when: 'an input changes, or the owner raises the retry limit'}});
         return;
@@ -222,7 +287,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const grace = Math.min(60_000, Math.floor(L.lease_ms / 10));
       const stageMs = Math.floor(Math.max(1, Math.min(L.elapsed_ms - (clock() - started), L.lease_ms - grace, 2 ** 31 - 1)));
       const budget = {provider_calls: L.stage_provider_calls, iterations: 1, elapsed_ms: stageMs, retries: L.stage_attempts};
-      const attempt = attempts + 1;
+      const attempt = same.length + 1;
       let claim;
       // The claim RESERVES its stage budget against the total ATOMICALLY: the work ledger refuses it, under its append
       // lock, when the total less every other claim's spend and live reservation cannot cover it, so two scheduler
@@ -273,7 +338,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       // fence(): throws LEASE_FENCED once this claim is released or past its lease; an executor calls it before a shared
       // side effect (a ticket, a shared ledger's close, a branch), so a stale holder writes none (finding 4, stages.mjs).
       const fence = () => { const why = work.leaseRefusal(claim, new Date(clock()).toISOString()); if (why) fail(why, 'LEASE_FENCED'); };
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, claim}); }
+      // THE STAGE'S BILLING CONTEXT (see the header): the declared policy over the work ledger under this claim.
+      const stageBilling = geminiBilling({policy: billing, ledger: workBillingLedger(work, claim, clock)});
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, claim, billing: stageBilling}); }
       catch (e) {
         // THE ACTUAL SPEND (self-audit round 3, assignment 3 (sealed bb1287a), L-302): every provider call is charged on the
         // work ledger before it is made (the executor contract above), so `charged` IS what this attempt spent, 0 included;
@@ -295,6 +362,7 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
         progress({event: 'interrupted', item, stage: gate.gate, claim, released});
         return;
       }
+      result = withBilling(result, stageBilling, gate.gate);
       // THE BUDGET, STRUCTURALLY (L-308): a stage that was charged its whole provider-call budget ran out of it (every call
       // is charged before it is made, and a meter refuses the call past the budget), whatever words its result uses. The
       // record says so in `usage.budget_exhausted` (with what was charged), for a reader that classifies stops by code.
@@ -356,18 +424,20 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       if (result.status === 'failed' || stopped) return;
     }
   };
-  // Concurrency: up to L.concurrency items at once; the work ledger's claims keep them from colliding.
-  let queue = order.filter(i => STAGES.includes(i.gate.gate)).map(i => i.item);
+  // Concurrency: up to L.concurrency items at once; the work ledger's claims keep them from colliding. An item pending on a
+  // billing refusal whose refused kind's setting changed is runnable too (the billing wake).
+  const runnable = i => STAGES.includes(i.gate.gate) || STAGES.includes(billingWake(i.gate).gate);
+  let queue = order.filter(runnable).map(i => i.item);
   if (only !== null) {
-    for (const i of order) if (i.item !== only && STAGES.includes(i.gate.gate)) log.skipped.push({item: i.item, gate: i.gate.gate, why: 'outside the --item scope'});
+    for (const i of order) if (i.item !== only && runnable(i)) log.skipped.push({item: i.item, gate: i.gate.gate, why: 'outside the --item scope'});
     const found = rec.items.find(i => i.item === only);
     log.scope = {only, on_ledger: Boolean(found), gate: found?.gate.gate ?? null, runnable: queue.includes(only)};
     queue = queue.filter(i => i === only);
   }
-  for (const i of rec.items) if (!STAGES.includes(i.gate.gate) && i.gate.blocker) log.blocked.push({item: i.item, gate: i.gate.gate, blocker: i.gate.blocker});
+  for (const i of rec.items) if (!runnable(i) && i.gate.blocker) log.blocked.push({item: i.item, gate: i.gate.gate, blocker: i.gate.blocker});
   const workers = Array.from({length: Math.max(1, L.concurrency)}, async () => { for (let it = queue.shift(); it; it = queue.shift()) await runItem(it); });
   await Promise.all(workers);
-  return {...log, spent: spent(work, {now: clock()}), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}};
+  return {...log, spent: spent(work, {now: clock()}), limits: L, reconcile: {counts: rec.counts, ledger: rec.ledger}, billing: billingStatus(work, billing)};
 }
 
 /**

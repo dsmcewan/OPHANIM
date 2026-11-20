@@ -188,11 +188,13 @@ never writes the status ledger.
      `pipeline` {`max_provider_calls`, `max_revisions`, `max_concurrent_units`, `verify_timeout_ms`}. Every one is
      `null` in the example and must be chosen: a null is refused. The limits bound **calls, not dollars**; an
      implementer session is charged one call per model request it makes, and so is each of its subagents;
-   - `billing`: `scope`, `gemini_api_primary`, `metered_gemini_failover`, `note`. The two settings are separate
-     authorizations (owner decision 2026-11-19, register L-136), each enforced where the money would be spent and
-     never by the presence of a key. `gemini_api_primary` enables primary Gemini API execution, which is off unless
-     the manifest says `true`; the Google implementer is an Antigravity SDK session billed on the Gemini API, so this
-     launcher refuses a manifest that does not enable it (the run could plan and then not implement).
+   - `billing`: `scope`, `gemini_api_primary` with `gemini_primary_budget`, `metered_gemini_failover` with
+     `metered_gemini_budget`, `note`. The two settings are separate authorizations (owner decision 2026-11-19,
+     register L-136), resolved through the one billing policy (`docs/billing-policy.md`), each with a budget of billed
+     Gemini requests that the run's work ledger records, each enforced where the money would be spent and never by the
+     presence of a key. `gemini_api_primary` declares primary Gemini execution; the Google implementer is an Antigravity
+     SDK session billed on the Gemini API, one billed request per model request of it and of each native subagent, so
+     this launcher refuses a manifest that does not declare it (the run could plan and then not implement).
      `metered_gemini_failover` governs only the metered fallback of a single-turn Gemini seat on an Antigravity lane, a
      reviewer or the validator; false: its lane's quota refusal is not answered by the metered API;
    - `require_subagent` (optional): `{type, model: "gemini-4-hydrogen", min_calls}`, where `type` is a specialist type

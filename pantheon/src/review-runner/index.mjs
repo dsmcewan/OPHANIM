@@ -1,7 +1,18 @@
 // The independent-review runner: one assignment, one reviewer model, one disposable worktree.
 // The owner runs it on their own machine with their own key. See HARNESS.md in the review
 // directory for the only text the runner adds to what the reviewer is shown.
+//
+// THE GEMINI BILLING POLICY (register L-136; pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md). `--via api`
+// with a Google reviewer (assignment 1's default, or --reviewer google:<model>) is PRIMARY Gemini API execution: every
+// request it sends -- each turn, and a retry after a 429/5xx -- is admitted by gemini_api_primary (default OFF; enabled by
+// --gemini-api-primary N, N the budget of billed requests) BEFORE it is sent, and recorded in
+// findings-<n>-<lab>.gemini-billing.jsonl beside the transcript (the budget's consumption: a --continue run continues
+// it, a restart never resets it) and on the provider_call event of the transcript. Refused (off, or the budget spent):
+// nothing is sent, the refusal is a transcript event, the run stops incomplete, and `--continue` resumes it once the
+// owner allows the spend. A GEMINI_API_KEY in the environment authorizes nothing. --metered-gemini-failover N is
+// resolved too, but no seat here fails over from a lane; --via subscription (the vendors' OAuth CLIs) is never refused.
 import { spawn } from "node:child_process";
+import { billingFromFlags, geminiBilling, geminiUsageFile, spendGemini, billingRecord, policyRecord, isGeminiBillingRefusal } from "../route/quota-failover.mjs";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { reviewTmpBase } from "./cli-common.mjs";
@@ -33,6 +44,8 @@ const USAGE = `usage: node pantheon/scripts/run-review.mjs --via api|subscriptio
                        transport and model check; the findings are named by the actual lab (findings-<n>-<lab>.md)
                        and their header records default_reviewer and reviewer_override: true
   [--continue <findings-<n>-<lab>.transcript.json>]   resume an incomplete review of the same assignment
+  [--gemini-api-primary N]   allow the Gemini API (a Google reviewer --via api) at most N billed requests; off by default
+  [--metered-gemini-failover N]   resolved with the same policy; no seat here fails over from a lane
   [--out DIR] [--dry-run] [--keep] [--force] [--telos-root DIR]`;
 
 const CAPABILITY_FACTS = JSON.parse(await readFile(new URL("../config/capability-facts.json", import.meta.url), "utf8"));
@@ -65,8 +78,12 @@ function parseCli(argv) {
       via: { type: "string" }, "max-wall-s": { type: "string" }, "allow-api-key-in-cli": { type: "boolean" }, "skip-model-check": { type: "boolean" },
       "grok-state-dir": { type: "string" }, continue: { type: "string" }, "codex-cli": { type: "string" }, "grok-cli": { type: "string" }, "agy-cli": { type: "string" },
       reviewer: { type: "string" }, "codex-outer-runtime": { type: "string" }, "grok-permissions-inspect": { type: "string" },
+      "gemini-api-primary": { type: "string" }, "metered-gemini-failover": { type: "string" },
     } }).values;
   } catch (e) { throw new UsageError(e.message); }
+  // THE BILLING POLICY, resolved before anything is read or run (see the header): malformed or unbudgeted is a usage error.
+  let billing;
+  try { billing = billingFromFlags(v); } catch (e) { throw new UsageError(e.message); }
   if (v.help) throw new UsageError("help");
   if (!/^[1-4]$/.test(v.assignment ?? "")) throw new UsageError("--assignment must be 1, 2, 3 or 4");
   if (!/^[0-9a-f]{40}$/.test(v.commit ?? "")) throw new UsageError("--commit must be a full 40-character lowercase hex commit id");
@@ -98,7 +115,7 @@ function parseCli(argv) {
   return { via: v.via, n: Number(v.assignment), commit: v.commit, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
     allowApiKeyInCli: !!v["allow-api-key-in-cli"], skipModelCheck: !!v["skip-model-check"], grokStateDir: v["grok-state-dir"] ?? null,
     codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null, reviewer,
-    codexOuterRuntime: v["codex-outer-runtime"] ?? "auto", grokPermissionsInspect: v["grok-permissions-inspect"] ? v["grok-permissions-inspect"].trim().split(/ +/) : null };
+    codexOuterRuntime: v["codex-outer-runtime"] ?? "auto", grokPermissionsInspect: v["grok-permissions-inspect"] ? v["grok-permissions-inspect"].trim().split(/ +/) : null, billing };
 }
 
 // --reviewer <lab>:<model>: the lab names the vendor exactly as the README table's labs do (brief.mjs LAB_TO_VENDOR).
@@ -200,7 +217,9 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
     key: { env: vendor.key_env, present: typeof env[vendor.key_env] === "string" && env[vendor.key_env].length > 0, sent_as: vendor.auth },
     child_process_env: { names: childEnvNames, telos_root_set: !!opts.telosRoot },
     worktree: { kind: "detached git worktree in a new temp dir", removed_after_run: !opts.keep, dependencies: "node_modules copied from the runner's checkout where present" },
-    out: { findings, transcript, findings_exists: await exists(findings), overwrite: opts.force },
+    out: { findings, transcript, findings_exists: await exists(findings), overwrite: opts.force, gemini_billing: join(outDir, `findings-${n}-${lab}.gemini-billing.jsonl`) },
+    // THE GEMINI BILLING POLICY in force (see the header): a Google reviewer over the API is primary Gemini API execution.
+    gemini_billing: { ...policyRecord(opts.billing), applies: row.vendor === "gemini" ? "primary: every request admitted by gemini_api_primary before it is sent" : "none: no Gemini API request on this run" },
     provider_calls: 0,
     _brief: b, // not printed
   };
@@ -266,6 +285,8 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   if (!secrets.includes(key)) secrets.push(key);
   const timeoutMs = opts.limits.timeout_s * 1000;
   const b = plan._brief;
+  // The run's Gemini billing context: the declared policy over the usage record beside the transcript (see the header).
+  const billing = geminiBilling({ policy: opts.billing, ledger: geminiUsageFile(plan.out.gemini_billing) });
 
   const started = now();
   // Not under /tmp (cli-common.mjs reviewTmpBase: the repository's jail fixtures hide /tmp from the code they jail).
@@ -280,7 +301,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     default_reviewer: plan.default_reviewer, reviewer_override: plan.reviewer_override, ...(plan.reviewer_override ? { reviewer: plan.reviewer } : {}),
     endpoint: plan.endpoint,
     hashes: { harness_template: plan.request.harness_template.sha256, system: plan.request.system.sha256, brief: plan.request.brief.sha256, tools: plan.request.tools.sha256 },
-    via: "api", limits: opts.limits, started_at: started.toISOString(),
+    via: "api", limits: opts.limits, started_at: started.toISOString(), gemini_billing: null,
     // A continuation carries the earlier run's events first (they are what a later --continue replays), then its own.
     events: resume ? [...(resume.t.events ?? [])] : [],
     ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method: plan.continue.method } } : {}),
@@ -354,7 +375,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
       if (state.providerCalls >= opts.limits.max_turns) { state.stop = `max_turns reached (${opts.limits.max_turns})`; break; }
       turn++;
       const req = conv.request();
-      const res = await providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn });
+      const res = await providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing });
       if (!res.ok) { state.stop = res.reason; break; }
       const r = conv.accept(res.json);
       state.served.push(r.served_model);
@@ -405,6 +426,8 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   Object.assign(transcript, {
     ended_at: ended.toISOString(), status, stop_reason: state.stop, coverage, coverage_gate: gate, provider_calls: state.providerCalls, tool_calls: state.toolCalls,
     served_models: distinctServed, usage_totals: state.usage, worktree_kept: opts.keep ? wt : null,
+    // The policy, every billed Gemini request (recorded before it was sent) and every refusal of this run (L-136).
+    gemini_billing: billingRecord(billing),
     review_tests: state.review_tests ?? { captured: false, why: "no worktree was created" },
     ...(state.cleanup_error ? { worktree_cleanup_error: state.cleanup_error } : {}),
   });
@@ -434,6 +457,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     `- started_at: ${started.toISOString()}`,
     `- ended_at: ${ended.toISOString()}`,
     `- provider_calls: ${state.providerCalls}`,
+    ...(plan.vendor === "gemini" ? [`- gemini_billing: gemini_api_primary ${opts.billing.gemini_api_primary.enabled ? `enabled, budget ${opts.billing.gemini_api_primary.budget}` : "off"} (${opts.billing.gemini_api_primary.source}); billed requests this run: ${billing.rows.length}; refused: ${billing.refusals.length}`] : []),
     `- tool_calls: ${state.toolCalls}`,
     `- usage_totals: \`${JSON.stringify(state.usage)}\``,
     `- limits: \`${JSON.stringify(opts.limits)}\``,
@@ -461,11 +485,24 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   return { status, stop_reason: state.stop };
 }
 
-async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn }) {
+async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing }) {
   const body = JSON.stringify(req.body);
   for (let attempt = 1; ; attempt++) {
+    // A Gemini request is PRIMARY Gemini API execution: admitted by the billing policy and recorded on its usage record
+    // BEFORE it is sent, each attempt (a retry is a billed request too); refused, nothing is sent (see the header).
+    let gemini = null;
+    if (plan.vendor === "gemini") {
+      try { gemini = spendGemini(billing, { kind: "primary", vendor: "gemini", model: plan.model, purpose: `review assignment ${plan.assignment.n}`, role: "reviewer", transport: "api", request: state.providerCalls + 1 }); }
+      catch (e) {
+        const b = e?.billing ?? {};
+        transcript.events.push({ type: "provider_call_refused", turn, attempt, at: new Date().toISOString(), code: e?.code ?? null, kind: "primary", setting: "gemini_api_primary",
+          source: b.source ?? null, budget: b.budget ?? null, used: b.used ?? null, provider_requests: 0, why: redact(String(e?.message ?? e), secrets) });
+        return { ok: false, reason: `${isGeminiBillingRefusal(e) ? "" : "the Gemini usage could not be recorded: "}${redact(String(e?.message ?? e), secrets)}` };
+      }
+    }
     state.providerCalls++;
-    const ev = { type: "provider_call", n: state.providerCalls, turn, attempt, at: new Date().toISOString(), request_bytes: Buffer.byteLength(body), request_sha256: sha256(body) };
+    const ev = { type: "provider_call", n: state.providerCalls, turn, attempt, at: new Date().toISOString(), request_bytes: Buffer.byteLength(body), request_sha256: sha256(body),
+      ...(gemini ? { gemini: { kind: gemini.kind, setting: gemini.setting, source: gemini.source, budget: gemini.budget, used_before: gemini.used_before, remaining_after: gemini.remaining_after } } : {}) };
     transcript.events.push(ev);
     const t0 = Date.now();
     let resp;

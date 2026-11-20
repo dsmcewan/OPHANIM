@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, REVIEW_INDEPENDENCE, workContributions} from './stages.mjs';
 import {reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
@@ -40,11 +40,11 @@ test('four real labs: an item without a ticket and one with an existing ticket c
     const turn = scriptedTurn();
     // The lab rule, for contrast, on the same items: implementation waits on review capacity.
     const lab = await tick({repo, statusRoot: f.statusRoot, workRoot: path.join(repo, 'status', 'work-lab'), limits: LIMITS,
-      executors: makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn: scriptedTurn(), stateDir: path.join(repo, 'status', 'operate-lab'), independence: 'lab'})});
+      executors: makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: path.join(repo, 'status', 'operate-lab'), independence: 'lab'})});
     assert.deepEqual(stagesOf(lab), ['plan:passed', 'implement:pending', 'plan:passed', 'implement:pending']);
     git(repo, 'checkout', '-q', '--', '.'); fs.rmSync(path.join(repo, 'tickets', 'fresh.json'), {force: true});
 
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.deepEqual(stagesOf(r), Array(2).fill(['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed']).flat(), JSON.stringify(r.dispatched.map(d => [d.item, d.stage, d.status])));
     const w = openWorkLedger({root: f.workRoot});

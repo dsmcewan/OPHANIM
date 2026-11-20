@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// MUTATION RUNNER for L-504 invariants 3 (the Antigravity model guard) and 4 (no metered Gemini spend with the failover
-// off), L-124 (the point-of-spend guard of the python SDK seat), and invariant 2 on the board's contributor rows (an
-// unnamed serving model stays unknown; patch 3b-identity-1): wave 3, sub-wave 3B-1. Every mutation re-introduces
+// MUTATION RUNNER for L-504 invariants 3 (the Antigravity model guard) and 4 (no metered Gemini spend the billing policy
+// does not admit), L-124 (the point-of-spend guard of the python SDK seat; split by L-136 into the failover and primary
+// settings), and invariant 2 on the board's contributor rows (an unnamed serving model stays unknown; patch
+// 3b-identity-1): wave 3, sub-wave 3B-1. Every mutation re-introduces
 // a plausible regression of one enumerated path, on a DISPOSABLE COPY of this tree (never the tree itself); the two suites
 // of this work run there, and the mutation is undone.
 //
@@ -21,7 +22,11 @@ import {fileURLToPath} from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SUITES = ['pantheon/tests/wave3-agy-guard.test.mjs', 'pantheon/tests/wave3-spend.test.mjs'];
 const AGY = 'pantheon/src/board/agy-cli.mjs', RUN = 'pantheon/src/board/run-item.mjs', SUB = 'pantheon/src/review-runner/subscription.mjs';
+const TURN = 'pantheon/src/sdk/agy-turn.mjs', LIVE = 'pantheon/src/sdk/live.mjs', PIPE = 'pantheon/src/pipeline/turns.mjs', QF = 'pantheon/src/route/quota-failover.mjs';
 const one = (file, from, to) => ({file, from, to});
+// The point-of-spend guard of the board's Gemini API seat, both of its checks (up front, and per request).
+const RUN_API_GUARD = [one(RUN, '    if (geminiApi) {\n      try { geminiAdmission(BILLING, spend); }', '    if (false) {\n      try { geminiAdmission(BILLING, spend); }'),
+  one(RUN, '      const admitRequest = geminiApi\n', '      const admitRequest = false\n')];
 
 export const MUTATIONS = [
   // ---- invariant 3: the model guard, per entry point -------------------------------------------------------------
@@ -57,26 +62,33 @@ export const MUTATIONS = [
     edits: [one(RUN, '...(sm && sm !== r.model ? { served_model: sm } : !sm ?', '...(false ? { served_model: sm } : !sm ?')]},
   {id: 'I4', path: 'board work contributor row', what: 'a serving model the worker\'s provider named is dropped from the row',
     edits: [one(RUN, '...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),', '')]},
-  // ---- invariant 4 / L-124: no metered Gemini call with the failover off, per seat and path -------------------------
-  {id: 'S1', path: 'L/P liveTurn -> laneFirstTurn, a lane quota refusal', what: 'laneFirstTurn ignores failover: false and asks the metered API',
-    edits: [one('pantheon/src/sdk/agy-turn.mjs', '    if (failover === false) {\n', '    if (false) {\n')]},
-  {id: 'S2', path: 'L/P liveTurn -> laneFirstTurn, a Gemini seat with no lane', what: 'AGY_NO_LANE removed: a laneless Gemini seat goes to the metered API',
-    edits: [one('pantheon/src/sdk/agy-turn.mjs', 'if (!viaLane && failover === false && vendor === "agy_google") {', 'if (false) {')]},
-  {id: 'S3', path: 'L/P liveTurn wiring', what: 'liveTurn does not carry meteredFailover into laneFirstTurn',
-    edits: [one('pantheon/src/sdk/live.mjs', 'laneFirstTurn(args, { lane: agySingleTurn, api, failover: meteredFailover })', 'laneFirstTurn(args, { lane: agySingleTurn, api, failover: true })')]},
-  {id: 'S4', path: 'I the pipeline implementer', what: 'the implementer ignores agy.meteredFailover: false and asks the metered API',
-    edits: [one('pantheon/src/pipeline/turns.mjs', '      if (agy.meteredFailover === false) {', '      if (false) {')]},
-  {id: 'S5', path: 'B(api) the board\'s Gemini API seat (operator seat, ticket pin)', what: 'the point-of-spend guard of the API seat removed (the base)',
-    edits: [one(RUN, '    if (!METERED_FAILOVER && isMeteredGemini({ vendor, transport: transport ?? "api" })) {', '    if (false) {')]},
-  {id: 'S6', path: 'B(sdk) the python SDK seat (L-124)', what: 'the SDK seat\'s point-of-spend guard removed (the base)',
-    edits: [one(RUN, '      if (!METERED_FAILOVER && isMeteredGemini({ vendor: "agy_google", transport: "sdk" })) {', '      if (false) {')]},
-  {id: 'S7', path: 'B(sdk) the python SDK seat (L-124)', what: 'the metered classification forgets the SDK transport',
-    edits: [one('pantheon/src/route/quota-failover.mjs', '(transport === "api" || transport === "sdk")', 'transport === "api"')]},
+  // ---- invariant 4 / L-124 / L-136: no metered Gemini call the billing policy does not admit, per seat and path ---------
+  {id: 'S1', path: 'L/P liveTurn -> laneFirstTurn, a lane quota refusal', what: 'laneFirstTurn asks the metered API on a lane quota refusal without the policy (only the caller\'s admission)',
+    edits: [one(TURN, '      spendGemini(billing, { kind: "failover", vendor: spare.vendor', '      ((_b, _a, admit) => admit())(billing, { kind: "failover", vendor: spare.vendor')]},
+  {id: 'S2', path: 'L/P liveTurn -> laneFirstTurn, a Gemini seat with no lane (primary)', what: 'the primary guard removed: a laneless Gemini seat goes to the metered API (laneFirstTurn up front and the API seat per request)',
+    edits: [one(TURN, '  if (!viaLane && isMeteredGemini({ vendor, transport: "api" })) {', '  if (false) {'),
+      one(LIVE, '    const gemini = isMeteredGemini({ vendor, transport: "api" });', '    const gemini = false;')]},
+  {id: 'S3', path: 'L/P liveTurn wiring', what: 'liveTurn does not carry its billing context into laneFirstTurn',
+    edits: [one(LIVE, 'laneFirstTurn({ ...args, billing: args?.billing ?? billing }, { lane: agySingleTurn, api })', 'laneFirstTurn({ ...args, billing: args?.billing ?? null }, { lane: agySingleTurn, api })')]},
+  {id: 'S4', path: 'I the pipeline implementer', what: 'the implementer asks the metered API on a proven quota refusal without the policy',
+    edits: [one(PIPE, '        spendGemini(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer"', '        ((_b, _a, admit) => admit())(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer"')]},
+  {id: 'S5', path: 'B(api) the board\'s Gemini API seat (operator seat, ticket pin)', what: 'the point-of-spend guard of the API seat removed (up front and per request)',
+    edits: RUN_API_GUARD},
+  {id: 'S6', path: 'B(sdk) the python SDK seat (L-124)', what: 'the SDK seat\'s point-of-spend guard removed (before the venv check and at the spawn)',
+    edits: [one(RUN, '      try { geminiAdmission(BILLING, spend); }\n      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }\n', ''),
+      one(RUN, '      try { spendGemini(BILLING, spend, () => admit()); }', '      try { admit(); }')]},
+  {id: 'S7', path: 'B(sdk) the python SDK seat (L-124, split by L-136)', what: 'the SDK seat is classified as a failover: the failover switch admits a primary seat',
+    edits: [one(RUN, '      const spend = { kind: "primary", vendor: "agy_google", model, purpose, role, transport: "sdk" };', '      const spend = { kind: "failover", vendor: "agy_google", model, purpose, role, transport: "sdk" };')]},
   {id: 'S8', path: 'B(spare) the walk\'s quota-failover candidate', what: 'both protections of the spare removed: the walk reaches it and the seat is not refused at spend',
-    edits: [one('pantheon/src/route/quota-failover.mjs', '    if (c.quota_failover && !meteredFailover) {', '    if (false) {'),
-      one(RUN, '    if (!METERED_FAILOVER && isMeteredGemini({ vendor, transport: transport ?? "api" })) {', '    if (false) {')]},
-  {id: 'S9', path: 'B the board wiring', what: 'runOpenItem does not carry opts.meteredFailover',
-    edits: [one(RUN, 'const METERED_FAILOVER = opts.meteredFailover ?? true;', 'const METERED_FAILOVER = true;')]},
+    edits: [one(QF, '      try { geminiAdmission(billing, { kind: "failover", vendor: c.vendor, model: c.model, purpose: c.role ?? null, role: c.role ?? null, transport: "api" }); }', '      try { /* no policy */ }'),
+      ...RUN_API_GUARD]},
+  {id: 'S9', path: 'B the board wiring', what: 'runOpenItem does not carry opts.billing',
+    edits: [one(RUN, 'const BILLING = opts.billing ?? geminiBilling();', 'const BILLING = geminiBilling();')]},
+  {id: 'S10', path: 'B(api) the board\'s Gemini API seat (L-136 split)', what: 'every Gemini API seat is classified as a failover: the failover switch admits an operator\'s or a ticket\'s primary seat',
+    edits: [one(RUN, '    const spend = { kind: geminiKindOf({ quota_failover }), vendor, model, purpose, role: ROLE_OF_PURPOSE[purpose] ?? purpose, transport: "api" };', '    const spend = { kind: "failover", vendor, model, purpose, role: ROLE_OF_PURPOSE[purpose] ?? purpose, transport: "api" };')]},
+  {id: 'S11', path: 'L laneFirstTurn, a Gemini seat with no lane (L-136 split)', what: 'the laneless Gemini seat is classified as a failover: the failover switch admits primary execution',
+    edits: [one(TURN, '    geminiAdmission(billing, { kind: "primary", vendor, model, purpose: seat?.role ?? null', '    geminiAdmission(billing, { kind: "failover", vendor, model, purpose: seat?.role ?? null'),
+      one(TURN, '...sig, billing, billingKind: "primary", ...(admits ? { admitRequest } : ch) });', '...sig, billing, billingKind: "failover", ...(admits ? { admitRequest } : ch) });')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

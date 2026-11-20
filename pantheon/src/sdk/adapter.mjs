@@ -418,7 +418,13 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
       model: model ?? spec.default_model, contents, ...extra,
     });
     await admit(req);
-    const res = await untilAborted(client.models.generateContent(signal ? { ...req, config: { ...req.config, abortSignal: signal } } : req), signal);
+    // NO HIDDEN BILLED REQUEST (register L-136, a sibling of L-301): the pinned @google/genai SDK continues a unary turn ON
+    // ITS OWN by default (config.automaticContinuation), sending further billed requests inside this ONE generateContent
+    // call, which neither the per-request charge nor the Gemini billing policy sees (observed: a CONTINUATION answer was
+    // followed by a second request past a spent budget). Off here, as the frontier path's own continuation loop does
+    // (packages/model-client wire.mjs); a CONTINUATION finish is then an incomplete turn, never an unadmitted request.
+    const sent = { ...req, config: { ...req.config, automaticContinuation: false, ...(signal ? { abortSignal: signal } : {}) } };
+    const res = await untilAborted(client.models.generateContent(sent), signal);
     const candidate = res?.candidates?.[0];
     const text = typeof res?.text === "string" ? res.text : collectGenaiText(res);
     const terminal = terminalState("genai", { finishReason: candidate?.finishReason ?? null, blocked: Boolean(res?.promptFeedback?.blockReason) });

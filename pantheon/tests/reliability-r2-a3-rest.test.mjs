@@ -98,7 +98,7 @@ test("finding 5.2: an exhaustion the report does not attribute to the lane's gro
 
 // ---- finding 6: the metered-failover switch on the walk
 
-test("finding 6: with meteredFailover false, routeSeats never reaches a metered Gemini quota-failover candidate", async () => {
+test("finding 6: with the metered failover off (not declared: the default, L-136), routeSeats never reaches a metered Gemini quota-failover candidate", async () => {
   // independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6: routeSeats (runOpenItem)
   // had no switch, so a lane's quota refusal reached the metered API whatever the run's billing said.
   const quota = () => Object.assign(new Error("agy: 429 RESOURCE_EXHAUSTED"), { status: 429, code: "quota_exhausted" });
@@ -106,9 +106,9 @@ test("finding 6: with meteredFailover false, routeSeats never reaches a metered 
   const SPARE = { vendor: "agy_google", model: "gemini-4-carbon", transport: "api", pool: "agy_google", quota_failover: { base: "gemini-4-carbon", lanes: ["gemini-4-carbon-high"] } };
   const NEXT = { vendor: "openai", model: "gpt-6-astra", transport: "api", pool: "openai" };
   const asked = [], skipped = [];
-  const r = await routeSeats({ candidates: [LANE, SPARE, NEXT], meteredFailover: false, onSkip: s => skipped.push(s.why),
+  const r = await routeSeats({ candidates: [LANE, SPARE, NEXT], onSkip: s => skipped.push(s.why),
     invoke: async c => { asked.push(c.model); if (c.transport === "agy-cli") throw quota(); return c.model; } });
   assert.deepEqual(asked, ["gemini-4-carbon-high", "gpt-6-astra"]);
   assert.equal(r.value, "gpt-6-astra");
-  assert.ok(skipped.some(w => /disabled/.test(w)), JSON.stringify(skipped));
+  assert.ok(skipped.some(w => /METERED_GEMINI_DISABLED/.test(w) && /metered_gemini_failover is off/.test(w)), JSON.stringify(skipped));
 });

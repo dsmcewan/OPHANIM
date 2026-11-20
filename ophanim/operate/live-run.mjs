@@ -13,18 +13,21 @@
 //                         pipeline: {max_provider_calls, max_revisions, max_concurrent_units, verify_timeout_ms}}:
 //                         positive integers; stage_provider_calls <= total_provider_calls and
 //                         pipeline.max_provider_calls <= stage_provider_calls (a pipeline runs inside one stage)
-//   billing              {scope: owner text, gemini_api_primary: true, metered_gemini_failover: true|false, note}.
-//                         Two separate authorizations (owner decision 2026-11-19, register L-136), each enforced at the
-//                         point of spend and never by the presence of a key:
-//                         gemini_api_primary       primary Gemini API execution; off unless this says true. The Google
-//                                                  implementer of a fit run is an Antigravity SDK session billed on the
-//                                                  Gemini API (GEMINI_API_KEY): every model request of it, and of each
-//                                                  of its native subagents, is one provider call. This launcher runs
-//                                                  only fit, so it REFUSES a manifest that does not say true: the run
-//                                                  could plan and then not implement.
+//   billing              {scope: owner text, gemini_api_primary: true, gemini_primary_budget, metered_gemini_failover:
+//                         true|false, metered_gemini_budget?, note}. Resolved through the ONE billing policy
+//                         (pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md; register L-136): two separate
+//                         authorizations, each with a declared budget of billed Gemini requests that the run's work
+//                         ledger may record, each enforced at the point of spend and never by the presence of a key:
+//                         gemini_api_primary       PRIMARY Gemini execution. The Google implementer of a fit run is an
+//                                                  Antigravity SDK session billed on the Gemini API (GEMINI_API_KEY):
+//                                                  every model request of it, and of each of its native subagents, is
+//                                                  one billed request against gemini_primary_budget (a positive
+//                                                  integer). This launcher runs only fit, so it REFUSES a manifest
+//                                                  that does not say true: the run could plan and then not implement.
 //                         metered_gemini_failover  whether a proven quota refusal of an Antigravity lane (a single-turn
 //                                                  Gemini seat: a reviewer, the validator) may be answered by the
-//                                                  metered Gemini API. It neither enables nor disables the implementer.
+//                                                  metered Gemini API. true needs metered_gemini_budget; false must not
+//                                                  carry one. It neither enables nor disables the implementer.
 //   require_subagent     (optional) {type: a specialist type, model: gemini-4-hydrogen, min_calls >= 1}: the run is NOT
 //                         accepted unless that many NATIVE subagents of that type, admitted by the controller and
 //                         answered by the provider under that model, are recorded in an implementer session whose
@@ -86,7 +89,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
-import {tick, spent, releaseInterrupted, STOP_CODES} from './scheduler.mjs';
+import {tick, spent, releaseInterrupted, STOP_CODES, billingStatus} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {openWorkReadOnly} from './cli.mjs';
 import {makeExecutors, implementerPath} from './stages.mjs';
@@ -109,8 +112,17 @@ import {probeQuota} from '../../pantheon/src/agy/quota.mjs';
 import {sandboxAvailable} from '../../pantheon/src/agy/sandbox.mjs';
 import {prepareWorkerWorkspace} from '../../pantheon/src/agy/workspace.mjs';
 import {spawnPromise} from '../../pantheon/src/board/spawn.mjs';
+import {billingFromConfig, policyRecord} from '../../pantheon/src/route/quota-failover.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+/**
+ * THE MANIFEST'S BILLING, through the one billing policy (register L-136): billing.metered_gemini_failover (unchanged in
+ * meaning) with its budget billing.metered_gemini_budget; primary Gemini API execution is not declared by a live run and
+ * stays off. Throws GEMINI_BILLING_INVALID (an enabled failover without a budget, a budget without the failover).
+ */
+export const manifestBilling = m => billingFromConfig({
+  metered_gemini_failover: {enabled: m.billing.metered_gemini_failover, ...(m.billing.metered_gemini_budget !== undefined ? {budget: m.billing.metered_gemini_budget} : {})},
+  gemini_api_primary: {enabled: m.billing.gemini_api_primary, ...(m.billing.gemini_primary_budget !== undefined ? {budget: m.billing.gemini_primary_budget} : {})}}, 'live-run manifest billing');
 export const REPO_ROOT = path.resolve(HERE, '../..');
 // v2 (2026-11-19): the Google implementer is billed on the Gemini API (billing.gemini_api_primary), the required
 // subagent is a native one ({type, model}), and agy-login is optional. A v1 manifest is refused: it authorized neither.
@@ -180,10 +192,17 @@ export function validateManifest(m, {baseDir = process.cwd()} = {}) {
       why.push('limits.pipeline.max_provider_calls is at most limits.stage_provider_calls (the pipeline runs inside the implement stage, whose budget bounds it)');
     }
   }
-  if (keys(m.billing, 'billing', ['scope', 'gemini_api_primary', 'metered_gemini_failover', 'note'])) {
+  if (keys(m.billing, 'billing', ['scope', 'gemini_api_primary', 'gemini_primary_budget', 'metered_gemini_failover', 'metered_gemini_budget', 'note'], new Set(['metered_gemini_budget']))) {
     if (!str(m.billing.scope)) why.push('billing.scope is the owner\'s text naming what may be billed');
-    if (m.billing.gemini_api_primary !== true) why.push('billing.gemini_api_primary is true: the Google implementer of a fit run is an Antigravity SDK session, a primary Gemini API seat (GEMINI_API_KEY), and primary Gemini API execution is off unless the owner enables it; without it this run could plan and not implement');
+    if (m.billing.gemini_api_primary !== true) why.push('billing.gemini_api_primary is true: the Google implementer of a fit run is an Antigravity SDK session, a primary Gemini seat of the billing policy (GEMINI_API_KEY), and primary Gemini execution is off unless the owner declares it; without it this run could plan and not implement');
     if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether a quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API');
+    // THE BUDGETS (register L-136, owner decision 2026-11-19, item 5): each enabled kind declares how many billed Gemini
+    // requests it may make; resolved through the one billing policy (pantheon/src/route/gemini-billing.mjs).
+    else if (m.billing.gemini_api_primary === true) {
+      // The owner chooses the primary budget like every limit: the example's null is refused as one, by name.
+      if (m.billing.gemini_primary_budget === null) why.push('billing.gemini_primary_budget is null: the owner must choose it (no default is filled in)');
+      else try { manifestBilling(m); } catch (e) { why.push(`billing: ${String(e.message).replace(/^GEMINI_BILLING_INVALID: /, '')} (billing.gemini_primary_budget is the budget of primary Gemini requests, a positive integer; billing.metered_gemini_budget is the failover's, a positive integer, present exactly when billing.metered_gemini_failover is true)`); }
+    }
     if (typeof m.billing.note !== 'string') why.push('billing.note is a string (empty when there is nothing to add)');
   }
   if (m.require_subagent !== undefined && keys(m.require_subagent, 'require_subagent', ['type', 'model', 'min_calls'])) {
@@ -501,10 +520,10 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
     out_dir: m.out_dir,
     credentials: {required: [...creds.rows, ...agyLogin], gemini_api_key: creds.gemini, values: 'never read into the record: presence only'},
     antigravity_sdk: sdk, preflight, gate, seats, policy: policyHashes(), profile: 'fit', independence: 'model',
-    limits: L, billing: m.billing,
-    gemini_api_primary: 'ENABLED by the manifest: the Google implementer is an Antigravity SDK session on the Gemini API (GEMINI_API_KEY; no subscription login, no agy CLI): every model request of it and of each native subagent is one provider call, charged before it is sent',
+    limits: L, billing: m.billing, gemini_billing: policyRecord(manifestBilling(m)),
+    gemini_api_primary: `ENABLED by the manifest, at most ${m.billing.gemini_primary_budget} billed request(s) on this run's work ledger: the Google implementer is an Antigravity SDK session on the Gemini API (GEMINI_API_KEY; no subscription login, no agy CLI): every model request of it and of each native subagent is one billed request, admitted and recorded before it is sent`,
     metered_gemini_failover: m.billing.metered_gemini_failover
-      ? 'ALLOWED: a proven quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API of the same base model'
+      ? `ALLOWED: a proven quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API of the same base model, at most ${m.billing.metered_gemini_budget} billed request(s) on this run's work ledger`
       : 'DISABLED: a quota refusal of an Antigravity lane (a single-turn Gemini seat) is not answered by the metered Gemini API',
     require_subagent: m.require_subagent ?? null,
     notes: ['The provider-call limits bound CALLS, not dollars. An implementer session is charged one call per model request it makes, and so is each of its native subagents; a long session spends many calls.',
@@ -756,9 +775,11 @@ export const VERIFY_FLOOR_MS = 5_000;
 export const verifyTimeout = (deadline, now = Date.now()) => Math.max(VERIFY_FLOOR_MS, Math.min(120_000, deadline - now));
 
 // ---- the confirmed run ------------------------------------------------------------------------------------------
-async function liveSeats({meteredFailover}) {
+// The live seats carry no billing policy of their own: every stage hands its seats the manifest's policy over the work
+// ledger under its claim (scheduler.mjs, tick({billing}) below; register L-136).
+async function liveSeats() {
   const live = await import(pathToFileURL(path.join(REPO_ROOT, 'pantheon/src/sdk/live.mjs')).href);
-  return {turn: await live.liveTurn({label: 'live-run', meteredFailover}), makeClientFor: await live.liveClients()};
+  return {turn: await live.liveTurn({label: 'live-run'}), makeClientFor: await live.liveClients()};
 }
 const tickRow = t => ({dispatched: t.dispatched, skipped: t.skipped, blocked: t.blocked, intake: t.intake.length, recovery: t.recovery, released_expired: t.released_expired,
   stopped: t.stopped, stop: t.stop ?? null, interrupted: t.interrupted ?? [], spent: t.spent, scope: t.scope ?? null});
@@ -775,15 +796,15 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const work = workInfo.state === 'resumable' ? openWorkLedger({root: m.ledgers.work_root, create: false}) : createWorkRoot(m.ledgers.work_root, {item: m.item, manifestDigest});
   const progressFile = path.join(m.out_dir, 'progress.jsonl');
   const note = e => { fs.appendFileSync(progressFile, JSON.stringify({at: new Date().toISOString(), ...e}) + '\n'); progress(e); };
-  // GEMINI_API_KEY stays in this process: the implementer's model gateway holds it (it is never given to a worker).
-  // TWO SEPARATE AUTHORIZATIONS (owner decision 2026-11-19, L-136), each enforced at the point of spend, never by
-  // withholding or finding a key:
-  //   billing.gemini_api_primary       primary Gemini API execution: the SDK implementer (validated true above)
+  // GEMINI_API_KEY stays in this process: the implementer's model gateway holds it (it is never given to a worker), and
+  // its presence authorizes nothing: the billing policy below does.
+  const s = seats ?? await liveSeats();
+  // THE ONE BILLING POLICY (register L-136): the manifest's billing, resolved centrally, handed to every tick below.
+  //   billing.gemini_api_primary       primary Gemini execution: the SDK implementer and its native subagents
   //   billing.metered_gemini_failover  the metered fallback of a single-turn Gemini lane seat
-  const s = seats ?? await liveSeats({meteredFailover: m.billing.metered_gemini_failover});
+  const billing = manifestBilling(m);
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
-    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, meteredFailover: m.billing.metered_gemini_failover,
-    geminiApiPrimary: m.billing.gemini_api_primary === true, progress: note});
+    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note});
   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
   // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).
@@ -806,7 +827,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
       break;
     }
     note({event: 'tick', n, gate: gate.gate});
-    const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note,
+    const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note, billing,
       ...(interrupt ? {interrupt} : {})});
     ticks.push(tickRow(t));
     gate = gateOf();
@@ -845,7 +866,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const record = {schema: RECORD_SCHEMA, at: new Date().toISOString(), started_at: new Date(started).toISOString(), elapsed_ms: Date.now() - started,
     manifest: {file, digest: manifestDigest}, item: m.item, candidate_commit: m.candidate_commit, plan,
     work_ledger: {root: m.ledgers.work_root, anchor: work.anchor, created: workInfo.state !== 'resumable', marker: path.join(m.ledgers.work_root, WORK_MARKER)},
-    limits: L, billing: m.billing, spent: spent(work), ticks, stages: stages.map(stageRow), budget_stops: budgetStops(ticks, stages, launcherStops), blockers,
+    limits: L, billing: m.billing, gemini_billing: billingStatus(work, billing), spent: spent(work), ticks, stages: stages.map(stageRow), budget_stops: budgetStops(ticks, stages, launcherStops), blockers,
     served_identities: servedIdentities(stages), subagent_receipt: receipt, pipelines: pipelinesOf(stages),
     final_gate: {gate: gate.gate, reason: gate.reason ?? null, blocker: gate.blocker ?? null}, verification: null, proposal,
     // NOT ACCEPTED UNTIL VERIFIED (self-audit round 3, assignment 3 (sealed bb1287a), L-307): the record written before the

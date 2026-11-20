@@ -35,7 +35,7 @@
 // agyHang; `sdkUnavailable([...models])` makes the provider answer 404 for those models; `serve(f)` names the model
 // that answered. `sdk()` lists what the provider saw: [{agent: "sdk-implementer" | "sdk-subagent:<type>", model, unit}].
 // GEMINI_API_KEY is a synthetic value held by this process (the controller); it is never given to a worker.
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -697,6 +697,15 @@ export function installScriptedGemini({ served = () => null } = {}) {
     }
     let payload = null;
     try { payload = JSON.parse(JSON.parse(Buffer.from(init.body).toString("utf8")).contents.at(-1).parts[0].text); } catch { payload = null; }
+    // THE PROVIDER EDGE OF THE L-136 OPERATE TESTS (test-only names; ophanim/operate/l136-billing.test.mjs): each generation
+    // request is recorded with the number of work.billing entries already persisted on the work ledger when it arrived;
+    // L136_HANG leaves it unanswered (the process is killed with the request in flight).
+    if (process.env.L136_EDGE_LOG) {
+      const chain = process.env.L136_WORK_CHAIN;
+      const billings = chain && existsSync(chain) ? readFileSync(chain, "utf8").split("\n").filter(l => l.includes('"kind":"work.billing"')).length : 0;
+      appendFileSync(process.env.L136_EDGE_LOG, JSON.stringify({ vendor: "agy_google", model, work_billings: billings, pid: process.pid }) + "\n");
+      if (process.env.L136_HANG === "1") await new Promise(() => {});
+    }
     if (payload?.fixture_subagent) { sessions.push({ agent: `sdk-subagent:${payload.fixture_subagent.type}`, model, unit: null }); return sse(model, "a specialist's answer"); }
     const s = payload?.fixture_session;
     if (!s) return json(400, { error: { code: 400, message: "the scripted endpoint serves the fixture's session relay only", status: "INVALID_ARGUMENT" } });

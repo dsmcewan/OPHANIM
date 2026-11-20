@@ -26,24 +26,6 @@ export const isSdkModel = model => Object.hasOwn(SDK_CONFIG.models, String(model
 /** The thinking levels recorded for `model`, lowest first ([] when none is recorded). */
 export const thinkingLevelsOf = model => [...(SDK_CONFIG.models[model]?.thinking ?? [])];
 
-// PRIMARY GEMINI API EXECUTION (owner decision 2026-11-19, register L-136): "its own setting, gemini_api_primary, default
-// off, independent of the failover switch. Without it every primary Gemini API or SDK seat is refused at the point of
-// spend." A session of this transport is such a seat: it is billed to the Gemini API key from its first request. The
-// seat's refusal is made where the seat is (pipeline/turns.mjs), before the transport is entered, and the presence of
-// the key never stands for the setting.
-export const GEMINI_API_PRIMARY_DISABLED = "GEMINI_API_PRIMARY_DISABLED";
-/** The refusal of a primary Gemini API seat of this transport while the setting is off: nothing was sent or charged. */
-export function primaryGeminiRefusal({ vendor, model, purpose = null }) {
-  return Object.assign(new Error(`${vendor}/${model}${purpose ? ` (${purpose})` : ""} is a primary Gemini API seat (the Antigravity SDK transport), and primary Gemini API execution is not enabled for this run (gemini_api_primary, default off): the seat is refused before it is admitted, charged or called`),
-    { code: GEMINI_API_PRIMARY_DISABLED, provider_requests: 0, transport: SDK_TRANSPORT });
-}
-
-// EXACTLY THE DECLARED ARGUMENT NAMES (independent review 2026-11-19, confirmed on SDK 0.1.24). The runtime reads other
-// spellings of a declared name (commandline and commandLine as CommandLine; subagents as Subagents; workspace as
-// Workspace), while the SDK's pre-tool hook hands the controller the keys as the model wrote them. A controller that
-// judges `CommandLine` and ignores `commandline` approves a call it never saw. The table of declared names is
-// config/antigravity-sdk.json `tools` (compared with the installed runtime by the contract suite); a call that carries
-// any other key, at the top level or inside a declared object or list of objects, is refused whole.
 const TOOLS = SDK_CONFIG.tools;
 /** The hook tool names whose arguments the controller knows (the tools it can decide). */
 export const DECLARED_TOOLS = Object.freeze(Object.keys(TOOLS.declared));

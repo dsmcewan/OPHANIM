@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import {makeRetriever} from './context.mjs';
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
@@ -52,7 +52,7 @@ test(`${SA}, D-D/L-202: a planner retrieval round served by another model is a p
     const f = fixture(repo, [{item: 'round'}]);
     // The planner (claude-opus-5-5) asks for a file first; that round is served by claude-sonnet-5, then it plans.
     const turn = recording({planner: ({prompt, k}) => (k === 1 ? {text: requests({op: 'file', path: 'alpha.mjs'}), served_model: 'claude-sonnet-5'} : json(planFor(prompt)))});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'round'), DONE, JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next?.why])));
@@ -92,7 +92,7 @@ test(`${SA}, D-C/L-201: every retrieval round of a plan reviewer, a change revie
       // The first validator's first round is served by gpt-6-luna, the unit's dispatcher (a Decision 6 arbiter).
       validator: ({vendor}) => (vendor === 'openai' && once('validator') ? {text: requests({op: 'file', path: 'alpha.mjs'}), served_model: 'gpt-6-luna'} : ACCEPT),
     });
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'admit'), ['plan:pending', 'plan:passed', 'implement:passed', 'review:pending', 'review:passed', 'validate:passed', 'outcome:passed'],
@@ -137,7 +137,7 @@ test(`${SA}, D-E/L-203 and L-205: a lifecycle whose seats are all served under a
       // The pinned Stage 5 reviewer rejects once (its finding feeds a revision: a critique row), then approves.
       'unit-review': ({rubric, passed}) => JSON.stringify(++judged === 1 || !passed ? unitReject(rubric, ['say why ok is exported']) : unitApprove(rubric))},
       {serve: SERVE[mode]});
-      const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+      const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
       const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
       const w = openWorkLedger({root: f.workRoot});
       assert.deepEqual(seq(w, mode), DONE, JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next?.why])));
@@ -205,7 +205,7 @@ test(`${OD}, L-001: a dispatcher's return reaches the revised plan only as struc
       // The OpenAI change reviewer's first answer is served by gpt-6-astra: refused at admission.
       review: ({vendor}) => (vendor === 'openai' && ++astraAnswered === 1 ? {text: APPROVE, served_model: 'gpt-6-astra'} : APPROVE),
     });
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, seating: ASTRA_FIRST});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, seating: ASTRA_FIRST});
     // The real implement stage, whose returned finding is then given a text beyond its validated fields (as a record written
     // by another controller version could carry): no seat may be shown that text.
     const implement = Object.assign(async ctx => {
@@ -266,8 +266,8 @@ test(`${OD}, L-002: the validator is not one of the approving change reviewers (
     // `four`: the configured pool. `three`: a pool of exactly the three panel models.
     const turn = recording();
     const THREE = {reviewer: [SEAT('xai', 'grok-4.7'), SEAT('agy_google', 'gemini-3.8-flash-high'), SEAT('anthropic', 'claude-sonnet-5')]};
-    const exFour = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
-    const exThree = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, seating: THREE});
+    const exFour = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
+    const exThree = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, seating: THREE});
     // One tick per pool, each for one item.
     const r4 = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: exFour, limits: LIMITS, only: 'four'});
     const w = openWorkLedger({root: f.workRoot});
@@ -309,7 +309,7 @@ esac
     const f = fixture(repo, [{item: 'sub'}]);
     const plan = {...TWO, work_units: [UNIT('alpha', {difficulty: 'medium'}), {...GAMMA, allowed_subagents: ['code-explorer']}]};
     const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, plan))});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'sub'), DONE, JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next?.why])));

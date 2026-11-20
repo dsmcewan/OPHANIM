@@ -8,7 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {openWorkLedger, outputsDigest} from './work-ledger.mjs';
-import {tick, spent} from './scheduler.mjs';
+import {spent} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors} from './stages.mjs';
 import {verifyInChild, statusLedgerState} from './live-run.mjs';
@@ -222,7 +223,7 @@ test('LIFECYCLE (fit): an implement stage killed after its units were approved r
     ctx.agyWorker('printf \'export const ok = true;\\n\' > "$dir/alpha.mjs"\n');
     const FINDING = 'the first attempt is not good enough';
     const turn = scriptedTurn({'unit-review': ({k, rubric, passed}) => JSON.stringify(k === 1 || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     const limits = {...FIT_LIMITS, iterations: 2};   // plan, then implement
     let kills = 1, finished;
     const done = new Promise(r => { finished = r; });

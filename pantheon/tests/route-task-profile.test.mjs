@@ -15,6 +15,7 @@ import { outputBudgetFor, TOKEN_TIERS } from "../src/config/tiers.mjs";
 import { labOf } from "../src/config/models.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { withDispatch, WORK } from "./fixtures/dispatch.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const CLASSES = JSON.parse(readFileSync(new URL("../src/config/classes.json", import.meta.url), "utf8"));
 const classOf = m => CLASSES.models[m]?.class;
@@ -289,7 +290,7 @@ test("board tickets may declare the fit dimensions; a value outside a dimension'
 
 test("fit through the real dispatcher: every turn records the profile, and the request carries the mapped effort", async () => {
   await withDispatch(async ({ spec, opts, calls, agy }) => {
-    const r = await runOpenItem(spec("fitRun", { difficulty: "medium", depth: "max" }), opts({ profile: "fit" }));
+    const r = await runOpenItem(spec("fitRun", { difficulty: "medium", depth: "max" }), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
     assert.ok(run.turns.length >= 4);

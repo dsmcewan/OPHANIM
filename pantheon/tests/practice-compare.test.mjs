@@ -21,6 +21,7 @@ import { openPantheonLedger } from "../src/ledger/system.mjs";
 import { reviewCycle } from "../src/ledger/review-cycle.mjs";
 import { ledgerView } from "../src/ledger/cycle-kinds.mjs";
 import { withDispatch, WORK, USAGE } from "./fixtures/dispatch.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(HERE, "..", "bin", "pantheon-compare.mjs");
@@ -47,7 +48,7 @@ test("compareProfiles: the same tickets under argo and fit, through the real dis
       spec("cmp-fails", { acceptance_cmd: "false" }),
     ];
     const seen = [];
-    const inner = dispatchRunner({ makeClientFor, dir: join(dir, "compare"), runOpts: { scouts: ["xai"] } });
+    const inner = dispatchRunner({ makeClientFor, dir: join(dir, "compare"), runOpts: { scouts: ["xai"], billing: optIn({ primary: 100 }) } });
     const runner = async a => { seen.push({ key: a.spec.key, profile: a.profile, bounds: a.bounds }); return inner(a); };
     const rec = await compareProfiles({ tickets, baseline: "argo", candidate: "fit", bounds: BOUNDS, runner, providers: FAKE,
       question: "Does fit change accepted results or provider usage against argo on these fixture tickets?" });
@@ -284,7 +285,8 @@ test("pantheon-compare.mjs: --clients/--turn fake modules, an explicit --max-pro
     assert.equal(existsSync(out), false, "a refused invocation writes nothing");
 
     const r = cli(...base, "--clients", join(repo, "clients.fixture.mjs"), "--turn", join(repo, "turn.fixture.mjs"),
-      "--max-provider-calls", "20", "--revisions", "2", "--question", "fixture: fit against argo", "--out", out);
+      "--max-provider-calls", "20", "--revisions", "2", "--question", "fixture: fit against argo", "--out", out,
+      "--gemini-api-primary", "50");   // the fit arm's Google implementer is a primary Gemini seat (register L-136)
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr.slice(-3000)}`);
     const rec = JSON.parse(readFileSync(out, "utf8"));
     assert.equal(rec.schema, COMPARE_SCHEMA);

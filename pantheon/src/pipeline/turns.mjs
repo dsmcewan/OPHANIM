@@ -34,10 +34,12 @@
 //   - THE SERVED MODEL is the provider's own statement as the gateway saw it (served_model_source "provider"). The
 //     transport's model guard refuses a session in which any answered request was not named as the model it asked for
 //     (AGY_MODEL_MISMATCH, with both identities): the model asked is never recorded in a missing name's place.
-//   - PRIMARY GEMINI API EXECUTION IS ITS OWN SETTING, DEFAULT OFF (owner decision 2026-11-19, register L-136). An SDK
-//     session is a primary Gemini API seat. It refuses itself before the transport is entered
-//     (GEMINI_API_PRIMARY_DISABLED) unless antigravity.geminiApiPrimary is true. The failover switch
-//     (agy.meteredFailover) is a separate authorization: it neither enables nor disables this seat.
+//   - A SESSION IS A PRIMARY GEMINI SEAT OF THE BILLING POLICY (register L-136; route/gemini-billing.mjs, below). The
+//     policy is asked before the transport is entered: with gemini_api_primary off, or its budget spent, nothing is
+//     prepared, spawned, admitted or charged (GEMINI_PRIMARY_DISABLED, METERED_GEMINI_BUDGET_EXHAUSTED). And EVERY
+//     billed request of the session, a native subagent's included, is admitted by the policy and recorded on the
+//     billing ledger before the gateway forwards it (spendGemini: kind "primary", transport "sdk"). The failover
+//     setting neither enables nor disables this seat.
 // The session's failures are thrown as they are (antigravity/turn.mjs FAILURES): the pipeline steps its ladder on
 // quota_exhausted, model_unavailable and lane_failure, and blocks the unit on a fault no rung can cure and on the
 // model guard's refusal.
@@ -55,10 +57,13 @@
 // the metered API is not called. If the metered API also cannot answer, the turn throws `quota_exhausted`. A failover
 // is recorded on the returned object: quota_failover {used, base, lanes, rule, after, probe}. This adapter never
 // retries a lane itself (the pipeline retries once and steps the ladder).
-// `agy.meteredFailover: false` (a run whose budget does not allow metered Gemini spend; ophanim/operate/live-run.mjs
-// passes it from its manifest) DISABLES that failover: a proven quota refusal is thrown as `quota_exhausted` with
-// quota_failover {used: false, disabled: true, ...} and the metered API is never called. The pipeline then treats it
-// as any quota refusal of a lane (index.mjs: the next subscription rung, and the unit BLOCKED when the ladder is spent).
+// THE BILLING POLICY (register L-136; route/gemini-billing.mjs, docs/billing-policy.md). `agy.billing` (the run's
+// context: the policy and its persistent usage record; default: both kinds off) admits that failover as a billed
+// request of kind "failover" (metered_gemini_failover), and every further request of it, at the point of spend. Off, or
+// its budget spent: the proven quota refusal is thrown as `quota_exhausted` with quota_failover {used: false, disabled:
+// true (off) | code, refused, ...} and `billing` (the refusal), and the metered API is never called. The pipeline then
+// treats it as any quota refusal of a lane (index.mjs: the next subscription rung, and the unit BLOCKED when the ladder
+// is spent). The same context reaches the single-turn seats (`billing` on each turn call).
 //
 // THE API FALLBACK CANNOT WRITE FILES, so its contract is the minimal honest one: the API is shown the unit prompt
 // and the current contents of the unit's owned files, and its WHOLE reply must be one strict JSON object
@@ -70,11 +75,11 @@
 // written is then judged by the controller's write jail like any other attempt: this adapter is not the jail.
 //
 // Inputs: the injected `turn` and `makeClientFor(vendor)` (the lifecycle's own), and `agy` options {cli?, timeoutS?,
-// sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?, meteredFailover? (default true)} — `run` replaces runAgyWorkerTurn, `api`
-// the metered-API call and `probe` the quota probe, for tests; and `antigravity` options {run?, geminiApiPrimary?,
-// python?, bridge?, upstream?, apiKey?, sandbox? {enabled, allowUnsandboxed, bwrap, home}, timeoutS?, graceS?, budget?,
-// fetchImpl?, checkAvailability?, allowSdkVersion?} — `run` replaces runAntigravitySdkTurn, for tests;
-// `geminiApiPrimary` (default false) is the setting above; the rest are the transport's options.
+// sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?, billing? (default: both kinds off)} — `run` replaces runAgyWorkerTurn, `api`
+// the metered-API call and `probe` the quota probe, for tests; and `antigravity` options {run?, python?, bridge?,
+// upstream?, apiKey?, sandbox? {enabled, allowUnsandboxed, bwrap, home}, timeoutS?, graceS?, budget?, fetchImpl?,
+// checkAvailability?, allowSdkVersion?} — `run` replaces runAntigravitySdkTurn, for tests; the rest are the transport's
+// options. The SDK implementer is billed through the same `agy.billing` context: it has no setting of its own.
 // Outputs: for every role, {text, served_model, served_model_source} (+ transport, quota_failover on the implementer).
 //
 // Must never: block the event loop on a child process (async spawn only); send a Google API key to the CLI; run the
@@ -90,8 +95,9 @@ import { probeQuota } from "../agy/quota.mjs";
 import { decideWrite } from "../agy/jail-hook.mjs";
 import { quotaFailoverFor, laneParts } from "../route/fit-matrix.mjs";
 import { QUOTA_FAILOVER_RULE } from "../route/frontier.mjs";
-import { isSdkSeat, SDK_TRANSPORT, primaryGeminiRefusal } from "../antigravity/config.mjs";
+import { isSdkSeat, SDK_TRANSPORT } from "../antigravity/config.mjs";
 import { runAntigravitySdkTurn } from "../antigravity/turn.mjs";
+import { geminiAdmission, isGeminiBillingRefusal, isMeteredGemini, spendGemini, METERED_GEMINI_DISABLED } from "../route/quota-failover.mjs";
 import { keysRefusal, sha256, str, strictJson } from "./util.mjs";
 import { matchesOwned, pathRefusal } from "./paths.mjs";
 import { git } from "./git.mjs";
@@ -239,7 +245,9 @@ async function sessionEvidence(x, { control_dir, seat, unit_id, attempt, timeout
 
 export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravity = {} } = {}) {
   if (typeof turn !== "function") throw new Error("pipelineTurns: pass turn({vendor, model, prompt, seat, extra}) for the single-turn seats");
-  if (antigravity.geminiApiPrimary !== undefined && typeof antigravity.geminiApiPrimary !== "boolean") throw new Error("pipelineTurns: antigravity.geminiApiPrimary is true or false (primary Gemini API execution: default off)");
+  if (Object.hasOwn(agy ?? {}, "meteredFailover")) throw new Error("pipelineTurns: agy.meteredFailover is replaced by agy.billing (the Gemini billing policy, route/gemini-billing.mjs)");
+  if (Object.hasOwn(antigravity ?? {}, "geminiApiPrimary")) throw new Error("pipelineTurns: antigravity.geminiApiPrimary is replaced by agy.billing (the Gemini billing policy, route/gemini-billing.mjs: gemini_api_primary, with a budget)");
+  const billing = agy.billing ?? null;
   const lane = agy.run ?? runAgyWorkerTurn;
   const probe = agy.probe ?? probeQuota;
   const timeoutS = agy.timeoutS ?? 1800;
@@ -257,7 +265,7 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
     // lane-first by the agy CLI or by the metered API (the single-turn Gemini rule). Refused before anything is sent.
     if (isSdkSeat(seat)) throw fail("SDK_SEAT_NOT_SINGLE_TURN", `${vendor}/${model} is a seat of the Antigravity SDK transport: it runs as a session on a work unit, and is not asked as a single ${seatRole} turn`);
     const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
-      ...(typeof admitRequest === "function" ? { admitRequest } : typeof charge === "function" ? { charge } : {}) });
+      ...(typeof admitRequest === "function" ? { admitRequest } : typeof charge === "function" ? { charge } : {}), ...(billing ? { billing } : {}) });
     // The served model is passed on exactly as the transport named it; a judging seat with none is refused upstream.
     // Its SOURCE is the transport's own report, passed on as given: "provider" only when the transport said the provider
     // named it (sdk/live.mjs liveTurn does, from the response), "input" when the transport substituted the model it was
@@ -269,13 +277,18 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
 
   /** The metered Gemini API of a lane's base model: one unary answer, by default through makeClientFor + sendTurn. */
   // `admitRequest` (optional): every request of this call, the first included, is admitted before it is sent (sendTurn's
-  // chargeFirstRequest); else `charge` admits the requests after the first, which the caller charged (L-301).
+  // chargeFirstRequest); else `charge` admits the requests after the first, which the caller charged (L-301). A Gemini
+  // request after the first (the failover's first was spent through the policy by the implementer below) passes the
+  // billing policy too, before that admission and before it is sent.
   const api = agy.api ?? (async ({ vendor, model, prompt, effort, signal, charge = null, admitRequest = null }) => {
     if (typeof makeClientFor !== "function") throw fail("NO_API_CLIENT", "the metered Gemini API was needed as a quota failover, and no makeClientFor was given");
     const { sendTurn } = await import("../sdk/adapter.mjs");
+    const own = request => (typeof admitRequest === "function" ? admitRequest({ kind: request === 1 ? "request" : "continuation" }) : typeof charge === "function" && request > 1 ? charge("continuation") : undefined);
+    const gemini = isMeteredGemini({ vendor, transport: "api" });
     const r = await sendTurn({ client: makeClientFor(vendor), vendor, model, prompt, label: "pipeline-implementer-quota-failover", onEvent: () => {},   // streamed: whole files can be long
       ...(effort ? { effort } : {}), ...(signal ? { signal } : {}),
-      ...(typeof admitRequest === "function" ? { onRequest: ({ request }) => admitRequest({ kind: request === 1 ? "request" : "continuation" }), chargeFirstRequest: true }
+      ...(gemini ? { onRequest: ({ request }) => { if (request > 1) spendGemini(billing, { kind: "failover", vendor, model, purpose: "implementer", role: "implementer", transport: "api", request }, () => own(request)); }, chargeFirstRequest: true }
+        : typeof admitRequest === "function" ? { onRequest: ({ request }) => own(request), chargeFirstRequest: true }
         : typeof charge === "function" ? { onRequest: () => charge("continuation") } : {}) });   // every further billed request (finding 1.1)
     if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
     // sendTurn's served_model is the model the provider's response named.
@@ -290,22 +303,30 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
   const sdkImplementer = async ({ vendor, model, seat = null, prompt, cwd, control_dir = null, owned_paths = null, verify_cmd = null, unit_id = null, allowed_subagents = [], sandbox: cap = null,
     attempt = 1, signal = undefined, charge = null, admitRequest = null, verify_hide = [], deadline = null, timeoutS: askedS = null }) => {
     if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
-    // PRIMARY GEMINI API EXECUTION, DEFAULT OFF (owner decision 2026-11-19, L-136; antigravity/config.mjs). The seat
-    // refuses itself HERE, before the transport is entered (no gateway, no bridge, no admission, no charge), unless the
-    // setting is on. Whatever key the environment holds, and whatever the failover switch says.
-    if (antigravity.geminiApiPrimary !== true) throw primaryGeminiRefusal({ vendor: seat?.vendor ?? vendor, model: seat?.model ?? model, purpose: "implementer" });
+    const s = { vendor: seat?.vendor ?? vendor, model: seat?.model ?? model, effort: seat?.effort ?? null };
+    // A PRIMARY GEMINI SEAT OF THE BILLING POLICY (the header). What one billed request of this session is to the policy:
+    const billed = (info, request) => ({ kind: "primary", vendor: s.vendor, model: str(info?.model) ? info.model : s.model, purpose: info?.class === "subagent" ? "subagent" : "implementer",
+      role: "implementer", transport: "sdk", request });
+    // ASKED HERE, before the transport is entered: off, or its budget spent, and nothing is prepared, spawned, admitted
+    // or charged. Whatever key the environment holds. (This asks; it records nothing: each request below does.)
+    try { geminiAdmission(billing, billed(null, 1)); } catch (e) { throw Object.assign(e, { transport: SDK_TRANSPORT }); }
     const owned = Array.isArray(owned_paths) ? owned_paths : Array.isArray(cap?.owned_paths) ? cap.owned_paths : [];
     const grace = antigravity.graceS ?? graceS;
     const turnS = printTimeoutOf({ timeoutS: Number.isFinite(askedS) && askedS > 0 ? askedS : antigravity.timeoutS ?? timeoutS, graceS: grace, deadline });
     if (turnS === null) throw fail("DEADLINE", `the stage's deadline leaves no time for an implementer session (${grace} s of kill grace needed beyond a 1 s turn)`);
-    const s = { vendor: seat?.vendor ?? vendor, model: seat?.model ?? model, effort: seat?.effort ?? null };
-    // EVERY BILLED REQUEST, admitted by the pipeline before the gateway forwards it. The session's first request is the
-    // implementer's own call; an older caller's `charge` contract charged that one up front and admits the others.
-    let own = 0;
-    const admit = ({ class: cls } = {}) => {
-      const kind = cls === "subagent" ? "subagent" : own++ === 0 ? "session" : "continuation";
-      if (typeof admitRequest === "function") return admitRequest({ kind });
-      if (typeof charge === "function" && kind !== "session") return charge("continuation");
+    // EVERY BILLED REQUEST of the session, before the gateway forwards it: the billing policy's admission, then the
+    // pipeline's own bound and charge, then the usage row persisted on the billing ledger (spendGemini). The session's
+    // first request is the implementer's own call; an older caller's `charge` contract charged that one up front and
+    // admits the others.
+    let own = 0, requests = 0, refusedByBilling = null;
+    const admit = (info = {}) => {
+      const kind = info.class === "subagent" ? "subagent" : own++ === 0 ? "session" : "continuation";
+      try {
+        spendGemini(billing, billed(info, ++requests), () => {
+          if (typeof admitRequest === "function") admitRequest({ kind });
+          else if (typeof charge === "function" && kind !== "session") charge("continuation");
+        });
+      } catch (e) { if (isGeminiBillingRefusal(e)) refusedByBilling ??= e; throw e; }
     };
     let made = null;
     const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-sdk-control-")));
@@ -319,6 +340,10 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
     } catch (e) {
       // What the session recorded up to its failure goes with the error (antigravity/turn.mjs carries it).
       if (e && typeof e === "object" && e.transport === SDK_TRANSPORT) e.session = await sessionEvidence(e, about).catch(() => null);
+      // A request the billing policy refused INSIDE the session (its budget was spent on the way): the gateway answered
+      // it as a refused charge and the session ended on it. The pipeline is told the policy's own refusal, with what the
+      // session recorded.
+      if (refusedByBilling && e?.code === "PROVIDER_LIMIT") throw Object.assign(refusedByBilling, { session: e.session ?? null, transport: SDK_TRANSPORT });
       throw e;
     } finally {
       if (made) await rm(made, { recursive: true, force: true }).catch(() => {});
@@ -381,19 +406,31 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
         throw laneFailure("exit", `${String(e?.message ?? e)}; a soft quota phrase ("${e.quota?.matched ?? "?"}") and the quota probe reads "${seen.state}": not a proven quota refusal, so the metered API is not used`,
           { quota_probe: seen, quota_failover: { used: false, lanes: [model], after, probe: seen }, jail_log: e.jail_log ?? [] });
       }
-      if (agy.meteredFailover === false) {
-        throw Object.assign(fail("quota_exhausted", `${model} was refused for quota, and the metered Gemini API failover is DISABLED for this run (meteredFailover: false): the API is not called`),
-          { status: 429, quota_probe: seen, quota_failover: { used: false, disabled: true, lanes: [model], rule: "metered Gemini API failover disabled by the caller", after, probe: seen }, jail_log: e.jail_log ?? [] });
-      }
       const spare = quotaFailoverFor(model);
-      if (!spare) throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and has no metered API failover`), { status: 429, quota_probe: seen });
+      // No metered API id behind this lane: nothing could be billed. With the failover off it is still marked disabled,
+      // as it always was (the record says why no failover answered).
+      if (!spare) {
+        const off = billing?.policy?.metered_gemini_failover?.enabled !== true;
+        throw Object.assign(fail("quota_exhausted", `${model} was refused for quota and has no metered API failover`), { status: 429, quota_probe: seen,
+          ...(off ? { quota_failover: { used: false, disabled: true, lanes: [model], rule: "metered Gemini API failover disabled by the billing policy (metered_gemini_failover off)", after, probe: seen }, jail_log: e.jail_log ?? [] } : {}) });
+      }
       const quota_failover = { used: true, base: spare.model, lanes: [model], rule: QUOTA_FAILOVER_RULE, after, probe: seen };
       const { shown, truncated } = owned ? await ownedFiles(cwd, owned) : { shown: [], truncated: false };
-      // The metered API call is a provider call of its own: the pipeline's `charge` admits it against max_provider_calls
-      // (and the caller's ledger charge) BEFORE it is made; a refusal (PROVIDER_LIMIT) means it is not made.
+      // The metered API call is a provider call of its own, and a BILLED Gemini request: the billing policy admits it
+      // first (metered_gemini_failover off, or its budget spent: refused, nothing admitted or sent), then the pipeline's
+      // `charge` admits it against max_provider_calls (and the caller's ledger charge), then its usage row is persisted --
+      // all BEFORE it is made; a refusal (PROVIDER_LIMIT) means it is not made.
       const admits = typeof admitRequest === "function";
-      if (admits) admitRequest({ kind: "failover" });
-      else if (typeof charge === "function") charge();
+      try {
+        spendGemini(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer", role: "implementer", transport: "api", request: 1 },
+          () => { if (admits) admitRequest({ kind: "failover" }); else if (typeof charge === "function") charge(); });
+      } catch (refusal) {
+        if (!isGeminiBillingRefusal(refusal)) throw refusal;
+        const off = refusal.code === METERED_GEMINI_DISABLED;
+        throw Object.assign(fail("quota_exhausted", `${model} was refused for quota, and its metered Gemini API failover is not admitted by the billing policy: ${refusal.message}`),
+          { status: 429, quota_probe: seen, quota_failover: { used: false, ...(off ? { disabled: true } : {}), code: refusal.code, refused: refusal.message.slice(0, 300), lanes: [model],
+            rule: off ? "metered Gemini API failover disabled by the billing policy (metered_gemini_failover off)" : QUOTA_FAILOVER_RULE, after, probe: seen }, billing: refusal.billing, jail_log: e.jail_log ?? [] });
+      }
       const further = admits ? () => admitRequest({ kind: "continuation" }) : charge;
       let r;
       try { r = await api({ vendor: spare.vendor, model: spare.model, effort: spare.effort, prompt: API_FALLBACK_PROMPT({ prompt, shown, truncated }), signal, charge: further }); }

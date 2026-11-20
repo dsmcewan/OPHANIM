@@ -21,6 +21,7 @@
   "billing": {
     "scope": "replace: what this run may bill, in the owner's words",
     "gemini_api_primary": true,
+    "gemini_primary_budget": null,
     "metered_gemini_failover": false,
     "note": ""
   },

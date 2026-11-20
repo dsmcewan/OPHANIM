@@ -10,7 +10,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, planRefusal} from './stages.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
@@ -46,7 +46,7 @@ test('with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes thro
     const f = fixture(repo, [{item: 'alpha-item'}]);
     const validatorPrompts = [];
     const turn = scriptedTurn({validator: ({prompt}) => { validatorPrompts.push(prompt); return ACCEPT; }});
-    const executors = makeExecutors({geminiApiPrimary: true, independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const executors = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], JSON.stringify(r.dispatched));
     const w = openWorkLedger({root: f.workRoot});
@@ -205,7 +205,7 @@ test('validation returns an implementation defect to implement and an inadequate
         ? json({verdict: 'implementation_defect', reasons: ['alpha.mjs also drops a trailing newline the requirement keeps'], criteria: [{id: 'a1', met: false, why: 'see reasons'}]})
         : json({verdict: 'plan_defect', reasons: ['criterion a1 does not test that alpha.mjs keeps its other exports'], criteria: [{id: 'a1', met: true, why: 'passes, but is inadequate'}]});
     }});
-    const ex = makeExecutors({geminiApiPrimary: true, independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     const seq = item => w.stages(item).map(s => `${s.stage}:${s.status}`);
@@ -236,7 +236,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const f = fixture(repo, [{item: 'flaky-review'}]);
     let down = true;
     const turn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai' && down) throw Object.assign(new Error('503 service unavailable'), {status: 503}); return APPROVE; }});
-    const ex = makeExecutors({geminiApiPrimary: true, independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
+    const ex = makeExecutors({independence: LAB, repo, makeClientFor, turn, stateDir: f.stateDir, ...SIX});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     assert.deepEqual(stagesOf(r), ['plan:passed', 'implement:passed', 'review:pending']);
     const w = openWorkLedger({root: f.workRoot});
@@ -271,7 +271,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     fs.mkdirSync(d);
     const fd = fixture(d, [{item: 'always-down'}]);
     const deadTurn = scriptedTurn({review: ({vendor}) => { if (vendor === 'xai') throw Object.assign(new Error('503'), {status: 503}); return APPROVE; }});
-    const dx = makeExecutors({geminiApiPrimary: true, independence: LAB, repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...SIX});
+    const dx = makeExecutors({independence: LAB, repo: d, makeClientFor, turn: deadTurn, stateDir: fd.stateDir, ...SIX});
     let t0 = Date.parse('2026-11-17T00:00:00Z');
     const seen = [];
     for (let i = 0; i < 5; i++, t0 += 60 * 60_000) {
@@ -292,7 +292,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const fg = fixture(g, [{item: 'short-pool'}]);
     const shortTurn = scriptedTurn();
     const short = {reviewer: SEATING.reviewer.filter(c => c.vendor !== 'anthropic')};
-    const sx = makeExecutors({geminiApiPrimary: true, independence: LAB, repo: g, makeClientFor, turn: shortTurn, stateDir: fg.stateDir, seating: short});
+    const sx = makeExecutors({independence: LAB, repo: g, makeClientFor, turn: shortTurn, stateDir: fg.stateDir, seating: short});
     // No iteration cap here: a structural pending is recorded once and is not re-dispatched on the same inputs.
     const rs = await tick({repo: g, statusRoot: fg.statusRoot, workRoot: fg.workRoot, executors: sx, limits: LIMITS});
     assert.deepEqual(stagesOf(rs), ['plan:pending']);
@@ -309,7 +309,7 @@ test('an unavailable reviewer or a short pool is pending with a blocker and the 
     const fh = fixture(h, [{item: 'tight'}]);
     const tight = scriptedTurn({'plan-review': ({vendor}) => (vendor === 'xai'
       ? json({verdict: 'request_changes', findings: [{severity: 'block', file: null, line: null, claim: 'no rollback for importers', reproduction: null}]}) : APPROVE)});
-    const hx = makeExecutors({geminiApiPrimary: true, independence: LAB, repo: h, makeClientFor, turn: tight, stateDir: fh.stateDir, ...FIVE});
+    const hx = makeExecutors({independence: LAB, repo: h, makeClientFor, turn: tight, stateDir: fh.stateDir, ...FIVE});
     const rh = await tick({repo: h, statusRoot: fh.statusRoot, workRoot: fh.workRoot, executors: hx, limits: {total_provider_calls: 100, stage_provider_calls: 5}});
     assert.deepEqual(stagesOf(rh), ['plan:failed']);
     const ph = openWorkLedger({root: fh.workRoot}).stages('tight')[0];

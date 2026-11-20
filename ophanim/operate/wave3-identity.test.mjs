@@ -31,7 +31,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors, implementerPath} from './stages.mjs';
 import {servedIdentities, subagentReceipt} from './live-run.mjs';
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
@@ -43,6 +43,7 @@ import {evidenceSection, workSection} from '../public/record.mjs';
 import {readWorkRecord} from '../public/work.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
 import {fixture, scriptedTurn, planFor, json, UNIT, APPROVE, LIMITS, unitApprove, unitReject} from './test-fixtures.mjs';
+import {optInPolicy} from '../../pantheon/tests/fixtures/billing.mjs';
 
 const L504 = 'wave 3, L-504 invariant 2';
 const DONE = ['plan:passed', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'];
@@ -110,7 +111,7 @@ for (const M of MODES) {
         // Unit alpha's pinned Stage 5 reviewer rejects once (its finding feeds a revision: a critique row and a unit finding).
         'unit-review': ({rubric, passed, unit_id}) => JSON.stringify(unit_id === 'alpha' && ++judged === 1 || !passed ? unitReject(rubric, ['say why ok is exported']) : unitApprove(rubric)),
       }, {serve});
-      const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+      const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
       const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
       const w = openWorkLedger({root: f.workRoot});
       assert.deepEqual(seq(w, item).filter(x => !x.startsWith('review:pending')), DONE, why(r));
@@ -237,8 +238,9 @@ printf 'export const ok = true;\\n' > "$dir/alpha.mjs"
 `);
     const f = fixture(repo, [{item: 'unnamed'}]);
     const HARD = {work_units: [UNIT('alpha', {difficulty: 'hard', allowed_subagents: ['code-explorer']})], slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}]};
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn: scriptedTurn({planner: ({prompt}) => json(planFor(prompt, HARD))}), stateDir: f.stateDir});
-    const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
+    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn({planner: ({prompt}) => json(planFor(prompt, HARD))}), stateDir: f.stateDir});
+    // The implementer is an SDK session, a primary Gemini seat (register L-136): the ticks declare it, with a budget.
+    const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, billing: optInPolicy({primary: 100})});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'unnamed'), DONE, why(r));
     const stages = w.stages('unnamed');
@@ -301,7 +303,7 @@ esac
         return unit.unit_id === 'alpha' ? {text: ans, served_model: `${model}-20261101`, served_model_source: 'provider'} : {text: ans, served_model: model, served_model_source: 'unknown'};
       },
     });
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     const s = seq(w, 'twice');
@@ -337,7 +339,7 @@ test(`${L504}: a RESUMED plan cycle restores each contributor from the cycle's r
       planner: ({prompt, model}) => ({text: json(planFor(prompt)), served_model: `${model}-20261101`, served_model_source: 'provider'}),
       'plan-review': ({vendor}) => { if (vendor === 'xai' && ++failed === 1) throw new Error('503 from the provider'); return APPROVE; },
     });
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'resumed'), ['plan:pending', ...DONE], why(r));
@@ -366,7 +368,7 @@ test(`${L504}: a change-review finding fed to a revision carries its reviewer's 
     const turn = scriptedTurn({review: ({vendor, model}) => (vendor === 'xai' && ++found === 1
       ? {text: json({verdict: 'request_changes', findings: [{severity: 'major', file: 'alpha.mjs', line: 1, claim: 'the export is not documented', reproduction: {kind: 'command', run: 'node verify.mjs'}}]}),
         served_model: `${model}-20261101`, served_model_source: 'provider'} : APPROVE)});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'critique').filter(x => !x.startsWith('review:pending')), ['plan:passed', 'implement:passed', 'review:returned', 'implement:passed', 'review:passed', 'validate:passed', 'outcome:passed'], why(r));
@@ -431,7 +433,7 @@ for (const M of MODES) {
       const FINDING = 'the first attempt is not good enough';
       const serve = ({kind, model}) => (kind === 'unit-review' ? {served_model: M.judge(model), served_model_source: M.source} : {served_model: model});
       const turn = scriptedTurn({'unit-review': ({k, rubric, passed}) => JSON.stringify(k === 1 || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))}, {serve});
-      const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir});
+      const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
       const limits = {...LIMITS, iterations: 2};   // plan, then implement
       let kills = 1, finished;
       const done = new Promise(r => { finished = r; });

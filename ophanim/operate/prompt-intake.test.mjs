@@ -15,7 +15,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {registerPrompt, authorizePrompt, promptIdentity, promptRequirement, promptBasis, readPromptRecord, promptRecords, PROMPT_SCHEMA, PROMPT_DIR, PROMPT_MAX_BYTES} from './prompt-intake.mjs';
 import {reconcile} from './reconcile.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {openWorkLedger} from './work-ledger.mjs';
 import {makeExecutors} from './stages.mjs';
 import {main as cli} from './cli.mjs';
@@ -177,7 +177,7 @@ test('A RAW AUTHORIZED PROMPT ENTERS THE BACKLOG AND PROCEEDS TO PLANNING WITHOU
     assert.deepEqual(before.items.map(i => [i.item, i.status, i.gate.gate, i.gate.mode, i.ticket, i.prompt.digest, i.prompt.verified]), [[r.item, 'Ready', 'plan', 'author', null, sha(PROMPT), true]]);
     const seen = [];
     const turn = scriptedTurn({planner: ({prompt}) => { seen.push(prompt); return json(planFor(prompt, {work_units: [UNIT('alpha')]})); }});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir});
+    const ex = makeExecutors({repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir});
     const t = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.equal(w.verify().ok, true);

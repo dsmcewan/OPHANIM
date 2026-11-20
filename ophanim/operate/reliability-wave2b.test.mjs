@@ -19,7 +19,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import {sandboxAvailable} from '../../pantheon/src/agy/sandbox.mjs';
 import {runPipeline} from '../../pantheon/src/pipeline/index.mjs';
@@ -44,7 +44,7 @@ function lifecycle(ctx, {turn = scriptedTurn(), investigation = {}, items = ['al
   const repo = ctx.dir;
   const f = fixture(repo, items.map(item => ({item})));
   // Primary Gemini API execution is enabled: every test here runs the implementer (an SDK session, off by default).
-  const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir, independence: 'model', seating: FIVE.seating, facts: FIVE.facts, investigation});
+  const ex = makeExecutors({repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir, independence: 'model', seating: FIVE.seating, facts: FIVE.facts, investigation});
   const at = {repo, statusRoot: f.statusRoot, workRoot: f.workRoot};
   return {repo, f, ex, turn, at, w: () => openWorkLedger({root: f.workRoot, create: false}), last: item => openWorkLedger({root: f.workRoot, create: false}).stages(item).at(-1)};
 }
@@ -212,12 +212,12 @@ test('L-304 (self-audit round 3, assignment 3 (sealed bb1287a)): the next implem
     try {
       // ATTEMPT 1, in a real child process: tick dispatches the implement stage, which is SIGKILLed mid-run.
       const url = p => JSON.stringify(pathToFileURL(path.join(ROOT, p)).href);
-      const code = `import {tick} from ${url('ophanim/operate/scheduler.mjs')};
+      const code = `import {tickWithPrimary as tick} from ${url('ophanim/operate/test-fixtures.mjs')};   // the implementer is a primary Gemini seat: the tick declares it
         import {makeExecutors} from ${url('ophanim/operate/stages.mjs')};
         import {scriptedTurn, FIVE, LIMITS} from ${url('ophanim/operate/test-fixtures.mjs')};
         import {scriptedClients, installScriptedGemini} from ${url('pantheon/tests/fixtures/dispatch.mjs')};
         installScriptedGemini();   // the implementer's provider, scripted in this child (it inherits the fixture's environment only)
-        const ex = makeExecutors({geminiApiPrimary: true, repo: ${JSON.stringify(L.repo)}, makeClientFor: scriptedClients(), turn: scriptedTurn(), stateDir: ${JSON.stringify(L.f.stateDir)}, independence: 'model', seating: FIVE.seating, facts: FIVE.facts});
+        const ex = makeExecutors({repo: ${JSON.stringify(L.repo)}, makeClientFor: scriptedClients(), turn: scriptedTurn(), stateDir: ${JSON.stringify(L.f.stateDir)}, independence: 'model', seating: FIVE.seating, facts: FIVE.facts});
         await tick({repo: ${JSON.stringify(L.repo)}, statusRoot: ${JSON.stringify(L.f.statusRoot)}, workRoot: ${JSON.stringify(L.f.workRoot)}, executors: {implement: ex.implement}, limits: LIMITS});`;
       const child = spawn(process.execPath, ['--input-type=module', '-e', code], {cwd: ROOT, env: process.env, stdio: ['ignore', 'ignore', 'pipe']});
       let err = ''; child.stderr.on('data', d => { err += d; });

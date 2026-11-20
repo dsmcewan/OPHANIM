@@ -20,6 +20,8 @@ import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { sendModelTurn } from "../../packages/model-client/index.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { withDispatch, withFakeAgy, seat } from "./fixtures/dispatch.mjs";
+// Primary Gemini API execution is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 const REPO = join(import.meta.dirname, "..");
 const box = await sandboxAvailable("bwrap");
@@ -57,7 +59,7 @@ test("L-301 (self-audit round 3, assignment 3 (sealed bb1287a)): runOpenItem cha
     const mk = (vendor, o) => vendor === "agy_google" ? hopping(google) : makeClientFor(vendor, o);
     mk.providers = makeClientFor.providers;
     const charges = [];
-    const r = await runOpenItem(spec("hops"), { ...opts(), makeClientFor: mk, maxProviderCalls: 50, onCharge: c => { charges.push({ ...c, sent_before: google.length + calls.length }); },
+    const r = await runOpenItem(spec("hops"), { ...opts(), makeClientFor: mk, maxProviderCalls: 50, billing: optIn({ primary: 100 }), onCharge: c => { charges.push({ ...c, sent_before: google.length + calls.length }); },
       seatOverrides: { implementer: seat("agy_google", "gemini-4-hydrogen", { transport: "api" }) } });
     const run = readRun(r);
     const billed = google.length + calls.length;   // every generation request any fake provider received
@@ -76,7 +78,7 @@ test("L-301: a further request past the caller's bound is refused and NOT sent (
     const mk = (vendor, o) => vendor === "agy_google" ? hopping(google) : makeClientFor(vendor, o);
     mk.providers = makeClientFor.providers;
     let work = 0;
-    const r = await runOpenItem(spec("hopBound"), { ...opts(), makeClientFor: mk, maxProviderCalls: 50,
+    const r = await runOpenItem(spec("hopBound"), { ...opts(), makeClientFor: mk, maxProviderCalls: 50, billing: optIn({ primary: 100 }),
       onCharge: ({ purpose }) => { if (purpose === "work" && ++work === 3) throw new Error("fixture bound: the stage budget is spent"); },
       seatOverrides: { implementer: seat("agy_google", "gemini-4-hydrogen", { transport: "api" }) } });
     const run = readRun(r);
@@ -241,7 +243,7 @@ test("L-410 (self-audit round 3, assignment 3 (sealed bb1287a)): the python SDK 
   await withDispatch(async ({ dir, spec, opts }) => {
     const python = fakePython(dir);
     await withEnv({ ...SYNTHETIC, PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: python }, async () => {
-      const r = await runOpenItem(spec("sdkEnv"), { ...opts(), maxProviderCalls: 50, seatOverrides: { reviewer: seat("agy_google", "gemini-3.8-flash", { transport: "agy" }) } });
+      const r = await runOpenItem(spec("sdkEnv"), { ...opts(), maxProviderCalls: 50, billing: optIn({ primary: 100 }), seatOverrides: { reviewer: seat("agy_google", "gemini-3.8-flash", { transport: "agy" }) } });
       const run = readRun(r);
       assert.ok(run.turns.some(t => t.vendor === "agy_google" && t.purpose === "critique"), JSON.stringify(run.turns.map(t => [t.purpose, t.vendor])));
       const env = Object.fromEntries(lines(join(dir, "sdk-env.txt")).map(l => /^([^=]*)=(.*)$/s.exec(l)).filter(Boolean).map(m => [m[1], m[2]]));
@@ -266,7 +268,7 @@ test("L-306: an aborted runOpenItem kills its python SDK seat too", async () => 
           setTimeout(() => { aliveAtAbort = pgrep(`${python}`); ac.abort(Object.assign(new Error("STAGE_ELAPSED: stopped"), { code: "STAGE_ELAPSED" })); }, 1500);
         }
       };
-      await runOpenItem(spec("sdkHang"), { ...opts(), maxProviderCalls: 50, signal: ac.signal, progress,
+      await runOpenItem(spec("sdkHang"), { ...opts(), maxProviderCalls: 50, billing: optIn({ primary: 100 }), signal: ac.signal, progress,
         seatOverrides: { reviewer: seat("agy_google", "gemini-3.8-flash", { transport: "agy" }) } }).catch(() => null);
       assert.ok(started > 0, "the SDK seat started");
       assert.ok(aliveAtAbort.length > 0, "its process was running when the stop came");

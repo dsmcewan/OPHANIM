@@ -14,6 +14,8 @@ import * as checkpoint from "../src/pipeline/checkpoint.mjs";
 import { laneFirstTurn } from "../src/sdk/agy-turn.mjs";
 import { digestOf } from "../src/pipeline/util.mjs";
 import { tempRepo, seats, unit, scripted, sh, PLANNER } from "./fixtures/pipeline-stages.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 const QUOTA = () => Object.assign(new Error("429 RESOURCE_EXHAUSTED"), { status: 429, code: "quota_exhausted" });
 const DISPATCH = { unit_id: "a", cohesive: true, specialist_role: "node-esm-library-engineer", difficulty: "medium", rubric: ["file exists"], notes: "" };
@@ -28,7 +30,7 @@ test("single-turn metered failover: charged on its own for every seat, refused p
     // The lane admits its call where the real one does, before its spawn (L-301: the per-request contract), then is refused.
     const lane = async ({ charge }) => { charge(); sent++; throw QUOTA(); };
     const api = async ({ model }) => { sent++; return { served_model: model, text: JSON.stringify({ ...DISPATCH, cohesive: false, notes: "fixture ends at dispatch" }) }; };
-    const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats({ dispatcher: () => seat }), turns: pipelineTurns({ turn: args => laneFirstTurn(args, { lane, api }) }),
+    const out = await runPipeline({ repo: env.repo, base: "main", plan: { work_units: plan }, seats: seats({ dispatcher: () => seat }), turns: pipelineTurns({ turn: args => laneFirstTurn(args, { lane, api }), agy: { billing: optIn({ failover: 100 }) } }),
       dir: join(env.root, name), limits: { max_provider_calls: max, judge_vendor: "agy_google" }, sameModel: () => true, planner: PLANNER });
     return { out, sent };
   };
@@ -46,7 +48,7 @@ test("laneFirstTurn: the failover calls charge() before the API, a refused charg
   const lane = async ({ signal }) => { signals.push(["lane", signal]); order.push("lane"); throw QUOTA(); };
   const api = async ({ signal }) => { signals.push(["api", signal]); order.push("api"); return { text: "ok", served_model: "gemini-4-hydrogen" }; };
   const ac = new AbortController();
-  const args = { vendor: "agy_google", model: "gemini-4-hydrogen-medium", prompt: "p", signal: ac.signal };
+  const args = { vendor: "agy_google", model: "gemini-4-hydrogen-medium", prompt: "p", signal: ac.signal, billing: optIn({ failover: 100 }) };
   const r = await laneFirstTurn({ ...args, charge: () => order.push("charge") }, { lane, api });
   assert.equal(r.quota_failover.used, true);
   assert.deepEqual(order, ["lane", "charge", "api"]);

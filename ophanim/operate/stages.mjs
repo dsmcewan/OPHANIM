@@ -24,14 +24,16 @@
 // Inputs: {repo, makeClientFor (the work seats), turn (single-turn seats: planner, reviewers, validator), n = 3,
 // statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
 // tests inject a synthetic pool with both), pipelineLimits (overrides of the pipeline's DEFAULT_LIMITS under `fit`; the
-// provider-call bound is the stage budget, or a lower max_provider_calls given here), meteredFailover (default true; false:
-// a Gemini lane's quota refusal in the pipeline is never answered by the metered Gemini API, pipeline/turns.mjs),
-// geminiApiPrimary (default FALSE; owner decision 2026-11-19, register L-136: primary Gemini API execution is its own
-// setting, independent of the failover switch. The `fit` implementer is an Antigravity SDK session, a primary Gemini API
-// seat: without this it is refused at the point of spend and the implement stage is blocked by name),
-// antigravity (other options of that transport: pipeline/turns.mjs `antigravity`; none is needed: it reads
-// GEMINI_API_KEY and PANTHEON_ANTIGRAVITY_PYTHON itself)}. Every stage
-// stays within ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
+// provider-call bound is the stage budget, or a lower max_provider_calls given here), antigravity (options of the
+// Antigravity SDK transport: pipeline/turns.mjs `antigravity`; none is needed: it reads GEMINI_API_KEY and
+// PANTHEON_ANTIGRAVITY_PYTHON itself)}. Every stage stays within ctx.budget.provider_calls; a failed or refused call is
+// counted. Vendor SDKs stay at the edge.
+// THE GEMINI BILLING POLICY (register L-136; docs/billing-policy.md) is not an input here: every stage is handed its billing
+// context by the scheduler (ctx.billing: the launcher's declared policy over the work ledger under the stage's claim), and
+// carries it to every point of Gemini spend -- the single-turn seats (each turn call), runOpenItem and the pipeline's turns.
+// A stage without one (a direct caller) runs with both kinds off. The `fit` implementer is an Antigravity SDK session, a
+// PRIMARY seat of that policy: with gemini_api_primary off it is refused before it starts, and the implement stage is
+// pending on that refusal until the launcher declares it.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -58,6 +60,7 @@ import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, imp
 import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT, liveOwner, recoverOrphanWorktrees, recoverDeadRunBranch, TRANSPORT_BLOCKERS} from '../../pantheon/src/pipeline/index.mjs';
 import {ceilingFor, SUBAGENT_MODEL, SUBAGENT_TYPES, SUBAGENT_TYPE_NAMES} from '../../pantheon/src/antigravity/subagents.mjs';
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
+import {geminiBilling, isGeminiBillingRefusal, METERED_GEMINI_DISABLED, GEMINI_BILLING_REFUSALS} from '../../pantheon/src/route/quota-failover.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
 import {promptRequirement, promptSection, PROMPT_BASIS_PREFIX} from './prompt-intake.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
@@ -161,7 +164,8 @@ function meter(turn, limit, ctx = {}) {
     const release = () => { if (held) { held = false; reserved--; } };
     const take = () => { release(); admit(who); admitted++; };
     const charge = () => { if (admitted === 0) take(); take(); };
-    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), admitRequest: () => take(), charge}))
+    // The stage's Gemini billing context rides with every call (register L-136): its billed requests are admitted by it.
+    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), admitRequest: () => take(), charge, billing: ctx.billing ?? geminiBilling()}))
       .then(r => {
         release();
         if (admitted === 0) {
@@ -576,9 +580,10 @@ const findingContribution = (f, via) => ({purpose: isAdvisory(f) ? 'dispatcher-r
 // selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
   seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
-  pipelineLimits = {}, meteredFailover = true, geminiApiPrimary = false, antigravity = {}} = {}) {
-  if (typeof geminiApiPrimary !== 'boolean') throw new Error('makeExecutors: geminiApiPrimary is true or false (primary Gemini API execution; default off)');
+  pipelineLimits = {}, antigravity = {}, ...rest} = {}) {
   independence ??= independenceFor(profile);
+  if (Object.hasOwn(rest, 'meteredFailover')) throw new Error('makeExecutors: meteredFailover is replaced by the Gemini billing policy, which the scheduler hands every stage (ctx.billing; tick({billing}))');
+  if (Object.hasOwn(rest, 'geminiApiPrimary')) throw new Error('makeExecutors: geminiApiPrimary is replaced by the Gemini billing policy, which the scheduler hands every stage (ctx.billing; tick({billing}): gemini_api_primary, with a budget)');
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
   if (typeof makeClientFor !== 'function') throw new Error('makeExecutors: pass makeClientFor(vendor) for the work seats');
@@ -1146,8 +1151,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.3).
       res = await runOpenItem(spec, {dir: boardDir, makeClientFor, planTitle: 'ticket', maxProviderCalls: ctx.budget.provider_calls, scouts, profile,
         ...(typeof ctx.charge === 'function' ? {onCharge: () => ctx.charge(1)} : {}),
-        // The run's metered-failover switch reaches runOpenItem's walks too (finding 6).
-        meteredFailover,
+        // The stage's Gemini billing context reaches runOpenItem's walks and seats too (finding 6; register L-136).
+        billing: ctx.billing ?? geminiBilling(),
         // The stage's stop reaches runOpenItem: no call is admitted after it, and each turn's request carries it (finding 9).
         ...(ctx.signal ? {signal: ctx.signal} : {}),
         // A checker's rejection at the top of the worker's dial is a revision by the same seat, not a stop (protocol v2).
@@ -1380,7 +1385,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.2).
     let run, admitted = 0;
     try {
-      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {meteredFailover}, antigravity: {...antigravity, geminiApiPrimary}}), dir, sameModel,
+      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {billing: ctx.billing ?? geminiBilling()}, antigravity}), dir, sameModel,
         // Checkpoints are sealed under a key held beside the work ledger (outside the item's state directory), and a
         // checkpoint whose seal, review or rubric does not re-derive is not resumed (independent review, assignment 3
         // (OpenAI gpt-6-astra extra review, 09d490f), question 7).
@@ -1511,15 +1516,17 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // from scratch, which would repeat the work and drop the findings.
       const stuck = unitsOut.filter(u => ['blocked', 'refused'].includes(u.status));
       // THE IMPLEMENTER TRANSPORT COULD NOT RUN (pipeline TRANSPORT_BLOCKERS: the provider refused the key, no
-      // GEMINI_API_KEY, no jail, no SDK, an unqualified SDK version). No rung of any ladder can cure that and no work
-      // was done: the stage is blocked on the environment, by name, and nothing else is run in the transport's place.
+      // GEMINI_API_KEY, no jail, no SDK, an unqualified SDK version, or the Gemini billing policy refused the seat). No
+      // rung of any ladder can cure that: the stage is blocked on it, by name, and nothing else is run in the
+      // transport's place. (A refusal of the billing policy is then made a transient pending by the scheduler, which
+      // wakes the stage when the launcher's policy changes: scheduler.mjs withBilling.)
       const noTransport = stuck.filter(u => TRANSPORT_BLOCKERS.includes(u.code));
       if (noTransport.length && noTransport.length === stuck.length) {
         const codes = [...new Set(noTransport.map(u => u.code))].sort();
         return result('blocked', {outputs: {...kept, transport_blocker: {codes, units: noTransport.map(u => u.unit_id)}}, team, contributions: all, findings, usage: usage(calls),
           blocker: {code: 'IMPLEMENTER_TRANSPORT', what: `IMPLEMENTER_TRANSPORT: the Antigravity SDK transport could not run (${codes.join(', ')}): ${String(noTransport[0].reason).slice(0, 300)}; the run record is kept (${recordFile})`,
-            role: 'lead@orch', resume_when: codes.includes('GEMINI_API_PRIMARY_DISABLED')
-              ? 'primary Gemini API execution is enabled for the run (gemini_api_primary): the fit implementer is an Antigravity SDK session billed on the Gemini API'
+            role: 'lead@orch', resume_when: codes.some(c => GEMINI_BILLING_REFUSALS.includes(c))
+              ? 'the launcher declares primary Gemini execution with a budget that is not spent (gemini_api_primary; --gemini-api-primary N): the fit implementer is an Antigravity SDK session billed on the Gemini API'
               : 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable'},
           next: {stage: 'implement', why: `the implementer transport could not run: ${codes.join(', ')}`}});
       }
@@ -1872,9 +1879,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       } catch (e) {
         refusedJ.push(`the validator call failed: ${e.message}`);
         budgetRows.push({code: m.stopOf(seat), why: refusedJ.at(-1)});
-        // A refusal BY THE RUN'S OWN SWITCH: the lane was refused for quota (or the seat has no lane) and the metered
-        // Gemini failover is off. It is a wait on capacity, not a defect of the validation (finding 6, below).
-        if (e?.quota_failover?.disabled === true || e?.code === 'AGY_NO_LANE') meteredOff.push({vendor: seat.vendor, model: seat.model, code: e.code ?? null, why: String(e.message ?? e).slice(0, 300)});
+        // A refusal BY THE RUN'S OWN BILLING POLICY (register L-136): the lane was refused for quota and its metered
+        // failover is off or its budget spent, or the seat is primary Gemini execution (no lane) and gemini_api_primary is
+        // off or spent. It is a wait on the owner's policy or the lane's quota, not a defect of the validation (finding 6).
+        if (e?.quota_failover?.disabled === true || isGeminiBillingRefusal(e)) {
+          meteredOff.push({vendor: seat.vendor, model: seat.model, code: e.code ?? null, billing: e.billing?.code ?? e.quota_failover?.code ?? (e?.quota_failover?.disabled ? METERED_GEMINI_DISABLED : null), why: String(e.message ?? e).slice(0, 300)});
+        }
         continue;
       }
       const j = jsonOf(reply?.text);
@@ -1917,14 +1927,18 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // No judgment is a defect of the validation itself, kept apart from a defect of the change.
     // Every eligible seat was asked and none gave an admissible answer: a capacity block, with the answers kept.
     if (!judged && exhausted) return noValidator('no seat is left whose answer could be admitted', {rejected_answers: rejected, refused: refusedJ, context: outputs.context});
-    // With the metered failover OFF, a validator refused for quota (or with no lane) is recorded as that block, with its
-    // own code, pending until the lane's quota resets: it was recorded failed with no blocker (independent review round
-    // 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6).
+    // A validator the BILLING POLICY refused (its lane refused for quota with the metered failover off or its budget spent;
+    // primary Gemini execution with gemini_api_primary off or spent) is recorded as that block, with its own code, pending
+    // until the lane's quota resets or the owner changes the policy (the scheduler wakes it then): it was recorded failed
+    // with no blocker (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6). The
+    // failover-off case keeps its code METERED_FAILOVER_DISABLED.
     if (!judged && meteredOff.length) {
-      const what = `METERED_FAILOVER_DISABLED: the validator seat was refused for quota (or has no Antigravity lane) and the metered Gemini API failover is off for this run (${meteredOff.map(x => `${x.vendor}/${x.model}: ${x.why}`).join('; ')}); the validated commit and its tests are kept`;
+      const codes = [...new Set(meteredOff.map(x => x.billing).filter(Boolean))];
+      const code = codes.every(c => c === METERED_GEMINI_DISABLED) ? 'METERED_FAILOVER_DISABLED' : codes.find(c => c !== METERED_GEMINI_DISABLED);
+      const what = `${code}: the validator seat was refused by the Gemini billing policy (${codes.join(', ') || 'metered failover off'}: ${meteredOff.map(x => `${x.vendor}/${x.model}: ${x.why}`).join('; ')}); the validated commit and its tests are kept`;
       return result('pending', {outputs: {...outputs, cause: 'metered-failover-disabled', metered_failover_refusals: meteredOff}, team, usage: usage(),
-        blocker: {code: 'METERED_FAILOVER_DISABLED', what, role: 'lead@orch', resume_when: 'the lane\'s quota resets, or the owner allows the metered Gemini failover', transient: true},
-        next: {stage: 'validate', why: 'the validator was refused for quota with the metered failover off'}});
+        blocker: {code, what, role: 'lead@orch', resume_when: 'the lane\'s quota resets, or the owner changes the Gemini billing policy (enables the refused kind with a budget, or raises it)', transient: true},
+        next: {stage: 'validate', why: 'the validator was refused by the Gemini billing policy'}});
     }
     // A validator that ran out of the stage's provider-call budget is a transient budget stop, like plan and review, not a
     // defect of the validation (L-308, self-audit round 3, assignment 3 (sealed bb1287a)): by the meter's CODE, and only

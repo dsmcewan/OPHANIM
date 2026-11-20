@@ -38,11 +38,20 @@
 // --evidence names ledger entries (repeatable); `--measured true` marks measured evidence, otherwise the
 // assessment is recorded as provisional judgment.
 //
+// THE GEMINI BILLING POLICY (register L-136; docs/billing-policy.md), on review and resume, both OFF when absent:
+// --gemini-api-primary N allows primary Gemini API execution -- a Google reviewer seat here is served by the Gemini API
+// itself (no Antigravity lane in front of it), as is a Google seat of a --turn module that is not a declared lane -- at
+// most N billed requests on this cycle ledger (counted from <ledger>/gemini-billing.jsonl, written before each request,
+// so a resume continues the count). --metered-gemini-failover N is accepted and resolved, but no seat of this command
+// fails over from a lane. A malformed or unbudgeted flag is a usage error. A GEMINI_API_KEY authorizes nothing: a
+// refused Google seat leaves the cycle open (resume it once the owner allows the spend).
+//
 // Exit codes: 0 done, 1 refused (a reviewer failed, the cycle cannot close, a ledger refusal), 2 usage.
 import {execFileSync} from 'node:child_process';
 import {basename, isAbsolute, join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {openPantheonLedger} from '../src/ledger/system.mjs';
+import {billingFromFlags, geminiBilling, geminiUsageFile, billingRecord} from '../src/route/quota-failover.mjs';
 import {reviewCycle} from '../src/ledger/review-cycle.mjs';
 import {REQUIRED_REVIEW_LABS} from '../src/ledger/cycle-kinds.mjs';
 import {currentPolicy, loadPractice, DEFAULT_PRACTICE_SCOPE} from '../src/ledger/practice-kinds.mjs';
@@ -93,18 +102,25 @@ const cycleOfFinding = f => {
   return review.derived_from.find(h => sys.ledger.read().find(x => sys.ledger.hashOf(x) === h)?.kind === 'cycle');
 };
 
+// THE BILLING POLICY of review and resume, resolved before any work (a usage error when malformed), over the cycle
+// ledger's own Gemini usage record.
+const billing = (() => {
+  if (verb !== 'review' && verb !== 'resume') return null;
+  try { return geminiBilling({policy: billingFromFlags(opts), ledger: geminiUsageFile(join(ledgerRoot, 'gemini-billing.jsonl'))}); }
+  catch (e) { return usage(e.message); }
+})();
+const billingShown = () => (billing ? (r => ({policy: r.policy, where: r.where, used: {failover: billing.ledger.used('failover'), primary: billing.ledger.used('primary')}, refusals: r.refusals}))(billingRecord(billing)) : null);
+// The live reviewer turn: the API seat, imported at the edge (src/sdk/live.mjs apiTurn), every Gemini request of it
+// admitted by the billing policy; or a --turn module, its Gemini API seats admitted the same way (billedTurnModule).
 async function liveTurn() {
-  // The vendor SDKs are imported here, at the edge, as bin/pantheon-build.mjs does.
-  const [{default: OpenAI}, {GoogleGenAI}, {default: Anthropic}, {makeClient, sendTurn}] = await Promise.all([
-    import('openai'), import('@google/genai'), import('@anthropic-ai/sdk'), import('../src/sdk/adapter.mjs')]);
-  const clients = new Map();
-  return async ({vendor, model, prompt}) => {
-    if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, {OpenAI, GoogleGenAI, Anthropic}));
-    const r = await sendTurn({client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-cycle-review`});
-    if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? 'unknown'})`);
-    return {text: r.text ?? '', response_id: r.response_id ?? null, served_model: r.served_model ?? null};
-  };
+  const {apiTurn} = await import('../src/sdk/live.mjs');
+  return apiTurn({label: 'cycle-review', billing});
 }
+const turnOf = async () => {
+  if (!opts.turn) return liveTurn();
+  const {billedTurnModule} = await import('../src/sdk/live.mjs');
+  return billedTurnModule((await import(pathToFileURL(resolve(opts.turn)).href)).default, billing);
+};
 
 try {
   if (verb === 'review') {
@@ -118,11 +134,11 @@ try {
       out({refused: `REVIEW_LABS_BELOW_REQUIRED: the coordinated cycle review needs ${REQUIRED_REVIEW_LABS} independent labs; --n ${opts.n} cannot lower it`,
         code: 'REVIEW_LABS_BELOW_REQUIRED'}, 1);
     }
-    const turn = opts.turn ? (await import(pathToFileURL(resolve(opts.turn)).href)).default : await liveTurn();
+    const turn = await turnOf();
     const r = await reviewCycle({ledger: rec, change: {scope, base, head, diff, files, author_labs: multi['author-lab'].length ? multi['author-lab'] : ['anthropic']},
       turn, n, required_reviewers: REQUIRED_REVIEW_LABS, max_attempts: maxAttempts, policy: currentPolicy(opts.profile ?? 'argo', {pools: readPools()}),
       practice_scope: opts['practice-scope'] ?? DEFAULT_PRACTICE_SCOPE});
-    out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), failed: r.failed}, r.complete ? 0 : 1);
+    out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), failed: r.failed, gemini_billing: billingShown()}, r.complete ? 0 : 1);
   }
   if (verb === 'resume') {
     // The change is the cycle's own: its base and head, re-read from the repository. reviewCycle checks
@@ -132,10 +148,10 @@ try {
     const c = rec.cycleState(last.hash).cycle;
     const diff = git('diff', '--no-color', c.base, c.head);
     const files = git('diff', '--name-only', c.base, c.head).split('\n').filter(Boolean);
-    const turn = opts.turn ? (await import(pathToFileURL(resolve(opts.turn)).href)).default : await liveTurn();
+    const turn = await turnOf();
     const r = await reviewCycle({ledger: rec, resume: true, turn, max_attempts: maxAttempts,
       change: {scope, base: c.base, head: c.head, diff, files, ...(multi['author-lab'].length ? {author_labs: multi['author-lab']} : {})}});
-    out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), resumed: true, retained: r.retained, attempted: r.attempted, failed: r.failed}, r.complete ? 0 : 1);
+    out({ledger: ledgerRoot, ...show(rec.cycleState(r.cycle)), resumed: true, retained: r.retained, attempted: r.attempted, failed: r.failed, gemini_billing: billingShown()}, r.complete ? 0 : 1);
   }
   if (verb === 'fix') {
     for (const k of ['finding', 'commit', 'test', 'before-exit', 'after-exit']) if (opts[k] === undefined) usage(`fix needs --${k}`);

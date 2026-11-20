@@ -57,7 +57,7 @@ async function withLiveFixture(fn, {worker = 'printf \'export const ok = true;\\
     process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: ITEM, candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture: scripted providers only', gemini_api_primary: true, metered_gemini_failover: false, note: ''},
+      billing: {scope: 'fixture: scripted providers only', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''},
       ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
       credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     let n = 0;
@@ -81,9 +81,9 @@ const modelTurns = repo => lines(path.join(repo, 'agy.log'));
 
 test('the manifest: every limit must be chosen (the example\'s nulls are refused), unknown keys, a wrong profile or independence and inconsistent billing are refused, each reason named', () => {
   const example = path.join(HERE, 'live-run.example.json');
-  assert.throws(() => readManifest(example), e => e.code === 'MANIFEST' && e.reasons.length === 9 && e.reasons.every(r => /is null: the owner must choose it/.test(r)));
+  assert.throws(() => readManifest(example), e => e.code === 'MANIFEST' && e.reasons.length === 10 && e.reasons.every(r => /is null: the owner must choose it/.test(r)));
   const good = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: 'a'.repeat(40), profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-    billing: {scope: 's', gemini_api_primary: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: '/s', work_root: '/w'},
+    billing: {scope: 's', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''}, ledgers: {status_root: '/s', work_root: '/w'},
     credentials: {required: ['anthropic-oauth', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: '/o'};
   assert.equal(validateManifest(good).item, 'two');
   assert.equal(confirmString(good), `two@${'a'.repeat(7)}`);
@@ -102,7 +102,7 @@ test('the manifest: every limit must be chosen (the example\'s nulls are refused
   assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}}), [], 'agy-login need not be named');
   assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}}), ['credentials.required includes OPENAI_API_KEY']);
   assert.match(why({credentials: {...good.credentials, gemini_api_key: 'not-used'}})[0], /^credentials\.gemini_api_key is "required": the Google implementer runs on the Gemini API with GEMINI_API_KEY/);
-  assert.match(why({billing: {...good.billing, gemini_api_primary: false}})[0], /^billing\.gemini_api_primary is true: .* a primary Gemini API seat \(GEMINI_API_KEY\), and primary Gemini API execution is off unless the owner enables it/);
+  assert.match(why({billing: {...good.billing, gemini_api_primary: false}})[0], /^billing\.gemini_api_primary is true: .* a primary Gemini seat of the billing policy \(GEMINI_API_KEY\), and primary Gemini execution is off unless the owner declares it/);
   assert.ok(why({billing: {scope: 's', metered_gemini_failover: false, note: ''}}).includes('billing.gemini_api_primary is required'));
   assert.deepEqual(why({schema: 'ophanim.live-run/v1'}), ['schema is "ophanim.live-run/v2"']);
   assert.match(why({billing: {...good.billing, metered_gemini_failover: 'no'}})[0], /^billing\.metered_gemini_failover is true or false/);
@@ -149,7 +149,7 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     assert.deepEqual(p.seats.by_difficulty.hard.implementer.ladder, implementerPath('hard').map(x => ({vendor: x.vendor, model: x.model, transport: x.transport, effort: x.effort})));
     assert.deepEqual([p.policy.selection.hash, p.policy.identity.digest, p.policy.independence], [selectionPolicy('fit').hash, policyDigest(currentPolicy()), 'model']);
     assert.match(p.metered_gemini_failover, /^DISABLED/);
-    assert.match(p.gemini_api_primary, /^ENABLED by the manifest: .*Antigravity SDK session on the Gemini API \(GEMINI_API_KEY; no subscription login, no agy CLI\)/);
+    assert.match(p.gemini_api_primary, /^ENABLED by the manifest, at most 500 billed request\(s\) on this run's work ledger: .*Antigravity SDK session on the Gemini API \(GEMINI_API_KEY; no subscription login, no agy CLI\)/);
     assert.match(p.notes[0], /bound CALLS, not dollars/);
 
     const refused = async (file, re, extra) => { const x = await run(['--manifest', file], extra); assert.equal(x.code, 1, x.out); assert.ok(x.json.refusals.some(w => re.test(w)), JSON.stringify(x.json.refusals)); return x; };
@@ -179,6 +179,9 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     // Without agy-login the agy CLI is not checked at all: the plan stands with the CLI absent.
     const noAgy = await run(['--manifest', write({credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}})], {env: {...env, PANTHEON_AGY_CLI: path.join(repo, 'no-such-agy')}});
     assert.deepEqual([noAgy.code, noAgy.json.preflight.skipped, noAgy.json.credentials.required.map(c => c.name)], [0, true, ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY']]);
+    // Each enabled kind declares its budget (register L-136); without one the manifest itself is refused.
+    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true}}), /metered_gemini_failover is enabled .* without a declared budget/);
+    await refused(write({billing: {scope: manifest.billing.scope, gemini_api_primary: true, metered_gemini_failover: false, note: ''}}), /billing\.gemini_primary_budget is required/);
     await refused(write({item: 'nope'}), /item "nope" is not on the status ledger/);
     const m = await run(['--manifest', write({limits: {...LIMITS, total_provider_calls: null}})]);
     assert.deepEqual([m.code, m.json.refused, m.json.refusals], [1, 'manifest', ['limits.total_provider_calls is null: the owner must choose it (no default is filled in)']]);

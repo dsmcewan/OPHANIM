@@ -14,7 +14,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger, outputsDigest} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, REVIEW_INDEPENDENCE} from './stages.mjs';
 import {reassessItem} from './reassess.mjs';
@@ -136,7 +136,7 @@ test('LIFECYCLE: a validator answer that names no serving model is never a valid
     const f = fixture(repo, [{item: 'fresh'}, {item: 'ticketed'}], {tickets: ['ticketed']});
     ctx.serve((_v, m) => m);
     const turn = scriptedTurn({validator: ({k}) => ({text: ACCEPT, served_model: [null, '', '   '][(k - 1) % 3]})});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: {...LIMITS, stage_attempts: 1}});
     const w = openWorkLedger({root: f.workRoot});
     for (const item of ['fresh', 'ticketed']) {
@@ -195,7 +195,7 @@ test('LIFECYCLE: a recorded reassessment stops the disqualified review, and the 
     const {dir: repo, makeClientFor} = ctx;
     const f = fixture(repo, [{item: 'active'}, {item: 'ticketed'}, {item: 'done'}], {tickets: ['ticketed']});
     ctx.serve((_v, m) => m);
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, independence: 'model'});
     const upToValidate = {plan: ex.plan, implement: ex.implement, review: ex.review, validate: ex.validate};
     const go = executors => tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors, limits: LIMITS});
     await go(ex);                                    // all three reach an outcome

@@ -18,6 +18,7 @@ import { resolveModel } from "../review/identity.mjs";
 import { classifyFailure } from "../../../packages/model-client/index.mjs";
 import { seatTransport, QUOTA_FAILOVER_RULE } from "../route/frontier.mjs";
 import { laneFor, laneLevels, quotaFailoverFor } from "../route/fit-matrix.mjs";
+import { geminiAdmission, isGeminiBillingRefusal, isMeteredGemini, spendGemini, METERED_GEMINI_DISABLED } from "../route/quota-failover.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** The role card a single-turn seat runs under: the planner's for a planner, the reviewer's for every judging seat. */
@@ -56,34 +57,40 @@ export async function agySingleTurn({ vendor, model, prompt, seat = null, timeou
  * classifyFailure classifies it), and the answer then says so (`quota_failover`). Any other lane failure is thrown as
  * it is: it never moves the turn to the metered API. A lane whose base model has no API id has no failover.
  */
-// `failover: false` (the caller's budget allows no metered Gemini spend) keeps the lane's quota refusal as it is: it is
-// thrown, marked quota_failover {used: false, disabled: true}, and the metered API is not called.
+// THE BILLING POLICY (register L-136; route/gemini-billing.mjs). `billing` (the turn's context: the policy and its
+// persistent usage record; default both kinds off) admits every billed Gemini request this turn could make:
+//   - the lane's quota failover (kind "failover", metered_gemini_failover): off, or its budget spent, keeps the lane's
+//     quota refusal as it is -- thrown, marked quota_failover {used: false, disabled: true (off) | code, refused} and
+//     `billing` (the refusal) -- and the metered API is not called;
+//   - a Gemini seat with NO declared lane (kind "primary", gemini_api_primary): refused before anything is made or
+//     charged unless primary Gemini API execution is enabled, its budget not spent. The failover switch never admits it.
+// The subscription lane itself is never refused by either setting.
 // THE FAILOVER IS ITS OWN PROVIDER CALL. The caller's `charge()` (in the turn's arguments: the pipeline's admit, the
-// lifecycle meter's) is called BEFORE the metered API is asked; a throw refuses the failover (the lane's quota refusal
-// is thrown, marked quota_failover {used: false, refused}) and the API is not called. `signal` is passed to the lane
-// and to the API, and an aborted signal refuses the failover the same way (independent review, assignment 3 (OpenAI
-// gpt-6-astra extra review, 09d490f), questions 1 and 9).
+// lifecycle meter's) is called BEFORE the metered API is asked, after the policy admitted it and before its usage row is
+// persisted; a throw refuses the failover (the lane's quota refusal is thrown, marked quota_failover {used: false,
+// refused}) and the API is not called. `signal` is passed to the lane and to the API, and an aborted signal refuses the
+// failover the same way (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), questions 1 and 9).
 // `admitRequest` (optional; live.mjs, the second charge contract): nothing was charged before the turn; every provider call
 // is admitted at its point of spend -- the lane's (passed to `lane` as `charge`, called between the jail build and the
 // spawn), the API's first and further requests, and the failover (admitted here, before the API is asked, with kind
 // "failover"; the API then charges only its further requests). It replaces `charge` when given.
-export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null, signal = undefined, charge = null, admitRequest = null }, { lane, api, failover = true }) {
+export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra = null, signal = undefined, charge = null, admitRequest = null, billing = null }, { lane, api, ...rest }) {
+  if (Object.hasOwn(rest, "failover")) throw new Error("laneFirstTurn: the failover switch is replaced by the turn's `billing` (the Gemini billing policy, route/gemini-billing.mjs)");
   const transport = seatTransport(vendor, model);
   const isLane = transport === "agy-cli";
   const sig = signal ? { signal } : {};
   const viaLane = isLane ? { vendor, model } : vendor === "agy_google" && transport === "api" && laneLevels(model).length ? laneFor(model, seat?.effort ?? null) : null;
-  // A Gemini seat with NO declared lane can only be answered by the metered API. With the metered failover off that is
-  // refused, never called: the caller's budget allows no metered Gemini spend, and the seat stays unanswered (its stage
-  // pending, with this reason) rather than silently spending it (independent review round 2, assignment 3 (Google
-  // gemini-4-carbon, manual, 77480d6), finding 6).
-  if (!viaLane && failover === false && vendor === "agy_google") {
-    throw Object.assign(new Error(`agy_google/${model} has no declared Antigravity lane (config/lanes.json), and the metered Gemini API is disabled for this run (metered failover off): the seat is not called`),
-      { code: "AGY_NO_LANE", quota_failover: { used: false, disabled: true, lanes: [], rule: "metered Gemini API failover disabled by the caller" } });
+  // A Gemini seat with NO declared lane can only be answered by the Gemini API: PRIMARY Gemini API execution. Refused here,
+  // before the client is made or anything is charged, unless gemini_api_primary admits it (the seat stays unanswered, its
+  // stage pending with this reason, rather than silently spending: independent review round 2, assignment 3 (Google
+  // gemini-4-carbon, manual, 77480d6), finding 6); every request it then makes is admitted again at its point of spend.
+  if (!viaLane && isMeteredGemini({ vendor, transport: "api" })) {
+    geminiAdmission(billing, { kind: "primary", vendor, model, purpose: seat?.role ?? null, role: seat?.role ?? null, transport: "api" });
   }
   // `charge` reaches the API seat too: every billed request after the turn's first is admitted by it (finding 1.1).
   const admits = typeof admitRequest === "function";
   const ch = admits ? { charge: () => admitRequest({ kind: "continuation" }) } : typeof charge === "function" ? { charge } : {};
-  if (!viaLane) return api({ vendor, model, prompt, seat, extra, ...sig, ...(admits ? { admitRequest } : ch) });
+  if (!viaLane) return api({ vendor, model, prompt, seat, extra, ...sig, billing, billingKind: "primary", ...(admits ? { admitRequest } : ch) });
   const spare = isLane ? quotaFailoverFor(model) : { vendor, model, effort: seat?.effort ?? null };
   try {
     const r = await lane({ vendor: viaLane.vendor, model: viaLane.model, prompt, seat, ...sig, ...(admits ? { charge: admitRequest } : {}) });
@@ -91,17 +98,17 @@ export async function laneFirstTurn({ vendor, model, prompt, seat = null, extra 
   } catch (e) {
     if (!spare || !classifyFailure(e).quota) throw e;
     const after = [{ lane: viaLane.model, outcome: "quota", source: "attempt", status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200) }];
-    if (failover === false) {
-      throw Object.assign(e, { quota_failover: { used: false, disabled: true, lanes: [viaLane.model], rule: "metered Gemini API failover disabled by the caller", after } });
-    }
     try {
       signal?.throwIfAborted();
-      if (admits) admitRequest({ kind: "failover" });
-      else if (typeof charge === "function") charge();
+      // The policy first (off or spent: refused, nothing admitted), then the caller's admission, then the usage row.
+      spendGemini(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: seat?.role ?? null, role: seat?.role ?? null, transport: "api", request: 1 },
+        () => { if (admits) admitRequest({ kind: "failover" }); else if (typeof charge === "function") charge(); });
     } catch (refusal) {
-      throw Object.assign(e, { quota_failover: { used: false, refused: String(refusal?.message ?? refusal).slice(0, 300), lanes: [viaLane.model], rule: QUOTA_FAILOVER_RULE, after } });
+      const billed = isGeminiBillingRefusal(refusal), off = billed && refusal.code === METERED_GEMINI_DISABLED;
+      throw Object.assign(e, { quota_failover: { used: false, ...(off ? { disabled: true } : {}), ...(billed ? { code: refusal.code } : {}), refused: String(refusal?.message ?? refusal).slice(0, 300),
+        lanes: [viaLane.model], rule: off ? "metered Gemini API failover disabled by the billing policy (metered_gemini_failover off)" : QUOTA_FAILOVER_RULE, after }, ...(billed ? { billing: refusal.billing } : {}) });
     }
-    const r = await api({ vendor: spare.vendor, model: spare.model, prompt, seat, ...sig, ...ch });
+    const r = await api({ vendor: spare.vendor, model: spare.model, prompt, seat, ...sig, billing, billingKind: "failover", firstAdmitted: true, ...ch });
     return { ...r, transport: "api", requested_model: model,
       quota_failover: { used: true, base: spare.model, lanes: [viaLane.model], rule: QUOTA_FAILOVER_RULE,
         after } };

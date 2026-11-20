@@ -39,7 +39,7 @@ import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn, agySdkEnvOf, agyModelMismatch } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
-import { routeSeats, isMeteredGemini, meteredGeminiRefusal, METERED_GEMINI_DISABLED } from "../route/quota-failover.mjs";
+import { routeSeats, isMeteredGemini, geminiAdmission, spendGemini, geminiBilling, geminiKindOf, billingRecord, isGeminiBillingRefusal } from "../route/quota-failover.mjs";
 import { laneParts } from "../route/fit-matrix.mjs";
 import { currentPolicy as currentIdentityPolicy, policyDigest as identityPolicyDigest, contributorKeys, candidateRefusal, reviewerRefusal, resolveModel } from "../review/identity.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
@@ -133,8 +133,9 @@ function usageOf(raw) {
 // here is the same quota refusal the fallback acted on.
 function failureOutcome(e) {
   if (/^CONTEXT_|^INPUT_CEILING$/.test(String(e?.code ?? ""))) return "refused_preflight";
-  // A metered Gemini seat refused at its point of spend with the failover off (route/quota-failover.mjs): nothing was sent.
-  if (e?.code === METERED_GEMINI_DISABLED) return "refused_metered";
+  // A metered Gemini seat refused at its point of spend by the billing policy (route/gemini-billing.mjs: off, or its
+  // budget spent): nothing was sent.
+  if (isGeminiBillingRefusal(e)) return "refused_metered";
   const f = classifyFailure(e);
   return f.quota ? "quota" : f.retryable ? "transient" : "error";
 }
@@ -438,11 +439,24 @@ export async function runOpenItem(spec, opts = {}) {
     profile, ...(ASSIGNMENT ? { assignment: ASSIGNMENT } : {}) };
   // Admitted at the generation boundary, before the call: past the bound, nothing is sent and the refusal
   // is named (PROVIDER_CALL_LIMIT). The routers treat it as non-retryable, so it ends the role's routing.
-  // `opts.meteredFailover: false`: no walk of this run reaches a metered Gemini API quota-failover candidate
-  // (route/quota-failover.mjs routeSeats; independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
-  // 77480d6), finding 6). Default true, as before.
-  const METERED_FAILOVER = opts.meteredFailover ?? true;
-  if (typeof METERED_FAILOVER !== "boolean") throw new Error("runOpenItem: meteredFailover is true or false");
+  // THE GEMINI BILLING POLICY (register L-136, extending L-124; route/gemini-billing.mjs, docs/billing-policy.md).
+  // `opts.billing` (a geminiBilling context: the policy and the persistent usage record its consumption is derived from;
+  // default: both kinds OFF) admits every billed Gemini request of this run at its point of spend: a walk's quota-failover
+  // candidate and its requests (metered_gemini_failover), and every primary Gemini seat -- an operator's or a ticket pin's
+  // Gemini API id, the python Antigravity SDK seat (gemini_api_primary). A key in the environment admits nothing. The
+  // policy, every usage row and every refusal are kept on run.json (`billing`).
+  if (opts.meteredFailover !== undefined) throw new Error("runOpenItem: meteredFailover is replaced by `billing` (the Gemini billing policy, route/gemini-billing.mjs)");
+  if (opts.billing !== undefined && opts.billing !== null && !(opts.billing.policy && Array.isArray(opts.billing.refusals))) throw new Error("runOpenItem: billing is a geminiBilling() context (route/gemini-billing.mjs)");
+  const BILLING = opts.billing ?? geminiBilling();
+  run.billing = { ...billingRecord(BILLING), rows: [], refusals: [] };
+  const billingSeen = { rows: BILLING.rows.length, refusals: BILLING.refusals.length };
+  // The run's own record of billing: the policy in force, and every usage row and refusal since the last write, appended.
+  const syncBilling = () => {
+    const b = billingRecord(BILLING);
+    run.billing = { ...(run.billing ?? {}), policy: b.policy, where: b.where, rows: [...(run.billing?.rows ?? []), ...b.rows.slice(billingSeen.rows)],
+      refusals: [...(run.billing?.refusals ?? []), ...b.refusals.slice(billingSeen.refusals)] };
+    billingSeen.rows = b.rows.length; billingSeen.refusals = b.refusals.length;
+  };
   // `opts.signal` (optional): the caller's stop (a lifecycle stage's elapsed bound). Once it fires no provider call is
   // admitted, and every turn carries it to its request (independent review round 2, assignment 3 (Google
   // gemini-4-carbon, manual, 77480d6), finding 9).
@@ -495,6 +509,7 @@ export async function runOpenItem(spec, opts = {}) {
   }
   let seatingShown = 0;
   const record = () => {
+    syncBilling();
     if (!recordAllowed) return;
     // The seating report, as the selector chose it (seatingOf): kept on the run and streamed as each seat answers.
     run.seating = seatingOf(run);
@@ -529,9 +544,11 @@ export async function runOpenItem(spec, opts = {}) {
   const enter = (name, detail = "") => { stage = name; progress({ event: "stage.start", detail }); };
 
   // THE ANTIGRAVITY SEAT. The CLI's --agent lane consumes cached OAuth and emits NDJSON events.
-  // Keep the SDK as default until a live OAuth turn produces an observed answer: the CLI can exit
-  // zero with SUCCESS, zero turns and empty response on print timeout. Renaming an OAuth token
-  // GEMINI_API_KEY cannot authenticate the SDK. PANTHEON_AGY_TRANSPORT=cli opts into the new lane.
+  // THE SUBSCRIPTION CLI LANE IS THE DEFAULT for every role (owner decision 2026-11-19, register L-136): the python SDK
+  // seat is billed to GEMINI_API_KEY or Vertex on every turn -- primary Gemini execution -- so the reviewer and the scout
+  // no longer default to it. PANTHEON_AGY_TRANSPORT=sdk still selects it for those two roles, and the seat is then
+  // admitted only by the billing policy's gemini_api_primary (with a budget), at its point of spend. Renaming an OAuth
+  // token GEMINI_API_KEY cannot authenticate the SDK.
   let agyN = 0;
   // `signal` (the turn's stop: L-306) cancels the CLI's or the SDK seat's process group; `admit` (L-301) is the provider-call
   // admission, called at the point of spend: inside runAgyCliTurn between its jail build and its spawn, or right before the
@@ -550,7 +567,7 @@ export async function runOpenItem(spec, opts = {}) {
     // unconditionally, for these two roles specifically, is the actual fix; PANTHEON_AGY_TRANSPORT
     // still governs scout/reviewer, which genuinely support both lanes.
     // A declared lane (lanes.json: transport agy-cli) is served by that transport for every role (audit M6).
-    const transport = (role === "planner" || role === "implementer" || declared === "agy-cli") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "sdk");
+    const transport = (role === "planner" || role === "implementer" || declared === "agy-cli") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "cli");
     const dir = join(outDir, "agy_google", `${purpose}-${++agyN}`); mkdirSync(dir, { recursive: true });
     // The implementer keeps its real NO_TOOLS prompt untouched: it is genuinely tool-less on every
     // transport (run-item.mjs applies its text reply to disk itself -- see the WORK stage above),
@@ -584,16 +601,15 @@ export async function runOpenItem(spec, opts = {}) {
         ...(verify ? { verify } : {}) });
       if (res.verify) progress({ event: "seat.verify", seat: "agy_google", model, detail: res.verify.offered ? `acceptance launcher offered: ${res.verify.command}` : `no command offered: ${res.verify.why}` });
     } else if (transport === "sdk") {
-      // THE POINT-OF-SPEND GUARD OF THE SDK SEAT (L-124; L-504 invariant 4). The python SDK seat is billed to
-      // GEMINI_API_KEY or to Vertex (PANTHEON_AGY_VERTEX_PROJECT) on every turn: it has no subscription mode. With the
-      // metered Gemini failover off it is refused HERE, before the venv and key checks, before it is admitted (charged)
-      // and before anything is spawned, whatever credential the environment holds (live-run's withholding of the key is
-      // not what protects it). The CLI transport above (the OAuth subscription) is never refused by this.
-      if (!METERED_FAILOVER && isMeteredGemini({ vendor: "agy_google", transport: "sdk" })) {
-        const refusal = meteredGeminiRefusal({ vendor: "agy_google", model, purpose, transport: "sdk" });
-        progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) });
-        throw refusal;
-      }
+      // THE POINT-OF-SPEND GUARD OF THE SDK SEAT (L-124, split by L-136; L-504 invariant 4). The python SDK seat is billed
+      // to GEMINI_API_KEY or to Vertex (PANTHEON_AGY_VERTEX_PROJECT) on every turn: it has no subscription mode, so it is
+      // PRIMARY Gemini execution. Unless the billing policy's gemini_api_primary admits it (the failover switch never
+      // does), it is refused HERE, before the venv and key checks, before it is admitted (charged) and before anything is
+      // spawned, whatever credential the environment holds (live-run's withholding of the key is not what protects it).
+      // The CLI transport above (the OAuth subscription) is never refused by this.
+      const spend = { kind: "primary", vendor: "agy_google", model, purpose, role, transport: "sdk" };
+      try { geminiAdmission(BILLING, spend); }
+      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }
       const python = process.env.PANTHEON_AGY_PYTHON ?? join(homedir(), "Projects", "agentic-pipeline", "sdk", ".venv-antigravity", "bin", "python");
       if (!existsSync(python)) throw new Error(`agy seat: venv python absent at ${python} (set PANTHEON_AGY_PYTHON)`);
       if (!process.env.GEMINI_API_KEY && !process.env.PANTHEON_AGY_VERTEX_PROJECT) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (or set PANTHEON_AGY_VERTEX_PROJECT for Vertex ADC)");
@@ -608,7 +624,11 @@ export async function runOpenItem(spec, opts = {}) {
       const sdkEnv = agySdkEnvOf(process.env);
       progress({ event: "seat.env", seat: "agy_google", model, detail: `python SDK seat env: allowlist, credentials passed: ${sdkEnv.credentials.join(", ") || "none"}; ${sdkEnv.dropped.length} variable(s) withheld` });
       signal?.throwIfAborted();
-      await admit();
+      // The policy (again, at the spawn), then the run's admission (its call bound and the caller's charge), then the usage
+      // row persisted -- all before the billed seat is spawned.
+      try { spendGemini(BILLING, spend, () => admit()); }
+      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: String(refusal?.message ?? refusal).slice(0, 300) }); record(); throw refusal; }
+      record();
       const run = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });
       const last = (run.stdout ?? "").trim().split("\n").filter(Boolean).pop();
       let out = null;
@@ -743,16 +763,25 @@ export async function runOpenItem(spec, opts = {}) {
     };
     const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...failover, ...extraFields });
     let turnAttempts = 0, settings = null;
-    // THE POINT-OF-SPEND GUARD OF A METERED GEMINI API SEAT (L-504 invariant 4): with the metered Gemini failover off, a
-    // Google-billed API seat -- a lane's quota failover the walk did not skip, an operator's or a ticket pin's Gemini API
-    // id, a re-asked seat -- is refused HERE, before it is admitted or charged and before its client is asked, whatever key
-    // the environment holds. Recorded as an attempt that made no provider request.
-    if (!METERED_FAILOVER && isMeteredGemini({ vendor, transport: transport ?? "api" })) {
-      const refusal = meteredGeminiRefusal({ vendor, model, purpose, transport: "api" });
-      recordAttempt(attemptOf({ outcome: failureOutcome(refusal), status: null, code: refusal.code, why: refusal.message.slice(0, 200), usage: null,
-        settings: { model, pool: pool ?? vendor, transport: transport ?? "api", effort: effort ?? null, max_output_tokens: null, output_budget_policy: null, basis: "requested" }, provider_requests: 0 }, Date.now()));
-      progress({ event: "turn.refused", seat: vendor, model, detail: refusal.message.slice(0, 300) });
-      throw refusal;
+    // THE POINT-OF-SPEND GUARD OF A METERED GEMINI API SEAT (L-504 invariant 4; L-124 split by L-136): a Google-billed API
+    // seat is a billed request of its KIND -- "failover" when it answers a lane's proven quota refusal (the walk's
+    // quota_failover candidate: metered_gemini_failover), "primary" otherwise (an operator's or a ticket pin's Gemini API
+    // id, a re-asked seat: gemini_api_primary). Unless the billing policy admits that kind, with its budget not spent, it
+    // is refused HERE, before it is admitted or charged and before its client is asked, whatever key the environment
+    // holds; then EVERY request it makes (the first, a long-decode hop) passes the policy again at its point of spend
+    // (spendGemini below). A refusal is recorded as an attempt that made no provider request.
+    const geminiApi = isMeteredGemini({ vendor, transport: transport ?? "api" });
+    const spend = { kind: geminiKindOf({ quota_failover }), vendor, model, purpose, role: ROLE_OF_PURPOSE[purpose] ?? purpose, transport: "api" };
+    if (geminiApi) {
+      try { geminiAdmission(BILLING, spend); }
+      catch (refusal) {
+        recordAttempt(attemptOf({ outcome: failureOutcome(refusal), status: null, code: refusal.code, why: refusal.message.slice(0, 200), usage: null,
+          settings: { model, pool: pool ?? vendor, transport: transport ?? "api", effort: effort ?? null, max_output_tokens: null, output_budget_policy: null, basis: "requested" }, provider_requests: 0,
+          ...(refusal.billing ? { billing: { code: refusal.billing.code, kind: refusal.billing.kind, source: refusal.billing.source, budget: refusal.billing.budget } } : {}) }, Date.now()));
+        progress({ event: "turn.refused", seat: vendor, model, detail: refusal.message.slice(0, 300) });
+        record();
+        throw refusal;
+      }
     }
     for (;;) {
       // With a ledger, the seat's stored conversation is checked against the ledger's turn entries for
@@ -764,7 +793,11 @@ export async function runOpenItem(spec, opts = {}) {
       // EVERY BILLED REQUEST IS ADMITTED BEFORE IT IS SENT, the first included (self-audit round 3, assignment 3 (sealed
       // bb1287a), L-301): a Google long-decode hop or an Anthropic compaction is a provider call of its own, charged on the
       // caller's meter (onCharge) and counted in this run's bound; a refusal refuses that request, and nothing is sent.
-      const admitRequest = () => admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose });
+      // A billed Gemini request is admitted by the billing policy first, then by the run (its bound and the caller's charge),
+      // and its usage row is persisted (and mirrored on run.json) -- all before it is sent.
+      const admitRequest = geminiApi
+        ? ({ request = 1 } = {}) => { spendGemini(BILLING, { ...spend, request }, () => admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose })); record(); }
+        : () => admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose });
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
         onRequest: admitRequest, chargeFirstRequest: true,
         ...(seatLedger ? { ledger: seatLedger } : {}),
@@ -827,7 +860,7 @@ export async function runOpenItem(spec, opts = {}) {
     // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
     // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
     const effortFor = candidate => effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null;
-    const routed = await routeSeats({ onSkip: skippedFailover, meteredFailover: METERED_FAILOVER, candidates, cooldown, signal: opts.signal,
+    const routed = await routeSeats({ onSkip: skippedFailover, billing: BILLING, candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
       invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
         effort: effortFor(candidate) }) });
@@ -899,7 +932,7 @@ export async function runOpenItem(spec, opts = {}) {
       let choice;
       try { choice = choose("scout", { avoid, avoidLabs, chars: p.prompt.length, ...(k ? { roleOverride: null } : {}) }); }
       catch (e) { throw refuse(`scout ${k + 1} has no candidate after avoiding labs ${avoidLabs.join(", ")}: ${e.message}`); }
-      const routed = await routeSeats({ onSkip: skippedFailover, meteredFailover: METERED_FAILOVER, candidates: choice.candidates, cooldown, signal: opts.signal,
+      const routed = await routeSeats({ onSkip: skippedFailover, billing: BILLING, candidates: choice.candidates, cooldown, signal: opts.signal,
         invoke: (candidate, { signal }) => {
           const cap = tokenCapFor("scout", candidate.model);
           return turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
@@ -1080,7 +1113,7 @@ export async function runOpenItem(spec, opts = {}) {
         const scoutChoice = profile === "argo" ? choose("scout", { chars: p.prompt.length })
           : choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake",
             reason: `intake fan-out vendor ${vendor}: the INTAKE table's ${vendor} seat` } });
-        const routed = await routeSeats({ onSkip: skippedFailover, meteredFailover: METERED_FAILOVER, candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
+        const routed = await routeSeats({ onSkip: skippedFailover, billing: BILLING, candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;

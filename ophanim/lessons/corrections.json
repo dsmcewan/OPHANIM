@@ -338,6 +338,13 @@
           "date": "2026-11-19",
           "ref": "PR 68, the five commits before 9770094",
           "note": "five commits were pushed while the qualification gate was red: the SDK contract suite skipped on the runner (no SDK installed there) and the no-skip gate failed, while the same suites were green where the SDK was installed. The pushes followed the local result; CI was not read until the pull request's events were. Fixed by installing the pinned SDK in the workflow"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "642887b (PR 68)",
+          "note": "a check written to stop a push on a moved base printed that the base had moved, and the same command went on to commit and push: the check was joined to the rest with ';', so its failure stopped nothing. The base had moved (the L-136 billing policy had landed) and the pull request conflicted in twelve files. Caught by reading the command's own output; the base was merged and the suites re-run before any result was reported for that commit. The third instance of this class, and the second in this run: a note to fetch the base before each push did not prevent it"
         }
       ],
       "fixed_in": "b8bf3d9 (the path); the commit chain is now gated on the parsed fail count being 0",
@@ -400,6 +407,14 @@
         },
         {
           "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-19",
+          "ref": "l136/billing-policy before 0fbf93e (l136-billing.mutate.mjs, first full run)",
+          "detected_by": "mutation D2 of pantheon/tests/l136-billing.mutate.mjs, the change's own runner",
+          "note": "\"off when absent at every entry point\" was tested through the CLI flags; the serve test always declared billing in its service config, so a serve config without billing resolving to ON survived. Fixed by a nothing-declared serve case; D2 then killed. Not counted as mechanism success: the class's registered detector did not fire, and one instance is not a demonstrated mechanism"
+        },
+        {
+          "observed_by": "mechanism",
           "date": "2026-11-19",
           "ref": "22ecb82 (independent review of the Antigravity SDK transport)",
           "note": "the same class in new code, two days after the owner raised it: the controller judged a tool call on the argument name the tool declares, and the SDK's runtime also read another spelling. run_command ran the command in `commandline` outside the verify jail; invoke_subagent started twelve subagents from `subagents` after the governor admitted one from `Subagents` (the ceiling). Found by a reviewer probing the installed runtime, not by this class's detector test, which is about its first instance; fixed by refusing any key a tool does not declare. NOT recorded as corrected_by mechanism: that would claim the owner's success criterion, which corrections.test.mjs pins as not claimed. Whether this counts is the owner's decision"
@@ -419,6 +434,30 @@
       }
     },
     {
+      "id": "verification-cost-unbounded",
+      "class": "Completed work is re-verified with full suites and full mutation sweeps, each mutation running the expensive real-process suites, and verification grows with test opportunities instead of checking the acceptance contract once on the final commit; the owner has to bound the execution.",
+      "source": "owner direction 2026-11-20 during L-136: \"Finish the current mutation run. Do not initiate another broad sweep or expand scope based solely on additional test opportunities ... Use deterministic, isolated tests for mutation coverage wherever possible. Reserve expensive real-SDK execution for the integration behaviors that genuinely require it ... Record nonblocking improvements as future tickets instead of extending this execution indefinitely.\"",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-20",
+          "ref": "613a4e2",
+          "note": "about two hours of the agent's run went to two full mutation runs of each runner and two full verification sets; each of the 26 L-136 mutations runs all three suites, about 55 s of real-process tests, even where the fast policy suite decides it. The re-runs answered real findings (a surviving mutation, a gate failure), so the cost per cycle, not the reason for re-running, is what the owner bounded"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-20",
+          "ref": "PR 68 after 22ecb82",
+          "note": "after one surviving mutation, a sweep of every uncovered refusal line and then mutations of the SDK bridge at about 25 s each against the installed SDK were started, with no evaluation against the nine acceptance items; the owner stopped it. The evaluation then found the one acceptance item with no test, which the sweep had not. The same direction the owner gave during L-136 on the same day: recorded here as that class's second instance, not as a class of its own. The acceptance evaluation is in the pull request; the bridge is now tested without a session; what remains is recorded as L-719 and L-720"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "execution conduct and test-infrastructure cost, not a code property",
+        "next": "the coordinator's briefs state a verification budget (one full verification on the final commit; after a fix, re-run only the affected tests and mutations); a runner that maps each mutation to the suites that decide it is future work (docs/execution/l136-report.md)"
+      }
+    },
+    {
       "id": "misses-fixed-without-cause",
       "class": "Defects found late (by a mutation run, a merge, CI or a review) are fixed and reported one by one, without asking why each was missed and which other paths rest on the same assumption, so the next change repeats the mechanism.",
       "source": "owner question 2026-11-19 ('Where do the missed failures come from. Explain why they were missed.'); owner's Evidence-Driven Reflection direction 2026-11-20; owner condition 7 (docs/self-evaluation.md)",
@@ -435,25 +474,6 @@
         "kind": "none",
         "why": "a step of the work, not a property of the code; no executable check exists for it",
         "next": "when a defect is found after its code was reported working, record with the fix which assumption let it through and which other paths share it, and check those paths before the next report. Evidence for it so far is this one run"
-      }
-    },
-    {
-      "id": "verification-past-the-contract",
-      "class": "Verification is extended on the strength of what else could be tested (a sweep, more mutations, whole sessions where a unit test would do) without first evaluating the work against its acceptance contract, so the run does not end and optional hardening is not told apart from a contract violation.",
-      "source": "owner direction 2026-11-20 ('Do not initiate another broad sweep or expand scope based solely on additional test opportunities. Evaluate the implementation against the original acceptance contract. Separate actual contract violations from optional hardening.'); owner conditions 2, 3 and 5 (docs/self-evaluation.md)",
-      "instances": [
-        {
-          "observed_by": "owner",
-          "date": "2026-11-20",
-          "ref": "PR 68 after 22ecb82",
-          "note": "after one surviving mutation, a sweep of every uncovered refusal line and then mutations of the SDK bridge at about 25 s each against the installed SDK were started, with no evaluation against the nine acceptance items; the owner stopped it. The evaluation then found the one acceptance item with no test, which the sweep had not"
-        }
-      ],
-      "fixed_in": "this commit (the acceptance evaluation is in the pull request; the bridge is tested without a session; what remains is recorded as open entries L-719 and L-720)",
-      "detector": {
-        "kind": "none",
-        "why": "a judgement about when verification serves the contract; no executable check exists for it",
-        "next": "evaluate against the acceptance list as soon as its own suites are green; before a verification activity the list does not name, say which line it serves, and with none record it as a future entry instead of doing it. Use a test of the unit where one can show the behaviour, and a whole session only for what needs one"
       }
     }
   ]

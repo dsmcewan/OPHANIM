@@ -1,0 +1,30 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "L-146",
+  "base_commit": "fd9f001",
+  "authorization": "owner, 2026-11-20: L-146 approved (bring cross-lab-review.mjs, live-check, live-ship, stream-check and view-check under the L-136 billing policy; primary authorization for direct Gemini API calls; credentials confer no permission; reuse L-136's mechanism; targeted verification only)",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**"],
+  "dependencies": ["single agent: one shared point-of-spend helper built on gemini-billing.mjs spendGemini; no concurrent owner of any file",
+    "pantheon/src/view/server.mjs is NOT owned: it is shared with the product bin pantheon-view.mjs, so view-check is gated in its own client factory; any other ungated metered Gemini path found is reported for the register, not changed"],
+  "subwaves": {
+    "L146": {
+      "agent-l146-billing": {
+        "branch": "l146/billing-paths",
+        "base_commit": "fd9f001",
+        "findings": ["L-146"],
+        "files": ["pantheon/bin/cross-lab-review.mjs", "pantheon/bin/cycle-review-http-turn.mjs",
+                  "pantheon/scripts/live-check.mjs", "pantheon/scripts/live-ship.mjs", "pantheon/scripts/stream-check.mjs", "pantheon/scripts/view-check.mjs",
+                  "pantheon/src/route/gemini-billing.mjs", "pantheon/src/sdk/live.mjs", "pantheon/src/sdk/adapter.mjs",
+                  "docs/billing-policy.md",
+                  "pantheon/tests/l146-*.test.mjs", "pantheon/tests/l146-billing.mutate.mjs", "pantheon/tests/fixtures/l146-*"],
+        "new_files": ["pantheon/tests/l146-*.test.mjs", "pantheon/tests/l146-billing.mutate.mjs", "pantheon/tests/fixtures/l146-*"],
+        "region_limits": {
+          "pantheon/src/route/gemini-billing.mjs, pantheon/src/sdk/live.mjs, pantheon/src/sdk/adapter.mjs": "additions only: the one shared metered-client / turn wrapper and the scripts' flag and usage-file resolution, built on resolveGeminiBilling, geminiBilling, geminiUsageFile and spendGemini; no change in behaviour for any existing caller (their tests are not edited)",
+          "pantheon/bin/cycle-review-http-turn.mjs": "only if the gate cannot be applied around it; its request shape and its use through pantheon-review-cycle --turn are unchanged",
+          "existing tests": "not edited"
+        }
+      }
+    }
+  }
+}

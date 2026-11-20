@@ -26,6 +26,13 @@
 //       --total-provider-calls N   the whole run's provider-call budget. Default 0: nothing that may call a
 //                                  provider is dispatched (intake is still recorded).
 //       --stage-provider-calls N, --iterations N, --concurrency N, --elapsed-ms N  (scheduler DEFAULT_LIMITS otherwise)
+//       THE GEMINI BILLING POLICY (register L-136; docs/billing-policy.md), declared per invocation, both OFF when absent:
+//       --metered-gemini-failover N  allow the metered Gemini API as an Antigravity lane's quota failover, at most N billed
+//                                    requests on this work ledger (all items, every run of it; counted from its work.billing)
+//       --gemini-api-primary N       allow primary Gemini API / SDK execution, at most N billed requests, the same way
+//       A flag without a positive-integer budget is a usage error (exit 2): nothing runs. A GEMINI_API_KEY in the
+//       environment authorizes nothing. A stage the policy refused waits pending, its work kept, and is dispatched again
+//       as soon as a later run declares a changed setting of the refused kind.
 //       --item ID   the item selector: intake, expired-claim release and evidence recovery still run for every item, but
 //                   ONLY this item is dispatched; every other runnable item is listed in `skipped` ("outside the --item
 //                   scope"). Without it every runnable item is queued (--concurrency 1 only serialises them). For one
@@ -73,6 +80,7 @@ import {reconcile, MARKER} from './reconcile.mjs';
 import {tick, watch, releaseInterrupted, DEFAULT_LIMITS} from './scheduler.mjs';
 import {readIssuesFile, fetchIssues} from './issues.mjs';
 import {registerPrompt, authorizePrompt} from './prompt-intake.mjs';
+import {billingFromFlags} from '../../pantheon/src/route/quota-failover.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '../..');
@@ -361,7 +369,9 @@ export async function seatsOf(opts) {
   const unavailable = e => { const f = () => { throw Object.assign(new Error(`the live provider SDKs are not available here: ${e.message}`), {code: 'NO_PROVIDER_SDK'}); }; return f; };
   const orUnavailable = async build => { try { return await build(); } catch (e) { return unavailable(e); } };
   const makeClientFor = opts.clients ? await load(opts.clients) : await orUnavailable(async () => (await live()).liveClients());
-  const turn = opts.turn ? await load(opts.turn) : await orUnavailable(async () => (await live()).liveTurn({label: 'operate'}));
+  // An injected --turn module's Gemini API seats are admitted by the stage's billing policy too (register L-136;
+  // sdk/live.mjs billedTurnModule): the stage's context rides with every call.
+  const turn = opts.turn ? (await live()).billedTurnModule(await load(opts.turn)) : await orUnavailable(async () => (await live()).liveTurn({label: 'operate'}));
   if (typeof makeClientFor !== 'function' || typeof turn !== 'function') usage('--clients and --turn name modules whose default export is a function');
   return {makeClientFor, turn};
 }
@@ -390,6 +400,8 @@ export const tickSummary = (t, limits) => ({
   // What is blocked and why, not only how many (an attempt-identity collision or a structural block is named here).
   blockers: t.blocked.map(b => ({item: b.item, gate: b.gate, code: b.blocker?.code ?? null, what: String(b.blocker?.what ?? '').slice(0, 300)})), skipped: t.skipped,
   stopped: t.stopped, spent: t.spent, by_gate: t.reconcile.counts.by_gate, ...(t.scope ? {scope: t.scope} : {}),
+  // The Gemini billing policy the tick ran under, and the billed requests the work ledger records against it (L-136).
+  ...(t.billing ? {billing: t.billing} : {}),
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
 });
 
@@ -445,13 +457,16 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
     }
     if (verb === 'tick' || verb === 'watch') {
       const limits = limitsOf(opts);
+      // THE BILLING POLICY, resolved before anything is opened or dispatched: a malformed or unbudgeted flag is a usage
+      // error; no flag, both kinds off (never the environment's keys).
+      const billing = billingFromFlags(opts);
       let stop = null;
       const progress = e => { stop?.track(e); err(JSON.stringify(e)); };
       const prep = await prepareDispatch({paths, opts, limits, stagesFile, progress});
       if (prep.blocked) { log(JSON.stringify(prep.blocked, null, 2)); return 3; }
       const holder = opts.holder ?? 'controller';
       if (opts.item !== undefined && !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(opts.item)) usage('--item names one status item id');
-      const common = {repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, bundlesDir: paths.bundlesDir, executors: prep.executors, limits, holder, progress,
+      const common = {repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, bundlesDir: paths.bundlesDir, executors: prep.executors, limits, holder, progress, billing,
         ...(opts.item !== undefined ? {only: opts.item} : {})};
       if (verb === 'tick') {
         const {issues} = await loadIssues(opts, {fetchImpl, env});

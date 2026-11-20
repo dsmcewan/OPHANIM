@@ -21,12 +21,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, implementerPath, mayDelegate, REVIEW_INDEPENDENCE} from './stages.mjs';
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
 import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer} from '../../pantheon/src/route/frontier.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
+import {optInPolicy} from '../../pantheon/tests/fixtures/billing.mjs';
 import {reviewSeatsByModel} from '../../pantheon/src/ledger/review-cycle.mjs';
 import {SEATING} from '../../pantheon/src/role/seating.mjs';
 import {fixture, scriptedTurn, planFor, json, git, UNIT, unitApprove, unitReject, LIMITS} from './test-fixtures.mjs';
@@ -79,7 +80,7 @@ test('LIFECYCLE, default routing (fit): an item without a ticket and one with a 
     const f = fixture(repo, ITEMS.map(item => ({item})), {tickets: ['ticketed']});
     ctx.agyWorker(WORKER);
     const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, THREE))});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', seating: DECISION6_POOL});   // no profile: the default
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', seating: DECISION6_POOL});   // no profile: the default
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.equal(w.verify().ok, true);
@@ -237,7 +238,7 @@ test('LIFECYCLE, default routing (fit): a Stage 5 rejection raises the implement
     // revision it sees, so after two rejections the reviewer is raised; the next rung approves passing work.
     ctx.agyWorker(`case "$prompt" in *"${FINDING}"*) printf '%s %s@%s\\n' "$dir" "$model" "$effort" >> "$FAKE_AGY_LOG.told"; printf '// frozen: the importer reads it lazily\\nexport const ok = true;\\n' > "$dir/alpha.mjs" ;; *) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;; esac\n`);
     const turn = scriptedTurn({'unit-review': ({model, rubric, passed}) => JSON.stringify(model === 'gpt-6-luna' || !passed ? unitReject(rubric, [FINDING]) : unitApprove(rubric))});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.equal(w.verify().ok, true);
@@ -289,7 +290,7 @@ test('LIFECYCLE, default routing (fit): a write outside the unit\'s owned paths 
     // The worker does its unit AND rewrites the acceptance check so that anything passes.
     ctx.agyWorker('printf \'export const ok = true;\\n\' > "$dir/alpha.mjs"; printf \'// nothing to check\\n\' > "$dir/verify.mjs"\n');
     const turn = scriptedTurn();
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', pipelineLimits: {max_revisions: 1}});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model', pipelineLimits: {max_revisions: 1}});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     for (const item of ITEMS) {
@@ -315,38 +316,43 @@ test('LIFECYCLE, default routing (fit): a write outside the unit\'s owned paths 
   });
 });
 
-test('LIFECYCLE, default routing (fit): primary Gemini API execution is off by default; with the key present the implement stage is blocked by name before anything is asked of the provider, and runs once it is enabled, whatever the failover switch says', async () => {
-  // Owner decision 2026-11-19 (L-136): its own setting, gemini_api_primary, default off, independent of the failover
-  // switch; the presence of GEMINI_API_KEY never implies authorization to spend. The fixture puts a key in the environment.
+test('LIFECYCLE, default routing (fit): the SDK implementer is a primary Gemini seat of the billing policy; with nothing declared and the key present the implement stage is pending on GEMINI_PRIMARY_DISABLED before anything is asked of the provider, and it runs once the launcher declares it, whatever the failover setting says', async () => {
+  // Owner decision 2026-11-19 (L-136): gemini_api_primary is its own setting, default off, independent of the failover,
+  // and the presence of GEMINI_API_KEY never implies authorization to spend. The fixture puts a key in the environment.
+  // The launcher declares the policy on the tick (operate: --gemini-api-primary N); the executors take no such option.
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor} = ctx;
     assert.ok(process.env.GEMINI_API_KEY, 'the key is present');
     const f = fixture(repo, [{item: 'off'}, {item: 'failover-only'}, {item: 'on'}]);
-    const run = async (item, over) => {
-      const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir, ...over});
-      await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: item});
+    const run = async (item, billing) => {
+      const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir});
+      await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, only: item, billing});
       return openWorkLedger({root: f.workRoot}).stages(item);
     };
-    for (const [item, over] of [['off', {}], ['failover-only', {meteredFailover: true}]]) {
-      const stages = await run(item, over);
-      assert.deepEqual(stages.map(s => `${s.stage}:${s.status}`), ['plan:passed', 'implement:blocked'], item);
+    for (const [item, billing] of [['off', optInPolicy()], ['failover-only', optInPolicy({failover: 10})]]) {
+      const stages = await run(item, billing);
+      assert.deepEqual(stages.map(s => `${s.stage}:${s.status}`), ['plan:passed', 'implement:pending'], item);
       const impl = stages[1];
-      assert.equal(impl.blocker.code, 'IMPLEMENTER_TRANSPORT');
-      assert.deepEqual(impl.outputs.transport_blocker, {codes: ['GEMINI_API_PRIMARY_DISABLED'], units: ['alpha']});
-      assert.match(impl.blocker.what, /primary Gemini API execution is not enabled for this run \(gemini_api_primary, default off\)/);
-      assert.match(impl.blocker.resume_when, /primary Gemini API execution is enabled for the run \(gemini_api_primary\)/);
+      // PENDING on the policy's own refusal, transient, carrying the setting it was refused under (the scheduler wakes it
+      // when the launcher's policy changes); what the stage itself reported is kept beside it.
+      assert.deepEqual([impl.blocker.code, impl.blocker.transient, impl.blocker.billing.settings.primary], ['GEMINI_PRIMARY_DISABLED', true, {enabled: false, budget: null}], item);
+      assert.equal(impl.outputs.billing_refused.status_reported, 'blocked');
+      assert.equal(impl.outputs.billing_refused.blocker_reported.code, 'IMPLEMENTER_TRANSPORT');
+      assert.deepEqual(impl.outputs.transport_blocker, {codes: ['GEMINI_PRIMARY_DISABLED'], units: ['alpha']});
+      assert.match(impl.outputs.billing_refused.blocker_reported.what, /agy_google\/gemini-4-hydrogen \(implementer\) would be served by primary Gemini execution on the python Antigravity SDK seat .* and gemini_api_primary is off/);
+      assert.deepEqual(impl.usage.gemini.refusals.map(r => [r.kind, r.code, r.transport, r.provider_requests]), [['primary', 'GEMINI_PRIMARY_DISABLED', 'sdk', 0]]);
       assert.equal(recordOf(impl).provider_calls.by_role.implementer ?? 0, 0, 'nothing was charged for it');
     }
     assert.deepEqual(ctx.sdk(), [], 'no request reached the provider');
     assert.deepEqual(ctx.agy().filter(a => a.agent !== 'pantheon-reviewer'), [], 'and no agy CLI lane stood in for the implementer');
-    // Enabled, with the failover switch OFF: the implementer runs. The two are separate authorizations.
-    const on = await run('on', {geminiApiPrimary: true, meteredFailover: false});
+    // Declared, with the failover OFF: the implementer runs, and each of its billed requests is on the work ledger.
+    const on = await run('on', optInPolicy({primary: 50}));
     assert.deepEqual(on.map(s => `${s.stage}:${s.status}`), DONE);
     assert.deepEqual(ctx.sdk().map(x => [x.agent, x.unit]), [['sdk-implementer', 'alpha']]);
-    // The setting is true or false: a truthy value that is not `true` is not an authorization, and is not read as one.
-    for (const geminiApiPrimary of ['yes', 1, null]) {
-      assert.throws(() => makeExecutors({repo: ctx.dir, makeClientFor: ctx.makeClientFor, turn: scriptedTurn(), stateDir: ctx.dir, geminiApiPrimary}), /makeExecutors: geminiApiPrimary is true or false/, JSON.stringify(geminiApiPrimary));
-    }
+    const billed = openWorkLedger({root: f.workRoot}).billings('primary');
+    assert.deepEqual(billed.map(r => [r.kind, r.model, r.purpose, r.transport]), [['primary', 'gemini-4-hydrogen', 'implementer', 'sdk']], 'one billed request, recorded before it was sent');
+    // The executors take no setting of their own: the old option is refused, not ignored.
+    assert.throws(() => makeExecutors({repo: ctx.dir, makeClientFor: ctx.makeClientFor, turn: scriptedTurn(), stateDir: ctx.dir, geminiApiPrimary: true}), /geminiApiPrimary is replaced by the Gemini billing policy/);
   });
 });
 
@@ -356,7 +362,7 @@ test('LIFECYCLE, default routing (fit): a plan whose units overlap without an or
     const f = fixture(repo, [{item: 'fresh'}]);
     // Two units own alpha.mjs and neither depends on the other; the revision (which answers the finding) is one unit.
     const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, /## Findings to answer/.test(prompt) ? {} : {work_units: [UNIT('one'), UNIT('two')]}))});
-    const ex = makeExecutors({geminiApiPrimary: true, repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
+    const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir, independence: 'model'});
     for (let i = 0; i < 3; i++) await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'fresh'), ['plan:passed', 'implement:returned', ...DONE]);

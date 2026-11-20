@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import * as LR from './live-run.mjs';
 import {fixture, scriptedTurn, planFor, json, git, FIVE, SIX, LIMITS, stagesOf} from './test-fixtures.mjs';
@@ -19,7 +19,7 @@ import {digest} from '../../packages/ledger/canonical.mjs';
 const mkTmp = prefix => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 const APPROVE = '```json\n{"verdict":"approve","findings":[]}\n```';
 const manifestFor = ({root, f, item, head, name, limits, over = {}}) => LR.validateManifest({schema: LR.LIVE_RUN_SCHEMA, item, candidate_commit: head, profile: 'fit', independence: 'model',
-  limits, billing: {scope: 'test', gemini_api_primary: true, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
+  limits, billing: {scope: 'test', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
   credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
 const confirmed = (root, m, turn, d, extra = {}) => LR.runConfirmed({manifest: m, digest: 'sha256:' + d.repeat(64), file: path.join(root, `${d}.json`)}, {ok: true},
   LR.statusLedgerState(m.ledgers.status_root), LR.inspectWorkRoot(m.ledgers.work_root, m.item),
@@ -194,7 +194,7 @@ test('findings 3.3 and 9: validate runs its tests without blocking the event loo
     // allowlist -- a flag file in the fixture -- exists.
     const cmd = `[ -n "$OPERATE_SLOW_FLAG" ] && sleep 20; node verify.mjs`;
     const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, {acceptance: [{id: 'a1', criterion: 'alpha.mjs exports ok === true', test: {cmd}}]}))});
-    const ex = makeExecutors({geminiApiPrimary: true, independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
+    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     const {validate, ...upToReview} = ex;
     const r1 = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: upToReview, limits: LIMITS});
     assert.deepEqual(stagesOf(r1), ['plan:passed', 'implement:passed', 'review:passed'], JSON.stringify(r1.dispatched));
@@ -226,10 +226,10 @@ test('finding 6: a validator refused for quota with the metered failover off is 
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'q'}]);
     const turn = scriptedTurn({validator: () => { throw Object.assign(new Error('agy: 429 RESOURCE_EXHAUSTED'), {status: 429, code: 'quota_exhausted', quota_failover: {used: false, disabled: true, lanes: ['x']}}); }});
-    // Primary Gemini API execution is enabled (the fit implementer is an SDK session; off by default, its own test is
-    // in fit-lifecycle.test.mjs) and the metered failover is OFF: the two are separate. The validator's lane refusal
-    // with the failover off is what this test is about.
-    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', meteredFailover: false, geminiApiPrimary: true, ...SIX});
+    // The metered failover is not declared: off by default (register L-136). Primary Gemini execution is declared on the
+    // ticks (the fit implementer is an SDK session): the two are separate, and the validator's lane refusal with the
+    // failover off is what this test is about.
+    const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const val = openWorkLedger({root: f.workRoot}).stages('q').find(s => s.stage === 'validate');
     assert.ok(val, 'the item reached validate');

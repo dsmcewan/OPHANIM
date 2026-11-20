@@ -105,43 +105,60 @@ test("an operator reseat of the planner to agy_google reaches the CLI lane by de
   });
 });
 
-test("reviewer=agy_google still respects PANTHEON_AGY_TRANSPORT (defaults to SDK, unlike planner/implementer)", async () => {
-  const savedTransport = process.env.PANTHEON_AGY_TRANSPORT;
+// THE REVIEWER'S DEFAULT TRANSPORT IS THE SUBSCRIPTION CLI LANE (owner decision 2026-11-19, register L-136): it was the
+// python SDK seat, which is billed to GEMINI_API_KEY or Vertex on every turn. PANTHEON_AGY_TRANSPORT=sdk still selects
+// the SDK seat, and that seat is then primary Gemini execution, admitted only by gemini_api_primary.
+test("reviewer=agy_google respects PANTHEON_AGY_TRANSPORT: the CLI lane (subscription) by default, like planner/implementer; sdk only when asked, and then only with gemini_api_primary", async () => {
+  const savedTransport = process.env.PANTHEON_AGY_TRANSPORT, savedCli = process.env.PANTHEON_AGY_CLI, savedPython = process.env.PANTHEON_AGY_PYTHON;
   delete process.env.PANTHEON_AGY_TRANSPORT;
   try {
     await withTmp(async dir => {
+      // No real turn succeeds here -- the point is WHICH failure. The CLI and the venv python are pointed at paths that do
+      // not exist, so neither the REAL agy binary (a real OAuth session) nor a real SDK seat is ever started.
+      process.env.PANTHEON_AGY_CLI = join(dir, "no-such-agy");
+      process.env.PANTHEON_AGY_PYTHON = join(dir, "no-such-python");
       const spec = {
         key: "agyReviewerUnaffected", repo_root: dir, title: "fixture", goal: "fixture goal",
         slot: "note.txt", path: "note.txt", copy: [], tests_file: null,
         acceptance_cmd: "true", question: "fixture question",
       };
-      // No real turn succeeds here (no GEMINI_API_KEY, no venv python) -- the point is WHICH
-      // failure: an SDK-lane env/venv error proves reviewer still defaults to SDK, not CLI.
       // runOpenItem never throws (see tests/board-run-item.test.mjs's own pinned property, "never
       // calls process.exit and returns a result object") -- it resolves with an {ok, error} shape.
       const { runOpenItem } = await import(`../src/board/run-item.mjs?fixture=${Date.now()}`);
-      const { makeClientFor } = scriptedClients();
-      const result = await runOpenItem(spec, {
-        dir: join(dir, "board"),
-        makeClientFor,
-        scouts: ["xai"],
-        seatOverrides: {
-          // Both pinned off agy_google: planner and implementer now default to it unconditionally
-          // (agyTurn forces CLI for them), and with no PANTHEON_AGY_CLI fixture set here, an
-          // unoverridden one would spawn the REAL agy binary against a real OAuth session -- a
-          // live network call this unit test must never make. Only reviewer is under test.
-          planner: { vendor: "anthropic", model: "claude-fable-5-1", rank: 0, pool: "anthropic", band: null, basis: "OPERATOR", why: "keep this fixture scoped to reviewer" },
-          implementer: { vendor: "openai", model: "gpt-6-astra", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "keep this fixture scoped to reviewer" },
-          // A declared Gemini model: the board refuses an undeclared name on Antigravity before any lane (independent
-          // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
-          reviewer: { vendor: "agy_google", model: "gemini-3.8-flash", rank: 0, pool: "agy_google", band: null, basis: "OPERATOR", why: "test reseat" },
-        },
-      });
-      const sawSdkLaneFailure = /GEMINI_API_KEY|venv python absent/i.test(result.error?.message ?? "");
-      assert.equal(sawSdkLaneFailure, true,
-        `reviewer=agy_google with no PANTHEON_AGY_TRANSPORT set must still attempt the SDK lane, unlike planner/implementer -- got: ${JSON.stringify(result.error)}`);
+      const { optIn } = await import("./fixtures/billing.mjs");
+      const run = async (key, extra = {}) => {
+        const { makeClientFor } = scriptedClients();
+        return runOpenItem({ ...spec, key }, {
+          dir: join(dir, key),
+          makeClientFor,
+          scouts: ["xai"],
+          seatOverrides: {
+            // Both pinned off agy_google: planner and implementer default to it unconditionally (agyTurn forces CLI for
+            // them). Only reviewer is under test.
+            planner: { vendor: "anthropic", model: "claude-fable-5-1", rank: 0, pool: "anthropic", band: null, basis: "OPERATOR", why: "keep this fixture scoped to reviewer" },
+            implementer: { vendor: "openai", model: "gpt-6-astra", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "keep this fixture scoped to reviewer" },
+            // A declared Gemini model: the board refuses an undeclared name on Antigravity before any lane (independent
+            // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
+            reviewer: { vendor: "agy_google", model: "gemini-3.8-flash", rank: 0, pool: "agy_google", band: null, basis: "OPERATOR", why: "test reseat" },
+          },
+          ...extra,
+        });
+      };
+      // 1. No PANTHEON_AGY_TRANSPORT: the CLI lane is attempted (its absence is the failure), never the SDK seat.
+      const byDefault = await run("agyReviewerDefault");
+      assert.match(byDefault.error?.message ?? "", /CLI absent at .*no-such-agy/,
+        `reviewer=agy_google with no PANTHEON_AGY_TRANSPORT set must attempt the CLI lane -- got: ${JSON.stringify(byDefault.error)}`);
+      // 2. PANTHEON_AGY_TRANSPORT=sdk, nothing declared: the SDK seat is refused by the billing policy before its venv check.
+      process.env.PANTHEON_AGY_TRANSPORT = "sdk";
+      const refused = await run("agyReviewerSdkOff");
+      assert.equal(refused.error?.code, "GEMINI_PRIMARY_DISABLED", JSON.stringify(refused.error));
+      // 3. PANTHEON_AGY_TRANSPORT=sdk with gemini_api_primary declared: the SDK lane is attempted (its venv's absence).
+      const sdk = await run("agyReviewerSdkOn", { billing: optIn({ primary: 5 }) });
+      assert.match(sdk.error?.message ?? "", /venv python absent/i, `PANTHEON_AGY_TRANSPORT=sdk must attempt the SDK lane -- got: ${JSON.stringify(sdk.error)}`);
     });
   } finally {
     if (savedTransport === undefined) delete process.env.PANTHEON_AGY_TRANSPORT; else process.env.PANTHEON_AGY_TRANSPORT = savedTransport;
+    if (savedCli === undefined) delete process.env.PANTHEON_AGY_CLI; else process.env.PANTHEON_AGY_CLI = savedCli;
+    if (savedPython === undefined) delete process.env.PANTHEON_AGY_PYTHON; else process.env.PANTHEON_AGY_PYTHON = savedPython;
   }
 });

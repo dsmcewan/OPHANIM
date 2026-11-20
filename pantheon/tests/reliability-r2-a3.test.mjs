@@ -17,6 +17,8 @@ import { runPipeline } from "../src/pipeline/index.mjs";
 import { tempRepo, seats, unit, scripted, write, sh, PLANNER, RUBRIC, approve } from "./fixtures/pipeline-stages.mjs";
 import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { quotaEvidence } from "../src/agy/quota.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 // Child mode (finding 8.1): a run with a fixed directory and run_id that hangs in its first implementer turn until killed.
 if (process.argv[2] === "--r2a3-child-hang") {
@@ -49,18 +51,21 @@ test("finding 6: every agy_google seat of the seating table names a declared Ant
   assert.equal(seatTransport(google.vendor, google.model), "agy-cli");
 });
 
-test("finding 6: with the metered failover off, a Gemini seat with no lane is refused and the metered API is never called", async () => {
-  // independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6.
+test("finding 6 (split by L-136): a Gemini seat with no lane is PRIMARY Gemini API execution: refused unless gemini_api_primary admits it, whatever the failover switch says, and the metered API is never called", async () => {
+  // independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 6; owner decision
+  // 2026-11-19 (L-136): primary execution has its own setting, and the failover switch never authorizes it.
   let api = 0, lane = 0;
-  await assert.rejects(
-    laneFirstTurn({ vendor: "agy_google", model: "gemini-3.6-flash", prompt: "q" },
-      { lane: async () => { lane++; return { text: "x" }; }, api: async () => { api++; return { text: "x" }; }, failover: false }),
-    e => e.code === "AGY_NO_LANE" && /metered/.test(e.message));
+  for (const billing of [undefined, optIn({ failover: 100 })]) {
+    await assert.rejects(
+      laneFirstTurn({ vendor: "agy_google", model: "gemini-3.6-flash", prompt: "q", billing },
+        { lane: async () => { lane++; return { text: "x" }; }, api: async () => { api++; return { text: "x" }; } }),
+      e => e.code === "GEMINI_PRIMARY_DISABLED" && /gemini_api_primary is off/.test(e.message) && e.provider_requests === 0);
+  }
   assert.equal(api, 0);
   assert.equal(lane, 0);
-  // Failover on: the API seat is served as before; another lab's seat is untouched by the switch.
-  await laneFirstTurn({ vendor: "agy_google", model: "gemini-3.6-flash", prompt: "q" }, { lane: async () => ({}), api: async () => { api++; return { text: "x" }; }, failover: true });
-  await laneFirstTurn({ vendor: "xai", model: "grok-4.7", prompt: "q" }, { lane: async () => ({}), api: async () => { api++; return { text: "x" }; }, failover: false });
+  // Primary declared, with a budget: the API seat is served as before; another lab's seat is untouched by the policy.
+  await laneFirstTurn({ vendor: "agy_google", model: "gemini-3.6-flash", prompt: "q", billing: optIn({ primary: 100 }) }, { lane: async () => ({}), api: async () => { api++; return { text: "x" }; } });
+  await laneFirstTurn({ vendor: "xai", model: "grok-4.7", prompt: "q" }, { lane: async () => ({}), api: async () => { api++; return { text: "x" }; } });
   assert.equal(api, 2);
 });
 
@@ -100,7 +105,8 @@ test("finding 5.1: a quota refusal steps the implementer to the next rung on ANO
   // independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.1.
   const env = await tempRepo(); t.after(env.cleanup);
   const tried = [];
-  const turns = pipelineTurns({ turn: single, agy: { meteredFailover: false, probe: async () => ({ state: "exhausted", buckets: [] }),
+  // The metered failover is not declared: off by default (register L-136).
+  const turns = pipelineTurns({ turn: single, agy: { probe: async () => ({ state: "exhausted", buckets: [] }),
     run: async ({ model, worktree }) => {
       tried.push(model);
       if (model.startsWith("gemini-4-hydrogen")) throw Object.assign(new Error("429 RESOURCE_EXHAUSTED"), { status: 429, code: "quota_exhausted", quota: { matched: "RESOURCE_EXHAUSTED", explicit: true } });
@@ -129,7 +135,7 @@ test("finding 5.3: a metered-failover answer refused (API_FILES_REFUSED) steps t
   // independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 5.3.
   const env = await tempRepo(); t.after(env.cleanup);
   const tried = [];
-  const turns = pipelineTurns({ turn: single, agy: { meteredFailover: true, probe: async () => ({ state: "exhausted", buckets: [] }),
+  const turns = pipelineTurns({ turn: single, agy: { billing: optIn({ failover: 100 }), probe: async () => ({ state: "exhausted", buckets: [] }),
     run: async ({ model, worktree }) => {
       tried.push(model);
       if (model.startsWith("gemini-4-hydrogen")) throw Object.assign(new Error("429"), { status: 429, code: "quota_exhausted", quota: { matched: "429", explicit: true } });
@@ -159,7 +165,7 @@ test("finding 1.1: every Google continuation hop is a charged provider call, and
         usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, totalTokenCount: 120 } };
     })();
   } } });
-  const turns = () => pipelineTurns({ turn: single, makeClientFor, agy: { probe: async () => ({ state: "exhausted", buckets: [] }),
+  const turns = () => pipelineTurns({ turn: single, makeClientFor, agy: { billing: optIn({ failover: 100 }), probe: async () => ({ state: "exhausted", buckets: [] }),
     // The lane admits its session before its spawn, as runAgyWorkerTurn does (L-301), then is refused for quota.
     run: async ({ charge }) => { charge(); throw Object.assign(new Error("429 RESOURCE_EXHAUSTED"), { status: 429, code: "quota_exhausted", quota: { matched: "RESOURCE_EXHAUSTED", explicit: true } }); } } });
   const one = seats({ implementer: () => ({ seat: { ...EASY[2] }, ladder: [{ ...EASY[2] }] }) });

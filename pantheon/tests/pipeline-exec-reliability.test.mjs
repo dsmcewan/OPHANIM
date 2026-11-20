@@ -9,6 +9,8 @@ import { pipelineTurns } from "../src/pipeline/turns.mjs";
 import { git } from "../src/pipeline/git.mjs";
 import { sha256 } from "../src/pipeline/util.mjs";
 import { tempRepo, seats, unit, scripted, sh, PLANNER } from "./fixtures/pipeline-stages.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 const QUOTA = () => Object.assign(new Error("429 RESOURCE_EXHAUSTED"), { code: "quota_exhausted", status: 429, quota: { explicit: true, matched: "429" } });
 const API_FILES = JSON.stringify({ files: [{ path: "src/a/impl.mjs", content: "export const id = \"a\";\n" }] });
@@ -22,7 +24,7 @@ test("metered failover: the API call is charged on its own, before it is made, a
   const order = [];
   const turns = pipelineTurns({
     turn: async () => { throw new Error("no single-turn seat here"); },
-    agy: { meteredFailover: true, run: async () => { order.push("lane"); throw QUOTA(); },
+    agy: { billing: optIn({ failover: 100 }), run: async () => { order.push("lane"); throw QUOTA(); },
       probe: async () => ({ state: "exhausted", buckets: [], raw_digest: "sha256:" + "a".repeat(64), exit_code: 0 }),
       api: async () => { order.push("api"); return { text: API_FILES, served_model: "gemini-api" }; } },
   });

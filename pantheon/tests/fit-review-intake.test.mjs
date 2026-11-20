@@ -11,6 +11,8 @@ import { runOpenItem } from "../src/board/run-item.mjs";
 import { labOf } from "../src/config/models.mjs";
 import { documentedEfforts, documentedDefaultEffort } from "../src/route/protocol.mjs";
 import { withDispatch, WORK, seat } from "./fixtures/dispatch.mjs";
+// The metered failover is OFF by default (register L-136): the rows that exercise it opt in explicitly, with a budget.
+import { optIn } from "./fixtures/billing.mjs";
 
 const runJson = r => JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
 const REVIEW = /VERDICT/;
@@ -25,7 +27,7 @@ const SAME_LAB_PLANNER = { planner: seat("agy_google", "gemini-4-carbon-high") }
 
 test("fit, critical stakes: three reviewers from three distinct labs, none the maker's, all approving, then ship", async () => {
   await withDispatch(async ({ spec, opts, calls }) => {
-    const r = await runOpenItem(spec("fitCritical", { stakes: "critical" }), opts({ profile: "fit", seatOverrides: SAME_LAB_PLANNER }));
+    const r = await runOpenItem(spec("fitCritical", { stakes: "critical" }), opts({ profile: "fit", billing: optIn({ primary: 100 }), seatOverrides: SAME_LAB_PLANNER }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = runJson(r);
     const work = run.turns.find(t => t.purpose === "work");
@@ -53,7 +55,7 @@ test("fit, critical stakes: one of the three reviewers rejects, so the change is
   await withDispatch(async ({ spec, opts, review }) => {
     // The xai reviewer rejects; the other two approve.
     review(c => c.vendor === "xai" ? "The ticket's case is missing.\nVERDICT: request_changes" : null);
-    const r = await runOpenItem(spec("fitOneRejects", { stakes: "critical" }), opts({ profile: "fit", seatOverrides: SAME_LAB_PLANNER }));
+    const r = await runOpenItem(spec("fitOneRejects", { stakes: "critical" }), opts({ profile: "fit", billing: optIn({ primary: 100 }), seatOverrides: SAME_LAB_PLANNER }));
     assert.equal(r.shipped, false);
     const run = runJson(r);
     const critiques = run.turns.filter(t => t.purpose === "critique");
@@ -70,7 +72,7 @@ test("fit, critical stakes with too few eligible labs: a named pending state bef
     // The operator seats the planner on a reviewer lab (anthropic) and fit seats the maker on openai: the configured
     // in-run reviewer pool then offers only xai and google.
     const r = await runOpenItem(spec("fitTooFewLabs", { stakes: "critical" }),
-      opts({ profile: "fit", seatOverrides: { planner: seat("anthropic", "claude-fable-5-2") } }));
+      opts({ profile: "fit", billing: optIn({ primary: 100 }), seatOverrides: { planner: seat("anthropic", "claude-fable-5-2") } }));
     assert.equal(r.shipped, false);
     assert.equal(r.error?.stage, "work");
     assert.match(r.error.message, /REVIEW_CAPACITY_PENDING/);
@@ -83,7 +85,7 @@ test("fit, critical stakes with too few eligible labs: a named pending state bef
 
 test("fit, contested ambiguity: three intake scouts from three distinct labs, each chosen by the fit selector and recorded", async () => {
   await withDispatch(async ({ spec, opts, calls, agy }) => {
-    const r = await runOpenItem(spec("fitContested", { ambiguity: "contested" }), opts({ profile: "fit" }));
+    const r = await runOpenItem(spec("fitContested", { ambiguity: "contested" }), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = runJson(r);
     const scouts = run.turns.filter(t => t.purpose === "scout");
@@ -107,7 +109,7 @@ test("fit, contested ambiguity: three intake scouts from three distinct labs, ea
 
 test("fit, settled ambiguity: explorer width 0 means no explorer stage", async () => {
   await withDispatch(async ({ spec, opts, calls }) => {
-    const r = await runOpenItem(spec("fitSettled", { ambiguity: "settled" }), opts({ profile: "fit" }));
+    const r = await runOpenItem(spec("fitSettled", { ambiguity: "settled" }), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = runJson(r);
     assert.equal(run.turns.filter(t => t.purpose === "scout").length, 0);
@@ -145,7 +147,7 @@ test("fit: when a fallback answered, the effort escalation starts from the ANSWE
     fault(c => (c.vendor === "openai" && WORK.test(c.prompt) ? { error: quota() } : null));
     implement(p => /FAILED the executed acceptance/.test(p) ? "export const ok = true; // fixed\n" : "export const ok = true;\n");
     const r = await runOpenItem(spec("fitFallbackEffort", { acceptance_cmd: "grep -q fixed code.mjs", slot: undefined, path: undefined, slots: [{ slot: "code", path: "code.mjs", model: "gpt-6-astra" }] }),
-      opts({ profile: "fit", seatOverrides: { implementer: seat("anthropic", "claude-fable-5-2") } }));
+      opts({ profile: "fit", billing: optIn({ primary: 100 }), seatOverrides: { implementer: seat("anthropic", "claude-fable-5-2") } }));
     const run = runJson(r);
     const work = run.turns.filter(t => t.purpose === "work");
     assert.equal(work[0].model, "claude-fable-5-2", `a fallback answered the first revision (${JSON.stringify(r.error)})`);
@@ -171,7 +173,7 @@ test("fit, critical stakes with NO overrides: producers are chosen on their own 
   // Owner control contract: do not force title/file workers onto one vendor to manufacture a numeric review
   // panel. fit's own planner (anthropic) and maker (openai) leave two in-run reviewer labs; the run is pending.
   await withDispatch(async ({ spec, opts, calls }) => {
-    const r = await runOpenItem(spec("fitCriticalDefault", { stakes: "critical" }), opts({ profile: "fit" }));
+    const r = await runOpenItem(spec("fitCriticalDefault", { stakes: "critical" }), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, false);
     assert.match(r.error.message, /REVIEW_CAPACITY_PENDING/);
     const run = runJson(r);
@@ -184,7 +186,7 @@ test("fit, critical stakes with NO overrides: producers are chosen on their own 
 
 test("fit, high stakes with NO overrides: at most one producer takes a reviewer lab, so two independent labs review", async () => {
   await withDispatch(async ({ spec, opts }) => {
-    const r = await runOpenItem(spec("fitHighDefault", { stakes: "high" }), opts({ profile: "fit" }));
+    const r = await runOpenItem(spec("fitHighDefault", { stakes: "high" }), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = runJson(r);
     const critiques = run.turns.filter(t => t.purpose === "critique");
