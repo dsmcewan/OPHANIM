@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseIndex, captureLab, changes, readPage, CLIENT } from "../src/vendor-docs/capture.mjs";
+import { parseIndex, captureLab, changes, readPage, plain, CLIENT } from "../src/vendor-docs/capture.mjs";
 
 const sha = s => createHash("sha256").update(s).digest("hex");
 const LAB = { hosts: ["docs.lab.test"], indexes: ["https://docs.lab.test/llms.txt"] };
@@ -396,4 +396,31 @@ test("A PAGE THAT IS WRITTEN ONCE FOR EACH SDK IS CAPTURED IN EACH FORM: the for
     "https://docs.lab.test/api/llms.txt": { body: API + "- [Create, for ts](https://docs.lab.test/reference/ts/create.md)\n", type: "text/plain" } }).fetch, now: NOW, sleep: async () => {}, retries: 0 });
   assert.equal(again.pages.some(p => p.url.includes("/reference/ts/ts/")), false, "a page that is already one SDK's form has no forms of its own");
   assert.equal(byUrl(again, "https://docs.lab.test/reference/ts/create.md").index, "https://docs.lab.test/api/llms.txt", "a form the index lists keeps its listing");
+});
+
+test("A PART OF A LAB'S SITE THAT HAS NO INDEX IS READ FROM ITS SITEMAP: every address the sitemap gives under the named part is captured, as the web page it is, titled by the page itself", async t => {
+  const post = "<!doctype html><html><head><title>Writing tools for agents &amp; more | Lab</title><style>p{color:red}</style></head><body><nav>News</nav><script>track()</script><h1>Writing tools</h1><p>Give a tool&nbsp;one job.</p><p>Name it &lt;plainly&gt;.</p></body></html>";
+  const pages = { ...PAGES,
+    "https://docs.lab.test/sitemap.xml": { body: `<?xml version="1.0"?><urlset><url><loc>https://docs.lab.test/posts/writing-tools</loc></url><url><loc> https://docs.lab.test/posts/gone </loc></url>
+      <url><loc>https://docs.lab.test/models/one</loc></url><url><loc>https://docs.lab.test/news/launch</loc></url><url><loc>https://elsewhere.test/posts/x</loc></url></urlset>`, type: "application/xml" },
+    "https://docs.lab.test/posts/writing-tools": { body: post, type: "text/html; charset=utf-8" } };
+  const def = { ...LAB, sitemaps: [{ url: "https://docs.lab.test/sitemap.xml", include: "/(posts|models)/", section: "Posts" }] };
+  const s = site(pages), dir = store(t);
+  const manifest = await captureLab({ lab: "lab", def, store: dir, fetch: s.fetch, now: NOW, sleep: async () => {}, retries: 0 });
+  const got = byUrl(manifest, "https://docs.lab.test/posts/writing-tools"), gone = byUrl(manifest, "https://docs.lab.test/posts/gone");
+  assert.deepEqual({ status: got.status, section: got.section, title: got.title, from: got.derived_from, index: got.index, type: got.type, sha256: got.sha256 },
+    { status: "captured", section: "Posts", title: "Writing tools for agents & more | Lab", from: "https://docs.lab.test/sitemap.xml", index: null, type: "text/html; charset=utf-8", sha256: sha(post) });
+  assert.deepEqual([gone.status, gone.why], ["failed", "HTTP 404"], "an address the sitemap gives that does not answer is a failure, as a listed page's is");
+  assert.deepEqual(s.asked.map(a => a.url).filter(u => /news\/launch|elsewhere\.test|models\/one$/.test(u)), [],
+    "an address outside the named part, on another site, or of a page the index already supplied is not asked for");
+  assert.deepEqual(manifest.indexes.map(i => i.url), ["https://docs.lab.test/llms.txt", "https://docs.lab.test/api/llms.txt", "https://docs.lab.test/sitemap.xml"]);
+  assert.equal(readPage({ store: dir, lab: "lab", url: got.url }), post, "the page is kept as it was served");
+  await assert.rejects(captureLab({ lab: "lab", def, store: store(t), fetch: site().fetch, now: NOW, sleep: async () => {}, retries: 0 }),
+    { code: "VENDOR_SITEMAP_UNREADABLE", message: /https:\/\/docs\.lab\.test\/sitemap\.xml: HTTP 404/ });
+});
+
+test("a web page is shown as its words: scripts and styles are dropped, markup becomes line breaks, and the characters it escapes are restored", () => {
+  assert.equal(plain("<html><head><title>T</title><style>p{color:red}</style></head><body><script>track('<p>')</script><h1>Writing tools</h1>\n\n<p>Give a tool&nbsp;one job.</p><p>Name it &lt;plainly&gt; &amp; well &#8212; &#x2014;.</p></body></html>"),
+    "T\nWriting tools\nGive a tool one job.\nName it <plainly> & well \u2014 \u2014.\n");
+  assert.equal(plain("# Already markdown\n\nNo markup here.\n"), "# Already markdown\n\nNo markup here.\n", "text that is not a web page is left as it is");
 });

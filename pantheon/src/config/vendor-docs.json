@@ -1,6 +1,6 @@
 {
   "schema": "pantheon.vendor-docs/v1",
-  "note": "Where each lab publishes its own documentation index (the llms.txt form: every page listed, each available as markdown). `hosts` are the only hosts a capture may ask: a listed link elsewhere is recorded and not read. These are documentation sites, not API hosts, and no key is sent to them (src/vendor-docs/capture.mjs). `models` says where a lab's per-model pages are found when its index does not list them: the links of a listing page that match `link`, and the page (`page`, with {name}) of each name the `names` patterns find in it. `server` names a lab's own documentation server (the MCP form over HTTP): the tool that lists the documents it holds, the tool that returns one, and the lab's sites its documents may be on. The labs' servers list differently, and `shape` says how: `hits` (a page of results at a time, the default), `names` (every page's name at once; `page` makes a name an address, and `fetch_with` names the argument a page is asked for with), or `paths` (the navigation as text, a line per page). It is asked at its own address, which is on `hosts`, for what the index did not supply; the other sites are never asked directly. `variants` names a section whose pages the lab also writes once for each SDK: the form for an SDK is at the page's address with the SDK's name put in after `from`.",
+  "note": "Where each lab publishes its own documentation index (the llms.txt form: every page listed, each available as markdown). `hosts` are the only hosts a capture may ask: a listed link elsewhere is recorded and not read. These are documentation sites, not API hosts, and no key is sent to them (src/vendor-docs/capture.mjs). `models` says where a lab's per-model pages are found when its index does not list them: the links of a listing page that match `link`, and the page (`page`, with {name}) of each name the `names` patterns find in it. `server` names a lab's own documentation server (the MCP form over HTTP): the tool that lists the documents it holds, the tool that returns one, and the lab's sites its documents may be on. The labs' servers list differently, and `shape` says how: `hits` (a page of results at a time, the default), `names` (every page's name at once; `page` makes a name an address, and `fetch_with` names the argument a page is asked for with), or `paths` (the navigation as text, a line per page). It is asked at its own address, which is on `hosts`, for what the index did not supply; the other sites are never asked directly. `variants` names a section whose pages the lab also writes once for each SDK: the form for an SDK is at the page's address with the SDK's name put in after `from`. `sitemaps` names a part of a lab's site that has no index: every address the sitemap gives that matches `include` is captured as the web page it is.",
   "labs": {
     "openai": {
       "hosts": [
@@ -63,10 +63,13 @@
     },
     "anthropic": {
       "hosts": [
-        "platform.claude.com"
+        "platform.claude.com",
+        "code.claude.com",
+        "www.anthropic.com"
       ],
       "indexes": [
-        "https://platform.claude.com/llms.txt"
+        "https://platform.claude.com/llms.txt",
+        "https://code.claude.com/docs/llms.txt"
       ],
       "server": {
         "url": "https://platform.claude.com/docs/mcp",
@@ -91,7 +94,14 @@
           "php",
           "cli"
         ]
-      }
+      },
+      "sitemaps": [
+        {
+          "url": "https://www.anthropic.com/sitemap.xml",
+          "include": "^https://www\\.anthropic\\.com/(engineering|research)(/|$)",
+          "section": "Engineering and research"
+        }
+      ]
     }
   }
 }

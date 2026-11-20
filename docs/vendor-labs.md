@@ -11,7 +11,7 @@ Every title, description and figure below is the lab's own, read from its docume
 | openai | 2026-11-20 | 1642 | 1474 | Documentation (638), Guides (233), Resources (203), Models (111), Showcase projects (93), Guide (56), Examples (48), Posts (36), and 64 more |
 | xai | 2026-11-20 | 266 | 264 | API (84), Grok Bot (32), Cookbook (28), The X Subscription (27), Grok Build (24), API Reference (22), Grok (15), (no section) (14), and 3 more |
 | google | 2026-11-20 | 390 | 387 | Models (114), API reference — Platform APIs (88), API reference — Agent APIs (34), Resources (26), Guides (23), Core capabilities (22), API reference — Core APIs (17), Tools (15), and 9 more |
-| anthropic | 2026-11-20 | 5571 | 5571 | API Reference (581), API Reference (cli) (581), API Reference (csharp) (581), API Reference (go) (581), API Reference (java) (581), API Reference (php) (581), API Reference (python) (581), API Reference (ruby) (581), and 12 more |
+| anthropic | 2026-11-20 | 6009 | 6008 | API Reference (581), API Reference (cli) (581), API Reference (csharp) (581), API Reference (go) (581), API Reference (java) (581), API Reference (php) (581), API Reference (python) (581), API Reference (ruby) (581), and 63 more |
 
 ## Where each lab documents each capability
 

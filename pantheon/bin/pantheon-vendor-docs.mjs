@@ -4,7 +4,7 @@
 //   pantheon-vendor-docs capture [--lab <lab>]... [--store <dir>] [--concurrency <n>]
 //   pantheon-vendor-docs models  [--lab <lab>]... [--store <dir>] [--offline] [--write] [--max-age <days>] [--all]
 //   pantheon-vendor-docs reference [--store <dir>] [--offline] [--write]
-//   pantheon-vendor-docs find <lab> <word>...      pantheon-vendor-docs show <lab> <address>
+//   pantheon-vendor-docs find <lab> <word>...      pantheon-vendor-docs show <lab> <address> [--raw]
 //
 // `capture` reads every page each lab lists. `models` captures (unless --offline, which uses the last capture), reads every
 // model page, and compares the result with the catalogue kept in the repository, the registry and the recorded capability
@@ -20,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureLab, changes, readManifest, readPage } from "../src/vendor-docs/capture.mjs";
+import { captureLab, changes, readManifest, readPage, plain } from "../src/vendor-docs/capture.mjs";
 import { reference, referenceChanges, render, find } from "../src/vendor-docs/reference.mjs";
 import { catalogue, keep } from "../src/vendor-docs/models.mjs";
 import { check } from "../src/vendor-docs/check.mjs";
@@ -39,7 +39,7 @@ function parse(argv) {
   const whole = (flag, value, min, max) => { const n = Number(value); if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${flag} is a whole number from ${min} to ${max}`); return n; };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag === "--offline" || flag === "--write" || flag === "--all") { a[flag.slice(2)] = true; continue; }
+    if (flag === "--offline" || flag === "--write" || flag === "--all" || flag === "--raw") { a[flag.slice(2)] = true; continue; }
     if (!flag.startsWith("--")) { a.words.push(flag); continue; }
     const value = argv[++i];
     if (value === undefined) throw new Error(`${flag} needs a value`);
@@ -140,7 +140,8 @@ function lookup(a) {
   }
   const text = words.length === 1 ? readPage({ store: a.store, lab, url: words[0], manifest }) : null;
   if (text === null) throw new Error(`show needs one address of a captured page of ${lab} (find lists them)`);
-  process.stdout.write(text);
+  // A web page is shown as its words; --raw prints it as it was served.
+  process.stdout.write(a.raw ? text : plain(text));
   return 0;
 }
 

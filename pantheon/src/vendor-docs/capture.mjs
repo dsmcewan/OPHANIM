@@ -28,6 +28,17 @@ const INDEX_BYTES = 4_000_000;
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
+const ENTITIES = { nbsp: " ", lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+const unescape = s => s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (all, dec, hex, name) =>
+  dec ? String.fromCodePoint(Number(dec)) : hex ? String.fromCodePoint(parseInt(hex, 16)) : ENTITIES[name.toLowerCase()] ?? all);
+
+/** A web page as its words, for reading: scripts and styles dropped, markup as line breaks. Other text is left as it is. */
+export function plain(text) {
+  if (!/<html[\s>]|<!doctype html/i.test(String(text).slice(0, 2000))) return text;
+  const words = String(text).replace(/<(script|style|noscript|svg)\b[\s\S]*?<\/\1\s*>/gi, "\n").replace(/<[^>]+>/g, "\n");
+  return unescape(words).split(/\r?\n/).map(l => l.trim()).filter(Boolean).join("\n") + "\n";
+}
+
 /** The titled links of an index (the `llms.txt` form): [{section, title, url, description}], in the index's order. */
 export function parseIndex(text, base) {
   const entries = [];
@@ -197,8 +208,32 @@ export async function captureLab({ lab, def, store, fetch = globalThis.fetch, no
     const digest = sha256(got.bytes);
     if (!existsSync(join(blobs, digest))) writeFileSync(join(blobs, digest), got.bytes);
     Object.assign(page, { status: "captured", sha256: digest, bytes: got.bytes.length, type: got.type, read: now(), ...(got.final !== page.url ? { final: got.final } : {}) });
+    // A page nothing titled (it came from a sitemap or a derived address) is titled by itself where it is a web page.
+    if (!page.title && /html/i.test(got.type ?? "")) {
+      const title = /<title[^>]*>([^<]+)<\/title>/i.exec(got.bytes.toString("utf8"));
+      if (title) page.title = unescape(title[1]).trim();
+    }
   };
   await pool([...listed.values()].filter(p => !p.status), concurrency, read);
+  // A part of a lab's site with no index of its own (a lab's engineering posts) is read from the site's sitemap: every
+  // address it gives under the named part, as the web page it is. A sitemap that cannot be read is an error, for the
+  // reason an index is.
+  for (const map of def.sitemaps ?? []) {
+    const got = await get(map.url, io);
+    if (!got.ok) throw fail("VENDOR_SITEMAP_UNREADABLE", `${lab}: the sitemap ${map.url}: ${got.why}`);
+    indexes.push({ url: map.url, status: "captured", sha256: sha256(got.bytes), bytes: got.bytes.length, read: now() });
+    const include = new RegExp(map.include), held = new Set([...listed.keys()].map(same)), found = [];
+    for (const m of got.bytes.toString("utf8").matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)) {
+      const url = unescape(m[1]);
+      let key;
+      try { key = same(url); } catch { continue; }
+      if (!include.test(url) || held.has(key) || classify(url, def).kind !== "page") continue;
+      held.add(key);
+      const entry = { section: map.section ?? "Sitemap", title: null, url, description: null, index: null, derived_from: map.url };
+      listed.set(url, entry); found.push(entry);
+    }
+    await pool(found, concurrency, read);
+  }
   // One lab writes each page of its API reference once for each SDK, at an address made from the page's own, and lists
   // only one form in its index. The other forms are asked for from each captured page of that section. A form that does
   // not exist (not every page has every form) is recorded as absent: it is not a page that failed.

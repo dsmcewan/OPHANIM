@@ -1040,15 +1040,23 @@
    }
   },
   "anthropic": {
-   "read": "2026-11-20T08:03:05.411Z",
+   "read": "2026-11-20T08:10:06.141Z",
    "pages": {
-    "listed": 5571,
-    "captured": 5571
+    "listed": 6009,
+    "captured": 6008
    },
    "indexes": [
     {
      "url": "https://platform.claude.com/llms.txt",
      "sha256": "b53485b5d9f5ca77c069e19b2ac2a0633b04757d3af2d325de91c80eedc27882"
+    },
+    {
+     "url": "https://code.claude.com/docs/llms.txt",
+     "sha256": "468a11b1c1889729b23ace48a74eaf1cd2e720eac14709ca02b750a34db6e272"
+    },
+    {
+     "url": "https://www.anthropic.com/sitemap.xml",
+     "sha256": "faa8a6fbe910e327db920cfb2a43192128c4f215214ea7b2abea4ecb82d3e8ea"
     }
    ],
    "sections": [
@@ -1089,6 +1097,10 @@
      "pages": 581
     },
     {
+     "section": "Engineering and research",
+     "pages": 222
+    },
+    {
      "section": "Messages",
      "pages": 99
     },
@@ -1117,6 +1129,178 @@
      "pages": 13
     },
     {
+     "section": "Deployment",
+     "pages": 12
+    },
+    {
+     "section": "Indexes",
+     "pages": 11
+    },
+    {
+     "section": "Reference",
+     "pages": 11
+    },
+    {
+     "section": "Platforms and integrations",
+     "pages": 10
+    },
+    {
+     "section": "Core concepts",
+     "pages": 9
+    },
+    {
+     "section": "Agents and parallel work",
+     "pages": 7
+    },
+    {
+     "section": "Create plugins",
+     "pages": 7
+    },
+    {
+     "section": "Self-hosted environments",
+     "pages": 7
+    },
+    {
+     "section": "Setup and access",
+     "pages": 7
+    },
+    {
+     "section": "Automation",
+     "pages": 6
+    },
+    {
+     "section": "Claude Code on desktop",
+     "pages": 6
+    },
+    {
+     "section": "Claude apps gateway",
+     "pages": 6
+    },
+    {
+     "section": "Code Review",
+     "pages": 6
+    },
+    {
+     "section": "Control and observability",
+     "pages": 6
+    },
+    {
+     "section": "Interface",
+     "pages": 6
+    },
+    {
+     "section": "Troubleshooting",
+     "pages": 6
+    },
+    {
+     "section": "Model and responses",
+     "pages": 5
+    },
+    {
+     "section": "Permissions and sandboxing",
+     "pages": 5
+    },
+    {
+     "section": "Use Claude Code",
+     "pages": 5
+    },
+    {
+     "section": "Agent SDK",
+     "pages": 4
+    },
+    {
+     "section": "Build",
+     "pages": 4
+    },
+    {
+     "section": "Extend with tools",
+     "pages": 4
+    },
+    {
+     "section": "Input and output",
+     "pages": 4
+    },
+    {
+     "section": "Other gateways",
+     "pages": 4
+    },
+    {
+     "section": "Security and data",
+     "pages": 4
+    },
+    {
+     "section": "Use plugins",
+     "pages": 4
+    },
+    {
+     "section": "Claude Code in the cloud",
+     "pages": 3
+    },
+    {
+     "section": "Code review and pull requests",
+     "pages": 3
+    },
+    {
+     "section": "Customize behavior",
+     "pages": 3
+    },
+    {
+     "section": "Getting started",
+     "pages": 3
+    },
+    {
+     "section": "Mods",
+     "pages": 3
+    },
+    {
+     "section": "Run Claude in your own CI",
+     "pages": 3
+    },
+    {
+     "section": "Run a marketplace",
+     "pages": 3
+    },
+    {
+     "section": "SDK references",
+     "pages": 3
+    },
+    {
+     "section": "Settings",
+     "pages": 3
+    },
+    {
+     "section": "Usage and costs",
+     "pages": 3
+    },
+    {
+     "section": "Adoption",
+     "pages": 2
+    },
+    {
+     "section": "Build agents",
+     "pages": 2
+    },
+    {
+     "section": "MCP",
+     "pages": 2
+    },
+    {
+     "section": "Manage plugins for your organization",
+     "pages": 2
+    },
+    {
+     "section": "Security scans",
+     "pages": 2
+    },
+    {
+     "section": "Test and troubleshoot",
+     "pages": 2
+    },
+    {
+     "section": "Artifacts",
+     "pages": 1
+    },
+    {
      "section": "Claude API skill",
      "pages": 1
     },
@@ -1125,11 +1309,39 @@
      "pages": 1
     },
     {
+     "section": "Environments",
+     "pages": 1
+    },
+    {
+     "section": "Gateways",
+     "pages": 1
+    },
+    {
+     "section": "Glossary",
+     "pages": 1
+    },
+    {
+     "section": "Guides",
+     "pages": 1
+    },
+    {
      "section": "Other pages",
      "pages": 1
     },
     {
+     "section": "Plugins",
+     "pages": 1
+    },
+    {
      "section": "Release notes",
+     "pages": 1
+    },
+    {
+     "section": "Resources",
+     "pages": 1
+    },
+    {
+     "section": "Skills",
      "pages": 1
     }
    ],
