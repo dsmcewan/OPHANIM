@@ -206,7 +206,7 @@ export function projectTranscript(text, vendor) {
 // always empty here because the names are unreadable, NOT because no tools ran.
 export function projectAgyDb(path, { sqlite: Sqlite = null } = {}) {
   const DatabaseSync = Sqlite ?? sqlite();
-  const db = new sqlite(path, { readOnly: true });
+  const db = new DatabaseSync(path, { readOnly: true });
   try {
     const rows = db.prepare("SELECT idx, step_type, step_payload FROM steps ORDER BY idx").all();
     return rows.map(r => {
