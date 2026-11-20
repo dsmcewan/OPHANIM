@@ -193,7 +193,7 @@ test("MODEL PAGES THE INDEX DOES NOT LIST ARE FOUND FROM THE LAB'S MODEL LISTING
     "https://docs.lab.test/models/lab-4.5.md": { body: "# Model 4.5\n", type: "text/markdown" },
     "https://docs.lab.test/models/lab-seven.md": { body: "# Seven\n", type: "text/markdown" },
   };
-  const def = { ...LAB, models: { listings: ["https://docs.lab.test/models/all.md"], link: "^https://docs\\.lab\\.test/models/(?!all\\.md$|compare\\.md$)[^/?#]+\\.md$",
+  const def = { ...LAB, models: { listings: ["https://docs.lab.test/models/all.md"], link: "/models/(?!all\\.md$|compare\\.md$)[^/?#]+\\.md$",
     names: ["^\\|\\s*(lab-[a-z0-9-]+)", "\\((lab-[a-z0-9-]+)\\)"], page: "https://docs.lab.test/models/{name}.md" } };
   const s = site(pages), dir = store(t);
   const manifest = await captureLab({ lab: "lab", def, store: dir, fetch: s.fetch, now: NOW, sleep: async () => {}, retries: 0 });

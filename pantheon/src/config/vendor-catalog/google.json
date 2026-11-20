@@ -1,0 +1,2259 @@
+{
+ "schema": "pantheon.vendor-catalog/v1",
+ "lab": "google",
+ "read": "2026-11-20T07:08:14.078Z",
+ "models": {
+  "antigravity-preview-05-2026": {
+   "first_seen": "2026-11-20",
+   "name": "Antigravity preview",
+   "page": "https://aistudio.google.com/docs/models/antigravity-preview-05-2026.md",
+   "sha256": "0691906d76d6166af9d316f58913865b79ab967cff063fdc22a20d55ec041127",
+   "status": {
+    "value": "deprecated",
+    "quote": "`antigravity-preview-05-2026` is [deprecated](/docs/deprecations#managed-agents) and will be shut down on October 5, 2026. Migrate to [`antigravity-preview-09-2026`](/docs/models/antigravity-preview-09-2026)."
+   },
+   "aliases": [],
+   "facts": {}
+  },
+  "antigravity-preview-09-2026": {
+   "first_seen": "2026-11-20",
+   "name": "Antigravity preview",
+   "page": "https://aistudio.google.com/docs/models/antigravity-preview-09-2026.md",
+   "sha256": "62f4dcb42010828cd20570f838f00a1c166c09a525784b987fdb8508f1c900ac",
+   "aliases": [],
+   "facts": {}
+  },
+  "deep-research-max-preview-04-2026": {
+   "first_seen": "2026-11-20",
+   "name": "Deep Research Max preview",
+   "page": "https://aistudio.google.com/docs/models/deep-research-max-preview-04-2026.md",
+   "sha256": "fdaa84deb61e3483c0783eba947b82dd33f82192039241b39a2f7213c2d718ae",
+   "aliases": [],
+   "facts": {}
+  },
+  "deep-research-preview-04-2026": {
+   "first_seen": "2026-11-20",
+   "name": "Deep Research preview",
+   "page": "https://aistudio.google.com/docs/models/deep-research-preview-04-2026.md",
+   "sha256": "378b4f3843f4034fcd949f57a441e3848d1fa1a410b118e35bce9dbb34da2d52",
+   "aliases": [],
+   "facts": {}
+  },
+  "deep-research-pro-preview-12-2025": {
+   "first_seen": "2026-11-20",
+   "name": "Deep Research Pro preview",
+   "page": "https://aistudio.google.com/docs/models/deep-research-pro-preview-12-2025.md",
+   "sha256": "931451c67f71d8dd218adf371b6c9534988d9737e2d5adad188ab9d9efd2409e",
+   "status": {
+    "value": "deprecated",
+    "quote": "`deep-research-pro-preview-12-2025` is [deprecated](/docs/deprecations#managed-agents) and will be shut down on October 23, 2026. Migrate to [`deep-research-preview-04-2026`](/docs/models/deep-research-preview-04-2026) or [`deep-research-max-preview-04-2026`](/docs/models/deep-research-max-preview-04-2026)."
+   },
+   "aliases": [],
+   "facts": {}
+  },
+  "gemini-2.0-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.0 Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.0-flash.md",
+   "sha256": "8974fc1509dc33c227e8b8d6555811582d95f0dad5e3d84edd9706bbdc0bfa7f",
+   "status": {
+    "value": "shut down",
+    "quote": "*   *Shut down*: `gemini-2.0-flash`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 8192,
+     "quote": "**Output token limit** 8,192"
+    },
+    "input": {
+     "value": "Audio, images, video, and text",
+     "quote": "**Inputs**\n    Audio, images, video, and text"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output**\n    Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.0-flash-lite": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.0 Flash-Lite",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.0-flash-lite.md",
+   "sha256": "0b9626f46f5165ca7487a8cf0887526c1d6d93d529b4797618db398cbecce524",
+   "status": {
+    "value": "shut down",
+    "quote": "*   *Shut down*: `gemini-2.0-flash-lite`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 8192,
+     "quote": "**Output token limit** 8,192"
+    },
+    "input": {
+     "value": "Audio, images, video, and text",
+     "quote": "**Inputs** Audio, images, video, and text"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Context caching": "Supported",
+     "File search": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-computer-use-preview-10-2025": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 computer use model",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-computer-use-preview-10-2025.md",
+   "sha256": "510bad2eb364a3eaa9a4b0dbfb30958ffcc4cc547e74cf408c1213932fd59855",
+   "status": {
+    "value": "shut down",
+    "quote": "Shut down: `gemini-2.5-computer-use-preview-10-2025`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 128000,
+     "quote": "**Input token limit**\n    128,000"
+    },
+    "max_output": {
+     "value": 64000,
+     "quote": "**Output token limit**\n    64,000"
+    },
+    "input": {
+     "value": "Image, text",
+     "quote": "**Input**\n    Image, text"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output**\n    Text"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash.md",
+   "sha256": "ebbac7c911885a35d6613da1d40ca8cb75864d6a7056fecb69b7f82251239eda",
+   "status": {
+    "value": "deprecated",
+    "quote": "*   Deprecated: `gemini-2.5-flash` (effective December 1, 2026, automatically routed to `gemini-3.5-flash-lite`)"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, images, video, audio",
+     "quote": "**Inputs** Text, images, video, audio"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash-image": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash image (Nano Banana)",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash-image.md",
+   "sha256": "74de80421698230f01f2401bb7bd292a4866722ea437b8cf9d89abc2289c0725",
+   "facts": {
+    "context_window": {
+     "value": 65536,
+     "quote": "**Input token limit** 65,536"
+    },
+    "max_output": {
+     "value": 32768,
+     "quote": "**Output token limit** 32,768"
+    },
+    "input": {
+     "value": "Image and Text",
+     "quote": "**Inputs** Image and Text"
+    },
+    "output": {
+     "value": "Image and Text",
+     "quote": "**Output** Image and Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash-lite": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash-Lite",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash-lite.md",
+   "sha256": "685ff40fe6654c6f371c3fa10b5417f3e19245e1571d9a931429afe98ba1bc5c",
+   "status": {
+    "value": "deprecated",
+    "quote": "is not deprecated and will continue to be served until further notice through"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, image, video, audio, PDF",
+     "quote": "**Inputs** Text, image, video, audio, PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash-lite-preview-09-2025": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash-Lite preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash-lite-preview-09-2025.md",
+   "sha256": "177ba81cbc74a7b372ab2afdaa086f2b5be5f9a2c3c80029e8e72edc34c9d7f9",
+   "status": {
+    "value": "shut down",
+    "quote": "*   Shut down: `gemini-2.5-flash-lite-preview-09-2025`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, image, video, audio, PDF",
+     "quote": "**Inputs** Text, image, video, audio, PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash-native-audio-preview-12-2025": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash live preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash-native-audio-preview-12-2025.md",
+   "sha256": "d38866275f292935284416edcc2295318ba387bcd14e23d6acd43fe9cff8ec58",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 8192,
+     "quote": "**Output token limit** 8,192"
+    },
+    "input": {
+     "value": "Audio, video, text",
+     "quote": "**Inputs** Audio, video, text"
+    },
+    "output": {
+     "value": "Audio and text",
+     "quote": "**Output** Audio and text"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash-preview-09-2025": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash-preview-09-2025.md",
+   "sha256": "5683166cad278154804a1b26521bf5e5f7b2f8c9679f8f1e9240a37f1cf1a0f3",
+   "status": {
+    "value": "shut down",
+    "quote": "*   Shut down: `gemini-2.5-flash-preview-09-2025`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, images, video, audio",
+     "quote": "**Inputs** Text, images, video, audio"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-flash-preview-tts": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Flash text-to-speech",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-flash-preview-tts.md",
+   "sha256": "7df7663b66772bb3f2cb52e3c7b2f695f96cef67dc4440223a23f0fbbbe8afd9",
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "max_output": {
+     "value": 16384,
+     "quote": "**Output token limit** 16,384"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Inputs** Text"
+    },
+    "output": {
+     "value": "Audio",
+     "quote": "**Output** Audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-pro": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Pro",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-pro.md",
+   "sha256": "85527f2946aff70a5f81da35afa67cbff6bfd14bdacae9986e20a2c2cdbaae13",
+   "status": {
+    "value": "deprecated",
+    "quote": "*   Deprecated: `gemini-2.5-pro` (effective December 1, 2026, automatically routed to `gemini-3.8-flash`)"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Audio, images, video, text, and PDF",
+     "quote": "**Inputs** Audio, images, video, text, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-2.5-pro-preview-tts": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 2.5 Pro text-to-speech",
+   "page": "https://aistudio.google.com/docs/models/gemini-2.5-pro-preview-tts.md",
+   "sha256": "5e53b08f65921be9286430f282b31296e707c834f6fee853ad62ef338bf1a1f1",
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "max_output": {
+     "value": 16384,
+     "quote": "**Output token limit** 16,384"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Inputs** Text"
+    },
+    "output": {
+     "value": "Audio",
+     "quote": "**Output** Audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3-flash-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3 Flash preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-3-flash-preview.md",
+   "sha256": "2328e992de70001d17c83d148c2ed906b60b8ab87f8af16c5fde6a71e148a442",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3-pro-image": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3 Pro image",
+   "page": "https://aistudio.google.com/docs/models/gemini-3-pro-image.md",
+   "sha256": "2e58b8f6bc74fe50098cbf89600f5f9b78aea7054e172707d3942a36a5fa8099",
+   "facts": {
+    "context_window": {
+     "value": 65536,
+     "quote": "**Input token limit** 65,536"
+    },
+    "max_output": {
+     "value": 32768,
+     "quote": "**Output token limit** 32,768"
+    },
+    "input": {
+     "value": "Image and Text",
+     "quote": "**Inputs** Image and Text"
+    },
+    "output": {
+     "value": "Image and Text",
+     "quote": "**Output** Image and Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3-pro-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3 Pro preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-3-pro-preview.md",
+   "sha256": "58d61d0989627d65cc090fa115e335317038852d051ac4887f2c00f9d7c0d3cb",
+   "status": {
+    "value": "shut down",
+    "quote": "*   *Shut down*: `gemini-3-pro-preview`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Not supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-flash-image": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Flash image",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-flash-image.md",
+   "sha256": "c76b273b6ac9f82764b65a2e72affe3309b01a99b6e73f3ca15acf7c1a395726",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 32768,
+     "quote": "**Output token limit** 32,768"
+    },
+    "input": {
+     "value": "Text, Image, Video, and PDF",
+     "quote": "**Inputs** Text, Image, Video, and PDF"
+    },
+    "output": {
+     "value": "Image and Text",
+     "quote": "**Output** Image and Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-flash-lite": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Flash-Lite",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-flash-lite.md",
+   "sha256": "00af860e4bd2e0846632fb4066e6be53bcef99d2bfafa589f4bbfc27b860f74c",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Not supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-flash-lite-image": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Flash Lite image",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-flash-lite-image.md",
+   "sha256": "9bd7efd30d7f8de43efd35535d4157f3ed3f44cfc52dbfa5da70de262e281e08",
+   "facts": {
+    "context_window": {
+     "value": 65536,
+     "quote": "**Input token limit** 65,536"
+    },
+    "max_output": {
+     "value": 4096,
+     "quote": "**Output token limit** 4,096"
+    },
+    "input": {
+     "value": "Text, Image, Video, and PDF",
+     "quote": "**Inputs** Text, Image, Video, and PDF"
+    },
+    "output": {
+     "value": "Image and Text",
+     "quote": "**Output** Image and Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-flash-lite-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Flash-Lite preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-flash-lite-preview.md",
+   "sha256": "10c5f48aa2ec5cb2f71a3e86960b0f1e1cf80bbf9eebf8b47b94d2777cbfee13",
+   "status": {
+    "value": "shut down",
+    "quote": "*   *Shut down*: `gemini-3.1-flash-lite-preview`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Not supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-flash-live-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Flash live preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-flash-live-preview.md",
+   "sha256": "ecc59a9657ed8532fbc9a13ec29c93554aee27802622226aec4e398acacef5f2",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, images, audio",
+     "quote": "**Inputs** Text, images, audio"
+    },
+    "output": {
+     "value": "Text and audio",
+     "quote": "**Output** Text and audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-flash-tts-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Flash TTS (text-to-speech) preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-flash-tts-preview.md",
+   "sha256": "cb6c1c52f97ad7c0b707e7ae7ce1619f35b24cb0748445df61f965c1f7dfcbbe",
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "max_output": {
+     "value": 16384,
+     "quote": "**Output token limit** 16,384"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Inputs** Text"
+    },
+    "output": {
+     "value": "Audio",
+     "quote": "**Output** Audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.1-pro-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.1 Pro preview",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.1-pro-preview.md",
+   "sha256": "b1a48c6c0e421d3699829eca13850f8c24841e3fd63d5dfd05624e57725bdf6b",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.5-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.5 Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.5-flash.md",
+   "sha256": "01926e8ea786bbc5b5857c0538ebfdf511ab94666355dfc1eba488cf903bd5d1",
+   "status": {
+    "value": "deprecated",
+    "quote": "(`gemini-3.5-flash`) is deprecated and has been replaced by"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.5-flash-lite": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.5 Flash-Lite",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.5-flash-lite.md",
+   "sha256": "3e1d93265689c3de5e8d3c09a5bedc6e148180a0bf59ea94e8c3b52add4093c9",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.5-live-translate-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.5 Live translate",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.5-live-translate-preview.md",
+   "sha256": "0640f4763434629dd87cc9e785fa6d9ec06d8f0f5ce7ed71dc8bbfd102be59d3",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Audio (speech)",
+     "quote": "**Inputs** Audio (speech)"
+    },
+    "output": {
+     "value": "Audio (translated speech) and Text (transcript)",
+     "quote": "**Output** Audio (translated speech) and Text (transcript)"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Supported",
+     "Live translation": "Supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.5-transcribe": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.5 Transcribe",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.5-transcribe.md",
+   "sha256": "3af4b08b3c7d2effc9d0c6bd898aa9b824d4ae9c19c3735d335bf48abf800130",
+   "facts": {
+    "input": {
+     "value": "Audio (up to 1 hour)",
+     "quote": "**Inputs** Audio (up to 1 hour)"
+    },
+    "output": {
+     "value": "Text, Word annotations",
+     "quote": "**Output** Text, Word annotations"
+    },
+    "supports": {
+     "Audio transcription": "Supported",
+     "Speaker diarization": "Supported",
+     "Word-level timestamps": "Supported",
+     "Custom vocabulary": "Supported",
+     "Smart transcription": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Image generation": "Not supported",
+     "Thinking": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.6-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.6 Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.6-flash.md",
+   "sha256": "5c1f02828dfb4e235c141775d65d587481e89e2d1233d7ab059d3b5477d39ac3",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "Tool retrieval": "Supported (Preview)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.7-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.7 Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.7-flash.md",
+   "sha256": "580c6577e018c4ecce13b77f2060d9ac229def01999e98e5f9329358c9a6c73d",
+   "status": {
+    "value": "deprecated",
+    "quote": "(`gemini-3.7-flash`) is deprecated and has been replaced by"
+   },
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "quote": "Thinking: Supported (low, medium, high)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported (low, medium, high)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.8-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.8 Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.8-flash.md",
+   "sha256": "15a23689debfba5b048795f2607244b73ee6cf052d65a59487bd6afa0c8977b9",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "quote": "Thinking: Supported (low, medium, high)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported (low, medium, high)",
+     "Tool retrieval": "Supported (Preview)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.8-flash-lite-tts": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.8 Flash-Lite TTS",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.8-flash-lite-tts.md",
+   "sha256": "06110e7a44b8a9f4be6d02e965cacf8aa7f9c750d258f24bee37a76d3014338c",
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "max_output": {
+     "value": 16384,
+     "quote": "**Output token limit** 16,384 (Gemini API serving limit)"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Inputs** Text"
+    },
+    "output": {
+     "value": "Audio",
+     "quote": "**Output** Audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.8-flash-tts": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.8 Flash TTS",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.8-flash-tts.md",
+   "sha256": "9474f945b54ff78714d28522a52e93a78d19903cc477ac7b8e6e7059f2e5ae58",
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "max_output": {
+     "value": 16384,
+     "quote": "**Output token limit** 16,384 (Gemini API serving limit)"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Inputs** Text"
+    },
+    "output": {
+     "value": "Audio",
+     "quote": "**Output** Audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.8-live": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.8 Live",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.8-live.md",
+   "sha256": "b4072fd8b1545e56130f28060d56c40ab98b11cf8e6a0d8dffbd0e3ae6f13d6d",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "efforts": {
+     "values": [
+      "interleaved reasoning"
+     ],
+     "quote": "Thinking: Supported (interleaved reasoning)"
+    },
+    "input": {
+     "value": "Text, images, audio",
+     "quote": "**Inputs** Text, images, audio"
+    },
+    "output": {
+     "value": "Text and audio",
+     "quote": "**Output** Text and audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported (interleaved reasoning)",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-3.8-live-extended-thinking": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 3.8 Live Extended Thinking",
+   "page": "https://aistudio.google.com/docs/models/gemini-3.8-live-extended-thinking.md",
+   "sha256": "cd8431c00e6891f2ab6d295aa1c5ff59c5a3384943be3fd30fa5094e8318d074",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, images, audio",
+     "quote": "**Inputs** Text, images, audio"
+    },
+    "output": {
+     "value": "Text and audio",
+     "quote": "**Output** Text and audio"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Supported (Async only)",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-4-argon": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 4 Argon",
+   "page": "https://aistudio.google.com/docs/models/gemini-4-argon.md",
+   "sha256": "634d048ca823d4abdc12284bb88192276b96308cf13be388c2af42a9c9a25e8d",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Context window (unified input and output token limit)** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Max output** 65,536 (default synchronous) / up to 1,048,576 (with [long decode](/docs/long-decode))"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "quote": "Thinking: Supported (low, medium, high)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Agentic video understanding": "Supported (defaults to static)",
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported (Implicit only)",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported (low, medium, high)",
+     "Tool retrieval": "Supported (Preview)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-4-carbon": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 4 Carbon",
+   "page": "https://aistudio.google.com/docs/models/gemini-4-carbon.md",
+   "sha256": "246d9801eac3340def9761289f4b8acde9ce7e241b41b423c35f8f8ecfd302df",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Context window (unified input and output token limit)** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Max output** 65,536 (default synchronous) / up to 1,048,576 (with [long decode](/docs/long-decode))"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "quote": "Thinking: Supported (low, medium, high)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Agentic video understanding": "Supported (defaults to static)",
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported (Implicit only)",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported (low, medium, high)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-4-hydrogen": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 4 Hydrogen",
+   "page": "https://aistudio.google.com/docs/models/gemini-4-hydrogen.md",
+   "sha256": "7ab00dcf8fc3dfd5fe8092a63e0b287feac2bc46830bbc8049682d15d75780fe",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Context window (unified input and output token limit)** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Max output** 65,536 (default synchronous) / up to 1,048,576 (with [long decode](/docs/long-decode))"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "quote": "Thinking: Supported (low, medium, high, xhigh)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Agentic video understanding": "Supported (defaults to static)",
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported (Implicit only)",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported (low, medium, high, xhigh)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-4-neon": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini 4 Neon",
+   "page": "https://aistudio.google.com/docs/models/gemini-4-neon.md",
+   "sha256": "a7a4b434a31b957da7f084c30c2ead10a0e7b27ad3119cbfa6720c54a4033898",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Context window (unified input and output token limit)** 1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Max output** 65,536 (default synchronous) / up to 1,048,576 (with [long decode](/docs/long-decode))"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "quote": "Thinking: Supported (low, medium, high, xhigh)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Agentic video understanding": "Supported (defaults to static)",
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported (Implicit only)",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported (low, medium, high, xhigh)",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-decision-1": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Decision 1",
+   "page": "https://aistudio.google.com/docs/models/gemini-decision-1.md",
+   "sha256": "194f8a01fbe6ce5a0cf35825a28e90a551a65a8ee3b808e239d6bcb0ea6571b7",
+   "facts": {
+    "context_window": {
+     "value": 262144,
+     "quote": "**Input token limit** 262,144"
+    },
+    "max_output": {
+     "value": 0,
+     "quote": "**Output token limit** 0 (up to 1,000 questions per request)"
+    },
+    "input": {
+     "value": "Text, Image, Video, Audio, and PDF",
+     "quote": "**Inputs** Text, Image, Video, Audio, and PDF"
+    },
+    "output": {
+     "value": "Calibrated probabilities (yes/no, choice, and score, with 0 output tokens)",
+     "quote": "**Output** Calibrated probabilities (yes/no, choice, and score, with 0 output tokens)"
+    },
+    "supports": {
+     "Calibrated decisions": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-embedding-001": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Embedding model",
+   "page": "https://aistudio.google.com/docs/models/gemini-embedding-001.md",
+   "sha256": "d527492e3634782f23b5a596a4f3302e0ad61bb6d5b7ee27683f0acedde9f9b7",
+   "facts": {
+    "context_window": {
+     "value": 2048,
+     "quote": "**Input token limit** 2,048"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Input** Text"
+    },
+    "output": {
+     "value": "Text embeddings",
+     "quote": "**Output** Text embeddings"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-embedding-2": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Embedding 2 model",
+   "page": "https://aistudio.google.com/docs/models/gemini-embedding-2.md",
+   "sha256": "21a60891e847da06981b7d8f0dea79bd2ffa7629f9ee2f046300a7d679940a1a",
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "input": {
+     "value": "Text, image, video, audio, PDF",
+     "quote": "**Input** Text, image, video, audio, PDF"
+    },
+    "output": {
+     "value": "Text embeddings",
+     "quote": "**Output** Text embeddings"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-embedding-2-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Embedding 2 preview model",
+   "page": "https://aistudio.google.com/docs/models/gemini-embedding-2-preview.md",
+   "sha256": "cde421c4b1cf25f6e5b4ad900a7d4f2e133d620e2b34f361fcec680eaaea2ddc",
+   "status": {
+    "value": "deprecated",
+    "quote": "*   Deprecated: `gemini-embedding-2-preview` (effective November 6, 2026, routes to `gemini-embedding-2`)"
+   },
+   "facts": {
+    "context_window": {
+     "value": 8192,
+     "quote": "**Input token limit** 8,192"
+    },
+    "input": {
+     "value": "Text, image, video, audio, PDF",
+     "quote": "**Input** Text, image, video, audio, PDF"
+    },
+    "output": {
+     "value": "Text embeddings",
+     "quote": "**Output** Text embeddings"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-nano-banana-2.1": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Nano Banana 2.1",
+   "page": "https://aistudio.google.com/docs/models/gemini-nano-banana-2.1.md",
+   "sha256": "52d61cd288bcb97e8802057ce45527b9cb613f30e85495aa7c0cf4ce2176baaa",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 32768,
+     "quote": "**Output token limit** 32,768"
+    },
+    "input": {
+     "value": "Text, Image, Video, and PDF",
+     "quote": "**Inputs** Text, Image, Video, and PDF"
+    },
+    "output": {
+     "value": "Image and Text",
+     "quote": "**Output** Image and Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-omni-1.1-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Omni Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-omni-flash.md",
+   "sha256": "a5bd15085c10bfe1581d3a506ba031de7bec53257d47bc17e225fe5493f8e20d",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536 tokens"
+    },
+    "input": {
+     "value": "Text, Image, Video (up to 10s for editing and extension)",
+     "quote": "**Input** Text, Image, Video (up to 10s for editing and extension)"
+    },
+    "output": {
+     "value": "Video",
+     "quote": "**Output** Video"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-omni-1.2-flash": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Omni Flash",
+   "page": "https://aistudio.google.com/docs/models/gemini-omni-flash.md",
+   "sha256": "a5bd15085c10bfe1581d3a506ba031de7bec53257d47bc17e225fe5493f8e20d",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536 tokens"
+    },
+    "input": {
+     "value": "Text, Image, Video (up to 15s for editing and 10s lookback for extension)",
+     "quote": "**Input** Text, Image, Video (up to 15s for editing and 10s lookback for extension)"
+    },
+    "output": {
+     "value": "Video with native Audio, Text",
+     "quote": "**Output** Video with native Audio, Text"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-robotics-er-1.5-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Robotics ER 1.5",
+   "page": "https://aistudio.google.com/docs/models/gemini-robotics-er-1.5-preview.md",
+   "sha256": "b2a1bc35e808548a0d244d66ee75ad6246719b1029ae1218e2182658a49429f7",
+   "facts": {
+    "context_window": {
+     "value": 1048576,
+     "quote": "**Input token limit**\n    1,048,576"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit**\n    65,536"
+    },
+    "input": {
+     "value": "Text, images, video, audio",
+     "quote": "**Inputs**\n    Text, images, video, audio"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output**\n    Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Context caching": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "gemini-robotics-er-1.6-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Robotics ER 1.6",
+   "page": "https://aistudio.google.com/docs/models/gemini-robotics-er-1.6-preview.md",
+   "sha256": "ec6aed1b5b0e21317362f1b06280688c52833365a9f4ac4fbdd998960493058d",
+   "status": {
+    "value": "shut down",
+    "quote": "Shut down: `gemini-robotics-er-1.6-preview`"
+   },
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit**\n    131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit**\n    65,536"
+    },
+    "input": {
+     "value": "Text, images, video, audio",
+     "quote": "**Inputs**\n    Text, images, video, audio"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output**\n    Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Supported",
+     "Priority inference": "Supported"
+    }
+   },
+   "aliases": [],
+   "also": [
+    "https://aistudio.google.com/docs/models/gemini-robotics-er-2-preview.md",
+    "https://aistudio.google.com/docs/models/gemini-robotics-er-2-streaming-preview.md"
+   ]
+  },
+  "gemini-robotics-er-2-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Robotics ER 2",
+   "page": "https://aistudio.google.com/docs/models/gemini-robotics-er-2-preview.md",
+   "sha256": "ac5331888871fc45fbac3be93f7d948b7c20362c6ebf134d1bed9a67b6bfe2d1",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, images, video, audio",
+     "quote": "**Inputs** Text, images, video, audio"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Supported",
+     "Computer use": "Supported",
+     "Context caching": "Supported",
+     "File search": "Supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Supported",
+     "Thinking": "Supported",
+     "URL context": "Supported",
+     "Batch API": "Supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": [],
+   "also": [
+    "https://aistudio.google.com/docs/models/gemini-robotics-er-2-streaming-preview.md"
+   ]
+  },
+  "gemini-robotics-er-2-streaming-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Gemini Robotics ER 2",
+   "page": "https://aistudio.google.com/docs/models/gemini-robotics-er-2-preview.md",
+   "sha256": "ac5331888871fc45fbac3be93f7d948b7c20362c6ebf134d1bed9a67b6bfe2d1",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit** 131,072"
+    },
+    "max_output": {
+     "value": 65536,
+     "quote": "**Output token limit** 65,536"
+    },
+    "input": {
+     "value": "Text, images, video, audio",
+     "quote": "**Inputs** Text, images, video, audio"
+    },
+    "output": {
+     "value": "Text",
+     "quote": "**Output** Text"
+    },
+    "supports": {
+     "Audio generation": "Not supported",
+     "Code execution": "Not supported",
+     "Computer use": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Supported",
+     "Image generation": "Not supported",
+     "Live API": "Supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": [],
+   "also": [
+    "https://aistudio.google.com/docs/models/gemini-robotics-er-2-streaming-preview.md"
+   ]
+  },
+  "imagen-4.0-generate-001": {
+   "first_seen": "2026-11-20",
+   "name": "Imagen 4",
+   "page": "https://aistudio.google.com/docs/models/imagen.md",
+   "sha256": "7fb8551fa37f1fa3013e638681146d1d920e2f7328f50915d62dcdbe39046a0c",
+   "aliases": [
+    "imagen-4.0-fast-generate-001",
+    "imagen-4.0-ultra-generate-001"
+   ],
+   "status": {
+    "value": "deprecated",
+    "quote": "The Imagen 4 standard, ultra, and fast endpoints are [deprecated](/docs/deprecations) and will be shut down on **August 17, 2026**; migrate to [Gemini 3.1 Flash Image](/docs/models/gemini-3.1-flash-image) to avoid service interruptions."
+   },
+   "facts": {
+    "context_window": {
+     "value": 480,
+     "quote": "**Input token limit** 480"
+    },
+    "input": {
+     "value": "Text",
+     "quote": "**Input** Text"
+    },
+    "output": {
+     "value": "Images",
+     "quote": "**Output** Images"
+    }
+   }
+  },
+  "lyria-3-clip-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Lyria 3 Clip preview",
+   "page": "https://aistudio.google.com/docs/models/lyria-3-clip-preview.md",
+   "sha256": "69375e39d3d4bf2ba6b0848d1ac45c3c6ed87fa36fb4dc30b07a91a466950d4c",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit**\n    131,072"
+    },
+    "input": {
+     "value": "Text and Image",
+     "quote": "**Inputs**\n    Text and Image"
+    },
+    "output": {
+     "value": "Audio (MP3), Text (Lyrics)",
+     "quote": "**Output**\n    Audio (MP3), Text (Lyrics)"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": [],
+   "also": [
+    "https://aistudio.google.com/docs/models/lyria-3-pro-preview.md"
+   ]
+  },
+  "lyria-3.5": {
+   "first_seen": "2026-11-20",
+   "name": "Lyria 3.5",
+   "page": "https://aistudio.google.com/docs/models/lyria-3.5.md",
+   "sha256": "9eba5ab1c71953053ee6479c4dd643a36b95d047eb904728afee063385d0024d",
+   "facts": {
+    "context_window": {
+     "value": 131072,
+     "quote": "**Input token limit**\n    131,072"
+    },
+    "input": {
+     "value": "Text and Image",
+     "quote": "**Inputs** Text and Image"
+    },
+    "output": {
+     "value": "Audio (MP3), Text (Lyrics)",
+     "quote": "**Output** Audio (MP3), Text (Lyrics)"
+    },
+    "supports": {
+     "Audio generation": "Supported",
+     "Code execution": "Not supported",
+     "Context caching": "Not supported",
+     "File search": "Not supported",
+     "Function calling": "Not supported",
+     "Grounding with Google Maps": "Not supported",
+     "Grounding with Google Search": "Not supported",
+     "Image generation": "Not supported",
+     "Live API": "Not supported",
+     "Structured outputs": "Not supported",
+     "Thinking": "Not supported",
+     "URL context": "Not supported",
+     "Batch API": "Not supported",
+     "Flex inference": "Not supported",
+     "Priority inference": "Not supported"
+    }
+   },
+   "aliases": []
+  },
+  "lyria-realtime-exp": {
+   "first_seen": "2026-11-20",
+   "name": "Lyria RealTime experimental",
+   "page": "https://aistudio.google.com/docs/models/lyria-realtime-exp.md",
+   "sha256": "c3d899a6144a0ad6150fee2a672324fb20b5f7233c4411f7549635ce804de8a3",
+   "facts": {
+    "input": {
+     "value": "Text (Weighted prompts)",
+     "quote": "**Input**\n    Text (Weighted prompts)"
+    },
+    "output": {
+     "value": "Audio (Raw 16-bit PCM)",
+     "quote": "**Output**\n    Audio (Raw 16-bit PCM)"
+    }
+   },
+   "aliases": []
+  },
+  "veo-2.0-generate-001": {
+   "first_seen": "2026-11-20",
+   "name": "Veo 2.0",
+   "page": "https://aistudio.google.com/docs/models/veo-2.0-generate-001.md",
+   "sha256": "fdc93c5c9756c2d5ab9c3047276b936d7bcc1154eb54d111ee94ca96fa297186",
+   "facts": {
+    "input": {
+     "value": "Text, image",
+     "quote": "**Input** Text, image"
+    },
+    "output": {
+     "value": "Video",
+     "quote": "**Output** Video"
+    }
+   },
+   "aliases": []
+  },
+  "veo-3.1-generate-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Veo 3.1",
+   "page": "https://aistudio.google.com/docs/models/veo-3.1-generate-preview.md",
+   "sha256": "6e6011bebe9d75e7604c217de2b5869df1413cff0cc2c81282781d79f2b0238c",
+   "aliases": [
+    "veo-3.1-fast-generate-preview"
+   ],
+   "facts": {
+    "input": {
+     "value": "Text, Image",
+     "quote": "**Input** Text, Image"
+    },
+    "output": {
+     "value": "Video with audio",
+     "quote": "**Output** Video with audio"
+    }
+   }
+  },
+  "veo-3.1-lite-generate-preview": {
+   "first_seen": "2026-11-20",
+   "name": "Veo 3.1 Lite preview",
+   "page": "https://aistudio.google.com/docs/models/veo-3.1-lite-generate-preview.md",
+   "sha256": "d0e1b314e9c0adb276244d044701a37553c43a78774d075d29aaf454a91ec855",
+   "status": {
+    "value": "shut down",
+    "quote": "[shut down](/docs/deprecations) on **October 22, 2026**; migrate to"
+   },
+   "facts": {
+    "input": {
+     "value": "Text, Image",
+     "quote": "**Input** Text, Image"
+    },
+    "output": {
+     "value": "Video with audio",
+     "quote": "**Output** Video with audio"
+    }
+   },
+   "aliases": []
+  }
+ },
+ "unread": []
+}

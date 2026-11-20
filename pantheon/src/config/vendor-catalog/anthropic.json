@@ -1,0 +1,674 @@
+{
+ "schema": "pantheon.vendor-catalog/v1",
+ "lab": "anthropic",
+ "read": "2026-11-20T07:08:36.043Z",
+ "models": {
+  "claude-fable-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Fable 5",
+   "page": "https://platform.claude.com/docs/en/models/fable-5/overview.md",
+   "sha256": "24e9635dc87f3d6f39c4a94b54347e196fda2094d48051e8af680d897d0e1165",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released June 9, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jan 2026",
+     "quote": "| Reliable knowledge cutoff                                                               | Jan 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-fable-5-1": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Fable 5.1",
+   "page": "https://platform.claude.com/docs/en/models/fable-5-1/overview.md",
+   "sha256": "3a9b4fcfa4bb72a721382f0e294b6e015e784cdb143e3221c86e8104d040a3f6",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released September 1, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                               | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-fable-5-2": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Fable 5.2",
+   "page": "https://platform.claude.com/docs/en/models/fable-5-2/overview.md",
+   "sha256": "da0d5c0705d0cc7ea46f828fb6ba236fd92d0f9ee26c4d223743df6f6d65ac65",
+   "status": {
+    "value": "Latest",
+    "quote": "**Latest.** Released November 9, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $8 / MTok · Output pricing: $40 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $8 / MTok · Output pricing: $40 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                               | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-haiku-4-5-20251001": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Haiku 4.5",
+   "page": "https://platform.claude.com/docs/en/models/haiku-4-5/overview.md",
+   "sha256": "1b62327ffdedb1438e364a64a6c80812cc689906b9b583a33c45f98b1fcf875b",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released October 15, 2025."
+   },
+   "facts": {
+    "context_window": {
+     "value": 200000,
+     "quote": "Context window: 200K tokens · Max output: 64K tokens · Input pricing: $1 / MTok · Output pricing: $5 / MTok"
+    },
+    "max_output": {
+     "value": 64000,
+     "quote": "Context window: 200K tokens · Max output: 64K tokens · Input pricing: $1 / MTok · Output pricing: $5 / MTok"
+    },
+    "effort_default": {
+     "value": "Not supported",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | Not supported          |"
+    },
+    "thinking": {
+     "value": "Extended",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Extended               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Feb 2025",
+     "quote": "| Reliable knowledge cutoff                                                               | Feb 2025               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-haiku-5-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Haiku 5.5",
+   "page": "https://platform.claude.com/docs/en/models/haiku-5-5/overview.md",
+   "sha256": "7e9de0c0275b5daa15f679911ae93f607cbdbbee82231a5e2a520b08e4ebd106",
+   "status": {
+    "value": "Latest",
+    "quote": "**Latest.** Released October 7, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: From $0.10 / MTok · Output pricing: From $0.50 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: From $0.10 / MTok · Output pricing: From $0.50 / MTok"
+    },
+    "effort_default": {
+     "value": "medium",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `medium`               |"
+    },
+    "thinking": {
+     "value": "Adaptive",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-mythos-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Mythos 5",
+   "page": "https://platform.claude.com/docs/en/models/mythos-5/overview.md",
+   "sha256": "d43d292f6cf5ae1601c9f5dc9222665a7dda0161e58527047b014bee1bcba544",
+   "status": {
+    "value": "Verification required",
+    "quote": "**Verification required.** Released June 9, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jan 2026",
+     "quote": "| Reliable knowledge cutoff                                                               | Jan 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-mythos-5-1": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Mythos 5.1",
+   "page": "https://platform.claude.com/docs/en/models/mythos-5-1/overview.md",
+   "sha256": "a9cd548ece1475a09e4157c9226a88c5024219c726dd64d97ba43006a6b5cb68",
+   "status": {
+    "value": "Verification required",
+    "quote": "**Verification required.** Released September 1, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                               | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-mythos-5-2": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Mythos 5.2",
+   "page": "https://platform.claude.com/docs/en/models/mythos-5-2/overview.md",
+   "sha256": "ccafb6a4256b2810441d5224dd44a333b308abdce944a60524966e5412221832",
+   "status": {
+    "value": "Verification required",
+    "quote": "**Verification required.** Released November 9, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $8 / MTok · Output pricing: $40 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $8 / MTok · Output pricing: $40 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                               | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-opus-4-5-20251101": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Opus 4.5",
+   "page": "https://platform.claude.com/docs/en/models/opus-4-5/overview.md",
+   "sha256": "05e1a2c031950ef63be8567edc615d7bd4e76ec09e5af652aa19eff774bda633",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released November 24, 2025."
+   },
+   "facts": {
+    "context_window": {
+     "value": 200000,
+     "quote": "Context window: 200K tokens · Max output: 64K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "max_output": {
+     "value": 64000,
+     "quote": "Context window: 200K tokens · Max output: 64K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | `high`                 |"
+    },
+    "thinking": {
+     "value": "Extended",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Extended               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "May 2025",
+     "quote": "| Reliable knowledge cutoff                                                               | May 2025               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-opus-4-6": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Opus 4.6",
+   "page": "https://platform.claude.com/docs/en/models/opus-4-6/overview.md",
+   "sha256": "51979d6b90518a23850808f36b6c5fc6870094f27a89133ce34a0f0237183ab8",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released February 5, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                         |"
+    },
+    "thinking": {
+     "value": "Adaptive (extended deprecated)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive (extended deprecated) |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text         |"
+    },
+    "knowledge_cutoff": {
+     "value": "May 2025",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | May 2025                       |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-opus-4-7": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Opus 4.7",
+   "page": "https://platform.claude.com/docs/en/models/opus-4-7/overview.md",
+   "sha256": "888f74b59447c7ac4ddf4d153e3163ada95509fa62a2e33b3c98b4f7887d565a",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released April 16, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jan 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Jan 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-opus-4-8": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Opus 4.8",
+   "page": "https://platform.claude.com/docs/en/models/opus-4-8/overview.md",
+   "sha256": "7cc5909e2db107080f743d2a006a83c99bcbd9b6d22f1beec5966e318cf0065d",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released May 28, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jan 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Jan 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-opus-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Opus 5",
+   "page": "https://platform.claude.com/docs/en/models/opus-5/overview.md",
+   "sha256": "c3c61d61c3be934ad86bf59e7ea16ed8d0fb99f0a9e3702055de860d1e2e8c16",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released July 24, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $5 / MTok · Output pricing: $25 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "May 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | May 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-opus-5-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Opus 5.5",
+   "page": "https://platform.claude.com/docs/en/models/opus-5-5/overview.md",
+   "sha256": "921bc577ff903820b6c0b218f6031e33d80e73a38bda1b6bab84e9418d076af9",
+   "status": {
+    "value": "Latest",
+    "quote": "**Latest.** Released September 22, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $4 / MTok · Output pricing: $20 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $4 / MTok · Output pricing: $20 / MTok"
+    },
+    "effort_default": {
+     "value": "medium",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `medium`               |"
+    },
+    "thinking": {
+     "value": "Adaptive (always on)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive (always on)   |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-sonnet-4-5-20250929": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Sonnet 4.5",
+   "page": "https://platform.claude.com/docs/en/models/sonnet-4-5/overview.md",
+   "sha256": "87957f24a362ed1fe48308d9079d6e2077493a9786659004c974ab8e98a413ce",
+   "status": {
+    "value": "Deprecated",
+    "quote": "**Deprecated.** Released September 29, 2025."
+   },
+   "facts": {
+    "context_window": {
+     "value": 200000,
+     "quote": "Context window: 200K tokens · Max output: 64K tokens · Input pricing: $3 / MTok · Output pricing: $15 / MTok"
+    },
+    "max_output": {
+     "value": 64000,
+     "quote": "Context window: 200K tokens · Max output: 64K tokens · Input pricing: $3 / MTok · Output pricing: $15 / MTok"
+    },
+    "effort_default": {
+     "value": "Not supported",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)          | Not supported          |"
+    },
+    "thinking": {
+     "value": "Extended",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)              | Extended               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                          | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jan 2025",
+     "quote": "| Reliable knowledge cutoff                                                               | Jan 2025               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-sonnet-4-6": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Sonnet 4.6",
+   "page": "https://platform.claude.com/docs/en/models/sonnet-4-6/overview.md",
+   "sha256": "89871f6c1347243e776a850ad26b78532cba203209711ab5116c7fee1cbf33dc",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released February 17, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $3 / MTok · Output pricing: $15 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $3 / MTok · Output pricing: $15 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                         |"
+    },
+    "thinking": {
+     "value": "Adaptive (extended deprecated)",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive (extended deprecated) |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text         |"
+    },
+    "knowledge_cutoff": {
+     "value": "Aug 2025",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Aug 2025                       |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-sonnet-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Sonnet 5",
+   "page": "https://platform.claude.com/docs/en/models/sonnet-5/overview.md",
+   "sha256": "5a9a3c010f05ba6616ae04c83b19492e24bff768d69eec040c2b9411d9fc6126",
+   "status": {
+    "value": "Legacy",
+    "quote": "**Legacy.** Released June 30, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $2 / MTok · Output pricing: $10 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $2 / MTok · Output pricing: $10 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jan 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Jan 2026               |"
+    }
+   },
+   "aliases": []
+  },
+  "claude-sonnet-5-5": {
+   "first_seen": "2026-11-20",
+   "name": "Claude Sonnet 5.5",
+   "page": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview.md",
+   "sha256": "0067a54f2d41feecd82eb7c5d34a9efdf96ac81fd90692b4408df8a03292deac",
+   "status": {
+    "value": "Latest",
+    "quote": "**Latest.** Released September 28, 2026."
+   },
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $2 / MTok · Output pricing: $10 / MTok"
+    },
+    "max_output": {
+     "value": 128000,
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $2 / MTok · Output pricing: $10 / MTok"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `high`                 |"
+    },
+    "thinking": {
+     "value": "Adaptive",
+     "quote": "| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive               |"
+    },
+    "modalities": {
+     "value": "Text and images → text",
+     "quote": "| Input → output                                                                                                              | Text and images → text |"
+    },
+    "knowledge_cutoff": {
+     "value": "Jun 2026",
+     "quote": "| Reliable knowledge cutoff                                                                                                   | Jun 2026               |"
+    }
+   },
+   "aliases": []
+  }
+ },
+ "unread": []
+}

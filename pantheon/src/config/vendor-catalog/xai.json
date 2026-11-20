@@ -1,0 +1,370 @@
+{
+ "schema": "pantheon.vendor-catalog/v1",
+ "lab": "xai",
+ "read": "2026-11-20T07:10:26.664Z",
+ "models": {
+  "grok-4.20-0309-non-reasoning": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.20 (Non-Reasoning)",
+   "page": "https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning.md",
+   "sha256": "4077bae7964e9b5942763b4d95958234879f82720a3eb5ed37b83347ee1024a8",
+   "aliases": [
+    "grok-4.20-beta-0309-non-reasoning",
+    "grok-4.20-beta-latest-non-reasoning",
+    "grok-4.20-beta-non-reasoning",
+    "grok-4.20-experimental-beta-0304-non-reasoning",
+    "grok-4.20-experimental-beta-non-reasoning-latest",
+    "grok-4.20-non-reasoning",
+    "grok-4.20-non-reasoning-gv2",
+    "grok-4.20-non-reasoning-latest"
+   ],
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "- **Context window:** 1,000,000 tokens"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "No",
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-4.20-0309-reasoning": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.20",
+   "page": "https://docs.x.ai/developers/models/grok-4.20-0309-reasoning.md",
+   "sha256": "99057608aeb1a4e6ace5d87bf6c4b27b3bff4af5248babad475500da31fdc2e3",
+   "aliases": [
+    "grok-4.20",
+    "grok-4.20-0309",
+    "grok-4.20-beta",
+    "grok-4.20-beta-0309",
+    "grok-4.20-beta-0309-reasoning",
+    "grok-4.20-beta-latest",
+    "grok-4.20-beta-latest-reasoning",
+    "grok-4.20-beta-reasoning",
+    "grok-4.20-experimental-beta-0304",
+    "grok-4.20-experimental-beta-0304-reasoning",
+    "grok-4.20-experimental-beta-latest",
+    "grok-4.20-experimental-beta-reasoning-latest",
+    "grok-4.20-reasoning",
+    "grok-4.20-reasoning-gv2",
+    "grok-4.20-reasoning-latest"
+   ],
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "- **Context window:** 1,000,000 tokens"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "Yes",
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-4.20-multi-agent-0309": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.20 Multi-Agent Beta",
+   "page": "https://docs.x.ai/developers/models/grok-4.20-multi-agent-0309.md",
+   "sha256": "6de12a68529773f220cb4bde47f13c452fa6df66fa5171e834b5a0ff52a87ee2",
+   "aliases": [
+    "grok-4.20-multi-agent",
+    "grok-4.20-multi-agent-beta-0309",
+    "grok-4.20-multi-agent-beta-latest",
+    "grok-4.20-multi-agent-experimental-beta-0304",
+    "grok-4.20-multi-agent-experimental-beta-latest",
+    "grok-4.20-multi-agent-latest"
+   ],
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "- **Context window:** 1,000,000 tokens"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "Yes",
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-4.3": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.3",
+   "page": "https://docs.x.ai/developers/models/grok-4.3.md",
+   "sha256": "9bcd456b37a6fa5bb1b1fed6acd53a2d8128e8f1b60d3eea76f44e3badc4ebc2",
+   "aliases": [
+    "grok-4.3-latest"
+   ],
+   "facts": {
+    "context_window": {
+     "value": 1000000,
+     "quote": "- **Context window:** 1,000,000 tokens"
+    },
+    "efforts": {
+     "values": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "quote": "- **Reasoning efforts (supported):** `none`, `low`, `medium`, `high`, `xhigh`"
+    },
+    "effort_default": {
+     "value": "low",
+     "quote": "- **Reasoning efforts (default):** `low`"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "Yes",
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-4.5": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.5",
+   "page": "https://docs.x.ai/developers/models/grok-4.5.md",
+   "sha256": "e42169ea8e7393e69666b59a2a3f7fd7b83d218362f72bbe161f26b4c5362a1d",
+   "aliases": [
+    "grok-4.5-latest",
+    "grok-build-latest"
+   ],
+   "facts": {
+    "context_window": {
+     "value": 500000,
+     "quote": "- **Context window:** 500,000 tokens"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "quote": "- **Reasoning efforts (supported):** `low`, `medium`, `high`, `xhigh`"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "- **Reasoning efforts (default):** `high`"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "Yes",
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-4.6": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.6",
+   "page": "https://docs.x.ai/developers/models/grok-4.6.md",
+   "sha256": "c4a10724ef97c04dbb5d3602280f93c619c3493bcdb8c1840318d3bfd4b6901c",
+   "facts": {
+    "context_window": {
+     "value": 500000,
+     "quote": "- **Context window:** 500,000 tokens"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "quote": "- **Reasoning efforts (supported):** `low`, `medium`, `high`, `xhigh`"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "- **Reasoning efforts (default):** `high`"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "Yes",
+     "Batch API": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "grok-4.7": {
+   "first_seen": "2026-11-20",
+   "name": "Grok 4.7",
+   "page": "https://docs.x.ai/developers/models/grok-4.7.md",
+   "sha256": "cf323be0bbc5ccf47c3b50b9f5f4cbcf481584f446cdc79d677d3beaf483c440",
+   "facts": {
+    "context_window": {
+     "value": 500000,
+     "quote": "- **Context window:** 500,000 tokens"
+    },
+    "efforts": {
+     "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "quote": "- **Reasoning efforts (supported):** `low`, `medium`, `high`, `xhigh`"
+    },
+    "effort_default": {
+     "value": "high",
+     "quote": "- **Reasoning efforts (default):** `high`"
+    },
+    "modalities": {
+     "value": "text, image → text",
+     "quote": "- **Modalities:** text, image → text"
+    },
+    "supports": {
+     "Function calling": "Yes",
+     "Structured outputs": "Yes",
+     "Reasoning": "Yes",
+     "Batch API": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "grok-imagine-image": {
+   "first_seen": "2026-11-20",
+   "name": "grok-imagine-image",
+   "page": "https://docs.x.ai/developers/models/grok-imagine-image.md",
+   "sha256": "628bb61ce27106ea2d3111d50de007645be2f615fb90356fa2e9ab802c4eaae3",
+   "aliases": [
+    "grok-imagine-image-2026-03-02"
+   ],
+   "facts": {
+    "modalities": {
+     "value": "text, image → image",
+     "quote": "- **Modalities:** text, image → image"
+    },
+    "supports": {
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-imagine-image-2.0": {
+   "first_seen": "2026-11-20",
+   "name": "grok-imagine-image-2.0",
+   "page": "https://docs.x.ai/developers/models/grok-imagine-image-2.0.md",
+   "sha256": "b96853a986641254b5b19a59fdc60e5ea0cacbe880f08ca7ed73037beabd4b23",
+   "facts": {
+    "modalities": {
+     "value": "text, image → image",
+     "quote": "- **Modalities:** text, image → image"
+    },
+    "supports": {
+     "Batch API": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "grok-imagine-video": {
+   "first_seen": "2026-11-20",
+   "name": "grok-imagine-video",
+   "page": "https://docs.x.ai/developers/models/grok-imagine-video.md",
+   "sha256": "691974fa0925e7e721bfa4c3e201f2b877118d48fe9f31b36fc17ce341544a55",
+   "facts": {
+    "modalities": {
+     "value": "text, image, video → video",
+     "quote": "- **Modalities:** text, image, video → video"
+    },
+    "supports": {
+     "Batch API": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "grok-imagine-video-1.5": {
+   "first_seen": "2026-11-20",
+   "name": "grok-imagine-video-1.5",
+   "page": "https://docs.x.ai/developers/models/grok-imagine-video-1.5.md",
+   "sha256": "136b85ccda2569acdd3ddba00e4ccf137d396fa9531d99a3f76ddfc7c3b428a4",
+   "aliases": [
+    "grok-imagine-video-1.5-2026-05-30",
+    "grok-imagine-video-1.5-preview"
+   ],
+   "facts": {
+    "modalities": {
+     "value": "text, image → video",
+     "quote": "- **Modalities:** text, image → video"
+    },
+    "supports": {
+     "Batch API": "Supported"
+    }
+   }
+  },
+  "grok-imagine-video-1.5-lite": {
+   "first_seen": "2026-11-20",
+   "name": "grok-imagine-video-1.5-lite",
+   "page": "https://docs.x.ai/developers/models/grok-imagine-video-1.5-lite.md",
+   "sha256": "0b6bfa7a6940a062f384ef3738c3f5222746e125dadcb9a837a85f30727a0ae7",
+   "facts": {
+    "modalities": {
+     "value": "text, image → video",
+     "quote": "- **Modalities:** text, image → video"
+    },
+    "supports": {
+     "Batch API": "Supported"
+    }
+   },
+   "aliases": []
+  },
+  "grok-voice-2.0": {
+   "first_seen": "2026-11-20",
+   "name": "Grok Voice 2.0",
+   "page": "https://docs.x.ai/developers/models/grok-voice-2.0.md",
+   "sha256": "b6e6345ab32cae6c27fd32c008767f868de6b564a215b12a26e58691790e4245",
+   "facts": {
+    "modalities": {
+     "value": "text → text",
+     "quote": "- **Modalities:** text → text"
+    }
+   },
+   "aliases": []
+  },
+  "grok-voice-3.0": {
+   "first_seen": "2026-11-20",
+   "name": "Grok Voice 3.0",
+   "page": "https://docs.x.ai/developers/models/grok-voice-3.0.md",
+   "sha256": "38532b045ef29b9402621e6358b8540a7b17c9ae4a91269bb1a5e423d49a3ce9",
+   "facts": {
+    "modalities": {
+     "value": "text → text",
+     "quote": "- **Modalities:** text → text"
+    }
+   },
+   "aliases": []
+  }
+ },
+ "unread": []
+}
