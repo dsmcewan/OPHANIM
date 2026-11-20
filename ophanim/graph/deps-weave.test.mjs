@@ -73,8 +73,9 @@ test('WHAT THE WEAVE CALLS A TEST is its own check node, the documented section 
   assert.ok(rel(facts, 'derived-from', fileIdIn('telos', 'lib/b.mjs'), changeIdIn('telos', COMMIT)));
 });
 
-test('A WEAVE THAT DOES NOT VERIFY gives no facts but the reason: a changed record, a broken chain, a bad signature', t => {
+test('A WEAVE THAT DOES NOT VERIFY gives no facts but the reason: a line that is not canonical, a changed record, a broken chain, a bad signature', t => {
   const cases = [
+    [out => { out[1] = out[1].replace('{"asserted_by"', '{ "asserted_by"'); }, /^line 2: not canonical JSON$/],
     [out => { out[1] = out[1].replace('"symbol":"b"', '"symbol":"x"'); }, /^line 2: record hash does not match its content$/],
     [out => { out.splice(2, 1); }, /^line 3: broken chain \(prev_hash is not the hash of the line before\)$/],
     [out => { const o = JSON.parse(out[1]); o.signature = Buffer.alloc(64, 7).toString('base64'); out[1] = canonical(o); }, /^line 2: the signature does not verify under the header's key$/],

@@ -90,9 +90,10 @@ test('A GATE RECORD names the commit it was taken at, with what it says it check
 });
 
 test('A FILE THAT IS NOT WHAT ITS NAME PROMISES is listed with why and gives no facts of its own; the same commit gives the same facts', t => {
-  const r = tempRepo(t), head = r.commit({'OWNERSHIP.json': '{not json', 'CURRENT-AUTHORITY.json': json({note: 'no plan'}), 'docker-compose.yml': 'services: [a, b]\n'}, 'broken');
+  const r = tempRepo(t), head = r.commit({'OWNERSHIP.json': '{not json', 'CURRENT-AUTHORITY.json': json({note: 'no plan'}), 'docker-compose.yml': 'services: [a, b]\n', 'compose.yml': 'services: {}\n'}, 'broken');
   const facts = declaredFacts(r.repo, head, {name: 'argo'}), root = ent(facts, repositoryId('argo'));
-  assert.deepEqual(root.attributes.unread.map(u => u.file), ['CURRENT-AUTHORITY.json', 'OWNERSHIP.json', 'docker-compose.yml']);
+  assert.deepEqual(root.attributes.unread.map(u => u.file), ['CURRENT-AUTHORITY.json', 'OWNERSHIP.json', 'compose.yml', 'docker-compose.yml']);
+  assert.equal(root.attributes.unread.find(u => u.file === 'compose.yml').why, 'no service could be read');
   assert.deepEqual(facts.filter(d => d.type).length, 0);
   assert.deepEqual(declaredFacts(r.repo, head, {name: 'argo'}), facts);
 });
@@ -109,4 +110,15 @@ test('IN THE GRAPH the declared facts are established beside the sibling\'s code
   assert.deepEqual(readers, [fileIdIn('lexi', 'backend/app.py'), serviceId('lexi', 'backend')].sort());
   const governed = v.edgesOf(fileIdIn('lexi', 'backend/app.py'), {mode: 'established', types: ['governs']});
   assert.equal(governed.length, 1);
+});
+
+test('A PATH THAT COVERS MORE THAN 200 FILES is listed with its count and not expanded; an authorization that names another plan\'s digest authorizes nothing', t => {
+  const r = tempRepo(t), many = Object.fromEntries(Array.from({length: 201}, (_, i) => [`many/f${i}.txt`, 'x\n']));
+  const head = r.commit({...many, 'OWNERSHIP.json': json({owners: [{lane: 'wide', paths: ['many/']}]}),
+    'CURRENT-AUTHORITY.json': json({active_plan: {version: 'v2', sha256: 'sha256:' + 'a'.repeat(64)}, active_authorization: {id: 'authz-1', status: 'AUTHORIZED', authorizes_plan: 'sha256:' + 'b'.repeat(64)}})}, 'wide');
+  const facts = declaredFacts(r.repo, head, {name: 'argo'});
+  const lane = ent(facts, entityId({domain: 'evidence', type: 'authorization', key: 'argo:ownership/wide'}));
+  assert.deepEqual([lane.attributes.governs, lane.attributes.wide_paths, lane.missing_evidence], [0, [{path: 'many/', files: 201}], ['1 path(s) cover more than 200 files and are not expanded']]);
+  assert.deepEqual(facts.filter(d => d.type === 'governs' || d.type === 'authorizes'), []);
+  assert.deepEqual(ent(facts, entityId({domain: 'evidence', type: 'authorization', key: 'argo:authz-1'})).missing_evidence, ['the authorization names a plan digest that is not the active plan\'s']);
 });

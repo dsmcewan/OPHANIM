@@ -78,6 +78,8 @@ test('THE AUDIT COMPARES EACH PINNED DIGEST with the sibling\'s own file at the 
     differing: [{path: 'lib/b.mjs', pinned: sha('not what the file holds'), found: sha(SIBLING_FILES['lib/b.mjs'])}], absent: ['lib/gone.mjs']}]);
   assert.deepEqual(audit(without.graph.view()).pins, [{repository: 'telos', pinned_commit: pinned, read_at: null, checked: false, pinned: 3,
     why: 'the sibling was not read: the digests of its files are not at hand'}]);
+  assert.deepEqual(needs(withSibling.graph.view(), 'ophanim/governance.mjs').direct.siblings.map(d => [d.name, d.basis]),
+    [['telos', 'commit pin'], ['telos:lib/a.mjs', 'digest pin'], ['telos:lib/b.mjs', 'digest pin'], ['telos:lib/gone.mjs', 'digest pin']], 'what a file needs of another repository is listed apart');
   // The pin source's own facts are the same with and without the checkout: only the audit's comparison differs.
   const pinFacts = g => g.graph.view().node(fileIdIn('telos', 'lib/b.mjs')).assertions.filter(a => a.source.id === 'ophanim.pins').map(a => g.graph.view().assertion(a.id).record.attributes);
   assert.deepEqual(pinFacts(withSibling), pinFacts(without));
@@ -103,6 +105,7 @@ test('WHAT DOES IT NEED: the direct dependencies by kind, each with the relation
   // Everything reachable: the package, the platform module, the variable, the table, util.mjs and its helper.
   assert.deepEqual([r.transitive.count, r.subject, r.cursor], [6, fileId('app/main.mjs'), v.seq]);
   assert.deepEqual(needs(v, 'app/main.mjs#run').direct.functions.map(f => f.name), ['app/util.mjs#helper']);
+  assert.deepEqual(Object.values(needs(v, 'app/util.mjs').direct).flat(), [], 'what depends ON a file is not what the file needs');
   assert.deepEqual(r.mentions, [{name: 'host:api.example.test', lines: [7], stated_by: [{source: 'ophanim.code-text', version: head}], note: 'named in a string: not a dependency'}]);
 });
 

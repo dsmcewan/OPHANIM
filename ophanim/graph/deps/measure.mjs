@@ -33,7 +33,7 @@ const step = (view, id, types, direction) => view.edgesOf(id, {mode: 'establishe
 
 function reach(view, id, types, direction, depth) {
   const seen = new Set();
-  let frontier = new Set(depth > 0 ? step(view, id, types, direction) : []);
+  let frontier = new Set(step(view, id, types, direction));
   for (let hops = 1; frontier.size && hops <= depth; hops++) {
     const next = new Set();
     for (const n of frontier) { if (seen.has(n)) continue; seen.add(n); for (const m of step(view, n, types, direction)) if (!seen.has(m)) next.add(m); }

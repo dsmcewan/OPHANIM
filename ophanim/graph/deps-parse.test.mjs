@@ -162,3 +162,18 @@ test('the same text gives the same reading', () => {
   const text = lines("import {a} from './a.mjs';", "export function f() { return a(process.env.X); }");
   assert.deepEqual(read(text), read(text));
 });
+
+test('WHAT THE FILE DOES NOT SETTLE IS NOT GUESSED: a path joined to a computed last part is counted; a function that calls itself, or calls one thing twice, states one call', () => {
+  const r = read(lines(
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import {fileURLToPath} from 'node:url';",
+    "import {digest} from './crypto.mjs';",
+    "const a = fs.readFileSync(path.join(ROOT, 'docs', name));",
+    "function walk(n) { return n ? walk(n - 1) : digest(n) + digest(n); }",
+    "const b = fs.readFileSync(fileURLToPath(new URL('./beside.json', import.meta.url)));",
+  ));
+  assert.deepEqual(r.unresolved.reads, [{line: 5, call: 'readFileSync'}]);
+  assert.deepEqual(r.functions.map(f => [f.name, f.calls]), [['walk', [{line: 6, imported: 'digest', specifier: './crypto.mjs'}]]]);
+  assert.deepEqual(r.reads, [{path: './beside.json', line: 7, call: 'readFileSync', relative: true}]);
+});

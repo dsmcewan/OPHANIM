@@ -88,6 +88,7 @@ test('THE PLATFORM, THE ENVIRONMENT AND PROGRAMS: a platform module, a variable 
 test('FILES READ BY PATH: a path relative to the file is exact; a path joined to a root the file computes resolves only when one tracked file fits', t => {
   const {repo, head} = setup(t), facts = codeFacts(repo, head), main = fileId('app/main.mjs');
   assert.deepEqual(rel(facts, 'consumes', main, fileId('app/config.json')).attributes, {basis: 'file read by path', calls: ['readFileSync'], lines: [8], as_written: './config.json', anchor: 'the file\'s own directory'});
+  assert.equal(rel(facts, 'consumes', main, fileId('app/config.json')).uncertainty, undefined, 'a path beside the file is exact: nothing was assumed');
   const table = rel(facts, 'consumes', main, fileId('app/data/table.json'));
   assert.deepEqual(table.attributes, {basis: 'file read by path', calls: ['readFileSync'], lines: [9], as_written: 'app/data/table.json', anchor: 'the repository root'});
   assert.equal(table.uncertainty, 'the path is joined to a root this file computes; it is taken as the one tracked file the path names from the repository root or a directory above the file');
@@ -191,4 +192,22 @@ test('PYTHON is read the same way: an import of a module of the repository is th
   assert.deepEqual(ent(facts, symbolIdIn('lexi', 'app/main.py', 'run')).attributes, {module: 'app/main.py', name: 'run', kind: 'function', line: 8, exported: true});
   assert.deepEqual(ent(facts, repositoryId('lexi')).attributes.unresolved_imports, [{file: 'app/main.py', specifier: '..outside', line: 6}]);
   assert.match(ent(facts, repositoryId('lexi')).attributes.readers, /^typescript [\d.]+ for JavaScript and TypeScript; a line-and-token reader for Python \(no calls\)$/);
+});
+
+test('A PATH THAT TWO TRACKED FILES FIT is not resolved: both are named and no edge is made', t => {
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'package.json': json({name: 'two'}), 'conf/x.json': '{}\n', 'app/conf/x.json': '{}\n',
+    'app/main.mjs': lines("import fs from 'node:fs';", "import path from 'node:path';", "export const x = fs.readFileSync(path.join(ROOT, 'conf/x.json'));")}, 'two fits');
+  const facts = codeFacts(repo, head), main = fileId('app/main.mjs');
+  assert.deepEqual(ent(facts, main).attributes.unresolved_reads, [{as_written: 'conf/x.json', line: 3, why: 'more than one tracked file fits', candidates: ['app/conf/x.json', 'conf/x.json']}]);
+  assert.deepEqual(facts.filter(d => d.type === 'consumes' && d.from === main), []);
+});
+
+test('PYTHON: a module two directories hold is not resolved, and a relative import that climbs out of the repository is not answered from its root', t => {
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'conftest.py': 'X = 1\n', 'pkg/conftest.py': 'X = 2\n', 'pkg/tests/test_a.py': 'import conftest\n', 'pkg/a.py': 'from ... import conftest\n'}, 'python edges');
+  const facts = codeFacts(repo, head, {name: 'lexi'});
+  assert.deepEqual(ent(facts, repositoryId('lexi')).attributes.unresolved_imports, [{file: 'pkg/a.py', specifier: '...', line: 1},
+    {file: 'pkg/tests/test_a.py', specifier: 'conftest', line: 1, why: 'more than one directory holds a module of this name'}]);
+  assert.deepEqual(facts.filter(d => d.type === 'depends-on'), []);
 });

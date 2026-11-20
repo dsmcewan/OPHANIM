@@ -3,7 +3,7 @@
 // repository below is made in a temporary directory by this test. Synthetic keys only; no network.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {dependencies, blastRadius, relevance, riskClass, assess, coverageOf, RISK} from './deps/measure.mjs';
+import {dependencies, blastRadius, relevance, riskClass, classOf, assess, coverageOf, RISK} from './deps/measure.mjs';
 import {repoSource, fileId} from './extract/repo.mjs';
 import {openSystemsGraph} from './extract/index.mjs';
 import {tempRepo, T0} from './fixtures/repo.mjs';
@@ -69,4 +69,17 @@ test('COVERAGE is attested complete only when every source is current and no rea
   assert.deepEqual(coverageOf(v), {coverage: 'attested-complete', why: []});
   assert.deepEqual(coverageOf(v, {gaps: ['2 file(s) the parser rejected give no facts']}), {coverage: 'unverified', why: ['2 file(s) the parser rejected give no facts']});
   assert.deepEqual(coverageOf({...v, sources: () => [{id: 'ophanim.repo', state: 'stale'}]}), {coverage: 'unverified', why: ['source ophanim.repo is stale']});
+});
+
+test('THE THRESHOLDS ARE INCLUSIVE: ten dependents is high and three is medium, as in Lachesis', () => {
+  assert.deepEqual([10, 9, 3, 2].map(n => classOf(n, 'attested-complete').class), ['high', 'medium', 'medium', 'low']);
+});
+
+test('RELEVANCE weighs a direct dependent at 3 and a check that verifies the node at 2', () => {
+  // A view of four nodes written out by hand: x depends on a; the check t verifies b.
+  const id = (type, key) => `ophanim/systems/${type}/${key}`, a = id('module', 'a'), b = id('module', 'b'), x = id('module', 'x'), check = id('test', 't');
+  const edges = [{type: 'depends-on', from: x, to: a}, {type: 'verifies', from: check, to: b}];
+  const view = {seq: 1, subjects: () => [a, b, x, check], nodeIn: () => true,
+    edgesOf: (n, {types}) => edges.filter(e => (e.from === n || e.to === n) && types.includes(e.type))};
+  assert.deepEqual([relevance(view, a), relevance(view, b), relevance(view, x)], [1, 2 / 3, 0]);
 });
