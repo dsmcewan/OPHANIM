@@ -7,6 +7,12 @@
 // owner, never executed (issue text and comments are task data, not authority). A ticket for an item that is not
 // on the ledger is an orphan, reported. Two issues carrying the same item marker are reported as a duplicate.
 //
+// THE SELF-REPAIR LANE (ophanim/operate/self-repair.mjs; docs/self-repair.md). The owner-signed item `self-repair` is the
+// lane's ON switch, never work: its gate is `lane` (never dispatched). While it is In progress, every OPEN round on the work
+// ledger (work.repair) is reconciled as an item of its own (`self-repair.r<N>`, its row built from its open event), through
+// the same gates as every other item. Without the item (or with it in another state) no round is listed: the
+// reconciliation is exactly as before.
+//
 // Inputs: repo, statusRoot, workLedger (openWorkLedger), issues (a snapshot array {number, title, body, state,
 // labels}) or null, bundlesDir or null. Output: {items: [{item, status, history, ticket, issues, runs, gate,
 // stages}], candidates, orphans, duplicates, counts}. Pure apart from reading those files.
@@ -19,6 +25,7 @@ import {buildDossier, makeRetriever, admitFile} from './context.mjs';
 import {earliestGate, completionEvidence, attemptInputs} from './gates.mjs';
 import {sourcesDigest, bundlesOf} from './evidence-recovery.mjs';
 import {STAGES, workKey} from './work-ledger.mjs';
+import {LANE_ITEM, laneSwitch, roundsOf, roundRow, isRound} from './self-repair.mjs';
 
 export const MARKER = /<!--\s*ophanim:item=([a-z0-9][a-z0-9.-]{0,63})\s*-->/;
 
@@ -107,6 +114,11 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
   const {board, byItem} = statusHistory(statusRoot);
   const G = graph ? graph.prepare({items: board.items, byItem, stagesOf: i => (workLedger ? (i === undefined ? workLedger.stages() : workLedger.stages(i)) : [])}) : null;
   const latest = new Map(board.items.map(i => [i.item, i]));
+  // The lane's switch and its open rounds (only while the switch is on); every round, open or closed, owns its ticket.
+  const lane = laneSwitch(board);
+  const allRounds = workLedger?.repairs ? roundsOf(workLedger) : [];
+  const rounds = lane.on ? allRounds.filter(r => !r.close) : [];
+  const roundIds = new Set(allRounds.map(r => r.item));
   const runs = retainedRuns(bundlesDir);
   const ticketsDir = path.join(repo, 'tickets');
   const ticketItems = fs.existsSync(ticketsDir) ? fs.readdirSync(ticketsDir).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)) : [];
@@ -169,7 +181,12 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     if (checks?.checked !== 'structural') return `its evidence does not re-check as apply would: ${checks?.why ?? Object.entries(checks ?? {}).filter(([k, v]) => k !== 'checked' && !v).map(([k]) => k).join(', ')}`;
     return null;
   };
-  const items = board.items.map(s => {
+  const items = [...board.items, ...rounds.map(roundRow)].map(s => {
+    if (s.item === LANE_ITEM) {
+      return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length, ticket: null, issues: issueByItem.get(s.item) ?? [],
+        runs: [], stages: 0, gate: {item: s.item, state: s.state, entry: s.entry, gate: 'lane', lane: {on: lane.on, rounds_open: rounds.length},
+          reason: lane.on ? `the self-repair lane's switch is ON: ${rounds.length} round(s) open; the item itself is never dispatched` : lane.why}};
+    }
     const ticketFile = path.join(ticketsDir, `${s.item}.json`);
     const ticket = fs.existsSync(ticketFile) ? readTicket({repo, item: s.item}) : null;
     const stages = workLedger ? workLedger.stages(s.item) : [];
@@ -182,7 +199,7 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     const recs = workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry) : [];
     const recovery = recs.filter(r => r.sources === recoverySources).at(-1) ?? recs.at(-1) ?? null;
     let gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, versionOf, now,
-      recovery, recoverySources, capacity, outcomeRecheck, ...(G ? {graph: G.gateInput(s.item, stages)} : {}),
+      recovery, recoverySources, capacity, outcomeRecheck, ...(G && !isRound(s.item) ? {graph: G.gateInput(s.item, stages)} : {}),
       reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
@@ -209,9 +226,9 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
       ticket: ticket ? (ticket.why ? {invalid: ticket.why} : {path: ticket.path, digest: ticket.digest}) : null,
       issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate,
       // The items this one waits for because they implement a prerequisite it requires (KD2-2): dependencyOrder runs them first.
-      ...(G ? {graph_depends_on: G.dependsOn(s.item), claimed_paths: G.paths(s.item)} : {})};
+      ...(G && !isRound(s.item) ? {graph_depends_on: G.dependsOn(s.item), claimed_paths: G.paths(s.item)} : {}), ...(isRound(s.item) ? {round: s.round} : {})};
   });
-  const orphans = ticketItems.filter(i => !latest.has(i)).map(i => ({ticket: `tickets/${i}.json`, why: 'a ticket for an item that is not on the status ledger'}));
+  const orphans = ticketItems.filter(i => !latest.has(i) && !roundIds.has(i)).map(i => ({ticket: `tickets/${i}.json`, why: 'a ticket for an item that is not on the status ledger'}));
   const gateCounts = {};
   for (const i of items) gateCounts[i.gate.gate] = (gateCounts[i.gate.gate] ?? 0) + 1;
   return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, orphans, duplicates, ...(G ? {graph: G.report()} : {}),

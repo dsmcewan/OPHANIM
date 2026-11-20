@@ -63,6 +63,20 @@
 //                 billing entries of the same kind before it, on the whole ledger, are fewer than its declared budget.
 //                 The budget's consumption is therefore derived from this record, never from a process's memory: a
 //                 restart, a resumed attempt or a later service tick cannot reset it.
+//   work.repair   THE SELF-REPAIR LANE'S RECORD (ophanim/operate/self-repair.mjs; docs/self-repair.md), one event each:
+//                 `open` (a round: its number, kind repair|rollback, the defect with the Detect evidence, the paths it
+//                 claims, its base on the line, the queue and the routing of every skipped defect), `revalidate` (a
+//                 re-validation on a moved line head, or a rollback's verification), `land` (one commit on the line:
+//                 commit, parent, the exact revert), `close` (landed | blocked | failed), `route` (a defect routed to the
+//                 owner as an unsigned candidate). Re-derived under the append lock: rounds are numbered in order; a REPAIR
+//                 round is refused while an open round claims overlapping paths, or one is already open for its defect; a
+//                 landing is a FAST-FORWARD of its line (its parent is the line's last landing, or the line's start) on
+//                 the round's own line, once; a landing whose parent is not the round's base (the base moved) needs a
+//                 passing re-validation of exactly that commit on exactly that parent first; a round closes once, and
+//                 `landed` only after its landing. A defect is routed once.
+//                 A claim may carry `paths` (a self-repair round's claim does): it is refused while ANOTHER item's live
+//                 claim carries overlapping paths (pantheon/src/pipeline/paths.mjs pathsOverlap), so two rounds never edit
+//                 overlapping paths at once. Claims without `paths` are checked exactly as before.
 //
 // Inputs: an absolute root (default <repo>/status/work). Outputs: the API below. Must never: sign a status, read
 // the owner's keys, or accept a stage whose handoff does not re-derive.
@@ -72,6 +86,7 @@ import {openLedger, createLedger, defineKinds, generateSigner} from '../../packa
 import {keyStore} from '../../packages/ledger/home.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {GEMINI_KINDS, SETTING_OF, budgetRefusal as geminiBudgetRefusal} from '../../pantheon/src/route/gemini-billing.mjs';
+import {pathsOverlap} from '../../pantheon/src/pipeline/paths.mjs';
 
 export const WORK_SCHEMA = 'ophanim.work/v1';
 // The governed lifecycle, in order. `plan` is evaluation and planning (evidence, problem, plan, independent
@@ -86,6 +101,44 @@ export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed'
 export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket']);
 export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
 export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
+/** The self-repair lane's events (work.repair) and how a round may close. */
+export const REPAIR_EVENTS = Object.freeze(['open', 'revalidate', 'land', 'close', 'route']);
+export const REPAIR_KINDS = Object.freeze(['repair', 'rollback']);
+export const REPAIR_CLOSE = Object.freeze(['landed', 'blocked', 'failed']);
+const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const pathList = v => Array.isArray(v) && v.length <= 256 && v.every(x => typeof x === 'string' && x.trim() !== '' && x.length <= 512);
+/** Why a work.repair event cannot follow `prior` (the lane's earlier events, in order), or null. */
+function repairRefusal(p, prior) {
+  const opens = prior.filter(q => q.event === 'open'), closes = new Map(prior.filter(q => q.event === 'close').map(q => [q.round, q]));
+  const open = Number.isInteger(p.round) ? opens.find(q => q.round === p.round) ?? null : null;
+  if (p.event === 'route') return prior.some(q => q.event === 'route' && q.defect?.id === p.defect.id) ? `the defect ${p.defect.id} is already routed to the owner: a defect is routed once` : null;
+  if (p.event === 'open') {
+    const last = Math.max(0, ...opens.map(q => q.round));
+    if (p.round !== last + 1) return `rounds are numbered in order: the next round is ${last + 1}, not ${p.round}`;
+    if (p.kind !== 'repair') return null;
+    const live = opens.filter(q => !closes.has(q.round));
+    const same = live.find(q => q.kind === 'repair' && q.defect?.id === p.defect.id);
+    if (same) return `round ${same.round} is already open for ${p.defect.id}`;
+    const clash = live.find(q => (q.paths ?? []).some(a => p.paths.some(b => pathsOverlap(a, b))));
+    if (clash) return `PATHS_CLAIMED: round ${p.round} would claim paths overlapping open round ${clash.round} (${p.paths.join(', ').slice(0, 200)}): two rounds never edit overlapping paths at once`;
+    return null;
+  }
+  if (!open) return `round ${p.round} was never opened`;
+  if (closes.has(p.round)) return `round ${p.round} is already closed (${closes.get(p.round).outcome})`;
+  if (p.event === 'close') return p.outcome === 'landed' && !prior.some(q => q.event === 'land' && q.round === p.round) ? `round ${p.round} cannot close landed: nothing of it landed` : null;
+  if (p.event === 'revalidate') return null;
+  // land
+  if (prior.some(q => q.event === 'land' && q.round === p.round)) return `round ${p.round} already landed: a round lands one commit`;
+  if (p.line !== open.line) return `LANDING_REF: round ${p.round} lands on its own line ${open.line}, never on ${p.line}`;
+  const lands = prior.filter(q => q.event === 'land' && q.line === p.line);
+  const start = opens.find(q => q.line === p.line)?.base ?? null;
+  const head = lands.at(-1)?.commit ?? start;
+  if (p.parent !== head) return `LANDING_NOT_FAST_FORWARD: the landing's parent ${p.parent.slice(0, 12)} is not the line's head ${String(head).slice(0, 12)}`;
+  if (p.parent !== open.base && !prior.some(q => q.event === 'revalidate' && q.round === p.round && q.ok === true && q.commit === p.commit && q.parent === p.parent)) {
+    return `REVALIDATE_REQUIRED: round ${p.round}'s base ${open.base.slice(0, 12)} moved to ${p.parent.slice(0, 12)}; it lands only after a passing re-validation of ${p.commit.slice(0, 12)} on that head`;
+  }
+  return null;
+}
 /** Why a claim may no longer record a result or charge a call at `at` (ms), or null. Shared by append and re-derivation. */
 export function fenceRefusal(claim, {released, at}) {
   if (released) return `the claim (${claim.stage}, attempt ${claim.attempt}) was already released (${released.outcome ?? 'released'}): LEASE_FENCED, a released claim records nothing`;
@@ -172,6 +225,26 @@ function kinds({operators}) {
       rederive: (e, view) => (entriesOf(view, 'work.reassessment').some(h => { const q = view.payload(h); return q.cycle === e.payload.cycle && q.policy === e.payload.policy; })
         ? 'this cycle is already reassessed under that policy' : null),
     },
+    'work.repair': {
+      authors: byController,
+      validate: p => {
+        if (p?.schema !== WORK_SCHEMA || !REPAIR_EVENTS.includes(p.event) || !ISO(p.at)) return 'a self-repair event names {event, round, at}';
+        if (p.event === 'route') return plain(p.defect) && str(p.defect.id) && p.round === null && p.route === 'owner' && str(p.why) ? null : 'a route names {defect: {id}, route: owner, why}';
+        if (!(Number.isInteger(p.round) && p.round >= 1)) return 'a self-repair event names its round (an integer >= 1)';
+        if (p.event === 'open') {
+          if (!REPAIR_KINDS.includes(p.kind) || !plain(p.defect) || !str(p.defect.id) || !pathList(p.paths) || !COMMIT.test(p.base ?? '') || !/^refs\/heads\/./.test(p.line ?? '')) {
+            return 'an open names {kind: repair|rollback, defect: {id}, paths, base (a commit), line (refs/heads/...)}';
+          }
+          if (p.kind === 'rollback' && !(plain(p.culprit) && Number.isInteger(p.culprit.round) && COMMIT.test(p.culprit.commit ?? ''))) return 'a rollback round names its culprit {round, commit}';
+          return null;
+        }
+        if (p.event === 'close') return REPAIR_CLOSE.includes(p.outcome) && str(p.why) ? null : `a close names {outcome: ${REPAIR_CLOSE.join('|')}, why}`;
+        if (p.event === 'revalidate') return COMMIT.test(p.commit ?? '') && COMMIT.test(p.parent ?? '') && typeof p.ok === 'boolean' ? null : 'a revalidation names {commit, parent, ok}';
+        return COMMIT.test(p.commit ?? '') && COMMIT.test(p.parent ?? '') && /^refs\/heads\/./.test(p.line ?? '') && p.revert === `git revert --no-edit ${p.commit}`
+          ? null : 'a landing names {line, commit, parent, revert: the exact revert of the commit}';
+      },
+      rederive: (e, view) => repairRefusal(e.payload, entriesOf(view, 'work.repair').filter(h => h !== e.hash).map(h => view.payload(h))),
+    },
     'work.intake': {
       authors: byController,
       validate: p => p?.schema === WORK_SCHEMA && INTAKE_SOURCES.includes(p.source) && str(p.ref) && INTAKE_CLASSES.includes(p.classification)
@@ -192,6 +265,7 @@ function kinds({operators}) {
         if (!(Number.isInteger(p.attempt) && p.attempt >= 1) || !SHA.test(p.key ?? '') || !str(p.holder)) return 'a claim names {attempt >= 1, key, holder}';
         if (!ISO(p.leased_at) || !(Number.isInteger(p.lease_ms) && p.lease_ms > 0)) return 'a claim names its lease {leased_at, lease_ms}';
         if (p.reserve !== undefined && !(plain(p.reserve) && nonneg(p.reserve.total_provider_calls) && Object.keys(p.reserve).length === 1)) return 'a reserving claim names reserve {total_provider_calls}';
+        if (p.paths !== undefined && !(pathList(p.paths) && p.paths.length)) return 'a claim\'s paths are a non-empty list of repository paths or globs';
         return budgetRefusal(p.budget);
       },
       rederive: (e, view) => {
@@ -204,6 +278,15 @@ function kinds({operators}) {
           if (!rel && p.fence === 1 && Date.parse(c.leased_at) + c.lease_ms <= at) return `"${p.item}" has an unreleased claim (${c.stage}, attempt ${c.attempt}) whose lease expired: release it as expired before claiming again`;
           if (!rel && Date.parse(c.leased_at) + c.lease_ms > at) return `"${p.item}" is already claimed (${c.stage}, attempt ${c.attempt}, lease until ${new Date(Date.parse(c.leased_at) + c.lease_ms).toISOString()}): no duplicate execution`;
           if (rel && c.key === p.key && view.payload(rel).outcome === 'completed') return `"${p.item}" ${p.stage} already completed for these exact inputs (${p.key.slice(0, 19)}): reuse it, do not pay twice`;
+        }
+        // THE PATH FENCE (self-repair): a claim carrying paths waits while another item's live claim holds overlapping ones.
+        if (p.paths !== undefined) {
+          for (const h of entriesOf(view, 'work.claim')) {
+            const c = view.payload(h);
+            if (c.item === p.item || !Array.isArray(c.paths) || releaseOf(view, h) || Date.parse(c.leased_at) + c.lease_ms <= at) continue;
+            const both = c.paths.filter(a => p.paths.some(b => pathsOverlap(a, b)));
+            if (both.length) return `PATHS_CLAIMED: "${c.item}" holds a live claim (${c.stage}, attempt ${c.attempt}) on paths overlapping "${p.item}"'s (${both.join(', ').slice(0, 200)}): two rounds never edit overlapping paths at once`;
+          }
         }
         if (p.reserve !== undefined) {
           const used = usedBefore(view, at), left = p.reserve.total_provider_calls - used;
@@ -416,7 +499,7 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
     // An unreleased claim on the item whose lease expired at `at` is first released as `expired` (a claim racing to
     // release it is fine: the ledger refuses the second release, and the fenced claim then re-derives).
     // `total_provider_calls` (optional): the total this claim's budget is RESERVED against, atomically (see the header).
-    claim: ({item, stage, attempt, inputs, holder, budget, lease_ms = 30 * 60_000, at = new Date().toISOString(), total_provider_calls = undefined}) => {
+    claim: ({item, stage, attempt, inputs, holder, budget, lease_ms = 30 * 60_000, at = new Date().toISOString(), total_provider_calls = undefined, paths = undefined}) => {
       for (const c of of('work.claim', x => x.item === item && !released(x.hash) && Date.parse(x.leased_at) + x.lease_ms <= Date.parse(at))) {
         try { append('work.release', {item: c.item, stage: c.stage, outcome: 'expired', why: 'the lease expired without a recorded result: released before a new claim', at}, [c.hash]); }
         catch (e) { if (!/already released/.test(e.message)) throw e; }
@@ -425,9 +508,10 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
       // bb1287a), L-308): the scheduler classifies the stop by `code` PROVIDER_CALL_BUDGET, never by the message.
       try {
         return append('work.claim', {item, stage, attempt, key: workKey({item, stage, inputs}), holder, leased_at: at, lease_ms, budget, fence: 1,
-          ...(total_provider_calls !== undefined ? {reserve: {total_provider_calls}} : {})});
+          ...(total_provider_calls !== undefined ? {reserve: {total_provider_calls}} : {}), ...(paths !== undefined ? {paths} : {})});
       } catch (e) {
         if (total_provider_calls !== undefined && String(e?.message ?? '').includes(RESERVE_REFUSAL)) { try { e.code = 'PROVIDER_CALL_BUDGET'; } catch { /* frozen */ } }
+        if (paths !== undefined && String(e?.message ?? '').includes('PATHS_CLAIMED:')) { try { e.code = 'PATHS_CLAIMED'; } catch { /* frozen */ } }
         throw e;
       }
     },
@@ -466,6 +550,10 @@ export function openWorkLedger({root, create = true, keys = null, anchor = null}
       append('work.reassessment', {item, cycle, recorded_policy, policy, findings, ...(policy_rules !== undefined ? {policy_rules} : {}), at}),
     reassessments: item => of('work.reassessment', r => item === undefined || r.item === item),
     intakes: () => of('work.intake'),
+    /** Record one self-repair lane event (work.repair; see the header). Returns its entry hash. */
+    recordRepair: ({at = new Date().toISOString(), ...event}) => append('work.repair', {...event, at}),
+    /** The self-repair lane's events, in ledger order. */
+    repairs: () => of('work.repair'),
     claims: item => of('work.claim', c => item === undefined || c.item === item),
     stages: item => of('work.stage', s => item === undefined || s.identity.item === item),
     /** The claim on `item` that is unreleased and unexpired at `now`, or null. */

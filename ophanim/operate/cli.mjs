@@ -38,6 +38,14 @@
 //       The execution service (service.mjs): watch under a validated config (declared provider-call cap, interval,
 //       issue source, seats), one instance per work ledger, status and log files under its state directory.
 //       Templates: ophanim/operate/service/ (systemd user unit, launchd agent, example config).
+//   node ophanim/operate/cli.mjs self-repair [--records DIR] [--base-ref REF] [--line REF] [--json]
+//       THE SELF-REPAIR LANE'S VIEW (self-repair.mjs; docs/self-repair.md), a DRY RUN: the lane's state (the owner's
+//       switch, the line, the open and closed rounds), what the next round would select, and what it would route to the
+//       owner. Detect and the selection only: no provider call, nothing written (no ledger entry, candidate or ref).
+//   node ophanim/operate/cli.mjs self-repair record --kind gate|stress|pentest --commit SHA --file FILE [--records DIR]
+//       Wrap one of OPHANIM's own machine records (check.mjs --json, stress.mjs --json, scripts/pentest/run.mjs's report)
+//       with the commit it ran on, into the lane's records directory (default status/operate/self-repair/records): Detect
+//       reads nothing else. Issue text is never a record.
 //   node ophanim/operate/cli.mjs report --out FILE [--issues FILE | --github] [--issues-label TEXT] [--bundles DIR]
 //       The backlog reconciliation as Markdown (FILE) and JSON (FILE with .json): every item by earliest unmet
 //       gate with its ticket, issues, runs, blocker, responsible role and resume condition, and the evidence gap
@@ -385,10 +393,28 @@ export const tickSummary = (t, limits) => ({
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
 });
 
+/** The self-repair view as plain text (the `self-repair` verb). */
+export function selfRepairText(v) {
+  const out = [];
+  out.push(`self-repair lane: ${v.lane.on ? `ON (switch entry ${v.lane.entry})` : `DORMANT -- ${v.lane.why}`}`);
+  out.push(`line ${v.line.ref}: ${v.line.exists ? `head ${v.line.head}` : `not started (it starts from ${v.line.base_ref} when the first round opens)`}; commit under repair ${v.commit ?? 'none'}`);
+  out.push(`rounds: ${v.rounds.open.length} open, ${v.rounds.closed.length} closed; records: gate ${v.records.gate}, stress ${v.records.stress}, pentest ${v.records.pentest}, unreadable ${v.records.unreadable}`);
+  out.push(`detect: ${v.detect.defects} defect(s) (${Object.entries(v.detect.by_kind).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'})`);
+  for (const x of v.detect.ignored) out.push(`  ignored ${x.source}: ${x.why}`);
+  out.push('', v.next ? `NEXT ROUND WOULD SELECT: ${v.next.id} (${v.next.kind}) -- ${v.next.title}; site ${v.next.site.join(', ')}` : 'NEXT ROUND WOULD SELECT: nothing');
+  out.push(`queued behind it: ${v.queue.length}${v.queue.length ? ` (${v.queue.slice(0, 12).join(', ')}${v.queue.length > 12 ? ', ...' : ''})` : ''}`);
+  out.push('', `ROUTED TO THE OWNER (unsigned candidates, never selected): ${v.owner.length}`, ...v.owner.map(o => `  ${o.id} [${o.subject ?? '-'}]: ${o.why}`));
+  out.push('', `pending the owner's decision (the register): ${v.owner_decision.length}`, ...v.owner_decision.map(o => `  ${o.id}: ${o.why}`));
+  out.push('', `unlocated (no path of the tree named): ${v.unlocated.length}${v.unlocated.length ? ` (${v.unlocated.join(', ')})` : ''}`);
+  if (v.other.length) out.push('', 'other skips:', ...v.other.map(o => `  ${o.id}: ${o.why}`));
+  out.push('', `written: ${v.written}`);
+  return out.join('\n');
+}
+
 export async function main(argv = process.argv.slice(2), {log = console.log, err = console.error, env = process.env, fetchImpl, stagesFile, proc = process, exit, graceMs} = {}) {
   const stopOpts = {proc, err, ...(exit ? {exit} : {}), ...(graceMs !== undefined ? {graceMs} : {})};
   try {
-    const {verb, opts} = parseArgs(argv);
+    const {verb, opts, pos} = parseArgs(argv);
     const paths = pathsOf({opts, env});
     if (verb === 'reconcile' || verb === 'report') {
       if (verb === 'report' && !opts.out) usage('report needs --out FILE');
@@ -463,6 +489,27 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
       const r = reassessItem({work: openWorkLedger({root: paths.workRoot}), item});
       log(JSON.stringify({item: r.item, policy: r.policy, recorded: r.recorded.map(x => ({stage: x.stage, cycle: x.cycle, reassessment: x.reassessment, findings: x.findings})),
         skipped: r.skipped.map(x => ({stage: x.stage, cycle: x.cycle, why: x.why}))}, null, 2));
+      return 0;
+    }
+    if (verb === 'self-repair') {
+      const sr = await import('./self-repair.mjs');
+      const stateDir = path.join(path.dirname(paths.workRoot), 'operate');
+      const records = opts.records ? path.resolve(opts.records) : sr.recordsDirOf(stateDir);
+      if (pos[0] === 'record') {
+        if (!opts.kind || !opts.commit || !opts.file) usage('self-repair record needs --kind gate|stress|pentest --commit SHA --file FILE');
+        const text = fs.readFileSync(path.resolve(opts.file), 'utf8');
+        const record = opts.kind === 'pentest' ? {report: text} : JSON.parse(text);
+        const f = sr.writeRecord({dir: records, kind: opts.kind, commit: opts.commit, record});
+        log(path.relative(process.cwd(), f));
+        return 0;
+      }
+      if (pos.length) usage(`self-repair takes no argument but "record" (got ${pos[0]})`);
+      const {openStatusLedger} = await import('../../packages/ledger/status.mjs');
+      const board = openStatusLedger({root: paths.statusRoot, create: false}).board();
+      const {work} = openWorkReadOnly(paths.workRoot);
+      const config = sr.laneConfig({...(opts['base-ref'] ? {base_ref: opts['base-ref']} : {}), ...(opts.line ? {line: opts.line} : {})});
+      const v = sr.laneView({repo: paths.repo, board, work, stateDir, config, records});
+      log(opts.json ? JSON.stringify(v, null, 2) : selfRepairText(v));
       return 0;
     }
     if (verb === 'serve') {
