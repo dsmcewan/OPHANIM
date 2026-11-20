@@ -12,6 +12,8 @@
 //             systems/change      <repository>:<commit>  a commit of a sibling repository
 //             systems/component   npm:<name>             a package of the npm registry          (ecosystem `npm`)
 //                                 pypi:<name>            a package of the Python package index   (ecosystem `pypi`)
+//                                 python:<module>        a Python module by its IMPORT name: the standard library or an
+//                                                        installed distribution, which the import does not say (`python`)
 //                                 node:<name>            a module of the Node platform itself    (ecosystem `node`)
 //                                 program:<name>         a program run by name                   (ecosystem `program`)
 //                                 action:<owner/name>    a CI action                             (ecosystem `action`)
@@ -26,7 +28,7 @@ import {fileId, symbolId, typeOf} from '../extract/repo.mjs';
 
 /** This repository's name in the graph (extract/repo.mjs repoSource's default). */
 export const HOME = 'ophanim';
-export const ECOSYSTEMS = Object.freeze(['npm', 'pypi', 'node', 'program', 'action', 'image']);
+export const ECOSYSTEMS = Object.freeze(['npm', 'pypi', 'python', 'node', 'program', 'action', 'image']);
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const need = (ok, why) => { if (!ok) throw Object.assign(new Error(why), {code: 'DEPS_ID_REFUSED'}); };
 
@@ -42,3 +44,5 @@ export const serviceId = (repo, name) => { need(NAME.test(repo) && typeof name =
 export const checkIdIn = (repo, p) => { need(NAME.test(repo) && repo !== HOME, `"${repo}" is not a sibling repository name`); return entityId({domain: 'systems', type: 'test', key: `${repo}:${p}`}); };
 /** A commit of a sibling repository (this repository's own commits are extract/repo.mjs changeId). */
 export const changeIdIn = (repo, commit) => { need(NAME.test(repo) && repo !== HOME && /^[0-9a-f]{40}$/.test(commit), 'a sibling commit has a repository name and 40 hex'); return entityId({domain: 'systems', type: 'change', key: `${repo}:${commit}`}); };
+/** A CI workflow of a sibling repository (this repository's own are extract/verification.mjs workflowId). */
+export const workflowIdIn = (repo, file) => { need(NAME.test(repo) && repo !== HOME, `"${repo}" is not a sibling repository name`); return entityId({domain: 'systems', type: 'workflow', key: `${repo}:${file}`}); };

@@ -2,7 +2,8 @@
 //
 // Purpose   The structural source (code.mjs) and the textual source (text.mjs) both rest on the same parse of the same
 //           files at the same commit. This reads the tree once (git's object store, never the working tree) and parses
-//           each code file once, so the two sources cannot disagree about what a file says.
+//           each code file once, so the two sources cannot disagree about what a file says. JavaScript and TypeScript
+//           go to the parser (parse.mjs); Python goes to the line-and-token reader (python.mjs), given the same shape.
 // Inputs    A repository root and a commit (40 hex).
 // Outputs   readTree(repo, commit) -> {commit, entries (path -> {path, blob, size, mode}), paths (Set), withheld,
 //           code: [paths read], text (path -> text, for code files and manifests), readings (path -> readCode result)}.
@@ -11,8 +12,16 @@
 // Must never  Read the working tree, or keep more than a few commits' readings in memory.
 import {treeAt, blobsAt} from '../extract/git.mjs';
 import {readCode} from './parse.mjs';
+import {readPython} from './python.mjs';
 
-export const CODE = /\.(mjs|js|cjs|jsx|ts|mts|cts|tsx)$/;
+export const CODE = /\.(mjs|js|cjs|jsx|ts|mts|cts|tsx|py)$/;
+export const isPython = p => p.endsWith('.py');
+/** The Python reader's result in the JavaScript reader's shape: it reads no calls and names no exports of its own. */
+function python(text, file) {
+  const r = readPython(text, {file});
+  const functions = (r.functions ?? []).map(f => ({kind: 'function', ...f}));
+  return {...r, exports: functions.filter(f => f.exported).map(f => ({name: f.name, line: f.line, kind: f.kind})), functions, writes: r.writes ?? [], module_calls: r.module_calls ?? []};
+}
 export const MANIFEST = /(^|\/)(package\.json|package-lock\.json)$/;
 const VENDORED = /(^|\/)node_modules\//;
 const KEEP = 6, cache = new Map();
@@ -26,7 +35,7 @@ export function readTree(repo, commit) {
   const bytes = blobsAt(repo, wanted.map(e => e.blob));
   const text = new Map(wanted.map(e => [e.path, bytes.get(e.blob).toString('utf8')]));
   const code = wanted.filter(e => CODE.test(e.path)).map(e => e.path).sort();
-  const readings = new Map(code.map(p => [p, readCode(text.get(p), {file: p})]));
+  const readings = new Map(code.map(p => [p, isPython(p) ? python(text.get(p), p) : readCode(text.get(p), {file: p})]));
   const out = Object.freeze({commit, entries, paths, withheld: tree.withheld, code, text, readings});
   cache.set(key, out);
   if (cache.size > KEEP) cache.delete(cache.keys().next().value);

@@ -33,7 +33,7 @@ test('ONE GRAPH: this repository\'s sources and each sibling\'s are observed, ea
   const {g, head, sibHead} = setup(t);
   assert.deepEqual(Object.fromEntries(Object.entries(g.observed).map(([k, o]) => [k, [o.recorded, o.version]])), {
     'ophanim.repo': [true, head], 'ophanim.code': [true, head], 'ophanim.code-text': [true, head], 'ophanim.pins': [true, head], 'ophanim.ownership': [true, head],
-    'sibling.telos.code': [true, sibHead], 'sibling.telos.code-text': [true, sibHead], 'sibling.telos.weave': [true, sibHead]});
+    'sibling.telos.code': [true, sibHead], 'sibling.telos.code-text': [true, sibHead], 'sibling.telos.weave': [true, sibHead], 'sibling.telos.declared': [true, sibHead]});
   assert.deepEqual(g.absent, [{repository: 'argo', why: 'no checkout was given'}, {repository: 'lexi', why: 'no checkout was given'}]);
 });
 
@@ -105,5 +105,5 @@ test('THE AUDIT lists, per repository, what each reading could not state, and wh
   assert.deepEqual([home.files_read, home.not_parsed.map(x => x.file), home.undeclared_imports, home.unresolved.reads], [3, ['app/broken.mjs'], [], 0]);
   assert.deepEqual(a.repositories[1].weave, {stated: null, why: 'docs/runs/clotho-self-weave/thread-ledger.snapshot.jsonl is not in the tree at this commit'});
   assert.deepEqual(a.sources.map(s => [s.id, s.state]), [['ophanim.code', 'current'], ['ophanim.code-text', 'current'], ['ophanim.ownership', 'current'], ['ophanim.pins', 'current'], ['ophanim.repo', 'current'],
-    ['sibling.telos.code', 'current'], ['sibling.telos.code-text', 'current'], ['sibling.telos.weave', 'current']]);
+    ['sibling.telos.code', 'current'], ['sibling.telos.code-text', 'current'], ['sibling.telos.declared', 'current'], ['sibling.telos.weave', 'current']]);
 });

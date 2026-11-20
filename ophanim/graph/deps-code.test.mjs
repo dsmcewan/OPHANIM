@@ -174,3 +174,20 @@ test('A SIBLING REPOSITORY is read the same way under its own name: its files ar
   assert.ok(!facts.some(d => (d.entity ?? d.from).includes('/systems/module/src/')), 'nothing of the sibling is written under this repository\'s file ids');
   assert.equal(codeSource({repo, name: 'telos'}).id, 'sibling.telos.code');
 });
+
+test('PYTHON is read the same way: an import of a module of the repository is the file it names, any other import is a module by its import name, and a variable is its NAME', t => {
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'app/__init__.py': '', 'app/util.py': 'def helper():\n    return 1\n', 'app/data/__init__.py': '', 'app/data/table.py': 'ROWS = []\n',
+    'app/main.py': lines('import os', 'import fastapi.responses', 'from . import util', 'from .util import helper', 'from app.data import table', 'from ..outside import nothing',
+      'HOME = os.environ["LEXI_HOME"]', 'def run():', '    return helper()')}, 'python');
+  const facts = codeFacts(repo, head, {name: 'lexi'}), main = fileIdIn('lexi', 'app/main.py');
+  assert.deepEqual(rel(facts, 'depends-on', main, fileIdIn('lexi', 'app/util.py')).attributes, {basis: 'import', specifiers: ['.', '.util'], lines: [3, 4]});
+  assert.deepEqual(rel(facts, 'depends-on', main, fileIdIn('lexi', 'app/data/table.py')).attributes, {basis: 'import', specifiers: ['app.data'], lines: [5], anchor: 'the repository root'});
+  assert.deepEqual(rel(facts, 'depends-on', main, fileIdIn('lexi', 'app/data/__init__.py')).attributes, {basis: 'import', specifiers: ['app.data'], lines: [5], anchor: 'the repository root'});
+  assert.deepEqual(rel(facts, 'depends-on', main, packageId('python', 'fastapi')).attributes, {basis: 'import', specifiers: ['fastapi.responses'], lines: [2]});
+  assert.deepEqual(ent(facts, packageId('python', 'os')).attributes, {ecosystem: 'python', name: 'os', note: 'a module by its import name: the import does not say whether it is the standard library or an installed distribution'});
+  assert.deepEqual(rel(facts, 'consumes', main, envId('LEXI_HOME')).attributes, {basis: 'environment variable read', lines: [7]});
+  assert.deepEqual(ent(facts, symbolIdIn('lexi', 'app/main.py', 'run')).attributes, {module: 'app/main.py', name: 'run', kind: 'function', line: 8, exported: true});
+  assert.deepEqual(ent(facts, repositoryId('lexi')).attributes.unresolved_imports, [{file: 'app/main.py', specifier: '..outside', line: 6}]);
+  assert.match(ent(facts, repositoryId('lexi')).attributes.readers, /^typescript [\d.]+ for JavaScript and TypeScript; a line-and-token reader for Python \(no calls\)$/);
+});

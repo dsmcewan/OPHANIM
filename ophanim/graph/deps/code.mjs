@@ -29,7 +29,7 @@ import path from 'node:path';
 import {isBuiltin} from 'node:module';
 import {resolveCommit} from '../extract/git.mjs';
 import {parserVersion} from './parse.mjs';
-import {readTree} from './read.mjs';
+import {readTree, isPython} from './read.mjs';
 import {HOME, repositoryId, fileIdIn, symbolIdIn, packageId, envId} from './ids.mjs';
 
 export const CODE_EXTRACTOR = 'ophanim.code.extractor';
@@ -136,6 +136,35 @@ export function codeFacts(repo, commit, {name = HOME} = {}) {
   };
 
   const undeclared = [], unresolvedImports = [], notParsed = [];
+  /**
+   * A Python import. A relative one (leading dots) is exact: the module beside the file, level by level. An absolute one
+   * is a module of the repository only when exactly ONE directory (the root, or one above the file) holds it; otherwise
+   * it is a module by its import name, which may be the standard library or an installed distribution.
+   */
+  const NOTE = 'a module by its import name: the import does not say whether it is the standard library or an installed distribution';
+  const moduleAt = (anchor, mod) => [join(anchor, `${mod}.py`), join(anchor, `${mod}/__init__.py`)].find(p => paths.has(p)) ?? null;
+  function pythonImport(file, i) {
+    const written = '.'.repeat(i.level ?? 0) + i.specifier, mod = i.specifier.split('.').filter(Boolean).join('/');
+    const link = (target, extra = {}) => { if (target !== file) gathered('depends-on', fid(file), fid(target), file, {basis: 'import', ...extra}, i.line, written); };
+    const under = (anchor, extra) => {
+      const hits = [...(mod ? [moduleAt(anchor, mod)] : []), ...i.names.map(n => moduleAt(anchor, mod ? `${mod}/${n}` : n))].filter(Boolean);
+      for (const h of hits) link(h, extra);
+      return hits.length > 0;
+    };
+    if (i.level > 0) {
+      let base = dirOf(file), outside = false;
+      for (let up = 1; up < i.level; up++) { if (!base) outside = true; base = dirOf(base); }
+      if (outside || !under(base, {})) unresolvedImports.push({file, specifier: written, line: i.line});
+      return;
+    }
+    const anchors = ['', ...(() => { const out = []; for (let d = dirOf(file); d; d = dirOf(d)) out.push(d); return out; })()].filter(a => moduleAt(a, mod));
+    if (anchors.length === 1) { under(anchors[0], anchors[0] ? {anchor: `a directory above the file (${anchors[0]}/)`} : {anchor: 'the repository root'}); return; }
+    if (anchors.length > 1) { unresolvedImports.push({file, specifier: written, line: i.line, why: 'more than one directory holds a module of this name'}); return; }
+    const top = i.specifier.split('.')[0];
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(top)) { unresolvedImports.push({file, specifier: written, line: i.line}); return; }
+    entity(packageId('python', top), file, {ecosystem: 'python', name: top, note: NOTE});
+    gathered('depends-on', fid(file), packageId('python', top), file, {basis: 'import'}, i.line, written); counts.platform++;
+  }
   const counts = {imports: 0, packages: 0, platform: 0, env: 0, programs: 0, reads: 0, writes: 0, calls: 0};
   const unresolved = {computed_programs: 0, computed_reads: 0, reads: 0, calls: 0};
   const envReaders = new Map();
@@ -148,6 +177,7 @@ export function codeFacts(repo, commit, {name = HOME} = {}) {
     // Imports.
     for (const i of r.imports) {
       counts.imports++;
+      if (isPython(file)) { pythonImport(file, i); continue; }
       if (i.specifier.startsWith('.')) {
         const t = resolveRelative(file, i.specifier);
         if (!t) { unresolvedImports.push({file, specifier: i.specifier, line: i.line}); continue; }
@@ -279,6 +309,7 @@ export function codeFacts(repo, commit, {name = HOME} = {}) {
 
   const cmp = (a, b) => (a.file + '\0' + (a.package ?? a.specifier) < b.file + '\0' + (b.package ?? b.specifier) ? -1 : 1);
   const root = {entity: repositoryId(name), ref: 'git', attributes: {commit, parser: `typescript ${parserVersion()}`, platform: `node ${process.versions.node.split('.')[0]}`,
+    readers: `typescript ${parserVersion()} for JavaScript and TypeScript; a line-and-token reader for Python (no calls)`,
     files_read: tree.code.length, counts, unresolved, withheld: tree.withheld,
     ...(notParsed.length ? {not_parsed: bounded(notParsed, 32)} : {}), ...(undeclared.length ? {undeclared_imports: bounded(undeclared.sort(cmp))} : {}),
     ...(unresolvedImports.length ? {unresolved_imports: bounded(unresolvedImports.sort(cmp), 32)} : {}), ...(badManifests.length ? {bad_manifests: badManifests} : {})},

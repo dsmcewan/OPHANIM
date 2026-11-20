@@ -19,6 +19,7 @@ import {weaveSource, WEAVE_ORIGIN, WEAVE_EXTRACTOR, weaveSourceIdOf} from './wea
 import {pinsSource, pinTables, PINS_ORIGIN, EXTRACTOR as PINS_EXTRACTOR, SOURCE_ID as PINS_SOURCE, GOVERNANCE} from './pins.mjs';
 import {ownershipSource, OWNERSHIP_ORIGIN, EXTRACTOR as OWNERSHIP_EXTRACTOR, SOURCE_ID as OWNERSHIP_SOURCE} from './authority.mjs';
 import {runtimeSource, EXTRACTOR as RUNTIME_EXTRACTOR} from './runtime.mjs';
+import {declaredSource, declaredOrigin, DECLARED_EXTRACTOR, declaredSourceIdOf} from './declared.mjs';
 import {textAt, resolveCommit} from '../extract/git.mjs';
 import {HOME} from './ids.mjs';
 
@@ -55,8 +56,9 @@ export function dependencySources({repo = ROOT, commit, status, work = null, cyc
     pinsSource({repo, ref: base.commit, telos: siblings.telos?.repo ?? null}), ownershipSource({repo, ref: base.commit}), ...extra.map(make => make({repo, commit: base.commit})),
     ...states.map(s => runtimeSource({stateDir: s.stateDir, name: s.name, id: runtimeId(s.name)}))];
   const theirs = present.flatMap(n => [codeSource({repo: siblings[n].repo, ref: refs[n], name: n}), textSource({repo: siblings[n].repo, ref: refs[n], name: n}),
-    ...(SIBLINGS[n].weave ? [weaveSource({repo: siblings[n].repo, ref: refs[n], name: n})] : [])]);
+    ...(SIBLINGS[n].weave ? [weaveSource({repo: siblings[n].repo, ref: refs[n], name: n})] : []), declaredSource({repo: siblings[n].repo, ref: refs[n], name: n})]);
   const origins = {
+    ...(present.length ? {[DECLARED_EXTRACTOR]: {...declaredOrigin(present), keys: ['graph-extractor']}} : {}),
     [PINS_EXTRACTOR]: {...PINS_ORIGIN, keys: ['graph-extractor']},
     [OWNERSHIP_EXTRACTOR]: {...OWNERSHIP_ORIGIN, keys: ['graph-extractor']},
     ...(states.length ? {[RUNTIME_EXTRACTOR]: {kind: 'extractor', basis: 'declared', sources: states.map(s => runtimeId(s.name)), keys: ['graph-extractor']}} : {}),
@@ -66,7 +68,7 @@ export function dependencySources({repo = ROOT, commit, status, work = null, cyc
   };
   // A sibling's weave refers to the files its code source states, so the code is observed first; this repository first of all.
   const order = [...ORDER, sourceIdOf(HOME), textSourceIdOf(HOME), PINS_SOURCE, OWNERSHIP_SOURCE, ...own.slice(4).map(s => s.id),
-    ...present.flatMap(n => [sourceIdOf(n), textSourceIdOf(n), ...(SIBLINGS[n].weave ? [weaveSourceIdOf(n)] : [])])];
+    ...present.flatMap(n => [sourceIdOf(n), textSourceIdOf(n), ...(SIBLINGS[n].weave ? [weaveSourceIdOf(n)] : []), declaredSourceIdOf(n)])];
   return {commit: base.commit, sources: [...base.sources, ...own, ...theirs], origins, order, absent, pinned};
 }
 
