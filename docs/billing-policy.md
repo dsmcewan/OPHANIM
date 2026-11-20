@@ -170,6 +170,7 @@ is primary Gemini execution: refused unless `gemini_api_primary` is enabled with
 | `pantheon/scripts/open-items-run.mjs`, `bin/pantheon-build.mjs` / `view/build-server.mjs` (runOpenItem, not among the seven) | either | both kinds off: refused; no opt-in is exposed there |
 | `bin/cross-lab-review.mjs` (the HTTPS module through `billedTurnModule`) | primary | one billed request per Google seat, charged before it is sent; refused up front unless admitted (L-146) |
 | `scripts/live-check.mjs`, `live-ship.mjs`, `stream-check.mjs`, `view-check.mjs` (`sdk/live.mjs operatorGemini clientFor`) | primary | refused before the client is made unless admitted; then per request, hops and retries included (L-146) |
+| `bin/pantheon-view.mjs` (`POST /turn` on an `agy_google` seat, through its own `makeClientFor`; `scripts/swarm-run.mjs` and `discuss-run.mjs` drive it) | primary | **not gated** (found at L-146, left unchanged: for the register) |
 | Antigravity CLI lanes (`agy`, every role) | none | subscription; never refused |
 
 ## What it does not do
