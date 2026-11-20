@@ -27,3 +27,8 @@ export default async function turn({vendor, model, prompt}) {
   if (choice?.finish_reason !== 'stop') throw new Error(`${vendor}/${model}: finish_reason ${choice?.finish_reason}`);
   return {text: choice.message?.content ?? '', response_id: json.id ?? null, served_model: json.model ?? null};
 }
+// WHAT THIS MODULE BILLS (register L-146): every agy_google call above is ONE request to the metered Gemini API, whatever
+// the model is named -- this module has no Antigravity lane, so a lane-named model is billed like an API id. The wrapper
+// that loads it (src/sdk/live.mjs billedTurnModule: pantheon-review-cycle --turn, bin/cross-lab-review.mjs) reads this
+// and charges each such call as primary Gemini API execution before calling it.
+turn.meteredGeminiApi = true;
