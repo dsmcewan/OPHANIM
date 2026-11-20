@@ -11,10 +11,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { runAntigravitySdkTurn, sdkPython, BRIDGE_SCRIPT } from "../src/antigravity/turn.mjs";
 import { SDK_CONFIG } from "../src/antigravity/config.mjs";
+import { runResearchTeam } from "../src/antigravity/research.mjs";
+import { researchSeat, researchSubordinate, researchLimits } from "../src/route/fit-matrix.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { startFakeGemini, fc, text, responsesIn, QUOTA, notFound } from "./fixtures/fake-gemini.mjs";
 import { tempRepo } from "./fixtures/pipeline-stages.mjs";
@@ -360,4 +363,78 @@ contract("A RESEARCH SESSION ON THE INSTALLED RUNTIME reads only: the model is o
   assert.deepEqual(r.subagents.instances, []);
   assert.deepEqual([r.served_model, r.requested_model], ["gemini-4-carbon", "gemini-4-carbon"]);
   if (BWRAP.ok) assert.deepEqual(r.sandbox.binds.filter(b => b.path === s.env.repo).map(b => b.mode), ["ro"], "the repository's bind in the jail is read-only");
+});
+
+// ---- A RESEARCH TEAM ON THE INSTALLED RUNTIME (owner direction 2026-11-20) -----------------------------------------------
+// Two levels, each its own controller-run session of the installed SDK in the real jail: a Carbon coordinator that reads
+// and delegates one gap, a Hydrogen specialist that reads and reports, the coordinator again, satisfied. What is scripted
+// is the provider's answers; the sessions, the tool decisions, the digests and the charges are the real ones.
+contract("A RESEARCH TEAM ON THE INSTALLED RUNTIME: a Carbon coordinator and a Hydrogen specialist are separate read-only sessions; every provider request was charged first; the specialist is offered no subagent tool; what each read is cited by the digest of the file's bytes; the team stops when the coordinator is satisfied", async t => {
+  const env = await tempRepo({ "README.md": "base\n", "src/u1/keep.mjs": "export const keep = 1;\n" });
+  const order = [];
+  const report = o => text(JSON.stringify({ sources: [], observations: [], hypotheses: [], dependencies: [], unresolved: [], next: [], ...o }));
+  const upstream = await startFakeGemini({ decide: ({ model, body }) => {
+    order.push(`send:${model}`);
+    const n = responsesIn(body), said = JSON.stringify(body?.contents ?? []);
+    if (model === "gemini-4-hydrogen") {
+      if (n === 0) return { parts: [fc("view_file", { AbsolutePath: join(env.repo, "src/u1/keep.mjs") })] };
+      return { parts: [report({ question: "What does src/u1/keep.mjs export, and under which name?", sources: [{ ref: "src/u1/keep.mjs" }],
+        observations: [{ id: "o1", text: "src/u1/keep.mjs exports the constant keep with the value 1", sources: ["src/u1/keep.mjs"] }] })] };
+    }
+    if (said.includes("ROUND 2 of")) {
+      return { parts: [report({ question: "What does this repository export?", sources: [{ ref: "src/u1/keep.mjs" }],
+        observations: [{ id: "o1", text: "The repository's one export is keep, from src/u1/keep.mjs", sources: ["src/u1/keep.mjs"] }],
+        delegations: [], satisfied: true, material: false, summary: "It exports keep (value 1) from src/u1/keep.mjs." })] };
+    }
+    if (n === 0) return { parts: [fc("view_file", { AbsolutePath: join(env.repo, "README.md") })] };
+    return { parts: [report({ question: "What does this repository export?", sources: [{ ref: "README.md" }],
+      observations: [{ id: "o1", text: "README.md says only: base", sources: ["README.md"] }],
+      unresolved: [{ id: "u1", question: "what the source files under src export", why: "the README does not say" }], next: [{ addresses: "u1", question: "read the files under src" }],
+      delegations: [{ addresses: "u1", question: "What does src/u1/keep.mjs export, and under which name?", specialty: "source-inventory", scope: ["src"], expected_evidence: "the export statement of the file", why: "the team's question is what the repository exports" }],
+      satisfied: false, material: false, summary: "The README does not say; one specialist is asked." })] };
+  } });
+  t.after(async () => { await upstream.close(); await env.cleanup(); });
+  const coordinator = researchSeat("scout"), subordinate = researchSubordinate();
+  const runNode = async ({ node, prompt, seat, signal, admit, bounds }) => {
+    const control_dir = join(env.root, "control", `${node.id}-r${node.round}`);
+    mkdirSync(control_dir, { recursive: true });
+    return runAntigravitySdkTurn({ seat, prompt, worktree: env.repo, control_dir, unit: { unit_id: node.id }, apiKey: KEY, upstream: upstream.url, python: PY, admit, signal,
+      sandbox: BWRAP.ok ? { enabled: true } : { enabled: false, allowUnsandboxed: true }, research: { system: "You are a member of a read-only research team. You change nothing.", tools: [...node.tools], scope: [...node.scope] },
+      budget: { max_model_calls: bounds.model_calls, max_tool_calls: bounds.tool_calls }, timeoutS: 90, graceS: 3 });
+  };
+  const events = [];
+  const r = await runResearchTeam({ team: { id: "rt-contract", role: "scout", trigger: "intake", question: "What does this repository export?", scope: ["."] }, coordinator, subordinate,
+    limits: researchLimits(coordinator.seat.model), runNode, admit: info => { order.push(`charge:${info.model}`); }, record: async ev => { events.push(ev); } });
+
+  assert.deepEqual([r.status, r.stop_reason, r.telemetry.depth_reached, r.telemetry.nodes_created, r.telemetry.active_peak, r.telemetry.coordinator_rounds], ["satisfied", "SATISFIED", 2, 1, 1, 2], JSON.stringify(r.nodes.map(n => [n.kind, n.state, n.error])));
+  // THE HIERARCHY: the coordinator (level 1, Carbon), one specialist under it (level 2, Hydrogen), each answered by the model asked.
+  assert.deepEqual(r.nodes.map(n => [n.kind, n.depth, n.parent === null ? null : n.parent === r.root, n.seat.model, n.served_model, n.served_model_source, n.state]), [
+    ["coordinator", 1, null, "gemini-4-carbon", "gemini-4-carbon", "provider", "finished"],
+    ["specialist", 2, true, "gemini-4-hydrogen", "gemini-4-hydrogen", "provider", "finished"],
+    ["coordinator", 1, null, "gemini-4-carbon", "gemini-4-carbon", "provider", "finished"]]);
+  // CHARGE BEFORE SEND, PER REQUEST: the order the controller charged and the provider received is charge, send, charge, send...
+  const gen = upstream.requests.filter(x => x.verb);
+  assert.deepEqual(order, gen.flatMap(g => [`charge:${g.model}`, `send:${g.model}`]), "every request the provider received was charged first, for the model it was sent to");
+  assert.deepEqual(r.telemetry.requests, { total: gen.length, by_model: { "gemini-4-carbon": gen.filter(g => g.model === "gemini-4-carbon").length, "gemini-4-hydrogen": gen.filter(g => g.model === "gemini-4-hydrogen").length } });
+  assert.deepEqual([...new Set(gen.map(g => `${g.model}@${g.body.generationConfig.thinkingConfig.thinkingLevel}`))], ["gemini-4-carbon@high", "gemini-4-hydrogen@medium"]);
+  assert.ok(gen.every(g => g.headers["x-goog-api-key"] === KEY), "the controller's key, on every member's requests");
+  // NO MEMBER IS OFFERED A WRITE, A COMMAND OR A SUBAGENT: the Hydrogen restriction is the runtime's tool list, not a request to the model.
+  for (const g of gen) {
+    const offered = g.body.tools.flatMap(x => (x.functionDeclarations ?? []).map(f => f.name));
+    for (const tool of ["create_file", "edit_file", "run_command", "invoke_subagent", "define_subagent"]) assert.ok(!offered.includes(tool), `${tool} is offered to ${g.model} (offered: ${offered.join(", ")})`);
+  }
+  // EVIDENCE: what a member cites is the digest of the bytes the controller saw it read.
+  const digest = p => "sha256:" + createHash("sha256").update(readFileSync(join(env.repo, p))).digest("hex");
+  const specialist = r.nodes.find(n => n.kind === "specialist");
+  assert.deepEqual(specialist.examined.map(e => [e.tool, e.path, e.sha256]), [["view_file", "src/u1/keep.mjs", digest("src/u1/keep.mjs")]]);
+  assert.deepEqual(specialist.report.sources, [{ ref: "src/u1/keep.mjs", version: digest("src/u1/keep.mjs") }]);
+  assert.deepEqual(r.knowledge.observations.map(o => o.evidence.map(e => [e.ref, e.version])), [[["README.md", digest("README.md")]], [["src/u1/keep.mjs", digest("src/u1/keep.mjs")]], [["src/u1/keep.mjs", digest("src/u1/keep.mjs")]]]);
+  // The coordinator's second round was shown the specialist's finding with its source and version, not its transcript.
+  const round2 = gen.find(g => JSON.stringify(g.body.contents).includes("ROUND 2 of"));
+  const shown = /o1: src\/u1\/keep\.mjs exports the constant keep with the value 1 \[src\/u1\/keep\.mjs@(sha256:[0-9a-f]{12})\]/.exec(JSON.stringify(round2.body.contents));
+  assert.ok(shown, "the finding, with its source and the start of its version");
+  assert.ok(digest("src/u1/keep.mjs").startsWith(shown[1]), "the version shown is the digest of the file the specialist read");
+  // Recorded before it ran, and with its outcome; nothing in the repository changed.
+  assert.deepEqual(events.filter(e => e.event === "node").map(e => [e.node.kind, e.node.state]), [["coordinator", "admitted"], ["coordinator", "finished"], ["specialist", "admitted"], ["specialist", "finished"], ["coordinator", "admitted"], ["coordinator", "finished"]]);
+  assert.equal(execFileSync("git", ["-C", env.repo, "status", "--porcelain"], { encoding: "utf8" }), "", "the repository is as it was");
 });

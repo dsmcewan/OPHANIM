@@ -44,6 +44,12 @@
 //       Read-only: the evidence dossier a judging seat is given for the item (context.mjs), or one retrieval result.
 //       Works for any item, Resolved ones included; nothing is recorded, reopened or signed.
 //   node ophanim/operate/cli.mjs reassess --item ID
+//   node ophanim/operate/cli.mjs research --item ID --trigger T --question TEXT --by NAME [--role scout|explorer|researcher]
+//       Record a REQUEST for research on an item (operate/research.mjs; owner direction 2026-11-20). T is what triggered it:
+//       intake | insufficient-evidence | contradiction | relationship | review-finding | invalidated-evidence | reflection.
+//       It writes one work.research record with the controller key and runs nothing. An open request makes the item's plan
+//       stale: at the next tick the plan stage runs the research (read-only SDK sessions, under the declared limits and
+//       the Gemini billing policy) and plans on what it found.
 //       Reassess the item's recorded model-rule reviews under the current identity policy; record any disqualification
 //       on the work ledger (new evidence: the review's own ledger and the status ledger are not touched).
 //   node ophanim/operate/cli.mjs serve --config FILE [--max-ticks N]
@@ -127,7 +133,7 @@ export function launcherStop({workRoot, proc = process, signals = ['SIGINT', 'SI
 const BOOLEAN = new Set(['json', 'github', 'once', 'init']);
 export function parseArgs(argv) {
   const [first, ...rest] = argv;
-  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, prompt, tick, watch, serve, context, reassess or report');
+  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, prompt, tick, watch, serve, context, reassess, research or report');
   const opts = {}, pos = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { pos.push(rest[i]); continue; }
@@ -390,7 +396,9 @@ export async function prepareDispatch({paths, opts, limits, stagesFile, progress
   const opened = openWorkReadOnly(paths.workRoot);
   const auth = authorityOf(opened.work, paths.workRoot);
   if (!auth.held) return {blocked: noAuthority(auth, opened.ledger)};
-  const executors = await loadExecutors({repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, limits, env: process.env, progress,
+  // RESEARCH IS ON for the executors this launcher builds (stages.mjs `research.enabled`): a recorded request, or the
+  // planner's gaps where primary Gemini execution is declared, is run by the plan stage; every request is still the billing policy's to admit.
+  const executors = await loadExecutors({repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, limits, env: process.env, progress, research: {enabled: true},
     ...(await seatsOf(opts))}, {stagesFile});
   return {executors, ledger: opened.ledger, authority: auth};
 }
@@ -513,6 +521,24 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
       const r = reassessItem({work: openWorkLedger({root: paths.workRoot}), item});
       log(JSON.stringify({item: r.item, policy: r.policy, recorded: r.recorded.map(x => ({stage: x.stage, cycle: x.cycle, reassessment: x.reassessment, findings: x.findings})),
         skipped: r.skipped.map(x => ({stage: x.stage, cycle: x.cycle, why: x.why}))}, null, 2));
+      return 0;
+    }
+    if (verb === 'research') {
+      // Record a request for research (research.mjs). Nothing is run here: the plan stage runs it at the next tick.
+      const item = opts.item ?? usage('research needs --item ID');
+      if (!/^[a-z0-9][a-z0-9.-]{0,63}$/.test(item)) usage('--item names one status item id');
+      const trigger = opts.trigger ?? usage('research needs --trigger (what triggered it)');
+      const question = opts.question ?? usage('research needs --question TEXT');
+      const by = opts.by ?? usage('research needs --by NAME (who asks)');
+      const opened = openWorkReadOnly(paths.workRoot);
+      const auth = authorityOf(opened.work, paths.workRoot);
+      if (!auth.held) { log(JSON.stringify(noAuthority(auth, opened.ledger), null, 2)); return 3; }
+      const {requestResearch, researchOf} = await import('./research.mjs');
+      const work = openWorkLedger({root: paths.workRoot});
+      let request;
+      try { request = requestResearch({work, item, trigger, question, by, ...(opts.role !== undefined ? {role: opts.role} : {})}); }
+      catch (e) { if (['RESEARCH_TRIGGER', 'RESEARCH_ROLE', 'RESEARCH_QUESTION'].includes(e.code)) usage(e.message); throw e; }
+      log(JSON.stringify({item, request, trigger, open: researchOf(work, item).open.map(r => ({request: r.hash, trigger: r.trigger, by: r.by}))}, null, 2));
       return 0;
     }
     if (verb === 'serve') {

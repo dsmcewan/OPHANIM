@@ -23,6 +23,7 @@ import {openStatusLedger, checkEvidenceLedgers} from '../../packages/ledger/stat
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {buildDossier, makeRetriever, admitFile} from './context.mjs';
 import {earliestGate, completionEvidence, attemptInputs, requirementOf} from './gates.mjs';
+import {researchOf} from './research-view.mjs';
 import {promptBinding, promptRequirement, promptRecords} from './prompt-intake.mjs';
 import {sourcesDigest, bundlesOf} from './evidence-recovery.mjs';
 import {STAGES, workKey} from './work-ledger.mjs';
@@ -181,6 +182,7 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     let gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, versionOf, now,
       recovery, recoverySources, capacity, outcomeRecheck,
       reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
+      research: workLedger?.research ? (r => ({open: r.open, conclusions: r.conclusions}))(researchOf(workLedger, s.item)) : null,
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
         ? (() => { try { return buildDossier({repo, statusRoot, item: s.item, work: workLedger, issues, bundlesDir}).stable; } catch { return null; } })() : null});

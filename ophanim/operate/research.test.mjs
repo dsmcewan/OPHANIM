@@ -8,10 +8,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {openWorkLedger, openResearchRequests, RESEARCH_DEPTH_MAX} from './work-ledger.mjs';
-import {RESEARCH_DEPTH_LIMIT} from '../../pantheon/src/antigravity/config.mjs';
+import {RESEARCH, RESEARCH_DEPTH_LIMIT} from '../../pantheon/src/antigravity/config.mjs';
 import {createHash} from 'node:crypto';
 import {requestResearch, researchOf, researchView, researchContributors, runResearch, teamIdOf, ROLE_OF_TRIGGER, RESEARCH_EVIDENCE_SCHEMA} from './research.mjs';
 import {optIn} from '../../pantheon/tests/fixtures/billing.mjs';
+import {main} from './cli.mjs';
 
 const tmp = (t, name) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`)); t.after(() => fs.rmSync(d, {recursive: true, force: true})); return d; };
 const AT = '2026-11-20T00:00:00.000Z';
@@ -64,7 +65,7 @@ function scripted(script) {
   const calls = [];
   const sdk = async ({seat, prompt, worktree, control_dir, unit, admit, signal, research, budget, timeoutS}) => {
     const round = Number(/ROUND (\d+) of/.exec(prompt)?.[1] ?? 0), specialist = /^ROLE: research specialist/.test(prompt);
-    calls.push({model: seat.model, unit: unit.unit_id, specialist, round, control_dir, worktree, system: research?.system ?? null, budget, timeoutS});
+    calls.push({model: seat.model, unit: unit.unit_id, specialist, round, control_dir, worktree, system: research?.system ?? null, tools: research?.tools ?? null, scope: research?.scope ?? null, budget, timeoutS});
     admit({class: 'root', type: null, model: seat.model, n: 1});
     const out = await script({seat, prompt, specialist, round, signal});
     return {text: JSON.stringify(out.report), examined: out.examined ?? [], served_model: out.served_model ?? seat.model, served_model_source: 'provider', usage: {total_token_count: 10}};
@@ -91,6 +92,8 @@ test('A RESEARCH RUN: the role and its seat follow the trigger; every member is 
   // WHO RAN, ON WHAT: Carbon coordinates, Hydrogen specialises; each session is the read-only research mode on the repository.
   assert.deepEqual(calls.map(c => [c.model, c.specialist, c.round]), [['gemini-4-carbon', false, 1], ['gemini-4-hydrogen', true, 0], ['gemini-4-hydrogen', true, 0], ['gemini-4-carbon', false, 2]]);
   assert.ok(calls.every(c => c.worktree === f.repo && /read-only research team/.test(c.system) && c.budget.max_model_calls > 0 && c.timeoutS > 0 && !c.control_dir.startsWith(f.repo)));
+  // WHAT EACH SESSION IS GIVEN IS ITS ASSIGNMENT: the specialists the tools and scope of their delegation, the coordinator the team's.
+  assert.deepEqual(calls.map(c => [c.specialist, c.tools, c.scope]), [[false, RESEARCH.tools, ['.']], [true, RESEARCH.tools, ['src']], [true, RESEARCH.tools, ['src']], [false, RESEARCH.tools, ['.']]]);
   // THE LEDGER: request, team, then each member admitted before its outcome, then the conclusion.
   const rec = f.work.research('two');
   assert.deepEqual(rec.map(x => `${x.phase}${x.state ? ':' + x.state : ''}${x.kind ? ':' + x.kind : ''}`), ['request', 'team', 'node:admitted:coordinator', 'node:finished:coordinator', 'node:admitted:specialist', 'node:admitted:specialist',
@@ -171,4 +174,23 @@ test('a research request names a known trigger and a real question; a request ma
   assert.deepEqual(Object.keys(ROLE_OF_TRIGGER).sort(), ['contradiction', 'insufficient-evidence', 'intake', 'invalidated-evidence', 'reflection', 'relationship', 'review-finding']);
   assert.match(researchView(w, 'two').text, /Research requested and not yet answered \(reflection, by owner\): How does the scheduler retry a pending stage\?/);
   assert.equal(researchView(w, 'other'), null);
+});
+
+test('`operate research` records a request and runs nothing: a known trigger, a question and who asks are required; the same request twice is refused; an unknown trigger or role is a usage error', async t => {
+  const root = tmp(t, 'research-cli'), workRoot = path.join(root, 'work');
+  openWorkLedger({root: workRoot});
+  const run = async argv => { const out = [], err = []; const code = await main([...argv, '--work-ledger', workRoot, '--repo', root], {log: s => out.push(s), err: s => err.push(s), env: {...process.env}}); return {code, out: out.join('\n'), err: err.join('\n')}; };
+  const ok = await run(['research', '--item', 'two', '--trigger', 'reflection', '--question', 'Why did the retry bound not hold across a restart?', '--by', 'owner', '--role', 'explorer']);
+  assert.equal(ok.code, 0, ok.err);
+  const said = JSON.parse(ok.out), recs = openWorkLedger({root: workRoot}).research('two');
+  assert.deepEqual([recs.map(r => [r.phase, r.trigger, r.role, r.by]), said.open.map(o => o.request)], [[['request', 'reflection', 'explorer', 'owner']], [recs[0].hash]]);
+  const twice = await run(['research', '--item', 'two', '--trigger', 'reflection', '--question', 'Why did the retry bound not hold across a restart?', '--by', 'owner']);
+  assert.deepEqual([twice.code, /already requested/.test(twice.err)], [1, true]);
+  for (const [argv, re] of [[['--item', 'two', '--trigger', 'whim', '--question', 'Why did the retry bound not hold across a restart?', '--by', 'o'], /"whim" is not a research trigger/],
+    [['--item', 'two', '--trigger', 'reflection', '--question', 'Why did the retry bound not hold across a restart?', '--by', 'o', '--role', 'implementer'], /not a research role/],
+    [['--item', 'two', '--trigger', 'reflection', '--by', 'o'], /research needs --question/], [['--item', 'two', '--trigger', 'reflection', '--question', 'Why did the retry bound not hold?'], /research needs --by/]]) {
+    const r = await run(['research', ...argv]);
+    assert.deepEqual([r.code, re.test(r.err)], [2, true], r.err);
+  }
+  assert.equal(openWorkLedger({root: workRoot}).research('two').length, 1, 'nothing else was recorded');
 });

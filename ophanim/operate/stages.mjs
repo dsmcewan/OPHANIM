@@ -69,6 +69,7 @@ import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
+import {requestResearch, researchOf, researchContributors, runResearch, teamIdOf, researchTransportRefusal, isResearchTransportStop} from './research.mjs';
 import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 
 export const PLAN_SCHEMA = 'ophanim.plan/v1';
@@ -179,6 +180,9 @@ function meter(turn, limit, ctx = {}) {
   m.left = () => m.limit - m.made - reserved;
   // The investigation's "may it ask again": false records a budget stop for that seat (it ended on the budget).
   m.canAsk = (reserve, who) => { const ok = m.left() > reserve; if (!ok) stop(who, 'PROVIDER_CALL_LIMIT'); return ok; };
+  // One provider call that is not a turn of this meter's `turn` (a research session's billed request, research.mjs):
+  // the same refusals, the same charge on the ledger before it is made, the same count.
+  m.take = who => admit(who);
   m.stopOf = who => m.stops.get(seatKey(who)) ?? null;
   return m;
 }
@@ -579,7 +583,7 @@ const findingContribution = (f, via) => ({purpose: isAdvisory(f) ? 'dispatcher-r
 // (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
 // selectSeat and runOpenItem still default to `argo` when called without one.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
-  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
+  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, research = {}, bundlesDir = null, independence = undefined,
   pipelineLimits = {}, antigravity = {}, ...rest} = {}) {
   independence ??= independenceFor(profile);
   if (Object.hasOwn(rest, 'meteredFailover')) throw new Error('makeExecutors: meteredFailover is replaced by the Gemini billing policy, which the scheduler hands every stage (ctx.billing; tick({billing}))');
@@ -625,6 +629,102 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   const needsUnits = profile === 'fit';
   // Evidence for every judging seat (context.mjs): the dossier of the item, and bounded read-only retrieval.
   const INV = {...DEFAULT_INVESTIGATION, ...investigation};
+  // RESEARCH (owner direction 2026-11-20; research.mjs): {enabled = false, limits = {}, sdk = the transport (tests pass
+  // a scripted session), preflight = why the transport cannot start a session here, or null}. Research runs inside the
+  // plan stage, before the planner is asked. IT IS THE LAUNCHER'S CHOICE (enabled): the launchers of this repository turn
+  // it on (cli.mjs tick, watch and serve; live-run.mjs); executors built without it run none, so nothing that builds
+  // executors for another purpose starts a billed research session because a planner's answer or a ledger record asked.
+  const RES = {enabled: false, limits: {}, sdk: undefined, preflight: undefined, ...research};
+  /** Why no research session can start here, told without starting one ({code, message}), or null. A caller's own transport is the caller's to vouch for. */
+  const researchReady = () => (typeof RES.preflight === 'function' ? RES.preflight() : RES.sdk ? null : researchTransportRefusal(antigravity));
+  /**
+   * THE CONTRIBUTION ROWS OF AN ITEM'S RESEARCH: one per distinct model identity that answered in a concluded team (the
+   * model that answered as `model`, the one asked as `requested_model` when they differ, the marker, the lab). Their
+   * findings are in the dossier every later plan of the item is written from, so they are contributors to it like any
+   * other: the review panels exclude them (review independence follows contributions). Eight Hydrogen members are one
+   * row: one model of one lab, never eight reviewers' worth of independence.
+   */
+  const researchRows = (work, item) => {
+    const by = new Map();
+    for (const c of researchContributors(work, item)) {
+      const vendor = c.vendor ?? 'agy_google', model = c.served_model ?? c.requested_model;
+      const row = {purpose: 'research', vendor, model, ...(c.served_model && c.served_model !== c.requested_model ? {requested_model: c.requested_model} : {}),
+        ...markerOf({served_model: c.served_model, served_model_source: c.served_model_source}), lab: labOf(vendor, model)};
+      const k = JSON.stringify(row), e = by.get(k) ?? {row, members: 0, teams: new Set(), deepest: 0};
+      e.members += 1; e.teams.add(c.team); e.deepest = Math.max(e.deepest, c.depth ?? 1);
+      by.set(k, e);
+    }
+    return [...by.values()].map(({row, members, teams, deepest}) => ({...row, via: `research: ${members} member(s) of ${[...teams].join(', ')} answered on this model (deepest level ${deepest}); their findings are in the dossier the plan is written from`}));
+  };
+  /**
+   * RUN THE ITEM'S OPEN RESEARCH REQUESTS, before the planner is asked. Returns {ran, stop}: `stop` is the stage's result
+   * when a team did not conclude (it was refused a charge, stopped or failed): the request stays open, nothing is planned
+   * on research that did not finish, and the stage is retried (a billing refusal is woken by the policy, scheduler.mjs).
+   */
+  /**
+   * THE PLANNER FOUND THE EVIDENCE INSUFFICIENT: record a research request for exactly those gaps (once: the same gaps are
+   * not researched twice) and run it. Returns what happened, for the stage's record. With primary Gemini execution not
+   * declared nothing is requested or run, and the record says so: the planner's answer authorizes no spend.
+   */
+  const researchOnGaps = async (ctx, m, {gaps, needed}) => {
+    if (!RES.enabled || !ctx.work?.research) return {ran: false, why: 'research is not enabled for these executors (makeExecutors research.enabled: the launcher\'s choice)'};
+    if ((ctx.billing ?? geminiBilling()).policy?.gemini_api_primary?.enabled !== true) return {ran: false, why: 'gemini_api_primary is not declared: research is not run, and nothing is requested on the planner\'s say'};
+    // A TRANSPORT THAT CANNOT START A SESSION RUNS NOTHING AND REQUESTS NOTHING: the item waits on its evidence exactly as
+    // it did before research existed, and the record says why.
+    const no = researchReady();
+    if (no) return {ran: false, why: `the research transport cannot start a session here (${no.code}: ${String(no.message).slice(0, 200)}): nothing is requested`};
+    const question = `The planner could not establish the problem from the evidence it was given. Gaps: ${gaps.join('; ') || 'none named'}. Evidence it says is needed: ${needed.join('; ') || 'none named'}.`;
+    let request;
+    try { request = requestResearch({work: ctx.work, item: ctx.item, trigger: 'insufficient-evidence', question, by: 'plan stage'}); }
+    catch (e) { return {ran: false, why: `not requested again: ${String(e.message).slice(0, 200)}`}; }
+    const top = git(repo)(['rev-parse', '--show-toplevel']).trim();
+    const run = await runResearch({work: ctx.work, item: ctx.item, claim: ctx.claim ?? null, request: researchOf(ctx.work, ctx.item).requests.find(r => r.hash === request), repo: top,
+      dir: path.join(dirOf(ctx, 'research'), teamIdOf({item: ctx.item, request})), billing: ctx.billing ?? geminiBilling(), admitRequest: who => m.take(who), head: git(top)(['rev-parse', 'HEAD']).trim(),
+      limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, signal: ctx.signal ?? null, progress}).catch(e => ({team: null, status: 'failed', stop_reason: e?.code ?? 'RESEARCH_FAILED', concluded: false, conclusion: null}));
+    return {ran: true, request, team: run.team, status: run.status, stop_reason: run.stop_reason, concluded: run.concluded, conclusion: run.conclusion};
+  };
+  const researchBefore = async (ctx, m, t0) => {
+    const out = {ran: [], stop: null};
+    if (!ctx.work?.research) return out;
+    const open = researchOf(ctx.work, ctx.item).open;
+    if (!open.length) return out;
+    const spent = () => ({provider_calls: m.made, elapsed_ms: Date.now() - t0});
+    // A REQUEST IS NEVER PLANNED AROUND. Executors that run no research stop here by name; so does a transport that cannot
+    // start a session (told before anything is prepared, or by the session that could not start). Nothing is simulated.
+    if (!RES.enabled) {
+      const what = `RESEARCH_NOT_ENABLED: research was requested for ${ctx.item} (${open.map(r => r.trigger).join(', ')}) and these executors run none (makeExecutors research.enabled: the launcher's choice); the request stays open and nothing is planned around it`;
+      out.stop = result('blocked', {outputs: {stage: 'research', research: []}, usage: spent(), blocker: {code: 'RESEARCH_NOT_ENABLED', what, role: 'lead@orch',
+        resume_when: 'the item is run by a launcher that enables research (operate tick, watch and serve, and the live run, do), and the owner records a new status entry for it'}, next: {stage: 'plan', why: what}});
+      return out;
+    }
+    const transportStop = (request, codes, reason) => {
+      const what = `RESEARCH_TRANSPORT: the research requested for ${ctx.item} (${request.trigger}) could not run: the Antigravity SDK transport cannot start a session (${codes.join(', ')}): ${String(reason ?? '').slice(0, 300)}; the request stays open and nothing is planned around it`;
+      return result('blocked', {outputs: {stage: 'research', research: out.ran, transport_blocker: {codes}}, usage: spent(), blocker: {code: 'RESEARCH_TRANSPORT', what, role: 'lead@orch',
+        resume_when: 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable; then the owner records a new status entry for the item'},
+        next: {stage: 'plan', why: what}});
+    };
+    const no = researchReady();
+    if (no) { out.stop = transportStop(open[0], [no.code], no.message); return out; }
+    const top = git(repo)(['rev-parse', '--show-toplevel']).trim();
+    const head = git(top)(['rev-parse', 'HEAD']).trim();
+    let context = null;
+    try { context = renderDossier(evidenceFor(ctx).dossier); } catch { context = null; }
+    for (const request of open) {
+      const run = await runResearch({work: ctx.work, item: ctx.item, claim: ctx.claim ?? null, request, repo: top, dir: path.join(dirOf(ctx, 'research'), teamIdOf({item: ctx.item, request: request.hash})), billing: ctx.billing ?? geminiBilling(),
+        admitRequest: who => m.take(who), context, head, limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, signal: ctx.signal ?? null, progress});
+      out.ran.push({request: request.hash, trigger: request.trigger, team: run.team, status: run.status, stop_reason: run.stop_reason, concluded: run.concluded, conclusion: run.conclusion});
+      if (run.concluded) continue;
+      if (isResearchTransportStop(run.stop_reason)) { out.stop = transportStop(request, [run.stop_reason], run.result?.nodes?.find(x => x.error)?.error?.message); break; }
+      const failed = run.status === 'failed';
+      const what = `${run.stop_reason}: the research requested for ${ctx.item} (${request.trigger}) did not conclude (${run.status}); nothing is planned on research that did not finish, and what it found so far is kept`;
+      out.stop = result(failed ? 'failed' : 'pending', {outputs: {stage: 'research', research: out.ran}, usage: {provider_calls: m.made, elapsed_ms: Date.now() - t0},
+        ...(failed ? {} : {blocker: {code: run.stop_reason, transient: true, what, role: 'decision-authority',
+          resume_when: 'the stage is retried: the team is resumed from what it recorded (a billing refusal waits for the policy to change, a spent stage budget for the next attempt)'}}),
+        next: {stage: 'plan', why: what}});
+      break;
+    }
+    return out;
+  };
   const evidenceFor = (ctx, extra = {}) => {
     const dossier = buildDossier({repo, statusRoot: statusAt, item: ctx.item, work: ctx.work, issues: ctx.issues ?? null, bundlesDir: ctx.bundlesDir ?? bundlesDir, limits: INV});
     // The seats' retriever serves the dossier's DERIVED views too ({"op":"dossier"}), so a cut derived view can be continued
@@ -764,6 +864,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // The tier the planner was seated at, and why, is on the record (question 4): seatOf keeps only the identity.
     const plannerOut = {...seatOf(planner), selection: planner.selection};
     const team = [{role: 'planner', ...seatOf(planner), tier: plannerTier}];
+    // RESEARCH BEFORE PLANNING (owner direction 2026-11-20; research.mjs). The item's open research requests are run
+    // first, read-only, and what they found is part of the dossier built below. A team that did not conclude ends the
+    // attempt here: the planner is not asked on research that did not finish.
+    const researched = await researchBefore(ctx, m, t0);
+    if (researched.stop) return {...researched.stop, team};
     // Review capacity BEFORE work: the plan needs n reviewer labs outside the planner's.
     // Independence follows contributions (review/scope.mjs): a revision consumes the plan it revises and the findings
     // it answers, so the labs behind those may not review it. A revised plan keeps the lineage of what it revises,
@@ -773,6 +878,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // without a lab is dropped by this filter, so the dispatcher's finding must carry its lab).
     const inherited = mode === 'revise' ? [...(prevRec?.contributions ?? []),
       ...(gate.findings ?? []).filter(f => f.lab).map(f => findingContribution(f, `finding ${String(f.id).slice(0, 19)} returned to planning reached the revised plan`))] : [];
+    // The item's research contributed to whatever is planned from its dossier: its members are contributors here, so
+    // the panel below is seated outside them (researchRows).
+    inherited.push(...researchRows(ctx.work, item));
     let planSeats;
     const corrected = gate.rereview?.policy_rules ?? null;
     try { planSeats = panel([{purpose: 'plan', ...seatOf(planner)}, ...inherited], n, corrected); } catch (e) {
@@ -786,6 +894,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // brief when it opened (independent review, assignment 1, Google gemini-4-carbon, 09d490f, question 5).
     const {dossier: built, retriever} = evidenceFor(ctx);
     let dossier = built;
+    // The research conclusions this attempt's dossier holds: a later conclusion that changes what a plan should rest on,
+    // and is not among them, makes the plan stale (gates.mjs).
+    const researchSeen = ctx.work?.research ? researchOf(ctx.work, item).conclusions.map(c => c.hash) : [];
     const investigations = Object.assign([], {dossier});
     // What the planner was given only in part stays an unresolved gap on the record, with the request that continues it.
     // It is what the planner that wrote the CURRENT version was given: that answer's own investigation, never the
@@ -795,6 +906,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let authorLog = null, authorUnknown = null;
     const plannerGot = () => deliveryOf(dossier, authorLog ?? {requests: []});
     const ctxOut = () => ({dossier: dossierRecord(dossier), investigations: [...investigations], unresolved: gapsOf(plannerGot()),
+      ...(researchSeen.length || researched.ran.length ? {research: researchSeen, research_ran: researched.ran} : {}),
       ...(authorLog ? {author_log: authorLog} : {}),
       ...(authorUnknown ? {author_delivery: {known: false, complete: false, why: authorUnknown}} : {})});
     // The cause of a finding as far as the record can tell: with the author's own investigation unknown, a source the
@@ -915,7 +1027,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         // The planner judged the evidence insufficient: no plan is forced. Its gaps are kept and the item waits.
         if (plain(j?.insufficient)) {
           const gaps = (Array.isArray(j.insufficient.gaps) ? j.insufficient.gaps : []).map(String), needed = (Array.isArray(j.insufficient.needed) ? j.insufficient.needed : []).map(String);
-          return result('blocked', {outputs: {mode, insufficient: {gaps, needed}, refused, versions, context: ctxOut(), planner: plannerOut}, team, contributions, usage: usage(),
+          // INSUFFICIENT EVIDENCE ACTIVATES RESEARCH (owner direction 2026-11-20), once per set of gaps, and only where
+          // primary Gemini execution is declared: nothing is authorized by the planner's answer. The request is recorded
+          // and run now; the item still waits, and the findings (a change of its evidence) are what wakes the plan.
+          const auto = await researchOnGaps(ctx, m, {gaps, needed});
+          return result('blocked', {outputs: {mode, insufficient: {gaps, needed}, refused, versions, context: ctxOut(), planner: plannerOut, research_on_gaps: auto}, team, contributions, usage: usage(),
             findings: gaps.map((g, i) => ({id: `gap-${i + 1}`, severity: 'block', cause: 'missing-evidence', text: g, lab: planner.lab})),
             blocker: {code: 'EVIDENCE_INSUFFICIENT', what: `EVIDENCE_INSUFFICIENT: the planner could not establish the problem from the evidence it was given or could retrieve (${gaps.join('; ') || 'no gap named'})`,
               role: 'lead@orch', resume_when: `the evidence changes (${needed.join('; ') || 'the missing records become retrievable'}), or the owner raises the investigation limits`},

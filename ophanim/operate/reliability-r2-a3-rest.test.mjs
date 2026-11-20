@@ -278,9 +278,10 @@ test('finding 9: a live run\'s stage gets the run\'s remaining elapsed time (no 
   const head = git(repo, 'rev-parse', 'HEAD').trim();
   const m = manifestFor({root, f, item: 'timed', head, name: 'out', limits: {total_provider_calls: 50, stage_provider_calls: 5, revisions: 1, stage_attempts: 1, elapsed_ms: 60_000,
     pipeline: {max_provider_calls: 5, max_revisions: 1, max_concurrent_units: 1, verify_timeout_ms: 10_000}}});
-  let given = null;
-  await confirmed(root, m, scriptedTurn(), '9', {repo, makeExecutorsImpl: () => ({plan: async ctx => { given = ctx.budget.elapsed_ms;
-    return {status: 'pending', outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, blocker: {what: 'x', role: 'lead@orch', resume_when: 'later'}, next: {stage: 'plan', why: 'x'}}; }})});
+  let given = null, built = null;
+  await confirmed(root, m, scriptedTurn(), '9', {repo, makeExecutorsImpl: opts => { built = opts; return {plan: async ctx => { given = ctx.budget.elapsed_ms;
+    return {status: 'pending', outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, blocker: {what: 'x', role: 'lead@orch', resume_when: 'later'}, next: {stage: 'plan', why: 'x'}}; }}; }});
+  assert.equal(built.research?.enabled, true, 'the live run builds executors that run requested research (stages.mjs: the launcher\'s choice)');
   assert.ok(given > 58_000, `the plan stage was given ${given} ms of a 60000 ms run`);
   // The verifier: what is left of the bound, never the fixed 120 s past it.
   assert.equal(typeof LR.verifyTimeout, 'function');

@@ -17,6 +17,9 @@
 //                purpose `research`), then to the stage's provider-call bound (the caller's `admitRequest`), and its usage
 //                row is persisted, all before the gateway forwards it. With primary execution not declared, or its budget
 //                spent, the team is refused before anything is prepared and the request stays open.
+//   SESSIONS     Each session's own directory (its runtime's state) is made OUTSIDE the repository it reads, wherever the
+//                item's state is kept, and removed when the session ends; what is kept of a session is its record below.
+//                A session is given its assignment's tools and scope, and the transport enforces both (turn.mjs).
 //   EVIDENCE     Every member is on the work ledger before it runs and again with its outcome. A finished member's full
 //                record (its report, what the controller saw it examine, with digests) is a file of the item's state
 //                directory, cited by digest on the ledger. The conclusion carries the findings concisely, source-linked.
@@ -32,14 +35,17 @@
 // Must never: run a team with no recorded request or trigger; send a billed request the policy did not admit; record a
 // conclusion for a team that was stopped or refused a charge; or let a research session write, run or delegate.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {RESEARCH, RESEARCH_TRIGGERS, RESEARCH_ROLES} from '../../pantheon/src/antigravity/config.mjs';
 import {researchSeat, researchSubordinate, researchLimits} from '../../pantheon/src/route/fit-matrix.mjs';
 import {runResearchTeam} from '../../pantheon/src/antigravity/research.mjs';
-import {runAntigravitySdkTurn} from '../../pantheon/src/antigravity/turn.mjs';
+import {runAntigravitySdkTurn, sdkPreflight} from '../../pantheon/src/antigravity/turn.mjs';
+import {transportBlockerOf, TRANSPORT_BLOCKERS} from '../../pantheon/src/pipeline/implement.mjs';
 import {geminiAdmission, spendGemini, isGeminiBillingRefusal} from '../../pantheon/src/route/quota-failover.mjs';
-import {openResearchRequests} from './work-ledger.mjs';
+import {researchOf, researchView, researchContributors} from './research-view.mjs';
+export {researchOf, researchView, researchContributors};
 
 export const RESEARCH_EVIDENCE_SCHEMA = 'ophanim.research-evidence/v1';
 /** The research role a trigger asks for, unless the request names one. */
@@ -55,6 +61,15 @@ const SYSTEM = role => [
   'Report facts with the path of the source each rests on. Say what you could not establish. Do not guess, and do not propose or make changes.',
 ].join(' ');
 
+/**
+ * Why the research transport cannot start a session here, told without starting one: {code, message} (a
+ * TRANSPORT_BLOCKERS code: no key, no SDK), or null. `antigravity`: the transport's options, as runResearch is given them.
+ */
+export const researchTransportRefusal = (antigravity = {}) => sdkPreflight({...(Object.hasOwn(antigravity, 'apiKey') ? {apiKey: antigravity.apiKey} : {}), ...(antigravity.python ? {python: antigravity.python} : {}),
+  ...(antigravity.bridge ? {bridge: antigravity.bridge} : {})});
+/** Is this stop of a team a fault of the transport that no retry of the team can cure (not the billing policy's refusal)? */
+export const isResearchTransportStop = code => TRANSPORT_BLOCKERS.includes(code) && !['GEMINI_PRIMARY_DISABLED', 'METERED_GEMINI_BUDGET_EXHAUSTED'].includes(code);
+
 /** Record a request for research on an item. Returns its hash. Throws for an unknown trigger or role. */
 export function requestResearch({work, item, trigger, question, scope = undefined, role = undefined, by, at = new Date().toISOString()}) {
   if (!RESEARCH_TRIGGERS.includes(trigger)) throw Object.assign(new Error(`"${trigger}" is not a research trigger (${RESEARCH_TRIGGERS.join(', ')})`), {code: 'RESEARCH_TRIGGER'});
@@ -62,33 +77,8 @@ export function requestResearch({work, item, trigger, question, scope = undefine
   if (!str(question) || question.trim().length < RESEARCH.bounds.min_question_chars) throw Object.assign(new Error(`a research request has a question of at least ${RESEARCH.bounds.min_question_chars} characters`), {code: 'RESEARCH_QUESTION'});
   return work.recordResearch({phase: 'request', item, trigger, question: question.trim(), by, once: 1, ...(scope ? {scope} : {}), ...(role ? {role} : {}), at});
 }
-/** The item's research on the ledger: {requests, open, teams, conclusions}. */
-export function researchOf(work, item) {
-  const all = work?.research ? work.research(item) : [];
-  return {all, requests: all.filter(r => r.phase === 'request'), open: openResearchRequests(all), teams: all.filter(r => r.phase === 'team'), conclusions: all.filter(r => r.phase === 'conclusion')};
-}
 /** The team a request (or, with none, a trigger and question) is answered by: one identity per item and request. */
 export const teamIdOf = ({item, request = null, trigger, question}) => 'rt-' + createHash('sha256').update(JSON.stringify([item, request, request ? null : trigger, request ? null : question])).digest('hex').slice(0, 16);
-
-/**
- * The item's research as ONE view of its dossier, or null when there is none: every conclusion's concise, source-linked
- * findings and every request still open. Its bytes are its version (context.mjs): new findings are new evidence.
- */
-export function researchView(work, item) {
-  const r = researchOf(work, item);
-  if (!r.conclusions.length && !r.open.length) return null;
-  const lines = [];
-  for (const c of r.conclusions) {
-    const t = r.teams.find(x => x.team === c.team);
-    lines.push(`## Research team ${c.team} (${t?.role ?? 'research'}; trigger: ${t?.trigger ?? 'unknown'}): ${c.status}${c.material ? '; MATERIAL: what was found changes what a plan should rest on' : ''}`,
-      `question: ${t?.question ?? '(not recorded)'}`, ...(c.summary ? [`answer: ${c.summary}`] : []), c.findings_text || '(no finding)', '');
-  }
-  for (const q of r.open) lines.push(`## Research requested and not yet answered (${q.trigger}, by ${q.by}): ${q.question}`, '');
-  return {text: lines.join('\n').trimEnd(), as_of: (r.conclusions.at(-1) ?? r.open.at(-1)).at};
-}
-
-/** Every member of the item's concluded research that answered: {team, node, kind, depth, vendor, requested_model, served_model, served_model_source}. */
-export const researchContributors = (work, item) => researchOf(work, item).conclusions.flatMap(c => (c.contributors ?? []).map(x => ({team: c.team, ...x})));
 
 /** The findings of a team's record, concise and source-linked, bounded in bytes; what does not fit is counted, never dropped silently. */
 export function findingsText(result, bytes = 6000) {
@@ -115,11 +105,13 @@ export function findingsText(result, bytes = 6000) {
  *   admitRequest   the stage's charge for one provider call ({vendor, model}) -> void | throws (its bound, its ledger charge)
  *   context        the controller's initial view, as text (the rendered dossier), shown to the coordinator
  *   sdk            runAntigravitySdkTurn, or a scripted one       antigravity   the transport's options
+ *   controlRoot    where each session's own directory is made (default: the system's temporary directory); it must be
+ *                  outside `repo`, and the transport refuses a session otherwise (CONTROL_IN_WORKTREE)
  * Returns {team, status, stop_reason, concluded, conclusion (hash | null), result (the team's record) | null, refused (the
  * billing policy's refusal before anything was prepared) | null}.
  */
 export async function runResearch({work, item, claim = null, request = null, trigger = request?.trigger, question = request?.question, scope = request?.scope ?? ['.'], role = request?.role ?? ROLE_OF_TRIGGER[trigger], repo, dir, billing,
-  admitRequest = () => {}, context = null, head = null, limits = {}, sdk = runAntigravitySdkTurn, antigravity = {}, signal = null, qualified = undefined, now = () => new Date().toISOString(), progress = () => {}}) {
+  admitRequest = () => {}, context = null, head = null, limits = {}, sdk = runAntigravitySdkTurn, antigravity = {}, controlRoot = os.tmpdir(), signal = null, qualified = undefined, now = () => new Date().toISOString(), progress = () => {}}) {
   if (!RESEARCH_TRIGGERS.includes(trigger)) throw Object.assign(new Error(`"${trigger}" is not a research trigger (${RESEARCH_TRIGGERS.join(', ')})`), {code: 'RESEARCH_TRIGGER'});
   if (!RESEARCH_ROLES.includes(role)) throw Object.assign(new Error(`"${role}" is not a research role (${RESEARCH_ROLES.join(', ')})`), {code: 'RESEARCH_ROLE'});
   const coordinator = researchSeat(role, qualified ? {qualified} : {}), subordinate = researchSubordinate();
@@ -173,11 +165,20 @@ export async function runResearch({work, item, claim = null, request = null, tri
   // the gateway forwards it (spendGemini's order). The team's shared bound was checked before this is called.
   const admit = info => { spendGemini(billing, billed(info.model, ++n), () => admitRequest({vendor: coordinator.seat.vendor, model: info.model})); };
   const runNode = async ({node, prompt, seat, signal: stop, admit: charge, bounds}) => {
-    const control_dir = path.join(dir, 'sessions', `${node.id}${node.kind === 'coordinator' ? `-r${node.round}` : ''}`);
-    fs.rmSync(control_dir, {recursive: true, force: true});
-    const r = await sdk({seat, prompt, worktree: repo, control_dir, unit: {unit_id: node.id}, admit: charge, signal: stop, research: {system: SYSTEM(node.kind === 'coordinator' ? role : `${node.specialty} specialist`)},
-      budget: {max_model_calls: bounds.model_calls, max_tool_calls: bounds.tool_calls}, timeoutS: bounds.timeout_s, ...antigravity});
-    return {text: r.text, structured_output: r.structured_output ?? null, examined: r.examined ?? [], served_model: r.served_model ?? null, served_model_source: r.served_model_source ?? null, usage: r.usage ?? null};
+    // THE SESSION'S OWN DIRECTORY IS OUTSIDE THE REPOSITORY IT READS (the item's state may be inside it), and is removed
+    // when the session ends, however it ends: nothing of a session is left behind but its record.
+    const control_dir = fs.mkdtempSync(path.join(controlRoot, `ophanim-research-${node.id}-`));
+    try {
+      const r = await sdk({seat, prompt, worktree: repo, control_dir, unit: {unit_id: node.id}, admit: charge, signal: stop,
+        research: {system: SYSTEM(node.kind === 'coordinator' ? role : `${node.specialty} specialist`), tools: [...node.tools], scope: [...node.scope]},
+        budget: {max_model_calls: bounds.model_calls, max_tool_calls: bounds.tool_calls}, timeoutS: bounds.timeout_s, ...antigravity});
+      return {text: r.text, structured_output: r.structured_output ?? null, examined: r.examined ?? [], served_model: r.served_model ?? null, served_model_source: r.served_model_source ?? null, usage: r.usage ?? null};
+    } catch (e) {
+      // A fault of the transport keeps the transport's name (implement.mjs transportBlockerOf): the caller tells it from a
+      // failed investigation.
+      const blocker = transportBlockerOf(e);
+      throw blocker && e.code !== blocker ? Object.assign(e, {code: blocker}) : e;
+    } finally { fs.rmSync(control_dir, {recursive: true, force: true}); }
   };
   const result = await runResearchTeam({team: {id: team, item, role, trigger, question, scope, head, ...(str(context) ? {context} : {})}, coordinator, subordinate, limits: L, runNode, admit, record, resume, signal, now});
   const concluded = !RESUMABLE(result.status, result.stop_reason);

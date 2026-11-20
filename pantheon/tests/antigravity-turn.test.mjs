@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, pythonRoots, IMPLEMENTER_TOOLS, RESEARCH_TOOLS, READ_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
+import { runAntigravitySdkTurn, toolDecision, prepareSdkWorkspace, bridgeEnvOf, sdkVersionRefusal, sdkPreflight, pythonRoots, IMPLEMENTER_TOOLS, RESEARCH_TOOLS, READ_TOOLS, BRIDGE_ENV_ALLOW } from "../src/antigravity/turn.mjs";
 import { SDK_READ_TOOLS } from "../src/antigravity/config.mjs";
 import { subagentGovernor } from "../src/antigravity/subagents.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
@@ -534,6 +534,42 @@ test("a research session is configured with the read tools only, no subagent typ
   const i = note(await run(CARBON, [{ probe: true }])).probes[0];
   assert.ok(i.enabled_tools.includes("create_file") && i.enabled_tools.includes("run_command") && /single implementer of one work unit/.test(i.system));
   await assert.rejects(run(CARBON, [{ probe: true }], { research: {} }), { code: "BAD_INPUT" });
+});
+
+test("A RESEARCH ASSIGNMENT'S TOOLS AND SCOPE ARE ITS SESSION'S: a read tool it was not given is neither offered nor served, a read outside its scope is refused, and a path that only starts like its scope is outside it", async t => {
+  const { env, run, note } = await setup(t);
+  const inWt = p => join(env.repo, p);
+  const r = await run(CARBON, [
+    { probe: true },
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("src/u1/keep.mjs") } } },     // 1 inside its scope
+    { hook: { tool: "view_file", args: { AbsolutePath: inWt("README.md") } } },            // 2 in the repository, outside its scope
+    { hook: { tool: "list_directory", args: { DirectoryPath: inWt("src") } } },            // 3 a read tool it was not given
+    { hook: { tool: "finish", args: { summary: "ok" } } },                                  // 4 finish
+  ], { research: { ...RESEARCH, tools: ["view_file"], scope: ["src"] } });
+  assert.deepEqual(r.tool_log.map(x => [x.n, x.tool, x.allow, x.code]), [[1, "view_file", true, null], [2, "view_file", false, "RESEARCH_SCOPE"], [3, "list_directory", false, "RESEARCH_TOOL_NOT_GIVEN"], [4, "finish", true, null]]);
+  assert.deepEqual([...note(r).probes[0].enabled_tools].sort(), ["finish", "view_file"], "what it was not given is not offered to the model either");
+  assert.deepEqual(r.examined.map(x => x.path), ["src/u1/keep.mjs"], "a refused read examined nothing");
+  // A scope is a path, not a prefix of characters: src/u does not contain src/u1.
+  const near = await run(CARBON, [{ hook: { tool: "view_file", args: { AbsolutePath: inWt("src/u1/keep.mjs") } } }], { research: { ...RESEARCH, scope: ["src/u"] } });
+  assert.deepEqual(near.tool_log.map(x => [x.allow, x.code]), [[false, "RESEARCH_SCOPE"]]);
+  // The whole repository, and a file named exactly, are scopes too.
+  const whole = await run(CARBON, [{ hook: { tool: "view_file", args: { AbsolutePath: inWt("README.md") } } }], { research: { ...RESEARCH, scope: ["."] } });
+  const exact = await run(CARBON, [{ hook: { tool: "view_file", args: { AbsolutePath: inWt("README.md") } } }], { research: { ...RESEARCH, scope: ["README.md"] } });
+  assert.deepEqual([whole.tool_log[0].allow, exact.tool_log[0].allow], [true, true]);
+  // An assignment that is not one is refused before anything is prepared.
+  for (const bad of [{ tools: ["create_file"] }, { tools: [] }, { tools: "view_file" }, { scope: [] }, { scope: ["../outside"] }, { scope: ["/etc"] }]) {
+    await assert.rejects(run(CARBON, [{ probe: true }], { research: { ...RESEARCH, ...bad } }), { code: "BAD_INPUT" }, JSON.stringify(bad));
+  }
+});
+
+test("the transport says why no session can start here, without starting one: no key, a key that cannot be a header value, no python; and nothing when those hold", () => {
+  assert.equal(sdkPreflight({ apiKey: "", python: process.execPath }).code, "NO_API_KEY");
+  assert.equal(sdkPreflight({ apiKey: null, python: process.execPath }).code, "NO_API_KEY");
+  assert.equal(sdkPreflight({ apiKey: "SYNTHETIC-VALUE\nwith a line break", python: process.execPath }).code, "NO_API_KEY");
+  const none = sdkPreflight({ apiKey: KEY, python: "/nonexistent/venv/bin/python" });
+  assert.deepEqual([none.code, /python is absent at \/nonexistent\/venv\/bin\/python/.test(none.message)], ["SDK_UNAVAILABLE", true]);
+  assert.equal(sdkPreflight({ apiKey: KEY, python: process.execPath }), null);
+  assert.ok(!JSON.stringify(sdkPreflight({ apiKey: "SYNTHETIC-VALUE\nwith a line break", python: process.execPath })).includes("SYNTHETIC-VALUE"), "the refusal does not repeat the key");
 });
 
 test("a read-only workspace owns no path and has no verify command; the read-only rule is the policy's, not the absence of owned paths", async t => {

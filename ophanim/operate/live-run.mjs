@@ -820,7 +820,9 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   //   billing.metered_gemini_failover  the metered fallback of a single-turn Gemini lane seat
   const billing = manifestBilling(m);
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
-    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note});
+    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note,
+    // Research is on for a live run (stages.mjs `research.enabled`); each of its requests is the billing policy's to admit.
+    research: {enabled: true}});
   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
   // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).
