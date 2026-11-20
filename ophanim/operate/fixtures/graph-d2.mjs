@@ -112,10 +112,13 @@ export function hypotheticalRequirement(loop, world, record, target) {
 
 /**
  * SCRIPTED executors for the controller-core graph tests: the plan stage writes the ticket and a plan whose typed
- * `requires` (plans[item]: [{id, why, implements?}]) are bound to the versions the graph handle states (ctx.graph, as
- * stages.mjs binds them); every other stage passes. `seen` logs each call.
+ * `requires` (plans[item]: [{id, why, implements?}], read when the item is planned) are bound to the versions the graph
+ * handle states (ctx.graph, as stages.mjs binds them) on the record (outputs.graph.requires) and in the plan document;
+ * every other stage passes. `seen` logs each call. Options: `stated` -- the plan DOCUMENT keeps each requirement as the
+ * planner stated it (no version) and the binding is on the record only, so a test shows which one a consumer reads;
+ * `paths` -- {item: [path or glob]}, the plan's slice paths (the paths it claims; default `lib/<item>.mjs`).
  */
-export function graphExecutors(world, plans = {}) {
+export function graphExecutors(world, plans = {}, {stated = false, paths = {}} = {}) {
   const seen = [];
   const plan = async ctx => {
     seen.push({stage: 'plan', item: ctx.item, graph: Boolean(ctx.graph)});
@@ -123,12 +126,14 @@ export function graphExecutors(world, plans = {}) {
       goal: 'g', question: 'q', repo_root: '.', slot: 'a', path: `lib/${ctx.item}.mjs`, copy: [], acceptance_cmd: 'true'};
     fs.writeFileSync(path.join(world.repo, 'tickets', `${ctx.item}.json`), JSON.stringify(ticket));
     const t = readTicket({repo: world.repo, item: ctx.item});
-    const requires = (plans[ctx.item] ?? []).map(r => ({...r, ...(ctx.graph ? {version: ctx.graph.stateOf(r.id).version} : {})}));
+    const bound = (plans[ctx.item] ?? []).map(r => ({...r, ...(ctx.graph ? {version: ctx.graph.stateOf(r.id).version} : {})}));
+    const requires = stated ? (plans[ctx.item] ?? []).map(r => ({...r})) : bound;
+    const slices = (paths[ctx.item] ?? [`lib/${ctx.item}.mjs`]).map((p, i) => ({id: `s${i + 1}`, title: ctx.item, slot: 'a', path: p}));
     const doc = {problem: {statement: `SYNTHETIC: the objective of ${ctx.item}`}, dependencies: [], capabilities: ['a synthetic capability, as free text'], requires,
-      slices: [{id: 's1', title: ctx.item, slot: 'a', path: `lib/${ctx.item}.mjs`}], acceptance: [{id: 'a1', criterion: 'synthetic', test: {cmd: 'true'}}]};
+      slices, acceptance: [{id: 'a1', criterion: 'synthetic', test: {cmd: 'true'}}]};
     // test-lint: allow scripted-terminal-status -- a scripted plan, the INPUT of these graph-loop tests: they assert the gate, the queue and the graph, not a stage's own outcome
     return {status: 'passed', identity: {ticket: {path: t.path, digest: t.digest}}, outputs: {plan: doc, ticket: {path: t.path, digest: t.digest}, deps: {}, evidence: [],
-      ...(ctx.graph ? {graph: {cursor: ctx.graph.cursor.seq, head: ctx.graph.cursor.head, requires}} : {})},
+      ...(ctx.graph ? {graph: {cursor: ctx.graph.cursor.seq, head: ctx.graph.cursor.head, requires: bound}} : {})},
       team: [{role: 'planner', vendor: 'synthetic', model: 'synthetic-planner', lab: 'synthetic'}], contributions: [], findings: [], usage: {provider_calls: 1}, next: {stage: 'implement', why: 'approved'}};
   };
   const pass = stage => async ctx => {

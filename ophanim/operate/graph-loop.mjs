@@ -39,12 +39,17 @@ import {existenceOf, planId, recordSharedPrerequisites, NAMING_SOURCES, WORK_GRA
 import {workReassessmentSet, reassessWork, reassessmentId} from '../graph/reassess.mjs';
 import {learningReuse} from '../graph/learning.mjs';
 import {sourcesOf, WORK_SOURCE} from '../graph/extract/index.mjs';
-import {GRAPH_ABSENT, graphRequiresOf, requirementOf, requirementDigest, requirableRefusal} from './gates.mjs';
+import {GRAPH_ABSENT, graphRequiresOf, boundRequiresOf, requirementOf, requirementDigest, requirableRefusal} from './gates.mjs';
 import {defaultSnapshot, decisionFor} from '../../pantheon/src/capability/advisory.mjs';
 import {requirementsOf as capabilityRequirements} from '../../pantheon/src/capability/eligibility.mjs';
 
 export const GRAPH_LOOP_SCHEMA = 'ophanim.graph-loop/v1';
 export const CANDIDATE_SCHEMA = 'ophanim.graph-candidate/v1';
+/**
+ * The state of a candidate record (KD2-5): OPEN while its condition holds; SUPERSEDED once it no longer does (the record is
+ * kept, with the reason and what resolved it, never deleted). A record written before states existed is open.
+ */
+export const CANDIDATE_STATE = Object.freeze({open: 'open', superseded: 'superseded'});
 export const PROPOSAL_SCHEMA = 'ophanim.coordinator-proposal/v1';
 export const TEAM_PROPOSAL_SCHEMA = 'ophanim.team-proposal/v1';
 /**
@@ -101,7 +106,8 @@ export function claimedPaths(view, plan) {
   }
   return [...out].sort(byString).slice(0, LOOP_BOUNDS.paths);
 }
-const overlaps = (a, b) => a.some(x => b.some(y => x === y || x.startsWith(y.replace(/\*+$/, '')) && y.endsWith('*') || y.startsWith(x.replace(/\*+$/, '')) && x.endsWith('*')));
+// Whether two claimed paths overlap is decided by ONE function, the owned-path grammar's (pantheon/src/pipeline/paths.mjs
+// pathsOverlap), where the queue report reads them (scheduler.mjs queueReport).
 
 /**
  * The item-level waits a prerequisite creates, and their cycles: item B waits for item A when B's current plan requires a
@@ -140,8 +146,10 @@ export function createGraphLoop(config) {
   const bounds = Object.fromEntries(Object.entries(LOOP_BOUNDS).map(([k, v]) => [k, Number.isInteger(config?.bounds?.[k]) && config.bounds[k] >= 0 ? Math.min(v, config.bounds[k]) : v]));
   if (!dir || !path.isAbsolute(dir) || !anchor || !origins || typeof sources !== 'function') throw Object.assign(new Error('createGraphLoop: {dir (absolute), anchor, origins, sources()} are required'), {code: 'USAGE'});
   const now = config.observed_at ?? (() => new Date().toISOString());
-  let graph = null, cache = null, cursorCache = null, lastSnapshot = null, lastShared = null;
-  const stats = {opens: 0, opened: [], observations: [], recorded: {reassessments: 0, findings: 0, candidates: 0, proposals: 0}, events: {considered: 0, deferred: 0}, ms: {open: 0, prepare: 0, observe: 0, snapshot: 0}};
+  // `prepared`: the last reconciliation's prepared context (the value of context().prepare), which recordCandidates
+  // retires stale candidate records against.
+  let graph = null, cache = null, cursorCache = null, lastSnapshot = null, lastShared = null, prepared = null;
+  const stats = {opens: 0, opened: [], observations: [], recorded: {reassessments: 0, findings: 0, candidates: 0, proposals: 0, retired: 0}, events: {considered: 0, deferred: 0}, ms: {open: 0, prepare: 0, observe: 0, snapshot: 0}};
   const timed = (k, f) => { const t = process.hrtime.bigint(); try { return f(); } finally { stats.ms[k] += Number(process.hrtime.bigint() - t) / 1e6; } };
   const doOpen = () => openGraph({dir, anchor, origins, sources: sources(), lockTimeoutMs: 60_000, ...(snapshot ? {snapshot: {dir: snapshot.dir, keys: snapshot.keys}} : {})});
 
@@ -153,7 +161,7 @@ export function createGraphLoop(config) {
     stats.opens++;
     if (s?.used) lastSnapshot = s.seq;      // a snapshot at this seq exists: the end of the tick writes one only if the graph moved
     stats.opened.push({mode: s?.used ? 'snapshot' : 'full', seq: graph.view().seq, rederived: graph.verification.rederived, snapshot_seq: s?.used ? s.seq : null, reason: s?.used ? null : s?.reason ?? 'no snapshot directory is configured'});
-    cache = null;
+    cache = null; prepared = null;
     return graph;
   }
   // The graph as last opened (or refreshed by cursor()); opened here, uncounted, for a caller outside a tick (a signature).
@@ -219,9 +227,10 @@ export function createGraphLoop(config) {
    * that changed a source already observed (a first observation introduces it). Each set is RECORDED once when the
    * context writes; at most LOOP_BOUNDS.events sets are computed per tick (one open; the rest the next tick, counted).
    * A plan reached only through its requirement of a prerequisite it cited as MISSING is not made stale by it: that
-   * prerequisite being established is the gate's UNLOCK (analyzePlan), not a change of what the plan rested on.
+   * prerequisite being established is the gate's UNLOCK (analyzePlan), not a change of what the plan rested on. What
+   * the plan cited is its BOUND version (gates.mjs boundRequiresOf, read from the plan record `recOf(hash)`).
    */
-  function reassessments(g, write, docOf) {
+  function reassessments(g, write, recOf) {
     const view = g.view(), out = new Map(), events = [];
     for (let after = 0; ;) {
       const page = g.events({after, limit: 1000});
@@ -250,7 +259,7 @@ export function createGraphLoop(config) {
         if (!h) continue;
         const last = m.path.at(-1);
         if (k === 'work/plan' && last && REQ_TYPES.includes(last.type) && last.from === m.id
-          && graphRequiresOf(docOf(h)).some(r => r.id === last.to && r.version === GRAPH_ABSENT)) continue;
+          && boundRequiresOf(recOf(h)).some(r => r.id === last.to && r.version === GRAPH_ABSENT)) continue;
         if (!out.has(h)) out.set(h, []);
         out.get(h).push({key: `reassess-work/event/${e.seq}`, event: e.key, why: cut(`${e.source} changed (event ${e.seq}, ${e.key}): ${m.why}`, 300)});
       }
@@ -269,10 +278,10 @@ export function createGraphLoop(config) {
       prepare({items = [], byItem = new Map(), stagesOf = () => []} = {}) {
         const g = current(), all = stagesOf();
         const key = `${g.view().seq}|${all.at(-1)?.hash ?? ''}|${all.length}|${items.map(i => i.item + '@' + i.entry).join(',')}|${write}`;
-        if (cache?.key === key) return cache.value;
+        if (cache?.key === key) return (prepared = cache.value);
         const value = timed('prepare', () => build(g, {items, byItem, stagesOf, write}));
         cache = {key: `${g.view().seq}|${all.at(-1)?.hash ?? ''}|${all.length}|${items.map(i => i.item + '@' + i.entry).join(',')}|${write}`, value};
-        return value;
+        return (prepared = value);
       },
     };
   }
@@ -290,7 +299,7 @@ export function createGraphLoop(config) {
     }
     // Who requires and who implements each prerequisite (the plans' own declarations, the work ledger's records).
     const requiring = new Map();
-    for (const [item, p] of current) for (const r of graphRequiresOf(p.outputs?.plan)) {
+    for (const [item, p] of current) for (const r of boundRequiresOf(p)) {
       if (requirableRefusal(r.id)) continue;          // a malformed id is no requirement the graph can hold
       if (!requiring.has(r.id)) requiring.set(r.id, []);
       requiring.get(r.id).push({item, implements: r.implements, line: r.line, why: r.why});
@@ -309,7 +318,7 @@ export function createGraphLoop(config) {
     const inCycle = new Map();
     for (const c of cycles) for (const m of c) if (!inCycle.has(m)) inCycle.set(m, c);
     const records = new Map(stagesOf().filter(x => x.stage === 'plan').map(x => [x.hash, x]));
-    const reassessed = reassessments(g, write, h => records.get(h)?.outputs?.plan ?? null);
+    const reassessed = reassessments(g, write, h => records.get(h) ?? null);
     // The analysis of one plan record (memoized): the block, the unlock, the basis of the attempt identity.
     const analyses = new Map();
     const analyze = (item, rec) => {
@@ -343,7 +352,37 @@ export function createGraphLoop(config) {
       .sort((x, y) => byString(x[0], y[0])).map(([id, items]) => ({prerequisite: id, items, exists: stateOf(id).exists,
         report: 'shared, never merged: each item keeps its own objective, ticket, claims and ownership'}));
     const paths = new Map([...current].map(([item, p]) => [item, claimedPaths(g.view(), planId(p.hash))]));
+    // THE RETIREMENT OF A STALE CANDIDATE (KD2-5; D2 fixes, outside-lab review): why a prerequisite recorded as a candidate
+    // (`was`, its record) is no longer one, when that can be said for certain -- it is ESTABLISHED (with the assertions that
+    // establish it), an item's current plan IMPLEMENTS it (that plan, its line and its requirement assertions), or NO current
+    // plan states it (the plans of the items that required it) -- else null, and the record stays open: a requirement the
+    // graph has not observed as established yet is no resolution.
+    const live = new Set(candidates.map(c => c.prerequisite));
+    const resolve = was => {
+      const id = was?.prerequisite;
+      if (typeof id !== 'string' || live.has(id) || requirableRefusal(id)) return null;
+      const s = stateOf(id);
+      if (s.exists) {
+        const ex = existenceOf(g.view(), id);
+        return {reason: 'established', why: cut(`${id} is established in the graph (${s.basis}): it is no longer a missing prerequisite`, 600),
+          resolved_by: {basis: s.basis, by: s.by, assertions: [...new Set(ex.sources.map(x => x.assertion))].sort(byString).slice(0, 16), established_at: s.established_at, version: s.version}};
+      }
+      const by = implementers(id);
+      if (by.length) {
+        return {reason: 'implemented', why: cut(`the current plan of ${by.join(', ')} implements ${id}: the items that require it wait for that work, which is no intake candidate`, 600),
+          resolved_by: {items: by, plans: by.map(item => {
+            const p = current.get(item), P = planId(p.hash), r = (requiring.get(id) ?? []).find(x => x.item === item && x.implements);
+            return {item, plan: P, record: p.hash, line: r?.line ?? null,
+              assertions: g.view().edgesOf(P, {mode: 'established', types: REQ_TYPES}).filter(e => e.from === P && e.to === id).flatMap(e => e.assertions).sort(byString).slice(0, 8)};
+          })}};
+      }
+      if (requiring.has(id)) return null;
+      const items = (Array.isArray(was.required_by) ? was.required_by : []).filter(x => typeof x === 'string');
+      return {reason: 'no longer required', why: cut(`no current plan requires ${id}`, 600),
+        resolved_by: {plans: items.map(item => ({item, plan: current.has(item) ? planId(current.get(item).hash) : null, record: current.get(item)?.hash ?? null}))}};
+    };
     return {
+      resolve,
       cursor: {seq: g.view().seq, head: g.view().head},
       // The graph as it stood at `seq` (a plan's dossier views are re-derived at the cursor the plan was made at: its own
       // later consequences on the graph are not new evidence, as reconcile.mjs rebuilds it against the work ledger then).
@@ -364,27 +403,58 @@ export function createGraphLoop(config) {
    * An intake CANDIDATE (KD2-2, KD2-5): ONE unsigned record per missing prerequisite, whatever the number of requiring
    * items (the items that require it are kept current on that one record), never executed. The scheduler records them at
    * the end of a tick, when every item has had its turn to plan (a prerequisite another item implements is no candidate).
-   * Returns 'written', 'updated' or null.
+   * A SUPERSEDED record whose gap returned is REOPENED (its retirement kept in `history`): never left retired while its
+   * condition holds. Returns 'written', 'updated', 'reopened' or null.
    */
-  function recordCandidate(c) {
-    if (!stateDir) return null;
-    const d = path.join(stateDir, 'graph-candidates'), f = path.join(d, `${digest(c.prerequisite).slice(0, 32)}.json`);
-    let was = null;
-    try { was = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { was = null; }
-    if (was && JSON.stringify(was.required_by) === JSON.stringify(c.items)) return null;
-    fs.mkdirSync(d, {recursive: true});
-    const body = {schema: CANDIDATE_SCHEMA, classification: 'candidate', executable: false, ref: c.ref, prerequisite: c.prerequisite, kind: c.kind, required_by: c.items, gap: c.gap, why: c.why,
-      authority: 'none: a candidate is never executed; the owner adds an item with a signed status entry (node packages/ledger/status.mjs set ...) or declines it',
-      graph: {anchor, seq: current().view().seq, head: current().view().head}};
+  const writeRecord = (f, body) => {
     const tmp = `${f}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`;
     fs.writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n');
     fs.renameSync(tmp, f);
-    return was ? 'updated' : 'written';
+  };
+  function recordCandidate(c) {
+    if (!stateDir) return null;
+    const d = path.join(stateDir, 'graph-candidates'), f = path.join(d, `${digest(c.prerequisite).slice(0, 32)}.json`);
+    let prior = null;
+    try { prior = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { prior = null; }
+    const was = prior?.state === CANDIDATE_STATE.superseded ? null : prior;
+    if (was && JSON.stringify(was.required_by) === JSON.stringify(c.items)) return null;
+    fs.mkdirSync(d, {recursive: true});
+    const history = [...(Array.isArray(prior?.history) ? prior.history : []), ...(prior && !was ? [{state: CANDIDATE_STATE.superseded, superseded: prior.superseded ?? null}] : [])].slice(-8);
+    writeRecord(f, {schema: CANDIDATE_SCHEMA, classification: 'candidate', state: CANDIDATE_STATE.open, executable: false, ref: c.ref, prerequisite: c.prerequisite, kind: c.kind, required_by: c.items, gap: c.gap, why: c.why,
+      authority: 'none: a candidate is never executed; the owner adds an item with a signed status entry (node packages/ledger/status.mjs set ...) or declines it',
+      graph: {anchor, seq: current().view().seq, head: current().view().head}, ...(history.length ? {history} : {})});
+    return was ? 'updated' : prior ? 'reopened' : 'written';
   }
-  /** Record the candidates of a reconciliation (scheduler.mjs, at the end of a tick). */
+  /**
+   * Record the candidates of a reconciliation (scheduler.mjs, at the end of a tick), and RETIRE every open candidate record
+   * it no longer lists (KD2-5; D2 fixes, outside-lab review: a candidate was never retired once its prerequisite was
+   * established or an item implemented it). A retired record is KEPT and marked superseded, with the reason and what
+   * resolved it (the assertions that establish the prerequisite, or the plan that implements it, or the plans that no longer
+   * require it): deleting it would erase the evidence that the gap was found, by whom it was required and how it closed,
+   * which the owner, who alone classifies candidates, may be reading. It is retired only when the reconciliation that
+   * produced `list` (this loop's last prepared context) can say why; otherwise it stays open.
+   */
   function recordCandidates(list = []) {
     const out = [];
     for (const c of list) { const r = recordCandidate(c); if (r) { stats.recorded.candidates++; out.push({prerequisite: c.prerequisite, required_by: c.items, recorded: r}); } }
+    const ids = xs => JSON.stringify(xs.map(c => c.prerequisite).sort(byString));
+    if (stateDir && prepared && ids(prepared.report().candidates) === ids(list)) {
+      const d = path.join(stateDir, 'graph-candidates');
+      let names = [];
+      try { names = fs.readdirSync(d).filter(n => /^[0-9a-f]{32}\.json$/.test(n)).sort(byString); } catch { names = []; }
+      for (const n of names) {
+        let was = null;
+        try { was = JSON.parse(fs.readFileSync(path.join(d, n), 'utf8')); } catch { continue; }
+        if (was?.schema !== CANDIDATE_SCHEMA || was.state === CANDIDATE_STATE.superseded || list.some(c => c.prerequisite === was.prerequisite)) continue;
+        let why = null;
+        try { why = prepared.resolve(was); } catch (e) { stats.retire_error = cut(e.message, 300); }
+        if (!why) continue;
+        writeRecord(path.join(d, n), {...was, state: CANDIDATE_STATE.superseded,
+          superseded: {reason: why.reason, why: why.why, resolved_by: why.resolved_by, graph: {anchor, seq: current().view().seq, head: current().view().head}}});
+        stats.recorded.retired++;
+        out.push({prerequisite: was.prerequisite, required_by: was.required_by ?? [], recorded: 'superseded', reason: why.reason});
+      }
+    }
     return out;
   }
 
@@ -439,10 +509,11 @@ export function createGraphLoop(config) {
  * THE ANALYSIS OF ONE PLAN against the graph (KD2-2): its requirement relationships as the graph holds them (established
  * ones can block; possible-only ones are ADVISORY and never block), each with the plan line that states it, its present
  * state and who implements it. The block: a cycle, an unobserved plan, or an established requirement of a missing
- * prerequisite this plan does not implement. The unlock: a requirement the plan cited as absent that now exists.
+ * prerequisite this plan does not implement. The unlock: a requirement the plan cited as absent that now exists. What the
+ * plan cited is the version its record BOUND (gates.mjs boundRequiresOf), not its document's optional one.
  */
 export function analyzePlan(view, {item, rec, stateOf, implementers, cycle = null, candidateOf}) {
-  const P = planId(rec.hash), doc = rec.outputs?.plan, typed = graphRequiresOf(doc);
+  const P = planId(rec.hash), doc = rec.outputs?.plan, typed = boundRequiresOf(rec);
   const lines = new Map(typed.map(r => [r.id, r]));
   for (const t of d1Requirements(doc).typed) if (!lines.has(t.id)) {
     const i = (doc?.[t.field] ?? []).findIndex(x => (typeof x === 'string' ? x : x?.id) === t.id);

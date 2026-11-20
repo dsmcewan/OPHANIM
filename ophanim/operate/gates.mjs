@@ -33,6 +33,22 @@ export function graphRequiresOf(doc) {
   return doc.requires.map((r, i) => (plainObj(r) && typeof r.id === 'string' ? {id: r.id, version: typeof r.version === 'string' ? r.version : null, why: typeof r.why === 'string' ? r.why : null,
     implements: r.implements === true, line: `requires[${i}]`, statement: JSON.stringify(r).slice(0, 300)} : null)).filter(Boolean);
 }
+/**
+ * THE BOUND typed requirements of a plan RECORD (KD2-3): the requirements its document states, each with the line that
+ * states it, and each VERSION taken from the binding the plan stage recorded (outputs.graph.requires: the version the
+ * graph stated when the plan was made, GRAPH_ABSENT for a missing prerequisite; stages.mjs). The document's own `version`
+ * is optional in the planner's answer, so it is read only for a record that predates the binding (no
+ * outputs.graph.requires) or a requirement the binding does not name. Every consumer of a plan's typed requirements reads
+ * them here: planValidity (the re-check), graph-loop.mjs analyzePlan (the block and the unlock), its reassessment filter
+ * and the requirements it reports. (D2 fixes, outside-lab review: the binding was recorded and never read.)
+ */
+export function boundRequiresOf(rec) {
+  const stated = graphRequiresOf(rec?.outputs?.plan), binding = rec?.outputs?.graph?.requires;
+  if (!Array.isArray(binding)) return stated;
+  const bound = new Map();
+  for (const b of binding) if (plainObj(b) && typeof b.id === 'string' && !bound.has(b.id)) bound.set(b.id, typeof b.version === 'string' ? b.version : null);
+  return stated.map(r => (bound.has(r.id) ? {...r, version: bound.get(r.id)} : r));
+}
 /** Whether a plan may require `id` (a typed requirement the work graph admits as requires-capability or depends-on). */
 export function requirableRefusal(id) {
   const bad = typeof id === 'string' ? idRefusal(id) : 'not a string';
@@ -104,10 +120,11 @@ export function completionEvidence(status) {
 // record is a member of. A requirement the plan cited as EXISTING whose version changed, and a plan a reassessment reached,
 // make it stale: it is re-planned, never executed on stale validity. A requirement cited as ABSENT is the gate's block
 // and unlock (graph-loop.mjs analyzePlan), not a staleness. A plan with typed requirements and no graph here cannot be
-// re-checked, and is stale (never presumed unchanged).
+// re-checked, and is stale (never presumed unchanged). The version a requirement was cited at is the BOUND one
+// (boundRequiresOf: the record's binding, not the document's optional version).
 export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => null, versionOf = null, graph = null}) {
   const why = [], observed = {};
-  const typed = graphRequiresOf(plan.outputs?.plan);
+  const typed = boundRequiresOf(plan);
   if (typed.length && !graph) { why.push('the plan cites graph facts, and no knowledge graph is supplied here to re-check them'); observed.graph = 'unreadable'; }
   if (graph) {
     for (const r of typed) {

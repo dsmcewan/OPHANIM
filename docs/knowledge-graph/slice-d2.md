@@ -58,7 +58,7 @@ If no current plan implements a missing prerequisite, it is ONE intake **candida
 
 - `eligible` (in dispatch order);
 - `blocked` (gate, code, prerequisite, line, implementers, cycle, why);
-- `concurrent`: groups of eligible items whose claimed paths are disjoint. The paths are the plan node's slices and its units' owned paths, as the graph states them. This is a report: the work ledger's per-item claims are what allow concurrency, as before;
+- `concurrent`: groups of eligible items whose claimed paths are disjoint. The paths are the plan node's slices and its units' owned paths, as the graph states them. Two paths clash when they could name a common path, decided by the owned-path grammar's one overlap function (`pantheon/src/pipeline/paths.mjs` `pathsOverlap`: `*`, `?`, `**`, a path inside a directory, case; conservative when unsure). `src/a/*` and `src/a/b.mjs` are never in one group (D2 fixes: the report compared paths by exact equality). This is a report: the work ledger's per-item claims are what allow concurrency, as before;
 - `unlocked`;
 - `order`;
 - `shared`: the current plans' shared prerequisites, each item listed apart;
@@ -82,7 +82,13 @@ Two items sharing a prerequisite stay two entries, each with its own claims: not
   - when nothing but plans states the prerequisite, the version is `GRAPH_ABSENT` ("absent");
   - otherwise it is the digest of its own non-naming established assertions and of what establishes it.
 
-  The plan stage records `outputs.graph = {cursor, head, requires}`, the cursor its dossier was built at.
+  The plan stage records `outputs.graph = {cursor, head, requires}`, the cursor its dossier was built at and the bound requirements.
+- **The binding is what is read** (D2 fixes). Every consumer of a plan's typed requirements reads them through `gates.mjs` `boundRequiresOf(record)`:
+  - `planValidity`, `analyzePlan` (the block and the unlock), the reassessment filter and the requirement index;
+  - each requirement is the line of the plan document that states it, with the version from `outputs.graph.requires`;
+  - the document's own `version` (optional in the planner's answer) is read only for a record with no `outputs.graph.requires`, or a requirement the binding does not name.
+
+  Before the fix nothing read `outputs.graph.requires`. The real plan stage also writes the bound list into the document, so its records were judged correctly. A record whose document states no version was not: a changed fact did not stale it, and an established prerequisite re-planned it instead of unlocking it.
 - **The prompt.** With a graph, `plannerPrompt` adds `GRAPH_RETRIEVAL_HELP` and a "Typed requirements" section, and names `requires?` in the answer schema. Without one, the prompt is byte-identical.
 - **The evidence.** The plan stage's dossier (`evidenceFor(ctx, {}, graph)`) ends with:
   - Slice B's `graph:<item>#neighbourhood` view;
@@ -95,7 +101,7 @@ Two items sharing a prerequisite stay two entries, each with its own claims: not
   - a recorded reassessment set reached it (`reassessed: ...`);
   - it has typed requirements and no graph is supplied here.
 
-  A requirement cited as absent is the gate's block and unlock, not a staleness.
+  "Cited" is the BOUND version. A requirement cited as absent is the gate's block and unlock, not a staleness: when it is established, the plan is UNLOCKED, never re-planned. A requirement bound at a version that changes makes the plan stale, and it is RE-PLANNED.
 - **D1's reassessment, on each observation event.** The prepared context computes `workReassessmentSet` for every observation event of a source other than the work graph that changed an already observed source. The work graph is excluded because its own events are the lifecycle's consequences, not evidence. With a writing context, `reconcile` RECORDS the set (`reassessWork`, once per event; `completion: 'not claimed'`). Its members map onto the gates:
   - a plan member makes `planValidity` stale;
   - a validation member makes `validationEvidence` stale.
@@ -125,9 +131,22 @@ Two items sharing a prerequisite stay two entries, each with its own claims: not
 - **A missing prerequisite no item implements** is an intake **candidate**, recorded unsigned under `<state dir>/graph-candidates/<digest of the prerequisite>.json`:
   - classification `candidate`, `executable: false`, `required_by`, the gap, and authority "none";
   - it is recorded at the END of a tick, when every item has had its turn to plan (a prerequisite another item implements is no candidate);
-  - there is one record per prerequisite; its `required_by` is kept current.
+  - there is one record per prerequisite; its `required_by` is kept current;
+  - its `state` is `open` while its condition holds.
 
   It is never claimed or executed: the owner adds an item with a signed status entry.
+- **A stale candidate is retired** (D2 fixes; `graph-loop.mjs` `recordCandidates`). At the end of the next tick, an open record the reconciliation no longer lists is marked `state: superseded`, with `superseded: {reason, why, resolved_by, graph}`:
+
+  | Reason | `resolved_by` |
+  |---|---|
+  | `established` | the basis, what establishes it, and the assertion ids that establish it |
+  | `implemented` | each implementing item's plan node, record, plan line and its requirement assertions |
+  | `no longer required` | the plans of the items that required it, which no longer state it |
+
+  - It is retired only when one of these can be said. A requirement the graph has not yet observed as established is no resolution, and the record stays open.
+  - The record is **kept, not removed**. Removing it would erase the evidence that the gap was found, which items required it, and how it closed. The owner, who alone classifies candidates, may be reading it.
+  - A retired candidate is never shown as open. The record says `superseded`; the tick's `candidates` and the queue report list only open ones; a later tick leaves it unchanged.
+  - If the gap returns, the same record is **reopened** (`state: open`), its retirement kept in `history`.
 - **A relevant failure mechanism.** A failed, returned or blocked stage whose finding names a file the learning graph relates to an established failure class becomes a **proposal to the coordinator** (`ophanim.coordinator-proposal/v1`, `kind: lesson-instance`, `applied: false`). It is written once under `<state dir>/graph-proposals/`. It is never an edit of `ophanim/lessons/**` or `docs/OPEN-LIMITATIONS.md`: the test checks both files are byte-identical.
 - **A reassessment** is recorded by D1's own rule on the graph ledger, and acts through the gates (section 4).
 - **D1's shared-prerequisite findings** are recorded by D1's own rule, once per tick and again only when the current plans' requirements or their existence change.
@@ -220,7 +239,7 @@ What is NOT advisory:
 
 | Test file | Covers |
 |---|---|
-| `graph-d2-loop.test.mjs` | KD2-1 cursor and wake; KD2-2 block with reason, one candidate, shared never merged, unlock, unrelated untouched; hypothetical never blocks; own work and the wait, a cycle refused; KD2-3 bound versions, stale re-planned with the reassessment recorded; KD2-5 and KD2-6 idempotent write-back, one open from the snapshot; the per-tick reassessment bound |
+| `graph-d2-loop.test.mjs` | KD2-1 cursor and wake; KD2-2 block with reason, one candidate, shared never merged, unlock, unrelated untouched; hypothetical never blocks; own work and the wait, a cycle refused; KD2-3 bound versions, stale re-planned with the reassessment recorded; KD2-5 and KD2-6 idempotent write-back, one open from the snapshot; the per-tick reassessment bound. The D2 fixes: the BOUND version read (stale and re-planned; absent then established, unlocked); the glob-aware concurrency report; a stale candidate retired, never shown as open, reopened |
 | `graph-d2-stages.test.mjs` | KD2-3 the planner's views, typed requires bound, its views re-derived at its cursor; KD2-4 team proposal recorded, live seats byte-identical, no extra provider request; `planRefusal` of typed requires |
 | `graph-d2-concurrency.test.mjs` | demonstration 8 (two real processes) |
 | `graph-d2-demo11.test.mjs` | demonstration 11, SYNTHETIC |
@@ -249,6 +268,13 @@ What is NOT advisory:
 | G17 | a repeated observation duplicates (`packages/graph` observe dedupe removed) | loop "KD2-5 and KD2-6"; demonstration 8 |
 | G18 | the graph re-derived in full on each tick (no snapshot) | loop "KD2-5 and KD2-6"; real "KD2-6" |
 | G19 | the per-tick reassessment bound not applied | loop "per-tick bound" |
+| G20 | `planValidity` reads the document's version, not the bound one | loop "the BOUND version ... at a version" |
+| G21 | the unlock reads the document's version, not the bound one | loop "the BOUND version ... ABSENT" |
+| G22 | the reassessment filter reads the document's version (an establishment re-plans) | loop "the BOUND version ... ABSENT" |
+| G23 | the concurrency report compares claimed paths by exact equality | loop "glob-aware" |
+| G24 | a stale candidate never retired | loop "stale candidate" |
+| G25 | a retired candidate kept open | loop "stale candidate" |
+| G26 | a retired candidate never reopened | loop "stale candidate" |
 
 The runner's result on the final commit is in the slice report.
 
@@ -269,7 +295,8 @@ Each item below is reported with a patch or a description in the slice report; n
 - **The reassessment's path.** D1's set records one path per member. A plan reached both through a requirement it cited as absent and through another changed input is judged by the first path found.
 - **A change after an unlock.** A plan that cited a prerequisite as absent is not made stale when that prerequisite changes after being established. Its attempt basis changes (new work for the next stage); it is not re-planned.
 - **A plan observed after the change.** A plan recorded before an event, but observed into the graph after it, is not a member of that event's set. Its cited files are still re-checked by their bytes.
-- **The concurrency groups** are a report; enforcement by path is future work.
+- **The concurrency groups** are a report; enforcement by path is future work. Their overlap test is conservative: a path that is not a valid owned-path pattern clashes with every other.
+- **The candidate retirement** runs against the reconciliation that produced the tick's candidate list (the loop's last prepared context). A caller that records candidates without that reconciliation retires nothing.
 - **Real data.** This container holds no real work ledger. The work graph is proven on synthetic work, and the learning proposal and the tick cost on the real repository graph.
 - **Future tickets:**
   - the four outside-manifest changes (section 12);

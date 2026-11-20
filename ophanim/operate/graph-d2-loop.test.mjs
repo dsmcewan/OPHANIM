@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick, watch, inputSignature} from './scheduler.mjs';
+import {tick, watch, inputSignature, queueReport} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {GRAPH_ABSENT} from './gates.mjs';
 import {planId} from '../graph/work.mjs';
@@ -239,5 +239,135 @@ test('KD2-6 the per-tick bound on reassessment: at most the bound of event sets 
     const g = rec().items[0].gate;
     assert.deepEqual([loop.stats().events.considered, loop.stats().events.deferred], [2, 0], 'the deferred one is computed the next tick');
     assert.equal(g.stale.flatMap(s => s.why).filter(x => x.startsWith('reassessed:')).length, 2, 'both events reach the plan: none was dropped');
+  } finally { w.done(); }
+});
+
+// ---- THE D2 FIXES (outside-lab review): the bound versions read, the concurrency report glob-aware, stale candidates retired.
+// A plan record whose DOCUMENT states a requirement as the planner did (no version) and whose RECORD binds it to the version
+// the graph stated (outputs.graph.requires): every consumer reads the binding (gates.mjs boundRequiresOf).
+test('KD2-3 the BOUND version is read: a requirement bound at a version (outputs.graph.requires) whose graph fact changes makes the plan stale and RE-PLANNED, whatever version the plan document states', async () => {
+  const w = d2World(['v']);
+  try {
+    const {ex} = graphExecutors(w, {v: [{id: OTHER, why: 'the index the work reads, which exists'}]}, {stated: true});
+    await run(w, ex, loopOf(w), {...LIMITS, iterations: 1}, 'v');
+    const plan = openWorkLedger({root: w.workRoot}).stages('v').find(s => s.stage === 'plan');
+    assert.equal(plan.outputs.plan.requires[0].version, undefined, 'the document states the requirement as the planner did: no version');
+    const cited = plan.outputs.graph.requires[0].version;
+    assert.match(cited, /^sha256:/, 'the record binds it to the version the graph stated');
+    // The change's reassessment is deferred here (the per-tick bound, KD2-6; or a plan observed after the event, slice-d2.md
+    // section 13): the bound version is all that decides.
+    const versionOnly = () => loopOf(w, {bounds: {events: 0}});
+    assert.equal(gateOf(w, 'v', versionOnly()).gate, 'implement', 'valid while the graph states the bound version');
+    setPrereqs(w.prereqFile, {established: {[OTHER]: 'ophanim/systems/module/lib/another-index.mjs'}});
+    const actor = loopOf(w);
+    actor.open();
+    assert.equal(actor.observe([PREREQ_SOURCE])[0].recorded, true);
+    const g = gateOf(w, 'v', versionOnly());
+    assert.equal(g.gate, 'plan', 'stale on the bound version: planned again');
+    const why = g.stale.filter(s => s.record === plan.hash).flatMap(s => s.why);
+    assert.ok(why.some(x => x.startsWith(`graph fact ${OTHER} changed (cited ${cited.slice(0, 19)}`)), JSON.stringify(why));
+    assert.ok(!why.some(x => x.startsWith('reassessed:')), 'and on nothing else: the reassessment was deferred');
+    const r = await run(w, ex, versionOnly(), {...LIMITS, iterations: 1}, 'v');
+    assert.deepEqual(r.dispatched.map(d => [d.item, d.stage]), [['v', 'plan']], 're-planned, not implemented on stale validity');
+  } finally { w.done(); }
+});
+
+test('KD2-3 the BOUND version is read: a requirement bound as ABSENT is UNLOCKED when it is established (recorded on the attempt), never re-planned, whatever version the plan document states', async () => {
+  const w = d2World(['b']);
+  try {
+    const {ex} = graphExecutors(w, {b: [{id: PREREQ, why: WHY}]}, {stated: true});
+    const r1 = await run(w, ex, loopOf(w));
+    assert.deepEqual(done(r1, 'b'), ['plan']);
+    assert.equal(r1.blocked.find(x => x.item === 'b').blocker.code, 'GRAPH_PREREQUISITE_MISSING');
+    const plan = openWorkLedger({root: w.workRoot}).stages('b').find(s => s.stage === 'plan');
+    assert.equal(plan.outputs.plan.requires[0].version, undefined, 'the document states the requirement as the planner did: no version');
+    assert.equal(plan.outputs.graph.requires[0].version, GRAPH_ABSENT, 'the record binds it as absent');
+    setPrereqs(w.prereqFile, {established: {[OTHER]: null, [PREREQ]: null}});
+    const r2 = await run(w, ex, loopOf(w));
+    assert.deepEqual(r2.queue.unlocked.map(u => [u.item, u.unlocked]), [['b', [PREREQ]]], 'unlocked');
+    assert.deepEqual(done(r2, 'b'), ['implement', 'review', 'validate', 'outcome'], 'executed on the plan made while it was missing: not re-planned');
+    const W = openWorkLedger({root: w.workRoot});
+    assert.equal(W.stages('b').filter(s => s.stage === 'plan').length, 1, 'one plan');
+    assert.equal(W.stages('b').find(s => s.stage === 'implement').inputs.graph_unlocked[0].prerequisite, PREREQ, 'the unlock is recorded on the attempt');
+  } finally { w.done(); }
+});
+
+test('KD2-2 the concurrency report is glob-aware: overlapping globs and nested paths are never reported runnable together; truly disjoint sets are', async () => {
+  const groups = paths => queueReport({items: Object.entries(paths).map(([item, claimed_paths]) => ({item, gate: {gate: 'implement'}, claimed_paths}))}, [], Object.keys(paths)).concurrent;
+  // Overlapping globs.
+  assert.deepEqual(groups({a: ['src/a/*'], b: ['src/a/b.mjs']}), [['a'], ['b']], 'a glob and a path it matches');
+  assert.deepEqual(groups({a: ['src/**'], b: ['src/x/y/z.mjs']}), [['a'], ['b']], 'a recursive glob and a path below it');
+  assert.deepEqual(groups({a: ['src/a/*.mjs'], b: ['src/*/b.mjs']}), [['a'], ['b']], 'two globs that both match src/a/b.mjs');
+  assert.deepEqual(groups({a: ['lib/**/x.mjs'], b: ['lib/q/r/x.mjs']}), [['a'], ['b']], 'a recursive glob in the middle');
+  // Nested paths.
+  assert.deepEqual(groups({a: ['src/a'], b: ['src/a/b.mjs']}), [['a'], ['b']], 'a directory and a file inside it');
+  assert.deepEqual(groups({a: ['src/a/b.mjs'], b: ['src/a/b.mjs']}), [['a'], ['b']], 'the same path');
+  // Truly disjoint sets.
+  assert.deepEqual(groups({a: ['src/a/*'], b: ['src/b/c.mjs'], c: ['lib/x.mjs']}), [['a', 'b', 'c']]);
+  assert.deepEqual(groups({a: ['src/a/*.mjs'], b: ['src/a/*.md']}), [['a', 'b']], 'two globs no path matches both');
+  assert.deepEqual(groups({a: ['src/a/*'], b: ['src/a/b.mjs'], c: ['src/c.mjs']}), [['a', 'c'], ['b']], 'each joins the first group it is disjoint from');
+  // In the tick: the claimed paths are the plans' slices as the graph states them.
+  const w = d2World(['g1', 'g2', 'g3']);
+  try {
+    const {ex} = graphExecutors(w, {}, {paths: {g1: ['src/a/*'], g2: ['src/a/b.mjs'], g3: ['src/c/d.mjs']}});
+    for (const item of ['g1', 'g2', 'g3']) await run(w, ex, loopOf(w), {...LIMITS, iterations: 1}, item);
+    const r = await run(w, ex, loopOf(w));
+    assert.deepEqual(r.queue.eligible, ['g1', 'g2', 'g3']);
+    assert.deepEqual(r.queue.concurrent, [['g1', 'g3'], ['g2']], 'src/a/* and src/a/b.mjs are never runnable together');
+  } finally { w.done(); }
+});
+
+test('KD2-5 a stale candidate is retired on the next tick: kept and marked superseded, with the reason and what resolved it (its establishment, an item\'s plan that implements it, or no plan requiring it); a retired candidate is never shown as open, and is reopened if the gap returns', async () => {
+  const CYC = 'ophanim/systems/interface/graph-loop-cycle';
+  const w = d2World(['e1', 'i1', 'n1', 'z2']);
+  try {
+    const plans = {e1: [{id: PREREQ2, why: 'e1 needs the ledger interface no module carries yet'}], i1: [{id: PREREQ, why: WHY}], n1: [{id: CYC, why: 'n1 needs the cycle interface no module carries yet'}]};
+    const {ex} = graphExecutors(w, plans);
+    const cdir = path.join(w.stateDir, 'graph-candidates');
+    const records = () => Object.fromEntries(fs.readdirSync(cdir).map(f => JSON.parse(fs.readFileSync(path.join(cdir, f), 'utf8'))).map(c => [c.prerequisite, c]));
+    // Tick 1: e1, i1 and n1 plan (z2 does not); three missing prerequisites, three open candidates.
+    await run(w, ex, loopOf(w), {...LIMITS, iterations: 3});
+    let c = records();
+    assert.deepEqual(Object.keys(c).sort(), [CYC, PREREQ, PREREQ2].sort());
+    for (const id of [CYC, PREREQ, PREREQ2]) assert.notEqual(c[id].state, 'superseded', `${id} is an open candidate`);
+    // Each condition stops holding: PREREQ2 is established; z2's plan implements PREREQ; n1 is re-planned without CYC.
+    setPrereqs(w.prereqFile, {established: {[OTHER]: null, [PREREQ2]: null}});
+    plans.z2 = [{id: PREREQ, why: 'z2 builds the dispatch interface', implements: true}];
+    plans.n1 = [];
+    const tfile = path.join(w.repo, 'tickets', 'n1.json');
+    fs.writeFileSync(tfile, JSON.stringify({...JSON.parse(fs.readFileSync(tfile, 'utf8')), goal: 'g, revised'}));
+    const r2 = await run(w, ex, loopOf(w));
+    assert.deepEqual(r2.graph.candidates, [], 'no prerequisite is a candidate now');
+    c = records();
+    for (const id of [CYC, PREREQ, PREREQ2]) {
+      assert.equal(c[id].state, 'superseded', `${id} is retired`);
+      assert.equal(c[id].executable, false);
+      assert.ok(c[id].required_by.length && c[id].why && c[id].gap, 'kept: what it was, for the audit');
+    }
+    const view = loopOf(w).open().view();
+    const est = view.edgesOf(PREREQ2, {mode: 'established', types: ['implemented-by']}).flatMap(e => e.assertions);
+    assert.equal(c[PREREQ2].superseded.reason, 'established');
+    assert.ok(est.length && est.every(a => c[PREREQ2].superseded.resolved_by.assertions.includes(a)), 'with the assertion that establishes it');
+    const z2plan = openWorkLedger({root: w.workRoot}).stages('z2').find(s => s.stage === 'plan');
+    assert.equal(c[PREREQ].superseded.reason, 'implemented');
+    assert.deepEqual(c[PREREQ].superseded.resolved_by.plans.map(p => [p.item, p.plan, p.line]), [['z2', planId(z2plan.hash), 'requires[0]']], 'with the plan that implements it');
+    assert.ok(c[PREREQ].superseded.resolved_by.plans[0].assertions.length, 'and the requirement assertion of that plan');
+    const n1plan = openWorkLedger({root: w.workRoot}).stages('n1').filter(s => s.stage === 'plan').at(-1);
+    assert.equal(c[CYC].superseded.reason, 'no longer required');
+    assert.deepEqual(c[CYC].superseded.resolved_by.plans.map(p => [p.item, p.plan]), [['n1', planId(n1plan.hash)]], 'with the plan that no longer requires it');
+    assert.deepEqual(r2.graph.recorded_candidates.map(x => [x.prerequisite, x.recorded]).sort(), [[CYC, 'superseded'], [PREREQ, 'superseded'], [PREREQ2, 'superseded']].sort());
+    // Never shown as open: the next tick lists no candidate and leaves the retired records as they are.
+    const bytes = fs.readdirSync(cdir).sort().map(f => fs.readFileSync(path.join(cdir, f), 'utf8'));
+    const r3 = await run(w, ex, loopOf(w));
+    assert.deepEqual([r3.queue.candidates, r3.graph.candidates, r3.graph.recorded_candidates], [[], [], []]);
+    assert.deepEqual(fs.readdirSync(cdir).sort().map(f => fs.readFileSync(path.join(cdir, f), 'utf8')), bytes, 'retired once');
+    // The gap returns (PREREQ2 is no longer established; e1's plan requires it): the same record is reopened, its retirement kept.
+    setPrereqs(w.prereqFile, {established: {[OTHER]: null}});
+    const r4 = await run(w, ex, loopOf(w));
+    assert.deepEqual(r4.graph.recorded_candidates.map(x => [x.prerequisite, x.recorded]), [[PREREQ2, 'reopened']]);
+    c = records();
+    assert.equal(c[PREREQ2].state, 'open');
+    assert.equal(c[PREREQ2].history.at(-1).superseded.reason, 'established');
+    assert.deepEqual([c[PREREQ].state, c[CYC].state], ['superseded', 'superseded']);
   } finally { w.done(); }
 });
