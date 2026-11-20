@@ -519,6 +519,26 @@
         "why": "command conduct inside an agent's session; the slice's own test guards only what reaches the graph",
         "next": "the exclusion pathspec in every brief; a later check could scan agent transcripts for withheld paths before integration"
       }
+    },
+    {
+      "id": "runner-deciding-tests-changed-not-rerun",
+      "class": "An integration re-runs a mutation runner in full only when its TARGET files change; a change to one of its DECIDING test files is not treated as a reason, so the runner can go red at baseline unnoticed (CI runs only --check).",
+      "source": "coordinator, at the integration of the knowledge-graph Slice D1 and the shallow-history fix, 2026-11-20",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "D1 merge 02a7916; fixed at the shallow-history integration",
+          "detected_by": "graph-b.mutate.mjs's own red-baseline check (exit 3), when the coordinator ran it in full for an unrelated fix",
+          "note": "Slice D1 added a real-history why-it-exists test to ophanim/graph/cli.test.mjs, a deciding file of graph-b.mutate.mjs, whose copy was a one-commit repository; the D1 brief and the coordinator re-ran only the runners whose targets changed. Next step: briefs and integrations re-run in full every runner whose target OR deciding test files changed"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "integration conduct; the runner's own baseline check detects it only when the runner is run",
+        "next": "the rule above in every brief; a check listing the runners whose deciding files a diff touches would make it mechanical"
+      }
     }
   ]
 }
