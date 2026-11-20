@@ -4,6 +4,7 @@
 // repositories below are made in temporary directories by this test. Synthetic keys only; no network.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {dependencyGraph} from './deps/index.mjs';
 import {subjectOf, needs, neededBy, audit} from './deps/query.mjs';
 import {packageId, envId, fileIdIn, symbolIdIn} from './deps/ids.mjs';
@@ -35,6 +36,9 @@ test('ONE GRAPH: this repository\'s sources and each sibling\'s are observed, ea
     'ophanim.repo': [true, head], 'ophanim.code': [true, head], 'ophanim.code-text': [true, head], 'ophanim.pins': [true, head], 'ophanim.ownership': [true, head],
     'sibling.telos.code': [true, sibHead], 'sibling.telos.code-text': [true, sibHead], 'sibling.telos.weave': [true, sibHead], 'sibling.telos.declared': [true, sibHead]});
   assert.deepEqual(g.absent, [{repository: 'argo', why: 'no checkout was given'}, {repository: 'lexi', why: 'no checkout was given'}]);
+  // Every source declares the version of the code that reads it (docs/knowledge-graph/checkpoint.md section 5a): a snapshot taken
+  // under other extractor code is then refused instead of trusted.
+  assert.deepEqual([...g.graph.projection.adapters.values()].filter(a => !/^sha256:[0-9a-f]{64}$/.test(a.extractorVersion ?? '')).map(a => a.id), []);
 });
 
 test('TELOS IS READ AT THE COMMIT THIS REPOSITORY PINS, not at whatever its checkout has moved to; a pin the checkout lacks is said so', t => {
@@ -60,6 +64,23 @@ test('A RUNTIME STATE DIRECTORY is a source under its own name; one that cannot 
   const o = g.observed['ophanim.runtime.nothing-here'];
   assert.deepEqual([o.state, typeof o.why, o.count], ['unavailable', 'string', null]);
   assert.throws(() => dependencyGraph({repo: home.repo, states: [{name: 'Bad Name', stateDir: empty.repo}]}), /a runtime state has a short lowercase name/);
+});
+
+test('THE AUDIT COMPARES EACH PINNED DIGEST with the sibling\'s own file at the pinned commit: a match, a difference and a path the sibling lacks are each named; a sibling that was not read is said so', t => {
+  const sha = x => createHash('sha256').update(x).digest('hex');
+  const home = tempRepo(t), sib = tempRepo(t), pinned = sib.commit(SIBLING_FILES, 'pinned');
+  home.commit({...HOME_FILES, 'ophanim/governance.mjs': lines(`export const TELOS_COMMIT = '${pinned}';`, 'export const TELOS_PINS = Object.freeze({',
+    `  'lib/a.mjs': '${sha(SIBLING_FILES['lib/a.mjs'])}',`, `  'lib/b.mjs': '${sha('not what the file holds')}',`, `  'lib/gone.mjs': '${sha('x')}',`, '});')}, 'pins');
+  const opts = {repo: home.repo, status: null, lessons: false, verification: false, records: false, observed_at: T0};
+  const withSibling = dependencyGraph({...opts, siblings: {telos: {repo: sib.repo}}}), without = dependencyGraph(opts);
+  t.after(withSibling.close); t.after(without.close);
+  assert.deepEqual(audit(withSibling.graph.view()).pins, [{repository: 'telos', pinned_commit: pinned, read_at: pinned, checked: true, pinned: 3, matching: 1,
+    differing: [{path: 'lib/b.mjs', pinned: sha('not what the file holds'), found: sha(SIBLING_FILES['lib/b.mjs'])}], absent: ['lib/gone.mjs']}]);
+  assert.deepEqual(audit(without.graph.view()).pins, [{repository: 'telos', pinned_commit: pinned, read_at: null, checked: false, pinned: 3,
+    why: 'the sibling was not read: the digests of its files are not at hand'}]);
+  // The pin source's own facts are the same with and without the checkout: only the audit's comparison differs.
+  const pinFacts = g => g.graph.view().node(fileIdIn('telos', 'lib/b.mjs')).assertions.filter(a => a.source.id === 'ophanim.pins').map(a => g.graph.view().assertion(a.id).record.attributes);
+  assert.deepEqual(pinFacts(withSibling), pinFacts(without));
 });
 
 test('A SUBJECT is named the way a person writes it: a path, a path#function, npm:name, env:NAME, program:name, host:name, sibling:path', t => {

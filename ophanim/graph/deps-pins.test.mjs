@@ -60,61 +60,29 @@ test('PIN TABLES: a line of a table that is not an entry is listed as unread, an
   assert.equal(r.commit, null);
 });
 
-test('TELOS PINS without a checkout: the repository, each pinned file and the dependency are stated; nothing is called verified', t => {
+test('TELOS PINS are stated as DECLARED: the repository, each pinned file with its pinned digest, and the dependency; nothing here says whether a digest holds', t => {
   const pins = {'build-gate/gate.mjs': sha(GATE), 'merkle-dag/merkle.mjs': sha(MERKLE)};
   const {repo: home, commit: commitHome} = tempRepo(t);
   const head = commitHome({[GOVERNANCE]: governance({commit: C40('b'), telos: pins})}, 'pins');
   const facts = pinsFacts(home, head);
   assert.deepEqual(ent(facts, repositoryId('telos')), {entity: repositoryId('telos'), ref: `${GOVERNANCE}#TELOS_COMMIT`,
-    attributes: {name: 'telos', pinned_commit: C40('b'), pinned_by: GOVERNANCE, line: 2, pinned_files: 2},
-    missing_evidence: [`no TELOS checkout was given: commit ${C40('b')} and the 2 pinned digest(s) are not checked`]});
+    attributes: {name: 'telos', pinned_commit: C40('b'), pinned_by: GOVERNANCE, line: 2, pinned_files: 2}});
   assert.deepEqual(ent(facts, fileIdIn('telos', 'build-gate/gate.mjs')), {entity: fileIdIn('telos', 'build-gate/gate.mjs'), ref: `${GOVERNANCE}#TELOS_PINS`,
-    attributes: {repository: 'telos', path: 'build-gate/gate.mjs', sha256: sha(GATE), commit: C40('b'), pinned_by: GOVERNANCE, line: 4},
-    missing_evidence: [`no TELOS checkout was given: the pinned digest is not checked against commit ${C40('b')}`]});
+    attributes: {repository: 'telos', path: 'build-gate/gate.mjs', sha256: sha(GATE), commit: C40('b'), pinned_by: GOVERNANCE, line: 4}});
   assert.deepEqual(rel(facts, 'depends-on', fileId(GOVERNANCE), fileIdIn('telos', 'merkle-dag/merkle.mjs')), {type: 'depends-on', from: fileId(GOVERNANCE),
     to: fileIdIn('telos', 'merkle-dag/merkle.mjs'), ref: `${GOVERNANCE}#TELOS_PINS`,
     attributes: {basis: 'digest pin', table: 'TELOS_PINS', sha256: sha(MERKLE), commit: C40('b'), line: 5}});
   assert.deepEqual(rel(facts, 'depends-on', fileId(GOVERNANCE), repositoryId('telos')).attributes, {basis: 'commit pin', commit: C40('b'), line: 2});
-  assert.deepEqual(facts.filter(d => d.entity && Object.hasOwn(d.attributes, 'verified')), [], 'no fact carries `verified` when nothing was checked');
+  // Whether a pinned digest holds is a comparison with the sibling's own file, made by the audit (deps/query.mjs): a
+  // fact of this source is the same for the same commit whether or not a TELOS checkout is at hand.
+  assert.deepEqual(facts.filter(d => d.entity && (Object.hasOwn(d.attributes, 'verified') || Object.hasOwn(d.attributes, 'found'))), []);
+  assert.deepEqual(Object.keys(pinsSource({repo: home})).sort(), ['authority', 'current', 'extractor', 'id', 'readAt', 'ref']);
 });
 
-test('TELOS PINS with a checkout: each digest is compared with the file at the PINNED COMMIT in git, never the working tree; a digest that differs is verified false with what was found', t => {
-  const telos = telosCheckout(t);
-  // The checkout's working tree and its HEAD move on after the pinned commit: neither is what the pin names.
-  telos.commitMore({'build-gate/gate.mjs': 'export const gate = "later";\n'}, 'later');
-  telos.write({'merkle-dag/merkle.mjs': 'export const merkle = "uncommitted";\n'});
-  const {repo, commit} = tempRepo(t);
-  const head = commit({[GOVERNANCE]: governance({commit: telos.commit, telos: {'build-gate/gate.mjs': sha(GATE), 'merkle-dag/merkle.mjs': sha('not the bytes'), 'merkle-dag/absent.mjs': sha('gone')}})}, 'pins');
-  const facts = pinsFacts(repo, head, {telos: telos.repo});
-  const gate = ent(facts, fileIdIn('telos', 'build-gate/gate.mjs')), merkle = ent(facts, fileIdIn('telos', 'merkle-dag/merkle.mjs')), absent = ent(facts, fileIdIn('telos', 'merkle-dag/absent.mjs'));
-  assert.deepEqual([gate.attributes.verified, gate.attributes.found, gate.missing_evidence], [true, sha(GATE), undefined]);
-  assert.deepEqual([merkle.attributes.verified, merkle.attributes.found, merkle.attributes.sha256], [false, sha(MERKLE), sha('not the bytes')]);
-  assert.deepEqual([absent.attributes.verified, absent.attributes.found], [false, null], 'a pinned path the commit does not hold is not verified');
-  assert.deepEqual(ent(facts, repositoryId('telos')).attributes, {name: 'telos', pinned_commit: telos.commit, pinned_by: GOVERNANCE, line: 2, pinned_files: 3,
-    commit_found: true, files_verified: 1, files_mismatched: ['merkle-dag/absent.mjs', 'merkle-dag/merkle.mjs']});
-  assert.equal(ent(facts, repositoryId('telos')).missing_evidence, undefined);
-});
-
-test('TELOS PINS with a checkout that lacks the commit: the facts say the check could not be made; `verified` is absent, never true', t => {
-  const other = telosCheckout(t);
-  const {repo, commit} = tempRepo(t);
-  const head = commit({[GOVERNANCE]: governance({commit: C40('c'), telos: {'build-gate/gate.mjs': sha(GATE)}})}, 'pins');
-  const facts = pinsFacts(repo, head, {telos: other.repo});
-  const gate = ent(facts, fileIdIn('telos', 'build-gate/gate.mjs'));
-  assert.deepEqual([Object.hasOwn(gate.attributes, 'verified'), Object.hasOwn(gate.attributes, 'found'), gate.missing_evidence],
-    [false, false, [`commit ${C40('c')} is not in the TELOS checkout given: the pinned digest is not checked`]]);
-  assert.deepEqual(ent(facts, repositoryId('telos')).attributes.commit_found, false);
-  assert.deepEqual(ent(facts, repositoryId('telos')).missing_evidence, [`commit ${C40('c')} is not in the TELOS checkout given: the 1 pinned digest(s) are not checked`]);
-  // A path that is no git checkout at all is the same statement, not a throw.
-  const none = pinsFacts(repo, head, {telos: '/nonexistent/telos'});
-  assert.deepEqual(ent(none, fileIdIn('telos', 'build-gate/gate.mjs')).missing_evidence, gate.missing_evidence);
-});
-
-test('TELOS PINS without a declared commit: the pins are stated and nothing can be checked, with or without a checkout', t => {
-  const telos = telosCheckout(t);
+test('TELOS PINS without a declared commit: the pins are stated, and the facts say there is no commit to check them at', t => {
   const {repo, commit} = tempRepo(t);
   const head = commit({[GOVERNANCE]: governance({commit: null, telos: {'build-gate/gate.mjs': sha(GATE)}})}, 'pins');
-  const facts = pinsFacts(repo, head, {telos: telos.repo});
+  const facts = pinsFacts(repo, head);
   const gate = ent(facts, fileIdIn('telos', 'build-gate/gate.mjs'));
   assert.deepEqual([gate.attributes.commit, Object.hasOwn(gate.attributes, 'verified'), gate.missing_evidence],
     [null, false, [`${GOVERNANCE} states no TELOS_COMMIT: there is no commit to check the pinned digest at`]]);
@@ -270,7 +238,7 @@ test('THE GRAPH: observed after the repository source, every pin, lineage and CI
     'ophanim/governance/check-a.mjs': good, [PROVENANCE]: provenance({[C40('1')]: c1}), '.github/workflows/q.yml': WORKFLOW,
     'package.json': JSON.stringify({name: 'fixture', engines: {node: '>=24 <25'}})}, 'everything');
   assert.deepEqual(PINS_ORIGIN, {kind: 'extractor', basis: 'declared', sources: [SOURCE_ID]});
-  const source = pinsSource({repo, telos: telos.repo});
+  const source = pinsSource({repo});
   const g = openSystemsGraph({sources: [repoSource({repo}), source], extraOrigins: {[EXTRACTOR]: {...PINS_ORIGIN, keys: ['graph-extractor']}}});
   t.after(g.close);
   g.graph.observe('ophanim.repo', {...g.by, observed_at: T0});
@@ -293,7 +261,6 @@ test('THE GRAPH: observed after the repository source, every pin, lineage and CI
     edge('depends-on', workflowId('.github/workflows/q.yml'), packageId('program', 'node')),
     edge('depends-on', fileId('package.json'), packageId('program', 'node')),
   ], Array.from({length: 9}, () => [true]));
-  assert.equal(v.node(fileIdIn('telos', 'build-gate/gate.mjs')).attributes.verified, true);
   assert.deepEqual(v.node(repositoryId('ophanim')).conflicts, [], 'the repository node this source shares with the repository source disagrees on nothing');
   assert.deepEqual(v.node(changeId(c1)).conflicts, []);
   // The same commit read again is the same facts in the same order, and a fresh replay re-derives the projection.
@@ -302,11 +269,11 @@ test('THE GRAPH: observed after the repository source, every pin, lineage and CI
   assert.deepEqual([again.digest(), again.verification.complete], [g.graph.digest(), true]);
 });
 
-test('THE REAL REPOSITORY at HEAD, without a TELOS checkout: the pin table, the lineage record and the workflows are read, and no pin is called verified', () => {
+test('THE REAL REPOSITORY at HEAD: the pin table, the lineage record and the workflows are read, and no pin is called verified', () => {
   const head = git(ROOT, 'rev-parse', 'HEAD'), facts = pinsFacts(ROOT, head);
   const telosFiles = facts.filter(d => d.entity?.includes('/telos:'));
   assert.ok(telosFiles.length > 0, 'the real pin table has entries');
-  assert.deepEqual(telosFiles.filter(d => Object.hasOwn(d.attributes, 'verified') || !d.missing_evidence?.length), []);
+  assert.deepEqual(telosFiles.filter(d => Object.hasOwn(d.attributes, 'verified') || d.missing_evidence?.length), []);
   assert.equal(ent(facts, repositoryId('telos')).attributes.pinned_files, telosFiles.length);
   assert.equal(ent(facts, repositoryId('ophanim')).status, undefined, 'PROVENANCE.json is read');
   assert.ok(rel(facts, 'derived-from', repositoryId('ophanim'), repositoryId('argo')));

@@ -126,7 +126,35 @@ export function audit(view) {
     return {repository: name, commit: a.commit ?? null, files_read: a.files_read ?? null, counts: a.counts ?? null, unresolved: a.unresolved ?? null,
       not_parsed: a.not_parsed ?? [], undeclared_imports: a.undeclared_imports ?? [], unresolved_imports: a.unresolved_imports ?? [], ...(weave ? {weave} : {}), gaps};
   });
-  return {query: 'audit', cursor: view.seq, digest: view.digest(), repositories, sources};
+  return {query: 'audit', cursor: view.seq, digest: view.digest(), repositories, pins: pinsOf(view, names), sources};
+}
+/**
+ * Each digest this repository pins of a sibling's file, compared with the sibling's own file. The pin is what this
+ * repository DECLARES (pins.mjs); the file's digest is what the sibling's source states at the commit it was read at
+ * (code.mjs `content_sha256`). They are compared only when the sibling was read at the pinned commit.
+ */
+function pinsOf(view, names) {
+  const out = [];
+  for (const name of names.filter(n => n !== HOME)) {
+    const repo = view.node(repositoryId(name)).attributes;
+    if (repo.pinned_commit === undefined) continue;
+    const pinned = [];
+    for (const s of view.subjects()) {
+      if (!s.startsWith('depends-on(') || !s.includes(`/${name}:`)) continue;
+      for (const a of view.query(s, 'established')) {
+        const r = view.assertion(a.id).record;
+        if (r.attributes.basis === 'digest pin' && repositoryOf(view, r.to) === name) pinned.push({id: r.to, path: decodeKey(parseId(r.to).key).slice(name.length + 1), pinned: r.attributes.sha256});
+      }
+    }
+    pinned.sort((a, b) => byString(a.path, b.path));
+    const base = {repository: name, pinned_commit: repo.pinned_commit ?? null, read_at: repo.commit ?? null};
+    if (!repo.commit) { out.push({...base, checked: false, pinned: pinned.length, why: 'the sibling was not read: the digests of its files are not at hand'}); continue; }
+    if (repo.commit !== repo.pinned_commit) { out.push({...base, checked: false, pinned: pinned.length, why: 'the sibling was read at another commit than the pinned one'}); continue; }
+    const found = pinned.map(p => ({...p, found: view.node(p.id).attributes.content_sha256 ?? null}));
+    out.push({...base, checked: true, pinned: pinned.length, matching: found.filter(p => p.found === p.pinned).length,
+      differing: found.filter(p => p.found !== null && p.found !== p.pinned).map(p => ({path: p.path, pinned: p.pinned, found: p.found})), absent: found.filter(p => p.found === null).map(p => p.path)});
+  }
+  return out;
 }
 /** Of the dependencies source `declared` states, how many source `read` states too, split by whether they join files or functions. */
 function agreement(view, declared, read) {

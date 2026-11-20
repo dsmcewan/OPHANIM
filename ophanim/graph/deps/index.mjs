@@ -12,7 +12,10 @@
 //           it. Keys are SYNTHETIC, generated for the process (extract/index.mjs openSystemsGraph): key custody for the
 //           graph domain is the owner's decision.
 // Must never  Write a source, a sibling repository or a production key; observe a source before one it refers to.
-import {sourcesOf, openSystemsGraph, observeAll, ORDER, ROOT, REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE} from '../extract/index.mjs';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import {parserVersion} from './parse.mjs';
+import {sourcesOf, openSystemsGraph, observeAll, extractorVersionOf, ORDER, ROOT, REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, STATUS_SOURCE, WORK_SOURCE, CYCLE_SOURCE} from '../extract/index.mjs';
 import {codeSource, codeOrigin, CODE_EXTRACTOR, sourceIdOf} from './code.mjs';
 import {textSource, textOrigin, TEXT_EXTRACTOR, textSourceIdOf} from './text.mjs';
 import {weaveSource, WEAVE_ORIGIN, WEAVE_EXTRACTOR, weaveSourceIdOf} from './weave.mjs';
@@ -26,6 +29,19 @@ import {HOME} from './ids.mjs';
 /** The sibling repositories this graph knows by name. `weave`: the sibling commits a signed dependency ledger of its own. */
 export const SIBLINGS = Object.freeze({telos: Object.freeze({weave: true}), argo: Object.freeze({weave: false}), lexi: Object.freeze({weave: false})});
 export {ROOT};
+
+// The version of the code each source's extractor runs (checkpoint.md section 5a): the digest of its module and of every
+// module it imports, as extract/index.mjs computes it, and for the two sources that read code, the parser's version too
+// (a reading rests on the parser as much as on this repository's code). Read once per process.
+const versions = new Map();
+const versioned = (source, module, {parser = false} = {}) => {
+  const key = `${module}\0${parser}`;
+  if (!versions.has(key)) {
+    const own = extractorVersionOf(fileURLToPath(new URL(module, import.meta.url)));
+    versions.set(key, parser ? 'sha256:' + createHash('sha256').update(JSON.stringify({schema: 'ophanim.graph.deps.extractor-version/v1', modules: own, parser: `typescript ${parserVersion()}`})).digest('hex') : own);
+  }
+  return {...source, extractorVersion: versions.get(key)};
+};
 
 /**
  * The source adapters and the origins that may write them. `siblings`: {name: {repo, ref}} for the checkouts at hand.
@@ -52,11 +68,14 @@ export function dependencySources({repo = ROOT, commit, status, work = null, cyc
     refs[n] = s.ref ?? pin ?? 'HEAD';
   }
   const present = Object.keys(refs);
-  const own = [codeSource({repo, ref: base.commit}), textSource({repo, ref: base.commit}),
-    pinsSource({repo, ref: base.commit, telos: siblings.telos?.repo ?? null}), ownershipSource({repo, ref: base.commit}), ...extra.map(make => make({repo, commit: base.commit})),
-    ...states.map(s => runtimeSource({stateDir: s.stateDir, name: s.name, id: runtimeId(s.name)}))];
-  const theirs = present.flatMap(n => [codeSource({repo: siblings[n].repo, ref: refs[n], name: n}), textSource({repo: siblings[n].repo, ref: refs[n], name: n}),
-    ...(SIBLINGS[n].weave ? [weaveSource({repo: siblings[n].repo, ref: refs[n], name: n})] : []), declaredSource({repo: siblings[n].repo, ref: refs[n], name: n})]);
+  const code = o => versioned(codeSource(o), './code.mjs', {parser: true}), text = o => versioned(textSource(o), './text.mjs', {parser: true});
+  const own = [code({repo, ref: base.commit}), text({repo, ref: base.commit}),
+    versioned(pinsSource({repo, ref: base.commit}), './pins.mjs'), versioned(ownershipSource({repo, ref: base.commit}), './authority.mjs'),
+    ...extra.map(make => make({repo, commit: base.commit})),
+    ...states.map(s => versioned(runtimeSource({stateDir: s.stateDir, name: s.name, id: runtimeId(s.name)}), './runtime.mjs'))];
+  const theirs = present.flatMap(n => [code({repo: siblings[n].repo, ref: refs[n], name: n}), text({repo: siblings[n].repo, ref: refs[n], name: n}),
+    ...(SIBLINGS[n].weave ? [versioned(weaveSource({repo: siblings[n].repo, ref: refs[n], name: n}), './weave.mjs')] : []),
+    versioned(declaredSource({repo: siblings[n].repo, ref: refs[n], name: n}), './declared.mjs')]);
   const origins = {
     ...(present.length ? {[DECLARED_EXTRACTOR]: {...declaredOrigin(present), keys: ['graph-extractor']}} : {}),
     [PINS_EXTRACTOR]: {...PINS_ORIGIN, keys: ['graph-extractor']},

@@ -172,7 +172,9 @@ export function codeFacts(repo, commit, {name = HOME} = {}) {
   for (const file of tree.code) {
     const r = readings.get(file), e = tree.entries.get(file), dir = dirOf(file);
     if (!r.ok) { notParsed.push({file, why: r.why}); continue; }
-    const node = entity(fid(file), file, {path: file, blob: e.blob, bytes: e.size, functions: r.functions.length});
+    // A sibling's file may already be a node, made when an earlier file imported it: its own reading completes it here.
+    const node = entity(fid(file), file, {});
+    Object.assign(node.attributes, {path: file, blob: e.blob, bytes: e.size, content_sha256: tree.digests.get(file), functions: r.functions.length});
 
     // Imports.
     for (const i of r.imports) {

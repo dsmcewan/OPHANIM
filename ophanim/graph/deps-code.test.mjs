@@ -4,6 +4,7 @@
 // in a temporary directory by this test; its packages do not exist. Synthetic keys only; no network, no provider.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {codeFacts, codeSource, codeOrigin, CODE_EXTRACTOR, sourceIdOf} from './deps/code.mjs';
 import {packageId, envId, fileIdIn, symbolIdIn, repositoryId} from './deps/ids.mjs';
 import {parserVersion} from './deps/parse.mjs';
@@ -166,7 +167,7 @@ test('A SIBLING REPOSITORY is read the same way under its own name: its files ar
     'src/b.ts': lines("export function b(): number { return 1; }")}, 'sibling');
   const facts = codeFacts(repo, head, {name: 'telos'});
   const a = fileIdIn('telos', 'src/a.ts'), b = fileIdIn('telos', 'src/b.ts');
-  assert.deepEqual(ent(facts, a).attributes.path, 'src/a.ts');
+  assert.deepEqual([ent(facts, a).attributes.path, ent(facts, a).attributes.content_sha256], ['src/a.ts', createHash('sha256').update(lines("import {b} from './b.js';", "export function a(): number { return b(); }")).digest('hex')]);
   assert.deepEqual(rel(facts, 'depends-on', a, b).attributes, {basis: 'import', specifiers: ['./b.js'], lines: [1], resolved_as: 'src/b.ts'});
   assert.deepEqual(rel(facts, 'depends-on', symbolIdIn('telos', 'src/a.ts', 'a'), symbolIdIn('telos', 'src/b.ts', 'b')).attributes, {basis: 'call', line: 2});
   assert.deepEqual(rel(facts, 'produces', b, symbolIdIn('telos', 'src/b.ts', 'b')).attributes, {basis: 'the file defines it'});

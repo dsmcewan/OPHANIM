@@ -12,18 +12,14 @@
 //               (`node-version:`); package.json names the Node range it accepts (`engines.node`).
 //           All three are DECLARATIONS, so the extractor's basis is `declared`.
 // Inputs    The repository root and a commit: the three files' text at that commit, from git's object store (git.mjs).
-//           governance.mjs is read AS TEXT, never imported (importing it loads TELOS code). Optionally `telos`: the path
-//           of a TELOS checkout, read through git only (`ls-tree` and `cat-file` at the pinned commit; never its
-//           working tree, never executed).
+//           governance.mjs is read AS TEXT, never imported (importing it loads TELOS code). No TELOS checkout is read
+//           here: whether a pinned digest holds is compared by the audit (query.mjs) with the digest the sibling's own
+//           source states for the file at the pinned commit, so these facts are the same with or without a checkout.
 // Outputs   pinsSource(): the adapter; pinsFacts(): the drafts of one commit; pinTables() and workflowDeclarations():
 //           the two text readers, exported for the tests; siblingChangeId(): a commit of a sibling repository.
-// Facts     systems/repository/telos                 the pinned commit and who pins it; with a checkout, whether the
-//                                                    commit is in it and how many pinned digests match
+// Facts     systems/repository/telos                 the pinned commit and who pins it
 //           systems/module|file/telos:<path>         a pinned TELOS file: its pinned sha256, the commit, the line of the
-//                                                    table entry; `verified` true|false and the digest `found` ONLY when
-//                                                    the file was read at the pinned commit in a checkout. Without a
-//                                                    checkout, or when the checkout lacks the commit, `verified` is
-//                                                    absent and missing_evidence says which.
+//                                                    table entry. Nothing here says whether the digest holds.
 //           depends-on   governance.mjs -> the TELOS repository (basis 'commit pin'); -> each pinned TELOS file and
 //                        each pinned local checker (basis 'digest pin'). A local pin carries `found` and `matches`:
 //                        the sha256 of that file's blob AT THE SAME COMMIT against the pinned one. (The run-time check
@@ -122,21 +118,7 @@ export function pinTables(text) {
   return {commit, tables, comparisons, unread_tables};
 }
 
-/**
- * The digests of `paths` at `commit` in the TELOS checkout `telos`, from git's object store: {state: 'none'} (no
- * checkout given), {state: 'absent'} (the commit is not in it, or it is no git checkout), or {state: 'checked',
- * found: Map path -> sha256 | null}. A path the commit does not hold as a regular file is null.
- */
-function telosDigests(telos, commit, paths) {
-  if (!telos) return {state: 'none'};
-  let tree;
-  try { resolveCommit(telos, commit); tree = treeAt(telos, commit); } catch { return {state: 'absent'}; }
-  const at = new Map(tree.entries.filter(e => e.mode !== '120000').map(e => [e.path, e.blob]));
-  const bytes = blobsAt(telos, paths.filter(p => at.has(p)).map(p => at.get(p)));
-  return {state: 'checked', found: new Map(paths.map(p => [p, at.has(p) ? sha256(bytes.get(at.get(p))) : null]))};
-}
-
-function pinFacts({text, read, has, telos, drafts, home}) {
+function pinFacts({text, read, has, drafts, home}) {
   if (text === null) { home.attributes.pin_file = null; home.missing.push(`${GOVERNANCE} is not in the tree at this commit: no TELOS pin is read`); return; }
   home.attributes.pin_file = GOVERNANCE;
   const {commit, tables, comparisons, unread_tables} = pinTables(text);
@@ -172,28 +154,22 @@ function pinFacts({text, read, has, telos, drafts, home}) {
     local_pins: {...local, mismatched: bounded(local.mismatched.sort()), unresolved: bounded(local.unresolved.sort())},
     ...(unread_tables.length ? {unread_tables: bounded(unread_tables)} : {}), ...(repeated.length ? {repeated_local_pins: bounded(uniq(repeated))} : {})}, ...evidence(missing)});
 
-  // TELOS: the repository at the pinned commit, each pinned file, and (only with a checkout that holds the commit)
-  // the digest found there.
+  // TELOS: the repository at the pinned commit and each pinned file, AS DECLARED. Whether a pinned digest holds is not
+  // stated here: that is a comparison with the sibling's own file at the pinned commit, which the sibling's source states
+  // (code.mjs `content_sha256`) and the audit makes (query.mjs). So this source gives the same facts for the same commit
+  // whether or not a TELOS checkout is at hand, and a replay re-derives them.
   const pins = tables.find(t => t.name === TELOS_TABLE)?.entries ?? [];
   if (!commit && !tables.some(t => t.name === TELOS_TABLE)) return;
   const n = pins.length, c = commit?.value ?? null;
-  const check = c ? telosDigests(telos, c, pins.map(e => e.path)) : {state: 'no-commit'};
-  const unchecked = {
-    'none': [`no TELOS checkout was given: commit ${c} and the ${n} pinned digest(s) are not checked`, `no TELOS checkout was given: the pinned digest is not checked against commit ${c}`],
-    'absent': [`commit ${c} is not in the TELOS checkout given: the ${n} pinned digest(s) are not checked`, `commit ${c} is not in the TELOS checkout given: the pinned digest is not checked`],
-    'no-commit': [`${GOVERNANCE} states no TELOS_COMMIT: there is no commit to check the ${n} pinned digest(s) at`, `${GOVERNANCE} states no TELOS_COMMIT: there is no commit to check the pinned digest at`],
-  }[check.state] ?? null;
-  const good = pins.filter(e => check.found?.get(e.path) === e.sha256).length;
+  const unchecked = c ? null : [`${GOVERNANCE} states no TELOS_COMMIT: there is no commit to check the ${n} pinned digest(s) at`, `${GOVERNANCE} states no TELOS_COMMIT: there is no commit to check the pinned digest at`];
   drafts.push({entity: repositoryId(TELOS), ref: `${GOVERNANCE}#${commit ? 'TELOS_COMMIT' : TELOS_TABLE}`,
-    attributes: {name: TELOS, pinned_commit: c, pinned_by: GOVERNANCE, line: commit?.line ?? null, pinned_files: n,
-      ...(check.state === 'absent' ? {commit_found: false} : {}),
-      ...(check.state === 'checked' ? {commit_found: true, files_verified: good, files_mismatched: bounded(pins.filter(e => check.found.get(e.path) !== e.sha256).map(e => e.path).sort())} : {})},
+    attributes: {name: TELOS, pinned_commit: c, pinned_by: GOVERNANCE, line: commit?.line ?? null, pinned_files: n},
     ...(unchecked ? {missing_evidence: [unchecked[0]]} : {})});
   if (commit) drafts.push({type: 'depends-on', from, to: repositoryId(TELOS), ref: `${GOVERNANCE}#TELOS_COMMIT`, attributes: {basis: 'commit pin', commit: c, line: commit.line}});
   for (const e of pins) {
-    const id = fileIdIn(TELOS, e.path), found = check.found?.get(e.path);
-    drafts.push({entity: id, ref: `${GOVERNANCE}#${TELOS_TABLE}`, attributes: {repository: TELOS, path: e.path, sha256: e.sha256, commit: c, pinned_by: GOVERNANCE, line: e.line,
-      ...(check.state === 'checked' ? {verified: found === e.sha256, found} : {})}, ...(unchecked ? {missing_evidence: [unchecked[1]]} : {})});
+    const id = fileIdIn(TELOS, e.path);
+    drafts.push({entity: id, ref: `${GOVERNANCE}#${TELOS_TABLE}`, attributes: {repository: TELOS, path: e.path, sha256: e.sha256, commit: c, pinned_by: GOVERNANCE, line: e.line},
+      ...(unchecked ? {missing_evidence: [unchecked[1]]} : {})});
     drafts.push({type: 'depends-on', from, to: id, ref: `${GOVERNANCE}#${TELOS_TABLE}`, attributes: {basis: 'digest pin', table: TELOS_TABLE, sha256: e.sha256, commit: c, line: e.line}});
   }
 }
@@ -308,17 +284,14 @@ function ciFacts({tree, read, drafts, home}) {
   if (nodeNamed || engines) drafts.push({entity: node, ref: nodeNamed ? WORKFLOWS : PACKAGE, attributes: {ecosystem: 'program', name: 'node', versions: bounded(stated)}});
 }
 
-/**
- * The facts of the three declarations at `commit`, as the extractor's drafts. `telos`: the path of a TELOS checkout to
- * check the pinned digests in (git's object store at the pinned commit), or null: then nothing is called verified.
- */
-export function pinsFacts(repo, commit, {telos = null} = {}) {
+/** The facts of the three declarations at `commit`, as the extractor's drafts. */
+export function pinsFacts(repo, commit) {
   const tree = treeAt(repo, commit), byPath = new Map(tree.entries.map(e => [e.path, e]));
   const has = p => byPath.has(p) && byPath.get(p).mode !== '120000';
   const read = p => (has(p) ? blobsAt(repo, [byPath.get(p).blob]).get(byPath.get(p).blob) : null);
   const textOf = p => read(p)?.toString('utf8') ?? null;
   const drafts = [], home = {attributes: {name: HOME}, missing: [], unresolved: false};
-  pinFacts({text: textOf(GOVERNANCE), read, has, telos, drafts, home});
+  pinFacts({text: textOf(GOVERNANCE), read, has, drafts, home});
   lineageFacts({text: textOf(PROVENANCE), ancestry: new Set(historyAt(repo, commit).map(c => c.commit)), drafts, home});
   ciFacts({tree, read, drafts, home});
   // The repository itself: what was read of it, and whether its lineage could be.
@@ -328,11 +301,11 @@ export function pinsFacts(repo, commit, {telos = null} = {}) {
 }
 
 /** The adapter: the declarations at the commit `ref` names now (readAt: that commit's objects). */
-export function pinsSource({repo, ref = 'HEAD', telos = null, extractor = EXTRACTOR} = {}) {
+export function pinsSource({repo, ref = 'HEAD', extractor = EXTRACTOR} = {}) {
   return {
     id: SOURCE_ID, extractor, ref: GOVERNANCE,
     authority: `${GOVERNANCE} (the TELOS commit and digest pins), ${PROVENANCE} (the ARGO lineage record), the CI workflows and ${PACKAGE} engines, at a commit`,
     current: () => ({version: resolveCommit(repo, ref)}),
-    readAt: version => pinsFacts(repo, version, {telos}),
+    readAt: version => pinsFacts(repo, version),
   };
 }
