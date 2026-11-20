@@ -476,6 +476,14 @@
           "ref": "e6c4fe0",
           "detected_by": "ophanim/graph/extract.test.mjs, at integration before the push (it also turned the Slice B mutation runner's baseline red)",
           "note": "pantheon/tests/capability.mutate.mjs (Slice C1) declares its file constants as template literals built from another constant; the reader read single-quoted constants only, so no C1 mutation had a target file. Fixed by resolving template constants through earlier constants, leaving any other substitution unread. Both runners were written on bases that did not yet contain the reader, so their slices could not have run its test. Next step: every later brief that adds or changes a *.mutate.mjs runner puts ophanim/graph/extract.test.mjs in its verification budget"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "kg/checkpoint fc02390; reader fixed on ophanim/knowledge-graphs",
+          "detected_by": "the checkpoint agent, comparing the reader's count against the runner's own --check count (the same cross-check as the class's detector, ophanim/graph/extract.test.mjs), before its commit",
+          "note": "an apostrophe in a section comment inside the checkpoint runner's MUTATIONS opened a string for the reader, so a bracket in a later edit string closed the table early: 16 of 20 mutations read. The agent reworded its comment (a workaround in the runner, not a fix); the coordinator made the reader blank comments before parsing, with a synthetic case that fails on the old reader, and every committed runner reads identically before and after. The brief's next step (extract.test.mjs in the budget of any brief that adds a runner) caught it before integration this time"
         }
       ],
       "detector": {

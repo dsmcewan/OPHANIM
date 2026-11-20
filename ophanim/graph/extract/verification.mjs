@@ -49,6 +49,27 @@ const LIST = /\b([A-Z][A-Z0-9_]*)\s*=\s*\[/g;
 const OBJ = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*\{/g;
 const HELPER = /\bconst\s+([a-z][\w]*)\s*=\s*\(?\s*([a-z]\w*)(?:\s*,\s*[a-z]\w*)*\s*\)?\s*=>\s*\[\s*(`[^`]*`|'[^']*'|[A-Z]\w*)/g;
 
+/**
+ * The runner's text with every comment blanked to spaces (newlines kept), string and template literals left as they are.
+ * A quote inside a comment (`// the runner's ...`) would otherwise open a string for `balanced` and the chunking below
+ * (coordinator fix at integration: the checkpoint runner read 16 of 20 mutations; lessons text-reader-misses-new-shape).
+ */
+function blankComments(text) {
+  let out = '', i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== c) j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1); i = j + 1; continue;
+    }
+    if (c === '/' && text[i + 1] === '/') { const j = text.indexOf('\n', i); const end = j === -1 ? text.length : j; out += ' '.repeat(end - i); i = end; continue; }
+    if (c === '/' && text[i + 1] === '*') { const j = text.indexOf('*/', i + 2); const end = j === -1 ? text.length : j + 2; out += text.slice(i, end).replace(/[^\n]/g, ' '); i = end; continue; }
+    out += c; i++;
+  }
+  return out;
+}
+
 /** The text from `open` (an opening bracket) to its match, skipping quoted strings; null when unbalanced. */
 function balanced(text, open) {
   const close = {'[': ']', '{': '}', '(': ')'}[text[open]];
@@ -67,7 +88,8 @@ const strings = s => [...s.matchAll(/'((?:[^'\\\n]|\\.)*)'/g)].map(m => m[1].rep
  * The mutations a runner's SOURCE TEXT lists: {listed, mutations: [{id, what, files, tests, patterns, defaulted}]}.
  * Text only; nothing of the runner is executed. A mutation whose files this cannot read is still listed (files: []).
  */
-export function mutationTable(text) {
+export function mutationTable(source) {
+  const text = blankComments(source);
   const startAt = text.search(/\bMUTATIONS\s*=\s*\[/);
   if (startAt === -1) return {listed: 0, mutations: []};
   const open = text.indexOf('[', startAt), region = balanced(text, open) ?? text.slice(open), head = text.slice(0, startAt);

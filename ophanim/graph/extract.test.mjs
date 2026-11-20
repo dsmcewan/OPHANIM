@@ -131,6 +131,10 @@ test('extract: mutation runners are read as TEXT, never imported -- every commit
   assert.deepEqual([c4.files, c4.tests], [['pantheon/src/capability/graph.mjs'], ['pantheon/tests/capability-graph.test.mjs']], 'template-literal constants are resolved');
   const tl = mutationTable("const D = 'lib/', A = `${D}a.mjs`, B = `${dir}b.mjs`;\nconst SUITES = [`${D}a.test.mjs`];\nconst MUTATIONS = [{id: 'X1', file: A}, {id: 'X2', file: B}];");
   assert.deepEqual(tl.mutations.map(x => [x.id, x.files, x.tests]), [['X1', ['lib/a.mjs'], ['lib/a.test.mjs']], ['X2', [], ['lib/a.test.mjs']]], 'an unresolvable substitution is not read');
+  // A quote inside a comment opens no string: before the fix, the apostrophe below hid X3 (the bracket in X2's text closed
+  // the table early), as a section comment in the checkpoint runner hid 4 of its 20 mutations.
+  const ap = mutationTable("const A = 'lib/a.mjs';\nconst SUITES = ['lib/a.test.mjs'];\nconst MUTATIONS = [\n  {id: 'X1', file: A, from: 'x', to: 'y'},\n  // the runner's note\n  {id: 'X2', file: A, from: 'a]', to: 'b'},\n  {id: 'X3', file: A, from: 'p', to: 'q'},\n];\n");
+  assert.deepEqual(ap.mutations.map(x => x.id), ['X1', 'X2', 'X3'], 'a comment is not read as code or as a string');
   t.diagnostic(`${runners.length} runners, ${mutations} mutations read as text, each with its target and deciding tests`);
 });
 
