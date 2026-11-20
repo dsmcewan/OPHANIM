@@ -24,10 +24,11 @@
 import { agySingleTurn, laneFirstTurn } from "./agy-turn.mjs";
 import { geminiAdmission, isMeteredGemini, spendGemini } from "../route/quota-failover.mjs";
 import { seatTransport } from "../route/frontier.mjs";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { GEMINI_BILLING_INVALID, GEMINI_KINDS, FLAG_OF, SETTING_OF, USAGE_FLAG, billingFlagsFromArgv, billingRecord, geminiBilling, geminiUsageFile }
-  from "../route/gemini-billing.mjs";
+import { GEMINI_BILLING_INVALID, GEMINI_KINDS, FLAG_OF, SETTING_OF, USAGE_FLAG, GEMINI_PRIMARY_DISABLED, METERED_GEMINI_BUDGET_EXHAUSTED,
+  billingFlagsFromArgv, billingRecord, geminiBilling, geminiUsageFile, isGeminiBillingRefusal, policyRecord,
+  geminiAdmission as admitGemini, spendGemini as spendOneGemini } from "../route/gemini-billing.mjs";
 import { GENERATION_METHODS } from "../../../packages/model-client/index.mjs";
 
 export async function liveClients() {
@@ -146,8 +147,15 @@ const invalidScript = why => Object.assign(new Error(`${GEMINI_BILLING_INVALID}:
  *   shown()   the record: the policy with its source, the record's path, the usage per kind, the rows, the refusals.
  * The record is printed (`gemini_billing {...}`) whenever the process exits, however it ends, and appended with a run
  * directory to <runDir>/gemini-billing-runs.jsonl, so the refusals of every invocation stay as evidence.
+ * EVERY REFUSAL CARRIES ITS RECOVERY CONDITION (register L-148, owner item 10): what would admit the request, on the error
+ * (`recovery`) and on its refusal row: the flag to restart or re-run with, or, for a spent budget, the budget, the usage
+ * recorded and where, and that only a larger N admits more (the budget is cumulative over the record).
+ *   serve     (register L-148: bin/pantheon-view.mjs) a LONG-RUNNING process, with a run directory: its start (the policy,
+ *             its source and the usage already recorded) is appended to <runDir>/gemini-billing-runs.jsonl at once, each
+ *             refusal when it is made, and SIGINT / SIGTERM end the process through `exit`, so the exit record is written
+ *             too. That file is the authorization history: it is only ever written, never read to authorize anything.
  */
-export function operatorGemini(rawArgv, { script, runDir = null, make = null } = {}) {
+export function operatorGemini(rawArgv, { script, runDir = null, make = null, serve = false } = {}) {
   let argv, billing, dir = null;
   try {
     const parsed = billingFlagsFromArgv(rawArgv);
@@ -160,6 +168,7 @@ export function operatorGemini(rawArgv, { script, runDir = null, make = null } =
       throw invalidScript(`${enabled.map(k => FLAG_OF[k]).join(" and ")} given without ${USAGE_FLAG} FILE: ${script} keeps no usage record of its own, `
         + "so the operator names the file its budget is counted from (one invocation or several); nothing runs");
     }
+    if (serve && !dir) throw invalidScript(`${script} serves requests until it is stopped, so its usage record has a fixed home (a run directory); none was given`);
     billing = geminiBilling({ policy: parsed.policy, ledger: file ? geminiUsageFile(file) : null });
   } catch (e) {
     if (e?.code !== GEMINI_BILLING_INVALID) throw e;
@@ -168,11 +177,47 @@ export function operatorGemini(rawArgv, { script, runDir = null, make = null } =
   }
   const used = k => { try { return billing.ledger ? billing.ledger.used(k) : 0; } catch { return null; } };
   const shown = () => ({ script, ...billingRecord(billing), used: Object.fromEntries(GEMINI_KINDS.map(k => [k, used(k)])) });
+  // The serve journal (below): its directory is the record's fixed home, created on the first start.
+  const history = rec => { if (dir) { try { mkdirSync(dir, { recursive: true }); appendFileSync(join(dir, "gemini-billing-runs.jsonl"), JSON.stringify(rec) + "\n"); } catch { /* the printed record stands */ } } };
   process.once("exit", code => {
-    const rec = { ...shown(), exit: code, at: new Date().toISOString() };
+    const rec = { ...(serve ? { event: "exit", pid: process.pid } : {}), ...shown(), exit: code, at: new Date().toISOString() };
     console.log(`gemini_billing ${JSON.stringify(rec)}`);
     if (dir) { try { appendFileSync(join(dir, "gemini-billing-runs.jsonl"), JSON.stringify(rec) + "\n"); } catch { /* the printed record stands */ } }
   });
+  if (serve) {
+    const start = { event: "start", script, pid: process.pid, policy: policyRecord(billing.policy), where: billing.ledger?.where ?? null,
+      used: Object.fromEntries(GEMINI_KINDS.map(k => [k, used(k)])), at: new Date().toISOString() };
+    history(start);
+    console.log(`gemini_billing_start ${JSON.stringify(start)}`);
+    for (const [signal, n] of [["SIGINT", 2], ["SIGTERM", 15]]) process.once(signal, () => process.exit(128 + n));
+  }
+  const where = billing.ledger?.where ?? null, verb = serve ? "restart" : "re-run";
+  const usageNote = where ? "" : ` and ${USAGE_FLAG} FILE`;
+  // What would admit a refused request. Never derived from the record or the history: only stated from them.
+  const recoveryOf = e => {
+    const b = e?.billing ?? {};
+    if (e?.code === GEMINI_PRIMARY_DISABLED) {
+      return `${billing.policy[SETTING_OF.failover].enabled ? `${FLAG_OF.failover} authorizes no primary request here; ` : ""}${verb} ${script} with ${FLAG_OF.primary} N${usageNote}: `
+        + `N is the cumulative budget of billed Gemini requests${where ? `, counted against the usage already recorded at ${where}` : ""}`;
+    }
+    if (e?.code === METERED_GEMINI_BUDGET_EXHAUSTED) {
+      return `the ${SETTING_OF.primary} budget of ${b.budget} is spent (${b.used} of ${b.budget} recorded at ${where ?? "the usage record"}); `
+        + `${verb} ${script} with a larger ${FLAG_OF.primary} N: the budget is cumulative over that record, so N admits N - ${b.used} more`;
+    }
+    return `the request was not sent: its usage could not be recorded first; ${verb} it once the usage record ${where ?? ""} is readable and writable and no live process holds its lock`;
+  };
+  // A refusal at the point of spend, or a usage record that could not be written before the request (never sent either way).
+  const refused = e => {
+    if (!(isGeminiBillingRefusal(e) || (e?.provider_requests === 0 && typeof e?.code === "string"))) return e;
+    const recovery = recoveryOf(e);
+    try { e.recovery = recovery; if (e.billing) e.billing.recovery = recovery; } catch { /* a frozen error keeps its message */ }
+    if (serve) history({ event: "refusal", script, pid: process.pid, ...(e.billing ?? { code: e.code, provider_requests: 0, why: String(e.message).slice(0, 400) }), recovery, at: e.billing?.at ?? new Date().toISOString() });
+    return e;
+  };
+  // The helper's two points of spend, in this scope: the shared admission and spend (route/gemini-billing.mjs), each
+  // refusal annotated with its recovery condition on the way out. Nothing else is decided here.
+  const geminiAdmission = (b, args) => { try { return admitGemini(b, args); } catch (e) { throw refused(e); } };
+  const spendGemini = (b, args) => { try { return spendOneGemini(b, args); } catch (e) { throw refused(e); } };
   const made = new Map();
   const client = vendor => { if (!made.has(vendor)) made.set(vendor, make(vendor)); return made.get(vendor); };
   const clientFor = (vendor, { model = null, purpose = script, role = null } = {}) => {
