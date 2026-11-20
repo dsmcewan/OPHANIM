@@ -66,6 +66,16 @@ function withFds(w, argv, at = [9, 20], opts = {}) {
     return spawnSync(argv[0], argv.slice(1), { encoding: "utf8", env: w.env, ...opts, stdio });
   } finally { closeSync(fd); }
 }
+/** The descriptors above stdio this test process hands to ANY child by inheritance, measured with nothing handed over.
+ *  None on a clean host; but a supervisor can leak its own: the GitHub Actions runner hands its jobs fds 142 and 145
+ *  (seen in CI at d9d626f, which made exact-list cells fail there and pass here). The cells expect what they hand PLUS
+ *  these, and the closer must still leave stdio only: KG-11's threat, live in CI. */
+function ambientFds(w) {
+  const r = withFds(w, LIST_FDS, []);
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout.trim().split("\n").filter(Boolean).map(Number).filter(n => n > 2);
+}
+const fdSet = (...lists) => [...new Set(lists.flat())].sort((a, b) => a - b);
 /** The closer's program run after `prelude` (the program text itself unchanged): how its refusals are shown on real cases. */
 const closerAfter = prelude => [fdExecPython(), ...FD_EXEC_PY_FLAGS, "-c", `${prelude}\n${FD_EXEC_PY}`];
 const readJson = f => (existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : null);
@@ -118,10 +128,10 @@ test("closer: python3 -I -S -c FD_EXEC_PY in front of the command; on a real tab
   assert.equal(resolveCommand("sh", "/nonexistent-dir:/bin"), "/bin/sh");
   assert.equal(resolveCommand("no-such-command-kg11", "/bin:/usr/bin"), null);
   assert.equal(resolveCommand("/bin/sh"), "/bin/sh");
-  const w = world(t), at = [3, 9, 20, 255];
+  const w = world(t), at = [3, 9, 20, 255], ambient = ambientFds(w);
   const direct = withFds(w, LIST_FDS, at);
   assert.equal(direct.status, 0, direct.stderr);
-  assert.deepEqual(direct.stdout.trim().split("\n").map(Number).sort((a, b) => a - b), [0, 1, 2, ...at], "node's spawn alone hands every one over (the positive control)");
+  assert.deepEqual(direct.stdout.trim().split("\n").map(Number).sort((a, b) => a - b), fdSet([0, 1, 2], at, ambient), `node's spawn alone hands every one over (the positive control), with any this host's supervisor leaked (${ambient.join(", ") || "none"})`);
   const via = withFds(w, fdExecArgv(LIST_FDS), at);
   assert.equal(via.status, 0, via.stderr);
   assert.deepEqual(via.stdout.trim().split("\n").map(Number).sort((a, b) => a - b), [0, 1, 2], "through the closer: stdio only");
@@ -173,10 +183,12 @@ test("closer fails closed: without /proc, with its closing sabotaged, or with a 
   assert.equal(noProc.status, FDS_REFUSED, noProc.stderr);
   assert.match(noProc.stderr, /^pantheon-fds: refused: the thread list cannot be listed \(ENOENT\); the jail was not started$/m);
   assert.equal(existsSync(mark), false, "without /proc, the command never ran");
-  // Its closing sabotaged (os.closerange a no-op): the check after it finds fd 9 and fd 20 still open.
+  // Its closing sabotaged (os.closerange a no-op): the check after it finds fd 9 and fd 20 still open (and any
+  // descriptor this host's supervisor leaked into the test process, which the closer must name too).
   const sabotaged = withFds(w, [...closerAfter("import os\nos.closerange = lambda low, high: None"), ...touch]);
   assert.equal(sabotaged.status, FDS_REFUSED, sabotaged.stderr);
-  assert.match(sabotaged.stderr, /^pantheon-fds: refused: descriptor\(s\) 9, 20 still open after closing; the jail was not started$/m);
+  const left = fdSet([9, 20], ambientFds(w)).join(", ");
+  assert.match(sabotaged.stderr, new RegExp(`^pantheon-fds: refused: descriptor\\(s\\) ${left} still open after closing; the jail was not started$`, "m"));
   assert.equal(existsSync(mark), false, "a descriptor still open: the command never ran");
   // A second thread (what a node closer always has): it could open a descriptor between the check and the exec.
   const threaded = withFds(w, [...closerAfter("import _thread, time\n_thread.start_new_thread(time.sleep, (30,))"), ...touch]);
