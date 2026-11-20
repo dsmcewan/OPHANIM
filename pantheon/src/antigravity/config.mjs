@@ -26,6 +26,51 @@ export const isSdkModel = model => Object.hasOwn(SDK_CONFIG.models, String(model
 /** The thinking levels recorded for `model`, lowest first ([] when none is recorded). */
 export const thinkingLevelsOf = model => [...(SDK_CONFIG.models[model]?.thinking ?? [])];
 
+// THE RESEARCH TEAM (owner direction 2026-11-20; config `research`). Scout, explorer and researcher are roles of the
+// investigation, not implementation subagents and not reviewers. Each names its candidate models in preference order
+// (gemini-4-carbon first); subordinate specialists are the subagent model; the hierarchy is at most RESEARCH_DEPTH_LIMIT
+// levels deep, the coordinator being level 1. The limit is CODE: the configuration may lower it and cannot raise it.
+export const RESEARCH_DEPTH_LIMIT = 10;
+export const RESEARCH_ROLES = Object.freeze(["scout", "explorer", "researcher"]);
+/** The read tools of this transport: the only tools a research session is given. */
+export const SDK_READ_TOOLS = Object.freeze(["view_file", "list_directory", "search_directory", "find_file"]);
+/**
+ * Why `cfg` (the shape of config/antigravity-sdk.json) cannot seat a research team, or null. A function of the config it
+ * is given, so each refusal can be shown by a test; applied once, below, to the shipped file.
+ */
+export function researchConfigRefusal(cfg) {
+  const r = cfg?.research;
+  if (!r || typeof r !== "object") return "config/antigravity-sdk.json declares no research block";
+  if (!Number.isInteger(r.max_depth) || r.max_depth < 1 || r.max_depth > RESEARCH_DEPTH_LIMIT) return `research.max_depth is a whole number from 1 to ${RESEARCH_DEPTH_LIMIT}`;
+  const names = Object.keys(r.roles ?? {});
+  if (names.length !== RESEARCH_ROLES.length || RESEARCH_ROLES.some(n => !names.includes(n))) return `the research roles are exactly ${RESEARCH_ROLES.join(", ")}`;
+  for (const role of RESEARCH_ROLES) {
+    const list = r.roles[role]?.candidates;
+    if (!Array.isArray(list) || !list.length) return `research role ${role} names no candidate`;
+    for (const c of list) {
+      if (!Object.hasOwn(cfg.models ?? {}, String(c?.model))) return `research role ${role}: "${c?.model}" is not a model this transport declares`;
+      const levels = cfg.models[c.model]?.thinking, effort = c.effort ?? null;
+      if (effort !== null && !(Array.isArray(levels) && levels.includes(effort))) return `research role ${role}: "${effort}" is not a thinking level recorded for ${c.model}`;
+    }
+  }
+  if (r.subordinate?.model !== cfg.subagents?.model) return `the subordinate model is the subagent model (${cfg.subagents?.model}): one Hydrogen policy, not two`;
+  for (const t of r.tools ?? []) if (!SDK_READ_TOOLS.includes(t)) return `research tool "${t}" is not a read tool (${SDK_READ_TOOLS.join(", ")})`;
+  if (!Array.isArray(r.tools) || !r.tools.length) return "research.tools names no read tool";
+  const b = r.bounds ?? {};
+  for (const k of ["max_nodes", "max_requests", "node_model_calls", "node_tool_calls", "node_timeout_s", "coordinator_rounds", "finding_bytes", "min_question_chars"]) {
+    if (!Number.isInteger(b[k]) || b[k] < 1) return `research.bounds.${k} is a positive whole number`;
+  }
+  // Level d is opened in the coordinator's round d - 1, so reaching the depth limit takes at least that many rounds.
+  if (b.coordinator_rounds < r.max_depth) return `research.bounds.coordinator_rounds must allow the depth limit (${r.max_depth} levels need at least ${r.max_depth} rounds)`;
+  if (!Array.isArray(r.triggers) || !r.triggers.length) return "research.triggers names no activation";
+  return null;
+}
+{ const bad = researchConfigRefusal(SDK_CONFIG); if (bad) throw new Error(`antigravity-sdk.json: ${bad}`); }
+export const RESEARCH = SDK_CONFIG.research;
+export const RESEARCH_MAX_DEPTH = RESEARCH.max_depth;
+export const RESEARCH_TRIGGERS = Object.freeze([...RESEARCH.triggers]);
+export const RESEARCH_SPECIALTIES = Object.freeze(Object.keys(RESEARCH.specialties));
+
 // EXACTLY THE DECLARED ARGUMENT NAMES (independent review 2026-11-19, confirmed on SDK 0.1.24). The runtime reads other
 // spellings of a declared name (commandline and commandLine as CommandLine; subagents as Subagents; workspace as
 // Workspace), while the SDK's pre-tool hook hands the controller the keys as the model wrote them. A controller that

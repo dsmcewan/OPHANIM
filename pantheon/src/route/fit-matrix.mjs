@@ -34,7 +34,9 @@
 // The difficulty is the ticket's label RAISED by the task profile's floors (stakes; ambiguity for the planner): a
 // floor can move a pick up a column, never down (frontier.mjs fitLevel).
 import { MODELS, LANES, modelId } from "../config/models.mjs";
-import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, SDK_DIFFICULTIES, thinkingLevelsOf } from "../antigravity/config.mjs";
+import { createHash } from "node:crypto";
+import { SDK_CONFIG, SDK_TRANSPORT, SDK_VENDOR, SDK_DIFFICULTIES, thinkingLevelsOf, RESEARCH_ROLES, researchConfigRefusal } from "../antigravity/config.mjs";
+import { ceilingFor } from "../antigravity/subagents.mjs";
 
 export const FIT_MATRIX_SCHEMA = "pantheon.fit-matrix/v1";
 export const FIT_DIFFICULTIES = Object.freeze(["easy", "medium", "hard"]);
@@ -196,3 +198,36 @@ export const FIT_MATRIX_BODY = Object.freeze({ schema: FIT_MATRIX_SCHEMA,
   reviewer: { pinned_to: "dispatcher", escalation: REVIEWER_ESCALATION.map(s => `${s.vendor}/${s.model}`) },
   rejection: "raise the thinking level on the same model, then the next ladder rung",
   google: "implementation: the google-antigravity SDK on the Gemini API (GEMINI_API_KEY), no Antigravity CLI lane and no metered-API failover; every other role's Gemini seat: its Antigravity lane, the metered Gemini API id of the lane's base model only as its 429/quota failover" });
+
+// ---- THE RESEARCH ROLES (owner direction 2026-11-20: the Carbon 4 research and exploration team) ---------------------
+// Scout, explorer and researcher are roles of the investigation. They are NOT rows of FIT_MATRIX: the matrix, its roles
+// and the fit selection policy's hash are as they were, and so are the implementer's hard / medium / easy assignments.
+// Their seat comes from config/antigravity-sdk.json `research.roles`: candidates in preference order, the first that
+// QUALIFIES is seated, on this transport. `qualified(model)` is the selector's own test of a candidate (null when it
+// qualifies, else the reason): today a candidate qualifies by being declared, and a capability-based selection can pass
+// its own test without any change here. The record says what was chosen, from what, under which configuration, and what
+// was passed over and why: a model is never substituted without that record, and never when none qualifies.
+export const RESEARCH_ROUTING_SCHEMA = "pantheon.research-routing/v1";
+const researchPolicy = cfg => "sha256:" + createHash("sha256").update(JSON.stringify({ schema: RESEARCH_ROUTING_SCHEMA, transport: cfg.transport, roles: cfg.research.roles, subordinate: cfg.research.subordinate, max_depth: cfg.research.max_depth })).digest("hex");
+/** The seat of a research role and the record of its selection: {seat, selection}. Throws RESEARCH_NO_QUALIFIED_MODEL. */
+export function researchSeat(role, { config = SDK_CONFIG, qualified = () => null } = {}) {
+  if (!RESEARCH_ROLES.includes(role)) throw new Error(`"${role}" is not a research role (${RESEARCH_ROLES.join(", ")})`);
+  if (config !== SDK_CONFIG) { const bad = researchConfigRefusal(config); if (bad) throw new Error(`research routing: ${bad}`); }
+  const candidates = config.research.roles[role].candidates.map(c => ({ model: c.model, effort: c.effort ?? null }));
+  const rejected = [];
+  for (const c of candidates) {
+    const why = qualified(c.model, { role, effort: c.effort });
+    if (why) { rejected.push({ model: c.model, why: String(why) }); continue; }
+    return { seat: { vendor: config.vendor, model: c.model, transport: config.transport, effort: c.effort },
+      selection: { schema: RESEARCH_ROUTING_SCHEMA, role, chosen: c, candidates, rejected, policy: researchPolicy(config), basis: config.research.basis } };
+  }
+  throw Object.assign(new Error(`no candidate of the research role ${role} qualifies (${rejected.map(r => `${r.model}: ${r.why}`).join("; ")}): nothing is substituted`),
+    { code: "RESEARCH_NO_QUALIFIED_MODEL", role, rejected });
+}
+/** The seat of a subordinate research specialist: the subagent model, on this transport. */
+export const researchSubordinate = (config = SDK_CONFIG) => ({ vendor: config.vendor, model: config.research.subordinate.model, transport: config.transport, effort: config.research.subordinate.effort ?? null });
+/**
+ * The limits of a research team whose coordinator runs on `model`: the depth limit, and the subordinates active at once,
+ * which is that model's EXISTING subagent ceiling (subagents.mjs: Carbon 8, Neon 4, Hydrogen none), not a second number.
+ */
+export const researchLimits = (model, config = SDK_CONFIG) => ({ max_depth: config.research.max_depth, max_active: ceilingFor(model), ...config.research.bounds });

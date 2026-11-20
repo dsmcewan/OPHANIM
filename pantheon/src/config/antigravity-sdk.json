@@ -97,5 +97,31 @@
     },
     "read_tools": ["view_file", "list_directory", "search_directory", "find_file"],
     "write_tools": ["create_file", "edit_file"]
+  },
+  "research": {
+    "basis": "owner direction 2026-11-20 (the Carbon 4 research and exploration team): gemini-4-carbon is the preferred model of the scout, explorer and researcher roles, on this transport; subordinate specialists are gemini-4-hydrogen; at most 10 nested levels; the coordinator model's existing subagent ceiling bounds the subordinates active at once (Carbon 8). A role's candidates are in preference order: the first that qualifies is seated, and the choice is recorded.",
+    "roles": {
+      "scout": { "candidates": [{ "model": "gemini-4-carbon", "effort": "high" }], "charter": "Discover the systems, evidence, capabilities, dependencies and unknowns that bear on the question." },
+      "explorer": { "candidates": [{ "model": "gemini-4-carbon", "effort": "high" }], "charter": "Investigate uncertain assumptions, competing explanations, architectural alternatives and relationships nobody has recorded yet." },
+      "researcher": { "candidates": [{ "model": "gemini-4-carbon", "effort": "high" }], "charter": "Conduct a detailed, source-backed investigation: trace execution paths, map dependencies and establish the evidence that planning and decisions need." }
+    },
+    "subordinate": { "model": "gemini-4-hydrogen", "effort": "medium" },
+    "max_depth": 10,
+    "depth_basis": "Levels of nesting, the coordinator being level 1. A ceiling, not a target: a level is opened only for a named evidence gap of the node above it. Hydrogen does not delegate (subagents.ceilings): every level below the coordinator is opened by the controller on the coordinator's request.",
+    "specialties": {
+      "source-inventory": "Find and list the sources that bear on the question, with where each is.",
+      "history-and-cause": "Establish how and why the present state came about, from the record.",
+      "dependency-map": "Map what depends on what, and through which interface.",
+      "execution-trace": "Follow one execution path through the code, step by step.",
+      "contract-and-invariant": "State the contracts and invariants in force, and where each is enforced.",
+      "evidence-retrieval": "Retrieve the specific records or passages a question needs.",
+      "contradiction-analysis": "Set conflicting statements or observations side by side and say which evidence supports which.",
+      "alternative-hypothesis": "Test one alternative explanation against the evidence.",
+      "change-impact": "Establish what a proposed change would touch and what could break.",
+      "acceptance-criteria": "Examine whether the acceptance criteria can be checked and what they leave out."
+    },
+    "tools": ["view_file", "list_directory", "search_directory", "find_file"],
+    "bounds": { "max_nodes": 40, "max_requests": 240, "node_model_calls": 24, "node_tool_calls": 80, "node_timeout_s": 900, "coordinator_rounds": 12, "finding_bytes": 4000, "min_question_chars": 24 },
+    "triggers": ["intake", "insufficient-evidence", "contradiction", "relationship", "review-finding", "invalidated-evidence", "reflection"]
   }
 }
