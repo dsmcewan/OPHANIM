@@ -199,6 +199,25 @@ export async function captureLab({ lab, def, store, fetch = globalThis.fetch, no
     Object.assign(page, { status: "captured", sha256: digest, bytes: got.bytes.length, type: got.type, read: now(), ...(got.final !== page.url ? { final: got.final } : {}) });
   };
   await pool([...listed.values()].filter(p => !p.status), concurrency, read);
+  // One lab writes each page of its API reference once for each SDK, at an address made from the page's own, and lists
+  // only one form in its index. The other forms are asked for from each captured page of that section. A form that does
+  // not exist (not every page has every form) is recorded as absent: it is not a page that failed.
+  if (def.variants) {
+    const { section, from, insert } = def.variants, forms = [];
+    for (const page of [...listed.values()]) {
+      if (page.status !== "captured" || page.section !== section || !page.url.startsWith(from)) continue;
+      const rest = page.url.slice(from.length);
+      if (insert.some(v => rest.startsWith(`${v}/`))) continue;
+      for (const variant of insert) {
+        const url = `${from}${variant}/${rest}`;
+        if (listed.has(url) || classify(url, def).kind !== "page") continue;
+        const entry = { section: `${section} (${variant})`, title: page.title, url, description: null, index: null, derived_from: page.url, variant };
+        listed.set(url, entry); forms.push(entry);
+      }
+    }
+    await pool(forms, concurrency, read);
+    for (const form of forms) if (form.status === "failed" && form.why === "HTTP 404") Object.assign(form, { status: "skipped", why: `no ${form.variant} form of this page (HTTP 404)` });
+  }
   // Two labs do not list their per-model pages in the index. Their model listing does: by links, or only by the names in
   // its tables, from which the page of each model is named. A listing that could not be read is an error for the same reason
   // an index is: the capture would look complete and hold no model.

@@ -13,7 +13,7 @@ Two things are kept apart throughout:
 NODE_USE_ENV_PROXY=1 node pantheon/bin/pantheon-vendor-docs.mjs models
 ```
 
-This reads every page each lab's documentation lists (about a minute for the four labs), reads every model page, and compares the result with the kept catalogue, the registry and the recorded capability facts. It changes nothing. It exits 0 when there is nothing to do, 2 when there is, 1 when it could not read a lab.
+This reads every page each lab's documentation lists (about four minutes for the four labs, most of it Anthropic's API reference in each SDK's form), reads every model page, and compares the result with the kept catalogue, the registry and the recorded capability facts. It changes nothing. It exits 0 when there is nothing to do, 2 when there is, 1 when it could not read a lab.
 
 | It prints | Meaning |
 |---|---|
@@ -31,7 +31,7 @@ This reads every page each lab's documentation lists (about a minute for the fou
 
 The four documentation hosts must be reachable: `developers.openai.com`, `docs.x.ai`, `aistudio.google.com`, `platform.claude.com`. No key is sent to them.
 
-Three labs run a documentation server of their own, and the capture asks each for what the lab's index does not list. OpenAI's (`developers.openai.com/mcp`) is how the Codex documentation (on `learn.chatgpt.com`, never asked directly) is read: the server's list, then that site's own links, each page through the server. xAI's (`docs.x.ai/api/mcp`) supplies a few pages its index omits. Anthropic's (`platform.claude.com/docs/mcp`) lists nothing its index does not. Google's (`gemini-api-docs-mcp.dev`) only answers searches, so it is not read.
+Three labs run a documentation server of their own, and the capture asks each for what the lab's index does not list. OpenAI's (`developers.openai.com/mcp`) is how the Codex documentation (on `learn.chatgpt.com`, never asked directly) is read: the server's list, then that site's own links, each page through the server. xAI's (`docs.x.ai/api/mcp`) supplies a few pages its index omits. Anthropic's (`platform.claude.com/docs/mcp`) lists nothing its index does not; its API reference as written for each SDK is listed nowhere and is captured from addresses made from the listed pages' own. Google's (`gemini-api-docs-mcp.dev`) only answers searches, so it is not read.
 
 ## 2. Record that it was seen
 

@@ -372,3 +372,28 @@ test("the server's own address, where the index lists it as a link, is not read 
   assert.equal(asked.some(a => a.url === SERVER), false, "no plain request is made to the server's address");
   assert.equal(manifest.server.status, "read");
 });
+
+test("A PAGE THAT IS WRITTEN ONCE FOR EACH SDK IS CAPTURED IN EACH FORM: the forms are asked for from the captured page's own address, and a form that does not exist is recorded, not a failure", async t => {
+  const pages = { ...PAGES,
+    "https://docs.lab.test/reference/ts/create.md": { body: "# Create a response\n\n- Signature: `client.responses.create(params)`\n", type: "text/markdown" },
+    "https://docs.lab.test/reference/py/new-home.md": { body: "# never asked\n", type: "text/markdown" },
+    // In the section and not under the address the forms are made from; and under that address in another section.
+    "https://docs.lab.test/api/llms.txt": { body: API + "- [Glossary](https://docs.lab.test/guides/glossary.md)\n\n## Guides\n- [About the reference](https://docs.lab.test/reference/about.md)\n", type: "text/plain" },
+    "https://docs.lab.test/guides/glossary.md": { body: "# Glossary\n", type: "text/markdown" },
+    "https://docs.lab.test/reference/about.md": { body: "# About the reference\n", type: "text/markdown" } };
+  const def = { ...LAB, variants: { section: "Reference", from: "https://docs.lab.test/reference/", insert: ["ts", "py"] } };
+  const s = site(pages), dir = store(t);
+  const manifest = await captureLab({ lab: "lab", def, store: dir, fetch: s.fetch, now: NOW, sleep: async () => {}, retries: 0 });
+  const ts = byUrl(manifest, "https://docs.lab.test/reference/ts/create.md"), py = byUrl(manifest, "https://docs.lab.test/reference/py/create.md");
+  assert.deepEqual({ status: ts.status, section: ts.section, title: ts.title, variant: ts.variant, from: ts.derived_from, sha256: ts.sha256 },
+    { status: "captured", section: "Reference (ts)", title: "Create a response", variant: "ts", from: "https://docs.lab.test/reference/create.md", sha256: sha(pages[ts.url].body) });
+  assert.deepEqual([py.status, py.why, py.variant], ["skipped", "no py form of this page (HTTP 404)", "py"]);
+  const forms = s.asked.map(a => a.url).filter(u => /\/(ts|py)\//.test(u)).sort();
+  assert.deepEqual(forms, ["https://docs.lab.test/reference/py/create.md", "https://docs.lab.test/reference/py/moved.md", "https://docs.lab.test/reference/ts/create.md", "https://docs.lab.test/reference/ts/moved.md"],
+    "only a captured page of the named section, under the address its forms are made from, has them asked for: not a page that failed or was refused, not a page of another section, not a page elsewhere");
+  assert.deepEqual(manifest.summary, { listed: 14, captured: 7, skipped: 5, refused: 1, failed: 1 }, "a missing form is not a failed page");
+  const again = await captureLab({ lab: "lab", def: { ...def, variants: { ...def.variants, insert: ["ts"] } }, store: dir, fetch: site({ ...pages,
+    "https://docs.lab.test/api/llms.txt": { body: API + "- [Create, for ts](https://docs.lab.test/reference/ts/create.md)\n", type: "text/plain" } }).fetch, now: NOW, sleep: async () => {}, retries: 0 });
+  assert.equal(again.pages.some(p => p.url.includes("/reference/ts/ts/")), false, "a page that is already one SDK's form has no forms of its own");
+  assert.equal(byUrl(again, "https://docs.lab.test/reference/ts/create.md").index, "https://docs.lab.test/api/llms.txt", "a form the index lists keeps its listing");
+});

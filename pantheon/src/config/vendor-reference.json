@@ -1040,10 +1040,10 @@
    }
   },
   "anthropic": {
-   "read": "2026-11-20T07:56:44.811Z",
+   "read": "2026-11-20T08:03:05.411Z",
    "pages": {
-    "listed": 923,
-    "captured": 923
+    "listed": 5571,
+    "captured": 5571
    },
    "indexes": [
     {
@@ -1054,6 +1054,38 @@
    "sections": [
     {
      "section": "API Reference",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (cli)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (csharp)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (go)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (java)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (php)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (python)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (ruby)",
+     "pages": 581
+    },
+    {
+     "section": "API Reference (typescript)",
      "pages": 581
     },
     {
