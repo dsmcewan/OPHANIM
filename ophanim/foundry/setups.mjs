@@ -61,7 +61,8 @@ export function candidateSetups({snapshot, reachable, implementers = null, plann
 /** Order setups by CRITERION over their trials. `sufficient` is false while any ranked setup has fewer than MIN_SAMPLES accepted trials. */
 export function rankSetups(trials, {minSamples = MIN_SAMPLES} = {}) {
   const by = new Map();
-  for (const t of trials) (by.get(t.setup.id) ?? by.set(t.setup.id, []).get(t.setup.id)).push(t);
+  // A rework trial was given a review to answer: it is not the same task as a first build, and is not ranked with them.
+  for (const t of trials.filter(x => !x.rework_of)) (by.get(t.setup.id) ?? by.set(t.setup.id, []).get(t.setup.id)).push(t);
   const rows = [...by].map(([id, ts]) => {
     const ok = ts.filter(t => t.accepted), scores = ok.map(t => t.operation?.score).filter(x => typeof x === 'number');
     return {setup: id, trials: ts.length, accepted: ok.length, accepted_rate: ok.length / ts.length, operation_score: scores.length ? median(scores) : null,

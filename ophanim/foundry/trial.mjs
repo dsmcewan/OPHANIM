@@ -11,7 +11,8 @@
 // Outputs   runTrial() -> an `ophanim.foundry.trial/v1` record (below). dependencyGate() -> {ok, needs, refused}.
 // Record    setup; request key, class and digest; the wall time of the build; whether it was BUILT (every file
 //           produced), VERIFIED (the acceptance command exited 0 in the jail on the final revision), what it DEPENDS
-//           ON and whether the request allows it, the reviewer's verdict, whether Pantheon SHIPPED it and the gate's
+//           ON and whether the request allows it, the reviewer's verdict (and, for a rework trial, the trial whose
+//           review it answers), whether Pantheon SHIPPED it and the gate's
 //           reason when it did not, the OPERATION's exit and report, and ACCEPTED = verified, dependencies allowed and
 //           (when the request has an operate command) operated with exit 0. Provider calls, tokens, the served model
 //           of each turn against the one asked for, the cost the clients reported, and each product file's sha256.
@@ -71,15 +72,23 @@ const seat = (s, why) => ({vendor: s.vendor, model: s.model, pool: s.vendor, ran
 const lastJson = out => { for (const line of String(out).trim().split('\n').reverse()) { try { const v = JSON.parse(line); if (v && typeof v === 'object') return v; } catch { /* not this line */ } } return null; };
 
 /** Build `request` once with `setup` in the new directory `dir`. Returns the trial record; writes nothing outside `dir`. */
-export async function runTrial({request, seed, requestSha, setup, dir, makeClientFor, n = 1, revisions = 2, maxProviderCalls = 16, clock = () => Date.now()}) {
+export const REWORK_HEADING = 'REVIEW OF THE PREVIOUS REVISION';
+/** The goal of a rework trial: the request's goal, then the previous revision's files and what its reviewer found (its verdict line left out: the findings are the input, not the form of a reply). */
+export function reworkGoal(goal, {files, review}) {
+  return `${goal}\n\n${REWORK_HEADING}. An earlier revision passed the acceptance test and was then reviewed. Its reviewer requested changes. Write a new complete revision that resolves the findings below while still passing every check above; where a finding is wrong, keep what was right.\n\n`
+    + files.map(f => `[previous ${f.path}]\n${f.text}`).join('\n\n') + `\n\n[the reviewer's findings]\n${review.split('\n').filter(l => !/^\s*VERDICT:/i.test(l)).join('\n').trim()}`;
+}
+
+export async function runTrial({request, seed, requestSha, setup, dir, makeClientFor, n = 1, revisions = 2, maxProviderCalls = 16, reworkOf = null, clock = () => Date.now()}) {
   if (fs.existsSync(dir) && fs.readdirSync(dir).length) throw new Error(`runTrial: ${dir} is not empty`);
   const repo = path.join(dir, 'repo');
   fs.mkdirSync(repo, {recursive: true});
   fs.cpSync(seed, path.join(repo, 'seed'), {recursive: true});
   const spentBefore = makeClientFor.spent?.().usd ?? null, started = clock();
-  const spec = {key: request.key, repo_root: repo, title: request.title, goal: request.goal, question: request.question, copy: ['seed'], acceptance_cmd: request.acceptance_cmd,
+  const goal = reworkOf ? reworkGoal(request.goal, reworkOf) : request.goal;
+  const spec = {key: request.key, repo_root: repo, title: request.title, goal, question: request.question, copy: ['seed'], acceptance_cmd: request.acceptance_cmd,
     ...(request.tests_file ? {tests_file: request.tests_file} : {}), ...(request.difficulty ? {difficulty: request.difficulty} : {}),
-    ...(request.files.length === 1 ? {slot: request.files[0].slot, path: request.files[0].path} : {slots: request.files.map(f => ({slot: f.slot, path: f.path, goal: f.goal ?? request.goal}))})};
+    ...(request.files.length === 1 ? {slot: request.files[0].slot, path: request.files[0].path} : {slots: request.files.map(f => ({slot: f.slot, path: f.path, goal}))})};
   const why = `foundry trial ${n} of setup ${setup.id}`;
   let result = null, error = null;
   try {
@@ -111,7 +120,7 @@ export async function runTrial({request, seed, requestSha, setup, dir, makeClien
   return {schema: TRIAL_SCHEMA, n, setup, request: {key: request.key, class: request.class, sha256: requestSha}, transport: makeClientFor.providers?.transport ?? 'undeclared', live: makeClientFor.providers?.kind === 'live',
     started_at: new Date(started).toISOString(), ms, built, verified, dependencies, operation,
     accepted: verified && dependencies.ok && (!request.operate || operation?.ok === true),
-    review: run?.review?.verdict ?? null, shipped: run?.shipped === true, ship_why: run?.shipped === true ? null : run?.ship_why ?? null, isolation: run?.acceptance?.isolation ?? null,
+    review: run?.review?.verdict ?? null, review_file: fs.existsSync(path.join(out, 'review.md')) ? path.join(out, 'review.md') : null, rework_of: reworkOf?.trial ?? null, shipped: run?.shipped === true, ship_why: run?.shipped === true ? null : run?.ship_why ?? null, isolation: run?.acceptance?.isolation ?? null,
     revisions: run?.acceptance?.revisions ?? null, provider_calls: run?.resources?.provider_calls ?? null,
     tokens: run?.resources ? {input: run.resources.reported_input_tokens ?? null, output: run.resources.reported_output_tokens ?? null, complete: run.resources.usage_complete === true} : null,
     cost_usd: spentBefore === null || spentAfter === null ? null : Number((spentAfter - spentBefore).toFixed(6)),

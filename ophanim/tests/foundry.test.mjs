@@ -96,6 +96,19 @@ test('A SETUP WHOSE PRODUCT FAILS loses to one whose product is accepted, howeve
   assert.deepEqual([n.winner, n.product, n.stages.find(s => s.stage === 'learn').next], [null, null, 'no setup has an accepted product for this class yet']);
 });
 
+test('REWORK: an accepted product whose reviewer requested changes is built again by the same setup with the previous revision and the review in hand; the rework is recorded against its parent and never ranked with first builds; the product is the approved revision', async t => {
+  const BETTER = 'export const add = (a, b) => Number(a) + Number(b);\n';
+  const w = world(t, {files: {'*': {'add.mjs': GOOD}}, files_rework: {'*': {'add.mjs': BETTER}}, findings: {'*': 'add("1", 2) returns "12".'}, verdict: {'*': 'request_changes'}, verdict_if: [{contains: 'Number(a) + Number(b)', verdict: 'approve'}]});
+  const r = await w.run({arms: 1, implementers: [SONNET], rework: 2});
+  const learn = r.stages.find(s => s.stage === 'learn'), trials = readTrials(w.state);
+  assert.deepEqual(trials.map(x => [x.n, x.rework_of, x.accepted, x.review]), [[1, null, true, 'request_changes'], [2, 1, true, 'approve']], 'one rework round was enough: the second is not run');
+  assert.deepEqual(learn.rework, [{trial: 2, of: 1, accepted: true, review: 'approve', score: 100, before: {review: 'request_changes', score: 100}}]);
+  assert.deepEqual([learn.ranking.map(x => [x.setup, x.trials]), r.product.trial, r.product.review, r.product.rework_of, fs.readFileSync(path.join(r.product.dir, 'add.mjs'), 'utf8')], [[[idOf(SONNET), 1]], 2, 'approve', 1, BETTER]);
+  const none = world(t, {files: {'*': {'add.mjs': GOOD}}, verdict: {'*': 'request_changes'}});
+  const kept = await none.run({arms: 1, implementers: [SONNET]});
+  assert.deepEqual([kept.trials, kept.product.review, kept.product.accepted], [[1], 'request_changes', true], 'with no rework asked for, the product is written out with its reviewer\'s verdict as it stands');
+});
+
 test('a trial whose served model was not the one asked for is recorded and left out of the ranking and of the graph', async t => {
   const w = world(t, {files: {'*': {'add.mjs': GOOD}}, served: {[SONNET]: HAIKU}});
   const r = await w.run({implementers: [SONNET], arms: 1});

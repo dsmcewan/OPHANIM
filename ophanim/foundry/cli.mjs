@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // THE FOUNDRY, from the command line (docs/foundry.md).
 //
-//   node ophanim/foundry/cli.mjs build --request FILE --state DIR [--arms N] [--repetitions N] [--implementers a,b]
+//   node ophanim/foundry/cli.mjs build --request FILE --state DIR [--arms N] [--repetitions N] [--rework N] [--implementers a,b]
 //                                       [--planner M] [--reviewer M] [--efforts low,high] [--max-usd X] [--per-call-usd X]
 //   node ophanim/foundry/cli.mjs status --state DIR [--class CLASS]
 //
@@ -19,9 +19,9 @@ import {runFoundry, readTrials} from './foundry.mjs';
 import {rankSetups} from './setups.mjs';
 import {foundryGraph, measuredSetups} from './graph.mjs';
 
-const USAGE = `usage: node ophanim/foundry/cli.mjs build --request FILE --state DIR [--arms N] [--repetitions N] [--implementers a,b] [--planner M] [--reviewer M] [--efforts low,high] [--max-usd X] [--per-call-usd X]
+const USAGE = `usage: node ophanim/foundry/cli.mjs build --request FILE --state DIR [--arms N] [--repetitions N] [--rework N] [--implementers a,b] [--planner M] [--reviewer M] [--efforts low,high] [--max-usd X] [--per-call-usd X]
        node ophanim/foundry/cli.mjs status --state DIR [--class CLASS]`;
-const VALUED = ['request', 'state', 'arms', 'repetitions', 'implementers', 'planner', 'reviewer', 'efforts', 'max-usd', 'per-call-usd', 'class'];
+const VALUED = ['request', 'state', 'arms', 'repetitions', 'rework', 'implementers', 'planner', 'reviewer', 'efforts', 'max-usd', 'per-call-usd', 'class'];
 /** Where the Claude command line is the transport, the capabilities it reaches are the Anthropic models of the api profile. */
 export const reachableByClaudeCli = seat => seat.vendor === 'anthropic' && seat.profile === 'api';
 
@@ -43,15 +43,15 @@ export async function main(argv, {out = s => process.stdout.write(s), err = s =>
     } finally { g.close(); }
     return 0;
   }
-  const arms = int('arms', 2), repetitions = int('repetitions', 1), maxUsd = usd('max-usd', 2), perCallUsd = usd('per-call-usd', 0.5);
-  if (command !== 'build' || !flags.request || !flags.state || [arms, repetitions, maxUsd, perCallUsd].some(Number.isNaN)) { err(USAGE + '\n'); return 2; }
+  const arms = int('arms', 2), repetitions = int('repetitions', 1), rework = int('rework', 0), maxUsd = usd('max-usd', 2), perCallUsd = usd('per-call-usd', 0.5);
+  if (command !== 'build' || !flags.request || !flags.state || [arms, repetitions, rework, maxUsd, perCallUsd].some(Number.isNaN)) { err(USAGE + '\n'); return 2; }
   // One spending cap for the whole build: the clients of every trial share one meter. An effort applies to the trial's own clients.
   const meter = clients ?? (() => { const made = new Map(); let spentBy = [];
     return ({setup}) => { const key = setup.effort ?? '';
       if (!made.has(key)) { const prior = () => spentBy.reduce((a, m) => a + m.spent().usd, 0); const m = claudeCliClients({live, effort: setup.effort, perCallUsd, maxUsd: Math.max(maxUsd - prior(), 0)}); made.set(key, m); spentBy = [...made.values()]; }
       return made.get(key); }; })();
   try {
-    const record = await runFoundry({requestFile: path.resolve(flags.request), state: path.resolve(flags.state), makeClients: meter, reachable: reachableByClaudeCli, arms, repetitions,
+    const record = await runFoundry({requestFile: path.resolve(flags.request), state: path.resolve(flags.state), makeClients: meter, reachable: reachableByClaudeCli, arms, repetitions, rework,
       implementers: flags.implementers ? flags.implementers.split(',') : null, planner: flags.planner ?? null, reviewer: flags.reviewer ?? null, efforts: flags.efforts ? flags.efforts.split(',') : [null], onStage: progress});
     out(JSON.stringify(record, null, 1) + '\n');
     return record.product ? 0 : 1;

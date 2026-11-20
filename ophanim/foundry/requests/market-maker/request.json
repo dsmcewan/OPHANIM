@@ -1,0 +1,26 @@
+{
+ "schema": "ophanim.foundry.request/v1",
+ "key": "marketMaker",
+ "title": "a paper-trading market-making strategy for BTCUSD",
+ "class": "build/trading-strategy",
+ "goal": "Write strategy.mjs: a market-making strategy for the BTCUSD spot market, as one ES module with NO imports and no side effects. It is PAPER TRADING: it is only ever replayed against recorded trades by a simulator; it sends no order anywhere and must not try to (no network, no files, no environment variables, no timers, no randomness: the same inputs must give the same quotes).\n\nINTERFACE. Export a function `createStrategy(config)` that returns an object with one method, `quote(state)`.\n\n`config` is: {symbol: 'BTCUSD', tick: 0.01, size_step: 0.00000001, min_size: 0.00001, max_order_size: 0.01, max_inventory: 0.05, fee_bps: 2, window: 50}.\n\nBefore every recorded trade the simulator calls `quote(state)` once. `state` is frozen and holds only the past:\n- `ts`: the time of the coming trade in milliseconds (you do not see its price or side);\n- `last_price`: the price of the previous trade (a number, USD);\n- `recent`: up to `config.window` previous trades, oldest first, each {ms, price, amount, side}, where `side` is the TAKER's side ('sell' printed against resting bids, 'buy' against resting asks). It is empty at the start;\n- `inventory`: your position in BTC (negative when short); `cash`: your cash in USD after fees;\n- `config`: the configuration above.\n\n`quote` returns {bid, ask}. Each is either null (no quote on that side) or {price, size} with plain numbers.\n\nRULES. A quote that breaks any rule is rejected and counted as a violation, and a single violation fails the acceptance:\n1. `price` is a positive multiple of 0.01. Round to cents explicitly (for example Math.round(p * 100) / 100): floating-point residue such as 61872.189999 is off the tick.\n2. `size` is a multiple of 0.00000001, at least 0.00001 and at most 0.01.\n3. The bid's price is at or below `last_price`; the ask's price is at or above `last_price`; the bid's price is strictly below the ask's price.\n4. A bid must satisfy inventory + size <= max_inventory (0.05). An ask must satisfy inventory - size >= -max_inventory. When a side would break this, return null for that side (or a smaller size).\n\nFILLS. Your quotes rest for one trade only. Your bid fills only if the coming trade is a taker 'sell' that prints strictly below your bid's price; your ask fills only if it is a taker 'buy' that prints strictly above your ask's price. A fill is at your own price, for the smaller of your size and the trade's amount, and costs a fee of 2 basis points of the filled notional. A quote too far from the market never fills; a quote too close is filled just before the price moves through it.\n\nWHAT IS CHECKED (the acceptance test below runs exactly this, over the first half of a recorded tape of about 500 trades spanning roughly two and a half hours; prices near 61,500 to 62,300 USD; consecutive trades typically differ by a few dollars to a few tens of dollars):\n- zero violations;\n- |inventory| never above 0.05 BTC;\n- both a bid and an ask quoted before at least half of the trades;\n- at least 10 fills;\n- deterministic: two replays give identical reports;\n- risk control: the final mark-to-market result (cash + inventory x last price, after fees) is no worse than minus half of (max_inventory x the window's price range), about -10 USD. A strategy that buys all the way down a falling market fails this: skew your quotes against your inventory so that a long position quotes lower on both sides and a short position higher, and size your quotes so that a run of one-sided fills does not reach the limit at once;\n- two replays finish in under 5 seconds.\n\nAfter acceptance the strategy is OPERATED over the second half of the tape, which the acceptance never replays, and scored by its mark-to-market result there. Do not fit constants to particular prices: derive the spread from the recent trades (for example from their dispersion or their typical move), with sensible bounds for when `recent` is short or empty.\n\nOutput only the complete contents of strategy.mjs.",
+ "question": "What quoting rule (spread from recent dispersion, inventory skew, size) makes a simple, deterministic market maker that keeps inventory inside a hard limit on a trade tape?",
+ "files": [
+  {
+   "slot": "strategy",
+   "path": "strategy.mjs"
+  }
+ ],
+ "seed": "seed",
+ "acceptance_cmd": "node seed/acceptance.mjs",
+ "tests_file": "seed/acceptance.mjs",
+ "operate": {
+  "cmd": "node seed/operate.mjs",
+  "timeout_ms": 60000,
+  "score": "score"
+ },
+ "allowed": {
+  "builtins": []
+ },
+ "difficulty": "hard"
+}
