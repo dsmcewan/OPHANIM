@@ -4,6 +4,7 @@
 **Slice** A of the program the owner's directive of 2026-11-20 sets (`docs/knowledge-graph/directive-2026-11-20.md`): the shared graph foundation (its deliverable 2, and the foundation part of deliverable 3).
 **Base** branch `kg/slice-a`, from `c14fed0` (the inventory `docs/knowledge-graph/inventory.md` and the Slice A ownership manifest).
 **Decisions** KD1 to KD13 are the coordinator's (the Slice A brief). This document says how each is implemented; it does not reopen them.
+**Integrated** slices A, B, C1 and E on `ophanim/knowledge-graphs`; section 19 indexes their documents and where each stands against section 15.
 
 Two tables below, the relationship registry and the entity types, are generated from the code and kept equal to it by `packages/graph/tests/schema.test.mjs` ("registry: the contract document tabulates exactly ..."). A change to either is a change to `schema.mjs`, this document and the contract version together.
 
@@ -392,3 +393,18 @@ Not implemented here, on purpose (KD13): any integration with the planner, sched
 ## 18. Verification
 
 `packages/graph/tests/` (schema, ledger, replay, traverse, events, concurrency), `ophanim/graph/lessons.test.mjs`, and the layering rule in `ophanim/ledger/layering.test.mjs`. The mutation runner `packages/graph/tests/graph.mutate.mjs` (`--only`, `--check`) holds 27 mutations, each run on a disposable copy against only the tests that decide it; it exits non-zero on a target that does not apply exactly once, a red baseline, or a survivor.
+
+## 19. The slices as integrated
+
+Each slice's own document is its detailed record (extractors, decisions as implemented, verification, caveats); this section indexes them against section 15. The registry and entity-type tables above include Slice C1's additions (contract 1.1.0: capability-domain types added, no existing type changed).
+
+| Slice | Document | Integrated | What it supplies | Open in the register |
+|---|---|---|---|---|
+| A, foundation | this document | 97cc60f, c34b98f | the contract, identity, admission, the ledger kinds, replay, traversal, change events, the lessons adapter | KG-1 (replay cost: a signed projection checkpoint comes before Slice D), KG-2, KG-4 |
+| B, systems and evidence | `slice-b.md` | d3d8890, dcecdc9, e6c4fe0 | extractors at a commit (repository, suites and workflows, mutation runners read as text, the status, work and cycle ledgers read only, register mentions); impact with explained paths and recorded reassessment sets; historical traceability with gaps reported; the `graph` retrieval op and dossier view in `ophanim/operate/context.mjs`; `ophanim/graph/cli.mjs` | KG-7 |
+| C1, capability, advisory | `slice-c1.md` | 4781ce0 | extractors for models, identity, lanes, transports, runtimes, pools, roles and chairs, with the seating tables and fit matrix as owner-directed assertions; the executable capability (model, runtime, transport, tools, sandbox profile, credential scope) and the bubble as the code provides it; eligibility in three modes, recorded beside each live selection without changing it; metrics as observed assertions; no `qualified-for` (the owner defines no criterion yet) | KG-5, KG-6 (Slice C2, with L-155), KG-4 |
+| E, federation | `slice-e.md` | 23a0cf4, bb25b5b | instance identity from ledger anchors; exports under an access policy (`scope` enforced); a read-only central projection; freshness and stale marking; catch-up by version; propagation with provenance; synthetic departments | KG-3 (qualified, synthetic), KG-8, KG-4 |
+| C2, the seat sandbox | not started | | the bubble's missing parts (KG-6) | L-155, KG-6 |
+| D, work and learning | not started | | section 15's row D | KG-1 first |
+
+Fixed by the coordinator at integration, each with a failing-first test: Slice E's freshness check gave a false reason for an import replayed as `recorded` (bb25b5b); Slice B's runner reader missed Slice E's helper shapes (dcecdc9) and Slice C1's template-literal constants (e6c4fe0), recorded as the lessons class `text-reader-misses-new-shape`.

@@ -455,6 +455,34 @@
         "why": "the brief is prose; check-ownership checks files, not region limits against the brief",
         "next": "write each region limit from the brief's DESIGN section, list every file the design names, and quote the owner decision into the brief instead of pointing at a file the brief forbids; have the agent run --check on EVERY committed *.mutate.mjs runner"
       }
+    },
+    {
+      "id": "text-reader-misses-new-shape",
+      "class": "A reader that parses source code as text (never executing it) is written against the shapes present when it is written; a later file in a new but legal shape is read partly or not at all, and the reader reports what it read without saying what it could not.",
+      "source": "coordinator integration of the knowledge-graph slices, 2026-11-20: the Slice B mutation-runner reader (ophanim/graph/extract/verification.mjs) twice failed on runners written concurrently by other slices",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "dcecdc9",
+          "detected_by": "ophanim/graph/extract.test.mjs (\"mutation runners are read as TEXT\"), the class's registered detector, at integration before the push",
+          "note": "packages/graph/tests/federation.mutate.mjs (Slice E) writes its edit helper as one(from, to, file = FED) and a constant-first test helper; the reader assumed one(FILE, ...) and (file, pattern) helpers, so the E runner's targets were not read. Fixed by reading the helper's own signature"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "e6c4fe0",
+          "detected_by": "ophanim/graph/extract.test.mjs, at integration before the push (it also turned the Slice B mutation runner's baseline red)",
+          "note": "pantheon/tests/capability.mutate.mjs (Slice C1) declares its file constants as template literals built from another constant; the reader read single-quoted constants only, so no C1 mutation had a target file. Fixed by resolving template constants through earlier constants, leaving any other substitution unread. Both runners were written on bases that did not yet contain the reader, so their slices could not have run its test. Next step: every later brief that adds or changes a *.mutate.mjs runner puts ophanim/graph/extract.test.mjs in its verification budget"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/graph/extract.test.mjs",
+        "name": "mutation runners are read as TEXT"
+      }
     }
   ]
 }

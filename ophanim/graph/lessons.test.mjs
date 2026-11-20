@@ -47,7 +47,8 @@ test('lessons: the real registry is projected as learning authoritative assertio
   const v = g.view();
   const classes = v.subjects().filter(s => s.startsWith('ophanim/learning/failure-class/'));
   assert.deepEqual(classes.sort(), reg.classes.map(c => FC(c.id)).sort(), 'one failure class per registry class, keyed by its id');
-  assert.equal(classes.length, 19);
+  // A floor, not a pin: the registry grows with every recorded lesson, and the line above already requires one class per entry.
+  assert.ok(classes.length >= 19, `the real registry, not an empty or truncated one: ${classes.length} classes`);
   for (const c of reg.classes) {
     const n = v.node(FC(c.id)), a = n.assertions[0];
     assert.deepEqual([n.established, a.classification, a.origin, a.source.id, a.source.version], [true, 'authoritative', EXTRACTOR, SOURCE_ID, version], c.id);
