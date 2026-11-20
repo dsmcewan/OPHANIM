@@ -1,5 +1,7 @@
 # Knowledge graphs: what already exists, and what is missing
 
+> **This is not the program's inventory.** The coordinator's Phase 0 inventory is `docs/knowledge-graph/inventory.md` on branch `ophanim/knowledge-graphs` (pinned at `46ef822`, with a measured technology assessment and a slice decomposition with owned files). This file is a second reading, made independently in another session at `af23623`, before that branch was seen. It is kept under another name so that the two do not collide. It covers code the coordinator's pin does not have (the research team, the SDK capability configuration and the `qualified` hook of pull request 68). Where the two disagree, the coordinator's is the program's record. One correction from it applies here: the two `models.json` paths are one file (a symlink), not a duplicate.
+
 **Pinned at** `af23623` (branch `feature/antigravity-sdk-intake`, pull request 68). Read by three read-only passes over the code on 2026-11-20; nothing was run. File and line references are to that commit. Two integration points and the ledger package's interface were then read again by hand (`pantheon/src/route/fit-matrix.mjs:246`, `ophanim/operate/context.mjs:296-407`, `packages/ledger/chain.mjs`, `ophanim/operate/work-ledger.mjs:411-452`).
 
 The owner's specification is "OPHANIM: Federated Knowledge Graph Architecture & Implementation" (2026-11-20). This document is its first deliverable. The design that follows from it is `docs/knowledge-graph/architecture.md`.
