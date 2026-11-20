@@ -23,6 +23,43 @@ test('success needs a class the owner raised that the mechanism then detected AN
   assert.deepEqual(report({classes: [cls('mechanism')]}).success, {demonstrated: true, classes: ['k']});
 });
 
+// The ordering cases. The criterion is about sequence (the owner raised it, LATER the mechanism handled it alone),
+// so each case fixes who came first; counting instances without their dates reported success for the reverse order.
+const owner = date => ({observed_by: 'owner', date});
+const mechanism = date => ({observed_by: 'mechanism', corrected_by: 'mechanism', date});
+const ordered = (...instances) => report({classes: [{id: 'k', class: 'c', source: 's', fixed_in: 'x',
+  detector: {kind: 'none', why: 'w', next: 'n'}, instances}]});
+
+test('owner raises a class, the mechanism later detects and corrects it: success', () => {
+  assert.deepEqual(ordered(owner('2026-11-17'), mechanism('2026-11-19')).success, {demonstrated: true, classes: ['k']});
+});
+
+test('the mechanism met a class first and the owner still had to raise it later: not success', () => {
+  assert.equal(ordered(mechanism('2026-11-17'), owner('2026-11-19')).success.demonstrated, false);
+});
+
+test('owner, mechanism, then the owner again: the owner had to raise it again, so not success, and the class is repeated', () => {
+  const r = ordered(owner('2026-11-16'), mechanism('2026-11-17'), owner('2026-11-19'));
+  assert.equal(r.success.demonstrated, false);
+  assert.deepEqual(r.repeated_classes, ['k']);
+});
+
+test('owner and mechanism instances on the same day: the record cannot order them, so not success', () => {
+  assert.equal(ordered(owner('2026-11-17'), mechanism('2026-11-17')).success.demonstrated, false);
+  assert.equal(ordered(mechanism('2026-11-17'), owner('2026-11-17')).success.demonstrated, false, 'the order instances are listed in is not evidence');
+});
+
+test('an instance without a date cannot be ordered, so it cannot support success', () => {
+  assert.equal(ordered({observed_by: 'owner'}, mechanism('2026-11-19')).success.demonstrated, false);
+  assert.equal(ordered(owner('2026-11-17'), {observed_by: 'mechanism', corrected_by: 'mechanism'}).success.demonstrated, false);
+});
+
+test('after a repeat, a mechanism correction later than every owner instance is success, and the class stays repeated', () => {
+  const r = ordered(owner('2026-11-16'), mechanism('2026-11-17'), owner('2026-11-18'), mechanism('2026-11-20'));
+  assert.deepEqual(r.success, {demonstrated: true, classes: ['k']});
+  assert.deepEqual(r.repeated_classes, ['k']);
+});
+
 test('the current record: repeated classes are named, and success is not claimed', () => {
   const r = report(load());
   assert.ok(r.repeated_classes.includes('unqualified-claim-as-measurement'), 'the owner raised it more than once');
