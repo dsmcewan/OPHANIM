@@ -12,6 +12,10 @@
 //
 //   node pantheon/tests/agy-sdk-jail.mutate.mjs [--only J1,J7] [--log DIR] [--copy-root DIR] [--check]
 //
+// The copy goes under /var/tmp by default, NOT /tmp: the CLI worker's jail replaces /tmp with a fresh tmpfs, so a copy under
+// /tmp hides its own source tree (the jail hook, the descriptor probe) from the CLI worker suites (jail-fds, the isolation
+// test), and their baseline fails (observed: 30/32, exit 3, with the copy under /tmp).
+//
 // Each mutation names its edits: {file, from, to}, the EXACT text replaced. The runner EXITS NON-ZERO when a target does
 // not occur exactly once (2), when the unmutated suites are not green -- a skip included: the jail cells skip where bwrap
 // does not work, and such a host proves nothing (3) -- or when any mutation SURVIVES (1): its deciding tests stay green with
@@ -131,7 +135,7 @@ if (bad.length || strays.length) {
   process.exit(2);
 }
 if (process.argv.includes('--check')) { console.log(`${chosen.length} mutation(s), every target occurring exactly once`); process.exit(0); }
-const copyRoot = path.resolve(arg('--copy-root', os.tmpdir()));
+const copyRoot = path.resolve(arg('--copy-root', fs.existsSync('/var/tmp') ? '/var/tmp' : os.tmpdir()));
 const logDir = path.resolve(arg('--log', path.join(copyRoot, `agy-sdk-jail-mutations-${Date.now()}`)));
 fs.mkdirSync(logDir, {recursive: true});
 const copy = fs.mkdtempSync(path.join(copyRoot, 'agy-sdk-jail-mutate-'));

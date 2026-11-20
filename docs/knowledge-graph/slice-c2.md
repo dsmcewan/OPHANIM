@@ -200,3 +200,4 @@ Also covered:
 - `docs/routing-task-profile.md` ("Inherited descriptors") still states that node marks inherited fds close-on-exec at startup. It is the coordinator's to correct.
 - An explicitly unsandboxed CLI run (`allowUnsandboxed`) starts the CLI without the closer, as it starts it without bwrap. It is recorded as such.
 - The capability graph's bubble evidence (`runtimes.json`) does not yet quote the closer.
+- `agy-sdk-jail.mutate.mjs` now copies the tree under `/var/tmp` by default. Its CLI worker suites cannot see a source tree under `/tmp`, which the CLI jail replaces with a tmpfs.

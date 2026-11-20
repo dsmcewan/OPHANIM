@@ -174,15 +174,16 @@ test("CLI worker: started from a controller holding fd 20 on a secret, the agy w
   leaked(c.controls.bwrap, w, "the probe under bwrap without the closer");
   assert.equal(c.controls.closer_status, 0, c.controls.closer_stderr);
   clean(c.controls.bwrap_closer, w, "the probe under bwrap through the closer");
-  // THE AGY WORKER (the CLI jail's spawn point): bwrap started through the closer, the CLI inheriting nothing.
+  // THE AGY WORKER (the CLI jail's spawn point): the CLI inherits nothing -- the property first, how it holds after.
   assert.equal(c.worker.error, null, c.said + JSON.stringify(c.worker));
-  assert.deepEqual([c.worker.launch.cmd, ...c.worker.launch.args0], [process.execPath, FD_EXEC_MODULE, "bwrap"]);
-  assert.deepEqual(c.worker.descriptors?.passed, [0, 1, 2]);
   clean(c.worker.agy, w, "the agy worker's child (what the CLI inherited)");
   // AGY'S SIDE: its shell did hold fd 20 on the secret (positive control), and ran the verify launcher holding it.
   leaked(c.worker.agy_held, w, "agy's shell holding fd 20");
   assert.equal(c.worker.approved, true, "the verify launcher ran through run_command, approved by the hook");
   clean(c.worker.verify, w, "the verify_cmd agy's run_command launched");
+  // How: bwrap started through the closer, stdio the only descriptors passed.
+  assert.deepEqual([c.worker.launch.cmd, ...c.worker.launch.args0], [process.execPath, FD_EXEC_MODULE, "bwrap"]);
+  assert.deepEqual(c.worker.descriptors?.passed, [0, 1, 2]);
   // THE CONTROLLER'S runVerify, this controller still holding fd 20.
   assert.deepEqual([c.runverify.exit_code, c.runverify.passed, c.runverify.jail], [0, true, { kind: "verify-jail", refused: false }], c.runverify.output);
   clean(c.runverify.probe, w, "the verify_cmd runVerify launched");
