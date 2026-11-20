@@ -226,7 +226,7 @@ What is NOT advisory:
 | `graph-d2-demo11.test.mjs` | demonstration 11, SYNTHETIC |
 | `graph-d2-real.test.mjs` | KD2-6 measured on the real graph; KD2-5 a failure mechanism becomes a proposal, the registry and register unchanged |
 
-`node ophanim/operate/graph-d2.mutate.mjs [--only G1,...] [--check]` runs each mutation on a disposable copy that keeps the history (a local clone with a sparse checkout that never materializes `findings-*`, this working tree committed on top), against only its deciding tests.
+`node ophanim/operate/graph-d2.mutate.mjs [--only G1,...] [--check]` runs each mutation on a disposable copy that keeps the history (a local clone with a sparse checkout that never materializes `findings-*`, this working tree committed on top), against only its deciding tests. The copy is made under the home directory by default (`--copy-root`), not the OS temp directory: the verify jail mounts a fresh tmpfs on `/tmp`, so demonstration 11's jailed verify command cannot run from a tree copied there. The first full run, with the copy under `/tmp`, stopped at a red baseline for exactly that reason.
 
 | Id | Mutation | Decided by |
 |---|---|---|

@@ -151,8 +151,12 @@ if (bad.length || strays.length) {
   process.exit(2);
 }
 if (process.argv.includes('--check')) { console.log(`${chosen.length} mutation(s), every target occurring exactly once`); process.exit(0); }
-const copyRoot = path.resolve(arg('--copy-root', os.tmpdir()));
-const logDir = path.resolve(arg('--log', path.join(copyRoot, `graph-d2-mutations-${Date.now()}`)));
+// The copy root defaults to the home directory, NOT the OS temp directory: the verify jail (pantheon/src/agy/verify-jail.mjs)
+// and the agy worker jail mount a fresh tmpfs on /tmp, so a tree copied there cannot run its own jailed verify command and
+// demonstration 11's pipeline unit fails (as ophanim/operate/reliability-wave2b.mutate.mjs and wave3-identity.mutate.mjs
+// note). The copy is removed when the run ends; the logs go to the OS temp directory.
+const copyRoot = path.resolve(arg('--copy-root', os.homedir()));
+const logDir = path.resolve(arg('--log', path.join(os.tmpdir(), `graph-d2-mutations-${Date.now()}`)));
 fs.mkdirSync(logDir, {recursive: true});
 const copy = path.join(fs.mkdtempSync(path.join(copyRoot, 'graph-d2-mutate-')), 'tree');
 let exit = 0;
