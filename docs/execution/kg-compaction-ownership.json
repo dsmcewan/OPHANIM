@@ -1,0 +1,56 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "af0dc3012688703ccac0f6de31836822a3279eae",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "package.json",
+    "package-lock.json"
+  ],
+  "wave": "KG snapshot compaction",
+  "base_commit": "fc1126c",
+  "authorization": "owner directive 2026-11-20 (knowledge graphs); register KG-9 (compaction before any further source joins the default open)",
+  "dependencies": [
+    "runs concurrently with Slice D1 (ophanim/graph/{work,learning,reassess}.mjs, ophanim/graph/extract/index.mjs, packages/graph/schema.mjs) and another session's port (ophanim/graph/deps/**); disjoint",
+    "region limits written from the brief's decisions KC-1 to KC-6; packages/ledger is not this work's"
+  ],
+  "subwaves": {
+    "KGK": {
+      "agent-kg-compaction": {
+        "branch": "kg/compaction",
+        "base_commit": "fc1126c",
+        "findings": [
+          "knowledge-graph snapshot compaction (KG-9)"
+        ],
+        "files": [
+          "packages/graph/checkpoint.mjs",
+          "packages/graph/projection.mjs",
+          "packages/graph/tests/checkpoint*.test.mjs",
+          "packages/graph/tests/checkpoint.mutate.mjs",
+          "packages/graph/tests/graph.mutate.mjs",
+          "packages/graph/tests/federation.mutate.mjs",
+          "docs/knowledge-graph/checkpoint.md"
+        ],
+        "new_files": [
+          "packages/graph/tests/checkpoint*.test.mjs"
+        ],
+        "region_limits": {
+          "packages/graph/checkpoint.mjs": "KC-2 to KC-4: the snapshot format, its reader and writer; every trust check kept (KC-1)",
+          "packages/graph/projection.mjs": "KC-2: serialize, restore and the digest's computation; the projection's behaviour and digest unchanged",
+          "packages/graph/tests/graph.mutate.mjs": "retarget a mutation whose target text moved; none removed",
+          "packages/graph/tests/federation.mutate.mjs": "retarget a mutation whose target text moved; none removed",
+          "packages/graph/tests/checkpoint.mutate.mjs": "the new mutations; K1-K22 retargeted only where their text moved",
+          "docs/knowledge-graph/checkpoint.md": "KC-6"
+        }
+      }
+    }
+  }
+}

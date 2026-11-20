@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-// MUTATION RUNNER for the knowledge graph's replay checkpoint (register KG-1; packages/graph/checkpoint.mjs, the
-// projection's state serializer and restorer, openGraph's `snapshot` option; docs/knowledge-graph/checkpoint.md). Kept
+// MUTATION RUNNER for the knowledge graph's replay checkpoint (register KG-1, KG-9; packages/graph/checkpoint.mjs, its
+// compact state encoding, the projection's state serializer, restorer and digest, openGraph's `snapshot` option;
+// docs/knowledge-graph/checkpoint.md). Kept
 // apart from graph.mutate.mjs and federation.mutate.mjs. Every mutation re-introduces a plausible regression of what a
 // snapshot may be trusted for -- its signature not checked, any key accepted, a forked ledger accepted, the registry,
 // origin registry, registered sources or extractor versions ignored, an unlistable snapshot directory thrown rather than
 // fallen back from, its state or its projection digest not checked, the entries after it
 // not applied, verified or noted, a source's replay status upgraded, a refusal not recorded, a partial file visible, a
-// write of a projection that is not its ledger's, retention not applied, and the full open changed when no snapshot is
-// given -- on a DISPOSABLE COPY of this tree (never the tree itself). Only the tests that decide it run there (`tests`:
+// write of a projection that is not its ledger's, retention not applied, the full open changed when no snapshot is
+// given; and, for the compact format (KG-9), the string table misread (by the writer or the reader), an older snapshot
+// read as this format, the state's encoding not checked, the digest's rows from the restored order missing one or used
+// after a write, the restored id order not checked, and a digest cell canonical() must write written otherwise
+// -- on a DISPOSABLE COPY of this tree (never the tree itself). Only the tests that decide it run there (`tests`:
 // each [file, --test-name-pattern]), and the copy is thrown away.
 //
 //   node packages/graph/tests/checkpoint.mutate.mjs [--only K1,K7] [--log DIR] [--copy-root DIR] [--check]
@@ -23,7 +27,7 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const T = 'packages/graph/tests/';
-const SUITES = [`${T}checkpoint.test.mjs`, `${T}checkpoint-equality.test.mjs`];
+const SUITES = [`${T}checkpoint.test.mjs`, `${T}checkpoint-equality.test.mjs`, `${T}checkpoint-format.test.mjs`];
 const CK = 'packages/graph/checkpoint.mjs', PROJ = 'packages/graph/projection.mjs', KINDS = 'packages/graph/kinds.mjs';
 const one = (file, from, to) => ({file, from, to});
 const t = (file, pattern) => [`${T}${file}.test.mjs`, pattern];
@@ -70,7 +74,7 @@ export const MUTATIONS = [
     edits: [one(CK, "const WHOLE = new Set(['applied', 'recorded']);", "const WHOLE = new Set(['applied', 'recorded', 'unavailable', 'invalid', 'diverged']);")]},
   {id: 'K15', what: 'the restorer lists assertions in another order than replay admitted them (as-of views and traversal differ)',
     tests: [t('checkpoint-equality', '^equality: a snapshot at the head'), t('checkpoint-equality', '^equality: a snapshot behind the head')],
-    edits: [one(PROJ, '      for (const [record, admitted, retired] of x.assertions) {', '      for (const [record, admitted, retired] of [...x.assertions].reverse()) {')]},
+    edits: [one(PROJ, '      for (let i = 0; i < rows.length; i++) {\n        const row = rows[i], record = row[0]', '      for (let i = rows.length - 1; i >= 0; i--) {\n        const row = rows[i], record = row[0]')]},
   // ---- what the open records of itself (KP3) ---------------------------------------------------------------------------
   {id: 'K16', what: 'the refusal reason is not recorded: a silent fallback', tests: [t('checkpoint', '^trust: a snapshot signed by a key'), t('checkpoint', '^fallback:')],
     edits: [one(KINDS, '    else { opened = s.info; projection.reset(); refresh({mode: \'full\'}); }', '    else { opened = {used: false}; projection.reset(); refresh({mode: \'full\'}); }')]},
@@ -84,6 +88,31 @@ export const MUTATIONS = [
   // ---- no snapshot (KP7) -----------------------------------------------------------------------------------------------
   {id: 'K20', what: 'the full open\'s behaviour changes when no snapshot is given (it verifies in frontier mode)', tests: [t('checkpoint', '^no snapshot:')],
     edits: [one(KINDS, "  if (!snapshot) refresh({mode: 'full'});", "  if (!snapshot) refresh({mode: 'frontier'});")]},
+  // ---- the compact format (KG-9) -------------------------------------------------------------------------------------
+  {id: 'K23', what: 'the string table misread by the writer: a string\'s first use refers to the next string (an id restored to the wrong string)',
+    tests: [t('checkpoint-format', '^format: the compact encoding returns'), t('checkpoint-equality', '^equality: a snapshot at the head')],
+    edits: [one(CK, "if (i === undefined) strings.set(v, i = index(strings.size, 'strings'));", 'if (i === undefined) { strings.set(v, strings.size); i = strings.size; }')]},
+  {id: 'K24', what: 'the string table misread by the reader: the first UTF-16 string read as latin1 (the boundary between the texts off by one)',
+    tests: [t('checkpoint-format', '^format: the compact encoding returns')],
+    edits: [one(CK, "    if (i < S1) table[i] = bytes.toString('latin1', at + from, at + to);", "    if (i <= S1) table[i] = bytes.toString('latin1', at + from, at + to);")]},
+  {id: 'K25', what: 'an older-format snapshot read as this format: the record\'s version not checked (any ophanim.graph.snapshot/ schema accepted)',
+    tests: [t('checkpoint-format', '^format: a snapshot in the older format')],
+    edits: [one(CK, "  if (older) return `older snapshot format: ${older}, not ${SNAPSHOT_SCHEMA} (the next writeSnapshot writes this reader's format)`;\n", ''),
+      one(CK, 'head.schema !== SNAPSHOT_SCHEMA ||', "!String(head.schema).startsWith('ophanim.graph.snapshot/') ||"),
+      one(CK, 'body.schema !== SNAPSHOT_SCHEMA || body.state_encoding !== STATE_ENCODING', "!String(body.schema).startsWith('ophanim.graph.snapshot/')")]},
+  {id: 'K26', what: 'the decoder does not check that the state names its encoding', tests: [t('checkpoint-format', '^format: the decoder refuses')],
+    edits: [one(CK, '  if (!plain(pre) || pre.encoding !== STATE_ENCODING) bad(', '  if (!plain(pre)) bad(')]},
+  {id: 'K27', what: 'the digest\'s rows from the restored id order composed without one assertion',
+    tests: [t('checkpoint-equality', '^equality: a snapshot at the head'), t('checkpoint-format', '^digest:')],
+    edits: [one(PROJ, '    for (let i = 0; i < order.length; i++) {\n      const id = order[i], a = st.assertions.get(id);', '    for (let i = 1; i < order.length; i++) {\n      const id = order[i], a = st.assertions.get(id);')]},
+  {id: 'K28', what: 'the restored id order is not checked to increase (a misordered state restored; its digest then the order\'s)',
+    tests: [t('checkpoint-format', '^format: the restored id order is checked')],
+    edits: [one(PROJ, "      if (typeof id !== 'string' || (prev !== null && !(prev < id))) throw", "      if (typeof id !== 'string') throw")]},
+  {id: 'K29', what: 'a digest row cell that is not a string, a finite number or null written by JSON.stringify, not canonical()', tests: [t('checkpoint-format', '^digest:')],
+    edits: [one(PROJ, 'if (!plainCell(r[j])) return canonical(rows);', 'if (false) return canonical(rows);')]},
+  {id: 'K30', what: 'the restored id order used after an assertion was admitted (the digest misses what came after the snapshot)',
+    tests: [t('checkpoint-equality', '^equality: a snapshot behind the head'), t('checkpoint-format', '^digest:')],
+    edits: [one(PROJ, '    if (!order || order.length !== st.assertions.size) return null;', '    if (!order) return null;')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

@@ -61,3 +61,25 @@ test('cli: a real process run builds the graph at the commit and answers from it
   assert.deepEqual(a.requirements.map(x => x.kind), ['ticket', 'status item']);
   assert.ok(a.requirements.every(x => x.sources.every(s => s.version)));
 });
+
+// Slice D part 1 (docs/knowledge-graph/slice-d1.md): why-exists and learning about REAL components; shared-prerequisites
+// over a SYNTHETIC work ledger (this container holds none), built with the real capability graph.
+test('cli: the Slice D part 1 queries -- why-exists and learning on real components, shared-prerequisites on a synthetic work ledger', async () => {
+  const {d1WorkLedger, SHARED_CONTRACT} = await import('./fixtures/d1-work.mjs');
+  const fs = await import('node:fs');
+  const built = realGraph();
+  const ask = argv => { const r = run(argv, {built}); assert.equal(r.code, 0, `${argv.join(' ')}: ${r.output.slice(0, 300)}`); return JSON.parse(r.output); };
+  const why = ask(['why-exists', 'pantheon/src/route/gemini-billing.mjs']);
+  assert.deepEqual([why.query, why.decisions.map(d => d.entry), why.graph.commit], ['why-exists', ['L-136'], built.commit]);
+  const learn = ask(['learning', 'ophanim/operate/context.mjs', '--claim', 'stored but never delivered']);
+  assert.ok(learn.established.classes.length > 0 && learn.established.classes.every(c => c.path.at(-1).type === 'detects'));
+  assert.equal(run(['shared-prerequisites'], {built}).code, 2, 'it names the work ledger it reads');
+  assert.equal(run(['why-exists'], {built}).code, 2);
+  const w = d1WorkLedger();
+  try {
+    const r = run(['shared-prerequisites', '--work-root', w.root, '--work-anchor', w.anchor, '--commit', built.commit]);
+    assert.equal(r.code, 0, r.output.slice(0, 300));
+    const f = JSON.parse(r.output).findings.find(x => x.prerequisite === SHARED_CONTRACT);
+    assert.deepEqual([f.items.length, f.existence.exists], [3, false]);
+  } finally { fs.default.rmSync(w.dir, {recursive: true, force: true}); }
+});
