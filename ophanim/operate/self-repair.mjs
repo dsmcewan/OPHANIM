@@ -99,7 +99,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   commands: Object.freeze({
     pentest: Object.freeze(['node', 'scripts/pentest/run.mjs']),
     lint: Object.freeze(['npm', 'run', 'test:lint', '--', '--enforce']),
-    stress: Object.freeze(['node', 'scripts/test-gates/stress.mjs', '--files', '{file}', '--repeat', '{rounds}', '--json', '{json}']),
+    // --no-self-repair-records: Verify's own stress run is evidence for THIS round, not a record for Detect to read.
+    stress: Object.freeze(['node', 'scripts/test-gates/stress.mjs', '--files', '{file}', '--repeat', '{rounds}', '--json', '{json}', '--no-self-repair-records']),
   }),
   jail: true, timeout_ms: 30 * 60_000, checkout_root: null,
 });
@@ -225,6 +226,35 @@ export function readRecords(dir) {
     out[kind].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.file < b.file ? -1 : 1));
   }
   return out;
+}
+/** Where the lane reads its records for `repo`, found as its CLI finds them: beside the work ledger (OPHANIM_WORK_LEDGER,
+ *  default status/work), under operate/self-repair/records. git-ignored (status/operate/). */
+export const laneRecordsDir = ({repo, env = process.env}) =>
+  recordsDirOf(path.join(path.dirname(path.resolve(env.OPHANIM_WORK_LEDGER ?? path.join(repo, 'status', 'work'))), 'operate'));
+/**
+ * FEED DETECT. The gates (scripts/test-gates/check.mjs) and the stress tool (stress.mjs) call this after each run, so a
+ * regression or a measured flake reaches Detect without a hand-made `self-repair record`. It wraps the run's record with
+ * the commit it ran on, into the lane's records directory:
+ *   - only while the lane is ON (the owner-signed switch on this repository's board), or into `dir` when one is given;
+ *   - only when the working tree IS that commit: a tree with changes or untracked files would attribute its results to a
+ *     commit that did not produce them, and the lane would chase a defect the commit does not have.
+ * A skip is returned, never thrown: {written, commit} or {skipped: why}. The caller's verdict never depends on the lane.
+ */
+export function feedRecord({repo, kind, record, env = process.env, dir = null}) {
+  if (!RECORD_KINDS.includes(kind)) fail(`a record is one of ${RECORD_KINDS.join(', ')}`, 'USAGE');
+  let target = dir;
+  if (!target) {
+    let sw;
+    try { sw = laneSwitch(openStatusLedger({root: path.resolve(env.OPHANIM_STATUS_LEDGER ?? path.join(repo, 'status', 'ledger')), create: false}).board()); }
+    catch (e) { return {skipped: `the status board could not be read (${cut(e.message, 160)}), so the lane's switch is unknown`}; }
+    if (!sw.on) return {skipped: sw.why};
+    target = laneRecordsDir({repo, env});
+  }
+  let commit, changes;
+  try { commit = git(repo, ['rev-parse', 'HEAD']).trim(); changes = git(repo, ['status', '--porcelain']).split('\n').filter(Boolean); }
+  catch (e) { return {skipped: `not a git checkout with a commit (${cut(e.message, 120)})`}; }
+  if (changes.length) return {skipped: `the working tree differs from ${commit.slice(0, 12)} (${changes.length} path(s) changed or untracked): its results are not that commit's`};
+  return {written: writeRecord({dir: target, kind, commit, record}), commit};
 }
 
 // ---- Detect (decision 3) ---------------------------------------------------------------------------------------------

@@ -26,7 +26,8 @@ import {fileURLToPath} from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const REACH_TEST = 'scripts/test-gates/toolkit-reach.test.mjs', AFFECTED_TEST = 'scripts/test-gates/toolkit-affected.test.mjs';
 const MANIFEST_TEST = 'scripts/test-gates/toolkit-manifest.test.mjs', STRESS_TEST = 'scripts/test-gates/toolkit-stress.test.mjs';
-const SUITES = [REACH_TEST, AFFECTED_TEST, MANIFEST_TEST, STRESS_TEST];
+const FEED_TEST = 'scripts/test-gates/toolkit-feed.test.mjs', FEED = 'scripts/test-gates/feed.mjs';
+const SUITES = [REACH_TEST, AFFECTED_TEST, MANIFEST_TEST, STRESS_TEST, FEED_TEST];
 const REACH = 'scripts/test-gates/reach.mjs', AFFECTED = 'scripts/test-gates/affected-runners.mjs', MANIFEST = 'scripts/test-gates/manifest-reach.mjs', STRESS = 'scripts/test-gates/stress.mjs';
 const WITHHELD = /(^|\/)findings-[^/]*(\/|$)/;
 const one = (file, from, to) => ({file, from, to});
@@ -71,6 +72,15 @@ export const MUTATIONS = [
     edits: [one(STRESS, '            failures: failuresOf(events), problems', '            failures: [], problems')]},
   {id: 'S4', what: 'the load processes are left running after the last round', tests: [[STRESS_TEST, '^stress: --load']],
     edits: [one(STRESS, '  } finally { await spin?.stop(); }', '  } finally { }')]},
+  // ---- feeding Detect (feed.mjs) ----------------------------------------------------------------------------------------
+  {id: 'F1', what: "a partial gate run feeds Detect: a later partial pass would hide a whole run's failures", tests: [[FEED_TEST, '^feed: only a WHOLE gate run']],
+    edits: [one(FEED, "export const gatePartial = (mode, opt) => mode === 'run' && Boolean(opt.only || opt.suites?.length);", 'export const gatePartial = (mode, opt) => false;')]},
+  {id: 'F2', what: 'a stress record keeps files outside this repository', tests: [[FEED_TEST, '^feed: a stress record keeps']],
+    edits: [one(FEED, "const inRepo = f => typeof f === 'string' && f !== '' && !path.isAbsolute(f) && f !== '..' && !f.startsWith('../');", "const inRepo = f => typeof f === 'string' && f !== '';")]},
+  {id: 'F3', what: 'a lane that fails to load stops the gate: the failure is thrown, not reported', tests: [[FEED_TEST, '^feed: a lane that fails to load']],
+    edits: [one(FEED, '  } catch (e) {\n    return {skipped: `the self-repair lane', '  } catch (e) {\n    throw e;\n    return {skipped: `the self-repair lane')]},
+  {id: 'F4', what: '--no-self-repair-records still feeds', tests: [[FEED_TEST, '^feed: the lane is called']],
+    edits: [one(FEED, '  if (feed === false) return {skipped:', '  if (false) return {skipped:')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

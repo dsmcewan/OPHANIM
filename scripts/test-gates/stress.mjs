@@ -6,6 +6,7 @@
 //
 //   node scripts/test-gates/stress.mjs --files <test file>... [--repeat N] [--concurrency K] [--load L]
 //                                      [--test-timeout MS] [--file-timeout S] [--json FILE] [--out DIR]
+//                                      [--self-repair-records DIR | --no-self-repair-records]   (feed.mjs)
 //
 // A ROUND runs every given file once, K at a time (rounds run one after another; a file never runs beside itself, as in
 // CI). Each file runs in its own `node --test` through the gate's own runFile (scripts/test-gates/check.mjs: its own
@@ -30,6 +31,7 @@ import {fileURLToPath} from 'node:url';
 import {runFile, readEvents, evaluateRuns, DEFAULT_TEST_TIMEOUT_MS, DEFAULT_FILE_TIMEOUT_S, PASS, FAIL, UNVERIFIED} from './check.mjs';
 import {designated, probeBwrap} from './real-bwrap.mjs';
 import {suites, ROOT} from './suites.mjs';
+import {FEED_FLAGS, feedFlag, feedDetect, feedLine, stressFeedable} from './feed.mjs';
 
 export const SCHEMA = 'ophanim.toolkit.stress/v1';
 export const DEFAULT_REPEAT = 5;
@@ -138,6 +140,7 @@ export async function main(argv, {out = s => console.log(s)} = {}) {
     else if (a === '--file-timeout') opt.fileTimeoutS = whole(argv[++i], '--file-timeout');
     else if (a === '--json') opt.json = argv[++i];
     else if (a === '--out') opt.outDir = path.resolve(argv[++i]);
+    else if (Object.values(FEED_FLAGS).includes(a)) i = feedFlag(argv, i, opt);
     else throw new Error(`unknown argument: ${a}`);
   }
   if (!opt.files.length) throw new Error('usage: stress.mjs --files <test file>... [--repeat N] [--concurrency K] [--load L] [--test-timeout MS] [--file-timeout S] [--json FILE] [--out DIR]');
@@ -153,6 +156,9 @@ export async function main(argv, {out = s => console.log(s)} = {}) {
   } finally { if (!keep) fs.rmSync(outDir, {recursive: true, force: true}); }
   out(render(rec));
   if (opt.json) fs.writeFileSync(opt.json, JSON.stringify(rec, null, 2) + '\n');
+  // Feed the self-repair lane's Detect (feed.mjs) with this repository's files only; never a cause of the verdict.
+  const feedable = stressFeedable(rec);
+  out(feedLine(feedable ? await feedDetect({kind: 'stress', record: feedable, feed: opt.feed}) : {skipped: 'no test file of this repository was run'}));
   return rec.verdict === PASS ? 0 : rec.verdict === FAIL ? 1 : 2;
 }
 

@@ -18,6 +18,8 @@
 //       "npm test" is accepted for test). Every suite that script runs must be in its log. A text log cannot show a
 //       silent mid-file exit; that is run mode's job, and CI runs run mode over every suite.
 //   node scripts/test-gates/check.mjs run [--only real-bwrap] [--suite ID ...] [--json FILE] [--out DIR]
+//   either mode: [--self-repair-records DIR | --no-self-repair-records] -- whether a whole run feeds the self-repair
+//   lane's Detect (feed.mjs; by default only while the owner-signed switch is on, and only for a clean tree)
 //                                         [--file-timeout SECONDS] [--test-timeout MS]
 //       Runs the suites itself, one `node --test` per file (the suite's flags and file concurrency), with the spec
 //       reporter captured and events-reporter.mjs to a file, and judges every file exactly (this is `npm run
@@ -39,6 +41,7 @@ import {fileURLToPath} from 'node:url';
 import {ROOT, coverage} from './suites.mjs';
 import {designated, probeBwrap, baselineDrift} from './real-bwrap.mjs';
 import {parseLog} from './parse-log.mjs';
+import {FEED_FLAGS, feedFlag, feedDetect, feedLine, gatePartial} from './feed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PASS = 'PASS', FAIL = 'FAIL', UNVERIFIED = 'UNVERIFIED';
@@ -348,6 +351,7 @@ export async function main(argv) {
     else if (a === '--allow-unverified') opt.allowUnverified = true;
     else if (a === '--file-timeout') opt.fileTimeoutS = positive(argv[++i], '--file-timeout');
     else if (a === '--test-timeout') opt.testTimeoutMs = positive(argv[++i], '--test-timeout');
+    else if (Object.values(FEED_FLAGS).includes(a)) i = feedFlag(argv, i, opt);
     else if (mode === 'logs' && a.includes('=')) { const k = a.indexOf('='); opt.logs.push({script: a.slice(0, k), file: a.slice(k + 1)}); }
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -392,6 +396,10 @@ export async function main(argv) {
   console.log(text);
   if (opt.report) fs.writeFileSync(opt.report, text + '\n');
   if (opt.json) fs.writeFileSync(opt.json, JSON.stringify(record, null, 2) + '\n');
+  // Feed the self-repair lane's Detect (feed.mjs): a whole run only, and never a cause of this gate's verdict.
+  console.log(feedLine(gatePartial(mode, opt)
+    ? {skipped: 'a partial gate run (--only, --suite) is not fed: Detect reads the latest gate record as the whole picture'}
+    : await feedDetect({kind: 'gate', record, feed: opt.feed})));
   return worst === PASS ? 0 : worst === FAIL ? 1 : opt.allowUnverified ? 0 : 2;
 }
 

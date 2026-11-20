@@ -25,7 +25,8 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const LANE_TEST = 'ophanim/operate/self-repair.test.mjs', VERIFY_TEST = 'ophanim/operate/self-repair-verify.test.mjs', PEN_TEST = 'ophanim/operate/pentest/g-self-repair.test.mjs';
-const SUITES = [LANE_TEST, VERIFY_TEST, PEN_TEST];
+const FEED_TEST = 'ophanim/operate/self-repair-feed.test.mjs';
+const SUITES = [LANE_TEST, VERIFY_TEST, PEN_TEST, FEED_TEST];
 const LANE = 'ophanim/operate/self-repair.mjs', LEDGER = 'ophanim/operate/work-ledger.mjs', SCHED = 'ophanim/operate/scheduler.mjs';
 const WITHHELD = /(^|\/)findings-[^/]*(\/|$)/;
 const one = (file, from, to) => ({file, from, to});
@@ -109,6 +110,13 @@ export const MUTATIONS = [
     edits: [one(LANE, "    if (!run.fails) return {ok: false, refusals: [{code: 'REPRODUCTION_DOES_NOT_FAIL'", "    if (false) return {ok: false, refusals: [{code: 'REPRODUCTION_DOES_NOT_FAIL'")]},
   {id: 'SR23', what: 'the scheduler runs a round\'s stages without the lane\'s wrapper: validate\'s mechanical checks never run', tests: [T_D5D6],
     edits: [one(SCHED, '      const exec = isRound(item) && lane?.on ? lane.wrap(gate.gate, executors[gate.gate]) : executors[gate.gate];', '      const exec = executors[gate.gate];')]},
+  // ---- feeding Detect (owner, 2026-11-20: "wire the gate and stress records into Detect") -------------------------------
+  {id: 'SR24', what: 'the feeder ignores the switch: records are written while the lane is dormant', tests: [[FEED_TEST, '^feed: with the lane OFF']],
+    edits: [one(LANE, '    if (!sw.on) return {skipped: sw.why};', '    if (false) return {skipped: sw.why};')]},
+  {id: 'SR25', what: 'the feeder ignores a dirty tree: a run on uncommitted changes is attributed to HEAD', tests: [[FEED_TEST, '^feed: a working tree that is not its commit']],
+    edits: [one(LANE, '  if (changes.length) return {skipped:', '  if (false) return {skipped:')]},
+  {id: 'SR26', what: "Verify's own stress run feeds Detect", tests: [[FEED_TEST, '^feed: Verify']],
+    edits: [one(LANE, ", '--json', '{json}', '--no-self-repair-records']),", ", '--json', '{json}']),")]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
