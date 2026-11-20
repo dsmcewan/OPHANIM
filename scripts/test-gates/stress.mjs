@@ -37,13 +37,17 @@ const rel = f => path.relative(ROOT, f) || f;
 // A busy loop in 50 ms slices that exits when its parent changes (the stress run ended, or was killed).
 const SPIN = 'const P=process.ppid;(function s(){const t=Date.now()+50;while(Date.now()<t);if(process.ppid!==P)process.exit(0);setImmediate(s)})()';
 
-/** Start L busy-loop processes; returns {pids, stop}: stop() kills them and resolves once each has exited (and is reaped). */
+/**
+ * Start L busy-loop processes; returns {pids, stop}: stop() kills them and resolves once each has exited (and is reaped).
+ * They are unref'd, so a caller that never stops them still exits (its 'exit' handler then kills them) instead of being
+ * held open by them -- found by mutation S4, whose test file hung; stop() refs them again so its wait is not cut short.
+ */
 export function startLoad(n) {
-  const kids = Array.from({length: n}, () => spawn(process.execPath, ['-e', SPIN], {stdio: 'ignore'}));
+  const kids = Array.from({length: n}, () => { const k = spawn(process.execPath, ['-e', SPIN], {stdio: 'ignore'}); k.unref(); return k; });
   const gone = kids.map(k => new Promise(resolve => { if (k.exitCode !== null || k.signalCode !== null) resolve(); else k.once('exit', () => resolve()); }));
   const kill = () => { for (const k of kids) if (k.exitCode === null && k.signalCode === null) k.kill('SIGKILL'); };
   process.once('exit', kill);
-  return {pids: kids.map(k => k.pid), stop: async () => { kill(); await Promise.all(gone); process.removeListener('exit', kill); }};
+  return {pids: kids.map(k => k.pid), stop: async () => { for (const k of kids) k.ref(); kill(); await Promise.all(gone); process.removeListener('exit', kill); }};
 }
 
 /** The cwd and flags of the suite that runs `file` (absolute), or the current directory and no flags. */

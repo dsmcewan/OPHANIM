@@ -98,14 +98,17 @@ function copyTree(dest) {
   g(dest, ['add', '-A']);
   g(dest, ['commit', '-q', '--allow-empty', '-m', 'the working tree under mutation']);
 }
+// Each run is BOUNDED (RUN_LIMIT_MS): a file that never exits (mutation S4's test file did, before stress.mjs unref'd its
+// load processes) is killed and reported HUNG -- never a kill, never an endless wait.
+const RUN_LIMIT_MS = 600_000;
 const runSuites = (dir, logFile, files, patterns = []) => {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT'));
   const r = spawnSync(process.execPath, ['--test', '--test-timeout=600000', ...patterns.map(p => `--test-name-pattern=${p}`), ...files],
-    {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env});
+    {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env, timeout: RUN_LIMIT_MS, killSignal: 'SIGKILL'});
   const out = `${r.stdout}${r.stderr}`;
   fs.writeFileSync(logFile, out);
   const count = k => Number(new RegExp(`^ℹ ${k} (\\d+)`, 'm').exec(out)?.[1] ?? NaN);
-  return {status: r.status, tests: count('tests'), pass: count('pass'), fail: count('fail'), cancelled: count('cancelled'), skipped: count('skipped'),
+  return {status: r.status, hung: r.error?.code === 'ETIMEDOUT', tests: count('tests'), pass: count('pass'), fail: count('fail'), cancelled: count('cancelled'), skipped: count('skipped'),
     failed: [...new Set(out.split('\n').filter(l => /^\s*✖ /.test(l) && !/failing tests/.test(l)).map(l => l.trim().replace(/ \(\d+(\.\d+)?ms\)$/, '')))]};
 };
 
@@ -132,7 +135,7 @@ try {
   copyTree(copy);
   const baseline = runSuites(copy, path.join(logDir, 'baseline.log'), SUITES);
   console.log(`baseline: ${baseline.pass}/${baseline.tests} pass, ${baseline.fail} fail, ${baseline.cancelled} cancelled, ${baseline.skipped} skipped`);
-  if (baseline.status !== 0 || baseline.fail || baseline.cancelled || baseline.skipped || !(baseline.tests > 0)) {
+  if (baseline.hung || baseline.status !== 0 || baseline.fail || baseline.cancelled || baseline.skipped || !(baseline.tests > 0)) {
     console.error('the unmutated suites are not green: no mutation result would mean anything');
     for (const f of baseline.failed.slice(0, 8)) console.error(`    ${f.slice(0, 200)}`);
     exit = 3;
@@ -149,9 +152,9 @@ try {
       const files = [...new Set(m.tests.map(([f]) => f))], patterns = [...new Set(m.tests.map(([, p]) => p))];
       const r = runSuites(copy, path.join(logDir, `${m.id}.log`), files, patterns);
       for (const [file, text] of originals) fs.writeFileSync(file, text);
-      const killed = r.status !== 0 && (r.fail > 0 || r.cancelled > 0) && r.tests > 0;
-      summary.push({id: m.id, what: m.what, tests: m.tests, files: [...new Set(m.edits.map(e => e.file))], killed, ran: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
-      console.log(`${m.id} ${killed ? 'KILLED  ' : 'SURVIVED'} ${r.pass}/${r.tests} pass, ${r.fail} fail  ${m.what}`);
+      const killed = !r.hung && r.status !== 0 && (r.fail > 0 || r.cancelled > 0) && r.tests > 0;
+      summary.push({id: m.id, what: m.what, tests: m.tests, files: [...new Set(m.edits.map(e => e.file))], killed, hung: r.hung, ran: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
+      console.log(`${m.id} ${killed ? 'KILLED  ' : r.hung ? 'HUNG    ' : 'SURVIVED'} ${r.pass}/${r.tests} pass, ${r.fail} fail  ${m.what}${r.hung ? ` (killed after ${RUN_LIMIT_MS / 1000}s)` : ''}`);
       for (const f of r.failed.slice(0, 3)) console.log(`    ${f.slice(0, 200)}`);
       if (!killed) exit = exit || 1;
     }
