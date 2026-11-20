@@ -369,6 +369,14 @@
           "date": "2026-11-17",
           "ref": "22cbbb8",
           "note": "symlinks escaped containment; requirement and history shared one identity; cut sources had no continuation; grep and the investigation total exceeded their byte budgets"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-19",
+          "ref": "l136/billing-policy before 0fbf93e (l136-billing.mutate.mjs, first full run)",
+          "detected_by": "mutation D2 of pantheon/tests/l136-billing.mutate.mjs, the change's own runner",
+          "note": "\"off when absent at every entry point\" was tested through the CLI flags; the serve test always declared billing in its service config, so a serve config without billing resolving to ON survived. Fixed by a nothing-declared serve case; D2 then killed. Not counted as mechanism success: the class's registered detector did not fire, and one instance is not a demonstrated mechanism"
         }
       ],
       "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",
@@ -376,6 +384,24 @@
         "kind": "test",
         "file": "ophanim/operate/context-bounds.test.mjs",
         "name": "4. budgets hold before anything enters a prompt"
+      }
+    },
+    {
+      "id": "verification-cost-unbounded",
+      "class": "Completed work is re-verified with full suites and full mutation sweeps, each mutation running the expensive real-process suites, and verification grows with test opportunities instead of checking the acceptance contract once on the final commit; the owner has to bound the execution.",
+      "source": "owner direction 2026-11-20 during L-136: \"Finish the current mutation run. Do not initiate another broad sweep or expand scope based solely on additional test opportunities ... Use deterministic, isolated tests for mutation coverage wherever possible. Reserve expensive real-SDK execution for the integration behaviors that genuinely require it ... Record nonblocking improvements as future tickets instead of extending this execution indefinitely.\"",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-20",
+          "ref": "613a4e2",
+          "note": "about two hours of the agent's run went to two full mutation runs of each runner and two full verification sets; each of the 26 L-136 mutations runs all three suites, about 55 s of real-process tests, even where the fast policy suite decides it. The re-runs answered real findings (a surviving mutation, a gate failure), so the cost per cycle, not the reason for re-running, is what the owner bounded"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "execution conduct and test-infrastructure cost, not a code property",
+        "next": "the coordinator's briefs state a verification budget (one full verification on the final commit; after a fix, re-run only the affected tests and mutations); a runner that maps each mutation to the suites that decide it is future work (docs/execution/l136-report.md)"
       }
     }
   ]
