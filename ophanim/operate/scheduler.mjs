@@ -19,6 +19,7 @@
 import {openWorkLedger, handoffRefusal, STAGES} from './work-ledger.mjs';
 import {requirementDigest, attemptInputs, sameAttempt} from './gates.mjs';
 import {GEMINI_BILLING_OFF, GEMINI_BILLING_SCHEMA, GEMINI_KINDS, SETTING_OF, geminiBilling, policyRecord} from '../../pantheon/src/route/gemini-billing.mjs';
+import {pathsOverlap} from '../../pantheon/src/pipeline/paths.mjs';
 import {reconcile} from './reconcile.mjs';
 import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
@@ -494,6 +495,9 @@ export function capacityOf(executors) {
  * code, the prerequisite and the plan line), runnable concurrently (groups of eligible items whose claimed paths are
  * disjoint, as the work ledger's per-item claims allow), unlocked, and the shared prerequisites. Two items sharing a
  * prerequisite stay two entries: nothing is merged, each keeps its own claims and ownership.
+ * Two claimed paths clash when they could name a common path: the owned-path grammar's one overlap function
+ * (pantheon/src/pipeline/paths.mjs pathsOverlap: globs, `**`, a path inside a directory, case; conservative when unsure),
+ * never exact equality (D2 fixes, outside-lab review: `src/a/*` and `src/a/b.mjs` were reported as runnable together).
  */
 export function queueReport(rec, order, queue, runnable = i => STAGES.includes(i.gate.gate)) {
   const eligible = [...queue];
@@ -502,7 +506,7 @@ export function queueReport(rec, order, queue, runnable = i => STAGES.includes(i
     ...(i.gate.blocker.cycle ? {cycle: i.gate.blocker.cycle} : {}), why: String(i.gate.blocker.what ?? '').slice(0, 300)}));
   const unlocked = rec.items.filter(i => i.gate.graph?.unlocked?.length).map(i => ({item: i.item, gate: i.gate.gate, unlocked: i.gate.graph.unlocked.map(u => u.prerequisite)}));
   const paths = new Map(rec.items.map(i => [i.item, i.claimed_paths ?? []]));
-  const clash = (a, b) => (paths.get(a) ?? []).some(x => (paths.get(b) ?? []).includes(x));
+  const clash = (a, b) => (paths.get(a) ?? []).some(x => (paths.get(b) ?? []).some(y => pathsOverlap(x, y)));
   const concurrent = [];
   for (const it of eligible) { const g = concurrent.find(grp => grp.every(o => !clash(o, it))); if (g) g.push(it); else concurrent.push([it]); }
   return {eligible, blocked, concurrent, unlocked, order: order.map(i => i.item), shared: rec.graph?.shared ?? [], cycles: rec.graph?.cycles ?? [],

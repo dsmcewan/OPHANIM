@@ -6,7 +6,8 @@
 // relationship blocking, a block without its reason, no unlock on establishment, unrelated work blocked, two items sharing
 // a prerequisite merged, a stale plan executed, the team proposal changing a live seat, a discovery executed without an
 // owner-signed item, a direct edit of the lessons registry, the graph re-derived in full on each tick, a repeated
-// observation duplicated -- on a DISPOSABLE COPY of this tree (never the tree itself), and only the tests that decide it
+// observation duplicated, and (the D2 fixes, G20-G26) the bound versions not read, the concurrency report blind to globs, a
+// stale candidate never retired -- on a DISPOSABLE COPY of this tree (never the tree itself), and only the tests that decide it
 // run there (`tests`: each [file, --test-name-pattern]); the copy is thrown away.
 //
 //   node ophanim/operate/graph-d2.mutate.mjs [--only G1,G7] [--log DIR] [--copy-root DIR] [--check]
@@ -46,6 +47,11 @@ const T_DEMO11 = [DEMO_TEST, '^demonstration 11'];
 const T_COST = [REAL_TEST, '^KD2-6 the added cost'];
 const T_BOUND = [LOOP_TEST, '^KD2-6 the per-tick bound'];
 const T_PROPOSAL = [REAL_TEST, '^KD2-5 a relevant failure mechanism'];
+// The D2 fixes (outside-lab review): the bound versions read, the concurrency report glob-aware, stale candidates retired.
+const T_BOUND_STALE = [LOOP_TEST, '^KD2-3 the BOUND version is read: a requirement bound at a version'];
+const T_BOUND_UNLOCK = [LOOP_TEST, '^KD2-3 the BOUND version is read: a requirement bound as ABSENT'];
+const T_GLOB = [LOOP_TEST, '^KD2-2 the concurrency report is glob-aware'];
+const T_RETIRE = [LOOP_TEST, '^KD2-5 a stale candidate is retired'];
 
 export const MUTATIONS = [
   // ---- KD2-1: the cursor -------------------------------------------------------------------------------------------------
@@ -101,6 +107,26 @@ export const MUTATIONS = [
     edits: [one(LOOP, '...(snapshot ? {snapshot: {dir: snapshot.dir, keys: snapshot.keys}} : {})});', '...{}});')]},
   {id: 'G19', what: 'the per-tick bound on reassessment is not applied: every event\'s set is computed in one tick', tests: [T_BOUND],
     edits: [one(LOOP, '        if (freshSets >= bounds.events) { stats.events.deferred++; continue; }', '        if (false) { stats.events.deferred++; continue; }')]},
+  // ---- the D2 fixes (outside-lab review) ---------------------------------------------------------------------------------
+  // Fix 1 (KD2-3): every consumer reads the BOUND versions (outputs.graph.requires), not the plan document's optional one.
+  {id: 'G20', what: 'planValidity reads the plan document\'s version, not the bound one: a changed graph fact the record bound does not stale the plan', tests: [T_BOUND_STALE],
+    edits: [one(GATES, '  const typed = boundRequiresOf(plan);', '  const typed = graphRequiresOf(plan.outputs?.plan);')]},
+  {id: 'G21', what: 'the unlock reads the plan document\'s version, not the bound one: a requirement bound as absent and then established is never unlocked', tests: [T_BOUND_UNLOCK],
+    edits: [one(LOOP, '  const P = planId(rec.hash), doc = rec.outputs?.plan, typed = boundRequiresOf(rec);', '  const P = planId(rec.hash), doc = rec.outputs?.plan, typed = graphRequiresOf(doc);')]},
+  {id: 'G22', what: 'the reassessment filter reads the plan document\'s version: the establishment of a prerequisite bound as absent re-plans instead of unlocking', tests: [T_BOUND_UNLOCK],
+    edits: [one(LOOP, '          && boundRequiresOf(recOf(h)).some(r => r.id === last.to && r.version === GRAPH_ABSENT)) continue;',
+      '          && graphRequiresOf(recOf(h)?.outputs?.plan).some(r => r.id === last.to && r.version === GRAPH_ABSENT)) continue;')]},
+  // Fix 2 (KD2-2): the concurrency report decides overlap with the one glob-aware function.
+  {id: 'G23', what: 'the concurrency report compares claimed paths by exact equality: src/a/* and src/a/b.mjs are reported as runnable together', tests: [T_GLOB],
+    edits: [one(SCHED, '  const clash = (a, b) => (paths.get(a) ?? []).some(x => (paths.get(b) ?? []).some(y => pathsOverlap(x, y)));',
+      '  const clash = (a, b) => (paths.get(a) ?? []).some(x => (paths.get(b) ?? []).includes(x));')]},
+  // Fix 3 (KD2-5): a stale candidate is retired, never shown as open, and reopened if its gap returns.
+  {id: 'G24', what: 'a stale candidate is never retired: its prerequisite established or implemented, it stays an open candidate', tests: [T_RETIRE],
+    edits: [one(LOOP, '    if (stateDir && prepared && ids(prepared.report().candidates) === ids(list)) {', '    if (false) {')]},
+  {id: 'G25', what: 'a retired candidate is shown as open: the retirement writes its reason and keeps the record open', tests: [T_RETIRE],
+    edits: [one(LOOP, '        writeRecord(path.join(d, n), {...was, state: CANDIDATE_STATE.superseded,', '        writeRecord(path.join(d, n), {...was, state: CANDIDATE_STATE.open,')]},
+  {id: 'G26', what: 'a retired candidate is never reopened: its gap returns and the record stays superseded', tests: [T_RETIRE],
+    edits: [one(LOOP, '    const was = prior?.state === CANDIDATE_STATE.superseded ? null : prior;', '    const was = prior;')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
