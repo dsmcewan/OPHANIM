@@ -386,8 +386,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const fence = () => { const why = work.leaseRefusal(claim, new Date(clock()).toISOString()); if (why) fail(why, 'LEASE_FENCED'); };
       // THE STAGE'S BILLING CONTEXT (see the header): the declared policy over the work ledger under this claim.
       const stageBilling = geminiBilling({policy: billing, ledger: workBillingLedger(work, claim, clock)});
-      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, ...(loop ? {graph: loop.executor()} : {}), claim, billing: stageBilling,
-        ...(round ? {selfRepair: round} : {})}); }
+      // A round's stage is handed its round (ctx.selfRepair: defect, base, line, paths); other items' contexts are as before.
+      try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, ...(loop ? {graph: loop.executor()} : {}),
+        ...(round ? {selfRepair: round} : {}), claim, billing: stageBilling}); }
       catch (e) {
         // THE ACTUAL SPEND (self-audit round 3, assignment 3 (sealed bb1287a), L-302): every provider call is charged on the
         // work ledger before it is made (the executor contract above), so `charged` IS what this attempt spent, 0 included;
