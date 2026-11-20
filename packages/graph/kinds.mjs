@@ -22,6 +22,7 @@ import {DEFAULT_INSTANCE} from './identity.mjs';
 import {GRAPH_SCHEMA, KINDS, payloadRefusal} from './schema.mjs';
 import {createProjection} from './projection.mjs';
 import {observationOf, changeEvents, freshness as freshnessOf} from './events.mjs';
+import {openSnapshot} from './checkpoint.mjs';
 
 export const GRAPH_DOMAIN = 'graph';
 const refused = (why, code = 'GRAPH_REFUSED') => Object.assign(new Error(why), {code});
@@ -46,21 +47,33 @@ export function createGraphLedger({dir, authority, operator, order}) {
 /**
  * Open the graph ledger at `dir`, pinned to `anchor`, and replay it. `origins`: the origin registry
  * (defineOrigins); `sources`: the registered source adapters. Throws GRAPH_CORRUPT if the ledger does not verify.
+ * `snapshot` ({dir, keys}: a snapshot directory and the reader's PINNED keys, checkpoint.mjs): open from the newest
+ * snapshot that passes every check, the chain verified in frontier mode and the entries after it re-derived; on any
+ * mismatch, the full open below, and `verification.snapshot` says which open was taken and why.
  */
 export function openGraph({dir, anchor, origins, sources = [], instance = DEFAULT_INSTANCE, checkpointEvery = 64,
-  lockTimeoutMs = 10_000, lockStaleMs = 600_000, log = () => {}}) {
+  lockTimeoutMs = 10_000, lockStaleMs = 600_000, log = () => {}, snapshot = null}) {
   const projection = createProjection({instance, origins, sources});
-  const ledger = openLedger({dir, kinds: graphKinds({projection, origins}), anchor, checkpointEvery, lockTimeoutMs, lockStaleMs, log});
-  let verification;
+  const kinds = graphKinds({projection, origins});
+  const ledger = openLedger({dir, kinds, anchor, checkpointEvery, lockTimeoutMs, lockStaleMs, log});
+  let verification, opened = null;
   function refresh({mode = 'frontier'} = {}) {
     let v;
     try { v = ledger.verify({mode}); } catch (e) { throw refused(`the graph ledger does not verify: ${e.message}`, 'GRAPH_CORRUPT'); }
     if (!v.ok) throw refused(`the graph ledger does not verify: ${v.why}`, v.why.startsWith('entry 0:') ? 'GRAPH_FOREIGN' : 'GRAPH_CORRUPT');
     const notes = projection.catchUp(ledger.read(), ledger.payloadOf);
     verification = {ok: true, entries: v.entries, head: v.head, rederived: v.rederived, partial: v.partial, complete: v.complete, notes};
+    // How this graph was opened stays on its verification; facts restored from a snapshot keep its provenance while
+    // they stand (a replay from genesis replaces them).
+    if (opened) verification.snapshot = !opened.used || projection.restored ? opened : {...opened, used: false, reason: 'the state restored from the snapshot was replaced by a replay of the ledger'};
     return verification;
   }
-  refresh({mode: 'full'});
+  if (!snapshot) refresh({mode: 'full'});
+  else {
+    const s = openSnapshot({snapshot, dir, anchor, ledger, kinds, projection, checkpointEvery, lockTimeoutMs, lockStaleMs, log});
+    if (s.used) { verification = s.verification; opened = s.verification.snapshot; }
+    else { opened = s.info; projection.reset(); refresh({mode: 'full'}); }
+  }
 
   /**
    * Append records (or retractions) of `kind` as `signer` (the author's key) co-signed by `order`. Records the graph
