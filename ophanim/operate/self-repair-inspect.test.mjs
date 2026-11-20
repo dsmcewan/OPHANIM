@@ -94,7 +94,7 @@ test('inspector: the gate run, the stress run of the changed tests and the pente
   assert.equal(running, null, 'running.json is removed at the end');
   assert.deepEqual([last.commit, last.since, last.steps.length], [head, since, 3]);
   const d = detect({repo: f.repo, commit: head, records: recs});
-  assert.deepEqual(d.defects.slice(0, 2).map(x => x.kind), ['regression', 'flake'], 'what the inspection found is what the next round repairs');
+  assert.deepEqual(d.defects.map(x => x.kind), ['regression', 'flake'], 'what the inspection found is what the next round repairs (and nothing else: the register is empty)');
 });
 
 test('inspector: the first inspection (no earlier commit) skips the stress run; the changed-tests list and the command templates', async t => {
