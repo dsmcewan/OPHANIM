@@ -115,6 +115,14 @@ test('A CALL OUTSIDE ANY FUNCTION to a package it imports adds nothing to the im
   assert.deepEqual(rel(facts, 'depends-on', fileId('a.mjs'), symbolId('b.mjs', 'b')).attributes, {basis: 'call outside any top-level function', line: 3});
 });
 
+test('AN IMPORT THAT NAMES NO PACKAGE AND NO FILE (a subpath alias, an absolute path) is listed as unresolved, and a call through it states nothing', t => {
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'package.json': json({name: 'alias'}), 'a.mjs': lines("import {x} from '#internal/x';", "import {y} from '/abs/y.mjs';", "export function f() { return x() + y(); }")}, 'aliases');
+  const facts = codeFacts(repo, head);
+  assert.deepEqual(ent(facts, repositoryId('ophanim')).attributes.unresolved_imports, [{file: 'a.mjs', specifier: '#internal/x', line: 1}, {file: 'a.mjs', specifier: '/abs/y.mjs', line: 2}]);
+  assert.deepEqual(facts.filter(d => d.from === symbolId('a.mjs', 'f')), []);
+});
+
 test('A FILE THE PARSER REJECTS gives no facts and is named on the repository, with what the reading rests on', t => {
   const {repo, head} = setup(t), facts = codeFacts(repo, head);
   const root = ent(facts, repositoryId('ophanim')).attributes;

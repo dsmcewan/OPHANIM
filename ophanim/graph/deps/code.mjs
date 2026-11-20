@@ -243,6 +243,7 @@ export function codeFacts(repo, commit, {name = HOME} = {}) {
       if (c.specifier.startsWith('.')) { const t = resolveRelative(file, c.specifier); def = t ? definitionOf(t.path, c.imported) : null; }
       else {
         const {pkg, sub} = packageOf(c.specifier), local = locals.get(pkg);
+        if (!PACKAGE_NAME.test(pkg)) continue;                     // not a package: the import is listed as unresolved
         if (!local) {
           if (!entities.has(packageId('npm', pkg))) continue;      // an import this source could not name is already listed
           if (from === fid(file)) continue;                        // the file's import of the package already states this

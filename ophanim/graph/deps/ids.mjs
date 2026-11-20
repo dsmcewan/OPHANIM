@@ -8,6 +8,8 @@
 //                                 <repository>:<path>    a file of a sibling repository
 //             systems/symbol      <path>#<name>          a function or exported name (extract/repo.mjs symbolId for this
 //                                                        repository; <repository>:<path>#<name> for a sibling)
+//             systems/test        <repository>:<path>    a sibling's file as a CHECK, where the sibling itself declares it one
+//             systems/change      <repository>:<commit>  a commit of a sibling repository
 //             systems/component   npm:<name>             a package of the npm registry          (ecosystem `npm`)
 //                                 pypi:<name>            a package of the Python package index   (ecosystem `pypi`)
 //                                 node:<name>            a module of the Node platform itself    (ecosystem `node`)
@@ -36,3 +38,7 @@ export const packageId = (ecosystem, name) => { need(ECOSYSTEMS.includes(ecosyst
 export const envId = name => { need(/^[A-Za-z_][A-Za-z0-9_]*$/.test(name), `"${name}" is not an environment variable name`); return entityId({domain: 'systems', type: 'interface', key: `env:${name}`}); };
 export const hostId = host => { need(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host), `"${host}" is not a host name`); return entityId({domain: 'systems', type: 'service', key: `host:${host}`}); };
 export const serviceId = (repo, name) => { need(NAME.test(repo) && typeof name === 'string' && name.length > 0, 'a composed service has a repository and a name'); return entityId({domain: 'systems', type: 'service', key: `${repo}:${name}`}); };
+/** A sibling's file as a check, where the sibling's own record declares it one (its file node stays what its path makes it). */
+export const checkIdIn = (repo, p) => { need(NAME.test(repo) && repo !== HOME, `"${repo}" is not a sibling repository name`); return entityId({domain: 'systems', type: 'test', key: `${repo}:${p}`}); };
+/** A commit of a sibling repository (this repository's own commits are extract/repo.mjs changeId). */
+export const changeIdIn = (repo, commit) => { need(NAME.test(repo) && repo !== HOME && /^[0-9a-f]{40}$/.test(commit), 'a sibling commit has a repository name and 40 hex'); return entityId({domain: 'systems', type: 'change', key: `${repo}:${commit}`}); };
