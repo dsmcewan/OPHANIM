@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { withDispatch } from "./fixtures/dispatch.mjs";
 import { boardFixture } from "./fixtures/board-repo.mjs";
 import { main as reviewMain, EXIT } from "../src/review-runner/index.mjs";
@@ -357,24 +357,44 @@ test("run-review --via api, PRIMARY (a Google reviewer): refused with a key pres
 });
 
 // ---- pantheon-board: the reviewer's default transport (owner decision 2026-11-19) -------------------------------------
-test("pantheon-board run: the reviewer's default transport is the subscription CLI lane (nothing billed); PANTHEON_AGY_TRANSPORT=sdk asks for the python SDK seat, which is PRIMARY execution: refused with a key present and nothing declared (never spawned), not admitted by the failover switch, spawned once gemini_api_primary is declared -- after its usage row is persisted", { timeout: 300_000 }, async () => {
+test("pantheon-board run: the reviewer's default transport is the subscription CLI lane (nothing billed); PANTHEON_AGY_TRANSPORT=sdk asks for the python SDK seat, which is PRIMARY execution: refused with a key present and nothing declared (never spawned), not admitted by the failover switch, spawned once gemini_api_primary is declared -- with nothing charged for the launch, and its one request charged before it is sent (L-150)", { timeout: 300_000 }, async () => {
   await withBoard(async f => {
     // The fake python SDK seat (its environment is scrubbed, so its paths are written into it): it logs each spawn with the
-    // usage rows persisted at that moment, and answers as the seat would.
+    // usage rows persisted at that moment and whether a Gemini key reached it, makes ONE Gemini request through the
+    // controller's metering relay with the capability it was given (register L-150: the seat holds no key; every request
+    // is charged at the relay before it is forwarded), and answers as the seat would.
     const pyLog = join(f.repo, "python.log"), python = join(f.repo, "fake-python");
     const usageOf = name => join(f.repo, "boards", name, "gemini-billing.jsonl");
     writeFileSync(python, `#!/bin/sh
 for a in "$@"; do case "$prev" in --out) out="$a" ;; --model) model="$a" ;; --role) role="$a" ;; esac; prev="$a"; done
 rows=$(cat ${JSON.stringify(f.repo)}/boards/*/gemini-billing.jsonl 2>/dev/null | wc -l)
-printf '%s %s %s\\n' "$role" "$model" "$rows" >> ${JSON.stringify(pyLog)}
+printf '%s %s %s %s\\n' "$role" "$model" "$rows" "\${GEMINI_API_KEY:-no-key}" >> ${JSON.stringify(pyLog)}
+MODEL="$model" ${JSON.stringify(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_RELAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_RELAY_CAPABILITY ?? "" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "review" }] }], sessionId: "1" }) }).then(r => r.text()).catch(() => null)'
 printf 'VERDICT: approve\\n' > "$out/response.md"
 printf '{"ok": true, "role": "%s", "model": "%s", "conversation_id": "fake-sdk", "tool_calls": 0, "subagent_calls": 0}\\n' "$role" "$model"
 `, { mode: 0o755 });
+    // THE PROVIDER EDGE OF THE RELAY: a local fake Gemini API in its own process (the board runs under spawnSync), recording
+    // each request with the key it carried and the usage rows persisted when it arrived. Never a real provider.
+    const edgeLog = join(f.repo, "relay-edge.jsonl"), edgeScript = join(f.repo, "relay-edge.mjs");
+    writeFileSync(edgeScript, `import http from "node:http";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+const boards = ${JSON.stringify(join(f.repo, "boards"))};
+const rows = () => (existsSync(boards) ? readdirSync(boards) : []).reduce((n, b) => { const u = boards + "/" + b + "/gemini-billing.jsonl"; return n + (existsSync(u) ? readFileSync(u, "utf8").split("\\n").filter(Boolean).length : 0); }, 0);
+const s = http.createServer((req, res) => { req.resume(); req.on("end", () => {
+  appendFileSync(${JSON.stringify(edgeLog)}, JSON.stringify({ path: req.url, key: req.headers["x-goog-api-key"] ?? null, usage_rows: rows() }) + "\\n");
+  res.writeHead(200, { "content-type": "text/event-stream" });
+  res.end("data: " + JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "VERDICT: approve" }] }, finishReason: "STOP" }], responseId: "edge-1" }) + "\\r\\n\\r\\n");
+}); });
+s.listen(0, "127.0.0.1", () => console.log(s.address().port));
+`);
+    const edgeProc = spawn(process.execPath, [edgeScript], { stdio: ["ignore", "pipe", "inherit"] });
+    const edgePort = await new Promise(r => edgeProc.stdout.once("data", d => r(String(d).trim())));
     const seats = ["implementer=xai/grok-4.6", "reviewer=agy_google/gemini-3.8-flash"];
     const spawned = () => (existsSync(pyLog) ? readFileSync(pyLog, "utf8").split("\n").filter(Boolean) : []);
-    const saved = { PANTHEON_AGY_TRANSPORT: process.env.PANTHEON_AGY_TRANSPORT, PANTHEON_AGY_PYTHON: process.env.PANTHEON_AGY_PYTHON };
+    const saved = { PANTHEON_AGY_TRANSPORT: process.env.PANTHEON_AGY_TRANSPORT, PANTHEON_AGY_PYTHON: process.env.PANTHEON_AGY_PYTHON, PANTHEON_AGY_RELAY_UPSTREAM: process.env.PANTHEON_AGY_RELAY_UPSTREAM };
     try {
       process.env.PANTHEON_AGY_PYTHON = python;
+      process.env.PANTHEON_AGY_RELAY_UPSTREAM = `http://127.0.0.1:${edgePort}`;
       delete process.env.PANTHEON_AGY_TRANSPORT;
       const byDefault = boardRun(f, "transport-default", { seats });
       assert.equal(byDefault.result?.shipped, true, byDefault.said);
@@ -387,10 +407,18 @@ printf '{"ok": true, "role": "%s", "model": "%s", "conversation_id": "fake-sdk",
         assert.deepEqual(spawned(), [], "the SDK seat was never spawned");
         assert.deepEqual(r.run.attempts.filter(a => a.vendor === "agy_google").map(a => [a.purpose, a.code, a.provider_requests]), [["critique", GEMINI_PRIMARY_DISABLED, 0]], r.said);
       }
+      assert.deepEqual(jsonl(edgeLog), [], "the refused seats sent nothing");
       const on = boardRun(f, "sdk-on", { seats, flags: ["--gemini-api-primary", "2"] });
       assert.equal(on.result?.shipped, true, on.said);
-      assert.deepEqual(spawned(), ["reviewer gemini-3.8-flash 1"], "spawned once, its usage row already persisted");
+      // L-150: a launch is not a request. Spawned once with NOTHING charged and no key; its one request was charged at the
+      // relay before it reached the provider, and forwarded with the controller's key.
+      assert.deepEqual(spawned(), ["reviewer gemini-3.8-flash 0 no-key"], "spawned once, nothing charged for the launch, no key in the seat");
+      assert.deepEqual(jsonl(edgeLog).map(e => [e.path, e.key, e.usage_rows]), [["/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse", KEYS.GEMINI_API_KEY, 1]], "its request was charged before it was sent");
       assert.deepEqual(jsonl(usageOf("sdk-on")).map(u => [u.kind, u.transport, u.model, u.source]), [["primary", "sdk", "gemini-3.8-flash", "flag --gemini-api-primary 2"]]);
-    } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+      assert.deepEqual(on.run.attempts.filter(a => a.vendor === "agy_google").map(a => [a.purpose, a.provider_requests]), [["critique", 1]]);
+    } finally {
+      edgeProc.kill();
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
   });
 });

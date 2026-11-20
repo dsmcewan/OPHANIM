@@ -7,6 +7,7 @@ import { tmpdir as tmpdirOf } from "node:os";
 import { join } from "node:path";
 import { parseUsageEnvelope, quotaEvidence, scopeQuota } from "../agy/quota.mjs";
 import { prepareSingleTurnWorkspace } from "../agy/workspace.mjs";
+import { RELAY_URL_ENV, RELAY_CAPABILITY_ENV } from "../route/gemini-relay.mjs";
 
 // A QUOTA REFUSAL by Antigravity, read from what the CLI itself reported (its result event and its stderr): an HTTP
 // 429, RESOURCE_EXHAUSTED, or a quota/rate-limit/spend-cap/prepaid-balance message. The CLI has no status code of its
@@ -348,18 +349,37 @@ export function workerEnvOf(extra = {}, base = null) {
 // THE PYTHON SDK SEAT'S ENVIRONMENT (board/run-item.mjs, PANTHEON_AGY_TRANSPORT=sdk; self-audit round 3, assignment 3 (sealed
 // bb1287a), L-410: it was spawned with the whole process.env, so OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY and every
 // other secret of the controller reached a non-default seat process). It is the worker's allowlist (workerEnvAllows: no
-// secret-named variable) plus EXACTLY the credential this transport is billed with and its Vertex settings
-// (AGY_SDK_CREDENTIALS), and nothing else: no other provider key, no PANTHEON_* switch but what PANTHEON_AGY_ENV_PASS lists.
-export const AGY_SDK_CREDENTIALS = Object.freeze(["GEMINI_API_KEY", "PANTHEON_AGY_VERTEX_PROJECT", "PANTHEON_AGY_VERTEX_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]);
-/** {env, dropped: [names], credentials: [names passed]} for the python SDK seat (never a value in the names). */
-export function agySdkEnvOf(base = process.env) {
+// secret-named variable), and nothing else: no provider key, no PANTHEON_* switch but what PANTHEON_AGY_ENV_PASS lists.
+// THE SEAT HOLDS NO CREDENTIAL (register L-150, L-151): every Gemini request of the SDK goes through the controller's
+// metering relay (route/gemini-relay.mjs), which holds the real key and charges each request before it forwards it. The
+// child gets ONLY the relay's scoped capability (its URL and the session's random token, `capability`), never
+// GEMINI_API_KEY, GOOGLE_API_KEY, a Vertex project or an ADC file: AGY_SDK_WITHHELD is dropped even when
+// PANTHEON_AGY_ENV_PASS names it, and `home` (a fresh directory of the session) replaces HOME, so no ~/.config/gcloud ADC
+// file or ~/.gemini login is in reach of the SDK's own credential discovery. A launch without a capability gets none of it
+// and its seat refuses to run (scripts/agy-seat.py).
+export const AGY_SDK_WITHHELD = Object.freeze(["GEMINI_API_KEY", "GOOGLE_API_KEY", "PANTHEON_AGY_VERTEX_PROJECT", "PANTHEON_AGY_VERTEX_LOCATION",
+  "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_GENAI_USE_VERTEXAI",
+  "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL", "CLOUDSDK_CONFIG", "ANTIGRAVITY_LS_ADDRESS",
+  RELAY_URL_ENV, RELAY_CAPABILITY_ENV]);
+/** No credential is ever passed to the python SDK seat (the list of names its env carries a credential under: empty). */
+export const AGY_SDK_CREDENTIALS = Object.freeze([]);
+/**
+ * {env, dropped: [names], credentials: [], capability: [names]} for the python SDK seat (never a value in the names).
+ * `capability`: the relay session's {PANTHEON_AGY_RELAY_URL, PANTHEON_AGY_RELAY_CAPABILITY}; `home`: the child's HOME.
+ */
+export function agySdkEnvOf(base = process.env, { capability = null, home = null } = {}) {
   const pass = base.PANTHEON_AGY_ENV_PASS ?? process.env.PANTHEON_AGY_ENV_PASS ?? "";
   const env = {}, dropped = [];
   for (const [k, v] of Object.entries(base ?? {})) {
     if (v === undefined) continue;
-    if (AGY_SDK_CREDENTIALS.includes(k) || workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k);
+    if (!AGY_SDK_WITHHELD.includes(k) && workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k);
   }
-  return { env, dropped: dropped.sort(), credentials: AGY_SDK_CREDENTIALS.filter(k => env[k] !== undefined) };
+  const given = [];
+  for (const k of [RELAY_URL_ENV, RELAY_CAPABILITY_ENV]) {
+    if (typeof capability?.[k] === "string" && capability[k]) { env[k] = capability[k]; given.push(k); }
+  }
+  if (typeof home === "string" && home) env.HOME = home;
+  return { env, dropped: dropped.sort(), credentials: AGY_SDK_CREDENTIALS.filter(k => env[k] !== undefined), capability: given };
 }
 // `base` (optional): the environment to start from instead of process.env (the review runner passes an already
 // scrubbed one); it is filtered through the allowlist either way.
