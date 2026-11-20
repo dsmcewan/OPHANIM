@@ -26,6 +26,12 @@ export const isSdkModel = model => Object.hasOwn(SDK_CONFIG.models, String(model
 /** The thinking levels recorded for `model`, lowest first ([] when none is recorded). */
 export const thinkingLevelsOf = model => [...(SDK_CONFIG.models[model]?.thinking ?? [])];
 
+// EXACTLY THE DECLARED ARGUMENT NAMES (independent review 2026-11-19, confirmed on SDK 0.1.24). The runtime reads other
+// spellings of a declared name (commandline and commandLine as CommandLine; subagents as Subagents; workspace as
+// Workspace), while the SDK's pre-tool hook hands the controller the keys as the model wrote them. A controller that
+// judges `CommandLine` and ignores `commandline` approves a call it never saw. The table of declared names is
+// config/antigravity-sdk.json `tools` (compared with the installed runtime by the contract suite); a call that carries
+// any other key, at the top level or inside a declared object or list of objects, is refused whole.
 const TOOLS = SDK_CONFIG.tools;
 /** The hook tool names whose arguments the controller knows (the tools it can decide). */
 export const DECLARED_TOOLS = Object.freeze(Object.keys(TOOLS.declared));

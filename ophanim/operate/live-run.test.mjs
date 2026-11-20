@@ -293,6 +293,41 @@ test('CONFIRMED: a quota refusal on every model of the unit\'s ladder BLOCKS the
   });
 });
 
+// THE BILLING WAKE THROUGH THE LAUNCHER (docs/billing-policy.md, "A changed policy wakes it at once"; independent review of
+// the billing merge). The launcher decides whether there is anything to dispatch before it reaches the scheduler, and it
+// read only the plain gate: a stage pending on a spent budget stayed "blocked: nothing to dispatch" until the pending's own
+// retry time, although the owner had raised the budget in the manifest. The scheduler's rule is the launcher's too.
+test('CONFIRMED, THE BILLING WAKE: a stage the policy refused is dispatched again at once when the manifest declares another budget, and the plan says why a blocked item is runnable; with the same budget there is still nothing to dispatch', needBwrap, async () => {
+  await withLiveFixture(async ({manifest, write, run, head}) => {
+    const confirm = `${ITEM}@${head.slice(0, 7)}`;
+    const budget = n => ({billing: {...manifest.billing, gemini_primary_budget: n}});
+    const implement = () => openWorkLedger({root: manifest.ledgers.work_root, create: false}).stages(ITEM).filter(s => s.stage === 'implement').map(s => [s.attempt, s.status, s.blocker?.code ?? null]);
+    // A budget of ONE: the implementer's own request spends it, and its subagent's request is refused inside the session.
+    const first = await run(['--manifest', write(budget(1)), '--confirm-spend', confirm]);
+    assert.equal(first.code, 3, first.out);
+    assert.deepEqual(implement(), [[1, 'pending', 'METERED_GEMINI_BUDGET_EXHAUSTED']]);
+    // The signed blocker says what happened: one request of this stage WAS billed before the refusal (it does not say
+    // "nothing billed was sent"), and the count it gives is the count on the same record.
+    const pending = openWorkLedger({root: manifest.ledgers.work_root, create: false}).stages(ITEM).find(s => s.stage === 'implement');
+    assert.equal(pending.usage.gemini.billed.gemini_api_primary, 1);
+    assert.match(pending.blocker.what, /refused 1 billed request\(s\) of this implement stage .*; 1 billed request\(s\) of this stage had been sent and charged before the refusal/);
+    assert.doesNotMatch(pending.blocker.what, /nothing billed was sent/);
+    // The SAME budget: the refusal stands, and the launcher has nothing to dispatch.
+    const same = await run(['--manifest', write(budget(1))]);
+    assert.deepEqual([same.code, same.json.ok, same.json.gate.gate, same.json.gate.runnable], [1, false, 'blocked', false]);
+    assert.ok(same.json.refusals.some(r => /is at gate "blocked" .*nothing to dispatch/.test(r)), JSON.stringify(same.json.refusals));
+    // The owner RAISES the budget: the item is runnable now, and the plan says it is the policy change that makes it so.
+    const dry = await run(['--manifest', write(budget(10))]);
+    assert.deepEqual([dry.code, dry.json.ok, dry.json.gate.gate, dry.json.gate.runnable], [0, true, 'blocked', true], JSON.stringify(dry.json.refusals));
+    assert.deepEqual([typeof dry.json.gate.billing_wake?.refused_under, dry.json.gate.billing_wake?.now], ['string', dry.json.gemini_billing.digest]);
+    assert.notEqual(dry.json.gate.billing_wake.refused_under, dry.json.gemini_billing.digest, 'refused under another policy than the one declared now');
+    // ... and the confirmed run dispatches the stage again AT ONCE (no clock is moved: the pending's retry is not yet due).
+    const again = await run(['--manifest', write(budget(10)), '--confirm-spend', confirm]);
+    assert.deepEqual(implement(), [[1, 'pending', 'METERED_GEMINI_BUDGET_EXHAUSTED'], [2, 'passed', null]], again.out);
+    assert.equal(again.code, 0, again.out);
+  }, {worker: ASKING, turn: SUBAGENT_PLAN});
+});
+
 test('CONFIRMED: the declared total stops the run when a stage could exceed it; the budget stop is recorded -> exit 3', needBwrap, async () => {
   await withLiveFixture(async ({manifest, write, run, head}) => {
     const r = await run(['--manifest', write({limits: {...LIMITS, total_provider_calls: 40}}), '--confirm-spend', `${ITEM}@${head.slice(0, 7)}`]);

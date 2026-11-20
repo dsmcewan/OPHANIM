@@ -373,6 +373,17 @@ export const MUTATIONS = [
     from: '      if (++unauthorized > MAX_UNAUTHORIZED_ROWS) requests.splice(', to: '      if (++unauthorized > Infinity) requests.splice('},
   {id: 'W12', what: 'a key that is not a clean header value is put in a header (the HTTP layer quotes it in its error)', file: GW, tests: T.gw,
     from: '  { const bad = keyRefusal(apiKey); if (bad) throw Object.assign(new Error(`the gateway was given', to: '  { const bad = null; if (bad) throw Object.assign(new Error(`the gateway was given'},
+  // ---- the independent review of the billing merge (2026-11-20): what the documented outcome rested on
+  {id: 'P24', what: 'a request the billing policy refused inside a session is forgotten when the session ends well: the unit takes its result', file: PT, tests: T.pipe,
+    from: '      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT });', to: '      if (false) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT });'},
+  {id: 'L11', what: 'the launcher\'s plan reads only the plain gate: a stage the policy refused stays "nothing to dispatch" after the manifest declares another budget', file: LR, tests: T.live,
+    from: 'runnable: STAGES.includes(g.gate) || wake !== null,', to: 'runnable: STAGES.includes(g.gate),'},
+  {id: 'L12', what: 'the launcher\'s run does not tick on a billing wake (the plan says runnable, and nothing is dispatched)', file: LR, tests: T.live,
+    from: '(STAGES.includes(gate.gate) || billingWakeOf(gate, billing) !== null)', to: '(STAGES.includes(gate.gate))'},
+  {id: 'L13', what: 'the launcher takes any stage pending on a billing refusal as runnable, whether or not the policy changed', file: LR, tests: T.live,
+    from: '&& policy && billingChanged(gate.blocker, policy)', to: '&& policy'},
+  {id: 'L14', what: 'a stage that billed before it was refused says nothing billed was sent', file: SCH, tests: T.live,
+    from: '    const sent = ctx.rows.length;', to: '    const sent = 0;'},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

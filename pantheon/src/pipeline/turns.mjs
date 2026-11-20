@@ -335,11 +335,19 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravit
       const r = await sdk({ seat: s, prompt, worktree: cwd, control_dir: ctl, unit: { unit_id, owned_paths: [...owned], verify_cmd, allowed_subagents: [...(allowed_subagents ?? [])] }, admit, signal: signal ?? null,
         timeoutS: turnS, graceS: grace, verify_hide: Array.isArray(verify_hide) ? verify_hide : [],
         ...Object.fromEntries(["python", "bridge", "upstream", "apiKey", "sandbox", "budget", "fetchImpl", "checkAvailability", "allowSdkVersion", "base_env"].filter(k => antigravity[k] !== undefined).map(k => [k, antigravity[k]])) });
+      const session = await sessionEvidence(r, about);
+      // A REQUEST THE POLICY REFUSED INSIDE THE SESSION STANDS, HOWEVER THE SESSION ENDED. The runtime can end well after
+      // one: the implementer's own request was already in flight when a subagent's was refused, and nothing more was
+      // asked (the gateway forgets a stop once the implementer is answered again). The documented outcome is the
+      // controller's to keep, not the runtime's: the unit is told the policy's refusal, with what the session recorded,
+      // and the session's result is not taken as the unit's work.
+      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT });
       return { text: r?.text ?? "", served_model: str(r?.served_model) ? r.served_model : null, served_model_source: r?.served_model_source ?? (str(r?.served_model) ? "unknown" : null),
-        transport: SDK_TRANSPORT, requested_model: s.model, effort: s.effort, response_id: r?.conversation_id ?? null, tool_calls: r?.tool_calls ?? null, session: await sessionEvidence(r, about) };
+        transport: SDK_TRANSPORT, requested_model: s.model, effort: s.effort, response_id: r?.conversation_id ?? null, tool_calls: r?.tool_calls ?? null, session };
     } catch (e) {
-      // What the session recorded up to its failure goes with the error (antigravity/turn.mjs carries it).
-      if (e && typeof e === "object" && e.transport === SDK_TRANSPORT) e.session = await sessionEvidence(e, about).catch(() => null);
+      // What the session recorded up to its failure goes with the error (antigravity/turn.mjs carries it). A refusal
+      // thrown above already carries the finished session's record.
+      if (e && typeof e === "object" && e.transport === SDK_TRANSPORT && !e.session) e.session = await sessionEvidence(e, about).catch(() => null);
       // A request the billing policy refused INSIDE the session (its budget was spent on the way): the gateway answered
       // it as a refused charge and the session ended on it. The pipeline is told the policy's own refusal, with what the
       // session recorded.

@@ -89,7 +89,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
-import {tick, spent, releaseInterrupted, STOP_CODES, billingStatus} from './scheduler.mjs';
+import {tick, spent, releaseInterrupted, STOP_CODES, billingStatus, billingChanged} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {openWorkReadOnly} from './cli.mjs';
 import {makeExecutors, implementerPath} from './stages.mjs';
@@ -116,13 +116,25 @@ import {billingFromConfig, policyRecord} from '../../pantheon/src/route/quota-fa
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /**
- * THE MANIFEST'S BILLING, through the one billing policy (register L-136): billing.metered_gemini_failover (unchanged in
- * meaning) with its budget billing.metered_gemini_budget; primary Gemini API execution is not declared by a live run and
- * stays off. Throws GEMINI_BILLING_INVALID (an enabled failover without a budget, a budget without the failover).
+ * THE MANIFEST'S BILLING, through the one billing policy (register L-136): billing.gemini_api_primary with its budget
+ * billing.gemini_primary_budget (a fit run's Google implementer is an Antigravity SDK session, a primary seat: the
+ * manifest must declare it, validateManifest), and billing.metered_gemini_failover with its budget
+ * billing.metered_gemini_budget. Throws GEMINI_BILLING_INVALID (an enabled kind without a budget, a budget without its kind).
  */
 export const manifestBilling = m => billingFromConfig({
   metered_gemini_failover: {enabled: m.billing.metered_gemini_failover, ...(m.billing.metered_gemini_budget !== undefined ? {budget: m.billing.metered_gemini_budget} : {})},
   gemini_api_primary: {enabled: m.billing.gemini_api_primary, ...(m.billing.gemini_primary_budget !== undefined ? {budget: m.billing.gemini_primary_budget} : {})}}, 'live-run manifest billing');
+/**
+ * THE SCHEDULER'S BILLING WAKE, AS THE LAUNCHER MUST SEE IT (docs/billing-policy.md, "A changed policy wakes it at
+ * once"). A stage pending on a billing refusal is dispatched again at once when the policy now declared differs, for a
+ * kind that was refused, from the settings it was refused under. The launcher decides whether there is anything to
+ * dispatch BEFORE it reaches `tick`; reading only the plain gate, it answered "blocked: nothing to dispatch" until the
+ * pending's own retry time, although the owner had raised the budget in the manifest. It applies the scheduler's own
+ * test (`billingChanged`). `tick` still decides the wake itself (the attempt bound under the settings now in force), and
+ * a tick that dispatches nothing ends the run. Returns {refused_under, now} (policy digests), or null.
+ */
+const billingWakeOf = (gate, policy) => (gate?.gate === 'blocked' && gate.blocker?.transient === true && policy && billingChanged(gate.blocker, policy)
+  ? {refused_under: gate.blocker.billing?.policy ?? null, now: policy.digest} : null);
 export const REPO_ROOT = path.resolve(HERE, '../..');
 // v2 (2026-11-19): the Google implementer is billed on the Gemini API (billing.gemini_api_primary), the required
 // subagent is a native one ({type, model}), and agy-login is optional. A v1 manifest is refused: it authorized neither.
@@ -504,7 +516,11 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
         const g = rec.items.find(i => i.item === m.item).gate;
         // A claim held by a run that was killed (L-305): named, with its holder and the end of its lease, not only "claimed".
         const held = g.gate === 'claimed' && work?.work ? heldClaim(work.work, m.item) : null;
-        gate = {gate: g.gate, reason: g.reason ?? null, mode: g.mode ?? null, status: it.state, blocker: g.blocker ?? null, runnable: STAGES.includes(g.gate), ...(held ? {held} : {})};
+        let policy = null;
+        try { policy = manifestBilling(m); } catch { policy = null; }   // an invalid billing block is a refusal of its own (validateManifest)
+        const wake = billingWakeOf(g, policy);
+        gate = {gate: g.gate, reason: g.reason ?? null, mode: g.mode ?? null, status: it.state, blocker: g.blocker ?? null, runnable: STAGES.includes(g.gate) || wake !== null,
+          ...(wake ? {billing_wake: wake} : {}), ...(held ? {held} : {})};
         if (held) add(held.why);
         else if (!gate.runnable) add(`item "${m.item}" is at gate "${g.gate}" (${g.reason ?? 'no reason given'}): nothing to dispatch`);
       } catch (e) { add(`reconcile failed: ${e.message}`); }
@@ -817,7 +833,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   // A claim this launcher did not take blocks the item until its lease ends: named, with its expiry (L-305).
   const noteHeld = () => { const h = gate.gate === 'claimed' ? heldClaim(work, m.item) : null; if (h && !launcherBlockers.some(b => b.claim === h.claim)) { launcherBlockers.push(h); note({event: 'claim.held', ...h}); } };
   noteHeld();
-  for (let n = 0; n < maxTicks && STAGES.includes(gate.gate); n++) {
+  for (let n = 0; n < maxTicks && (STAGES.includes(gate.gate) || billingWakeOf(gate, billing) !== null); n++) {
     if (interrupt?.aborted) break;
     const left = deadline - Date.now();
     if (left <= 0) { launcherStops.push({source: 'launcher', kind: 'elapsed', code: 'ELAPSED_LIMIT', why: `elapsed limit ${L.elapsed_ms} ms reached`}); break; }

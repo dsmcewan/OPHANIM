@@ -339,6 +339,8 @@ test('LIFECYCLE, default routing (fit): the SDK implementer is a primary Gemini 
       assert.equal(impl.outputs.billing_refused.status_reported, 'blocked');
       assert.equal(impl.outputs.billing_refused.blocker_reported.code, 'IMPLEMENTER_TRANSPORT');
       assert.deepEqual(impl.outputs.transport_blocker, {codes: ['GEMINI_PRIMARY_DISABLED'], units: ['alpha']});
+      assert.match(impl.blocker.what, /; nothing billed was sent, and the work so far is kept$/, 'refused before any request: the blocker says nothing was billed, and that is what the record shows');
+      assert.deepEqual(impl.usage.gemini.billed, {metered_gemini_failover: 0, gemini_api_primary: 0});
       assert.match(impl.outputs.billing_refused.blocker_reported.what, /agy_google\/gemini-4-hydrogen \(implementer\) would be served by primary Gemini execution on the python Antigravity SDK seat .* and gemini_api_primary is off/);
       assert.deepEqual(impl.usage.gemini.refusals.map(r => [r.kind, r.code, r.transport, r.provider_requests]), [['primary', 'GEMINI_PRIMARY_DISABLED', 'sdk', 0]]);
       assert.equal(recordOf(impl).provider_calls.by_role.implementer ?? 0, 0, 'nothing was charged for it');

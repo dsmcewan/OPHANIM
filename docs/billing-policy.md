@@ -12,7 +12,7 @@ re-exported by `pantheon/src/route/quota-failover.mjs` (the L-124 mechanism it e
 | Setting | Kind | What it admits | Default |
 |---|---|---|---|
 | `metered_gemini_failover` | `failover` | the metered Gemini API answering an Antigravity lane's **proven quota refusal** (and every further request of that answer: a long-decode hop, a compaction) | off |
-| `gemini_api_primary` | `primary` | **primary Gemini API or SDK execution**: a Gemini API id seat with no lane in front of it, an operator's or a ticket's Gemini API pin, the python Antigravity SDK seat (`scripts/agy-seat.py`, billed to `GEMINI_API_KEY` or Vertex), a Google seat of an injected `--turn` module that is not a declared lane (every Google call of a module that declares its Gemini calls metered), an operator script's Google seat (L-146, below) | off |
+| `gemini_api_primary` | `primary` | **primary Gemini API or SDK execution**: a Gemini API id seat with no lane in front of it, an operator's or a ticket's Gemini API pin, the `fit` implementer's Antigravity SDK session in the pipeline (`src/antigravity/`: each model request of the session, its native subagents' included), the board's python Antigravity SDK seat (`scripts/agy-seat.py`, billed to `GEMINI_API_KEY` or Vertex), a Google seat of an injected `--turn` module that is not a declared lane (every Google call of a module that declares its Gemini calls metered), an operator script's Google seat (L-146, below) | off |
 
 - Both are **off when absent**. Each is enabled only by an explicit CLI flag or a supported configuration setting.
 - **No environment variable and no credential authorizes spend.** A `GEMINI_API_KEY`, `GOOGLE_API_KEY` or Vertex project in
@@ -35,7 +35,7 @@ what is enforced (enabled and budget of each kind), not where it was declared.
 |---|---|---|
 | `ophanim/operate/cli.mjs tick`, `watch` | flags `--metered-gemini-failover N`, `--gemini-api-primary N` | the work ledger: its `work.billing` entries, every item and run |
 | `ophanim/operate/cli.mjs serve` (`service.mjs`) | config `billing: {metered_gemini_failover: {enabled, budget}, gemini_api_primary: {enabled, budget}}` | the work ledger, as above |
-| `ophanim/operate/live-run.mjs` (not one of the seven; same policy) | manifest `billing.metered_gemini_failover` (unchanged in meaning) and `billing.metered_gemini_budget` (required exactly when it is true); primary stays off | the run's isolated work ledger |
+| `ophanim/operate/live-run.mjs` (not one of the seven; same policy) | manifest `billing.gemini_api_primary` (must be true: a `fit` run's Google implementer is a primary seat) with `billing.gemini_primary_budget`, and `billing.metered_gemini_failover` with `billing.metered_gemini_budget` (required exactly when it is true) | the run's isolated work ledger |
 | `pantheon/bin/pantheon-board.mjs run`, `resume` | the two flags | the board run: `<board>/gemini-billing.jsonl` (its cycle review and a paired counterpart included); `resume` of the same board continues it |
 | `pantheon/bin/pantheon-compare.mjs` | the two flags | the whole comparison: `<dir>/gemini-billing.jsonl` (every ticket, both arms, the cycle reviews) |
 | `pantheon/bin/pantheon-review-cycle.mjs review`, `resume` | the two flags | the cycle ledger: `<ledger>/gemini-billing.jsonl`; `resume` continues it |
@@ -107,13 +107,16 @@ refusal, and is marked `quota_failover: {used: false, disabled: true | code, ref
 - **A refused stage keeps its work.** A lifecycle stage in which the policy refused a billed request, and which did not
   pass or return, is recorded `pending` on a transient blocker (code: the refusal's; role `decision-authority`) that
   carries the settings of the refused kinds it was refused under. Its outputs (the plan, the cycle, the board, the
-  pipeline record) stay on the record; it is never turned into a failure that sends the work back.
+  pipeline record) stay on the record; it is never turned into a failure that sends the work back. Its blocker says how
+  many requests of the stage had been billed before the refusal (none, when it was refused before any).
 - **A retry under the same policy is refused again.** The pending is retried when due (`retry_after_ms`); the billed
   request is refused again before it is admitted (a lane whose quota has reset needs no failover and answers). Refusals
   under the same settings count against the stage's attempt bound.
 - **A changed policy wakes it at once.** When a later run declares a different setting (enabled, or another budget) for a
   kind that was refused, the scheduler dispatches the pending stage immediately, through the transient pending's own
   retry route, and refusals recorded under the earlier settings do not count against the attempt bound of the new ones.
+  The live-run launcher applies the same test before it decides there is nothing to dispatch: a manifest that declares
+  another budget re-dispatches the refused stage at once, and its plan names the wake (`gate.billing_wake`).
 - Standalone runs keep their own recovery: a board item that was not shipped is still Ready and is run again; a review
   cycle with a refused seat stays open for `resume`; an incomplete review run is continued with `--continue`; a refused
   cross-lab seat is run again alone on the same directory with the setting declared (its other labs' reviews stay).
@@ -124,12 +127,23 @@ Under `fit` the Google implementer is a session of the official `google-antigrav
 (`pantheon/src/antigravity/`, `pipeline/turns.mjs`). It is primary Gemini execution, with no lane in front of it and no
 failover behind it:
 
-- The policy is asked before the session is started. With `gemini_api_primary` off, or its budget spent, nothing is
-  prepared, spawned, admitted or charged, and the unit blocks on that refusal.
+- The policy is asked before the session is started. With `gemini_api_primary` off, or its budget spent, no session is
+  prepared or spawned, nothing is admitted or charged on the Gemini side, the provider is not contacted, and the unit
+  blocks on that refusal. The attempt is not free: the pipeline has by then asked its dispatcher once for the unit (a
+  provider call of another lab, charged on the work ledger) and made the unit's worktree and run branch, and each retry
+  under an unchanged policy does so again (register L-722).
 - Every billed request of the session is one billed request of kind `primary`: the implementer's own and each native
   subagent's, by the model it asked. The controller's model gateway admits each through this policy, then through the
   pipeline's own call bound, and the usage row is persisted before the request is forwarded.
-- A budget that runs out inside a session refuses that request (it is not sent), ends the session and blocks the unit.
+- A budget that runs out inside a session refuses that request (it is not sent) and blocks the unit, whether the
+  session then fails or ends well: the controller keeps the refusal, and does not rest on what the runtime does next.
+  The work of that attempt is not kept; once the policy admits it again the session is asked for from the start
+  (register L-724).
+- The budget is not reserved per session. Concurrent sessions draw on it request by request, so a budget smaller than
+  they need together can be spent with no unit completed.
+- A usage row that cannot be persisted (the record refuses the append, or a live process keeps it locked) means the
+  request is not sent. The session ends and the unit blocks under the run's call-bound code, not a billing code
+  (register L-723).
 
 ## The board's Antigravity seats
 
@@ -216,6 +230,8 @@ request is charged on the record before it is sent; other labs' clients are made
 | `sdk/live.mjs billedTurnModule` (`--turn` modules, e.g. `bin/cycle-review-http-turn.mjs`) | primary | one billed request per call on a non-lane Gemini seat, and on every Gemini seat of a module that declares its Gemini calls metered (`cycle-review-http-turn.mjs`: L-146) |
 | `pipeline/turns.mjs` implementer failover, and its further requests | failover | per request |
 | `pipeline/turns.mjs` single-turn seats (dispatcher, reviewer, subagent) | as their turn | the stage's context rides with each call |
+| `pipeline/turns.mjs` SDK implementer (`fit`: a session of the Antigravity SDK transport, `src/antigravity/`): the implementer's requests and its native subagents' | primary | refused before the session is prepared unless admitted; then per request at the controller's model gateway, each usage row persisted before the request is forwarded |
+| The SDK transport's model metadata requests (`GET models/<id>`: the availability check before a session; the dry run of `ophanim/operate/live-run.mjs`, `sdkPreflight`) | none (not a generation request) | the availability check is made only for a seat the policy admitted; the dry run sends them with the manifest's key and spends nothing. Not observed against the live provider (L-701) |
 | `board/run-item.mjs` walk (`routeSeats`): the lane's quota-failover candidate | failover | skipped unless admitted |
 | `board/run-item.mjs turn()`: a Gemini API seat (failover candidate, operator seat, ticket pin) | failover or primary | refused up front unless admitted; then per request |
 | `board/run-item.mjs agyTurn` python SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`) | primary | refused before the venv and key checks unless admitted; admitted again at the spawn, **one billed request per spawn**: the seat's agent may then make up to `--max-model-calls` (default 40) model calls, and its subagent its own, which the record does not count (L-148 inventory) |

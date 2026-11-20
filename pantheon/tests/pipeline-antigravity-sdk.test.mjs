@@ -365,6 +365,20 @@ test("THE SDK IMPLEMENTER IS A PRIMARY SEAT OF THE GEMINI BILLING POLICY (regist
   assert.equal(spent.out.provider_calls.by_role.implementer, 1, "the session's first request");
   assert.equal(spent.out.provider_calls.by_role.continuation, 1, "and its second; the refused third was never charged");
   assert.ok(spent.u.attempts[0].session, "what the session recorded up to the refusal is kept on the attempt");
+  // A REQUEST THE POLICY REFUSED INSIDE A SESSION THAT STILL ENDS WELL (independent review of the billing merge): the
+  // implementer's own request was admitted and in flight when a subagent's request was refused for the spent budget, and
+  // the session returned its result without asking again. A session's good ending does not undo the policy's refusal: the
+  // unit blocks on it all the same, and the session's result is not taken as the unit's work.
+  const one = optIn({ primary: 1 });
+  const overlapped = await pipeline(t, async args => {
+    args.admit({ class: "root", type: null, model: args.seat.model });   // admitted: the budget's one request
+    assert.throws(() => args.admit({ class: "subagent", type: "code-explorer", model: "gemini-4-hydrogen" }), /METERED_GEMINI_BUDGET_EXHAUSTED/);
+    return session({ ...args, admit: () => {} });   // the session ends well; nothing more is asked of the policy
+  }, { agy: { billing: one } });
+  assert.deepEqual([overlapped.u.status, overlapped.u.code, overlapped.calls.length], ["blocked", "METERED_GEMINI_BUDGET_EXHAUSTED", 1], overlapped.u.reason);
+  assert.deepEqual([one.ledger.used("primary"), one.refusals.map(x => [x.code, x.purpose, x.model])], [1, [["METERED_GEMINI_BUDGET_EXHAUSTED", "subagent", "gemini-4-hydrogen"]]], "one billed request; the subagent's was refused and not recorded");
+  assert.ok(overlapped.u.attempts[0].session, "what the session recorded is kept on the attempt");
+  assert.equal(overlapped.s.calls.filter(c => c.role === "reviewer").length, 0, "no reviewer was asked about a session the policy had refused");
   // The transport has no setting of its own: the old option is refused, not ignored.
   assert.throws(() => pipelineTurns({ turn: async () => ({}), antigravity: { geminiApiPrimary: true } }), /antigravity\.geminiApiPrimary is replaced by agy\.billing/);
 });
