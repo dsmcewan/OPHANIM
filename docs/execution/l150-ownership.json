@@ -6,7 +6,8 @@
   "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
   "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**"],
   "dependencies": ["single agent; region limits written from the brief's DESIGN section (D1-D8); the owner decision is quoted in the brief, not pointed at",
-    "the design is conditional on the SDK investigation: a stop condition is reported to the coordinator before any workaround"],
+    "the design is conditional on the SDK investigation: a stop condition is reported to the coordinator before any workaround",
+    "post-hoc amendment (coordinator, 2026-11-20, at integration): (a) run-item.mjs turn(): laneCharged = 1 became += 1, outside the literal SDK-branch region, so the run's provider_requests counts each request the relay admits; the CLI lane's single admission is unchanged; accepted (the design D4 needs it; the region limit was narrower than the design). (b) the coordinator retargeted l136 T2, wave3 S6 and wave3 G6 (their targets were the removed spawn charge and a renamed variable) and added the relay's idle and lifetime bound test with mutations M20 and M21 (b9cbafb)"],
   "subwaves": {
     "L150": {
       "agent-l150-relay": {
