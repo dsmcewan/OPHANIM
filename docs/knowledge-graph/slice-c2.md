@@ -141,3 +141,62 @@ The review runner's toolbox serving profile and the run recorder appending the `
 - `--unshare-ipc`, `--unshare-uts` and `--unshare-cgroup` are not used, following `bwrapArgs`'s conventions.
 - The timeout cell drives the controller's bound to 2 s with `PANTHEON_AGY_TIMEOUT=-58` (the bound is the seat's timeout plus 60 s of grace); no knob was added for it.
 - On the run's stop path the board records the run's error but not the aborted critique attempt (unchanged by this slice).
+
+## 11. Descriptors (KG-11)
+
+Register KG-11: the jails passed through descriptors the controller inherited. Once in four full `npm test` runs the verify_cmd launched by agy's run_command held fd 20 on the container's proxy CA bundle. Node's `spawn` and bwrap close nothing beyond the stdio they set up, so a descriptor a supervisor leaks into the controller without close-on-exec reached every jailed command, the SDK seat's included.
+
+**The property.** Every jailed command starts with no open descriptor beyond 0, 1 and 2. This holds whatever the starting process inherited and whatever its number, at every spawn point of both jails:
+- the agy CLI worker (`prepareWorkerJail`: the unit worker, the single turns, the preflight and the quota probe, the review runner's agy lane);
+- the verify_cmd its run_command launches, and the controller's own runVerify (the verify launcher, `src/agy/verify-jail.mjs`);
+- the python SDK seat's whole process, at the board (`run-item.mjs`) and at the direct launcher (`bin/agy-seat.mjs`).
+
+No jail passes any other descriptor on purpose. The command gets its stdin, stdout and stderr (the controller's pipes, or what the launcher was given), recorded as `descriptors.passed: [0, 1, 2]` on the CLI jail's sandbox record and the SDK jail's record.
+
+**The mechanism** (`src/agy/fd-exec.mjs`, choice (a) of the decision, placed in front of bwrap). Every jail's argv is `[node, fd-exec.mjs, bwrap, ...]`. The closer is a fresh process. It:
+1. closes every descriptor above 2 that lacks O_CLOEXEC in `/proc/self/fdinfo`;
+2. checks again that none is left;
+3. replaces itself with bwrap (`process.execve`).
+
+Because it replaces itself, the pid, the process group and the kill path are those bwrap had before. Its own descriptors (node's event loop, the module it loaded) are close-on-exec and close at the exec. The work is done in the child and not in the controller, choice (b), for three reasons, each observed here:
+- The controller runs other threads: node opens `/proc/self/maps` and its own binary without O_CLOEXEC, and its TLS stack opens CA files the same way (KG-11's descriptor was a CA bundle). A scan made in the controller cannot exclude a descriptor opened between the scan and the fork. Closing one there could pull a file out from under another thread.
+- Node marks only a low range of inherited descriptors close-on-exec at startup. On node 24.22, strace shows `fcntl(fd, F_SETFD, FD_CLOEXEC)` on 0..16, and an inherited fd 20 above a gap stays inheritable. The verify launcher's earlier comment ("node marks every inherited fd above 2") was wrong for such a descriptor.
+- bwrap 0.9 has no option to close descriptors, and a POSIX sh cannot name one above 9.
+
+The closer runs on the host, before bwrap, so it needs nothing visible inside any jail. No new dependency is added: the closer is the controller's own node binary.
+
+**Fail closed.** The gates refuse with SANDBOX_UNAVAILABLE before anything is built, admitted, charged or spawned when the closer does not work here: `sdkJailAvailable` for the SDK seat (no override), `prepareWorkerJail` for the CLI (only the existing explicit `allowUnsandboxed` override, recorded). Each gate's probe (`fdExecAvailable`, cached per node binary) runs the closer on a real case: fd 20 handed over without close-on-exec, and the exec'd command must hold no descriptor on its file. If the closer cannot establish the property at the spawn itself, it exits 125 and the command never runs. That happens with no `/proc`, an unreadable fdinfo, a descriptor still open after its close, or a node without `process.execve`. 125 is the verify launcher's `VERIFY_JAIL_REFUSED`, and the CLI reads the closer's `pantheon-fds:` line as the sandbox failing to start, as it reads bwrap's own.
+
+**The test** (`pantheon/tests/jail-fds.test.mjs`, real-bwrap, gated on `sandboxAvailable("bwrap")`). It is deterministic: it does not depend on what the environment leaks.
+- Each controller (`fixtures/jail-fds-controller.mjs`, or the launcher itself) is started with fd 9 and fd 20 open on a synthetic secret without close-on-exec. It first records that its fd 20 is still inheritable.
+- Agy's shell opens fd 20 on the secret again (with bash) when it runs the verify launcher. That way the launcher's closer alone decides what reaches the verify_cmd.
+- The probe (`fixtures/jail-fds-probe.py`) lists its own `/proc/self/fd` and its parent's, resolves every target, and reads every regular file through its descriptor for the needle.
+- Positive controls: the probe spawned by node, and the probe under a bare bwrap, hold fd 20 and read the secret.
+
+Also covered:
+- the closer's decisions on an injected table;
+- its refusal without `/proc` and without `process.execve`;
+- both gates' refusals with a closer that does not work, the board's SDK seat included.
+
+`verify-jail-credential-isolation.test.mjs` now leaks fd 20 on purpose at each launcher entry (agy's shell, a shell exec'ing the launcher, the controller calling runVerify). Its "no inherited descriptor beyond stdio" assertion therefore passes whatever the environment leaks, and fails when the closer is removed.
+
+**The mutations** (`agy-sdk-jail.mutate.mjs`, its suites now including `jail-fds.test.mjs` and the isolation test):
+
+| ID | Mutation | Killed by |
+|---|---|---|
+| F1 | the closer removed at the verify launcher | CLI worker; isolation WORKER and CONTROLLER |
+| F2 | the closer dropped at the SDK seat's board spawn | SDK board |
+| F3 | the closer dropped at the direct launcher | SDK launcher |
+| F4 | the closer removed from the CLI worker's jail | CLI worker |
+| F5 | the closer's refusal replaced by an unprotected run | closer fails closed |
+| F6 | the SDK gate stops checking the closer | gates fail closed |
+| F7 | the CLI gate stops checking the closer | gates fail closed |
+| F8 | the closer closes only 3 to 9 (what a POSIX sh can name) | closer, host, CLI worker, SDK board, SDK launcher |
+
+**What remains.**
+- The exact route of the observed failure was not reproduced. In this container the launcher of 42052d1 already closed an injected fd 20 (its `closeInheritedFds`, in the launcher's own process), and a strace of it under the real environment shows no CA bundle opened. The closer now stands in a fresh process in front of every bwrap, the launcher's included, so a descriptor that reached the jail by any route through the starting process is closed. A route inside bwrap itself would not be: none is known, and bwrap passed only stdio in every test here.
+- Other bwrap jails start bwrap directly, without the closer: the board's acceptance jail (`board/acceptance.mjs`) and the review runner's grok and codex jails. KG-11 named the two jails above.
+- `process.execve` is marked experimental in node 24. Where it is missing (node before 22.15 or 23.11), every jail refuses rather than running without the property. `pantheon/package.json` still says node >= 20; the root pins 24.
+- `docs/routing-task-profile.md` ("Inherited descriptors") still states that node marks inherited fds close-on-exec at startup. It is the coordinator's to correct.
+- An explicitly unsandboxed CLI run (`allowUnsandboxed`) starts the CLI without the closer, as it starts it without bwrap. It is recorded as such.
+- The capability graph's bubble evidence (`runtimes.json`) does not yet quote the closer.

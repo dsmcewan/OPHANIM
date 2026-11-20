@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fakeAgy, FAKE_MCP_CREDENTIAL } from "./fixtures/dispatch.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
+import { FD_EXEC_MODULE } from "../src/agy/fd-exec.mjs";
 import { CARD_TEMPLATE } from "../src/agy/workspace.mjs";
 
 const PROBE = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "agy-worker-probe.mjs");
@@ -165,7 +166,8 @@ for (const form of ["direct", "wrapped"]) {
       [direct, "ACTIVE"], [direct, "DONE"], ["run_command", "ACTIVE"], ["run_command", "DONE"]]);
     assert.deepEqual([o.turn.exit_code, o.turn.status, o.turn.error, o.turn.usage], [0, "SUCCESS", null, { input_tokens: 1234, output_tokens: 56 }]);
     // The launch: bwrap, the argv with the prompt redacted, the token redacted, no forbidden flags.
-    assert.equal(o.launch.argv[0], "bwrap");
+    // KG-11: bwrap starts through the descriptor closer (node running src/agy/fd-exec.mjs).
+    assert.deepEqual([o.launch.argv[0], o.launch.argv[1], o.launch.argv[2]], [process.execPath, FD_EXEC_MODULE, "bwrap"]);
     assert.ok(o.launch.argv.includes("<prompt>") && o.launch.argv.includes("--log-file") && o.launch.argv.includes("--add-dir"));
     assert.ok(!o.launch.argv.some(a => a === "--sandbox" || a.startsWith("--dangerously-skip-permissions")));
     // CREDENTIAL ISOLATION: the A2A token never enters the CLI's environment (the relay reads its token file).

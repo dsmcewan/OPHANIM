@@ -91,6 +91,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 import { spawnPromise } from "../board/spawn.mjs";
 import { RELAY_URL_ENV, RELAY_CAPABILITY_ENV } from "../route/gemini-relay.mjs";
+import { fdExecArgv, fdExecAvailable, FD_EXEC_MODULE, FDS_PASSED } from "./fd-exec.mjs";
 
 // The source tree the jail hook runs from (src/): it must stay visible inside every jail.
 const HERE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -552,9 +553,14 @@ export const cliDirOf = cli => (cli.includes("/") ? dirname(real(cli)) : null);
 //     has no egress filter. Host loopback services, the LAN and a cloud metadata endpoint stay reachable from the jail, and
 //     so do host Unix sockets outside the hidden locations (a read-only mount does not stop connect()). It is never claimed
 //     isolated.
-//   - FAIL CLOSED: no bwrap, or a failing probe of the jail's own flags (sdkJailAvailable), refuses the seat before the spawn
-//     and before anything is admitted or charged (SANDBOX_UNAVAILABLE). There is NO override: the CLI's allowUnsandboxed is
-//     not extended to the SDK seat.
+//   - NO DESCRIPTOR BEYOND 0, 1 AND 2 (register KG-11; src/agy/fd-exec.mjs): bwrap is started through the descriptor
+//     closer (`prefix` is [node, fd-exec.mjs, bwrap, ...]), a fresh process that closes every descriptor above 2 the
+//     controller inherited without close-on-exec, checks that none is left, and execs bwrap in its place. The seat is given
+//     stdin, stdout and stderr only, on purpose, and nothing else;
+//   - FAIL CLOSED: no bwrap, a failing probe of the jail's own flags, or a descriptor closer that does not work here
+//     (sdkJailAvailable) refuses the seat before the spawn and before anything is admitted or charged (SANDBOX_UNAVAILABLE).
+//     There is NO override: the CLI's allowUnsandboxed is not extended to the SDK seat. A closer that cannot establish the
+//     property at the spawn itself exits 125 and starts nothing.
 //   - SINGLE-ASSIGNMENT LIFETIME: the spawn point removes the seat's HOME after the assignment on every path (success,
 //     refusal, timeout, kill: dropSdkSeatScratch), its /tmp dies with the jail, and the relay session is closed and its
 //     capability revoked.
@@ -641,14 +647,16 @@ export function interpreterPaths(python) {
 }
 
 /**
- * THE SDK SEAT'S JAIL (see the header): {prefix: ["bwrap", ..., "--"], env, home, binds: [{mode: "tmpfs" | "ro" | "rw" |
- * "null", path}], hidden, visible, writable, dropped, record}. The spawn is `[...prefix, python, script, ...args]` with
- * `env` and nothing else. `env` is agySdkEnvOf's (its HOME must be a directory inside `out_dir`); `read` are files the seat
- * reads (made visible when hidden); `base` is the controller's environment (the hidden locations, the operator's pass list).
+ * THE SDK SEAT'S JAIL (see the header): {prefix: [node, fd-exec.mjs, "bwrap", ..., "--"], fds: {argv, passed}, env, home,
+ * binds: [{mode: "tmpfs" | "ro" | "rw" | "null", path}], hidden, visible, writable, dropped, record}. The spawn is
+ * `[...prefix, python, script, ...args]` with `env` and nothing else: the descriptor closer (fds.argv, src/agy/fd-exec.mjs)
+ * first, then bwrap. `env` is agySdkEnvOf's (its HOME must be a directory inside `out_dir`); `read` are files the seat
+ * reads (made visible when hidden); `base` is the controller's environment (the hidden locations, the operator's pass list);
+ * `node` the node binary that runs the closer (on the host, before bwrap).
  * Throws SDK_JAIL_LAYOUT (a path that would expose a hidden location, a missing workspace or out dir, a HOME outside the out
  * dir) or SDK_JAIL_ENV (see sdkSeatEnv). Never spawns anything.
  */
-export function sdkSeatJail({ python, script, repo, workspace, out_dir, env, read = [], bwrap = "bwrap", base = process.env, hidden = sdkSeatHidden(base) }) {
+export function sdkSeatJail({ python, script, repo, workspace, out_dir, env, read = [], bwrap = "bwrap", node = process.execPath, base = process.env, hidden = sdkSeatHidden(base) }) {
   if (!python || !script || !repo || !workspace || !out_dir || !env) throw new Error("sdkSeatJail: pass the python, the script, the repository, the workspace, the out dir and the env");
   const hiddenDirs = [...hidden.filter(h => h.kind === "dir").map(h => h.path), "/tmp"];
   const exposes = p => p === "/" || hiddenDirs.includes(p) || hidden.some(h => h.path === p);
@@ -691,39 +699,49 @@ export function sdkSeatJail({ python, script, repo, workspace, out_dir, env, rea
   // instead of landing, unseen, in a tmpfs.
   for (const h of hidden) if (h.kind === "dir") prefix.push("--remount-ro", h.path);
   prefix.push("--chdir", real(workspace), "--");
-  return { prefix, env: jailEnv, home, binds, hidden, visible: ro, writable, dropped,
+  // NO DESCRIPTOR BEYOND 0, 1 AND 2 (KG-11): bwrap starts through the descriptor closer, in front of it.
+  const fds = { argv: [node, FD_EXEC_MODULE], passed: [...FDS_PASSED] };
+  return { prefix: fdExecArgv(prefix, { node }), fds, env: jailEnv, home, binds, hidden, visible: ro, writable, dropped,
     record: { kind: "bwrap", hidden: hidden.map(h => ({ path: h.path, kind: h.kind, why: h.why })), visible: ro, writable, home,
-      env: Object.keys(jailEnv).sort(), dropped, network: "shared (retained: sdk-jail-egress)" } };
+      env: Object.keys(jailEnv).sort(), dropped, network: "shared (retained: sdk-jail-egress)",
+      descriptors: { passed: [...FDS_PASSED], closer: "src/agy/fd-exec.mjs: every inherited descriptor above 2 closed before bwrap" } } };
 }
 
 const jailProbes = new Map();
 /**
  * Can the SDK seat's jail be made here? sandboxAvailable, then the jail's own flags (a PID namespace with a fresh /proc, a new
- * session, a tmpfs remounted read-only), once per binary (cached). {ok, why?}; never throws.
+ * session, a tmpfs remounted read-only), then the descriptor closer with `node` (fdExecAvailable), once per binary pair
+ * (cached). {ok, why?}; never throws.
  */
-export function sdkJailAvailable(bwrap = "bwrap") {
-  if (!jailProbes.has(bwrap)) {
-    jailProbes.set(bwrap, (async () => {
+export function sdkJailAvailable(bwrap = "bwrap", { node = process.execPath } = {}) {
+  const key = `${bwrap}\0${node}`;
+  if (!jailProbes.has(key)) {
+    jailProbes.set(key, (async () => {
       const base = await sandboxAvailable(bwrap);
       if (!base.ok) return base;
       try {
         const r = await spawnPromise(bwrap, ["--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--remount-ro", "/tmp", "true"], { timeout: 10000 });
-        return r.status === 0 ? { ok: true } : { ok: false, why: `the jail probe (a PID namespace, a fresh /proc) exited ${r.status ?? r.killedFor}: ${String(r.stderr ?? "").trim().slice(0, 200)}` };
+        if (r.status !== 0) return { ok: false, why: `the jail probe (a PID namespace, a fresh /proc) exited ${r.status ?? r.killedFor}: ${String(r.stderr ?? "").trim().slice(0, 200)}` };
       } catch (e) {
         return { ok: false, why: `bwrap could not be started: ${e?.code ?? e?.message ?? e}` };
       }
+      // KG-11: the seat starts with no descriptor beyond 0, 1 and 2, or it does not start.
+      const fds = await fdExecAvailable({ node });
+      if (!fds.ok) return { ok: false, why: `no descriptor beyond 0, 1 and 2 can be guaranteed: ${fds.why}` };
+      return { ok: true };
     })());
   }
-  return jailProbes.get(bwrap);
+  return jailProbes.get(key);
 }
 /**
- * THE GATE of both spawn points, called before anything is admitted, charged or spawned: {bwrap, build(spec)} where build is
- * sdkSeatJail with this bwrap. Throws SANDBOX_UNAVAILABLE when the jail cannot be made. There is no override.
+ * THE GATE of both spawn points, called before anything is admitted, charged or spawned: {bwrap, node, build(spec)} where
+ * build is sdkSeatJail with this bwrap and this node (the descriptor closer's). Throws SANDBOX_UNAVAILABLE when the jail
+ * cannot be made, its descriptor closer included. There is no override.
  */
-export async function sdkSeatJailGate({ bwrap = "bwrap" } = {}) {
-  const probe = await sdkJailAvailable(bwrap);
+export async function sdkSeatJailGate({ bwrap = "bwrap", node = process.execPath } = {}) {
+  const probe = await sdkJailAvailable(bwrap, { node });
   if (!probe.ok) throw jailError("SANDBOX_UNAVAILABLE", `the python SDK seat's bwrap jail is unavailable (${probe.why}); refusing to run the python SDK seat unjailed (there is no override)`, { why: probe.why, provider_requests: 0 });
-  return { bwrap, build: spec => sdkSeatJail({ ...spec, bwrap }) };
+  return { bwrap, node, build: spec => sdkSeatJail({ ...spec, bwrap, node }) };
 }
 /**
  * The seat's single-assignment teardown: its HOME (`jail.home`, a directory of its out dir) removed. The jail's /tmp needs
