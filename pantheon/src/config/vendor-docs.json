@@ -1,0 +1,55 @@
+{
+  "schema": "pantheon.vendor-docs/v1",
+  "note": "Where each lab publishes its own documentation index (the llms.txt form: every page listed, each available as markdown). `hosts` are the only hosts a capture may ask: a listed link elsewhere is recorded and not read. These are documentation sites, not API hosts, and no key is sent to them (src/vendor-docs/capture.mjs). `models` says where a lab's per-model pages are found when its index does not list them: the links of a listing page that match `link`, and the page (`page`, with {name}) of each name the `names` patterns find in it.",
+  "labs": {
+    "openai": {
+      "hosts": [
+        "developers.openai.com"
+      ],
+      "indexes": [
+        "https://developers.openai.com/llms.txt"
+      ],
+      "models": {
+        "listings": [
+          "https://developers.openai.com/api/docs/models/all.md"
+        ],
+        "link": "^https://developers\\.openai\\.com/api/docs/models/(?!all\\.md$|compare\\.md$)[^/?#]+\\.md$"
+      }
+    },
+    "xai": {
+      "hosts": [
+        "docs.x.ai"
+      ],
+      "indexes": [
+        "https://docs.x.ai/llms.txt"
+      ],
+      "models": {
+        "listings": [
+          "https://docs.x.ai/developers/models.md"
+        ],
+        "link": "^https://docs\\.x\\.ai/developers/models/[^/?#]+\\.md$",
+        "names": [
+          "^\\|\\s*(grok-[a-z0-9.\\-]+)",
+          "\\((grok-[a-z0-9.\\-]+)\\)"
+        ],
+        "page": "https://docs.x.ai/developers/models/{name}.md"
+      }
+    },
+    "google": {
+      "hosts": [
+        "aistudio.google.com"
+      ],
+      "indexes": [
+        "https://aistudio.google.com/llms.txt"
+      ]
+    },
+    "anthropic": {
+      "hosts": [
+        "platform.claude.com"
+      ],
+      "indexes": [
+        "https://platform.claude.com/llms.txt"
+      ]
+    }
+  }
+}
