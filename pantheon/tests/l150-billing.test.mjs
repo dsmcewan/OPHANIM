@@ -14,6 +14,12 @@
 //
 // The relay's module is imported lazily, so the cells that drive agy-seat.py and the board load (and fail on their
 // assertions) on the base commit too: the base evidence of register L-150.
+//
+// THE SEAT'S JAIL (knowledge graphs, Slice C2; register L-155): both spawn points now run the seat inside its bwrap jail
+// (src/agy/sandbox.mjs sdkSeatJail), so the cells that spawn it through the launcher or the board are real-bwrap cells
+// (`jailed`: skipped, and reported UNVERIFIED by the test gate, where bwrap does not work), and the stub writes what it
+// records (its environment, a spawn marker) into its out dir, the only place outside the workspace the jail lets it write.
+// A jailed seat's pid is its PID namespace's; the crash cell finds the seat's host pid from outside (seatPidOf).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -24,8 +30,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { billingFromFlags, geminiBilling, geminiUsageFile } from "../src/route/gemini-billing.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
+import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { withDispatch, seat } from "./fixtures/dispatch.mjs";
 import { startFakeGemini } from "./fixtures/l150-fake-gemini.mjs";
+
+const have = await sandboxAvailable("bwrap");
+const jailed = { skip: have.ok ? false : `bwrap unavailable: ${have.why}` };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STUB = join(HERE, "fixtures", "l150-sdk-stub");
@@ -58,14 +68,24 @@ async function post(url, token, path = STREAM, body = { contents: [{ role: "user
   return { status: r.status, text, json, reason: json?.error?.details?.[0]?.reason ?? null, recovery: json?.error?.details?.[0]?.metadata?.recovery ?? null };
 }
 
-// The python the seat is spawned with: the stub SDK on PYTHONPATH; its environment is written to `env.txt` and its pid to
-// `pid` (the seat's environment is scrubbed, so these paths are written into it).
+// The python the seat is spawned with: the stub SDK on PYTHONPATH; its environment is written to `env.txt` and a spawn
+// marker to `pid`, both in its --out dir (the seat's environment is scrubbed and its jail writes nothing else, so the
+// stub finds the out dir in its own arguments).
 function stubPython(dir) {
   const py = join(dir, "python");
-  writeFileSync(py, `#!/bin/sh\necho $$ > ${JSON.stringify(join(dir, "pid"))}\nenv > ${JSON.stringify(join(dir, "env.txt"))}\nPYTHONDONTWRITEBYTECODE=1 PYTHONPATH=${JSON.stringify(STUB)} exec python3 "$@"\n`, { mode: 0o755 });
+  writeFileSync(py, `#!/bin/sh\nout=""; prev=""; for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done\nmkdir -p "$out"\necho $$ > "$out/pid"\nenv > "$out/env.txt"\nPYTHONDONTWRITEBYTECODE=1 PYTHONPATH=${JSON.stringify(STUB)} exec python3 "$@"\n`, { mode: 0o755 });
   return py;
 }
 const envOf = dir => Object.fromEntries((existsSync(join(dir, "env.txt")) ? readFileSync(join(dir, "env.txt"), "utf8").split("\n") : []).map(l => /^([^=]*)=(.*)$/s.exec(l)).filter(Boolean).map(m => [m[1], m[2]]));
+/** The host pid of the seat whose --out is `out` (a jailed seat's own pid is its PID namespace's): its python process. */
+function seatPidOf(out) {
+  for (const d of readdirSync("/proc").filter(n => /^\d+$/.test(n))) {
+    let argv;
+    try { argv = readFileSync(`/proc/${d}/cmdline`, "utf8").split("\0").filter(Boolean); } catch { continue; }
+    if (/python/.test(argv[0] ?? "") && argv.includes(SEAT_PY) && argv[argv.indexOf("--out") + 1] === out) return Number(d);
+  }
+  throw new Error(`no seat process with --out ${out}`);
+}
 function seatTree(dir) {
   const ws = join(dir, "ws"); mkdirSync(ws, { recursive: true });
   writeFileSync(join(ws, "README.md"), "# a workspace under review\n");
@@ -250,7 +270,7 @@ test("seat direct run without a capability sends zero requests, with keys in its
   assert.equal(fake.requests.length, 0, "no request reached the provider");
 });
 
-test("seat governed run: every request of the session -- each model call, the retry, the continuation, the subagent's -- is charged before it is sent, with its identity and lineage; the child holds no key", async t => {
+test("seat governed run: every request of the session -- each model call, the retry, the continuation, the subagent's -- is charged before it is sent, with its identity and lineage; the child holds no key", jailed, async t => {
   const dir = scratch(t), ws = seatTree(dir), py = stubPython(dir);
   const fake = await startFakeGemini({ mode: "review", failFirst: 1, workspace: ws, usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
   const r = await launch(dir, { budget: 10, upstream: fake.url, python: py, args: seatArgs(dir, ws) });
@@ -273,15 +293,15 @@ test("seat governed run: every request of the session -- each model call, the re
   assert.deepEqual(outcomes.map(o => [o.request_id === rows[o.seq - 1].identity.request_id, o.status]), [[true, 503], [true, 200], [true, 200], [true, 200], [true, 200], [true, 200]]);
   assert.deepEqual([r.report?.relay?.admitted, r.result?.relay?.admitted], [6, 6]);
   // THE CHILD'S ENVIRONMENT: the capability, a HOME of its own, and no credential.
-  const env = envOf(dir);
+  const env = envOf(join(dir, "out"));
   assert.deepEqual([env.GEMINI_API_KEY, env.GOOGLE_API_KEY], [undefined, undefined]);
-  assert.ok(!readFileSync(join(dir, "env.txt"), "utf8").includes(KEY), "the real key's value is nowhere in the child's environment");
+  assert.ok(!readFileSync(join(dir, "out", "env.txt"), "utf8").includes(KEY), "the real key's value is nowhere in the child's environment");
   assert.match(env.PANTHEON_AGY_RELAY_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.match(env.PANTHEON_AGY_RELAY_CAPABILITY ?? "", /^ophanim-relay-[0-9a-f]{64}$/);
   assert.equal(env.HOME, join(dir, "out", "home"));
 });
 
-test("seat web search: the SDK's :generateContent search request is charged like any other", async t => {
+test("seat web search: the SDK's :generateContent search request is charged like any other", jailed, async t => {
   const dir = scratch(t), ws = seatTree(dir), py = stubPython(dir);
   const fake = await startFakeGemini({ mode: "scout", workspace: ws, usage: join(dir, "usage.jsonl"), final: "RAN: nothing" }); t.after(() => fake.close());
   const r = await launch(dir, { budget: 10, upstream: fake.url, python: py, args: seatArgs(dir, ws, { role: "scout" }) });
@@ -291,7 +311,7 @@ test("seat web search: the SDK's :generateContent search request is charged like
   assert.deepEqual(jsonl(join(dir, "usage.jsonl")).map(u => [u.identity.method, u.lineage.conversation]), [["streamGenerateContent", "root"], ["generateContent", "unattributed"], ["streamGenerateContent", "root"]]);
 });
 
-test("seat exhaustion: a session able to make 40 requests with a budget of 3 never sends a fourth; the turn ends on the refusal with its output and progress kept", async t => {
+test("seat exhaustion: a session able to make 40 requests with a budget of 3 never sends a fourth; the turn ends on the refusal with its output and progress kept", jailed, async t => {
   const dir = scratch(t), ws = seatTree(dir), py = stubPython(dir);
   const fake = await startFakeGemini({ mode: "loop", workspace: ws, usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
   const r = await launch(dir, { budget: 3, upstream: fake.url, python: py, args: seatArgs(dir, ws, { more: ["--max-model-calls", "40"] }) });
@@ -307,7 +327,7 @@ test("seat exhaustion: a session able to make 40 requests with a budget of 3 nev
   assert.equal(JSON.parse(readFileSync(join(dir, "out", "relay-session.json"), "utf8")).relay.admitted, 3);
 });
 
-test("seat concurrency across processes: two governed launches competing for the last request over one record, exactly one admitted", async t => {
+test("seat concurrency across processes: two governed launches competing for the last request over one record, exactly one admitted", jailed, async t => {
   const dir = scratch(t), ws = seatTree(dir);
   seedRows(join(dir, "usage.jsonl"), 2);
   const fake = await startFakeGemini({ mode: "text", workspace: ws, usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
@@ -318,7 +338,7 @@ test("seat concurrency across processes: two governed launches competing for the
   assert.equal(runs.find(x => x.code === 5).result.refused.code, BUDGET);
 });
 
-test("seat crash cancel restart: a session killed (SIGKILL) or cancelled (SIGTERM) after admission, and a controller killed in flight, leave every admitted request counted; a restart counts them", async t => {
+test("seat crash cancel restart: a session killed (SIGKILL) or cancelled (SIGTERM) after admission, and a controller killed in flight, leave every admitted request counted; a restart counts them", jailed, async t => {
   const { relayAccounting, readRelayOutcomes } = await relay();
   const dir = scratch(t), ws = seatTree(dir), usage = join(dir, "usage.jsonl");
   const fake = await startFakeGemini({ mode: "hang", workspace: ws, usage }); t.after(() => fake.close());
@@ -328,7 +348,7 @@ test("seat crash cancel restart: a session killed (SIGKILL) or cancelled (SIGTER
     let launcher = null;
     const done = launch(d, { budget: 3, usage, upstream: fake.url, python: stubPython(d), args: seatArgs(dir, ws, { out: join(d, "out") }), onSpawn: c => { launcher = c; } });
     await until(() => fake.requests.length === before + 1);
-    kill({ launcher, seatPid: Number(readFileSync(join(d, "pid"), "utf8")) });
+    kill({ launcher, seatPid: seatPidOf(join(d, "out")) });
     return done;
   };
   // (a) the SDK session crashes: its process is SIGKILLed while its request is in flight.
@@ -354,7 +374,7 @@ test("seat crash cancel restart: a session killed (SIGKILL) or cancelled (SIGTER
   const restart = await launch(d, { budget: 3, usage, upstream: fake.url, python: stubPython(d), args: seatArgs(dir, ws, { out: join(d, "out") }) });
   assert.equal(restart.code, 2, restart.said);
   assert.equal(restart.report?.refused?.code, BUDGET);
-  assert.deepEqual([fake.requests.length, existsSync(join(d, "pid"))], [before, false], "nothing spawned or sent");
+  assert.deepEqual([fake.requests.length, existsSync(join(d, "out", "pid"))], [before, false], "nothing spawned or sent");
 });
 
 // ---- the board's SDK seat (runOpenItem, PANTHEON_AGY_TRANSPORT=sdk) -------------------------------------------------
@@ -376,14 +396,15 @@ async function boardSeat(t, { budget, seed = 0, maxProviderCalls = 50, charge = 
       const board = r?.board ?? null;
       const run = board && existsSync(join(board, "run.json")) ? JSON.parse(readFileSync(join(board, "run.json"), "utf8")) : null;
       const seatDirs = run ? readdirSync(join(run.repo_root, "outputs", "open-items", "l150-sdk", "agy_google")).map(n => join(run.repo_root, "outputs", "open-items", "l150-sdk", "agy_google", n)) : [];
-      out = { r, run, seatDirs, partial: seatDirs.map(s => join(s, "response.partial.md")).filter(existsSync).map(f => readFileSync(f, "utf8")) };
+      out = { r, run, seatDirs, partial: seatDirs.map(s => join(s, "response.partial.md")).filter(existsSync).map(f => readFileSync(f, "utf8")),
+        seatEnv: envOf(seatDirs.find(s => existsSync(join(s, "env.txt"))) ?? dir), spawned: seatDirs.some(s => existsSync(join(s, "pid"))) };
     } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
   });
-  return { ...out, fake, usage: jsonl(usage), billing, env: envOf(dir), spawned: existsSync(join(dir, "pid")) };
+  return { ...out, fake, usage: jsonl(usage), billing, env: out.seatEnv };
 }
 const critique = run => (run?.attempts ?? []).filter(a => a.vendor === "agy_google" && a.purpose === "critique");
 
-test("board sdk seat: each request is charged as it is made -- usage rows, the attempt's provider requests and the run's provider calls all count the requests, not the launch", async t => {
+test("board sdk seat: each request is charged as it is made -- usage rows, the attempt's provider requests and the run's provider calls all count the requests, not the launch", jailed, async t => {
   const b = await boardSeat(t, { budget: 100 });
   assert.ok(b.run, JSON.stringify(b.r?.error?.message ?? b.r));
   assert.deepEqual(critique(b.run).map(a => [a.outcome, a.provider_requests]), [["ok", 5]], JSON.stringify(b.run.attempts));
@@ -397,7 +418,7 @@ test("board sdk seat: each request is charged as it is made -- usage rows, the a
   assert.match(b.env.PANTHEON_AGY_RELAY_CAPABILITY ?? "", /^ophanim-relay-/);
 });
 
-test("board sdk seat exhaustion: a budget of 3 admits three requests, refuses the fourth as a billing refusal (recoverable), keeps the seat's output; a restart counts them", async t => {
+test("board sdk seat exhaustion: a budget of 3 admits three requests, refuses the fourth as a billing refusal (recoverable), keeps the seat's output; a restart counts them", jailed, async t => {
   const b = await boardSeat(t, { budget: 3 });
   assert.equal(b.fake.requests.length, 3, "never a fourth");
   assert.deepEqual(critique(b.run).map(a => [a.outcome, a.code, a.provider_requests]), [["refused_metered", BUDGET, 3]], JSON.stringify(b.run?.attempts));
@@ -409,14 +430,14 @@ test("board sdk seat exhaustion: a budget of 3 admits three requests, refuses th
   assert.deepEqual(critique(again.run).map(a => [a.code, a.provider_requests]), [[BUDGET, 0]]);
 });
 
-test("board sdk seat seeded record: two earlier sessions' spending is counted, so only the last unit of the budget is admitted", async t => {
+test("board sdk seat seeded record: two earlier sessions' spending is counted, so only the last unit of the budget is admitted", jailed, async t => {
   const b = await boardSeat(t, { budget: 3, seed: 2 });
   assert.equal(b.fake.requests.length, 1);
   chargedBefore(b.fake.requests, 2);
   assert.deepEqual(critique(b.run).map(a => [a.code, a.provider_requests]), [[BUDGET, 1]]);
 });
 
-test("board sdk seat provider-call bound: the run's admission is charged per request, before each is sent, and its refusal refuses the next request", async t => {
+test("board sdk seat provider-call bound: the run's admission is charged per request, before each is sent, and its refusal refuses the next request", jailed, async t => {
   const charges = [];
   const b = await boardSeat(t, { budget: 100, charge: fake => c => {
     if (c.vendor !== "agy_google") return;

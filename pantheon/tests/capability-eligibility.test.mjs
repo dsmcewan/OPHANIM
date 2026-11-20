@@ -87,11 +87,15 @@ test('requirements: effort, features and delegation each exclude with their reas
   const delegate = decide(SNAP, {role: 'reviewer', delegation: 1});
   assert.deepEqual(ids(delegate), ['agy-sdk/agy_google/gemini-3.6-flash'], 'only the SDK reviewer may start a subagent');
   assert.deepEqual(decide(SNAP, {role: 'scout', delegation: 1}).eligible, [], 'and only for the reviewer role');
+  // The bubble (Slice C2: the SDK seat is jailed, L-155 closed): the API seats are the ones whose bubble does not hold (no
+  // per-assignment teardown), and with the bubble required only the jailed seats remain, the CLI lanes and the SDK seat.
   const recorded = decide(SNAP, {role: 'reviewer'}), required = decide(SNAP, {role: 'reviewer', bubble: 'required'});
-  assert.ok(ids(recorded).includes('agy-sdk/agy_google/gemini-3.6-flash'));
-  assert.match(recorded.explanation.join('\n'), /the bubble does not hold for .*agy-sdk\/agy_google\/gemini-3\.6-flash \(sandbox, tools; L-155\)/);
-  assert.match(why(required, 'agy-sdk/agy_google/gemini-3.6-flash').join(), /bubble: the bubble does not hold: sandbox does not hold \(L-155\)/);
-  assert.ok(ids(required).every(c => c.startsWith('agy-cli/')), 'with the bubble required, only the jailed lanes remain');
+  assert.ok(ids(recorded).includes('agy-sdk/agy_google/gemini-3.6-flash') && ids(recorded).includes('api/openai/gpt-6-astra'));
+  assert.match(recorded.explanation.join('\n'), /the bubble does not hold for .*api\/openai\/gpt-6-astra \(lifetime\)/);
+  assert.doesNotMatch(recorded.explanation.join('\n'), /agy-sdk\/agy_google\/gemini-3\.6-flash \(/, 'the jailed SDK seat is not among them');
+  assert.match(why(required, 'api/openai/gpt-6-astra').join(), /bubble: the bubble does not hold: lifetime does not hold/);
+  assert.ok(ids(required).includes('agy-sdk/agy_google/gemini-3.6-flash'), 'the jailed SDK seat stays eligible with the bubble required');
+  assert.ok(ids(required).every(c => c.startsWith('agy-cli/') || c.startsWith('agy-sdk/')), 'with the bubble required, only the jailed seats remain');
   const billing = decide(SNAP, {role: 'reviewer', billing: {gemini_primary: false}});
   assert.match(why(billing, 'agy-sdk/agy_google/gemini-3.6-flash').join(), /billing: sdk-seat-metered/);
 });
