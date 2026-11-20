@@ -76,6 +76,8 @@ export const MUTATIONS = [
   // ---- the transport on each attempt (KS4, KG-6) -----------------------------------------------------------------------
   {id: 'J10', what: 'the attempt\'s transport recorded as agy (agyTurn\'s resolved transport not reported)', tests: [jail('^board: the SDK seat'), jail('^KG-6:')],
     edits: [one(RI, 'onTransport(AGY_TRANSPORT_OF[transport] ?? null);', 'onTransport(null);')]},
+  {id: 'J15', what: 'the turn\'s transport recorded as agy (the attempt says agy-cli or agy-sdk, the run\'s turns row does not)', tests: [jail('^board: the SDK seat'), jail('^KG-6:')],
+    edits: [one(RI, 'transport: ran ?? settings.transport, purpose, ms, chars: r.text.length,', 'transport: transport ?? "agy", purpose, ms, chars: r.text.length,')]},
   // ---- no descriptor beyond 0, 1 and 2 at any spawn point (register KG-11; src/agy/fd-exec.mjs) -------------------------
   {id: 'F1', what: 'the descriptor closer removed at the verify launcher (bwrap spawned directly: what the launcher inherited reaches the verify_cmd)',
     tests: [fds('^CLI worker:'), iso('^credential isolation, WORKER path'), iso('^credential isolation, CONTROLLER path')],

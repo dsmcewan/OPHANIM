@@ -322,11 +322,11 @@ test("B(sdk) L-124: the python Antigravity SDK seat (critique, scout; asked for 
 
 test("O the subscription (OAuth) lanes keep working with nothing declared: the planner and the implementer forced onto the CLI, and a reviewer on a declared lane or by the default transport, answer through the agy CLI", async t => {
   const rows = [
-    ["plan", { planner: seat("agy_google", SDK_MODEL), ...XAI_WORKER, reviewer: seat("openai", "gpt-6-astra") }, { planTitle: "model" }, "pantheon-planner", SDK_MODEL, "agy"],
-    ["work", { implementer: seat("agy_google", SDK_MODEL), reviewer: seat("xai", "grok-4.7") }, {}, "pantheon-implementer", SDK_MODEL, "agy"],
+    ["plan", { planner: seat("agy_google", SDK_MODEL), ...XAI_WORKER, reviewer: seat("openai", "gpt-6-astra") }, { planTitle: "model" }, "pantheon-planner", SDK_MODEL, "agy-cli"],
+    ["work", { implementer: seat("agy_google", SDK_MODEL), reviewer: seat("xai", "grok-4.7") }, {}, "pantheon-implementer", SDK_MODEL, "agy-cli"],
     ["critique", { ...XAI_WORKER, reviewer: seat("agy_google", LANE) }, {}, "pantheon-reviewer", LANE, "agy-cli"],
     // The reviewer's DEFAULT transport (no PANTHEON_AGY_TRANSPORT) is the CLI lane now (owner decision, L-136).
-    ["critique", { ...XAI_WORKER, reviewer: seat("agy_google", SDK_MODEL) }, {}, "pantheon-reviewer", SDK_MODEL, "agy"],
+    ["critique", { ...XAI_WORKER, reviewer: seat("agy_google", SDK_MODEL) }, {}, "pantheon-reviewer", SDK_MODEL, "agy-cli"],
   ];
   for (const [purpose, seatOverrides, extra, card, model, transport] of rows) {
     await t.test(`${purpose} on ${model}`, async () => {

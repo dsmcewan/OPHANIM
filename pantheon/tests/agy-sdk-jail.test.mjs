@@ -207,6 +207,7 @@ test("board: the SDK seat's whole process runs in the jail -- the controller's e
   // KG-6: the attempt says which transport served it, and the metrics map it onto its executable capability.
   assert.deepEqual(critique(b.run).map(a => [a.transport, a.outcome, a.provider_requests]), [["agy-sdk", "ok", b.fake.requests.length]], JSON.stringify(critique(b.run)));
   assert.equal(critique(b.run)[0].settings.transport, "agy", "the seat's transport as selected is kept in its settings");
+  assert.deepEqual(b.run.turns.filter(x => x.vendor === "agy_google").map(x => [x.purpose, x.transport, x.settings.transport]), [["critique", "agy-sdk", "agy"]], "the turn records the transport it ran on too (KG-6)");
   const M = extractMetrics({ runs: [{ run: b.run, source: "board", practice: false }], stages: [], transcripts: [], gemini: [], relay: [], unreadable: [], read: {} }, { snapshot: capabilitySnapshot(registries()) });
   assert.equal(M.capabilities[CAPABILITY]?.attempts, 1, JSON.stringify(Object.keys(M.capabilities)));
   assert.deepEqual(M.unmapped.filter(u => u.seat.vendor === "agy_google"), [], "the SDK attempt is not listed unmapped");
@@ -300,6 +301,7 @@ test("KG-6: an agy seat on the CLI lane records transport agy-cli on its attempt
     const r = await runOpenItem(spec("c2-cli"), { ...opts(), seatOverrides: { reviewer: seat("agy_google", MODEL, { transport: "agy" }) } });
     const run = JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
     assert.deepEqual(critique(run).map(a => [a.transport, a.outcome, a.settings.transport]), [["agy-cli", "ok", "agy"]], JSON.stringify(critique(run)));
+    assert.deepEqual(run.turns.filter(x => x.vendor === "agy_google").map(x => [x.purpose, x.transport, x.settings.transport]), [["critique", "agy-cli", "agy"]], "the turn records the transport it ran on too, the seat's own in its settings");
     const old = { ...run, attempts: critique(run).map(a => ({ ...a, transport: "agy" })) };
     const M = extractMetrics({ runs: [{ run, source: "new" }, { run: old, source: "old" }], stages: [], transcripts: [], gemini: [], relay: [], unreadable: [], read: {} }, { snapshot: capabilitySnapshot(registries()) });
     assert.equal(M.capabilities[`agy-cli/agy_google/${MODEL}`]?.attempts, 1);

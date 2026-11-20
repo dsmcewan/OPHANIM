@@ -789,7 +789,9 @@ export async function runOpenItem(spec, opts = {}) {
       recordAttempt({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, outcome: "ok", status: null, code: null, why: null, usage, settings, ms: Date.now() - a0, provider_requests: laneCharged });
       // The agy transports take no effort. The protocol never decides one for these seats; if one
       // arrives anyway it is recorded as not carried rather than silently dropped.
-      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "agy", purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
+      // THE TURN'S TRANSPORT (KG-6): the one agyTurn resolved, agy-cli or agy-sdk, as on the attempt, so the metrics map the
+      // turn (its `accepted` outcome) onto its executable capability; `settings` keeps the seat's transport as selected.
+      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
         tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}),
         served_model: model, served_model_source: "input", ...chosen });
       // FORMAT REQUIREMENT (owner direction 2026-11-17). The Antigravity transports return no serving model. The model
