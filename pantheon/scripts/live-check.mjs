@@ -6,7 +6,10 @@
 // on the vendor's side -- can only be shown by asking the vendor something it could answer only
 // from the first turn. That is the check here, and it is the whole point of the file.
 //
-// Usage: node scripts/live-check.mjs [vendor] [model]   (keys from the environment)
+// Usage: node scripts/live-check.mjs [vendor] [model] [--replay|--server] [--gemini-api-primary N --gemini-usage FILE]
+//   (keys from the environment). THE GEMINI BILLING POLICY (register L-146; docs/billing-policy.md), OFF when absent:
+//   agy_google is the metered Gemini API, so it runs only with --gemini-api-primary N, at most N billed requests counted
+//   from --gemini-usage FILE (required with it; each request is recorded there before it is sent). A key authorizes nothing.
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
@@ -14,14 +17,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeClient, ADAPTERS, isReplay } from "../src/sdk/adapter.mjs";
+import { operatorGemini } from "../src/sdk/live.mjs";
 import { sdkTurn, recordExtendsLocally } from "../src/sdk/seat-sdk.mjs";
 import { loadSeat } from "../src/seat/store.mjs";
 
-const vendor = process.argv[2] ?? "openai";
+const gemini = operatorGemini(process.argv.slice(2), { script: "live-check", make: v => makeClient(v, { OpenAI, GoogleGenAI, Anthropic }) });
+const argv = gemini.argv;
+const vendor = argv[0] ?? "openai";
 // Third arg may be a model or a continuity mode, so the same script can prove both modes.
-const continuity = process.argv.includes("--replay") ? "replay"
-  : process.argv.includes("--server") ? "server" : undefined;
-const model = (process.argv[3] && !process.argv[3].startsWith("--")) ? process.argv[3] : ADAPTERS[vendor]?.default_model;
+const continuity = argv.includes("--replay") ? "replay"
+  : argv.includes("--server") ? "server" : undefined;
+const model = (argv[1] && !argv[1].startsWith("--")) ? argv[1] : ADAPTERS[vendor]?.default_model;
 if (!ADAPTERS[vendor]) { console.error(`no adapter for "${vendor}"`); process.exit(2); }
 
 // An isolated PANTHEON_HOME: a live check must not write into the operator's real seat store.
@@ -36,7 +42,7 @@ let failed = false;
 const say = (ok, line) => { if (!ok) failed = true; console.log(`${ok ? "ok  " : "FAIL"}  ${line}`); };
 
 try {
-  const client = makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic });
+  const client = gemini.clientFor(vendor, { model, purpose: "live-check" });
   console.log(`vendor=${vendor} model=${model} continuity=${continuity ?? "(vendor default)"} host=${ADAPTERS[vendor].base_url ?? "(sdk default)"}`);
 
   const a = await sdkTurn({ ...seat, client, model, continuity,

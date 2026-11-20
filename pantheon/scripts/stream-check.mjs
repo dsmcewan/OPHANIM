@@ -3,13 +3,20 @@
 // buffers and emits everything at the end: it satisfies every shape assertion, produces the
 // right final text, and is useless for a live view. So the check is temporal, not structural —
 // it measures the gap between the first delta and the last, and fails if they arrive together.
+//
+// Usage: node scripts/stream-check.mjs [vendor] [model] [--gemini-api-primary N --gemini-usage FILE]. THE GEMINI BILLING
+// POLICY (register L-146; docs/billing-policy.md), OFF when absent: agy_google is the metered Gemini API, so it runs only
+// with --gemini-api-primary N, at most N billed requests (a continuation hop is one) counted from --gemini-usage FILE
+// (required with it; each request is recorded there before it is sent). A key authorizes nothing.
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { makeClient, ADAPTERS, sendTurn } from "../src/sdk/adapter.mjs";
+import { operatorGemini } from "../src/sdk/live.mjs";
 
-const vendor = process.argv[2] ?? "openai";
-const model = process.argv[3] ?? ADAPTERS[vendor]?.default_model;
+const gemini = operatorGemini(process.argv.slice(2), { script: "stream-check", make: v => makeClient(v, { OpenAI, GoogleGenAI, Anthropic }) });
+const vendor = gemini.argv[0] ?? "openai";
+const model = gemini.argv[1] ?? ADAPTERS[vendor]?.default_model;
 if (!ADAPTERS[vendor]) { console.error(`no adapter for "${vendor}"`); process.exit(2); }
 
 let failed = false;
@@ -18,7 +25,7 @@ const say = (ok, line) => { if (!ok) failed = true; console.log(`${ok ? "ok  " :
 const events = [];
 const t0 = Date.now();
 try {
-  const client = makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic });
+  const client = gemini.clientFor(vendor, { model, purpose: "stream-check" });
   const res = await sendTurn({
     client, vendor, model,
     prompt: "List the numbers 1 to 60, one per line, nothing else.",

@@ -93,6 +93,29 @@ export function billingFromFlags(opts = {}) {
   return resolveGeminiBilling(declared);
 }
 
+/** The operator scripts' flag naming the usage record a budget is counted from (register L-146). */
+export const USAGE_FLAG = "--gemini-usage";
+/**
+ * AN OPERATOR SCRIPT'S RAW ARGV (register L-146: bin/cross-lab-review.mjs, scripts/live-check, live-ship, stream-check,
+ * view-check; their point of spend is sdk/live.mjs operatorGemini). The two flags and `--gemini-usage FILE` are taken out
+ * of it (`--flag value` or `--flag=value`) and the rest is returned in order, for the script's own positional parsing.
+ * The flags resolve through billingFromFlags, so a malformed or unbudgeted flag is GEMINI_BILLING_INVALID here as at
+ * every entry point. Returns {argv, policy, usage}: `usage` is the --gemini-usage path as written, or null.
+ */
+export function billingFlagsFromArgv(argv = []) {
+  const names = [...GEMINI_KINDS.map(k => FLAG_OF[k]), USAGE_FLAG], taken = {}, rest = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = String(argv[i]), name = names.find(n => a === n || a.startsWith(`${n}=`));
+    if (!name) { rest.push(argv[i]); continue; }
+    const value = a === name ? argv[++i] : a.slice(name.length + 1);
+    if (value === undefined || value === "" || (a === name && String(value).startsWith("--"))) invalid(`${name} takes a value`);
+    if (Object.hasOwn(taken, name)) invalid(`${name} is given twice`);
+    taken[name] = String(value);
+  }
+  const flags = Object.fromEntries(GEMINI_KINDS.filter(k => Object.hasOwn(taken, FLAG_OF[k])).map(k => [FLAG_OF[k].slice(2), taken[FLAG_OF[k]]]));
+  return { argv: rest, policy: billingFromFlags(flags), usage: taken[USAGE_FLAG] ?? null };
+}
+
 /** A configuration block {metered_gemini_failover?: {enabled, budget?}, gemini_api_primary?: {enabled, budget?}}, declared at `where`. */
 export function billingFromConfig(block, where) {
   if (block === undefined || block === null) return GEMINI_BILLING_OFF;
