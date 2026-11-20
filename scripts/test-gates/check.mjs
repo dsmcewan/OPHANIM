@@ -41,7 +41,6 @@ import {fileURLToPath} from 'node:url';
 import {ROOT, coverage} from './suites.mjs';
 import {designated, probeBwrap, baselineDrift} from './real-bwrap.mjs';
 import {parseLog} from './parse-log.mjs';
-import {FEED_FLAGS, feedFlag, feedDetect, feedLine, gatePartial} from './feed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PASS = 'PASS', FAIL = 'FAIL', UNVERIFIED = 'UNVERIFIED';
@@ -351,7 +350,8 @@ export async function main(argv) {
     else if (a === '--allow-unverified') opt.allowUnverified = true;
     else if (a === '--file-timeout') opt.fileTimeoutS = positive(argv[++i], '--file-timeout');
     else if (a === '--test-timeout') opt.testTimeoutMs = positive(argv[++i], '--test-timeout');
-    else if (Object.values(FEED_FLAGS).includes(a)) i = feedFlag(argv, i, opt);
+    else if (a === '--no-self-repair-records') opt.feed = false;
+    else if (a === '--self-repair-records') { const d = argv[++i]; if (!d || d.startsWith('--')) throw new Error('--self-repair-records takes a directory'); opt.feed = path.resolve(d); }
     else if (mode === 'logs' && a.includes('=')) { const k = a.indexOf('='); opt.logs.push({script: a.slice(0, k), file: a.slice(k + 1)}); }
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -396,10 +396,14 @@ export async function main(argv) {
   console.log(text);
   if (opt.report) fs.writeFileSync(opt.report, text + '\n');
   if (opt.json) fs.writeFileSync(opt.json, JSON.stringify(record, null, 2) + '\n');
-  // Feed the self-repair lane's Detect (feed.mjs): a whole run only, and never a cause of this gate's verdict.
-  console.log(feedLine(gatePartial(mode, opt)
-    ? {skipped: 'a partial gate run (--only, --suite) is not fed: Detect reads the latest gate record as the whole picture'}
-    : await feedDetect({kind: 'gate', record, feed: opt.feed})));
+  // Feed the self-repair lane's Detect: a whole run only. feed.mjs is loaded LAZILY, so this gate runs, and its verdict
+  // and exit stand, whether or not the feed (or the lane behind it) can be loaded: the outer wheel never depends on it.
+  try {
+    const f = await import('./feed.mjs');
+    console.log(f.feedLine(f.gatePartial(mode, opt)
+      ? {skipped: 'a partial gate run (--only, --suite) is not fed: Detect reads the latest gate record as the whole picture'}
+      : await f.feedDetect({kind: 'gate', record, feed: opt.feed})));
+  } catch (e) { console.log(`self-repair: no record for Detect (the feed could not be loaded: ${String(e?.message ?? e).slice(0, 160)})`); }
   return worst === PASS ? 0 : worst === FAIL ? 1 : opt.allowUnverified ? 0 : 2;
 }
 

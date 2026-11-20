@@ -3,8 +3,9 @@
 // directory -- only while the lane is ON (the owner-signed switch) and only when the working tree IS that commit -- so a
 // regression or a measured flake reaches Detect without a hand-made `self-repair record`.
 //
-// The lane is the inner wheel; these tools are outer ones. So the lane is loaded lazily, and any failure to load or write
-// is a reported skip: a broken lane module can never stop a gate or change its verdict or exit code.
+// The lane is the inner wheel; these tools are outer ones. So the tools load THIS module lazily (and parse the two flags
+// themselves), this module loads the lane lazily, and any failure to load or write is a reported skip: a missing or broken
+// feed or lane can never stop a gate or change its verdict or exit code.
 //
 //   --self-repair-records DIR   feed DIR whatever the switch (still only for a clean tree)
 //   --no-self-repair-records    do not feed Detect
@@ -13,18 +14,6 @@ import {ROOT} from './suites.mjs';
 
 export const FEED_FLAGS = Object.freeze({dir: '--self-repair-records', off: '--no-self-repair-records'});
 const loadLane = () => import('../../ophanim/operate/self-repair.mjs');
-
-/** If argv[i] is a feed flag, record it on opt.feed (false, or a directory) and return the last index it used; else -1. */
-export function feedFlag(argv, i, opt) {
-  if (argv[i] === FEED_FLAGS.off) { opt.feed = false; return i; }
-  if (argv[i] === FEED_FLAGS.dir) {
-    const d = argv[i + 1];
-    if (!d || d.startsWith('--')) throw new Error(`${FEED_FLAGS.dir} takes a directory`);
-    opt.feed = path.resolve(d);
-    return i + 1;
-  }
-  return -1;
-}
 
 /** Hand `record` to the lane: {written, commit} or {skipped: why}. Never throws. `feed` is opt.feed (undefined = by switch). */
 export async function feedDetect({kind, record, feed = undefined, repo = ROOT, load = loadLane, env = process.env}) {

@@ -31,7 +31,6 @@ import {fileURLToPath} from 'node:url';
 import {runFile, readEvents, evaluateRuns, DEFAULT_TEST_TIMEOUT_MS, DEFAULT_FILE_TIMEOUT_S, PASS, FAIL, UNVERIFIED} from './check.mjs';
 import {designated, probeBwrap} from './real-bwrap.mjs';
 import {suites, ROOT} from './suites.mjs';
-import {FEED_FLAGS, feedFlag, feedDetect, feedLine, stressFeedable} from './feed.mjs';
 
 export const SCHEMA = 'ophanim.toolkit.stress/v1';
 export const DEFAULT_REPEAT = 5;
@@ -140,7 +139,8 @@ export async function main(argv, {out = s => console.log(s)} = {}) {
     else if (a === '--file-timeout') opt.fileTimeoutS = whole(argv[++i], '--file-timeout');
     else if (a === '--json') opt.json = argv[++i];
     else if (a === '--out') opt.outDir = path.resolve(argv[++i]);
-    else if (Object.values(FEED_FLAGS).includes(a)) i = feedFlag(argv, i, opt);
+    else if (a === '--no-self-repair-records') opt.feed = false;
+    else if (a === '--self-repair-records') { const d = argv[++i]; if (!d || d.startsWith('--')) throw new Error('--self-repair-records takes a directory'); opt.feed = path.resolve(d); }
     else throw new Error(`unknown argument: ${a}`);
   }
   if (!opt.files.length) throw new Error('usage: stress.mjs --files <test file>... [--repeat N] [--concurrency K] [--load L] [--test-timeout MS] [--file-timeout S] [--json FILE] [--out DIR]');
@@ -156,9 +156,11 @@ export async function main(argv, {out = s => console.log(s)} = {}) {
   } finally { if (!keep) fs.rmSync(outDir, {recursive: true, force: true}); }
   out(render(rec));
   if (opt.json) fs.writeFileSync(opt.json, JSON.stringify(rec, null, 2) + '\n');
-  // Feed the self-repair lane's Detect (feed.mjs) with this repository's files only; never a cause of the verdict.
-  const feedable = stressFeedable(rec);
-  out(feedLine(feedable ? await feedDetect({kind: 'stress', record: feedable, feed: opt.feed}) : {skipped: 'no test file of this repository was run'}));
+  // Feed the self-repair lane's Detect with this repository's files only; feed.mjs is loaded lazily (as in check.mjs).
+  try {
+    const f = await import('./feed.mjs'), feedable = f.stressFeedable(rec);
+    out(f.feedLine(feedable ? await f.feedDetect({kind: 'stress', record: feedable, feed: opt.feed}) : {skipped: 'no test file of this repository was run'}));
+  } catch (e) { out(`self-repair: no record for Detect (the feed could not be loaded: ${String(e?.message ?? e).slice(0, 160)})`); }
   return rec.verdict === PASS ? 0 : rec.verdict === FAIL ? 1 : 2;
 }
 

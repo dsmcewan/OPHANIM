@@ -4,18 +4,20 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import {FEED_FLAGS, feedFlag, feedDetect, feedLine, gatePartial, stressFeedable} from './feed.mjs';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {feedDetect, feedLine, gatePartial, stressFeedable} from './feed.mjs';
 
-test('feed flags: --no-self-repair-records turns feeding off; --self-repair-records takes a directory', () => {
-  const o1 = {};
-  assert.equal(feedFlag([FEED_FLAGS.off], 0, o1), 0);
-  assert.equal(o1.feed, false);
-  const o2 = {};
-  assert.equal(feedFlag([FEED_FLAGS.dir, 'rec'], 0, o2), 1);
-  assert.equal(o2.feed, path.resolve('rec'));
-  assert.throws(() => feedFlag([FEED_FLAGS.dir], 0, {}), /takes a directory/);
-  assert.throws(() => feedFlag([FEED_FLAGS.dir, '--json'], 0, {}), /takes a directory/);
-  assert.equal(feedFlag(['--json'], 0, {}), -1);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+test('feed flags: the gate and the stress tool parse --self-repair-records DIR and --no-self-repair-records themselves', () => {
+  for (const [tool, args] of [['check.mjs', ['logs']], ['stress.mjs', ['--files', path.join(HERE, 'toolkit-feed.test.mjs')]]]) {
+    const bare = spawnSync(process.execPath, [path.join(HERE, tool), ...args, '--self-repair-records'], {encoding: 'utf8', timeout: 60_000});
+    assert.notEqual(bare.status, 0, `${tool}: a missing directory is refused`);
+    assert.match(bare.stderr, /--self-repair-records takes a directory/, tool);
+    const next = spawnSync(process.execPath, [path.join(HERE, tool), ...args, '--self-repair-records', '--no-self-repair-records'], {encoding: 'utf8', timeout: 60_000});
+    assert.match(next.stderr, /--self-repair-records takes a directory/, `${tool}: a flag is not taken as the directory`);
+  }
 });
 
 test('feed: the lane is called with the kind, the record and the directory; off means it is not called at all', async () => {
