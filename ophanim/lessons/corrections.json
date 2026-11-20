@@ -464,6 +464,14 @@
           "ref": "the integration toolkit (1f6e2ae); manifest-reach also caught the guest-seat manifest (2295293)",
           "detected_by": "scripts/test-gates/manifest-reach.mjs, now this class's detector",
           "note": "the class now has a mechanical detector: manifest-reach fails a manifest that does not grant or hold every test that imports, and every runner that imports or edits, a module the agent may change. It caught the hand-written guest-seat manifest (capability.mutate.mjs, a target-edit the import-based reach missed) and flagged the D2 and jail-fds manifests. The owner asked for this toolkit (\"after market toolkit\"). Next step: run manifest-reach on every manifest before dispatch"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the pentest slice at integration (45dab29)",
+          "detected_by": "ophanim/ledger/layering.test.mjs and the gate's coverage orphan check (scripts/test-gates/suites.mjs coverage), not manifest-reach",
+          "note": "the brief placed the federation and graph-integrity attacks under packages/graph/tests/pentest/, where importing the shared harness breaks the graph layering rule, and three pentest files where no suite's glob reaches (test:gates would fail, CI would never run them). The brief's verification budget listed neither check. manifest-reach could not see it: both checks find their files by directory scan or glob, not by import. Fixed by moving the files and adding the two pentest directories to test:proof; the layering rule did not loosen. Next step: every brief that adds files lists layering.test.mjs and the coverage orphan check in its budget"
         }
       ],
       "detector": {
