@@ -26,7 +26,8 @@ import {fileURLToPath} from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const WORK_TEST = 'ophanim/graph/graph-d1-work.test.mjs', LEARNING_TEST = 'ophanim/graph/graph-d1-learning.test.mjs', REASSESS_TEST = 'ophanim/graph/graph-d1-reassess.test.mjs';
 const WHY_TEST = 'ophanim/graph/graph-d1-why.test.mjs', CONC_TEST = 'ophanim/graph/graph-d1-concurrency.test.mjs', EXTRACT_TEST = 'ophanim/graph/extract.test.mjs';
-const SUITES = [WORK_TEST, LEARNING_TEST, REASSESS_TEST, WHY_TEST, CONC_TEST, EXTRACT_TEST];
+const LANE_TEST = 'ophanim/graph/graph-lane-learning.test.mjs', D1SRC = 'ophanim/graph/d1-sources.mjs';
+const SUITES = [WORK_TEST, LEARNING_TEST, REASSESS_TEST, WHY_TEST, CONC_TEST, EXTRACT_TEST, LANE_TEST];
 const WORK = 'ophanim/graph/work.mjs', LEARNING = 'ophanim/graph/learning.mjs', REASSESS = 'ophanim/graph/reassess.mjs', WHY = 'ophanim/graph/why.mjs', INDEX = 'ophanim/graph/extract/index.mjs';
 const WITHHELD = /(^|\/)findings-[^/]*(\/|$)/;
 const one = (file, from, to) => ({file, from, to});
@@ -77,6 +78,15 @@ export const MUTATIONS = [
   {id: 'Y2', what: 'a shallow checkout\'s boundary commit is named as the one that introduced a path already in its tree, and its message read for a decision', tests: [[WHY_TEST, '^why it exists: a SHALLOW checkout']],
     edits: [one(WHY, "first = earliest?.history_cut ? null : earliest;", "first = earliest;"),
       one(WHY, "  const cut = commits[0]?.history_cut === true;", "  const cut = false;")]},
+  // ---- the self-repair lane's rounds in the learning graph (owner, 2026-11-20) ------------------------------------------
+  {id: 'LL1', what: "a lane round's finding names no file: learningReuse cannot join it to the file a Diagnose touches", tests: [[LANE_TEST, '^lane learning: through the graph']],
+    edits: [one(LEARNING, "      file, severity: null, outcome: closes.get(n)?.outcome ?? 'open',", "      file: null, severity: null, outcome: closes.get(n)?.outcome ?? 'open',")]},
+  {id: 'LL2', what: 'a landed round records no repair (its commit and test are lost)', tests: [[LANE_TEST, '^lane learning: each repair round']],
+    edits: [one(LEARNING, "    if (!land || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(land.p.commit ?? '')) continue;", '    if (true) continue;')]},
+  {id: 'LL3', what: 'a rollback does not mark the repair it reverted', tests: [[LANE_TEST, '^lane learning: each repair round']],
+    edits: [one(LEARNING, "      if (p.kind === 'rollback' && Number.isInteger(p.culprit?.round)) reverted.set(p.culprit.round, p.round);", '')]},
+  {id: 'LL4', what: 'the lane-learning source is not composed with the work ledger (the rounds never reach the graph)', tests: [[LANE_TEST, '^lane learning: through the graph'], [WORK_TEST, '^work: every source of Slice D part 1 is registered']],
+    edits: [one(D1SRC, '...(work ? [workGraphSource(work), laneLearningSource(work)] : [])', '...(work ? [workGraphSource(work)] : [])')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

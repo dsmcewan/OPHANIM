@@ -36,7 +36,7 @@ import {authoritySource, AUTHORITY_SOURCE, AUTHORITY_EXTRACTOR, AUTHORITY_ORIGIN
 import {boardSource, BOARD_SOURCE, BOARD_EXTRACTOR, BOARD_ORIGIN} from './board.mjs';
 import {resolveCommit} from './git.mjs';
 import {IMPACT_RULE} from '../impact.mjs';
-import {D1_ORIGIN_SPEC, D1_MODULES, d1Sources, LEARNING_SOURCE, WORK_GRAPH_SOURCE, CYCLE_LEARNING_SOURCE} from '../d1-sources.mjs';
+import {D1_ORIGIN_SPEC, D1_MODULES, d1Sources, LEARNING_SOURCE, WORK_GRAPH_SOURCE, CYCLE_LEARNING_SOURCE, LANE_LEARNING_SOURCE} from '../d1-sources.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export {IMPACT_RULE};
@@ -49,7 +49,7 @@ export const DEPENDENCY_SOURCES = Object.freeze([PACKAGES_SOURCE, PINS_SOURCE, I
  * B2's: the packages before the imports that resolve to them; the pins after the workflows of the verification source;
  * the literals, whose mentions name what the others hold, last of the repository-backed; the board with the ledgers).
  */
-export const ORDER = Object.freeze([REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, LEARNING_SOURCE, ...DEPENDENCY_SOURCES, STATUS_SOURCE, WORK_SOURCE, WORK_GRAPH_SOURCE, CYCLE_SOURCE, CYCLE_LEARNING_SOURCE, BOARD_SOURCE]);
+export const ORDER = Object.freeze([REPO_SOURCE, VERIFICATION_SOURCE, RECORDS_SOURCE, LESSONS_SOURCE, LEARNING_SOURCE, ...DEPENDENCY_SOURCES, STATUS_SOURCE, WORK_SOURCE, WORK_GRAPH_SOURCE, LANE_LEARNING_SOURCE, CYCLE_SOURCE, CYCLE_LEARNING_SOURCE, BOARD_SOURCE]);
 
 /** The origins of Slice B (and Slice A's lessons extractor), each with the key id that may write as it. */
 export const ORIGIN_SPEC = Object.freeze({

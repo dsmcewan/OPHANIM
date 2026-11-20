@@ -13,16 +13,18 @@
 import {fileURLToPath} from 'node:url';
 import {workGraphSource, WORK_GRAPH_SOURCE, WORK_GRAPH_EXTRACTOR, WORK_GRAPH_ORIGIN, WORK_RULE, WORK_RULE_ORIGIN} from './work.mjs';
 import {learningSource, cycleLearningSource, LEARNING_SOURCE, LEARNING_EXTRACTOR, LEARNING_ORIGIN, CYCLE_LEARNING_SOURCE, CYCLE_LEARNING_EXTRACTOR,
-  CYCLE_LEARNING_ORIGIN, LEARNING_RULE, LEARNING_RULE_ORIGIN, SIMILARITY_RULE, SIMILARITY_ORIGIN, MUTATION_TOOL, MUTATION_TOOL_ORIGIN} from './learning.mjs';
+  CYCLE_LEARNING_ORIGIN, LEARNING_RULE, LEARNING_RULE_ORIGIN, SIMILARITY_RULE, SIMILARITY_ORIGIN, MUTATION_TOOL, MUTATION_TOOL_ORIGIN,
+  laneLearningSource, LANE_LEARNING_SOURCE, LANE_LEARNING_EXTRACTOR, LANE_LEARNING_ORIGIN} from './learning.mjs';
 import {REASSESS_RULE, REASSESS_ORIGIN} from './reassess.mjs';
 import {WHY_RULE, WHY_ORIGIN} from './why.mjs';
 
-export {WORK_GRAPH_SOURCE, LEARNING_SOURCE, CYCLE_LEARNING_SOURCE, WORK_RULE, LEARNING_RULE, SIMILARITY_RULE, MUTATION_TOOL, REASSESS_RULE, WHY_RULE};
-export const D1_SOURCES = Object.freeze([LEARNING_SOURCE, WORK_GRAPH_SOURCE, CYCLE_LEARNING_SOURCE]);
+export {WORK_GRAPH_SOURCE, LEARNING_SOURCE, CYCLE_LEARNING_SOURCE, LANE_LEARNING_SOURCE, WORK_RULE, LEARNING_RULE, SIMILARITY_RULE, MUTATION_TOOL, REASSESS_RULE, WHY_RULE};
+export const D1_SOURCES = Object.freeze([LEARNING_SOURCE, WORK_GRAPH_SOURCE, CYCLE_LEARNING_SOURCE, LANE_LEARNING_SOURCE]);
 export const D1_ORIGIN_SPEC = Object.freeze({
   [WORK_GRAPH_EXTRACTOR]: {...WORK_GRAPH_ORIGIN, keys: ['graph-extractor']},
   [LEARNING_EXTRACTOR]: {...LEARNING_ORIGIN, keys: ['graph-extractor']},
   [CYCLE_LEARNING_EXTRACTOR]: {...CYCLE_LEARNING_ORIGIN, keys: ['graph-extractor']},
+  [LANE_LEARNING_EXTRACTOR]: {...LANE_LEARNING_ORIGIN, keys: ['graph-extractor']},
   [WORK_RULE]: {...WORK_RULE_ORIGIN, keys: ['graph-rule']},
   [LEARNING_RULE]: {...LEARNING_RULE_ORIGIN, keys: ['graph-rule']},
   [SIMILARITY_RULE]: {...SIMILARITY_ORIGIN, keys: ['graph-rule']},
@@ -36,6 +38,8 @@ export const D1_MODULES = Object.freeze({
   [LEARNING_SOURCE]: {factory: learningSource, module: here('./learning.mjs')},
   [WORK_GRAPH_SOURCE]: {factory: workGraphSource, module: here('./work.mjs')},
   [CYCLE_LEARNING_SOURCE]: {factory: cycleLearningSource, module: here('./learning.mjs')},
+  // The self-repair lane's rounds, from the same work ledger (owner, 2026-11-20: "wire the rounds into the learning graph").
+  [LANE_LEARNING_SOURCE]: {factory: laneLearningSource, module: here('./learning.mjs')},
 });
 /** The adapters, as extract/index.mjs sourcesOf composes them: learning with the lessons, the others with their ledgers. */
-export const d1Sources = ({repo, lessons, work, cycle}) => [...(lessons ? [learningSource({repo})] : []), ...(work ? [workGraphSource(work)] : []), ...(cycle ? [cycleLearningSource(cycle)] : [])];
+export const d1Sources = ({repo, lessons, work, cycle}) => [...(lessons ? [learningSource({repo})] : []), ...(work ? [workGraphSource(work), laneLearningSource(work)] : []), ...(cycle ? [cycleLearningSource(cycle)] : [])];
