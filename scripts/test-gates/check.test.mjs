@@ -200,7 +200,8 @@ test('every suite CI runs is enumerated from package.json, every test file is in
   const cov = coverage();
   assert.deepEqual(cov.problems, []);
   assert.deepEqual(cov.orphans, []);
-  assert.deepEqual(cov.suites.map(s => s.id), ['test:@argo/model-client', 'test:@argo/ledger', 'test:pantheon', 'test:proof', 'test:gates:self']);
+  // The knowledge-graph foundation's suite (packages/graph, registered in the root test script by Slice A) is acknowledged here.
+  assert.deepEqual(cov.suites.map(s => s.id), ['test:@argo/model-client', 'test:@argo/ledger', 'test:@argo/graph', 'test:pantheon', 'test:proof', 'test:gates:self']);
   for (const s of cov.suites) assert.ok(s.files.length > 0, s.id);
   assert.ok(suites().find(s => s.id === 'test:pantheon').flags.includes('--test-concurrency=2'));
   assert.throws(() => parseNodeTest('node --test a.mjs; rm -rf x', 'x'), /shell syntax/);
