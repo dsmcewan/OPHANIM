@@ -25,8 +25,9 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const LANE_TEST = 'ophanim/operate/self-repair.test.mjs', VERIFY_TEST = 'ophanim/operate/self-repair-verify.test.mjs', PEN_TEST = 'ophanim/operate/pentest/g-self-repair.test.mjs';
-const FEED_TEST = 'ophanim/operate/self-repair-feed.test.mjs';
-const SUITES = [LANE_TEST, VERIFY_TEST, PEN_TEST, FEED_TEST];
+const FEED_TEST = 'ophanim/operate/self-repair-feed.test.mjs', LOOP_TEST = 'ophanim/operate/self-repair-inspect.test.mjs';
+const INSPECTOR = 'ophanim/operate/self-repair-inspect.mjs';
+const SUITES = [LANE_TEST, VERIFY_TEST, PEN_TEST, FEED_TEST, LOOP_TEST];
 const LANE = 'ophanim/operate/self-repair.mjs', LEDGER = 'ophanim/operate/work-ledger.mjs', SCHED = 'ophanim/operate/scheduler.mjs';
 const WITHHELD = /(^|\/)findings-[^/]*(\/|$)/;
 const one = (file, from, to) => ({file, from, to});
@@ -116,7 +117,18 @@ export const MUTATIONS = [
   {id: 'SR25', what: 'the feeder ignores a dirty tree: a run on uncommitted changes is attributed to HEAD', tests: [[FEED_TEST, '^feed: a working tree that is not its commit']],
     edits: [one(LANE, '  if (changes.length) return {skipped:', '  if (false) return {skipped:')]},
   {id: 'SR26', what: "Verify's own stress run feeds Detect", tests: [[FEED_TEST, '^feed: Verify']],
-    edits: [one(LANE, ", '--json', '{json}', '--no-self-repair-records']),", ", '--json', '{json}']),")]},
+    edits: [one(LANE, "'--files', '{file}', '--repeat', '{rounds}', '--json', '{json}', '--no-self-repair-records']),", "'--files', '{file}', '--repeat', '{rounds}', '--json', '{json}']),")]},
+  // ---- the recursive loop: self-inspection (owner, 2026-11-20) ---------------------------------------------------------
+  {id: 'SR27', what: 'the idle lane does nothing: the recursive loop is dropped', tests: [[LOOP_TEST, '^loop: an idle lane']],
+    edits: [one(LANE, 'log.inspection = inspectIdle({repo, state, head, config, records: recordsDir, start: startInspection, at});', 'log.inspection = undefined;')]},
+  {id: 'SR28', what: 'the lane inspects while a round is open (it is repairing, not idle)', tests: [[LOOP_TEST, '^loop: when something needs repair']],
+    edits: [one(LANE, '        if (!rounds().some(r => !r.close)) log.inspection = inspectIdle(', '        if (true) log.inspection = inspectIdle(')]},
+  {id: 'SR29', what: 'a second inspection starts while one runs', tests: [[LOOP_TEST, '^loop: one inspection at a time']],
+    edits: [one(LANE, "    if (running && alive(running.pid)) return {state: 'running',", "    if (false) return {state: 'running',")]},
+  {id: 'SR30', what: 'the same commit is inspected again and again', tests: [[LOOP_TEST, '^loop: a commit is inspected once']],
+    edits: [one(LANE, "    if (last?.commit === head) return {state: 'already-inspected',", "    if (false) return {state: 'already-inspected',")]},
+  {id: 'SR31', what: 'the inspector never stresses the tests changed since the last inspection', tests: [[LOOP_TEST, '^inspector: the gate run']],
+    edits: [one(INSPECTOR, '    const files = plan.since ? changedTests(co.dir, plan.since, plan.commit) : [];', '    const files = [];')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

@@ -102,6 +102,14 @@ export const DEFAULT_CONFIG = Object.freeze({
     // --no-self-repair-records: Verify's own stress run is evidence for THIS round, not a record for Detect to read.
     stress: Object.freeze(['node', 'scripts/test-gates/stress.mjs', '--files', '{file}', '--repeat', '{rounds}', '--json', '{json}', '--no-self-repair-records']),
   }),
+  // THE RECURSIVE LOOP (self-inspection; self-repair-inspect.mjs): what the idle lane runs on a clean checkout of the line
+  // head, beside the tickets, at a lower CPU priority. Each writes a record the lane feeds to the next Detect itself.
+  inspect: Object.freeze({
+    gates: Object.freeze(['node', 'scripts/test-gates/check.mjs', 'run', '--json', '{json}', '--no-self-repair-records']),
+    stress: Object.freeze(['node', 'scripts/test-gates/stress.mjs', '--files', '{files}', '--repeat', '{rounds}', '--json', '{json}', '--no-self-repair-records']),
+    pentest: Object.freeze(['node', 'scripts/pentest/run.mjs']),
+    rounds: 5, nice: 10, timeout_ms: 90 * 60_000,
+  }),
   jail: true, timeout_ms: 30 * 60_000, checkout_root: null,
 });
 export function laneConfig(over = {}) {
@@ -423,7 +431,7 @@ export function checkoutAt(repo, commit, {root = null} = {}) {
   }
   return {dir: dest, done: () => fs.rmSync(dir, {recursive: true, force: true})};
 }
-const spawnRun = (cmd, args, {cwd, env, timeout}) => new Promise(resolve => {
+export const spawnRun = (cmd, args, {cwd, env, timeout}) => new Promise(resolve => {
   const t0 = Date.now();
   let out = '', err = '', killed = null;
   let child;
@@ -707,13 +715,61 @@ export function lineLandings(work, line) {
   });
 }
 
+// ---- THE RECURSIVE LOOP: self-inspection (owner, 2026-11-20) ---------------------------------------------------------
+// "If it needs repairs it fixes itself; if not, it does a recursive loop ... in parallel with the ticket." When Detect
+// finds nothing to select and no round is open, the idle lane inspects itself: a whole gate run, a stress run of the
+// test files changed since the last inspection, and the pentest, on a clean checkout of the line head, in a background
+// process beside the tickets (self-repair-inspect.mjs). Each writes a record naming that commit, so the NEXT round's
+// Detect sees whatever they found and repairs it. It runs the outer wheels and never edits them. A commit is inspected
+// once: a new inspection starts when the line moves (inspecting identical code again adds nothing), and one runs at a
+// time. Its state is under <stateDir>/self-repair/inspection/ (git-ignored): running.json while one runs, last.json after.
+export const INSPECTION_SCHEMA = 'ophanim.self-repair.inspection/v1';
+export const inspectionDirOf = state => path.join(state, 'self-repair', 'inspection');
+const readJsonOr = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+export const writeJsonAtomic = (f, v) => {
+  fs.mkdirSync(path.dirname(f), {recursive: true});
+  const t = `${f}.${process.pid}.tmp`;
+  fs.writeFileSync(t, JSON.stringify(v, null, 2) + '\n');
+  fs.renameSync(t, f);
+};
+const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+export const inspectionState = state => ({running: readJsonOr(path.join(inspectionDirOf(state), 'running.json')), last: readJsonOr(path.join(inspectionDirOf(state), 'last.json'))});
+const INSPECTOR = path.join(path.dirname(new URL(import.meta.url).pathname), 'self-repair-inspect.mjs');
+/** Start the inspector as a detached background process (its output in inspection.log); returns its pid. */
+export function spawnInspection(plan, {state}) {
+  const d = inspectionDirOf(state);
+  fs.mkdirSync(d, {recursive: true});
+  const planFile = path.join(d, 'plan.json');
+  writeJsonAtomic(planFile, plan);
+  const fd = fs.openSync(path.join(d, 'inspection.log'), 'a');
+  try {
+    const child = spawn(process.execPath, [INSPECTOR, '--plan', planFile], {cwd: plan.repo, detached: true, stdio: ['ignore', fd, fd], env: process.env});
+    child.unref();
+    return child.pid;
+  } finally { fs.closeSync(fd); }
+}
+/** The idle lane's decision: running, already inspected, skipped (nothing to inspect with), or started. Never throws. */
+export function inspectIdle({repo, state, head, config = DEFAULT_CONFIG, records, start = spawnInspection, at = () => new Date().toISOString()}) {
+  try {
+    const {running, last} = inspectionState(state);
+    if (running && alive(running.pid)) return {state: 'running', commit: running.commit, pid: running.pid, started_at: running.started_at};
+    if (last?.commit === head) return {state: 'already-inspected', commit: head, finished_at: last.finished_at, why: 'this commit was inspected; a new inspection starts when the line moves'};
+    if (!config.inspect) return {state: 'skipped', commit: head, why: 'no inspection is configured'};
+    if (showAt(repo, head, 'scripts/test-gates/check.mjs') === null) return {state: 'skipped', commit: head, why: 'the commit has no scripts/test-gates/check.mjs to inspect it with'};
+    const plan = {schema: INSPECTION_SCHEMA, repo, commit: head, since: last?.commit ?? null, records, state, inspect: config.inspect, at: at()};
+    const pid = start(plan, {state});
+    writeJsonAtomic(path.join(inspectionDirOf(state), 'running.json'), {schema: INSPECTION_SCHEMA, commit: head, pid, started_at: plan.at, since: plan.since});
+    return {state: 'started', commit: head, pid, since: plan.since};
+  } catch (e) { return {state: 'failed', commit: head, why: cut(e.message, 300)}; }
+}
+
 /**
  * The lane, for one tick (scheduler.mjs). `begin()` settles what an earlier tick left (a passed outcome not yet landed),
  * runs Detect, routes and opens at most ONE new round (a rollback round runs to its end here); the scheduler then runs
  * the rounds' stages with `wrap` and `claimPaths`; `end()` lands every round whose outcome passed and closes the rounds
  * that ended. Dormant (nothing read beyond the board, nothing recorded) unless the switch is on.
  */
-export function createLane({repo, statusRoot, workRoot, work, board = null, config: given = null, stateDir = null, clock = () => Date.now(), records = null, register = REGISTER}) {
+export function createLane({repo, statusRoot, workRoot, work, board = null, config: given = null, stateDir = null, clock = () => Date.now(), records = null, register = REGISTER, startInspection = spawnInspection}) {
   const config = given ?? DEFAULT_CONFIG;
   const state = stateDir ?? path.join(path.dirname(workRoot), 'operate');
   const recordsDir = records ?? recordsDirOf(state);
@@ -856,7 +912,12 @@ export function createLane({repo, statusRoot, workRoot, work, board = null, conf
       const sel = select({defects: det.defects, rounds: rounds(), board: b, config, stagesOf: i => work.stages(i), routed: routedOf(work)});
       for (const s of sel.skipped.filter(x => x.route === 'owner')) route(det.defects.find(d => d.id === s.id), s.why);
       log.selection = {selected: sel.selected?.id ?? null, queue: sel.queue.length, skipped: sel.skipped.length};
-      if (!sel.selected) return log;
+      if (!sel.selected) {
+        // THE RECURSIVE LOOP: nothing needs repair and no round is open, so the idle lane inspects itself (inspectIdle).
+        // While a round is open the lane is repairing, not idle.
+        if (!rounds().some(r => !r.close)) log.inspection = inspectIdle({repo, state, head, config, records: recordsDir, start: startInspection, at});
+        return log;
+      }
       const d = sel.selected, base = ensureLine();
       const n = 1 + Math.max(0, ...rounds().map(x => x.n));
       const ev = recordEvent({event: 'open', round: n, kind: 'repair', defect: {id: d.id, kind: d.kind, title: cut(d.title, 200), site: d.site, reproduction: d.reproduction ?? null},

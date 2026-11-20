@@ -222,9 +222,6 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   }
   // THE LANE (see the header): settle, Detect, open at most one round -- or nothing at all while it is dormant.
   const lane = selfRepair === false ? null : createLane({repo, statusRoot, workRoot, work, clock, ...(selfRepair ?? {})});
-  // Dormant, begin() is synchronous and returns null: nothing is awaited, the tick's bookkeeping is exactly as before.
-  const opening = lane ? lane.begin() : null;
-  if (opening) await opening;
   let rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx});
   // Intake: every source of work is recorded once (by source and ref): status items, published issues (linked to an
   // item by its marker, or candidates), and tickets (an item's, or an orphan). Candidates and orphans are recorded and
@@ -244,6 +241,13 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   }
   for (const o of rec.orphans ?? []) intake({source: 'ticket', ref: `ticket:${path.basename(o.ticket, '.json')}`, item: null, classification: 'candidate', why: o.why});
   for (const c of rec.candidates) intake({source: 'issue', ref: `issue:${c.number}`, item: null, classification: 'candidate', why: c.why});
+  // THE TICKETS ARE COUNTED FIRST (the reconciliation and intake above); the self-repair lane then runs BESIDE them
+  // (owner, 2026-11-20: "after it's counted the tickets ... they should be running in parallel with the ticket"). A round
+  // it opens joins this tick's dispatch through the reconciliation that follows; an idle lane starts its self-inspection
+  // in the background and the tick does not wait for it. Dormant, begin() is synchronous and returns null: nothing is
+  // awaited and the tick's bookkeeping is exactly as before.
+  const opening = lane ? lane.begin() : null;
+  if (opening) { await opening; rec = reconcile({repo, statusRoot, workLedger: work, issues, bundlesDir, now: clock(), capacity, ...gctx}); }
   // Evidence recovery: each item Resolved without completion evidence is searched for applicable retained evidence once
   // per status entry and set of sources (evidence-recovery.mjs). What applies becomes an UNSIGNED proposal for the
   // owner; nothing is recorded on the status ledger. No provider is called.
