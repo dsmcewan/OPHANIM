@@ -191,7 +191,7 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
         if (!tr) return `GRAPH_REFERENCE supersedes ${t}, which is not in the graph`;
         if (!sim.isCur(t)) return `GRAPH_STALE ${t} was already superseded or retracted`;
         if (tr.subject !== r.subject) return `GRAPH_REFUSED a supersession replaces an assertion of the same subject (${tr.subject})`;
-        if (!overrides(r.classification, tr.classification)) return `GRAPH_HYPOTHETICAL a hypothetical assertion never supersedes a ${tr.classification} one`;
+        if (!overrides(r.classification, tr.classification)) return `GRAPH_HYPOTHETICAL a hypothetical assertion never supersedes an assertion classified ${tr.classification}`;
         if (tr.origin !== r.origin) return `GRAPH_UNAUTHORIZED ${t} is superseded only by its own origin (${tr.origin}); another origin's disagreement is a contradiction, not an overwrite`;
         sim.retire(t);
       }
@@ -200,7 +200,7 @@ export function createProjection({instance = DEFAULT_INSTANCE, origins, sources 
         if (!tr) return `GRAPH_REFERENCE invalidates ${t}, which is not in the graph`;
         if (!sim.isCur(t)) return `GRAPH_STALE ${t} is no longer current`;
         if (sourceFact(tr) || isSourceNode(tr.subject)) return 'GRAPH_SOURCE a source\'s assertion is not invalidated; record a contradiction or observe the source again';
-        if (!overrides(r.classification, tr.classification)) return `GRAPH_HYPOTHETICAL a hypothetical assertion never invalidates a ${tr.classification} one`;
+        if (!overrides(r.classification, tr.classification)) return `GRAPH_HYPOTHETICAL a hypothetical assertion never invalidates an assertion classified ${tr.classification}`;
         sim.retire(t);
       }
       for (const i of r.inputs) {

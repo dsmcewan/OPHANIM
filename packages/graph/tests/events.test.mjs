@@ -4,7 +4,7 @@
 // and never-observed sources are visible states.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {affected, observationOf, assertion} from '../index.mjs';
+import {affected, observationOf, assertion, CHANGE_LIST_MAX} from '../index.mjs';
 import {world, SYSTEM, SYSTEM_SNAPSHOT, C, id, src, RUN, T0, at, V1, dirSource, publish} from './fixture.mjs';
 
 const ex = (w, minutes) => ({...w.by('extractor'), observed_at: at(minutes)});
@@ -104,4 +104,18 @@ test('freshness: never-observed, stale and unavailable sources are visible state
   assert.deepEqual([s.state, /"causes" is not registered/.test(s.record.attributes.why)], ['stale', true]);
   assert.equal(state()[SYSTEM], 'stale');
   assert.deepEqual(g.view().node(C('session')).attributes, {moved: 1});
+});
+
+test('bounded: an observation lists at most CHANGE_LIST_MAX changed subjects; beyond that their count and digest, and replay re-derives the list', t => {
+  const entities = {};
+  for (let i = 0; i <= CHANGE_LIST_MAX; i++) entities[C(`n${i}`)] = {};
+  const w = world(t, {snapshot: {entities, relationships: []}}), g = w.open();
+  const r = g.observe(SYSTEM, ex(w, 0));
+  const a = r.record.attributes;
+  assert.deepEqual([a.changes.count, a.changes.listed, a.nodes.length, a.relationships.length], [CHANGE_LIST_MAX + 1, false, 0, 0], 'the record stays small');
+  assert.equal(r.event.nodes.length, CHANGE_LIST_MAX + 1, 'the event names every change, re-derived from the versions');
+  assert.equal(w.open().events().events[0].nodes.length, CHANGE_LIST_MAX + 1, 'and so does a replay');
+  const blind = w.open({sources: [dirSource(w.srcRoot, SYSTEM, {gone: () => true})]});
+  const e = blind.events().events[0];
+  assert.deepEqual([e.nodes, affected(blind.projection, e).unknown], [null, true], 'a replay that cannot read the source says the changes are unknown');
 });

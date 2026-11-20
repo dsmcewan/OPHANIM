@@ -80,11 +80,15 @@ test('hypothetical: a proposal is never established or verified, and never overw
   // A verified observation stays what it is, whoever proposes otherwise -- its own tool included.
   const o1 = obs('o1', {outcome: 'pass'});
   g.assert([o1], w.by('tool'));
-  refused(() => g.supersede([proposal({entity: o1.subject, supersedes: [o1.id], attributes: {outcome: 'fail'}}, 'synthetic.tool')], w.by('tool')), /GRAPH_HYPOTHETICAL a hypothetical assertion never supersedes a observed one/);
-  refused(() => g.assert([proposal({entity: id('evidence', 'claim', 'x'), invalidates: [o1.id]}, 'synthetic.tool')], w.by('tool')), /never invalidates a observed one/);
+  refused(() => g.supersede([proposal({entity: o1.subject, supersedes: [o1.id], attributes: {outcome: 'fail'}}, 'synthetic.tool')], w.by('tool')), /GRAPH_HYPOTHETICAL a hypothetical assertion never supersedes an assertion classified observed/);
+  refused(() => g.assert([proposal({entity: id('evidence', 'claim', 'x'), invalidates: [o1.id]}, 'synthetic.tool')], w.by('tool')), /never invalidates an assertion classified observed/);
   refused(() => g.supersede([proposal({entity: o1.subject, supersedes: [o1.id]})], w.by('agent')), /never supersedes|own origin/);
+  // Nor does the extractor of a source overwrite that source's authoritative fact with a proposal of its own.
+  const fact = v.query(C('sdk-gateway'), 'established')[0];
+  refused(() => g.supersede([proposal({entity: C('sdk-gateway'), supersedes: [fact.id], attributes: {version: 99}}, 'synthetic.extractor')], w.by('extractor')),
+    /never supersedes an assertion classified authoritative/);
   const after = g.view();
-  assert.deepEqual([after.established(o1.id), after.node(o1.subject).attributes.outcome], [true, 'pass']);
+  assert.deepEqual([after.established(o1.id), after.node(o1.subject).attributes.outcome, after.established(fact.id), after.node(C('sdk-gateway')).attributes], [true, 'pass', true, {version: 1}]);
   assert.equal(after.query(o1.subject, 'transitions')[0].may.supersede[0], 'synthetic.tool (not as hypothetical)', 'what may change it is stated');
 });
 

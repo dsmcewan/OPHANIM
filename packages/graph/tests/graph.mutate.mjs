@@ -93,6 +93,8 @@ export const MUTATIONS = [
     edits: [one(PROJ, '    if (r.attributes.from_version !== at || r.supersedes.length !== (prev ? 1 : 0) || (prev && r.supersedes[0] !== prev.id)) {', '    if (false) {')]},
   {id: 'G26', what: 'freshness reports a moved, unreadable or unprojectable source as current', tests: [t('events', '^freshness:')],
     edits: [one(EVENTS, ": r.state !== 'current' || r.replay !== 'applied' || r.version !== live ? 'stale' : 'current';", ": 'current';")]},
+  {id: 'G27', what: 'an observation lists every changed subject, however many (unbounded record growth)', tests: [t('events', '^bounded:')],
+    edits: [one(EVENTS, '  const listed = d.changes.count <= CHANGE_LIST_MAX;', '  const listed = true;')]},
   // ---- concurrency (KD11; demonstration 8) -----------------------------------------------------------------------------
   {id: 'G13', what: 'the ledger append lock removed: two processes append on the same head (lost or forked updates)', tests: [t('concurrency', '^concurrency:')],
     edits: [one(CHAIN, '    return locked(() => {', '    return (fn => fn())(() => {')]},
@@ -106,8 +108,9 @@ function copyTree(dest) {
   const files = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard', '-z'], {encoding: 'utf8', maxBuffer: 1 << 28}).split('\0').filter(Boolean);
   for (const f of files) {
     const from = path.join(ROOT, f);
-    if (!fs.existsSync(from) || fs.lstatSync(from).isDirectory() || fs.lstatSync(from).isSymbolicLink()) continue;
+    if (!fs.existsSync(from) || fs.lstatSync(from).isDirectory()) continue;
     fs.mkdirSync(path.dirname(path.join(dest, f)), {recursive: true});
+    if (fs.lstatSync(from).isSymbolicLink()) { fs.symlinkSync(fs.readlinkSync(from), path.join(dest, f)); continue; }   // e.g. pantheon's models.json
     fs.copyFileSync(from, path.join(dest, f));
     fs.chmodSync(path.join(dest, f), fs.statSync(from).mode);
   }
