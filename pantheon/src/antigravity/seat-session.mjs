@@ -83,7 +83,10 @@ export function seatAccounting({ usage = [], outcomes = [] } = {}) {
   const admitted = usage.filter(r => r?.schema === GEMINI_BILLING_SCHEMA && r?.identity?.request_id);
   const rows = admitted.map(r => { const o = byId.get(r.identity.request_id); return { request_id: r.identity.request_id, model: r.model, outcome: o ? (o.status ?? o.refusal ?? "unknown") : "unknown" }; });
   return { admitted: rows.length, completed: rows.filter(r => r.outcome !== "unknown").length, unknown: rows.filter(r => r.outcome === "unknown").length, rows,
-    refused: outcomes.filter(o => o?.refusal).length };
+    // REFUSED means refused BEFORE it was charged. A request that was charged and then failed (the upstream was
+    // unreachable, the client hung up, the session was stopped) is not a refusal: it is on the usage record
+    // (independent review of f4bd6bc, finding 3: such requests were counted, and described, as refused and uncharged).
+    refused: outcomes.filter(o => o?.refusal && o.charged !== true).length, failed_after_charge: outcomes.filter(o => o?.refusal && o.charged === true).length };
 }
 
 /** Open the gateway session of one launch of the python SDK seat. See the header. */
@@ -129,10 +132,11 @@ export async function openSeatSession({ apiKey, upstream = SDK_CONFIG.api.base_u
   const summary = () => {
     const rec = gateway?.record() ?? null;
     // The gateway's own refusals (the session's cap, its bounds, a call it does not serve), beside the caller's charge.
-    const wire = (rec?.requests ?? []).filter(r => r.refusal && r.refusal !== GATEWAY_REFUSALS.BUDGET).map(r => ({ code: r.refusal, why: `${r.verb ?? "request"} for ${r.model ?? "no model"} was refused on the wire`, recovery: seatRecoveryOf(r.refusal), at: r.at, request_id: `${id}#${r.seq}` }));
+    const failed = (rec?.requests ?? []).filter(r => r.refusal && r.charged === true).map(r => ({ code: r.refusal, why: `${r.verb ?? "request"} for ${r.model ?? "no model"} was admitted and charged, and then failed`, at: r.at, request_id: `${id}#${r.seq}` }));
+    const wire = (rec?.requests ?? []).filter(r => r.refusal && r.charged !== true && r.refusal !== GATEWAY_REFUSALS.BUDGET).map(r => ({ code: r.refusal, why: `${r.verb ?? "request"} for ${r.model ?? "no model"} was refused on the wire`, recovery: seatRecoveryOf(r.refusal), at: r.at, request_id: `${id}#${r.seq}` }));
     return { schema: SEAT_SESSION_SCHEMA, gateway_session: id, model, max_requests: maxRequests, received: rec?.totals.received ?? 0, admitted,
       refused: [...refusals.map(({ code, why, recovery, at, request_id }) => ({ code, why, recovery, at, request_id })), ...wire],
-      outcomes: (rec?.requests ?? []).filter(r => r.forwarded).length, root_session: root, closed };
+      failed_after_charge: failed, outcomes: (rec?.requests ?? []).filter(r => r.forwarded).length, root_session: root, closed };
   };
   gateway = await startModelGateway({ upstream, apiKey, root: { model, marker: `[pantheon-seat:${id}]` }, subagents: { model: null, ceiling: 0, markers: {} }, admit: charge,
     maxRequests, maxConcurrent, idleMs, lifetimeMs, maxBodyBytes, outcomes, outcomeTag: { gateway_session: id }, status: summary, fetchImpl, signal });

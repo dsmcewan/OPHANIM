@@ -72,6 +72,7 @@ import {openLedger, createLedger, defineKinds, generateSigner} from '../../packa
 import {keyStore} from '../../packages/ledger/home.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {GEMINI_KINDS, SETTING_OF, budgetRefusal as geminiBudgetRefusal} from '../../pantheon/src/route/gemini-billing.mjs';
+import {RESEARCH_TRIGGERS} from '../../pantheon/src/antigravity/config.mjs';
 
 export const WORK_SCHEMA = 'ophanim.work/v1';
 // The governed lifecycle, in order. `plan` is evaluation and planning (evidence, problem, plan, independent
@@ -102,6 +103,8 @@ export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
 // The level of a node is bounded HERE as well as in the controller: a record of an eleventh level is not taken.
 export const RESEARCH_PHASES = Object.freeze(['request', 'team', 'node', 'refusal', 'conclusion']);
 export const RESEARCH_NODE_STATES = Object.freeze(['admitted', 'finished', 'failed', 'cancelled']);
+/** The ends a team can CONCLUDE with. A failed, cancelled or charge-refused team records no conclusion: its request stays open. */
+export const RESEARCH_CONCLUDED = Object.freeze(['satisfied', 'exhausted', 'stopped']);
 export const RESEARCH_DEPTH_MAX = 10;
 /** The requests no conclusion has answered yet, from an item's research records (`work.research(item)`), oldest first. */
 export const openResearchRequests = records => { const answered = new Set(records.filter(r => r.phase === 'conclusion' && r.request).map(r => r.request)); return records.filter(r => r.phase === 'request' && !answered.has(r.hash)); };
@@ -186,7 +189,7 @@ function kinds({operators}) {
       validate: p => {
         if (p?.schema !== WORK_SCHEMA || !ID.test(p.item ?? '') || !RESEARCH_PHASES.includes(p.phase) || !ISO(p.at)) return 'a research record names {item, phase, at}';
         const seat = x => plain(x) && str(x.model);
-        if (p.phase === 'request') return str(p.trigger) && str(p.question) && str(p.by) && (p.scope === undefined || (Array.isArray(p.scope) && p.scope.every(str))) && (p.role === undefined || str(p.role)) ? null
+        if (p.phase === 'request') return RESEARCH_TRIGGERS.includes(p.trigger) && str(p.question) && str(p.by) && (p.scope === undefined || (Array.isArray(p.scope) && p.scope.every(str))) && (p.role === undefined || str(p.role)) ? null
           : 'a research request names {trigger, question, by, scope?, role?}';
         if (!str(p.team)) return 'a research record after the request names its team';
         if (p.phase === 'team') return (p.request === null || SHA.test(p.request ?? '')) && str(p.trigger) && str(p.role) && seat(p.coordinator) && seat(p.subordinate) && plain(p.limits) && str(p.root) ? null
@@ -199,17 +202,43 @@ function kinds({operators}) {
           : 'a research conclusion names {request|null, status, satisfied, material, telemetry, contributors, findings_text, findings|null}';
       },
       rederive: (e, view) => {
-        const p = e.payload, mine = entriesOf(view, 'work.research').filter(h => h !== e.hash).map(h => view.payload(h)).filter(q => q.item === p.item);
+        const p = e.payload, mine = entriesOf(view, 'work.research').filter(h => h !== e.hash).map(h => ({hash: h, ...view.payload(h)})).filter(q => q.item === p.item);
+        // THE LEASE FENCE (independent review of ea858a6..af23623, lifecycle finding 4): a research record made under a
+        // stage's claim is held to that claim like a spend: an expired or released claim records nothing more.
+        const claims = e.derived_from.filter(h => view.entry(h)?.kind === 'work.claim');
+        if (claims.length) {
+          const c = view.payload(claims[0]), rel = releaseOf(view, claims[0]);
+          if (c.item !== p.item) return 'a research record is made under a claim of its own item';
+          const fenced = fenceRefusal(c, {released: rel ? view.payload(rel) : null, at: Date.parse(p.at)});
+          if (fenced) return fenced;
+        }
+        // (finding 7) A team and a conclusion name a request that IS a request of this item, and a conclusion answers its
+        // own team's request, not another's.
+        const isRequest = h => mine.some(q => q.phase === 'request' && q.hash === h);
         if (p.phase === 'request') return p.once === 1 && mine.some(q => q.phase === 'request' && q.trigger === p.trigger && q.question === p.question) ? 'this research is already requested for the item (same trigger and question)' : null;
         const team = mine.filter(q => q.team === p.team);
-        if (p.phase === 'team') return team.some(q => q.phase === 'team') ? 'this research team is already recorded' : null;
-        if (!team.some(q => q.phase === 'team')) return 'its team is not recorded for this item';
+        if (p.phase === 'team') {
+          if (team.some(q => q.phase === 'team')) return 'this research team is already recorded';
+          return p.request === null || isRequest(p.request) ? null : 'the request a team names is not a research request of this item';
+        }
+        const opened = team.find(q => q.phase === 'team');
+        if (!opened) return 'its team is not recorded for this item';
+        if (p.phase !== 'conclusion' && team.some(q => q.phase === 'conclusion')) return 'this research team has concluded: it records nothing more';
         if (p.phase === 'node') {
+          // A member's outcome follows its admission: nothing finishes, fails or is cancelled that was never admitted.
+          if (p.state !== 'admitted' && !team.some(q => q.phase === 'node' && q.node === p.node && (q.round ?? null) === (p.round ?? null) && q.state === 'admitted')) return `node ${p.node} was never recorded as admitted`;
           if (p.kind === 'coordinator') return p.depth === 1 && p.parent === null ? null : 'a coordinator is level 1 and has no parent';
           if (p.parent === null) return 'a specialist has a parent';
-          return team.some(q => q.phase === 'node' && q.node === p.parent && q.depth === p.depth - 1) ? null : `its parent ${p.parent} is not a recorded node of this team one level above it`;
+          if (!team.some(q => q.phase === 'node' && q.node === p.parent && q.depth === p.depth - 1)) return `its parent ${p.parent} is not a recorded node of this team one level above it`;
+          // A level is opened under a member that FINISHED: its open question is what the level is for.
+          return team.some(q => q.phase === 'node' && q.node === p.parent && q.state === 'finished') ? null : `its parent ${p.parent} has not finished: a level is opened for an open question of a finished member`;
         }
-        if (p.phase === 'conclusion') return team.some(q => q.phase === 'conclusion') ? 'this research team has already concluded' : null;
+        if (p.phase === 'conclusion') {
+          if (team.some(q => q.phase === 'conclusion')) return 'this research team has already concluded';
+          if (!RESEARCH_CONCLUDED.includes(p.status)) return `a team that is ${p.status} has not concluded: its request stays open`;
+          if ((p.request ?? null) !== (opened.request ?? null)) return 'a conclusion answers the request its own team was opened for';
+          return team.some(q => q.phase === 'node') ? null : 'a team with no member has concluded nothing';
+        }
         return null;
       },
     },

@@ -315,7 +315,10 @@ team's rules and what the SDK does against what OPHANIM does are in
    (register L-729).
 4. **What it may do.** Read. A member's session is offered read tools only, inside its assignment's scope, and the
    repository is read-only inside its jail. It cannot write, run a command, start an agent, approve anything or change a
-   rule. Its findings are evidence the planner and the reviewers weigh; they authorize nothing.
+   rule. Its findings are evidence the planner and the reviewers weigh; they authorize nothing. What the controller
+   keeps inside the repository is hidden from it: the work ledger and its key, the item's state and the owner's status
+   keys are refused by the tool decision and absent inside the jail. Other secrets a repository may hold are not
+   (register L-738).
 5. **Spend.** Every request of every member is a billed request of kind `primary`
    ([docs/billing-policy.md](billing-policy.md)): without `--gemini-api-primary N` (or the service's or manifest's
    equivalent) nothing is prepared and the plan stage waits, pending on the policy's refusal, until the policy changes.
@@ -323,15 +326,21 @@ team's rules and what the SDK does against what OPHANIM does are in
 6. **What a change of the findings does.** The findings are a view of the item's dossier, so a plan that waited on
    evidence is woken by them. A conclusion the coordinator marks material (what was found changes what a plan should
    rest on) makes stale every approved plan that was not given it, and the item is planned again through the existing
-   plan gate. Nothing downstream of a stale plan is reused.
+   plan gate. Nothing downstream of a stale plan is reused. A plan was "given" a conclusion when the conclusion is
+   inside the bytes of the research view its dossier delivered: material conclusions come first, newest first, each
+   with an equal share (register L-739). The plan stage itself asks for research on a planner's gaps at most three
+   times per item (register L-740).
 7. **Review independence.** Every member that answered is recorded as a contributor to the plan, with the model that
    was asked and the model that answered. The plan's and the change's review panels are seated outside those models,
    as for any contributor. Eight Hydrogen specialists are one model of one lab, never eight reviewers' worth of
    independence. OpenAI's dispatch and pinned in-run review, Grok's eligibility for the independent adversarial review
    and the cross-lab qualification are as they were.
-8. **Interruption and recovery.** A team that was stopped, refused a charge or cut by its stage's end records no
-   conclusion. Its request stays open, every member that finished stays on the ledger with its record, and the next
-   run reuses them (each record checked against its digest) and pays only for the rest.
+8. **Interruption and recovery.** A team that was cancelled, failed, refused a charge or cut by its stage's end
+   records no conclusion. Its request stays open, every member that finished stays on the ledger with its record, and
+   the next run reuses them (each record checked against its digest) and pays only for the rest. A member whose record
+   no longer matches is run again and recorded again. The team's request bound is one bound across all its runs. A team
+   that spent its own bound of rounds or requests does conclude, as stopped and not satisfied: resuming it could do
+   nothing more, and what it holds is treated as material because it never judged it (register L-742).
 9. **Where it does not run.** Executors built without `research: {enabled: true}` run none (`operate tick`, `watch`,
    `serve` and the live run turn it on). On such executors an open request stops the plan stage as
    `RESEARCH_NOT_ENABLED`; where the SDK transport cannot start a session (no key, no SDK, no jail) it stops as

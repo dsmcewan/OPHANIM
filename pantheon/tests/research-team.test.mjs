@@ -14,7 +14,8 @@ const src = (path, n = 1) => ({ tool: "view_file", path, kind: "file", sha256: V
 const report = ({ question = "q", path = "src/a.mjs", text = `what ${path} does`, open = null, next = [] } = {}) => ({ question, sources: [{ ref: path }],
   observations: [{ id: "o1", text, sources: [path] }], hypotheses: [], dependencies: [], unresolved: open ? [{ id: open, question: `what about ${open}?`, why: "not visible from here" }] : [], next });
 /** A coordinator's report. */
-const lead = ({ delegations = [], satisfied = false, material = false, open = ["u1"], summary = "so far" } = {}) => ({ question: "root", sources: [], observations: [], hypotheses: [], dependencies: [],
+const lead = ({ delegations = [], satisfied = false, material = false, open = ["u1"], summary = "so far", own = null } = {}) => ({ question: "root", ...(own ? { own } : {}), sources: own ? [{ ref: own }] : [],
+  observations: own ? [{ id: "o1", text: `what ${own} shows`, sources: [own] }] : [], hypotheses: [], dependencies: [],
   unresolved: open.map(id => ({ id, question: `open ${id}: which module owns the retry?`, why: "needs a specialist" })), next: [], delegations, satisfied, material, summary });
 const ask = (addresses, over = {}) => ({ addresses, question: `Trace how ${addresses} is resolved through the scheduler's retry path.`, specialty: "execution-trace", scope: ["src"],
   expected_evidence: "the functions on the path, with file and line", why: "the plan cannot be judged without it", ...over });
@@ -27,7 +28,8 @@ function team({ coordinator, specialist = () => ({ report: report() }), limits =
   const runNode = async ({ node, prompt, seat: s, signal, admit }) => {
     calls.push({ id: node.id, kind: node.kind, round: node.round ?? null, model: s.model });
     prompts.push({ id: node.id, kind: node.kind, round: node.round ?? null, prompt });
-    if (node.kind === "coordinator") { admit({ class: "root", model: s.model }); return { text: JSON.stringify(await coordinator(node.round, prompt, { admit, signal })), examined: [], served_model: s.model, served_model_source: "provider", usage: { total_token_count: 100 } }; }
+    if (node.kind === "coordinator") { admit({ class: "root", model: s.model }); const { own = null, ...rep } = (await coordinator(node.round, prompt, { admit, signal })) ?? {};
+      return { text: JSON.stringify(typeof rep === "object" && Object.keys(rep).length ? rep : "not a report"), examined: own ? [src(own)] : [], served_model: s.model, served_model_source: "provider", usage: { total_token_count: 100 } }; }
     active += 1; peak = Math.max(peak, active);
     try {
       admit({ class: "root", model: s.model });
@@ -182,7 +184,7 @@ test("REPEATED OBSERVATIONS ARE ONE FINDING, AND INDEPENDENT CORROBORATION IS KE
 });
 
 test("RESEARCH ENDS WHEN ITS OBJECTIVE IS MET, NOT WHEN ITS DEPTH IS SPENT: a satisfied coordinator opens no level, and delegations it sends with a satisfied answer are not run", async () => {
-  const t = team({ coordinator: () => lead({ satisfied: true, open: [], delegations: [ask("u1")], summary: "the dossier already answers it" }) });
+  const t = team({ coordinator: () => lead({ satisfied: true, open: [], delegations: [ask("u1")], summary: "the dossier already answers it", own: "docs/retry.md" }) });
   const r = await t.run();
   assert.deepEqual([r.status, r.rounds, r.telemetry.depth_reached, r.telemetry.nodes_created, t.calls.length], ["satisfied", 1, 1, 0, 1]);
   // The round bound: a coordinator that never concludes is stopped, with what it found kept.
@@ -256,4 +258,129 @@ test("WHAT GOES UP IS BOUNDED: a member with more findings than the bound allows
   assert.deepEqual([lines.length + Number(left[1]), lines.length > 0, lines.length < 40, Buffer.byteLength(lines.join("\n"), "utf8") <= 600], [40, true, true, true]);
   assert.equal(specialist.report.observations.length, 40, "the stored report keeps every finding");
   assert.equal(r.knowledge.observations.length, 40, "and so does the team's knowledge");
+});
+
+// ---- Findings of the independent review of ea858a6..af23623 (2026-11-20), each reproduced by the reviewer first --------
+test("A SPECIALIST CITES ONLY WHAT IT READ ITSELF: a source another member read is not its evidence; the coordinator may cite what its members read", async () => {
+  // Review finding 1: every node was checked against the team's sources, so a member that read one file could cite another's.
+  const t = team({
+    coordinator: round => (round === 1 ? lead({ delegations: [ask("u1"), ask("u1", { question: "List every caller of the retry scheduler under src, with file and line.", specialty: "source-inventory" })] })
+      : { ...lead({ satisfied: true, material: true, open: [], summary: "done" }), sources: [{ ref: "src/a.mjs" }], observations: [{ id: "o1", text: "src/a.mjs holds the retry", sources: ["src/a.mjs"] }] }),
+    specialist: async node => (node.specialty === "execution-trace" ? { report: report({ path: "src/a.mjs" }) }
+      : (await sleep(30), { report: report({ path: "src/a.mjs", text: "a second-hand claim" }), examined: [src("src/zzz.mjs")] })),
+  });
+  const r = await t.run();
+  const [a, b] = r.nodes.filter(n => n.kind === "specialist");
+  assert.deepEqual([a.state, b.state, b.error?.code, b.error?.why], ["finished", "failed", "INVALID_REPORT", ["the report cites src/a.mjs, which this node never examined", "observation o1 cites src/a.mjs, which is not among the report's sources"]]);
+  assert.deepEqual(r.knowledge.observations.flatMap(o => o.evidence.flatMap(e => e.nodes)).includes(b.id), false, "the member that never read it is not named as having examined it");
+  assert.equal(r.status, "satisfied", "the coordinator's own citation of a member's source is accepted");
+});
+
+test("A PATH THAT WAS ABSENT WHEN IT WAS READ IS KEPT AS ABSENT: its source says so, with no version, wherever the finding goes", async () => {
+  // Review finding 2: a file that did not exist was recorded like any source, and a finding resting on it looked like one on a file.
+  const t = team({
+    coordinator: round => (round === 1 ? lead({ delegations: [ask("u1")] }) : lead({ satisfied: true, open: [], summary: "done" })),
+    specialist: () => ({ report: report({ path: "src/ghost.mjs", text: "src/ghost.mjs is not there" }), examined: [{ tool: "view_file", path: "src/ghost.mjs", kind: "missing", sha256: null, bytes: null }] }),
+  });
+  const r = await t.run();
+  const s = r.nodes.find(n => n.kind === "specialist");
+  assert.deepEqual(s.report.sources, [{ ref: "src/ghost.mjs", version: null, absent: true }]);
+  assert.deepEqual(r.knowledge.observations.map(o => o.evidence.map(e => [e.ref, e.version, e.absent ?? false])), [[["src/ghost.mjs", null, true]]]);
+  assert.match(t.prompts.find(p => p.kind === "coordinator" && p.round === 2).prompt, /src\/ghost\.mjs@ABSENT/, "the coordinator is shown that the source was absent");
+});
+
+test("THE REQUEST BUDGET IS THE TEAM'S, ACROSS RESUMES: requests an earlier run of the team made count against the same bound", async () => {
+  // Review finding 3: a resumed team started its count at zero, so the bound held per attempt and not per team.
+  const script = { coordinator: round => (round === 1 ? lead({ delegations: [ask("u1"), ask("u1", { question: "List every caller of the retry scheduler under src, with file and line.", specialty: "source-inventory" }), ask("u1", { question: "Which contract bounds the number of retries, and where is it?", specialty: "history-and-cause" })] }) : lead({ satisfied: true, open: [], summary: "done" })) };
+  const first = team({ ...script, limits: { max_requests: 3, max_active: 1 } });
+  const r1 = await first.run();
+  assert.deepEqual([r1.status, r1.stop_reason, r1.telemetry.requests.total], ["stopped", "RESEARCH_REQUEST_BUDGET", 3]);
+  const second = team({ ...script, limits: { max_requests: 3, max_active: 1 } });
+  const r2 = await second.run({ resume: r1.nodes });
+  assert.deepEqual([r2.status, r2.stop_reason, r2.telemetry.requests.total, r2.telemetry.requests.carried, second.calls.length], ["stopped", "RESEARCH_REQUEST_BUDGET", 0, 3, 1],
+    "the three requests of the first run are the team's: the resumed run is refused its first new request");
+  // A larger bound is the launcher's to give: the same records under it go on, and only the new requests are new.
+  const third = team({ ...script, limits: { max_requests: 6, max_active: 1 } });
+  const r3 = await third.run({ resume: r1.nodes });
+  assert.deepEqual([r3.status, r3.telemetry.requests.carried, r3.telemetry.requests.total <= 3], ["satisfied", 3, true]);
+});
+
+test("A STOPPED TEAM STARTS NOTHING MORE: after a refused charge or a spent budget, the specialists still waiting for a slot are not started, and each is recorded as not run", async () => {
+  // Review finding 4: the pool went on starting every queued specialist after the caller had refused a charge.
+  const ten = Array.from({ length: 10 }, (_, i) => ask("u1", { question: `Trace retry path number ${i + 1} through the scheduler, with file and line.` }));
+  let charges = 0;
+  const t = team({ coordinator: () => lead({ delegations: ten }), specialist: async () => (await sleep(20), { report: report() }), limits: { max_active: 2 },
+    over: { admit: () => { charges += 1; if (charges === 3) throw Object.assign(new Error("STAGE_CALLS: the stage's bound is spent"), { code: "STAGE_CALLS" }); } } });
+  const r = await t.run();
+  const spec = r.nodes.filter(n => n.kind === "specialist");
+  assert.deepEqual([r.status, r.stop_reason, t.calls.filter(c => c.kind === "specialist").length, charges], ["stopped", "STAGE_CALLS", 2, 3], "two were running; no third session was started and the caller was not asked again");
+  assert.deepEqual(spec.reduce((m, n) => (m[`${n.state}:${n.error?.code ?? "-"}`] = (m[`${n.state}:${n.error?.code ?? "-"}`] ?? 0) + 1, m), {}), { "finished:-": 1, "failed:STAGE_CALLS": 1, "cancelled:TEAM_STOPPED": 8 });
+  // The team's own bound, the same way.
+  const b = team({ coordinator: () => lead({ delegations: ten }), specialist: async () => (await sleep(20), { report: report() }), limits: { max_active: 2, max_requests: 2 } });
+  const rb = await b.run();
+  assert.deepEqual([rb.stop_reason, b.calls.filter(c => c.kind === "specialist").length <= 2], ["RESEARCH_REQUEST_BUDGET", true]);
+});
+
+test("THE CEILINGS ARE THE CONTROLLER'S, NOT THE CALLER'S: limits above the coordinator model's subagent ceiling, or above ten levels, are refused before anything runs", async () => {
+  // Review finding 5: any max_active was accepted, so a launcher's limits could run 20 Hydrogen members under Carbon.
+  await assert.rejects(() => team({ coordinator: () => lead(), limits: { max_active: 20 } }).run(), /limits\.max_active is at most 8 for a coordinator on gemini-4-carbon/);
+  await assert.rejects(() => team({ coordinator: () => lead(), limits: { max_active: 9 } }).run(), /at most 8/);
+  await assert.rejects(() => team({ coordinator: () => lead(), limits: { max_depth: 11 } }).run(), /limits\.max_depth is at most 10/);
+  assert.equal((await team({ coordinator: () => lead({ satisfied: true, open: [], summary: "s" }), limits: { max_active: 3 } }).run()).telemetry.active_peak, 0, "a lower ceiling is the caller's to ask for");
+});
+
+test("A TEAM THAT DID NOT END BY ITS OWN ACCOUNT CONCLUDES NOTHING: a failed, stopped or cancelled team reports no summary and nothing as material, whatever an earlier round said", async () => {
+  // Review finding 6: a team whose second round was not a report returned material: true and the first round's summary.
+  const t = team({ coordinator: round => (round === 1 ? lead({ delegations: [ask("u1")], material: true, summary: "round one thinks it matters" }) : {}), specialist: () => ({ report: report() }) });
+  const r = await t.run();
+  assert.deepEqual([r.status, r.stop_reason, r.satisfied, r.material, r.summary], ["failed", "INVALID_REPORT", false, false, null]);
+  assert.deepEqual(t.events.filter(e => e.event === "conclusion").map(e => [e.status, e.material, e.summary]), [["failed", false, null]]);
+  assert.equal(r.knowledge.observations.length, 1, "what the members found is still kept");
+});
+
+test("A MEMBER IS ON THE RECORD BEFORE ITS SESSION STARTS, and a satisfied team holds evidence", async () => {
+  // Review finding 7: moving the admitted record to after the session had started failed no test.
+  let seenAtStart = null;
+  const t = team({ coordinator: round => (round === 1 ? lead({ delegations: [ask("u1")] }) : lead({ satisfied: true, open: [], summary: "done" })),
+    specialist: node => { seenAtStart = t.events.some(e => e.event === "node" && e.node.id === node.id && e.node.state === "admitted"); return { report: report() }; } });
+  await t.run();
+  assert.equal(seenAtStart, true, "the admitted record was written before the session was asked anything");
+  // Review finding 8: a coordinator could declare the question answered with no observation anywhere in the team.
+  const empty = await team({ coordinator: () => lead({ satisfied: true, material: true, open: [], summary: "trust me" }) }).run();
+  assert.deepEqual([empty.status, empty.stop_reason, empty.satisfied, empty.material], ["failed", "SATISFIED_WITHOUT_EVIDENCE", false, false]);
+});
+
+test("A REPORT'S DEPENDENCIES AND HYPOTHESES ARE HELD TO ITS EVIDENCE TOO: a dependency cites sources the node read, and a hypothesis called supported or contradicted names the observation that does it", () => {
+  // Review finding 8: only observations were checked against the sources.
+  const ok = { ...report(), dependencies: [{ from: "a", to: "b", kind: "imports", contract: null, sources: ["src/a.mjs"] }], hypotheses: [{ id: "h1", text: "a drives b", supports: ["o1"], contradicts: [], status: "supported" }] };
+  const examined = [src("src/a.mjs")];
+  assert.deepEqual(reportRefusal(ok, { examined }), []);
+  assert.deepEqual(reportRefusal({ ...ok, dependencies: [{ from: "a", to: "b", kind: "imports", sources: ["src/unread.mjs"] }] }, { examined }), ["a dependency (a -> b) cites src/unread.mjs, which is not among the report's sources"]);
+  assert.deepEqual(reportRefusal({ ...ok, dependencies: [{ from: "a", to: "b", kind: "imports", sources: [] }] }, { examined }), ["a dependency (a -> b) names no source: a dependency is what a source shows"]);
+  assert.deepEqual(reportRefusal({ ...ok, hypotheses: [{ id: "h1", text: "a drives b", supports: [], contradicts: [], status: "supported" }] }, { examined }), ["hypothesis h1 is called supported and names no observation that supports it"]);
+  assert.deepEqual(reportRefusal({ ...ok, hypotheses: [{ id: "h1", text: "a drives b", supports: ["o1"], contradicts: [], status: "contradicted" }] }, { examined }), ["hypothesis h1 is called contradicted and names no observation that contradicts it"]);
+});
+
+test("AN ADMISSION THAT ANSWERS LATER IS WAITED FOR: a refusal that arrives asynchronously stops the team and its request is not counted; a failed member keeps what its session recorded", async () => {
+  // Review finding 9: the caller's charge was not awaited, so an asynchronous refusal was an unhandled rejection and the request was counted.
+  let n = 0;
+  const t = team({ coordinator: () => lead({ delegations: [ask("u1")] }), specialist: () => ({ report: report() }),
+    over: { admit: async () => { n += 1; await sleep(5); if (n === 2) throw Object.assign(new Error("STAGE_CALLS: spent"), { code: "STAGE_CALLS" }); } } });
+  const awaiting = { ...t };
+  // The scripted node awaits its admission, as the gateway does.
+  const r = await runResearchTeam({ team: TEAM, coordinator: CARBON, subordinate: HYDROGEN, limits: researchLimits(CARBON.seat.model), now: () => "2026-11-20T00:00:00.000Z",
+    admit: async () => { n += 1; await sleep(5); if (n === 2) throw Object.assign(new Error("STAGE_CALLS: spent"), { code: "STAGE_CALLS" }); },
+    runNode: async ({ node, seat, admit }) => { await admit({ class: "root", model: seat.model }); const rep = node.kind === "coordinator" ? lead({ delegations: [ask("u1")] }) : report();
+      return { text: JSON.stringify(rep), examined: rep.sources.map(x => src(x.ref)), served_model: seat.model, served_model_source: "provider", usage: { total_token_count: 10 } }; } });
+  assert.ok(awaiting);
+  assert.deepEqual([r.status, r.stop_reason, r.telemetry.requests.total, r.nodes.find(x => x.kind === "specialist").error.code], ["stopped", "STAGE_CALLS", 1, "STAGE_CALLS"]);
+  // A member whose session failed after it had read and been answered: what the session recorded is kept with the failure.
+  const failing = await runResearchTeam({ team: TEAM, coordinator: CARBON, subordinate: HYDROGEN, limits: researchLimits(CARBON.seat.model), now: () => "2026-11-20T00:00:00.000Z",
+    runNode: async ({ node, seat, admit }) => { admit({ class: "root", model: seat.model });
+      if (node.kind === "coordinator") return { text: JSON.stringify(node.round === 1 ? lead({ delegations: [ask("u1")] }) : lead({ open: [], delegations: [], summary: "nothing admissible" })), examined: [], served_model: seat.model, served_model_source: "provider", usage: { total_token_count: 10 } };
+      throw Object.assign(new Error("the session timed out"), { code: "TIMEOUT", session: { examined: [src("src/a.mjs")], usage: { total_token_count: 77 }, served_model: "gemini-4-hydrogen", served_model_source: "provider" } }); } });
+  const dead = failing.nodes.find(x => x.kind === "specialist");
+  assert.deepEqual([dead.state, dead.error.code, dead.examined.map(e => e.path), dead.usage.tokens, dead.served_model], ["failed", "TIMEOUT", ["src/a.mjs"], 77, "gemini-4-hydrogen"]);
+  assert.equal(failing.telemetry.tokens.total >= 77, true, "its tokens are in the team's telemetry");
+  assert.deepEqual(failing.contributors.filter(c => c.kind === "specialist").map(c => c.served_model), ["gemini-4-hydrogen"], "a model that answered inside a failed member is a contributor");
 });

@@ -31,7 +31,12 @@ test('THE WORK LEDGER\'S RESEARCH RECORDS: a request, a team, its nodes, a refus
   assert.throws(() => w.recordResearch(opened), /this research team is already recorded/);
   const node = (over = {}) => ({phase: 'node', ...team, node: 'rn-root000000000000', kind: 'coordinator', parent: null, depth: 1, round: 1, state: 'admitted', seat: CARBON, question: 'the team\'s question', at: AT, ...over});
   w.recordResearch(node());
+  // A LEVEL IS OPENED UNDER A MEMBER THAT FINISHED, and an outcome follows an admission (independent review, lifecycle finding 7).
+  assert.throws(() => w.recordResearch(node({node: 'rn-a', kind: 'specialist', parent: 'rn-root000000000000', depth: 2, seat: HYDROGEN})), /its parent rn-root000000000000 has not finished/);
+  assert.throws(() => w.recordResearch(node({node: 'rn-never', kind: 'specialist', parent: 'rn-root000000000000', depth: 2, seat: HYDROGEN, state: 'finished'})), /node rn-never was never recorded as admitted/);
+  w.recordResearch(node({state: 'finished'}));
   w.recordResearch(node({node: 'rn-a', kind: 'specialist', parent: 'rn-root000000000000', depth: 2, seat: HYDROGEN, round: 1}));
+  w.recordResearch(node({node: 'rn-a', kind: 'specialist', parent: 'rn-root000000000000', depth: 2, seat: HYDROGEN, round: 1, state: 'finished'}));
   w.recordResearch(node({node: 'rn-b', kind: 'specialist', parent: 'rn-a', depth: 3, seat: HYDROGEN, round: 2}));
   // THE LEVEL IS BOUNDED BY THE LEDGER TOO: an eleventh level is not a record this ledger takes.
   assert.equal(RESEARCH_DEPTH_MAX, RESEARCH_DEPTH_LIMIT);
@@ -47,7 +52,20 @@ test('THE WORK LEDGER\'S RESEARCH RECORDS: a request, a team, its nodes, a refus
   w.recordResearch(done);
   assert.throws(() => w.recordResearch(done), /this research team has already concluded/);
   assert.deepEqual(openResearchRequests(w.research('two')), [], 'a conclusion that cites the request answers it');
-  assert.deepEqual(w.research('two').map(r => r.phase), ['request', 'team', 'node', 'node', 'node', 'refusal', 'conclusion']);
+  assert.deepEqual(w.research('two').map(r => r.phase), ['request', 'team', 'node', 'node', 'node', 'node', 'node', 'refusal', 'conclusion']);
+  // AFTER ITS CONCLUSION A TEAM RECORDS NOTHING MORE; a conclusion is of a team that concluded, answers its own team's
+  // request, and is not of a team with no member; a team names a request that exists; a trigger is a known one.
+  assert.throws(() => w.recordResearch(node({node: 'rn-b', kind: 'specialist', parent: 'rn-a', depth: 3, seat: HYDROGEN, round: 2, state: 'finished'})), /this research team has concluded: it records nothing more/);
+  const req2 = w.recordResearch({phase: 'request', item: 'two', trigger: 'contradiction', question: 'Two sources disagree about the lease: which holds?', by: 'check@review', once: 1, at: AT});
+  const t2 = {item: 'two', team: 'rt-00000000000000b2'};
+  assert.throws(() => w.recordResearch({...opened, ...t2, request: 'sha256:' + 'f'.repeat(64)}), /the request a team names is not a research request of this item/);
+  w.recordResearch({...opened, ...t2, request: null});
+  assert.throws(() => w.recordResearch({...done, ...t2, request: null}), /a team with no member has concluded nothing/);
+  w.recordResearch(node({...t2}));
+  assert.throws(() => w.recordResearch({...done, ...t2, request: req2}), /a conclusion answers the request its own team was opened for/);
+  assert.throws(() => w.recordResearch({...done, ...t2, request: null, status: 'cancelled'}), /a team that is cancelled has not concluded: its request stays open/);
+  assert.throws(() => w.recordResearch({phase: 'request', item: 'two', trigger: 'whim', question: 'Is this a trigger the owner named, or one made up?', by: 'x', at: AT}), /a research request names/);
+  assert.deepEqual(openResearchRequests(w.research('two')).map(r => r.hash), [req2], 'the second request is still open: nothing that was refused closed it');
   assert.deepEqual(w.research('other-item'), []);
   assert.equal(w.verify().ok, true, 'and the ledger re-derives every one of them');
 });
@@ -193,4 +211,73 @@ test('`operate research` records a request and runs nothing: a known trigger, a 
     assert.deepEqual([r.code, re.test(r.err)], [2, true], r.err);
   }
   assert.equal(openWorkLedger({root: workRoot}).research('two').length, 1, 'nothing else was recorded');
+});
+
+// ---- Findings of the independent review of ea858a6..af23623 (2026-11-20), the lifecycle side ----------------------------
+test('THE RUNNER HIDES THE CONTROLLER\'S OWN RECORDS FROM EVERY SESSION, COUNTS THE TEAM\'S REQUESTS ACROSS RUNS, AND RECORDS A RE-RUN MEMBER AGAIN', async t => {
+  // Finding 1: nothing was hidden, so a session could read the work ledger's private key.
+  const f = setup(t), usage = path.join(f.root, 'usage.jsonl'), seen = [];
+  const spy = script => { const s = scripted(script); return {...s, sdk: async a => { seen.push(a.research.hide ?? null); return s.sdk(a); }}; };
+  const one = spy(TWO_READERS), stateDir = path.join(f.root, 'state');
+  const r1 = await runResearch({work: f.work, item: 'two', request: f.request(), repo: f.repo, dir: path.join(f.dir, 'team'), billing: optIn({primary: 3, file: usage}), sdk: one.sdk, hide: [stateDir, 'relative/is/ignored']});
+  assert.equal(r1.concluded, false);
+  assert.ok(seen.length === 4 && seen.every(h => h.includes(f.work.root) && h.includes(path.join(f.dir, 'team')) && h.includes(stateDir) && !h.includes('relative/is/ignored')), 'every session is told to hide the work ledger, the team\'s own directory and what the caller named');
+  // Finding 5: a member whose file was altered was run on every resume and never recorded again.
+  const altered = f.work.research('two').find(x => x.phase === 'node' && x.state === 'finished' && x.kind === 'specialist');
+  fs.appendFileSync(path.join(f.dir, 'team', altered.evidence.file), ' ');
+  const two = scripted(TWO_READERS);
+  const r2 = await runResearch({work: f.work, item: 'two', request: f.request(), repo: f.repo, dir: path.join(f.dir, 'team'), billing: optIn({primary: 5, file: usage}), sdk: two.sdk});
+  // Run 2 has two requests left of five: the altered member again, then the coordinator's second round.
+  assert.deepEqual([r2.status, two.calls.filter(c => c.specialist).length, two.calls.length], ['satisfied', 1, 2]);
+  const rows = f.work.research('two').filter(x => x.phase === 'node' && x.node === altered.node && x.state === 'finished');
+  assert.deepEqual([rows.length, rows[1].evidence.sha256 === 'sha256:' + createHash('sha256').update(fs.readFileSync(path.join(f.dir, 'team', altered.evidence.file))).digest('hex')], [2, true], 'its new outcome is on the ledger with the digest of its new file');
+  // Controller finding 3, through the runner: the team's bound counts what earlier runs billed, read from the ledger.
+  assert.equal(r2.result.telemetry.requests.carried, 3, 'the three requests of the first run are carried into the second');
+  const g = setup(t), u2 = path.join(g.root, 'usage.jsonl');
+  await runResearch({work: g.work, item: 'two', request: g.request(), repo: g.repo, dir: path.join(g.dir, 'team'), billing: optIn({primary: 3, file: u2}), sdk: scripted(TWO_READERS).sdk});
+  const capped = scripted(TWO_READERS);
+  const r3 = await runResearch({work: g.work, item: 'two', request: g.request(), repo: g.repo, dir: path.join(g.dir, 'team'), billing: optIn({primary: 50, file: u2}), sdk: capped.sdk, limits: {max_requests: 3}});
+  // The team's own bound of three is spent by the first run: the policy would admit more, the team does not ask.
+  assert.deepEqual([r3.status, r3.stop_reason, r3.concluded, r3.result.material, r3.result.summary], ['stopped', 'RESEARCH_REQUEST_BUDGET', true, true, null],
+    'a team that spent its own bound concludes as stopped; it did not judge what it found, so what it holds is treated as material, with no summary');
+  await assert.rejects(() => runResearch({work: g.work, item: 'two', trigger: 'intake', question: 'What does this repository hold, and where is it tested?', repo: g.repo, dir: path.join(g.dir, 'other'), billing: optIn({primary: 5, file: u2}), sdk: capped.sdk, limits: {max_active: 12}}),
+    /limits\.max_active is at most 8/, 'a launcher\'s limits cannot raise the coordinator model\'s ceiling');
+});
+
+test('THE RESEARCH VIEW SHOWS FIRST WHAT A PLAN MOST NEEDS, AND SAYS WHAT WAS GIVEN: a material conclusion is not pushed out of the delivered bytes by older ones', t => {
+  // Finding 2: the view kept the oldest conclusions; a later material one fell outside the cut and the plan recorded it as given.
+  const w = openWorkLedger({root: tmp(t, 'research-view')});
+  const seat = CARBON, long = n => Array.from({length: 60}, (_, i) => `- finding ${n}.${i}: the scheduler retries a pending stage under its attempt bound [src/scheduler.mjs@sha256:1111]`).join('\n');
+  const team = (id, material, text) => {
+    const tm = {item: 'two', team: id};
+    w.recordResearch({phase: 'team', ...tm, request: null, trigger: 'contradiction', role: 'explorer', coordinator: seat, subordinate: HYDROGEN, selection: null, limits: {max_depth: 10}, root: `rn-${id}`, at: AT});
+    for (const state of ['admitted', 'finished']) w.recordResearch({phase: 'node', ...tm, node: `rn-${id}`, kind: 'coordinator', parent: null, depth: 1, round: 1, state, seat, question: 'q', at: AT});
+    return w.recordResearch({phase: 'conclusion', ...tm, request: null, status: 'satisfied', stop_reason: 'SATISFIED', satisfied: true, material, summary: `answer of ${id}`, findings_text: text, findings: null, telemetry: {}, contributors: [], at: AT});
+  };
+  const old1 = team('rt-00000000000000a1', false, long(1)), old2 = team('rt-00000000000000a2', false, long(2)), late = team('rt-00000000000000a3', true, '- THE LATE FINDING: the lease is not released on restart [src/scheduler.mjs@sha256:2222]');
+  const v = researchView(w, 'two'), delivered = Buffer.from(v.text, 'utf8').subarray(0, 6000).toString('utf8');
+  assert.ok(delivered.includes('THE LATE FINDING') && delivered.indexOf('rt-00000000000000a3') < delivered.indexOf('rt-00000000000000a2'), 'the material conclusion is first, and inside the bytes the dossier delivers');
+  assert.ok(v.given.includes(late), 'and it is among what was given');
+  assert.ok(delivered.includes('answer of rt-00000000000000a2') && /cut here: the rest of this team's findings is in its conclusion on the work ledger, sha256:/.test(delivered), 'a long conclusion is shown by its answer and first findings, and says where the rest is');
+  assert.deepEqual([v.given.includes(old1) || v.given.includes(old2), v.given.every(h => [old1, old2, late].includes(h))], [true, true]);
+  // With too many conclusions for the view, the ones outside it are NOT given.
+  for (let i = 0; i < 20; i++) team(`rt-0000000000000b${String(i).padStart(2, '0')}`, false, long(i));
+  const many = researchView(w, 'two');
+  assert.ok(many.given.includes(late) && many.given.length < 23, `the material conclusion is still given; ${23 - many.given.length} others are outside the view and are not recorded as given`);
+});
+
+test('A RESEARCH RECORD IS HELD TO ITS CLAIM\'S LEASE: under an expired or a released claim nothing more of a team is recorded', t => {
+  // Finding 4: research records were appended under a claim that had expired an hour earlier.
+  const w = openWorkLedger({root: tmp(t, 'research-fence')});
+  const claimed = at => w.claim({item: 'two', stage: 'plan', attempt: 1, inputs: {a: at}, holder: 'h', budget: {provider_calls: 5, iterations: 1, elapsed_ms: 60_000, retries: 1}, lease_ms: 60_000, at});
+  const live = claimed('2026-11-20T00:00:00.000Z');
+  const team = {item: 'two', team: 'rt-00000000000000c1'};
+  const open = {phase: 'team', ...team, request: null, trigger: 'intake', role: 'scout', coordinator: CARBON, subordinate: HYDROGEN, selection: null, limits: {max_depth: 10}, root: 'rn-c1'};
+  w.recordResearch({...open, claim: live, at: '2026-11-20T00:00:30.000Z'});
+  const node = state => ({phase: 'node', ...team, node: 'rn-c1', kind: 'coordinator', parent: null, depth: 1, round: 1, state, seat: CARBON, question: 'q'});
+  w.recordResearch({...node('admitted'), claim: live, at: '2026-11-20T00:00:40.000Z'});
+  assert.throws(() => w.recordResearch({...node('finished'), claim: live, at: '2026-11-20T01:00:00.000Z'}), /LEASE_FENCED|lease|expired/i, 'an hour after a one-minute lease');
+  assert.throws(() => w.recordResearch({...node('finished'), claim: live, item: 'other'}), /its team is not recorded|claim of its own item/);
+  assert.deepEqual(w.research('two').map(r => `${r.phase}:${r.state ?? ''}`), ['team:', 'node:admitted']);
+  assert.equal(w.verify().ok, true);
 });

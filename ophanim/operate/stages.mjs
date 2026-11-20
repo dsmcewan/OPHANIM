@@ -69,7 +69,7 @@ import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
-import {requestResearch, researchOf, researchContributors, runResearch, teamIdOf, researchTransportRefusal, isResearchTransportStop} from './research.mjs';
+import {requestResearch, researchOf, researchView, researchContributors, runResearch, teamIdOf, researchTransportRefusal, isResearchTransportStop} from './research.mjs';
 import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 
 export const PLAN_SCHEMA = 'ophanim.plan/v1';
@@ -582,6 +582,8 @@ const findingContribution = (f, via) => ({purpose: isAdvisory(f) ? 'dispatcher-r
 // `profile` defaults to `fit` (owner direction 2026-11-17): the lifecycle routes by the fit matrix
 // (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
 // selectSeat and runOpenItem still default to `argo` when called without one.
+/** How many times the plan stage itself may ask for research on one item's insufficient evidence. */
+export const GAP_RESEARCH_MAX = 3;
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
   seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, research = {}, bundlesDir = null, independence = undefined,
   pipelineLimits = {}, antigravity = {}, ...rest} = {}) {
@@ -666,8 +668,19 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
    * not researched twice) and run it. Returns what happened, for the stage's record. With primary Gemini execution not
    * declared nothing is requested or run, and the record says so: the planner's answer authorizes no spend.
    */
+  /**
+   * What a research session must not read although it is inside the repository it reads: the controller's own state (the
+   * item's state directory, with other teams' evidence) and the owner's status keys. The runner adds the work ledger and
+   * the team's directory itself (research.mjs). Independent review of ea858a6..af23623, lifecycle finding 1.
+   */
+  const researchHide = ctx => [stateDir ?? (ctx.work?.root ? path.join(path.dirname(ctx.work.root), 'operate') : null), path.join(statusAt, 'keys')].filter(p => typeof p === 'string' && path.isAbsolute(p));
   const researchOnGaps = async (ctx, m, {gaps, needed}) => {
     if (!RES.enabled || !ctx.work?.research) return {ran: false, why: 'research is not enabled for these executors (makeExecutors research.enabled: the launcher\'s choice)'};
+    // BOUNDED PER ITEM (independent review, lifecycle finding 3): "once per set of gaps" is an exact match of the text, so a
+    // planner that words its gaps differently each time got a new team each time, without end. After GAP_RESEARCH_MAX
+    // such requests the plan stage asks for no more on the planner's say; an operator still can (`operate research`).
+    const asked = researchOf(ctx.work, ctx.item).requests.filter(r => r.trigger === 'insufficient-evidence' && r.by === 'plan stage').length;
+    if (asked >= GAP_RESEARCH_MAX) return {ran: false, why: `the plan stage has already asked for research on this item's evidence ${asked} time(s) (at most ${GAP_RESEARCH_MAX}): no further team is started on the planner's say`};
     if ((ctx.billing ?? geminiBilling()).policy?.gemini_api_primary?.enabled !== true) return {ran: false, why: 'gemini_api_primary is not declared: research is not run, and nothing is requested on the planner\'s say'};
     // A TRANSPORT THAT CANNOT START A SESSION RUNS NOTHING AND REQUESTS NOTHING: the item waits on its evidence exactly as
     // it did before research existed, and the record says why.
@@ -680,7 +693,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const top = git(repo)(['rev-parse', '--show-toplevel']).trim();
     const run = await runResearch({work: ctx.work, item: ctx.item, claim: ctx.claim ?? null, request: researchOf(ctx.work, ctx.item).requests.find(r => r.hash === request), repo: top,
       dir: path.join(dirOf(ctx, 'research'), teamIdOf({item: ctx.item, request})), billing: ctx.billing ?? geminiBilling(), admitRequest: who => m.take(who), head: git(top)(['rev-parse', 'HEAD']).trim(),
-      limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, signal: ctx.signal ?? null, progress}).catch(e => ({team: null, status: 'failed', stop_reason: e?.code ?? 'RESEARCH_FAILED', concluded: false, conclusion: null}));
+      limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, hide: researchHide(ctx), signal: ctx.signal ?? null, progress}).catch(e => ({team: null, status: 'failed', stop_reason: e?.code ?? 'RESEARCH_FAILED', concluded: false, conclusion: null}));
     return {ran: true, request, team: run.team, status: run.status, stop_reason: run.stop_reason, concluded: run.concluded, conclusion: run.conclusion};
   };
   const researchBefore = async (ctx, m, t0) => {
@@ -711,7 +724,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     try { context = renderDossier(evidenceFor(ctx).dossier); } catch { context = null; }
     for (const request of open) {
       const run = await runResearch({work: ctx.work, item: ctx.item, claim: ctx.claim ?? null, request, repo: top, dir: path.join(dirOf(ctx, 'research'), teamIdOf({item: ctx.item, request: request.hash})), billing: ctx.billing ?? geminiBilling(),
-        admitRequest: who => m.take(who), context, head, limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, signal: ctx.signal ?? null, progress});
+        admitRequest: who => m.take(who), context, head, limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, hide: researchHide(ctx), signal: ctx.signal ?? null, progress});
       out.ran.push({request: request.hash, trigger: request.trigger, team: run.team, status: run.status, stop_reason: run.stop_reason, concluded: run.concluded, conclusion: run.conclusion});
       if (run.concluded) continue;
       if (isResearchTransportStop(run.stop_reason)) { out.stop = transportStop(request, [run.stop_reason], run.result?.nodes?.find(x => x.error)?.error?.message); break; }
@@ -896,7 +909,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let dossier = built;
     // The research conclusions this attempt's dossier holds: a later conclusion that changes what a plan should rest on,
     // and is not among them, makes the plan stale (gates.mjs).
-    const researchSeen = ctx.work?.research ? researchOf(ctx.work, item).conclusions.map(c => c.hash) : [];
+    // GIVEN is what is inside the bytes of the research view the dossier delivers, not every conclusion on the ledger
+    // (independent review, lifecycle finding 2: a material conclusion outside the cut was recorded as given).
+    const researchSeen = ctx.work?.research ? researchView(ctx.work, item)?.given ?? [] : [];
     const investigations = Object.assign([], {dossier});
     // What the planner was given only in part stays an unresolved gap on the record, with the request that continues it.
     // It is what the planner that wrote the CURRENT version was given: that answer's own investigation, never the

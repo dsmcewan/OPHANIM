@@ -46,6 +46,7 @@ export function problems(reg, {root = ROOT} = {}) {
     if (!Array.isArray(c.instances) || !c.instances.length) out.push(`${c.id}: no recorded instance`);
     for (const i of c.instances ?? []) {
       if (!['owner', 'review', 'mechanism'].includes(i.observed_by)) out.push(`${c.id}: instance observed_by must be owner, review or mechanism`);
+      if (i.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(i.date))) out.push(`${c.id}: an instance's date is YYYY-MM-DD (${i.date}): dates are compared as dates`);
       if (i.observed_by === 'review' && !(typeof i.detected_by === 'string' && i.detected_by.trim())) out.push(`${c.id}: an instance a review found says which review (detected_by)`);
       if (i.by_detector === true && i.observed_by !== 'mechanism') out.push(`${c.id}: by_detector is for an instance the registered check found, not one a review or the owner found`);
       else if (i.by_detector === true && c.detector?.kind !== 'test') out.push(`${c.id}: an instance claims the class's registered check (by_detector), and the class has none`);
@@ -62,6 +63,8 @@ export function problems(reg, {root = ROOT} = {}) {
   return out;
 }
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const NAMES_A_CHECK = /[\w./-]+\.test\.mjs|\bmutation\s+[A-Z]+\d+\b/;
 export function report(reg) {
   const classes = reg.classes.map(c => {
     const byOwner = c.instances.filter(i => i.observed_by === 'owner');
@@ -69,15 +72,21 @@ export function report(reg) {
     const byMechanism = c.instances.filter(i => i.observed_by === 'mechanism');
     // "A previously observed class": the registered check's detection counts only from the owner's first raising on.
     const raised = byOwner.map(i => i.date).filter(Boolean).sort()[0] ?? null;
-    const byOwnCheck = byMechanism.filter(i => i.by_detector === true);
+    // ITS OWN REGISTERED CHECK: a class with no detector has none, whatever an instance claims (independent review of
+    // a1d090f, finding 3.1: report() counted such a claim; only problems() refused it).
+    const byOwnCheck = c.detector.kind === 'test' ? byMechanism.filter(i => i.by_detector === true) : [];
+    const day = d => (DATE.test(d ?? '') ? Date.parse(d) : NaN);
     return {id: c.id, detector: c.detector.kind === 'test' ? `${c.detector.file} :: ${c.detector.name}` : `none (${c.detector.why})`,
       fixed: Boolean(c.fixed_in), owner_interventions: byOwner.length, found_by_review: byReview.length, detections: byMechanism.length, detected_by_own_check: byOwnCheck.length,
       corrected_by_mechanism: byMechanism.filter(i => i.corrected_by === 'mechanism').length,
       // The three things, apart: every instance was discovered; one is repaired when it says who corrected it; its
       // recurrence is proven only when it names the reusable check that was seen to catch it.
       discovered: c.instances.length, repaired: c.instances.filter(i => typeof i.corrected_by === 'string' && i.corrected_by).length,
-      recurrence_proven: c.instances.filter(i => typeof i.recurrence_check === 'string' && i.recurrence_check.trim()).length,
-      succeeded: raised !== null && byOwnCheck.some(i => i.corrected_by === 'mechanism' && typeof i.date === 'string' && i.date >= raised),
+      // A recurrence is proven by a check that is NAMED (a test file, or a mutation of a runner), not by any text in the field (3.5).
+      recurrence_proven: c.instances.filter(i => typeof i.recurrence_check === 'string' && NAMES_A_CHECK.test(i.recurrence_check)).length,
+      // Dates are compared as dates (3.3). And the owner raising the class AGAIN after the check's detection means the
+      // mechanism missed a recurrence: that detection is not a success (3.4).
+      succeeded: raised !== null && byOwnCheck.some(i => i.corrected_by === 'mechanism' && day(i.date) >= day(raised) && !byOwner.some(o => day(o.date) > day(i.date))),
       // Condition 7: the owner raising the same class again is evidence the improvement process needs examination.
       repeated: byOwner.length > 1};
   });

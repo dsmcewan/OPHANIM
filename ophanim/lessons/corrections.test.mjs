@@ -55,12 +55,12 @@ test('the registry refuses what would blur them: the registered check claimed fo
   const base = {schema: 'ophanim.owner-corrections/v1'};
   const one = (detector, instance) => problems({...base, classes: [{id: 'k', class: 'c', source: 's', detector, instances: [instance]}]});
   const none = {kind: 'none', why: 'w', next: 'n'};
-  assert.match(one(none, {observed_by: 'mechanism', by_detector: true, date: 'd'}).join('; '), /k: an instance claims the class's registered check \(by_detector\), and the class has none/);
-  assert.match(one(withTest, {observed_by: 'review', by_detector: true, date: 'd', detected_by: 'a reviewer'}).join('; '), /k: by_detector is for an instance the registered check found, not one a review or the owner found/);
-  assert.match(one(withTest, {observed_by: 'owner', by_detector: true, date: 'd'}).join('; '), /k: by_detector is for an instance the registered check found/);
-  assert.match(one(withTest, {observed_by: 'reviewer', date: 'd'}).join('; '), /k: instance observed_by must be owner, review or mechanism/);
-  assert.match(one(withTest, {observed_by: 'review', date: 'd'}).join('; '), /k: an instance a review found says which review \(detected_by\)/);
-  assert.deepEqual(one(withTest, {observed_by: 'review', date: 'd', detected_by: 'the third independent review'}), []);
+  assert.match(one(none, {observed_by: 'mechanism', by_detector: true, date: '2026-11-17'}).join('; '), /k: an instance claims the class's registered check \(by_detector\), and the class has none/);
+  assert.match(one(withTest, {observed_by: 'review', by_detector: true, date: '2026-11-17', detected_by: 'a reviewer'}).join('; '), /k: by_detector is for an instance the registered check found, not one a review or the owner found/);
+  assert.match(one(withTest, {observed_by: 'owner', by_detector: true, date: '2026-11-17'}).join('; '), /k: by_detector is for an instance the registered check found/);
+  assert.match(one(withTest, {observed_by: 'reviewer', date: '2026-11-17'}).join('; '), /k: instance observed_by must be owner, review or mechanism/);
+  assert.match(one(withTest, {observed_by: 'review', date: '2026-11-17'}).join('; '), /k: an instance a review found says which review \(detected_by\)/);
+  assert.deepEqual(one(withTest, {observed_by: 'review', date: '2026-11-17', detected_by: 'the third independent review'}), []);
 });
 
 test('the current record: repeated classes are named, and success is not claimed', () => {
@@ -71,4 +71,24 @@ test('the current record: repeated classes are named, and success is not claimed
   // detected by its own registered check: none has been.
   assert.ok(r.review_found.length >= 3, JSON.stringify(r.review_found));
   assert.deepEqual(r.classes.filter(c => c.detected_by_own_check > 0).map(c => c.id), []);
+});
+
+// ---- Findings of the independent review of a1d090f (2026-11-20) ---------------------------------------------------------
+test('the success rule holds on its own, not only behind the registry\'s other checks: no detector, no success; dates are dates; a later owner raising undoes it; a recurrence check names a check', () => {
+  const cls = (over, instances) => ({id: 'c', class: 'x', source: 's', detector: {kind: 'test', file: 'ophanim/lessons/corrections.test.mjs', name: 'the success rule'}, ...over, instances});
+  const owner = date => ({observed_by: 'owner', date, ref: 'r', note: 'n'});
+  const own = (date, over = {}) => ({observed_by: 'mechanism', by_detector: true, corrected_by: 'mechanism', date, ref: 'r', note: 'n', detected_by: 'the registered check', ...over});
+  const ok = report({classes: [cls({}, [owner('2026-11-17'), own('2026-11-19')])]});
+  assert.deepEqual([ok.success.demonstrated, ok.classes[0].succeeded], [true, true], 'the rule\'s own case: raised by the owner, then caught by the registered check and corrected');
+  // 3.1 A class with NO registered check cannot have been detected by its own check, whatever an instance says.
+  assert.equal(report({classes: [cls({detector: {kind: 'none', why: 'no test yet', next: 'write one'}}, [owner('2026-11-17'), own('2026-11-19')])]}).success.demonstrated, false);
+  // 3.3 Dates are compared as dates: the 9th is before the 17th.
+  assert.equal(report({classes: [cls({}, [owner('2026-11-17'), own('2026-11-09')])]}).success.demonstrated, false);
+  assert.ok(problems({schema: 'ophanim.owner-corrections/v1', purpose: 'p', classes: [cls({}, [owner('2026-11-17'), own('2026-11-9')])]}).some(p => /date/.test(p)), 'a date that is not YYYY-MM-DD is a problem of the registry');
+  // 3.4 The owner raising the class AGAIN after the detection is the mechanism missing a recurrence: not a success.
+  const again = report({classes: [cls({}, [owner('2026-11-17'), own('2026-11-18'), owner('2026-11-20')])]});
+  assert.deepEqual([again.success.demonstrated, again.classes[0].repeated], [false, true]);
+  // 3.5 A recurrence is proven by a named check, not by any sentence in the field.
+  const rec = text => report({classes: [cls({}, [{...owner('2026-11-17'), recurrence_check: text}])]}).classes[0].recurrence_proven;
+  assert.deepEqual([rec('none yet: no reusable check exists'), rec('pantheon/tests/antigravity-gateway.test.mjs (the stop on arrival)'), rec('mutation W7 of ophanim/operate/sdk-intake.mutate.mjs killed on ea858a6')], [0, 1, 1]);
 });

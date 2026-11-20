@@ -19,6 +19,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -630,4 +631,23 @@ test("a partial checkpoint is restored only into the run it was recorded for: an
   const onZ = { record: { ...body, seal: sealOf(body, expect.key) }, patch: got.patch };
   assert.equal(partialRefusal(onZ, { ...expect, upstream: [{ unit_id: "z", unit_key: "k", tree: "t1" }] }), null);
   assert.match(partialRefusal(onZ, { ...expect, upstream: [{ unit_id: "z", unit_key: "k", tree: "t2" }] }), /upstream units or their trees differ from this run's/);
+});
+
+// ---- Findings of the independent review of af23623 (2026-11-20) ---------------------------------------------------------
+test("A PARTIAL CHECKPOINT THE RUN CANNOT USE IS SAID SO, NOT PASSED OVER: after the base moved, the unit's earlier partial checkpoint is named in the record with the reason, and it is removed when the unit is approved", async t => {
+  // Finding 1.1: the lookup is by unit key, and the key changes with the base or the plan. The earlier partial checkpoint was
+  // then not found, nothing was recorded, a new billed session started from nothing, and the old files stayed for good.
+  const { env, checkpoints, usage } = await partialEnv(t);
+  const first = await pipeline(t, stoppedAfter({ "src/a/part.mjs": "export const part = 1;\n" }), { env, checkpoints, agy: { billing: optIn({ primary: 2, file: usage }) } });
+  const old = partialFile(checkpoints.dir, first.u.unit_key);
+  assert.equal(existsSync(old), true);
+  await write(env.repo, "UNRELATED.md", "the base moves\n");
+  for (const a of [["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "an unrelated commit"]]) execFileSync("git", ["-C", env.repo, ...a]);
+  let part = "unseen";
+  const second = await pipeline(t, async args => { part = existsSync(join(args.worktree, "src/a/part.mjs")); return session(args); }, { env: { ...env, dir: join(env.root, "run2") }, checkpoints, agy: { billing: optIn({ primary: 10, file: usage }) } });
+  assert.notEqual(second.u.unit_key, first.u.unit_key, "the unit's key follows the base");
+  assert.deepEqual([second.u.status, part, second.u.partial_resume ?? null], ["approved", false, null], "the unit ran from its base");
+  assert.match(second.u.partial_rejected.why, /a partial checkpoint of unit a was recorded for another unit key \(the base or the plan changed since\): it is not restored/);
+  assert.deepEqual([second.u.partial_rejected.unit_key, second.out.checkpoints.partial_rejected], [first.u.unit_key, ["a"]]);
+  assert.equal(existsSync(old), false, "the unit is approved: its earlier partial checkpoint is removed with it");
 });

@@ -40,6 +40,7 @@
 // refused; count a request the caller refused; or report the model asked for as the model that answered.
 import { createHash } from "node:crypto";
 import { RESEARCH, RESEARCH_SPECIALTIES, SDK_READ_TOOLS } from "./config.mjs";
+import { ceilingFor } from "./subagents.mjs";
 
 export const RESEARCH_TEAM_SCHEMA = "pantheon.research-team/v1";
 export const REPORT_PARTS = Object.freeze(["question", "sources", "observations", "hypotheses", "dependencies", "unresolved", "next"]);
@@ -62,9 +63,13 @@ export function parseReport(answer) {
   try { const j = JSON.parse(answer.slice(a, b + 1)); return plain(j) ? j : null; } catch { return null; }
 }
 
+/** What the controller holds about one examined path: its version, and whether it was absent when it was read. */
+const seenOf = e => ({ version: e.sha256 ?? null, absent: e.kind === "missing" });
 /**
- * Why a report is not accepted (a list, empty when it is). `examined` is what the controller saw the node examine;
- * `known` (the coordinator's) is the sources finished members examined: Map ref -> version.
+ * Why a report is not accepted (a list, empty when it is). `examined` is what the controller saw THIS node examine.
+ * `known` is the sources finished members examined (Map ref -> {version, absent}): it is the COORDINATOR's alone, because
+ * the coordinator is shown its members' findings with their sources. A specialist cites only what it read itself
+ * (independent review of ea858a6..af23623, finding 1: `known` was applied to every node).
  */
 export function reportRefusal(report, { examined = [], coordinator = false, known = new Map() } = {}) {
   if (!plain(report)) return ["the answer is not a JSON object"];
@@ -74,14 +79,14 @@ export function reportRefusal(report, { examined = [], coordinator = false, know
     else if (!Array.isArray(report[k])) why.push(`the report has no ${k} (a list, empty when there is none)`);
   }
   if (why.length) return why;
-  const seen = new Map(known);
-  for (const e of examined) seen.set(e.path, e.sha256 ?? null);
+  const seen = new Map(coordinator ? known : []);
+  for (const e of examined) seen.set(e.path, seenOf(e));
   const refs = new Set();
   for (const s of report.sources) {
     const ref = plain(s) ? s.ref : s;
     if (!str(ref)) { why.push("a source has no ref (the path examined)"); continue; }
     if (!seen.has(ref)) { why.push(`the report cites ${ref}, which this node never examined`); continue; }
-    if (plain(s) && s.version != null && s.version !== seen.get(ref)) why.push(`the report gives ${ref} a version (${short(s.version)}) that is not the one examined (${short(seen.get(ref))})`);
+    if (plain(s) && s.version != null && s.version !== seen.get(ref).version) why.push(`the report gives ${ref} a version (${short(s.version)}) that is not the one examined (${short(seen.get(ref).version)})`);
     refs.add(ref);
   }
   const ids = new Set();
@@ -94,8 +99,16 @@ export function reportRefusal(report, { examined = [], coordinator = false, know
   for (const h of report.hypotheses) {
     if (!plain(h) || !str(h.id) || !str(h.text)) { why.push("a hypothesis is {id, text, supports, contradicts}"); continue; }
     for (const r of [...list(h.supports), ...list(h.contradicts)]) if (!ids.has(r)) why.push(`hypothesis ${h.id} refers to ${r}, which is not one of its observations`);
+    // A verdict on a hypothesis names what gives it (finding 8): "supported" with nothing supporting it is an assertion.
+    if (h.status === "supported" && !list(h.supports).length) why.push(`hypothesis ${h.id} is called supported and names no observation that supports it`);
+    if (h.status === "contradicted" && !list(h.contradicts).length) why.push(`hypothesis ${h.id} is called contradicted and names no observation that contradicts it`);
   }
-  for (const d of report.dependencies) if (!plain(d) || !str(d.from) || !str(d.to)) why.push("a dependency is {from, to, kind, contract?, sources}");
+  for (const d of report.dependencies) {
+    if (!plain(d) || !str(d.from) || !str(d.to)) { why.push("a dependency is {from, to, kind, contract?, sources}"); continue; }
+    // A dependency is a finding like any other: it rests on sources the node read (finding 8).
+    if (!list(d.sources).length) why.push(`a dependency (${d.from} -> ${d.to}) names no source: a dependency is what a source shows`);
+    for (const r of list(d.sources)) if (!refs.has(r)) why.push(`a dependency (${d.from} -> ${d.to}) cites ${r}, which is not among the report's sources`);
+  }
   const open = new Set();
   for (const u of report.unresolved) { if (!plain(u) || !str(u.id) || !str(u.question)) why.push("an unresolved question is {id, question, why}"); else open.add(u.id); }
   for (const n of report.next) {
@@ -125,10 +138,10 @@ const REPORT_CONTRACT = [
 export function conciseFinding(node, bytes = RESEARCH.bounds.finding_bytes) {
   const head = `- node ${node.id} (level ${node.depth}${node.specialty ? `, ${node.specialty}` : ""}, ${node.seat.model}): ${node.question}`;
   if (node.state !== "finished") return `${head}\n  state: ${node.state}${node.error ? ` (${node.error.code}: ${list(node.error.why).join("; ") || node.error.message || ""})` : ""}`.slice(0, bytes);
-  const v = new Map(node.report.sources.map(s => [s.ref, s.version]));
+  const v = new Map(node.report.sources.map(s => [s.ref, s.absent ? "ABSENT" : short(s.version)]));
   const lines = [head];
   const rows = [
-    ...node.report.observations.map(o => `  ${o.id}: ${o.text} [${o.sources.map(r => `${r}@${short(v.get(r))}`).join(", ")}]`),
+    ...node.report.observations.map(o => `  ${o.id}: ${o.text} [${o.sources.map(r => `${r}@${v.get(r)}`).join(", ")}]`),
     ...node.report.hypotheses.map(h => `  ${h.id} (${h.status ?? "open"}): ${h.text}${list(h.supports).length ? ` supported by ${h.supports.join(", ")}` : ""}${list(h.contradicts).length ? ` contradicted by ${h.contradicts.join(", ")}` : ""}`),
     ...node.report.dependencies.map(d => `  depends: ${d.from} -> ${d.to}${d.kind ? ` (${d.kind})` : ""}${d.contract ? `; contract: ${d.contract}` : ""}`),
     ...node.report.unresolved.map(u => `  open ${u.id}: ${u.question}${u.why ? ` (${u.why})` : ""}`),
@@ -178,7 +191,7 @@ function specialistPrompt({ team, node, gap }) {
  *   resume       node records of an earlier run of this team: finished ones are reused, not run
  * Returns the team's record.
  */
-export async function runResearchTeam({ team, coordinator, subordinate, limits, runNode, admit: charge = () => {}, record = async () => {}, resume = [], signal = null, now = () => new Date().toISOString() }) {
+export async function runResearchTeam({ team, coordinator, subordinate, limits, runNode, admit: charge = () => {}, record = async () => {}, resume = [], spent = null, signal = null, now = () => new Date().toISOString() }) {
   if (!plain(team) || !str(team.id) || !str(team.question) || !Object.hasOwn(RESEARCH.roles, String(team.role))) throw new Error("runResearchTeam: pass team {id, role, question, scope}");
   if (!Array.isArray(team.scope) || !team.scope.length) throw new Error("runResearchTeam: the team has a scope (paths inside the repository)");
   if (!str(coordinator?.seat?.model) || !str(subordinate?.model) || typeof runNode !== "function") throw new Error("runResearchTeam: pass the coordinator's seat, the subordinate seat and runNode");
@@ -187,13 +200,25 @@ export async function runResearchTeam({ team, coordinator, subordinate, limits, 
   }
   if (!Number.isInteger(limits.max_active) || limits.max_active < 0) throw new Error("runResearchTeam: limits.max_active is a whole number");
   if (limits.max_depth > RESEARCH.max_depth) throw new Error(`runResearchTeam: limits.max_depth is at most ${RESEARCH.max_depth}`);
+  // THE COORDINATOR MODEL'S CEILING IS NOT THE CALLER'S TO RAISE (finding 5): a caller may ask for fewer at once, never more.
+  const ceiling = ceilingFor(coordinator.seat.model);
+  if (limits.max_active > ceiling) throw new Error(`runResearchTeam: limits.max_active is at most ${ceiling} for a coordinator on ${coordinator.seat.model}`);
 
   const root = nodeId({ team: team.id, parent: null, addresses: null, question: team.question });
   const nodes = [], refusals = [], byId = new Map();
   const requests = { total: 0, by_model: {} }, tokens = { total: 0, by_model: {} };
   const knowledge = new Map(), known = new Map();
-  const prior = new Map(resume.filter(n => n?.state === "finished").map(n => [n.kind === "coordinator" ? `${n.id}#${n.round}` : n.id, n]));
+  const keyOf = n => (n.kind === "coordinator" ? `${n.id}#${n.round}` : n.id);
+  const prior = new Map(resume.filter(n => n?.state === "finished").map(n => [keyOf(n), n]));
+  // THE BOUND IS THE TEAM'S, NOT ONE RUN'S (finding 3): every request an earlier run of this team made, by a member
+  // that finished or not, counts against the same max_requests. Each member is counted once, by its last record.
+  const spentBefore = new Map();
+  for (const n of resume) if (plain(n) && str(n.id)) spentBefore.set(keyOf(n), Math.max(spentBefore.get(keyOf(n)) ?? 0, Number.isInteger(n.usage?.requests) ? n.usage.requests : 0));
+  // `spent`: the caller's own count of what earlier runs of this team billed (its ledger's), when it has one; else the
+  // usage on the resumed records.
+  const carried = Number.isInteger(spent) && spent >= 0 ? spent : [...spentBefore.values()].reduce((a, b) => a + b, 0);
   let active = 0, peak = 0, created = 0, reused = 0, depthReached = 1, budgetStop = false, callerStop = null;
+  const stopped = () => budgetStop || callerStop !== null;
   const aborted = () => signal?.aborted === true;
   const nodeBounds = { model_calls: limits.node_model_calls, tool_calls: limits.node_tool_calls, timeout_s: limits.node_timeout_s };
 
@@ -202,28 +227,34 @@ export async function runResearchTeam({ team, coordinator, subordinate, limits, 
   const refuse = async (r) => { refusals.push(r); await emit({ event: "refusal", refusal: r }); };
 
   // EVERY BILLED REQUEST: the team's own bound first, then the caller's charge; counted only when both let it through.
+  // The request is RESERVED against the bound before the caller is asked, and given back if the caller refuses, so the
+  // bound holds under concurrency whether the caller answers at once or later (finding 9: a charge that answered
+  // asynchronously was not waited for, its refusal was lost and its request was counted).
   const admitFor = node => (info = {}) => {
-    if (requests.total >= limits.max_requests) {
+    if (carried + requests.total >= limits.max_requests) {
       budgetStop = true;
       node._refused = "RESEARCH_REQUEST_BUDGET";
-      throw Object.assign(new Error(`RESEARCH_REQUEST_BUDGET: the team's request budget (${limits.max_requests}) is spent; the request is not sent`), { code: "RESEARCH_REQUEST_BUDGET" });
+      throw Object.assign(new Error(`RESEARCH_REQUEST_BUDGET: the team's request budget (${limits.max_requests}) is spent${carried ? ` (${carried} by earlier runs of this team)` : ""}; the request is not sent`), { code: "RESEARCH_REQUEST_BUDGET" });
     }
     const model = str(info.model) ? info.model : node.seat.model;
-    try { charge({ ...info, model, node: node.id, team: team.id, role: team.role, kind: node.kind, depth: node.depth }); }
-    catch (e) { callerStop ??= e; node._refused = e?.code ?? "CHARGE_REFUSED"; throw e; }
     requests.total += 1; requests.by_model[model] = (requests.by_model[model] ?? 0) + 1; node.usage.requests += 1;
+    const refused = e => { requests.total -= 1; requests.by_model[model] -= 1; if (!requests.by_model[model]) delete requests.by_model[model]; node.usage.requests -= 1; callerStop ??= e; node._refused = e?.code ?? "CHARGE_REFUSED"; throw e; };
+    let answer;
+    try { answer = charge({ ...info, model, node: node.id, team: team.id, role: team.role, kind: node.kind, depth: node.depth }); }
+    catch (e) { refused(e); }
+    return typeof answer?.then === "function" ? answer.then(() => undefined, refused) : undefined;
   };
 
   const absorb = node => {
-    for (const s of node.report.sources) known.set(s.ref, s.version);
-    const v = new Map(node.report.sources.map(s => [s.ref, s.version]));
+    for (const s of node.report.sources) known.set(s.ref, { version: s.version, absent: s.absent === true });
+    const v = new Map(node.report.sources.map(s => [s.ref, s.version])), gone = new Set(node.report.sources.filter(s => s.absent).map(s => s.ref));
     for (const o of node.report.observations) {
       const key = claimKey(o.text);
       const entry = knowledge.get(key) ?? { text: o.text.replace(/\s+/g, " ").trim(), evidence: [] };
       for (const ref of o.sources) {
         const at = entry.evidence.find(e => e.ref === ref && e.version === v.get(ref));
         if (at) { if (!at.nodes.includes(node.id)) at.nodes.push(node.id); }
-        else entry.evidence.push({ ref, version: v.get(ref) ?? null, nodes: [node.id] });
+        else entry.evidence.push({ ref, version: v.get(ref) ?? null, ...(gone.has(ref) ? { absent: true } : {}), nodes: [node.id] });
       }
       knowledge.set(key, entry);
     }
@@ -232,26 +263,38 @@ export async function runResearchTeam({ team, coordinator, subordinate, limits, 
   /** Run one admitted node's session and settle its record. */
   const runOne = async (node, prompt) => {
     if (aborted()) { node.state = "cancelled"; node.error = { code: "ABORTED", message: "the team was stopped before this node started" }; await emit({ event: "node", node: publicNode(node) }); return node; }
+    // A TEAM THAT WAS REFUSED A CHARGE, OR HAS SPENT ITS BOUND, STARTS NOTHING MORE (finding 4): a member still waiting
+    // for a slot is recorded as not run. Its session is not started and the caller is not asked again.
+    if (stopped()) { node.state = "cancelled"; node.error = { code: "TEAM_STOPPED", message: `the team stopped (${callerStop?.code ?? "RESEARCH_REQUEST_BUDGET"}) before this member started` }; await emit({ event: "node", node: publicNode(node) }); return node; }
     node.state = "running"; node.started_at = now();
-    try {
-      const r = await runNode({ node: publicNode(node), prompt, seat: node.seat, signal, admit: admitFor(node), bounds: node.bounds });
+    const settle = r => {
       node.served_model = r?.served_model ?? null; node.served_model_source = r?.served_model_source ?? (r?.served_model ? "unknown" : null);
       node.usage.tokens = r?.usage?.total_token_count ?? 0;
       tokens.total += node.usage.tokens; tokens.by_model[node.seat.model] = (tokens.by_model[node.seat.model] ?? 0) + node.usage.tokens;
       node.examined = list(r?.examined).map(e => ({ tool: e.tool ?? null, path: e.path, kind: e.kind ?? "file", sha256: e.sha256 ?? null, bytes: e.bytes ?? null }));
+    };
+    try {
+      const r = await runNode({ node: publicNode(node), prompt, seat: node.seat, signal, admit: admitFor(node), bounds: node.bounds });
+      settle(r);
       const report = parseReport(r?.structured_output ?? r?.text);
       const why = reportRefusal(report, { examined: node.examined, coordinator: node.kind === "coordinator", known });
       if (why.length) { node.state = "failed"; node.error = { code: "INVALID_REPORT", why }; }
       else {
-        const versions = new Map([...known, ...node.examined.map(e => [e.path, e.sha256 ?? null])]);
-        node.report = { ...report, sources: report.sources.map(s => { const ref = plain(s) ? s.ref : s; return { ref, version: versions.get(ref) ?? null }; }) };
+        // Each cited source with what the controller holds about it: its version, or that it was ABSENT when read
+        // (finding 2: an absent path was kept like a file, and a finding resting on it looked like one on a file).
+        const held = new Map([...(node.kind === "coordinator" ? known : []), ...node.examined.map(e => [e.path, seenOf(e)])]);
+        node.report = { ...report, sources: report.sources.map(s => { const ref = plain(s) ? s.ref : s, h = held.get(ref); return { ref, version: h?.version ?? null, ...(h?.absent ? { absent: true } : {}) }; }) };
         node.state = "finished";
         absorb(node);
       }
     } catch (e) {
-      const stopped = aborted();
-      node.state = stopped ? "cancelled" : "failed";
-      node.error = { code: stopped ? "ABORTED" : node._refused ?? e?.code ?? "NODE_FAILED", message: String(e?.message ?? e).slice(0, 400) };
+      const wasAborted = aborted();
+      // What the session recorded up to its failure is kept with it (finding 9): what it read, what it used, and the
+      // model that answered inside it, which is a contributor whether or not the member finished.
+      const s = plain(e?.session) ? e.session : plain(e) && (e.examined || e.usage || e.served_model) ? e : null;
+      if (s) settle(s);
+      node.state = wasAborted ? "cancelled" : "failed";
+      node.error = { code: wasAborted ? "ABORTED" : node._refused ?? e?.code ?? "NODE_FAILED", message: String(e?.message ?? e).slice(0, 400) };
     }
     node.ended_at = now();
     await emit({ event: "node", node: publicNode(node) });
@@ -330,7 +373,11 @@ export async function runResearchTeam({ team, coordinator, subordinate, limits, 
       break;
     }
     rootState = c;
-    if (c.report.satisfied) { status = "satisfied"; stop_reason = "SATISFIED"; break; }
+    if (c.report.satisfied) {
+      // "Answered" with no observation anywhere in the team is an assertion, not a finding (finding 8).
+      if (!knowledge.size) { status = "failed"; stop_reason = "SATISFIED_WITHOUT_EVIDENCE"; break; }
+      status = "satisfied"; stop_reason = "SATISFIED"; break;
+    }
     const admitted = [];
     for (const d of c.report.delegations) { const n = await admitDelegation(d, round); if (n) admitted.push(n); }
     const toRun = admitted.filter(n => n._live);
@@ -361,12 +408,18 @@ export async function runResearchTeam({ team, coordinator, subordinate, limits, 
     contributors.push({ node: n.id, kind: n.kind, depth: n.depth, parent: n.parent, requested_model: n.seat.model, served_model: served, served_model_source: n.served_model_source ?? null, vendor: n.seat.vendor ?? null });
   }
   const by = (arr, key) => arr.reduce((m, x) => { m[x[key]] = (m[x[key]] ?? 0) + 1; return m; }, {});
-  const result = { schema: RESEARCH_TEAM_SCHEMA, team: { ...team }, root, status, stop_reason, satisfied: status === "satisfied", material: final?.report?.material === true, summary: final?.report?.summary ?? null, rounds,
+  // ONLY A TEAM THAT ENDED BY ITS OWN ACCOUNT CONCLUDES (finding 6): a failed, stopped or cancelled team says nothing is
+  // material and gives no summary, whatever an earlier round said. What its members found is kept below all the same.
+  // A team that spent its own bound of rounds or requests did not judge what it found. Whatever it holds is then treated
+  // as material: a plan is not left standing on less than the team saw because the team ran out before saying so.
+  const concluded = status === "satisfied" || status === "exhausted";
+  const outOfBound = status === "stopped" && (stop_reason === "ROUND_LIMIT" || stop_reason === "RESEARCH_REQUEST_BUDGET");
+  const result = { schema: RESEARCH_TEAM_SCHEMA, team: { ...team }, root, status, stop_reason, satisfied: status === "satisfied", material: concluded ? final?.report?.material === true : outOfBound && knowledge.size > 0, summary: concluded ? final?.report?.summary ?? null : null, rounds,
     selection: coordinator.selection ?? null, nodes: out, refusals,
     knowledge: { observations: [...knowledge.values()], unresolved: out.filter(n => n.state === "finished").flatMap(n => n.report.unresolved.map(u => ({ node: n.id, ...u }))),
       dependencies: out.filter(n => n.state === "finished").flatMap(n => n.report.dependencies.map(d => ({ node: n.id, ...d }))), hypotheses: out.filter(n => n.state === "finished").flatMap(n => n.report.hypotheses.map(h => ({ node: n.id, ...h }))) },
     contributors,
-    telemetry: { depth_reached: depthReached, active_peak: peak, nodes_created: created, coordinator_rounds: rounds, nodes: by(out.filter(n => n.kind === "specialist"), "state"), requests, tokens, refusals: by(refusals, "code"), reused } };
+    telemetry: { depth_reached: depthReached, active_peak: peak, nodes_created: created, coordinator_rounds: rounds, nodes: by(out.filter(n => n.kind === "specialist"), "state"), requests: { ...requests, ...(carried ? { carried } : {}) }, tokens, refusals: by(refusals, "code"), reused } };
   await emit({ event: "conclusion", status, stop_reason, satisfied: result.satisfied, material: result.material, summary: result.summary, telemetry: result.telemetry });
   return result;
 }
