@@ -40,7 +40,7 @@ import { runAgyCliTurn, agySdkEnvOf, agyModelMismatch } from "./agy-cli.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
 import { routeSeats, isMeteredGemini, geminiAdmission, spendGemini, geminiBilling, geminiKindOf, billingRecord, isGeminiBillingRefusal } from "../route/quota-failover.mjs";
-import { startGeminiRelay, relayUpstreamOf, RELAY_VERTEX_UNSUPPORTED } from "../route/gemini-relay.mjs";
+import { openSeatSession, seatUpstreamOf, SEAT_VERTEX_UNSUPPORTED } from "../antigravity/seat-session.mjs";
 import { laneParts } from "../route/fit-matrix.mjs";
 import { currentPolicy as currentIdentityPolicy, policyDigest as identityPolicyDigest, contributorKeys, candidateRefusal, reviewerRefusal, resolveModel } from "../review/identity.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
@@ -48,6 +48,7 @@ import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../r
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
 import { reviewScope, CRITIQUE_VIA } from "../review/scope.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
+import { SDK_TRANSPORT } from "../antigravity/config.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
 import { assignArm, explicitAssignment, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
@@ -551,11 +552,11 @@ export async function runOpenItem(spec, opts = {}) {
   // token GEMINI_API_KEY cannot authenticate the SDK.
   let agyN = 0;
   // THE SDK SEAT'S OWN MAXIMUM REQUEST COUNT (owner decision L-150, item 3): the BudgetConfig.max_model_calls the seat's Agent
-  // is given (scripts/agy-seat.py --max-model-calls) and the session cap its metering relay enforces, the same number.
+  // is given (scripts/agy-seat.py --max-model-calls) and the session cap its gateway session enforces, the same number.
   const SDK_MAX_MODEL_CALLS = 40;
   // `signal` (the turn's stop: L-306) cancels the CLI's or the SDK seat's process group; `admit` (L-301) is the provider-call
   // admission, called at the point of spend: inside runAgyCliTurn between its jail build and its spawn, or, for the python
-  // SDK seat, at EACH request its metering relay admits (L-150), never for the launch itself.
+  // SDK seat, at EACH request the model gateway admits for it (L-150), never for the launch itself.
   async function agyTurn({ purpose, model, prompt, declared = null, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900), signal = undefined, admit = () => {} }) {
     const role = purpose === "critique" ? "reviewer" : purpose === "scout" ? "scout" : purpose === "plan" ? "planner"
       : purpose === "work" ? "implementer" : null;
@@ -605,7 +606,7 @@ export async function runOpenItem(spec, opts = {}) {
       if (res.verify) progress({ event: "seat.verify", seat: "agy_google", model, detail: res.verify.offered ? `acceptance launcher offered: ${res.verify.command}` : `no command offered: ${res.verify.why}` });
     } else if (transport === "sdk") {
       // THE POINT-OF-SPEND GUARD OF THE SDK SEAT (L-124, split by L-136; L-504 invariant 4). The python SDK seat's requests
-      // are billed to GEMINI_API_KEY (through the metering relay below, request by request: L-150): it has no subscription
+      // are billed to GEMINI_API_KEY (through the model gateway below, request by request: L-150): it has no subscription
       // mode, so it is PRIMARY Gemini execution. Unless the billing policy's gemini_api_primary admits it (the failover
       // switch never does), it is refused HERE, before the venv and key checks, before anything is admitted (charged) and
       // before anything is spawned, whatever credential the environment holds (live-run's withholding of the key is not
@@ -615,15 +616,15 @@ export async function runOpenItem(spec, opts = {}) {
       catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }
       const python = process.env.PANTHEON_AGY_PYTHON ?? join(homedir(), "Projects", "agentic-pipeline", "sdk", ".venv-antigravity", "bin", "python");
       if (!existsSync(python)) throw new Error(`agy seat: venv python absent at ${python} (set PANTHEON_AGY_PYTHON)`);
-      // VERTEX THROUGH THE SDK SEAT IS REFUSED (register L-150, design D8): the metering relay holds the Gemini API key and
-      // no Vertex credential it could forward with, and a Vertex request the relay did not carry would be neither charged
+      // VERTEX THROUGH THE SDK SEAT IS REFUSED (register L-150, design D8): the model gateway holds the Gemini API key and
+      // no Vertex credential it could forward with, and a Vertex request the gateway did not carry would be neither charged
       // nor bounded. Fail closed, before anything is admitted or spawned.
       if (process.env.PANTHEON_AGY_VERTEX_PROJECT) {
-        const why = `${RELAY_VERTEX_UNSUPPORTED}: PANTHEON_AGY_VERTEX_PROJECT asks for Vertex, and the python SDK seat's requests are carried only by the controller's metering relay, which forwards to the Gemini API with GEMINI_API_KEY; nothing was admitted or spawned`;
+        const why = `${SEAT_VERTEX_UNSUPPORTED}: PANTHEON_AGY_VERTEX_PROJECT asks for Vertex, and the python SDK seat's requests are carried only by the controller's model gateway, which forwards to the Gemini API with GEMINI_API_KEY; nothing was admitted or spawned`;
         progress({ event: "turn.refused", seat: "agy_google", model, detail: why.slice(0, 300) }); record();
-        throw Object.assign(new Error(why), { code: RELAY_VERTEX_UNSUPPORTED, provider_requests: 0 });
+        throw Object.assign(new Error(why), { code: SEAT_VERTEX_UNSUPPORTED, provider_requests: 0 });
       }
-      if (!process.env.GEMINI_API_KEY) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (the controller's metering relay holds it; the SDK seat never does)");
+      if (!process.env.GEMINI_API_KEY) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (the controller's model gateway holds it; the SDK seat never does)");
       const args = [join(REPO, "scripts", "agy-seat.py"), "--role", role, "--workspace", worktree, "--repo", REPO,
         "--model", model, "--brief", join(dir, "brief.txt"), "--out", dir,
         "--progress", join(outDir, "progress.jsonl"),
@@ -632,25 +633,26 @@ export async function runOpenItem(spec, opts = {}) {
         "--timeout", String(timeoutS)];
       if (schemaPath) args.push("--schema", schemaPath);
       signal?.throwIfAborted();
-      // THE METERING RELAY (register L-150, L-151; route/gemini-relay.mjs): EVERY Gemini request the SDK makes -- each model
-      // call, retry, continuation, subagent call, web search -- reaches this loopback relay with the session's capability,
-      // and is admitted there by the session's own maximum request count (the --max-model-calls the seat is given), then
-      // by spendGemini: the policy, then the run's admission (`admit`: its provider-call bound and the caller's charge),
-      // then the usage row persisted -- all before it is forwarded with the real key. The launch itself is charged nothing.
-      const relay = await startGeminiRelay({ apiKey: process.env.GEMINI_API_KEY, upstream: relayUpstreamOf(process.env), outcomes: join(dir, "relay-outcomes.jsonl") });
-      const session = relay.openSession({ billing: BILLING, admit: () => admit(), spend: { vendor: "agy_google", purpose, role },
+      // THE MODEL GATEWAY (register L-150, L-151, L-724; antigravity/gateway.mjs through seat-session.mjs): EVERY Gemini
+      // request the SDK makes -- each model call, retry, continuation, subagent call, web search -- reaches the controller's
+      // loopback gateway with the session's token, and is admitted there by the session's own maximum request count (the
+      // --max-model-calls the seat is given), then by spendGemini: the policy, then the run's admission (`admit`: its
+      // provider-call bound and the caller's charge), then the usage row persisted -- all before it is forwarded with the
+      // real key. The launch itself is charged nothing. It is the gateway the pipeline's SDK sessions use: one mechanism.
+      const session = await openSeatSession({ apiKey: process.env.GEMINI_API_KEY, upstream: seatUpstreamOf(process.env), outcomes: join(dir, "gateway-outcomes.jsonl"),
+        model, billing: BILLING, admit: () => admit(), spend: { vendor: "agy_google", purpose, role },
         maxRequests: SDK_MAX_MODEL_CALLS, lifetimeMs: (timeoutS + 60) * 1000,
         lineage: { board_run: { key: run.key, board: root, started_at: run.started_at }, seat: { vendor: "agy_google", model, role, purpose, launch: `${purpose}-${agyN}` } },
-        onAdmitted: row => { record(); progress({ event: "relay.admitted", seat: "agy_google", model: row.model, detail: `request ${row.request} of the session (${row.identity.request_id}, ${row.lineage.conversation}): charged before it was sent; ${row.remaining_after} of the budget left` }); },
-        onRefused: r => progress({ event: "turn.refused", seat: "agy_google", model, detail: `metering relay: ${r.code}: ${String(r.why).slice(0, 240)}` }) });
-      // THE SCRUBBED ENVIRONMENT (L-410, tightened by L-150): the worker's allowlist and the relay's scoped capability, a HOME
+        onAdmitted: row => { record(); progress({ event: "gateway.admitted", seat: "agy_google", model: row.model, detail: `request ${row.request} of the session (${row.identity.request_id}, ${row.lineage.conversation}): charged before it was sent; ${row.remaining_after} of the budget left` }); },
+        onRefused: r => progress({ event: "turn.refused", seat: "agy_google", model, detail: `model gateway: ${r.code}: ${String(r.why).slice(0, 240)}` }) });
+      // THE SCRUBBED ENVIRONMENT (L-410, tightened by L-150): the worker's allowlist and the session's scoped capability, a HOME
       // of its own, and NO credential: never GEMINI_API_KEY, GOOGLE_API_KEY, Vertex or ADC. The stop reaches its process group (L-306).
       const home = join(dir, "home"); mkdirSync(home, { recursive: true });
       const sdkEnv = agySdkEnvOf(process.env, { capability: session.env, home });
-      progress({ event: "seat.env", seat: "agy_google", model, detail: `python SDK seat env: allowlist, credentials passed: ${sdkEnv.credentials.join(", ") || "none"}; relay capability: ${sdkEnv.capability.join(", ") || "none"}; ${sdkEnv.dropped.length} variable(s) withheld` });
+      progress({ event: "seat.env", seat: "agy_google", model, detail: `python SDK seat env: allowlist, credentials passed: ${sdkEnv.credentials.join(", ") || "none"}; gateway capability: ${sdkEnv.capability.join(", ") || "none"}; ${sdkEnv.dropped.length} variable(s) withheld` });
       let sdkRun;
       try { sdkRun = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) }); }
-      finally { session.close(); await relay.close(); record(); }
+      finally { await session.close(); record(); }
       const made = session.admitted;
       const last = (sdkRun.stdout ?? "").trim().split("\n").filter(Boolean).pop();
       let out = null;
@@ -664,7 +666,7 @@ export async function runOpenItem(spec, opts = {}) {
         throw agyModelMismatch({ requested: { agent: `pantheon-${role}`, model }, reported: { agent: typeof out?.role === "string" ? `pantheon-${out.role}` : null, model: reported } }, { transport: "agy-sdk", provider_requests: made });
       }
       if (sdkRun.killedFor === "cancelled") throw Object.assign(new Error("agy SDK seat was cancelled"), { code: "ABORTED", provider_requests: made });
-      // A REFUSAL OF THE BILLING POLICY OR OF THE RUN'S OWN ADMISSION, made by the relay at a request's point of spend
+      // A REFUSAL OF THE BILLING POLICY OR OF THE RUN'S OWN ADMISSION, made at the gateway at a request's point of spend
       // (owner item 8): the seat ended its turn on it, keeping its output and progress, and the run records it as that
       // refusal (L-136: refused_metered, recoverable), with the requests admitted before it still counted.
       const refused = session.billingRefusal;
@@ -705,6 +707,14 @@ export async function runOpenItem(spec, opts = {}) {
     const failover = quota_failover?.used ? { quota_failover } : {};
     if (failover.quota_failover) progress({ event: "quota_failover", seat: vendor, model, detail: `metered API used as quota failover of ${quota_failover.lanes.join(", ")}: ${quota_failover.after.map(a => `${a.lane} ${a.outcome} (${a.source})`).join("; ")}` });
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
+    // A SEAT OF THE ANTIGRAVITY SDK TRANSPORT IS NOT RUN HERE (owner direction 2026-11-19): it is a tool-enabled session
+    // on a work unit, with its own jail, gateway and subagent governor (src/pipeline, src/antigravity). The selector
+    // gives this per-file board the fit matrix's Google implementer in the board's own form (route/frontier.mjs
+    // boardSeat: the same model as one tool-less Gemini API turn), so a seat that still names the SDK transport was
+    // seated by hand. It is refused before any call or charge, and no agy CLI lane is started in its place.
+    if (transport === SDK_TRANSPORT) {
+      throw Object.assign(new Error(`${vendor}/${model} is a seat of the Antigravity SDK transport: it runs as a session on a work unit (the pipeline), and the per-file board does not run it. Nothing is run in its place`), { code: "SDK_SEAT_NEEDS_PIPELINE" });
+    }
     // The seat's own transport decides the path; a seat built before transports were recorded falls back
     // to the rule the transports encode (a non-frontier agy_google model is not an API id).
     const lane = transport ? transport !== "api" : vendor === "agy_google" && !isFrontier(model);
@@ -726,7 +736,7 @@ export async function runOpenItem(spec, opts = {}) {
       // signal cancels the agy process group, and the call is admitted at its point of spend (after the jail build, before
       // the spawn), so a lane turn that fails before its spawn is not a provider call.
       refuseIfClosed({ vendor, model, pool, transport: settings.transport, purpose });
-      // Each admission is one provider call: the CLI lane's one spawn, or each request the SDK seat's metering relay admits (L-150).
+      // Each admission is one provider call: the CLI lane's one spawn, or each request the model gateway admits for the SDK seat (L-150).
       let laneCharged = 0;
       const admitLane = () => { admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose }); laneCharged += 1; };
       try { r = await agyTurn({ purpose, model, prompt, declared: transport, ...(signal ? { signal } : {}), admit: admitLane }); }

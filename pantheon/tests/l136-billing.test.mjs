@@ -171,7 +171,8 @@ async function withCompare(fn) {
     const ticket = (item, extra) => writeFileSync(join(repo, "tickets", `${item}.json`), JSON.stringify({ schema: "ophanim.ticket/v1", item, slice: "the whole item",
       proposes: { state: "Resolved", basis: "alpha.mjs exports ok = true" }, title: "alpha.mjs exports ok = true", goal: "Make alpha.mjs export `ok` as true.", question: "fixture",
       repo_root: ".", copy: ["alpha.mjs", "verify.mjs"], acceptance_cmd: "node verify.mjs", ...extra }, null, 2) + "\n");
-    // PRIMARY: the ticket pins its work to a Gemini API id. FAILOVER: a hard ticket whose fit arm walks its lane ladder to the spare.
+    // PRIMARY: the ticket pins its work to a Gemini API id. "ladder": a hard ticket with no pin, whose fit arm seats the
+    // fit matrix's Google implementer (the Gemini API itself: PRIMARY execution, with no lane ladder in front of it).
     ticket("pinned", { slots: [{ slot: "alpha", path: "alpha.mjs", model: "gemini-4-carbon" }], difficulty: "easy" });
     ticket("ladder", { slot: "alpha", path: "alpha.mjs", difficulty: "hard" });
     writeFileSync(join(repo, "l136.clients.fixture.mjs"), RECORDING_CLIENTS);
@@ -204,25 +205,31 @@ test("pantheon-compare, PRIMARY (a ticket's Gemini API pin, both arms): refused 
   });
 });
 
-test("pantheon-compare, FAILOVER (the fit arm's lane ladder refused for quota; the spare of its pick): refused with a key present and nothing declared, charged before it is sent when declared, refused once the comparison's budget is spent", { timeout: 300_000 }, async () => {
+test("pantheon-compare, THE FIT ARM'S GOOGLE IMPLEMENTER (a hard ticket with no pin): it is the Gemini API itself, PRIMARY execution with no lane in front of it and no failover behind it; the failover setting does not admit it; declared, it is charged before it is sent, and refused once the budget is spent", { timeout: 300_000 }, async () => {
+  // On the base this was the pantheon-compare FAILOVER cell: the fit arm walked its Antigravity lane ladder to the spare of
+  // its pick. With the fit Google implementer seated on the Gemini API itself (owner direction 2026-11-19, the Antigravity
+  // SDK migration) the fit arm has no lane ladder to refuse, so that cell has no subject here; what this arm does spend is
+  // primary. The failover gate itself is the shared one the pantheon-board FAILOVER test above shows
+  // (docs/OPEN-LIMITATIONS.md L-721).
   await withCompare(async f => {
-    f.agyQuota(["gemini-4-carbon-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-high"]);
-    for (const [name, flags] of [["ladder-off", []], ["ladder-primary-only", ["--gemini-api-primary", "5"]]]) {
+    for (const [name, flags] of [["ladder-off", []], ["ladder-failover-only", ["--metered-gemini-failover", "5"]]]) {
       const r = compareRun(f, name, { item: "ladder", flags });
       assert.equal(r.status, 0, r.said);
-      assert.deepEqual([r.edge, r.usage], [[], []]);
-      assert.ok(refusalsOf(r.runs).some(([c, k]) => c === METERED_GEMINI_DISABLED && k === "failover"), `${JSON.stringify(refusalsOf(r.runs))}\n${r.said}`);
+      assert.deepEqual([r.edge, r.usage], [[], []], "no billed Gemini request, nothing charged");
+      const fit = r.runs.find(run => run.profile === "fit");
+      assert.deepEqual((fit.billing?.refusals ?? []).map(x => [x.code, x.kind, x.model, x.purpose]), [[GEMINI_PRIMARY_DISABLED, "primary", "gemini-4-carbon", "work"]], `${name}: ${r.said}`);
+      assert.deepEqual(fit.attempts.filter(a => a.purpose === "work").map(a => [a.model, a.transport, a.outcome]), [["gemini-4-carbon", "api", "refused_metered"]], `${name}: no lane was started for it, and no other seat wrote the work`);
     }
-    const ok = compareRun(f, "ladder-on", { item: "ladder", flags: ["--metered-gemini-failover", "4"] });
+    const ok = compareRun(f, "ladder-on", { item: "ladder", flags: ["--gemini-api-primary", "4"] });
     assert.equal(ok.status, 0, ok.said);
     assert.ok(ok.edge.length >= 1, ok.said);
     chargedBefore(ok.edge);
     assert.equal(ok.usage.length, ok.edge.length);
-    assert.ok(ok.usage.every(u => u.kind === "failover" && u.source === "flag --metered-gemini-failover 4"));
-    const spent = compareRun(f, "ladder-spent", { item: "ladder", flags: ["--metered-gemini-failover", "1"], seedUsage: "failover" });
+    assert.ok(ok.usage.every(u => u.kind === "primary" && u.model === "gemini-4-carbon" && u.source === "flag --gemini-api-primary 4"));
+    const spent = compareRun(f, "ladder-spent", { item: "ladder", flags: ["--gemini-api-primary", "1"], seedUsage: "primary" });
     assert.equal(spent.status, 0, spent.said);
     assert.deepEqual(spent.edge, [], spent.said);
-    assert.ok(refusalsOf(spent.runs).some(([c, k]) => c === METERED_GEMINI_BUDGET_EXHAUSTED && k === "failover"), JSON.stringify(refusalsOf(spent.runs)));
+    assert.ok(refusalsOf(spent.runs).some(([c, k]) => c === METERED_GEMINI_BUDGET_EXHAUSTED && k === "primary"), JSON.stringify(refusalsOf(spent.runs)));
   });
 });
 
@@ -361,21 +368,21 @@ test("pantheon-board run: the reviewer's default transport is the subscription C
   await withBoard(async f => {
     // The fake python SDK seat (its environment is scrubbed, so its paths are written into it): it logs each spawn with the
     // usage rows persisted at that moment and whether a Gemini key reached it, makes ONE Gemini request through the
-    // controller's metering relay with the capability it was given (register L-150: the seat holds no key; every request
-    // is charged at the relay before it is forwarded), and answers as the seat would.
+    // controller's model gateway with the capability it was given (register L-150: the seat holds no key; every request
+    // is charged at the gateway before it is forwarded), and answers as the seat would.
     const pyLog = join(f.repo, "python.log"), python = join(f.repo, "fake-python");
     const usageOf = name => join(f.repo, "boards", name, "gemini-billing.jsonl");
     writeFileSync(python, `#!/bin/sh
 for a in "$@"; do case "$prev" in --out) out="$a" ;; --model) model="$a" ;; --role) role="$a" ;; esac; prev="$a"; done
 rows=$(cat ${JSON.stringify(f.repo)}/boards/*/gemini-billing.jsonl 2>/dev/null | wc -l)
 printf '%s %s %s %s\\n' "$role" "$model" "$rows" "\${GEMINI_API_KEY:-no-key}" >> ${JSON.stringify(pyLog)}
-MODEL="$model" ${JSON.stringify(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_RELAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_RELAY_CAPABILITY ?? "" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "review" }] }], sessionId: "1" }) }).then(r => r.text()).catch(() => null)'
+MODEL="$model" ${JSON.stringify(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_GATEWAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_GATEWAY_TOKEN ?? "" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "review" }] }], sessionId: "1" }) }).then(r => r.text()).catch(() => null)'
 printf 'VERDICT: approve\\n' > "$out/response.md"
 printf '{"ok": true, "role": "%s", "model": "%s", "conversation_id": "fake-sdk", "tool_calls": 0, "subagent_calls": 0}\\n' "$role" "$model"
 `, { mode: 0o755 });
-    // THE PROVIDER EDGE OF THE RELAY: a local fake Gemini API in its own process (the board runs under spawnSync), recording
+    // THE PROVIDER EDGE OF THE GATEWAY: a local fake Gemini API in its own process (the board runs under spawnSync), recording
     // each request with the key it carried and the usage rows persisted when it arrived. Never a real provider.
-    const edgeLog = join(f.repo, "relay-edge.jsonl"), edgeScript = join(f.repo, "relay-edge.mjs");
+    const edgeLog = join(f.repo, "gateway-edge.jsonl"), edgeScript = join(f.repo, "gateway-edge.mjs");
     writeFileSync(edgeScript, `import http from "node:http";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 const boards = ${JSON.stringify(join(f.repo, "boards"))};
@@ -391,10 +398,10 @@ s.listen(0, "127.0.0.1", () => console.log(s.address().port));
     const edgePort = await new Promise(r => edgeProc.stdout.once("data", d => r(String(d).trim())));
     const seats = ["implementer=xai/grok-4.6", "reviewer=agy_google/gemini-3.8-flash"];
     const spawned = () => (existsSync(pyLog) ? readFileSync(pyLog, "utf8").split("\n").filter(Boolean) : []);
-    const saved = { PANTHEON_AGY_TRANSPORT: process.env.PANTHEON_AGY_TRANSPORT, PANTHEON_AGY_PYTHON: process.env.PANTHEON_AGY_PYTHON, PANTHEON_AGY_RELAY_UPSTREAM: process.env.PANTHEON_AGY_RELAY_UPSTREAM };
+    const saved = { PANTHEON_AGY_TRANSPORT: process.env.PANTHEON_AGY_TRANSPORT, PANTHEON_AGY_PYTHON: process.env.PANTHEON_AGY_PYTHON, PANTHEON_AGY_GATEWAY_UPSTREAM: process.env.PANTHEON_AGY_GATEWAY_UPSTREAM };
     try {
       process.env.PANTHEON_AGY_PYTHON = python;
-      process.env.PANTHEON_AGY_RELAY_UPSTREAM = `http://127.0.0.1:${edgePort}`;
+      process.env.PANTHEON_AGY_GATEWAY_UPSTREAM = `http://127.0.0.1:${edgePort}`;
       delete process.env.PANTHEON_AGY_TRANSPORT;
       const byDefault = boardRun(f, "transport-default", { seats });
       assert.equal(byDefault.result?.shipped, true, byDefault.said);
@@ -411,7 +418,7 @@ s.listen(0, "127.0.0.1", () => console.log(s.address().port));
       const on = boardRun(f, "sdk-on", { seats, flags: ["--gemini-api-primary", "2"] });
       assert.equal(on.result?.shipped, true, on.said);
       // L-150: a launch is not a request. Spawned once with NOTHING charged and no key; its one request was charged at the
-      // relay before it reached the provider, and forwarded with the controller's key.
+      // gateway before it reached the provider, and forwarded with the controller's key.
       assert.deepEqual(spawned(), ["reviewer gemini-3.8-flash 0 no-key"], "spawned once, nothing charged for the launch, no key in the seat");
       assert.deepEqual(jsonl(edgeLog).map(e => [e.path, e.key, e.usage_rows]), [["/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse", KEYS.GEMINI_API_KEY, 1]], "its request was charged before it was sent");
       assert.deepEqual(jsonl(usageOf("sdk-on")).map(u => [u.kind, u.transport, u.model, u.source]), [["primary", "sdk", "gemini-3.8-flash", "flag --gemini-api-primary 2"]]);

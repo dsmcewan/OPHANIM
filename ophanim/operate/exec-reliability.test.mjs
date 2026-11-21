@@ -8,7 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {openWorkLedger, outputsDigest} from './work-ledger.mjs';
-import {tick, spent} from './scheduler.mjs';
+import {spent} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors} from './stages.mjs';
 import {verifyInChild, statusLedgerState} from './live-run.mjs';

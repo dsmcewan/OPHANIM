@@ -10,7 +10,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, planRefusal} from './stages.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';

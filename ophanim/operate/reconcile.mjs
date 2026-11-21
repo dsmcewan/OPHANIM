@@ -7,16 +7,24 @@
 // owner, never executed (issue text and comments are task data, not authority). A ticket for an item that is not
 // on the ledger is an orphan, reported. Two issues carrying the same item marker are reported as a duplicate.
 //
+// A PROMPT (prompt-intake.mjs) is joined the same way. An item whose SIGNED basis binds a prompt record carries it
+// (`prompt: {path, digest, verified}`); when the record is missing or is not the text whose digest the owner signed, the
+// item is BLOCKED (PROMPT_RECORD_MISMATCH) for as long as that is so, and nothing is planned from changed text. A prompt
+// record with no signed entry, or that its item's signed basis does not bind, is a `prompt_candidates` row: recorded,
+// reported, never executed.
+//
 // Inputs: repo, statusRoot, workLedger (openWorkLedger), issues (a snapshot array {number, title, body, state,
-// labels}) or null, bundlesDir or null. Output: {items: [{item, status, history, ticket, issues, runs, gate,
-// stages}], candidates, orphans, duplicates, counts}. Pure apart from reading those files.
+// labels}) or null, bundlesDir or null. Output: {items: [{item, status, history, ticket, prompt, issues, runs, gate,
+// stages}], candidates, prompt_candidates, orphans, duplicates, counts}. Pure apart from reading those files.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {openStatusLedger, checkEvidenceLedgers} from '../../packages/ledger/status.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {buildDossier, makeRetriever, admitFile} from './context.mjs';
-import {earliestGate, completionEvidence, attemptInputs} from './gates.mjs';
+import {earliestGate, completionEvidence, attemptInputs, requirementOf} from './gates.mjs';
+import {researchOf} from './research-view.mjs';
+import {promptBinding, promptRequirement, promptRecords} from './prompt-intake.mjs';
 import {sourcesDigest, bundlesOf} from './evidence-recovery.mjs';
 import {STAGES, workKey} from './work-ledger.mjs';
 
@@ -174,6 +182,7 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     let gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, versionOf, now,
       recovery, recoverySources, capacity, outcomeRecheck,
       reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
+      research: workLedger?.research ? (r => ({open: r.open, conclusions: r.conclusions}))(researchOf(workLedger, s.item)) : null,
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
         ? (() => { try { return buildDossier({repo, statusRoot, item: s.item, work: workLedger, issues, bundlesDir}).stable; } catch { return null; } })() : null});
@@ -195,14 +204,33 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
           reason: what.slice(0, 600)};
       }
     }
+    // THE OWNER'S PROMPT, when the item's signed requirement binds one. Read and checked now, on every reconciliation:
+    // a record that is missing or is not the signed text blocks the item for as long as that is so (it is not a stage
+    // result, so restoring the record makes the item plannable again at once).
+    const requirement = requirementOf(byItem.get(s.item) ?? [s]);
+    const bound = promptBinding(requirement?.basis)?.item === s.item ? promptBinding(requirement.basis) : null;
+    const promptNow = bound ? promptRequirement({repo, requirement}) : null;
+    if (promptNow?.why && STAGES.includes(gate.gate)) {
+      const what = `PROMPT_RECORD_MISMATCH: ${promptNow.why}: the item's requirement is the prompt the owner signed, and it is not planned or built from other text`;
+      gate = {item: gate.item, state: gate.state, ...(gate.entry ? {entry: gate.entry} : {}), gate: 'blocked', stage: gate.gate, requirement: gate.requirement, stale: gate.stale ?? [],
+        routed: {gate: gate.gate, mode: gate.mode ?? null, reason: gate.reason ?? null, route: gate.route ?? null},
+        blocker: {code: 'PROMPT_RECORD_MISMATCH', what: what.slice(0, 600), role: 'decision-authority', resume_when: `${bound.record} is restored to the text the owner signed (${bound.sha256}), or the owner records a new status entry of the item`},
+        reason: what.slice(0, 600)};
+    }
     return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length,
       ticket: ticket ? (ticket.why ? {invalid: ticket.why} : {path: ticket.path, digest: ticket.digest}) : null,
+      prompt: bound ? {path: bound.record, digest: bound.sha256, verified: !promptNow?.why, ...(promptNow?.why ? {why: promptNow.why} : {})} : null,
       issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate};
   });
   const orphans = ticketItems.filter(i => !latest.has(i)).map(i => ({ticket: `tickets/${i}.json`, why: 'a ticket for an item that is not on the status ledger'}));
+  // Prompt records nobody signed for, or that their item's signed basis does not bind: data, never work.
+  const boundTo = new Map(items.filter(i => i.prompt).map(i => [i.item, i.prompt.path]));
+  const prompt_candidates = promptRecords(repo).filter(r => boundTo.get(r.item) !== r.record).map(r => ({prompt: r.item, record: r.record, digest: r.prompt_sha256,
+    why: latest.has(r.item) ? 'a prompt record the item\'s signed status entry does not bind: not its requirement; never executed on its own'
+      : 'a prompt with no owner-signed status entry: an intake candidate for the owner to authorize; never executed on its own'}));
   const gateCounts = {};
   for (const i of items) gateCounts[i.gate.gate] = (gateCounts[i.gate.gate] ?? 0) + 1;
-  return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, orphans, duplicates,
-    counts: {items: items.length, issues: (issues ?? []).length, linked_issues: [...issueByItem.values()].flat().length, candidates: candidates.length,
+  return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, prompt_candidates, orphans, duplicates,
+    counts: {items: items.length, issues: (issues ?? []).length, linked_issues: [...issueByItem.values()].flat().length, candidates: candidates.length, prompt_candidates: prompt_candidates.length,
       tickets: ticketItems.length, orphans: orphans.length, items_with_runs: items.filter(i => i.runs.length).length, by_gate: gateCounts}};
 }

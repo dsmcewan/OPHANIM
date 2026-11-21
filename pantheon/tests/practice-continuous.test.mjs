@@ -30,6 +30,7 @@ import { reviewCycle } from "../src/ledger/review-cycle.mjs";
 import { currentPolicy } from "../src/ledger/practice-kinds.mjs";
 import { openStatusLedger } from "../../packages/ledger/status.mjs";
 import { withDispatch } from "./fixtures/dispatch.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOARD_CLI = resolve(HERE, "..", "bin", "pantheon-board.mjs");
@@ -93,7 +94,7 @@ test("shadow: a fit dispatch is shadowed by argo; a legacy dispatch by fit, with
   await withDispatch(async ({ spec, opts }) => {
     const pools = readPools();
     for (const [profile, other] of [["fit", "argo"], ["legacy", "fit"]]) {
-      const o = opts({ profile });
+      const o = opts({ profile, billing: optIn({ primary: 100 }) });
       const r = await runOpenItem(spec(`shadow-${profile}`), o);
       assert.equal(r.shipped, true, JSON.stringify(r.error));
       for (const t of readRun(o.dir).turns) {
@@ -136,7 +137,7 @@ test("interleave: the assigned arm is dispatched and recorded on run.json and on
       { key: keyFor("fit", "il-halt"), o: { interleave: true, assignmentPolicy: { eligible: ["low", "normal"], halted: ["normal"] } }, arm: "argo", basis: BASIS.halted, randomized: false },
     ];
     for (const c of cases) {
-      const o = opts(c.o);
+      const o = opts({ billing: optIn({ primary: 100 }), ...c.o });   // the fit arm's Google implementer is a primary Gemini seat (register L-136)
       const r = await runOpenItem(spec(c.key, c.extra ?? {}), o);
       assert.equal(r.shipped, true, `${c.key}: ${JSON.stringify(r.error)}`);
       const run = readRun(o.dir);

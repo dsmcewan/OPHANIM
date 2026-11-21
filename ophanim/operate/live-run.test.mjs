@@ -57,9 +57,9 @@ async function withLiveFixture(fn, {worker = 'printf \'export const ok = true;\\
     process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: ITEM, candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture: scripted providers and the fake agy only', metered_gemini_failover: false, note: ''},
+      billing: {scope: 'fixture: scripted providers only', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''},
       ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
-      credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: path.join(outside, 'run')};
+      credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     let n = 0;
     const write = (over = {}) => { const file = path.join(outside, `manifest-${++n}.json`); fs.writeFileSync(file, JSON.stringify({...manifest, ...over}, null, 2)); return file; };
     const env = {...process.env, ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: SECRET, XAI_API_KEY: 'x'};
@@ -81,10 +81,10 @@ const modelTurns = repo => lines(path.join(repo, 'agy.log'));
 
 test('the manifest: every limit must be chosen (the example\'s nulls are refused), unknown keys, a wrong profile or independence and inconsistent billing are refused, each reason named', () => {
   const example = path.join(HERE, 'live-run.example.json');
-  assert.throws(() => readManifest(example), e => e.code === 'MANIFEST' && e.reasons.length === 9 && e.reasons.every(r => /is null: the owner must choose it/.test(r)));
+  assert.throws(() => readManifest(example), e => e.code === 'MANIFEST' && e.reasons.length === 10 && e.reasons.every(r => /is null: the owner must choose it/.test(r)));
   const good = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: 'a'.repeat(40), profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-    billing: {scope: 's', metered_gemini_failover: false, note: ''}, ledgers: {status_root: '/s', work_root: '/w'},
-    credentials: {required: ['anthropic-oauth', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: '/o'};
+    billing: {scope: 's', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''}, ledgers: {status_root: '/s', work_root: '/w'},
+    credentials: {required: ['anthropic-oauth', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: '/o'};
   assert.equal(validateManifest(good).item, 'two');
   assert.equal(confirmString(good), `two@${'a'.repeat(7)}`);
   const why = over => { try { validateManifest({...structuredClone(good), ...over}); return []; } catch (e) { assert.equal(e.code, 'MANIFEST'); return e.reasons; } };
@@ -95,10 +95,21 @@ test('the manifest: every limit must be chosen (the example\'s nulls are refused
   assert.deepEqual(why({limits: {...LIMITS, elapsed_ms: 0}}), ['limits.elapsed_ms is a positive integer']);
   assert.deepEqual(why({limits: {...LIMITS, stage_provider_calls: 500}}), ['limits.stage_provider_calls is at most limits.total_provider_calls']);
   assert.match(why({limits: {...LIMITS, pipeline: {...LIMITS.pipeline, max_provider_calls: 41}}})[0], /pipeline.max_provider_calls is at most limits.stage_provider_calls/);
-  assert.match(why({credentials: {required: ['OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}})[0], /exactly one Anthropic credential/);
-  assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'not-used'}}), ['credentials.required includes agy-login']);
-  assert.match(why({credentials: {...good.credentials, gemini_api_key: 'required'}})[0], /"required" exactly when billing.metered_gemini_failover is true/);
-  assert.deepEqual(why({require_subagent: {role: 'api-designer', model: 'grok-4.5', min_calls: 0}}), ['require_subagent.model is one of grok-4.6, grok-4.7', 'require_subagent.min_calls is a positive integer']);
+  assert.match(why({credentials: {required: ['OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}})[0], /exactly one Anthropic credential/);
+  // OWNER DIRECTION 2026-11-19. The Google implementer is an Antigravity SDK session billed on the Gemini API: the
+  // manifest must authorize that spend and require the key; the agy CLI login is optional (the implementer uses none);
+  // a required subagent is a NATIVE one, on the pinned subagent model; a v1 manifest authorized none of this.
+  assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}}), [], 'agy-login need not be named');
+  assert.deepEqual(why({credentials: {required: ['ANTHROPIC_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}}), ['credentials.required includes OPENAI_API_KEY']);
+  assert.match(why({credentials: {...good.credentials, gemini_api_key: 'not-used'}})[0], /^credentials\.gemini_api_key is "required": the Google implementer runs on the Gemini API with GEMINI_API_KEY/);
+  assert.match(why({billing: {...good.billing, gemini_api_primary: false}})[0], /^billing\.gemini_api_primary is true: .* a primary Gemini seat of the billing policy \(GEMINI_API_KEY\), and primary Gemini execution is off unless the owner declares it/);
+  assert.ok(why({billing: {scope: 's', metered_gemini_failover: false, note: ''}}).includes('billing.gemini_api_primary is required'));
+  assert.deepEqual(why({schema: 'ophanim.live-run/v1'}), ['schema is "ophanim.live-run/v2"']);
+  assert.match(why({billing: {...good.billing, metered_gemini_failover: 'no'}})[0], /^billing\.metered_gemini_failover is true or false/);
+  assert.deepEqual(why({credentials: {required: [...good.credentials.required, 'GITHUB_TOKEN'], gemini_api_key: 'required'}}), ['credentials.required: unknown credential "GITHUB_TOKEN"']);
+  assert.deepEqual(why({require_subagent: {type: 'api-designer', model: 'grok-4.7', min_calls: 0}}), ['require_subagent.type is a specialist type: one of code-explorer, dependency-analyst, context-retriever, test-constructor, bounded-implementer',
+    'require_subagent.model is gemini-4-hydrogen (the model every implementer\'s native subagents run on)', 'require_subagent.min_calls is a positive integer']);
+  assert.deepEqual(why({require_subagent: {type: 'code-explorer', model: 'gemini-4-hydrogen', min_calls: 1}}), []);
   const missing = {...structuredClone(good)}; delete missing.out_dir; delete missing.billing;
   assert.throws(() => validateManifest(missing), e => e.reasons.includes('manifest.billing is required') && e.reasons.includes('manifest.out_dir is required'));
   assert.deepEqual(why({candidate_commit: 'abc'}), ['candidate_commit is a full 40-hex commit']);
@@ -111,21 +122,34 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     assert.equal(r.code, 0, r.out);
     const p = r.json;
     assert.deepEqual([p.schema, p.mode, p.ok, p.refusals, p.provider_calls, p.confirm_spend], [PLAN_SCHEMA, 'dry-run', true, [], 0, `${ITEM}@${head.slice(0, 7)}`]);
-    assert.deepEqual([turn.log.length, ctx.calls.length, modelTurns(repo).length], [0, 0, 0], 'no provider call and no agy model turn');
+    assert.deepEqual([turn.log.length, ctx.calls.length, modelTurns(repo).length, ctx.sdk().length], [0, 0, 0, 0], 'no provider call, no agy model turn and no implementer session');
     assert.equal(fs.existsSync(manifest.ledgers.work_root) || fs.existsSync(manifest.out_dir), false, 'a dry run creates nothing');
     assert.deepEqual(tree(f.statusRoot), statusBefore);
     // What it checked.
     assert.deepEqual([p.checkout, p.status_ledger.read_only, p.status_ledger.items, p.work_ledger.state], [{head, clean: true, ok: true}, true, 3, 'absent']);
     assert.deepEqual(p.gate, {gate: 'plan', reason: p.gate.reason, mode: 'author', status: 'Ready', blocker: null, runnable: true});
-    assert.deepEqual([p.preflight.ok, p.preflight.checks.auth.ok, p.preflight.checks.card_tools.ok, p.preflight.lanes.map(l => [l.difficulty, l.lane, l.state])],
-      [true, true, true, [['easy', 'gemini-4-hydrogen-medium', 'available'], ['medium', 'gemini-4-hydrogen-high', 'available'], ['hard', 'gemini-4-carbon-high', 'available']]]);
+    // THE IMPLEMENTER'S TRANSPORT, checked without a generation call: the key is present, the SDK's own python states the
+    // qualified version, the jail is usable, and the provider was asked about every implementer and subagent model.
+    const sdk = p.antigravity_sdk;
+    assert.deepEqual([sdk.ok, sdk.transport, sdk.failed, sdk.warnings, sdk.key, sdk.sandbox.ok], [true, 'antigravity-sdk', [], [], {name: 'GEMINI_API_KEY', present: true}, true]);
+    assert.deepEqual([sdk.sdk.status, sdk.sdk.distribution, sdk.sdk.version, sdk.sdk.qualified], ['installed', 'google-antigravity', '0.1.24', '0.1.24']);
+    assert.deepEqual(sdk.implementers, [{difficulty: 'easy', model: 'gemini-4-hydrogen', effort: 'medium', subagent_ceiling: 0}, {difficulty: 'medium', model: 'gemini-4-neon', effort: null, subagent_ceiling: 4},
+      {difficulty: 'hard', model: 'gemini-4-carbon', effort: 'high', subagent_ceiling: 8}]);
+    assert.deepEqual(sdk.subagents, {model: 'gemini-4-hydrogen', ceilings: {'gemini-4-carbon': 8, 'gemini-4-neon': 4, 'gemini-4-hydrogen': 0}});
+    assert.deepEqual(sdk.models.map(a => [a.model, a.available, a.status]).sort(), ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-4-neon'].map(x => [x, true, 200]));
+    assert.ok(sdk.models.every(a => a.limits.input_token_limit === 1048576), 'the limits the provider states are on the plan');
+    // The agy CLI serves no implementer: its preflight (named by agy-login) probes the lane of a single-turn Gemini seat.
+    assert.deepEqual([p.preflight.ok, p.preflight.checks.auth.ok, p.preflight.checks.card_tools.ok, p.preflight.lanes.map(l => [l.lane, l.state])], [true, true, true, [['gemini-4-carbon-high', 'available']]]);
     assert.deepEqual(p.credentials.required.map(c => [c.name, c.present]), [['ANTHROPIC_API_KEY', true], ['OPENAI_API_KEY', true], ['XAI_API_KEY', true], ['agy-login', true]]);
     assert.deepEqual([p.seats.planner.model, p.seats.planner.source], ['claude-opus-5-5', 'no ticket: medium']);
-    assert.deepEqual(Object.entries(p.seats.by_difficulty).map(([d, s]) => [d, s.dispatcher.model, s.implementer.start.model, s.subagent.model, s.reviewer.pinned.model]),
-      [['easy', 'gpt-6-luna', 'gemini-4-hydrogen-medium', 'grok-4.6', 'gpt-6-luna'], ['medium', 'gpt-6.1-sol', 'gemini-4-hydrogen-high', 'grok-4.6', 'gpt-6.1-sol'], ['hard', 'gpt-6-astra', 'gemini-4-carbon-high', 'grok-4.7', 'gpt-6-astra']]);
-    assert.deepEqual(p.seats.by_difficulty.hard.implementer.ladder.map(s => s.model), implementerPath('hard').map(s => s.model));
+    assert.deepEqual(Object.entries(p.seats.by_difficulty).map(([d, s]) => [d, s.dispatcher.model, s.implementer.start.model, s.implementer.start.effort, s.subagent.model, s.subagent.ceiling, s.reviewer.pinned.model]),
+      [['easy', 'gpt-6-luna', 'gemini-4-hydrogen', 'medium', 'gemini-4-hydrogen', 0, 'gpt-6-luna'], ['medium', 'gpt-6.1-sol', 'gemini-4-neon', null, 'gemini-4-hydrogen', 4, 'gpt-6.1-sol'],
+        ['hard', 'gpt-6-astra', 'gemini-4-carbon', 'high', 'gemini-4-hydrogen', 8, 'gpt-6-astra']]);
+    for (const x of Object.values(p.seats.by_difficulty)) assert.deepEqual([x.implementer.start.transport, x.subagent.transport, x.subagent.native], ['antigravity-sdk', 'antigravity-sdk', true]);
+    assert.deepEqual(p.seats.by_difficulty.hard.implementer.ladder, implementerPath('hard').map(x => ({vendor: x.vendor, model: x.model, transport: x.transport, effort: x.effort})));
     assert.deepEqual([p.policy.selection.hash, p.policy.identity.digest, p.policy.independence], [selectionPolicy('fit').hash, policyDigest(currentPolicy()), 'model']);
     assert.match(p.metered_gemini_failover, /^DISABLED/);
+    assert.match(p.gemini_api_primary, /^ENABLED by the manifest, at most 500 billed request\(s\) on this run's work ledger: .*Antigravity SDK session on the Gemini API \(GEMINI_API_KEY; no subscription login, no agy CLI\)/);
     assert.match(p.notes[0], /bound CALLS, not dollars/);
 
     const refused = async (file, re, extra) => { const x = await run(['--manifest', file], extra); assert.equal(x.code, 1, x.out); assert.ok(x.json.refusals.some(w => re.test(w)), JSON.stringify(x.json.refusals)); return x; };
@@ -141,9 +165,23 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     await refused(write({ledgers: {...manifest.ledgers, work_root: path.join(f.statusRoot, 'work')}}), /work_root and status_root are separate/);
     const noX = {...env}; delete noX.XAI_API_KEY;
     await refused(write(), /credential XAI_API_KEY is not present/, {env: noX});
-    // Enabling the failover declares its budget (register L-136); without one the manifest itself is refused.
-    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true}, credentials: {...manifest.credentials, gemini_api_key: 'required'}}), /metered_gemini_failover is enabled .* without a declared budget/);
-    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true, metered_gemini_budget: 3}, credentials: {...manifest.credentials, gemini_api_key: 'required'}}), /GEMINI_API_KEY is not present/);
+    // The implementer's transport: no key, or no SDK, refuses the run before anything is spent. A model the provider does
+    // not serve is a WARNING that names what follows; nothing is substituted in the plan.
+    const noG = {...env}; delete noG.GEMINI_API_KEY;
+    await refused(write(), /credential GEMINI_API_KEY is not present: the Google implementer runs on the Gemini API/, {env: noG});
+    await refused(write(), /Antigravity SDK preflight \(sdk\): the Antigravity SDK's python is absent at /, {env: {...env, PANTHEON_ANTIGRAVITY_PYTHON: path.join(repo, 'no-venv', 'bin', 'python')}});
+    ctx.sdkUnavailable(['gemini-4-neon', 'gemini-4-hydrogen']);
+    const warned = await run(['--manifest', write()]);
+    assert.equal(warned.code, 0, warned.out);
+    assert.deepEqual(warned.json.antigravity_sdk.warnings, ['gemini-4-hydrogen is not served by the Gemini API for this key (HTTP 404): a easy unit steps its implementer ladder at once, with the cause recorded; no native subagent will run (SUBAGENT_MODEL_UNAVAILABLE)',
+      'gemini-4-neon is not served by the Gemini API for this key (HTTP 404): a medium unit steps its implementer ladder at once, with the cause recorded']);
+    ctx.sdkUnavailable([]);
+    // Without agy-login the agy CLI is not checked at all: the plan stands with the CLI absent.
+    const noAgy = await run(['--manifest', write({credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'], gemini_api_key: 'required'}})], {env: {...env, PANTHEON_AGY_CLI: path.join(repo, 'no-such-agy')}});
+    assert.deepEqual([noAgy.code, noAgy.json.preflight.skipped, noAgy.json.credentials.required.map(c => c.name)], [0, true, ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY']]);
+    // Each enabled kind declares its budget (register L-136); without one the manifest itself is refused.
+    await refused(write({billing: {...manifest.billing, metered_gemini_failover: true}}), /metered_gemini_failover is enabled .* without a declared budget/);
+    await refused(write({billing: {scope: manifest.billing.scope, gemini_api_primary: true, metered_gemini_failover: false, note: ''}}), /billing\.gemini_primary_budget is required/);
     await refused(write({item: 'nope'}), /item "nope" is not on the status ledger/);
     const m = await run(['--manifest', write({limits: {...LIMITS, total_provider_calls: null}})]);
     assert.deepEqual([m.code, m.json.refused, m.json.refusals], [1, 'manifest', ['limits.total_provider_calls is null: the owner must choose it (no default is filled in)']]);
@@ -152,19 +190,19 @@ test('DRY RUN (the default): ONE plan, zero provider calls, nothing created; the
     assert.match(c.json.refusals[0], new RegExp(`exactly "${ITEM}@${head.slice(0, 7)}"`));
     assert.equal((await run(['--manifest', write(), '--dry-run', '--confirm-spend', 'x'])).code, 2);
     assert.equal((await run(['--bogus'])).code, 2);
-    assert.deepEqual([turn.log.length, ctx.calls.length, modelTurns(repo).length], [0, 0, 0], 'no refusal made a provider call');
+    assert.deepEqual([turn.log.length, ctx.calls.length, modelTurns(repo).length, ctx.sdk().length], [0, 0, 0, 0], 'no refusal made a provider call');
     assert.equal(fs.existsSync(manifest.ledgers.work_root) || fs.existsSync(manifest.out_dir), false);
   });
 });
 
-// Unit alpha (hard) may consult an api-designer subagent; the worker asks it once.
-const SUBAGENT_PLAN = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, {work_units: [UNIT('alpha', {difficulty: 'hard', allowed_subagents: ['api-designer']})]}))});
-const ASKING = 'agy_ask api-designer "what should ok be?" >/dev/null || exit 1\nprintf \'export const ok = true;\\n\' > "$dir/alpha.mjs"\n';
+// Unit alpha (hard: a Carbon implementer, ceiling 8) may delegate to a code-explorer; the worker asks for one.
+const SUBAGENT_PLAN = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, {work_units: [UNIT('alpha', {difficulty: 'hard', allowed_subagents: ['code-explorer']})]}))});
+const ASKING = 'sdk_subagent code-explorer "Find where ok is read and what value it must have; report file paths and lines."\nprintf \'export const ok = true;\\n\' > "$dir/alpha.mjs"\n';
 
-test('CONFIRMED: only the selected item runs (two other runnable items present) to an UNSIGNED outcome; the required Grok subagent call is recorded; a fresh reader verifies the record; the status ledger is byte-identical', needBwrap, async () => {
+test('CONFIRMED: only the selected item runs (two other runnable items present) to an UNSIGNED outcome; the required native Hydrogen subagent is recorded; a fresh reader verifies the record; the status ledger is byte-identical', needBwrap, async () => {
   await withLiveFixture(async ({repo, f, turn, ctx, manifest, write, run, head}) => {
     const statusBefore = tree(f.statusRoot);
-    const file = write({require_subagent: {role: 'api-designer', model: 'grok-4.7', min_calls: 1}});
+    const file = write({require_subagent: {type: 'code-explorer', model: 'gemini-4-hydrogen', min_calls: 1}});
     const r = await run(['--manifest', file, '--confirm-spend', `${ITEM}@${head.slice(0, 7)}`]);
     const rec = JSON.parse(fs.readFileSync(path.join(manifest.out_dir, 'run.json'), 'utf8'));
     assert.equal(r.code, 0, JSON.stringify({acceptance: rec.acceptance, gate: rec.final_gate, stages: rec.stages.map(s => [s.stage, s.status, s.next?.why])}));
@@ -179,14 +217,19 @@ test('CONFIRMED: only the selected item runs (two other runnable items present) 
     // The work ledger is the isolated, separately anchored one this launcher created, with its marker.
     const marker = JSON.parse(fs.readFileSync(path.join(manifest.ledgers.work_root, WORK_MARKER), 'utf8'));
     assert.deepEqual([marker.item, marker.anchor, rec.work_ledger.created], [ITEM, w.anchor, true]);
-    // The REQUIRED subagent call: answered, by grok-4.7, in the accepted implement record.
-    assert.deepEqual([rec.subagent_receipt.met, rec.subagent_receipt.counted, rec.subagent_receipt.calls[0].served_model], [true, 1, 'grok-4.7']);
-    assert.ok(turn.log.some(l => l.kind === 'subagent' && l.model === 'grok-4.7'));
+    // The REQUIRED subagent: a native code-explorer the controller admitted in the Carbon implementer's session, answered
+    // by the provider as gemini-4-hydrogen, in the accepted implement record. No xAI model was asked for it.
+    const got = rec.subagent_receipt.calls[0];
+    assert.deepEqual([rec.subagent_receipt.met, rec.subagent_receipt.counted, got.type, got.model, got.served_model, got.implementer, got.started], [true, 1, 'code-explorer', 'gemini-4-hydrogen', 'gemini-4-hydrogen', 'gemini-4-carbon', true]);
+    assert.ok(!turn.log.some(l => l.kind === 'subagent'), 'no single-turn subagent seat was asked');
+    assert.deepEqual(ctx.sdk().map(x => [x.agent, x.model]), [['sdk-implementer', 'gemini-4-carbon'], ['sdk-subagent:code-explorer', 'gemini-4-hydrogen']]);
     // Served identities: every pipeline seat with what served it, and the stage teams.
     const served = rec.served_identities;
     for (const role of ['dispatcher', 'implementer', 'unit-reviewer', 'subagent']) assert.ok(served.some(s => s.source === 'pipeline.json' && s.role === role && s.served_model), role);
     assert.ok(served.some(s => s.source === 'stage team' && s.role === 'cycle-reviewer'));
-    assert.deepEqual(served.find(s => s.source === 'pipeline.json' && s.role === 'implementer').served_model_source, 'input');
+    assert.deepEqual(served.find(s => s.source === 'pipeline.json' && s.role === 'implementer').served_model_source, 'provider');
+    assert.deepEqual(served.filter(s => s.source === 'pipeline.json' && s.role === 'subagent').map(s => [s.native, s.subagent_type, s.model, s.served_model, s.implementer]), [[true, 'code-explorer', 'gemini-4-hydrogen', 'gemini-4-hydrogen', 'gemini-4-carbon']]);
+    assert.deepEqual(served.filter(s => s.source === 'stage team' && s.role === 'subagent').map(s => [s.vendor, s.model, s.lab, s.authored]), [['agy_google', 'gemini-4-hydrogen', 'google', true]], 'on the stage team as an author, in the google lab');
     assert.deepEqual(rec.budget_stops, []);
     assert.equal(rec.pipelines.length, 1);
     assert.ok(fs.existsSync(rec.pipelines[0].record));
@@ -205,7 +248,8 @@ test('CONFIRMED: only the selected item runs (two other runnable items present) 
     assert.deepEqual([rec.proposal.signed, fs.existsSync(rec.proposal.path)], [false, true]);
     assert.equal(r.json.proposal.apply_command, `OPHANIM_STATUS_LEDGER='${f.statusRoot}' node packages/ledger/status.mjs apply '${rec.proposal.path}' --keys "$OPHANIM_STATUS_KEYS"`);
     assert.deepEqual(tree(f.statusRoot), statusBefore, 'the status ledger is byte-identical: nothing was written to status_root');
-    assert.equal(ctx.calls.length, 0, 'the metered Gemini API was never called');
+    assert.equal(ctx.calls.length, 0, 'no API client of the work seats was used');
+    assert.equal(modelTurns(repo).length, 0, 'the agy CLI ran no model turn: its only use was the zero-spend preflight');
     // A second launch on the same work_root resumes it (same item) and finds nothing to dispatch; another item is refused.
     const again = await run(['--manifest', file]);
     assert.deepEqual([again.code, again.json.work_ledger.state, again.json.gate.gate], [1, 'resumable', 'awaiting-owner']);
@@ -216,44 +260,72 @@ test('CONFIRMED: only the selected item runs (two other runnable items present) 
 
 test('CONFIRMED: require_subagent unmet (the plan allowed no subagent) -> exit 3, the reason recorded, the outcome still unsigned', needBwrap, async () => {
   await withLiveFixture(async ({manifest, write, run, head}) => {
-    const r = await run(['--manifest', write({require_subagent: {role: 'api-designer', model: 'grok-4.7', min_calls: 1}}), '--confirm-spend', `${ITEM}@${head.slice(0, 7)}`]);
+    const r = await run(['--manifest', write({require_subagent: {type: 'code-explorer', model: 'gemini-4-hydrogen', min_calls: 1}}), '--confirm-spend', `${ITEM}@${head.slice(0, 7)}`]);
     const rec = JSON.parse(fs.readFileSync(path.join(manifest.out_dir, 'run.json'), 'utf8'));
     assert.equal(r.code, 3);
     assert.equal(rec.final_gate.gate, 'awaiting-owner');
     assert.deepEqual([rec.subagent_receipt.met, rec.subagent_receipt.counted], [false, 0]);
-    assert.deepEqual(rec.acceptance, {met: false, reasons: ['require_subagent not met: 0 answered api-designer call(s) served by grok-4.7 in the accepted implement record; 1 required']});
+    assert.deepEqual(rec.acceptance, {met: false, reasons: ['require_subagent not met: 0 native code-explorer subagent(s) answered by gemini-4-hydrogen in the accepted implement record; 1 required']});
     assert.equal(rec.verification.ok, true);
   });
 });
 
-test('CONFIRMED with metered_gemini_failover: false: a quota refusal on every lane of the unit\'s ladder BLOCKS the unit; the metered Gemini API is never called; the stage waits pending on the billing refusal, its work kept -> exit 3', needBwrap, async () => {
+test('CONFIRMED: a quota refusal on every model of the unit\'s ladder BLOCKS the unit; nothing else writes the work -> exit 3', needBwrap, async () => {
   await withLiveFixture(async ({ctx, manifest, write, run, head, repo}) => {
-    ctx.agyQuota(implementerPath('easy').map(s => s.model));
+    ctx.agyQuota([...new Set(implementerPath('easy').map(s => s.model))]);
     const r = await run(['--manifest', write(), '--confirm-spend', `${ITEM}@${head.slice(0, 7)}`]);
     const rec = JSON.parse(fs.readFileSync(path.join(manifest.out_dir, 'run.json'), 'utf8'));
     assert.equal(r.code, 3, JSON.stringify(rec.acceptance));
-    assert.equal(ctx.calls.length, 0, 'no metered API call');
+    assert.equal(ctx.calls.length, 0, 'no API client of the work seats wrote in the implementer\'s place');
+    assert.equal(modelTurns(repo).length, 0, 'and no agy CLI lane did');
     const impl = rec.stages.find(s => s.stage === 'implement');
-    // A stage the billing policy refused a request in is PENDING on that refusal, transient and woken by a changed policy
-    // (register L-136, owner decision item 4: the recoverable work state is preserved); the unit's block it reported is
-    // kept beside it, with the run record and its work.
-    assert.equal(impl.status, 'pending');
-    assert.deepEqual([impl.blocker.code, impl.blocker.transient, impl.blocker.billing?.settings?.failover], ['METERED_GEMINI_DISABLED', true, {enabled: false, budget: null}]);
-    const work = openWorkLedger({root: manifest.ledgers.work_root}).stages(ITEM).find(s => s.stage === 'implement');
-    assert.equal(work.outputs.billing_refused.status_reported, 'blocked');
-    assert.match(work.outputs.billing_refused.blocker_reported.what, /PIPELINE_UNITS_UNRESOLVED/);
-    assert.ok(rec.blockers.some(b => b.blocker?.code === 'METERED_GEMINI_DISABLED'), JSON.stringify(rec.blockers));
-    const attempts = rec.served_identities.filter(s => s.source === 'pipeline.json' && s.role === 'implementer');
-    assert.ok(attempts.length && attempts.every(a => a.quota_failover?.used === false && a.quota_failover.disabled === true), JSON.stringify(attempts));
-    // Each subscription BASE MODEL once, then blocked: after a quota refusal the same base model's other thinking levels
-    // share its quota and are not launched (independent review round 2, assignment 3 (Google gemini-4-carbon, manual,
-    // 77480d6), finding 5.1).
-    const seenBase = new Set();
-    const bases = implementerPath('easy').map(s => s.model).filter(m => { const b = m.replace(/-(low|medium|high|xhigh)$/, ''); return !seenBase.has(b) && seenBase.add(b); });
-    assert.deepEqual(modelTurns(repo).map(l => l.split(' ')[1]), bases, 'each subscription base model once, then blocked');
+    assert.equal(impl.status, 'blocked');
+    assert.match(impl.blocker.what, /PIPELINE_UNITS_UNRESOLVED/);
+    assert.match(impl.blocker.what, /LANE_LADDER_EXHAUSTED/);
+    assert.ok(rec.blockers.some(b => b.blocker?.code === 'PIPELINE_UNITS_UNRESOLVED'));
+    // Each MODEL once, then blocked: a quota refusal is the model's, so its other thinking levels are not asked.
+    assert.deepEqual(ctx.sdk().filter(x => x.agent === 'sdk-implementer').map(x => x.model), ['gemini-4-hydrogen', 'gemini-3.8-flash'], 'each model of the ladder once');
+    const unit = JSON.parse(fs.readFileSync(rec.pipelines[0].record, 'utf8')).units.alpha;
+    assert.deepEqual(unit.attempts[0].lane_failures.map(x => [x.model, x.cause, x.next]), [['gemini-4-hydrogen', 'quota', 'next_rung'], ['gemini-3.8-flash', 'quota', 'exhausted']]);
+    assert.deepEqual(unit.escalations.map(e => [e.kind, e.cause, e.skipped_same_base.map(x => x.effort)]), [['lane_failover', 'quota', ['high', 'xhigh']]]);
     assert.match(rec.acceptance.reasons[0], /did not reach its outcome/);
     assert.equal(rec.verification.ok, true);
   });
+});
+
+// THE BILLING WAKE THROUGH THE LAUNCHER (docs/billing-policy.md, "A changed policy wakes it at once"; independent review of
+// the billing merge). The launcher decides whether there is anything to dispatch before it reaches the scheduler, and it
+// read only the plain gate: a stage pending on a spent budget stayed "blocked: nothing to dispatch" until the pending's own
+// retry time, although the owner had raised the budget in the manifest. The scheduler's rule is the launcher's too.
+test('CONFIRMED, THE BILLING WAKE: a stage the policy refused is dispatched again at once when the manifest declares another budget, and the plan says why a blocked item is runnable; with the same budget there is still nothing to dispatch', needBwrap, async () => {
+  await withLiveFixture(async ({manifest, write, run, head}) => {
+    const confirm = `${ITEM}@${head.slice(0, 7)}`;
+    const budget = n => ({billing: {...manifest.billing, gemini_primary_budget: n}});
+    const implement = () => openWorkLedger({root: manifest.ledgers.work_root, create: false}).stages(ITEM).filter(s => s.stage === 'implement').map(s => [s.attempt, s.status, s.blocker?.code ?? null]);
+    // A budget of ONE: the implementer's own request spends it, and its subagent's request is refused inside the session.
+    const first = await run(['--manifest', write(budget(1)), '--confirm-spend', confirm]);
+    assert.equal(first.code, 3, first.out);
+    assert.deepEqual(implement(), [[1, 'pending', 'METERED_GEMINI_BUDGET_EXHAUSTED']]);
+    // The signed blocker says what happened: one request of this stage WAS billed before the refusal (it does not say
+    // "nothing billed was sent"), and the count it gives is the count on the same record.
+    const pending = openWorkLedger({root: manifest.ledgers.work_root, create: false}).stages(ITEM).find(s => s.stage === 'implement');
+    assert.equal(pending.usage.gemini.billed.gemini_api_primary, 1);
+    assert.match(pending.blocker.what, /refused 1 billed request\(s\) of this implement stage .*; 1 billed request\(s\) of this stage had been sent and charged before the refusal/);
+    assert.doesNotMatch(pending.blocker.what, /nothing billed was sent/);
+    // The SAME budget: the refusal stands, and the launcher has nothing to dispatch.
+    const same = await run(['--manifest', write(budget(1))]);
+    assert.deepEqual([same.code, same.json.ok, same.json.gate.gate, same.json.gate.runnable], [1, false, 'blocked', false]);
+    assert.ok(same.json.refusals.some(r => /is at gate "blocked" .*nothing to dispatch/.test(r)), JSON.stringify(same.json.refusals));
+    // The owner RAISES the budget: the item is runnable now, and the plan says it is the policy change that makes it so.
+    const dry = await run(['--manifest', write(budget(10))]);
+    assert.deepEqual([dry.code, dry.json.ok, dry.json.gate.gate, dry.json.gate.runnable], [0, true, 'blocked', true], JSON.stringify(dry.json.refusals));
+    assert.deepEqual([typeof dry.json.gate.billing_wake?.refused_under, dry.json.gate.billing_wake?.now], ['string', dry.json.gemini_billing.digest]);
+    assert.notEqual(dry.json.gate.billing_wake.refused_under, dry.json.gemini_billing.digest, 'refused under another policy than the one declared now');
+    // ... and the confirmed run dispatches the stage again AT ONCE (no clock is moved: the pending's retry is not yet due).
+    const again = await run(['--manifest', write(budget(10)), '--confirm-spend', confirm]);
+    assert.deepEqual(implement(), [[1, 'pending', 'METERED_GEMINI_BUDGET_EXHAUSTED'], [2, 'passed', null]], again.out);
+    assert.equal(again.code, 0, again.out);
+  }, {worker: ASKING, turn: SUBAGENT_PLAN});
 });
 
 test('CONFIRMED: the declared total stops the run when a stage could exceed it; the budget stop is recorded -> exit 3', needBwrap, async () => {

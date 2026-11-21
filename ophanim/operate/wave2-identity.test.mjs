@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import {makeRetriever} from './context.mjs';
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
@@ -293,33 +293,45 @@ test(`${OD}, L-002: the validator is not one of the approving change reviewers (
   });
 });
 
-test(`${SA}, L-205 (M1, M9): a subagent asked of grok-4.7 and served by grok-4.6 excludes BOTH from the change panel and the validator, through the projection and the cycle's recorded contributors`, async () => {
+test(`${SA}, L-205 (M1, M9), on the Antigravity SDK transport (owner direction 2026-11-19): an implementer's native Hydrogen subagent is a contributor under the name asked AND the name the provider answered under; both are excluded from the change panel and the validator, and xAI, which contributed nothing, reviews`, async () => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor} = ctx;
-    // Unit c asks its subagent one question over A2A (the fake CLI's agy_ask), as in fit-lifecycle.test.mjs.
+    // Unit c (hard: a Carbon implementer) asks for one native code-explorer subagent, as in fit-lifecycle.test.mjs.
     ctx.agyWorker(`case "$unit" in
   alpha) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;;
-  c) agy_ask api-designer "what should g be?" >/dev/null || exit 1; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
+  c) sdk_subagent code-explorer "Find where g is read and what value it must have; report file paths and lines."; mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
 esac
 `);
+    // The provider answers every gemini-4-hydrogen request under a DATED SNAPSHOT name: the same model, another name.
+    // (A request the provider answers under ANOTHER model is not a contribution at all: the session fails,
+    // pantheon/tests/antigravity-turn.test.mjs.)
+    ctx.serve((vendor, model) => (model === 'gemini-4-hydrogen' ? 'gemini-4-hydrogen-20261101' : null));
     const f = fixture(repo, [{item: 'sub'}]);
-    const plan = {...TWO, work_units: [UNIT('alpha'), {...GAMMA, allowed_subagents: ['api-designer']}]};
-    const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, plan))}, {serve: SERVE.substitute({subagent: {'grok-4.7': 'grok-4.6'}})});
+    const plan = {...TWO, work_units: [UNIT('alpha', {difficulty: 'medium'}), {...GAMMA, allowed_subagents: ['code-explorer']}]};
+    const turn = scriptedTurn({planner: ({prompt}) => json(planFor(prompt, plan))});
     const ex = makeExecutors({repo, makeClientFor, turn, stateDir: f.stateDir});
     const r = await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'sub'), DONE, JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next?.why])));
     const [, impl, rev, val] = w.stages('sub');
     const rec = JSON.parse(fs.readFileSync(impl.outputs.run.record, 'utf8'));
-    assert.deepEqual(rec.units.c.a2a.calls.map(c => [c.model, c.served_model]), [['grok-4.7', 'grok-4.6']]);
-    assert.deepEqual(impl.contributions.filter(c => c.purpose === 'subtask').map(c => [named(c), c.requested_model]), [['xai/grok-4.6', 'grok-4.7']]);
-    // The change cycle records both names, and its panel seats no xAI model (both of the pool's xAI models contributed).
+    // The subagent is the SDK's own: admitted by the controller, on the pinned model, with the provider's name for it.
+    const session = rec.units.c.attempts[0].session;
+    assert.deepEqual(session.subagents.instances.map(i => [i.type, i.model, i.status]), [['code-explorer', 'gemini-4-hydrogen', 'idle']]);
+    assert.deepEqual(session.gateway.served_models['gemini-4-hydrogen'], ['gemini-4-hydrogen-20261101']);
+    assert.deepEqual(rec.units.c.a2a.calls, [], 'no A2A subagent seat was asked');
+    assert.deepEqual(impl.contributions.filter(c => c.purpose === 'subtask').map(c => [named(c), c.requested_model, c.lab, c.served_model_source]), [['agy_google/gemini-4-hydrogen-20261101', 'gemini-4-hydrogen', 'google', 'provider']]);
+    assert.ok(!impl.contributions.some(c => c.vendor === 'xai'), 'no xAI model contributed: Grok is not spent on Google implementation delegation');
+    // The change cycle records both names of the subagent's model, and its panel seats neither.
     const cl = ledgerOf(rev.outputs.cycle_ledger);
     const st = deriveCycle(cl.view, rev.outputs.cycle);
-    assert.deepEqual(st.cycle.contributors.filter(c => c.vendor === 'xai').map(c => c.model).sort(), ['grok-4.6', 'grok-4.7']);
+    assert.deepEqual([...new Set(st.cycle.contributors.filter(c => /hydrogen/.test(c.model)).map(c => c.model))].sort(), ['gemini-4-hydrogen', 'gemini-4-hydrogen-20261101']);
     const panel = rev.team.filter(t => t.role === 'cycle-reviewer');
-    assert.deepEqual(panel.map(t => t.lab).sort(), ['anthropic', 'google', 'openai']);
-    assert.notEqual(resolveModel(val.outputs.validator.vendor, val.outputs.validator.model).lab, 'xai');
+    const idOf = t => resolveModel(t.vendor, t.model).id;
+    assert.equal(new Set(panel.map(t => t.lab)).size, 3);
+    for (const id of ['google/gemini-4-hydrogen', 'google/gemini-4-carbon', 'google/gemini-4-neon']) assert.ok(!panel.some(t => idOf(t) === id) && idOf(val.outputs.validator) !== id, `${id} contributed (as the implementer or its subagent) and judged`);
+    // xAI stays an eligible, independent review laboratory, and is seated.
+    assert.ok(panel.some(t => t.lab === 'xai'), `xAI reviews (${panel.map(named).join(', ')})`);
   });
 });
 

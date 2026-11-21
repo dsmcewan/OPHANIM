@@ -174,7 +174,7 @@ function chainFrom(plan, stages, usable = () => true) {
 // (a caller with no executors: a status view) such a stage stays blocked.
 // `outcomeRecheck(record)` (optional): why a passed outcome's proposal would now be refused at apply, or null.
 export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, versionOf = null, now = Date.now(), recovery = null, recoverySources = null,
-  evidenceStable = null, reassessments = [], capacity = null, outcomeRecheck = null}) {
+  evidenceStable = null, reassessments = [], capacity = null, outcomeRecheck = null, research = null}) {
   const base = {item: item.item, state: item.state, ...(item.entry ? {entry: item.entry} : {})};
   // THE ROUTING BASIS of the gate returned (see attemptInputs): the present state it read, never a record hash, so a
   // re-route on the same present state is the same work (refused as done) and a change of that state is new work.
@@ -294,6 +294,17 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
   const observed = {};
   for (const p of [...passedPlans].reverse()) {
     const v = planValidity(p, {requirement, deps: Object.fromEntries(Object.entries(deps).map(([d, s]) => [d, s ? {entry: s.entry} : null])), ticket: t, bytesOf, versionOf});
+    // RESEARCH (work.research; operate/research.mjs). Two things put what a plan rests on in question, and neither is
+    // decided by the plan's own citations: a request for research that no conclusion has answered yet (the plan stage
+    // runs it, then plans on its findings), and a conclusion that says what it found CHANGES what a plan should rest on
+    // and that this plan was not given (its record lists the conclusions its dossier held: outputs.context.research).
+    if (research) {
+      const open = research.open ?? [], seen = new Set(p.outputs?.context?.research ?? []);
+      const unseen = (research.conclusions ?? []).filter(c => c.material && !seen.has(c.hash));
+      if (open.length) { v.valid = false; v.why.push(`research was requested and is not answered yet (${open.map(r => r.trigger).join(', ')})`); }
+      if (unseen.length) { v.valid = false; v.why.push(`research concluded that what it found changes what a plan should rest on, and this plan was not given it (${unseen.map(c => c.team).join(', ')})`); }
+      if (open.length || unseen.length) v.observed.research = [...open.map(r => r.hash), ...unseen.map(c => c.hash)].sort().join(',');
+    }
     const bad = hit(p);
     if (bad) { planReassessed ??= bad; stale.push({stage: 'plan', record: p.hash, why: [`its plan review was disqualified by reassessment ${bad.hash.slice(0, 19)}`]}); continue; }
     if (v.valid) { valid = p; break; }

@@ -5,24 +5,33 @@
 //                lineage (restored from the cycle's recorded contributors), a dispatcher's advisory return inherited by
 //                the revised plan (dedupe), and the run carrying it out (stage5_excluded);
 //   implement    the five-stage pipeline's authored rows, arbiter rows, unit findings and team (stages.mjs implementUnits),
-//                including an implementer answer that named no serving model (the metered Gemini failover);
+//                including a contributor whose served model is unknown (a native subagent that was never answered);
 //   review       the change cycle's recorded contributors on the run ledger, its team;
 //   validate     the validator's record and the change reviewers it excludes;
 //   outcome      the unsigned status proposal's evidence (board/operate.mjs proposeFromBundle) and its re-check
 //                (packages/ledger/status.mjs checkEvidenceLedgers);
 //   live run     servedIdentities and subagentReceipt (live-run.mjs);
 //   public       the cycle's provenance (public/provenance.mjs cycleRecord), the evidence and work sections (record.mjs).
-// The scheduler's tick runs the real stage executors; Pantheon's pipeline runs with the fixture's fake agy CLI writing
-// the files (pantheon/tests/fixtures/dispatch.mjs); every single-turn seat is scripted and SERVED under a name other
-// than the one asked (a dated snapshot), or marked as the stamped input, or by another model, per the table below. No
-// provider is called. The pipeline-level projections are in pantheon/tests/wave3-identity.test.mjs; the mutations that
-// prove the paths the base already held are in wave3-identity.mutate.mjs.
+// The scheduler's tick runs the real stage executors; every single-turn seat is scripted and SERVED under a name other
+// than the one asked (a dated snapshot), or marked as the stamped input, per the table below. No provider is called.
+//
+// THE IMPLEMENTER AND ITS SUBAGENTS (owner direction 2026-11-19: the Google implementer is an Antigravity SDK session on
+// the Gemini API, and its subagents are its own, on gemini-4-hydrogen). Pantheon's pipeline runs the REAL SDK transport
+// between the fixture's session relay and its in-process scripted provider (pantheon/tests/fixtures/dispatch.mjs), which
+// here answers every request under a dated snapshot of the model asked. So an implementer's and a native subagent's
+// identity is: the model asked, the provider's own name for the answer, marker "provider". That transport's model guard
+// refuses an answer under another model or under no name, so neither can be a contributor of a lifecycle run; the
+// lifecycle's "unknown served model" case is a native subagent that was admitted and never answered ("unnamed"). The
+// A2A subagent (two answers under two markers) and the implementer answered by the metered failover with no name exist
+// only on an explicit lane seat, which the lifecycle no longer seats: their projections are driven at the pipeline's own
+// entry in pantheon/tests/wave3-identity.test.mjs. The mutations that prove the paths the base already held are in
+// wave3-identity.mutate.mjs.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors, implementerPath} from './stages.mjs';
 import {servedIdentities, subagentReceipt} from './live-run.mjs';
 import {resolveModel, contributorKeys} from '../../pantheon/src/review/identity.mjs';
@@ -61,32 +70,39 @@ const why = r => JSON.stringify(r.dispatched.map(d => [d.stage, d.status, d.next
 
 // THE SOURCES. Every judging seat (planner, plan and change reviewers, validator, dispatcher, unit reviewer) answers under
 // another NAME of the model asked (a dated snapshot: the same identity, so it is admitted) with the marker, or -- "input"
-// -- as the stamped requested name. The hard unit's subagent is asked twice: both answers are served by SUB (another
-// model, except under "input", where the served name is the asked one) under two different markers.
+// -- as the stamped requested name. The hard unit's Carbon implementer delegates to two native code-explorer subagents;
+// the provider answers the implementers and the subagents under SDK(model), a dated snapshot, in every mode.
 const MODES = [
-  {source: 'provider', other: 'unknown', judge: m => `${m}-20261101`, sub: 'grok-4.6'},
-  {source: 'unknown', other: 'provider', judge: m => `${m}-20261101`, sub: 'grok-4.6'},
-  {source: 'input', other: 'provider', judge: m => m, sub: 'grok-4.7'},
+  {source: 'provider', judge: m => `${m}-20261101`},
+  {source: 'unknown', judge: m => `${m}-20261101`},
+  {source: 'input', judge: m => m},
 ];
-const GAMMA = UNIT('c', {owned_paths: ['gamma/**'], difficulty: 'hard', verify_cmd: 'node gamma/gamma.test.mjs', invariants: ['gamma/gamma.mjs exports g === 3 and its test proves it'], allowed_subagents: ['api-designer']});
-const TWO = {work_units: [UNIT('alpha'), GAMMA], slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}, {id: 's3', title: 'gamma.mjs', slot: 'gamma', path: 'gamma/gamma.mjs'}]};
+const SDK = m => `${m}-20261101`;
+const HYDROGEN = 'gemini-4-hydrogen';
+// Unit alpha is MEDIUM (a Neon implementer), so gemini-4-hydrogen contributes to this change as the subagent model only.
+const GAMMA = UNIT('c', {owned_paths: ['gamma/**'], difficulty: 'hard', verify_cmd: 'node gamma/gamma.test.mjs', invariants: ['gamma/gamma.mjs exports g === 3 and its test proves it'], allowed_subagents: ['code-explorer']});
+const TWO = {work_units: [UNIT('alpha', {difficulty: 'medium'}), GAMMA], slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}, {id: 's3', title: 'gamma.mjs', slot: 'gamma', path: 'gamma/gamma.mjs'}]};
 const WORKER = `case "$unit" in
   alpha) printf 'export const ok = true;\\n' > "$dir/alpha.mjs" ;;
-  c) agy_ask api-designer "what should g be?" >/dev/null || exit 1; agy_ask api-designer "and its test?" >/dev/null || exit 1
+  c) sdk_subagent code-explorer "Report what value gamma/gamma.mjs should export as g, with the file that says so."
+     sdk_subagent code-explorer "Report which test file proves the exported value of g, with its path."
      mkdir -p "$dir/gamma"; printf 'export const g = 3;\\n' > "$dir/gamma/gamma.mjs"; printf 'import {g} from "./gamma.mjs"; if (g !== 3) process.exit(1);\\n' > "$dir/gamma/gamma.test.mjs" ;;
 esac
 `;
+/** The native subagents of a pipeline record's unit, as producers: one per instance and name the provider answered under. */
+const nativeOf = u => u.attempts.flatMap(a => (a.session?.subagents?.instances ?? []).flatMap(i => { const named = a.session.gateway?.served_models?.[i.model] ?? [];
+  return (named.length ? named : [null]).map(n => ({vendor: a.vendor, model: i.model, served_model: n, served_model_source: n ? 'provider' : 'unnamed'})); }));
 
 for (const M of MODES) {
   test(`${L504}, source "${M.source}": every projection of the lifecycle keeps requested, served and marker, and every exclusion reads the served identity`, {timeout: 300_000}, async t => {
     await withDispatch(async ctx => {
       const {dir: repo, makeClientFor} = ctx;
       ctx.agyWorker(WORKER);
+      ctx.serve((vendor, model) => (vendor === 'agy_google' ? SDK(model) : null));
       const item = `ident-${M.source}`;
       const f = fixture(repo, [{item}]);
-      let subCalls = 0, found = 0, judged = 0;
-      const serve = ({kind, model}) => (kind === 'subagent' ? {served_model: M.sub, served_model_source: ++subCalls === 1 ? M.source : M.other}
-        : {served_model: M.judge(model), served_model_source: M.source});
+      let found = 0, judged = 0;
+      const serve = ({model}) => ({served_model: M.judge(model), served_model_source: M.source});
       const turn = scriptedTurn({
         planner: ({prompt}) => json(planFor(prompt, TWO)),
         // One plan-review finding from the xAI seat (a finder row), then approvals.
@@ -116,10 +132,16 @@ for (const M of MODES) {
         assert.equal(fr.length, 1);
         assert.deepEqual(who(fr[0]), J('grok-4.7'));
       });
-      await t.test('S1 the implement stage\'s authored rows: work (stamped input), both subagent answers (two markers), the critique', () => {
+      await t.test('S1 the implement stage\'s authored rows: work and the native subagents (the model asked, the provider\'s name for the answer), the critique', () => {
         const rows = p => impl.contributions.filter(c => c.purpose === p).map(who);
-        assert.deepEqual(set(rows('work')), set(Object.values(U).flatMap(u => u.attempts.map(a => id(a.model, a.model, 'input')))));
-        assert.deepEqual(set(rows('subtask')), set([id('grok-4.7', M.sub, M.source), id('grok-4.7', M.sub, M.other)]), 'a subagent answer\'s identity was dropped');
+        // The producers. Unit alpha's Neon attempt was rejected once, and the unit stepped to the next rung of its path
+        // (no thinking level of Neon is recorded to raise); unit c ran on Carbon. Each by the name asked and the provider's.
+        const [neon, afterNeon] = implementerPath('medium'), [carbon] = implementerPath('hard');
+        const ran = [neon, afterNeon, carbon].map(x => x.model);
+        assert.deepEqual(Object.values(U).flatMap(u => u.attempts.map(a => [a.model, a.served_model, a.served_model_source])).sort(), ran.map(m => [m, SDK(m), 'provider']).sort());
+        assert.deepEqual(set(rows('work')), set(Object.values(U).flatMap(u => u.attempts.map(a => id(a.model, SDK(a.model), 'provider')))));
+        assert.equal(U.c.attempts[0].session.subagents.instances.length, 2, 'the producer: two subagents were admitted and answered');
+        assert.deepEqual(set(rows('subtask')), set([id(HYDROGEN, SDK(HYDROGEN), 'provider')]), 'the subagents\' identity was dropped');
         assert.deepEqual(rows('critique'), [J(disp('alpha'))]);
       });
       await t.test('S2 the arbiter rows: every dispatcher by asked and served name, with the marker', () => {
@@ -132,20 +154,20 @@ for (const M of MODES) {
       });
       await t.test('S4 the implement stage\'s team: each dispatcher, implementer, subagent and unit reviewer as it was asked AND served', () => {
         const producers = Object.values(U).flatMap(u => [{...u.dispatch, role: 'dispatcher'}, ...u.attempts.map(a => ({...a, role: 'implementer'})),
-          ...u.a2a.calls.map(c => ({...c, role: 'subagent'})), ...u.reviews.map(x => ({...x, role: 'unit-reviewer'}))]);
+          ...nativeOf(u).map(c => ({...c, role: 'subagent'})), ...u.reviews.map(x => ({...x, role: 'unit-reviewer'}))]);
+        assert.equal(producers.filter(p => p.role === 'subagent').length, 2);
         const team = impl.team.map(x => ({role: x.role, ...who(x)}));
         for (const p of producers) assert.ok(team.some(x => JSON.stringify(x) === JSON.stringify({role: p.role, ...who(p)})), `${p.role} ${p.model}: ${JSON.stringify(who(p))} is not on the team ${JSON.stringify(team)}`);
       });
       await t.test('G1/G2 the change cycle records each contributor name with its contribution\'s identity; the cycle excludes every name', () => {
         const st = deriveCycle(ledgerOf(rev.outputs.cycle_ledger).view, rev.outputs.cycle);
-        const xai = st.cycle.contributors.filter(c => c.vendor === 'xai');
-        // Each name of each subagent contribution is a row of the cycle that states that contribution's identity.
-        for (const want of [id('grok-4.7', M.sub, M.source), id('grok-4.7', M.sub, M.other)]) {
-          for (const name of new Set([want.requested_model, want.served_model])) {
-            assert.ok(xai.some(x => x.model === name && JSON.stringify(who(x)) === JSON.stringify(want)), `the cycle lost ${name} as ${JSON.stringify(want)}: ${JSON.stringify(xai)}`);
-          }
+        const google = st.cycle.contributors.filter(c => c.vendor === 'agy_google');
+        // Each name of the subagent contribution is a row of the cycle that states that contribution's identity.
+        const want = id(HYDROGEN, SDK(HYDROGEN), 'provider');
+        for (const name of new Set([want.requested_model, want.served_model])) {
+          assert.ok(google.some(x => x.model === name && JSON.stringify(who(x)) === JSON.stringify(want)), `the cycle lost ${name} as ${JSON.stringify(want)}: ${JSON.stringify(google)}`);
         }
-        for (const m of ['grok-4.7', M.sub, disp('alpha'), disp('c')]) assert.ok(st.cycle.author_models.includes(resolveModel(null, m).id), m);
+        for (const m of [HYDROGEN, SDK(HYDROGEN), 'gemini-4-carbon', 'gemini-4-neon', disp('alpha'), disp('c')]) assert.ok(st.cycle.author_models.includes(resolveModel(null, m).id), m);
       });
       await t.test('S18 the change review\'s team keeps each reviewer\'s served name and marker', () => {
         for (const x of rev.team.filter(y => y.role === 'cycle-reviewer')) assert.deepEqual(who(x), J(x.model));
@@ -165,10 +187,13 @@ for (const M of MODES) {
         const v = rows.find(x => x.source === 'outputs.validator');
         assert.deepEqual(who(v), J(v.model), 'the live record dropped the validator\'s marker');
       });
-      await t.test('V4 subagentReceipt: every recorded call by vendor, asked and served name and marker; it counts a call only when the required model SERVED it', () => {
-        const receipt = subagentReceipt(stages, {role: 'api-designer', model: 'grok-4.7', min_calls: 1});
-        assert.deepEqual(set(receipt.all_calls_recorded.map(c => ({vendor: c.vendor, ...who(c)}))), set([{vendor: 'xai', ...id('grok-4.7', M.sub, M.source)}, {vendor: 'xai', ...id('grok-4.7', M.sub, M.other)}]));
-        assert.equal(receipt.counted, M.sub === 'grok-4.7' ? 2 : 0, 'the receipt counted a call the required model did not serve');
+      await t.test('V4 subagentReceipt: every native subagent by vendor, asked and served name and marker; it counts one only when the required model SERVED it', () => {
+        const receipt = subagentReceipt(stages, {type: 'code-explorer', model: HYDROGEN, min_calls: 2});
+        assert.deepEqual(receipt.all_calls_recorded.map(c => ({vendor: c.vendor, ...who(c)})), [0, 1].map(() => ({vendor: 'agy_google', ...id(HYDROGEN, SDK(HYDROGEN), 'provider')})));
+        assert.deepEqual([receipt.counted, receipt.met], [2, true], 'a dated snapshot of the required model is the required model');
+        // The same subagents do not count for another model, or for a specialist type that did not run.
+        assert.equal(subagentReceipt(stages, {type: 'code-explorer', model: 'gemini-4-carbon', min_calls: 1}).counted, 0, 'the receipt counted a subagent the required model did not serve');
+        assert.equal(subagentReceipt(stages, {type: 'test-constructor', model: HYDROGEN, min_calls: 1}).counted, 0);
       });
       const proposal = JSON.parse(fs.readFileSync(out.outputs.proposal_path, 'utf8'));
       await t.test('B3/T1 the unsigned status proposal names each reviewer\'s served name and marker; its evidence is well formed', () => {
@@ -196,56 +221,63 @@ for (const M of MODES) {
         const ws = workSection({ledger: rw.ledger, item: {...rw.items.get(item), team: impl.team}}).join('\n');
         const sub = impl.team.find(x => x.role === 'subagent');
         const cellOf = x => (x.served_model !== x.model ? `${x.served_model} (asked ${x.model}; ${x.served_model_source})` : `${x.served_model} (${x.served_model_source})`);
-        assert.ok(ws.includes(`| subagent | xai | ${cellOf(sub)} |`), `the work section dropped the subagent's identity:\n${ws}`);
+        assert.deepEqual(who(sub), id(HYDROGEN, SDK(HYDROGEN), 'provider'));
+        assert.ok(ws.includes(`| subagent | agy_google | ${cellOf(sub)} |`), `the work section dropped the subagent's identity:\n${ws}`);
       });
     });
   });
 }
 
-test(`${L504}: an implementer answer that named NO serving model (the metered Gemini failover) is carried as unknown, never as the model asked, through the implement stage, the change cycle, the live record and the public work view`, {timeout: 300_000}, async t => {
+test(`${L504}: a contributor whose served model is UNKNOWN (a native subagent that was admitted and never answered) is carried as unknown, never as the model asked, through the implement stage, the change cycle, the live record and the public work view`, {timeout: 300_000}, async t => {
   await withDispatch(async ctx => {
     const {dir: repo, makeClientFor} = ctx;
-    const lane = implementerPath('easy')[0].model;
-    // The lane is refused for quota; the metered API answers the files and its response names no model.
-    ctx.agyQuota([lane]);
-    ctx.implement(() => JSON.stringify({files: [{path: 'alpha.mjs', content: 'export const ok = true;\n'}]}));
+    // The hard unit's Carbon implementer is admitted one code-explorer and never gives it its task: the controller holds
+    // its slot, and no request of it reaches the provider. Its served model is unknown.
+    ctx.agyWorker(`sdk_subagent_unasked code-explorer "Report every caller of the exported ok, with file and line."
+printf 'export const ok = true;\\n' > "$dir/alpha.mjs"
+`);
     const f = fixture(repo, [{item: 'unnamed'}]);
-    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn(), stateDir: f.stateDir});
-    // The metered failover is OFF by default (register L-136): this row exercises it, so the tick declares it, with a budget.
-    const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, billing: optInPolicy({failover: 100})});
+    const HARD = {work_units: [UNIT('alpha', {difficulty: 'hard', allowed_subagents: ['code-explorer']})], slices: [{id: 's1', title: 'alpha.mjs exports ok = true', slot: 'alpha', path: 'alpha.mjs'}]};
+    const ex = makeExecutors({repo, makeClientFor, turn: scriptedTurn({planner: ({prompt}) => json(planFor(prompt, HARD))}), stateDir: f.stateDir});
+    // The implementer is an SDK session, a primary Gemini seat (register L-136): the ticks declare it, with a budget.
+    const r = await ticks({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS, billing: optInPolicy({primary: 100})});
     const w = openWorkLedger({root: f.workRoot});
     assert.deepEqual(seq(w, 'unnamed'), DONE, why(r));
     const stages = w.stages('unnamed');
     const [, impl, rev] = stages;
     const rec = JSON.parse(fs.readFileSync(impl.outputs.run.record, 'utf8'));
     const a = rec.units.alpha.attempts.find(x => x.status === 'written');
-    const UNNAMED = id(lane, null, 'unnamed');
+    const UNNAMED = id(HYDROGEN, null, 'unnamed');
 
-    await t.test('the producer: the attempt was written by the metered failover and names no served model', () => {
-      assert.deepEqual([a.model, a.served_model, a.quota_failover?.used], [lane, null, true]);
+    await t.test('the producer: the subagent was admitted, never started, and the provider answered nothing under its model', () => {
+      assert.deepEqual(a.session.subagents.instances.map(i => [i.type, i.model, i.status, i.trajectory_id]), [['code-explorer', HYDROGEN, 'admitted', null]]);
+      assert.deepEqual([a.session.gateway.served_models[HYDROGEN] ?? null, a.session.gateway.totals.by_class.subagent], [null, 0]);
+      assert.deepEqual([a.model, a.served_model, a.served_model_source], ['gemini-4-carbon', 'gemini-4-carbon', 'provider'], 'the implementer itself was named by the provider');
     });
-    await t.test('S1 the authored work row says the served model is unknown ("unnamed"), not the model asked', () => {
-      assert.deepEqual(impl.contributions.filter(c => c.purpose === 'work').map(who), [UNNAMED], 'the work row replaced the unknown served model with the model asked');
-      assert.equal(impl.contributions.find(c => c.purpose === 'work').lab, 'google');
+    await t.test('S1 the authored subtask row says the served model is unknown ("unnamed"), not the model asked', () => {
+      assert.deepEqual(impl.contributions.filter(c => c.purpose === 'subtask').map(who), [UNNAMED], 'the subtask row replaced the unknown served model with the model asked');
+      assert.equal(impl.contributions.find(c => c.purpose === 'subtask').lab, 'google');
     });
-    await t.test('S4 the implementer\'s team row says the same', () => {
-      assert.deepEqual(impl.team.filter(x => x.role === 'implementer').map(who), [UNNAMED]);
+    await t.test('S4 the subagent\'s team row says the same', () => {
+      assert.deepEqual(impl.team.filter(x => x.role === 'subagent').map(who), [UNNAMED]);
     });
-    await t.test('G1/G2 the change cycle records the lane name with an unknown served model; the asked identity is excluded', () => {
+    await t.test('G1/G2 the change cycle records the subagent model with an unknown served model; the asked identity is excluded', () => {
       const st = deriveCycle(ledgerOf(rev.outputs.cycle_ledger).view, rev.outputs.cycle);
-      const row = st.cycle.contributors.find(c => c.model === lane);
-      assert.deepEqual(who(row), UNNAMED, 'the cycle recorded the lane name as if it had served');
-      assert.ok(st.cycle.author_models.includes(resolveModel('agy_google', lane).id));
+      const row = st.cycle.contributors.find(c => c.model === HYDROGEN);
+      assert.deepEqual(who(row), UNNAMED, 'the cycle recorded the subagent model as if it had served');
+      assert.ok(st.cycle.author_models.includes(resolveModel('agy_google', HYDROGEN).id));
     });
     await t.test('V1 the live record keeps the unknown served model and its marker', () => {
       const rows = servedIdentities(stages);
-      assert.deepEqual(who(rows.find(x => x.source === 'stage team' && x.role === 'implementer')), UNNAMED);
-      assert.deepEqual(who(rows.find(x => x.source === 'pipeline.json' && x.role === 'implementer' && x.status === 'written')), id(lane, null, null));
+      assert.deepEqual(who(rows.find(x => x.source === 'stage team' && x.role === 'subagent')), UNNAMED);
+      assert.deepEqual(who(rows.find(x => x.source === 'pipeline.json' && x.role === 'subagent')), UNNAMED);
+      const receipt = subagentReceipt(stages, {type: 'code-explorer', model: HYDROGEN, min_calls: 1});
+      assert.deepEqual([receipt.counted, receipt.met, receipt.all_calls_recorded.map(c => who(c))], [0, false, [UNNAMED]], 'a subagent that was never answered is no receipt of the required model');
     });
-    await t.test('U3 the public work view names the lane and says no served model was named', () => {
+    await t.test('U3 the public work view names the subagent model and says no served model was named', () => {
       const rw = readWorkRecord({repo, statusRoot: f.statusRoot, workRoot: f.workRoot});
       const ws = workSection({ledger: rw.ledger, item: {...rw.items.get('unnamed'), team: impl.team}}).join('\n');
-      assert.ok(ws.includes(`| implementer | agy_google | ${lane} (unnamed) | google |`), ws);
+      assert.ok(ws.includes(`| subagent | agy_google | ${HYDROGEN} (unnamed) | google |`), ws);
     });
   });
 });

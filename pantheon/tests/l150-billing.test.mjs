@@ -1,19 +1,20 @@
 // REGISTER L-150 and L-151 (owner decisions 2026-11-20): EVERY Gemini request made inside the python Antigravity SDK seat
 // is authorized and charged BEFORE it is sent, through the central billing policy (route/gemini-billing.mjs spendGemini),
-// by the controller's loopback metering relay (route/gemini-relay.mjs), which alone holds the real credential; a launch is
+// by the controller's loopback model gateway (antigravity/gateway.mjs, opened for the seat by seat-session.mjs: the ONE
+// mechanism since the owner's decision of 2026-11-20, register L-724), which alone holds the real credential; a launch is
 // not a request; and a direct run of scripts/agy-seat.py without the controller's capability makes no request at all.
 //
-// THE PROVIDER EDGE ONLY IS FAKE. Upstream of the relay is always a LOCAL fake Gemini API (fixtures/l150-fake-gemini.mjs)
+// THE PROVIDER EDGE ONLY IS FAKE. Upstream of the gateway is always a LOCAL fake Gemini API (fixtures/l150-fake-gemini.mjs)
 // that records every request with the number of usage rows ALREADY PERSISTED when it arrived ("charged before it is sent",
 // asserted at the edge itself). The SDK is the stub of fixtures/l150-sdk-stub on PYTHONPATH (the CI runner has no SDK):
 // it sends the SAME HTTP requests the real google-antigravity 0.1.24 harness was observed to send (the real-SDK proof of
 // L-150) -- :streamGenerateContent?alt=sse for every model call, a 503 retried, a tool-call continuation, a subagent's own
-// conversation (its own sessionId), the web search's :generateContent -- to the relay, the capability as its key. Every
-// key here is SYNTHETIC. Driven through the production entry points: the relay itself, scripts/agy-seat.py (directly, and
+// conversation (its own sessionId), the web search's :generateContent -- to the gateway, the session's token as its key.
+// Every key here is SYNTHETIC. Driven through the production entry points: the seat's gateway session, scripts/agy-seat.py (directly, and
 // through the governed launcher bin/agy-seat.mjs), and runOpenItem's SDK seat (PANTHEON_AGY_TRANSPORT=sdk).
 //
-// The relay's module is imported lazily, so the cells that drive agy-seat.py and the board load (and fail on their
-// assertions) on the base commit too: the base evidence of register L-150.
+// These cells were written against the L-150 metering relay (route/gemini-relay.mjs) and are kept, each one, against the
+// gateway that replaced it: what the relay had to show, the gateway shows here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -31,10 +32,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const STUB = join(HERE, "fixtures", "l150-sdk-stub");
 const SEAT_PY = join(HERE, "..", "scripts", "agy-seat.py");
 const LAUNCHER = join(HERE, "..", "bin", "agy-seat.mjs");
-const relay = () => import("../src/route/gemini-relay.mjs");
-// The codes, spelled out (this file loads on a tree without the relay).
-const BUDGET = "METERED_GEMINI_BUDGET_EXHAUSTED", CAP_ABSENT = "GEMINI_RELAY_CAPABILITY_ABSENT", NO_CAP = "GEMINI_RELAY_CAPABILITY_REFUSED",
-  METHOD = "GEMINI_RELAY_METHOD_REFUSED", SESSION_CAP = "GEMINI_RELAY_SESSION_CAP", VERTEX = "GEMINI_RELAY_VERTEX_UNSUPPORTED";
+const seatSession = () => import("../src/antigravity/seat-session.mjs");
+const BUDGET = "METERED_GEMINI_BUDGET_EXHAUSTED", CAP_ABSENT = "PANTHEON_GATEWAY_CAPABILITY_ABSENT", NO_CAP = "PANTHEON_GATEWAY_UNAUTHORIZED",
+  METHOD = "PANTHEON_PATH_NOT_SERVED", SESSION_CAP = "PANTHEON_SESSION_CAP", VERTEX = "PANTHEON_GATEWAY_VERTEX_UNSUPPORTED";
 const KEY = "AIza-l150-synthetic-real-key-stand-in-0000", GKEY = "AIza-l150-synthetic-google-key-1111";
 const STREAM = "/v1beta/models/gemini-3.7-flash:streamGenerateContent?alt=sse";
 const jsonl = f => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)) : []);
@@ -55,7 +55,10 @@ async function post(url, token, path = STREAM, body = { contents: [{ role: "user
   const text = await r.text();
   let json = null;
   try { json = JSON.parse(text); } catch { json = null; }
-  return { status: r.status, text, json, reason: json?.error?.details?.[0]?.reason ?? null, recovery: json?.error?.details?.[0]?.metadata?.recovery ?? null };
+  // The refusal's code: the caller's own (after the mark) when the charge was refused, else the gateway's.
+  const message = json?.error?.message ?? "";
+  const reason = /PANTHEON_GATEWAY_REFUSED ([A-Z_]+):/.exec(message)?.[1] ?? /^(PANTHEON_[A-Z_]+)/.exec(message)?.[1] ?? null;
+  return { status: r.status, text, json, reason, recovery: /\(recovery: (.*)\)$/s.exec(message)?.[1] ?? null };
 }
 
 // The python the seat is spawned with: the stub SDK on PYTHONPATH; its environment is written to `env.txt` and its pid to
@@ -78,7 +81,7 @@ const seatArgs = (dir, ws, { role = "reviewer", out = join(dir, "out"), more = [
 function launch(dir, { budget, usage = join(dir, "usage.jsonl"), upstream, python, args, env = {}, onSpawn = null }) {
   const flags = budget === null ? [] : ["--gemini-api-primary", String(budget), "--gemini-usage", usage];
   const child = spawn(process.execPath, [LAUNCHER, ...flags, "--python", python, "--", ...args],
-    { env: { ...process.env, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, PANTHEON_AGY_RELAY_UPSTREAM: upstream, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    { env: { ...process.env, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, PANTHEON_AGY_GATEWAY_UPSTREAM: upstream, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", d => { stdout += d; }); child.stderr.on("data", d => { stderr += d; });
   onSpawn?.(child);
@@ -102,23 +105,29 @@ test("python3 is on this host (the seat cells run the real agy-seat.py over the 
   assert.equal(r.status, 0, String(r.error ?? r.stderr));
 });
 
-// ---- the relay itself (route/gemini-relay.mjs) ------------------------------------------------------------------------
-test("relay three requests with budget 3: exactly three admitted, each charged before it was sent, the fourth refused with its code and recovery; nothing is charged for the launch", async t => {
-  const { startGeminiRelay } = await relay();
+// ---- the seat's session on the model gateway (antigravity/seat-session.mjs over gateway.mjs) --------------------------
+// One session is one launch of the seat and one gateway. `open` starts it over the local fake provider.
+async function open(t, { dir, billing, fake, over = {} }) {
+  const { openSeatSession } = await seatSession();
+  const s = await openSeatSession({ apiKey: KEY, upstream: fake.url, model: "gemini-3.7-flash", billing, ...over });
+  t.after(() => s.close());
+  return { s, url: s.env.PANTHEON_AGY_GATEWAY_URL, token: s.env.PANTHEON_AGY_GATEWAY_TOKEN };
+}
+
+test("gateway session, three requests with budget 3: exactly three admitted, each charged before it was sent, the fourth refused with its code and recovery; nothing is charged for the launch", async t => {
   const dir = scratch(t), billing = billingOf(dir, 3);
   const fake = await startFakeGemini({ mode: "text", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url, outcomes: join(dir, "outcomes.jsonl") }); t.after(() => r.close());
   const admitted = [];
-  const s = r.openSession({ billing, admit: row => admitted.push(row.request), spend: { purpose: "critique", role: "reviewer" }, lineage: { board_run: { key: "l150" } } });
+  const { s, url, token } = await open(t, { dir, billing, fake, over: { outcomes: join(dir, "outcomes.jsonl"), admit: row => admitted.push(row.request), spend: { purpose: "critique", role: "reviewer" }, lineage: { board_run: { key: "l150" } } } });
   assert.deepEqual(jsonl(join(dir, "usage.jsonl")), [], "opening a session charges nothing");
   const got = [];
-  for (let i = 0; i < 4; i++) got.push(await post(r.url, s.token));
+  for (let i = 0; i < 4; i++) got.push(await post(url, token));
   assert.deepEqual(got.map(g => g.status), [200, 200, 200, 403]);
   assert.equal(fake.requests.length, 3, "exactly three reached the provider");
   chargedBefore(fake.requests);
-  assert.ok(fake.requests.every(q => q.key === KEY), "forwarded with the controller's credential, never the capability");
+  assert.ok(fake.requests.every(q => q.key === KEY), "forwarded with the controller's credential, never the session's token");
   assert.equal(got[3].reason, BUDGET);
-  assert.match(got[3].json.error.message, /^GEMINI_RELAY_REFUSED METERED_GEMINI_BUDGET_EXHAUSTED: .*\(recovery: .*declare a larger budget/);
+  assert.match(got[3].json.error.message, /^PANTHEON_PROVIDER_LIMIT: PANTHEON_GATEWAY_REFUSED METERED_GEMINI_BUDGET_EXHAUSTED: .*\(recovery: .*declare a larger budget/);
   assert.match(got[3].recovery, /declare a larger budget/);
   const rows = jsonl(join(dir, "usage.jsonl"));
   assert.deepEqual(rows.map(u => [u.kind, u.transport, u.model, u.request, u.used_before, u.identity.seq, u.identity.method, u.identity.sdk_session, u.lineage.board_run.key, u.lineage.conversation]),
@@ -126,109 +135,106 @@ test("relay three requests with budget 3: exactly three admitted, each charged b
   assert.deepEqual(admitted, [1, 2, 3], "the caller's per-request admission ran for each admitted request, never for the refused one");
   assert.deepEqual(billing.refusals.map(x => [x.code, x.used, x.identity?.seq]), [[BUDGET, 3, 4]], "the refusal is recorded with its request identity");
   const outcomes = jsonl(join(dir, "outcomes.jsonl"));
-  assert.deepEqual(outcomes.filter(o => !o.refused).map(o => [o.status, o.response_id, o.usage?.totalTokenCount]), [[200, "fake-resp-0", 107], [200, "fake-resp-1", 107], [200, "fake-resp-2", 107]]);
-  assert.deepEqual(outcomes.filter(o => o.refused).map(o => [o.refused.code, o.provider_requests]), [[BUDGET, 0]]);
+  assert.deepEqual(outcomes.map(o => [o.seq, o.gateway_session === s.id, o.forwarded, o.status, o.refusal, o.usage?.total_token_count ?? null]),
+    [[1, true, true, 200, null, 107], [2, true, true, 200, null, 107], [3, true, true, 200, null, 107], [4, true, false, 403, "PANTHEON_PROVIDER_LIMIT", null]]);
+  assert.deepEqual([s.admitted, s.summary().admitted, s.summary().refused.map(x => x.code)], [3, 3, [BUDGET]]);
 });
 
-test("relay unsupported methods are refused and recorded, nothing forwarded or charged; countTokens is forwarded and not charged", async t => {
-  const { startGeminiRelay } = await relay();
+test("gateway session, calls it does not serve are refused and recorded, nothing forwarded or charged: another method, another path, another query, another model, a websocket upgrade, and countTokens too", async t => {
   const dir = scratch(t), billing = billingOf(dir, 10);
   const fake = await startFakeGemini({ mode: "text", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url }); t.after(() => r.close());
-  const s = r.openSession({ billing });
+  const { s, url, token } = await open(t, { dir, billing, fake });
   const refused = [];
   for (const path of ["/v1beta/models/gemini-3.7-flash:embedContent", "/v1beta/models/gemini-3.7-flash:batchGenerateContent", "/v1beta/cachedContents",
     "/upload/v1beta/files", "/v1beta/tunedModels/x:generateContent", "/v1beta/models/gemini-3.7-flash:streamGenerateContent?alt=json",
     "/v1beta/models/gemini-3.7-flash:generateContent?alt=sse", "/v1internal:streamGenerateContent?alt=sse",
-    "/v1beta1/projects/p/locations/global/publishers/google/models/gemini-3.7-flash:streamGenerateContent?alt=sse"]) {
-    const g = await post(r.url, s.token, path);
+    "/v1beta1/projects/p/locations/global/publishers/google/models/gemini-3.7-flash:streamGenerateContent?alt=sse",
+    // countTokens: the relay this replaces passed it through uncharged; the gateway serves the generation calls only.
+    "/v1beta/models/gemini-3.7-flash:countTokens"]) {
+    const g = await post(url, token, path);
     refused.push([path, g.status, g.reason]);
   }
-  const list = await fetch(`${r.url}/v1beta/models`, { headers: { "x-goog-api-key": s.token } });
-  refused.push(["GET /v1beta/models", list.status, (await list.json())?.error?.details?.[0]?.reason]);
-  // The Live API's bidirectional stream: a websocket upgrade is a transport the relay does not carry.
+  const list = await fetch(`${url}/v1beta/models`, { headers: { "x-goog-api-key": token } });
+  refused.push(["GET /v1beta/models", list.status, /^(PANTHEON_[A-Z_]+)/.exec((await list.json())?.error?.message ?? "")?.[1] ?? null]);
+  assert.deepEqual(refused.filter(([, status, reason]) => !(status === 404 && reason === METHOD)), [], "each is refused as a call that is not served");
+  // Another model than the seat's: refused on the wire (the relay forwarded any model).
+  const other = await post(url, token, "/v1beta/models/gemini-4-carbon:streamGenerateContent?alt=sse");
+  assert.deepEqual([other.status, other.reason], [403, "PANTHEON_MODEL_NOT_ALLOWED"]);
+  // The Live API's bidirectional stream: a websocket upgrade is a transport the gateway does not carry.
   const upgrade = await new Promise(resolve => {
-    const req = http.request(`${r.url}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`, { headers: { connection: "Upgrade", upgrade: "websocket", "x-goog-api-key": s.token, "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" } });
-    req.on("response", res => resolve(res.statusCode)); req.on("upgrade", () => resolve("upgraded")); req.on("error", () => resolve("error")); req.end();
+    const req = http.request(`${url}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`, { headers: { connection: "Upgrade", upgrade: "websocket", "x-goog-api-key": token, "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" } });
+    req.on("response", res => { res.resume(); resolve(res.statusCode); }); req.on("upgrade", () => resolve("upgraded")); req.on("error", () => resolve("error")); req.end();
   });
-  assert.ok(refused.every(([, status, reason]) => status === 403 && reason === METHOD), JSON.stringify(refused));
-  assert.equal(upgrade, 403);
+  assert.equal(upgrade, 404);
   assert.equal(fake.requests.length, 0, "nothing reached the provider");
   assert.deepEqual(jsonl(join(dir, "usage.jsonl")), [], "nothing was charged");
-  assert.equal(s.refusals.length, refused.length + 1, "every refusal is recorded on the session");
-  const free = await post(r.url, s.token, "/v1beta/models/gemini-3.7-flash:countTokens");
-  assert.deepEqual([free.status, fake.requests.map(q => q.path), jsonl(join(dir, "usage.jsonl")).length], [200, ["/v1beta/models/gemini-3.7-flash:countTokens"], 0]);
+  assert.equal(s.summary().refused.length, refused.length + 2, "every refusal is on the session's account");
 });
 
-test("relay capability: a request without one, with a wrong one, or with a closed session's is refused; nothing forwarded or charged", async t => {
-  const { startGeminiRelay } = await relay();
+test("gateway session token: a request without one, with a wrong one, with the real key, or with another session's is not served, and a closed session's gateway is gone; nothing forwarded or charged; the key goes to Google or loopback only", async t => {
   const dir = scratch(t), billing = billingOf(dir, 10);
   const fake = await startFakeGemini({ mode: "text", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url }); t.after(() => r.close());
-  const s = r.openSession({ billing }), other = r.openSession({ billing });
-  const got = [await post(r.url, null), await post(r.url, "ophanim-relay-not-a-session"), await post(r.url, KEY)];
-  other.close();
-  got.push(await post(r.url, other.token));
-  assert.deepEqual(got.map(g => [g.status, g.reason]), Array(4).fill([401, NO_CAP]));
+  const { s, url, token } = await open(t, { dir, billing, fake });
+  const closed = await open(t, { dir, billing, fake });
+  const got = [await post(url, null), await post(url, "pantheon-gw-not-a-session"), await post(url, KEY), await post(url, closed.token)];
+  assert.deepEqual(got.map(g => [g.status, g.reason]), Array(4).fill([401, NO_CAP]), "another session's token is no token here");
+  await closed.s.close();
+  const after = await post(closed.url, closed.token).then(g => g.status, () => "unreachable");
+  assert.equal(after, "unreachable", "a closed session's gateway is gone: its token is worth nothing");
   assert.deepEqual([fake.requests.length, jsonl(join(dir, "usage.jsonl")).length, s.admitted], [0, 0, 0]);
-  assert.equal((await post(r.url, s.token)).status, 200, "control: the open session's own capability is admitted");
-  // A relay that started anyway is closed at once, so a regression fails this assertion instead of holding the process open.
+  assert.equal((await post(url, token)).status, 200, "control: the open session's own token is admitted");
+  // A session that opened anyway is closed at once, so a regression fails this assertion instead of holding the process open.
+  const { openSeatSession } = await seatSession();
   const started = p => p.then(async x => { await x.close(); return x; });
-  await assert.rejects(started(startGeminiRelay({ apiKey: KEY, upstream: "https://attacker.example.com" })), /GEMINI_RELAY_UPSTREAM|only to a Google API host/);
-  await assert.rejects(started(startGeminiRelay({ apiKey: "", upstream: fake.url })), /holds the real Gemini credential/);
+  await assert.rejects(started(openSeatSession({ apiKey: KEY, upstream: "https://attacker.example.com", model: "gemini-3.7-flash", billing })), /PANTHEON_UPSTREAM_NOT_ALLOWED: .*only to a Google API host/);
+  await assert.rejects(started(openSeatSession({ apiKey: "", upstream: fake.url, model: "gemini-3.7-flash", billing })), /holds the real Gemini credential/);
 });
 
-test("relay session cap: the session's maximum request count is enforced beside the budget, and counts admissions, not outcomes", async t => {
-  const { startGeminiRelay } = await relay();
+test("gateway session cap: the session's maximum request count is enforced beside the budget, and counts admissions, not outcomes", async t => {
   const dir = scratch(t), billing = billingOf(dir, 10);
   const fake = await startFakeGemini({ mode: "text", failFirst: 2, usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url }); t.after(() => r.close());
-  const s = r.openSession({ billing, maxRequests: 2 });
-  const got = [await post(r.url, s.token), await post(r.url, s.token), await post(r.url, s.token)];
-  assert.deepEqual(got.map(g => g.status), [503, 503, 403], "two admitted (their provider answered 503), the third refused");
+  const { s, url, token } = await open(t, { dir, billing, fake, over: { maxRequests: 2 } });
+  const got = [await post(url, token), await post(url, token), await post(url, token)];
+  assert.deepEqual(got.map(g => g.status), [503, 503, 403], "two admitted (their provider answered 503), the third refused with a status the harness does not retry");
   assert.equal(got[2].reason, SESSION_CAP);
   assert.deepEqual([fake.requests.length, jsonl(join(dir, "usage.jsonl")).length, s.admitted], [2, 2, 2], "an admitted request counts whatever its outcome");
+  assert.deepEqual(s.summary().refused.map(x => [x.code, /new launch opens a new session/.test(x.recovery)]), [[SESSION_CAP, true]]);
 });
 
-test("relay concurrent sessions competing for the last request: exactly one admitted (one controller, and two relays over one record)", async t => {
-  const { startGeminiRelay } = await relay();
+test("gateway sessions competing for the last request: exactly one admitted (two sessions of one controller, and two controllers over one record)", async t => {
   const dir = scratch(t);
   seedRows(join(dir, "usage.jsonl"), 2);
   const fake = await startFakeGemini({ mode: "text", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
   const billing = billingOf(dir, 3);
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url }); t.after(() => r.close());
-  const a = r.openSession({ billing }), b = r.openSession({ billing });
-  const one = await Promise.all([post(r.url, a.token), post(r.url, b.token), post(r.url, a.token), post(r.url, b.token)]);
+  const a = await open(t, { dir, billing, fake }), b = await open(t, { dir, billing, fake });
+  const one = await Promise.all([post(a.url, a.token), post(b.url, b.token), post(a.url, a.token), post(b.url, b.token)]);
   assert.deepEqual(one.map(g => g.status).sort(), [200, 403, 403, 403]);
   assert.equal(fake.requests.length, 1, "one controller: exactly one reached the provider");
-  // Two relays, each with its own billing context over the SAME record (two controllers): the record's lock decides.
+  // Two controllers, each with its own billing context over the SAME record: the record's lock decides.
   const dir2 = scratch(t);
   seedRows(join(dir2, "usage.jsonl"), 2);
   const fake2 = await startFakeGemini({ mode: "text", usage: join(dir2, "usage.jsonl") }); t.after(() => fake2.close());
-  const r1 = await startGeminiRelay({ apiKey: KEY, upstream: fake2.url }), r2 = await startGeminiRelay({ apiKey: KEY, upstream: fake2.url });
-  t.after(() => r1.close()); t.after(() => r2.close());
-  const s1 = r1.openSession({ billing: billingOf(dir2, 3) }), s2 = r2.openSession({ billing: billingOf(dir2, 3) });
-  const two = await Promise.all([post(r1.url, s1.token), post(r2.url, s2.token)]);
+  const s1 = await open(t, { dir: dir2, billing: billingOf(dir2, 3), fake: fake2 }), s2 = await open(t, { dir: dir2, billing: billingOf(dir2, 3), fake: fake2 });
+  const two = await Promise.all([post(s1.url, s1.token), post(s2.url, s2.token)]);
   assert.deepEqual(two.map(g => g.status).sort(), [200, 403]);
   assert.deepEqual([fake2.requests.length, jsonl(join(dir2, "usage.jsonl")).length], [1, 3]);
 });
 
-test("relay bounds: an oversized body and a request over the session's concurrency are refused, never charged", async t => {
-  const { startGeminiRelay, RELAY_BOUND } = await relay();
+test("gateway session bounds: an oversized body and a request over the session's concurrency are refused, never charged", async t => {
   const dir = scratch(t), billing = billingOf(dir, 10);
   const fake = await startFakeGemini({ mode: "hang", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url, maxBodyBytes: 1024 }); t.after(() => r.close());
-  const s = r.openSession({ billing, maxConcurrent: 1 });
-  const big = await post(r.url, s.token, STREAM, { contents: [{ parts: [{ text: "x".repeat(4096) }] }] });
-  assert.deepEqual([big.status, big.reason], [400, RELAY_BOUND]);
-  const inflight = post(r.url, s.token).catch(() => null);
+  const { s, url, token } = await open(t, { dir, billing, fake, over: { maxBodyBytes: 1024, maxConcurrent: 1 } });
+  const big = await post(url, token, STREAM, { contents: [{ parts: [{ text: "".padStart(4096, "x") }] }] }).then(g => [g.status, g.reason], () => ["cut", "PANTHEON_REQUEST_TOO_LARGE"]);
+  assert.equal(big[1], "PANTHEON_REQUEST_TOO_LARGE", "refused while it arrived (answered 413, or cut)");
+  const inflight = post(url, token).catch(() => null);
   await until(() => fake.requests.length === 1);
-  const over = await post(r.url, s.token);
-  assert.deepEqual([over.status, over.reason], [429, RELAY_BOUND]);
+  const over = await post(url, token);
+  assert.deepEqual([over.status, over.reason], [429, "PANTHEON_SESSION_BUSY"]);
   assert.deepEqual([fake.requests.length, jsonl(join(dir, "usage.jsonl")).length], [1, 1], "only the in-flight request was charged");
-  await r.close();
+  await s.close();
   await inflight;
 });
+
 
 // ---- scripts/agy-seat.py: no metered execution without the controller's capability (L-151) ---------------------------
 test("seat direct run without a capability sends zero requests, with keys in its environment or none", async t => {
@@ -237,8 +243,8 @@ test("seat direct run without a capability sends zero requests, with keys in its
   const cases = [
     ["keys present", { GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY, GOOGLE_GEMINI_BASE_URL: fake.url }],
     ["no keys", { GOOGLE_GEMINI_BASE_URL: fake.url }],
-    ["a URL without a token", { GEMINI_API_KEY: KEY, PANTHEON_AGY_RELAY_URL: fake.url }],
-    ["a non-loopback relay", { GEMINI_API_KEY: KEY, PANTHEON_AGY_RELAY_URL: "http://relay.example.com:80", PANTHEON_AGY_RELAY_CAPABILITY: "forged" }],
+    ["a URL without a token", { GEMINI_API_KEY: KEY, PANTHEON_AGY_GATEWAY_URL: fake.url }],
+    ["a non-loopback gateway", { GEMINI_API_KEY: KEY, PANTHEON_AGY_GATEWAY_URL: "http://gateway.example.com:80", PANTHEON_AGY_GATEWAY_TOKEN: "forged" }],
   ];
   for (const [name, extra] of cases) {
     const env = { PATH: process.env.PATH, HOME: dir, ...extra };
@@ -268,16 +274,16 @@ test("seat governed run: every request of the session -- each model call, the re
   assert.deepEqual(rows.map(u => [u.request, u.lineage.conversation, u.lineage.parent_session === root, u.identity.sdk_session === root]),
     [[1, "root", true, true], [2, "root", true, true], [3, "root", true, true], [4, "root", true, true], [5, "subagent", true, false], [6, "root", true, true]]);
   assert.equal(rows[4].lineage.subagent_session, fake.requests[4].session);
-  assert.equal(new Set(rows.map(u => u.identity.relay_session)).size, 1);
+  assert.equal(new Set(rows.map(u => u.identity.gateway_session)).size, 1);
   const outcomes = jsonl(join(dir, "usage.jsonl.outcomes.jsonl"));
-  assert.deepEqual(outcomes.map(o => [o.request_id === rows[o.seq - 1].identity.request_id, o.status]), [[true, 503], [true, 200], [true, 200], [true, 200], [true, 200], [true, 200]]);
-  assert.deepEqual([r.report?.relay?.admitted, r.result?.relay?.admitted], [6, 6]);
+  assert.deepEqual(outcomes.map(o => [`${o.gateway_session}#${o.seq}` === rows[o.seq - 1].identity.request_id, o.status]), [[true, 503], [true, 200], [true, 200], [true, 200], [true, 200], [true, 200]]);
+  assert.deepEqual([r.report?.gateway?.admitted, r.result?.gateway?.admitted], [6, 6]);
   // THE CHILD'S ENVIRONMENT: the capability, a HOME of its own, and no credential.
   const env = envOf(dir);
   assert.deepEqual([env.GEMINI_API_KEY, env.GOOGLE_API_KEY], [undefined, undefined]);
   assert.ok(!readFileSync(join(dir, "env.txt"), "utf8").includes(KEY), "the real key's value is nowhere in the child's environment");
-  assert.match(env.PANTHEON_AGY_RELAY_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/);
-  assert.match(env.PANTHEON_AGY_RELAY_CAPABILITY ?? "", /^ophanim-relay-[0-9a-f]{64}$/);
+  assert.match(env.PANTHEON_AGY_GATEWAY_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/);
+  assert.match(env.PANTHEON_AGY_GATEWAY_TOKEN ?? "", /^pantheon-gw-[0-9a-f]{48}$/);
   assert.equal(env.HOME, join(dir, "out", "home"));
 });
 
@@ -304,7 +310,7 @@ test("seat exhaustion: a session able to make 40 requests with a budget of 3 nev
   assert.equal(kept.refused.code, BUDGET, "result.json records the refusal");
   assert.ok(jsonl(join(dir, "out", "progress.jsonl")).some(p => p.event === "turn.refused" && /METERED_GEMINI_BUDGET_EXHAUSTED/.test(p.detail)));
   assert.equal(jsonl(join(dir, "usage.jsonl")).length, 3);
-  assert.equal(JSON.parse(readFileSync(join(dir, "out", "relay-session.json"), "utf8")).relay.admitted, 3);
+  assert.equal(JSON.parse(readFileSync(join(dir, "out", "gateway-session.json"), "utf8")).gateway.admitted, 3);
 });
 
 test("seat concurrency across processes: two governed launches competing for the last request over one record, exactly one admitted", async t => {
@@ -319,7 +325,7 @@ test("seat concurrency across processes: two governed launches competing for the
 });
 
 test("seat crash cancel restart: a session killed (SIGKILL) or cancelled (SIGTERM) after admission, and a controller killed in flight, leave every admitted request counted; a restart counts them", async t => {
-  const { relayAccounting, readRelayOutcomes } = await relay();
+  const { seatAccounting, readSeatOutcomes } = await seatSession();
   const dir = scratch(t), ws = seatTree(dir), usage = join(dir, "usage.jsonl");
   const fake = await startFakeGemini({ mode: "hang", workspace: ws, usage }); t.after(() => fake.close());
   const inFlight = async (name, kill) => {
@@ -344,7 +350,7 @@ test("seat crash cancel restart: a session killed (SIGKILL) or cancelled (SIGTER
   assert.equal(killed.signal, "SIGKILL");
   const rows = jsonl(usage);
   assert.equal(rows.length, 3);
-  const acc = relayAccounting({ usage: rows, outcomes: readRelayOutcomes(`${usage}.outcomes.jsonl`) });
+  const acc = seatAccounting({ usage: rows, outcomes: readSeatOutcomes(`${usage}.outcomes.jsonl`) });
   assert.equal(acc.admitted, 3);
   assert.ok(acc.unknown >= 1, `the killed controller's request has no outcome: ${JSON.stringify(acc.rows)}`);
   assert.equal(acc.rows.find(x => x.request_id === rows[2].identity.request_id).outcome, "unknown");
@@ -364,7 +370,7 @@ async function boardSeat(t, { budget, seed = 0, maxProviderCalls = 50, charge = 
   const fake = await startFakeGemini({ mode, usage }); t.after(() => fake.close());
   const onCharge = charge ? charge(fake) : null;
   const billing = billingOf(dir, budget);
-  const vars = { PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: py, PANTHEON_AGY_RELAY_UPSTREAM: fake.url, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY,
+  const vars = { PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: py, PANTHEON_AGY_GATEWAY_UPSTREAM: fake.url, GEMINI_API_KEY: KEY, GOOGLE_API_KEY: GKEY,
     OPENAI_API_KEY: "sk-l150-synthetic-openai", ...env };
   let out;
   await withDispatch(async ({ spec, opts }) => {
@@ -394,7 +400,7 @@ test("board sdk seat: each request is charged as it is made -- usage rows, the a
   assert.equal(b.run.billing.rows.filter(u => u.transport === "sdk").length, 5, "run.json carries every usage row");
   assert.equal(b.run.provider_calls.made, b.run.attempts.reduce((n, a) => n + a.provider_requests, 0), "the run's provider calls are the attempts' requests");
   assert.deepEqual([b.env.GEMINI_API_KEY, b.env.GOOGLE_API_KEY, b.env.OPENAI_API_KEY], [undefined, undefined, undefined], "the seat holds no credential");
-  assert.match(b.env.PANTHEON_AGY_RELAY_CAPABILITY ?? "", /^ophanim-relay-/);
+  assert.match(b.env.PANTHEON_AGY_GATEWAY_TOKEN ?? "", /^pantheon-gw-/);
 });
 
 test("board sdk seat exhaustion: a budget of 3 admits three requests, refuses the fourth as a billing refusal (recoverable), keeps the seat's output; a restart counts them", async t => {
@@ -429,33 +435,31 @@ test("board sdk seat provider-call bound: the run's admission is charged per req
   assert.deepEqual(b.usage.length, 2);
 });
 
-test("board sdk seat vertex: Vertex through the SDK seat is refused before anything is admitted or spawned (the relay carries the Gemini API only)", async t => {
+test("board sdk seat vertex: Vertex through the SDK seat is refused before anything is admitted or spawned (the gateway carries the Gemini API only)", async t => {
   const b = await boardSeat(t, { budget: 100, env: { PANTHEON_AGY_VERTEX_PROJECT: "synthetic-project" } });
   assert.deepEqual([b.fake.requests.length, b.usage.length, b.spawned], [0, 0, false]);
   assert.deepEqual(critique(b.run).map(a => [a.code, a.provider_requests]), [[VERTEX, 0]]);
 });
 
-// ---- the channel's idle and lifetime bounds (owner item 4; added by the coordinator at integration) --------------------
-test("relay idle and lifetime bounds: a session idle past its bound, or past its lifetime while active, is closed: the next request is refused with GEMINI_RELAY_SESSION_CLOSED, nothing charged or forwarded", async t => {
-  const { startGeminiRelay } = await relay();
+// ---- the channel's idle and lifetime bounds (owner item 4 of the L-150 decision) ---------------------------------------
+test("gateway session idle and lifetime bounds: a session idle past its bound, or past its lifetime while active, is over: the next request is refused with PANTHEON_SESSION_EXPIRED, nothing charged or forwarded", async t => {
   const dir = scratch(t), billing = billingOf(dir, 10);
   const fake = await startFakeGemini({ mode: "text", usage: join(dir, "usage.jsonl") }); t.after(() => fake.close());
-  const r = await startGeminiRelay({ apiKey: KEY, upstream: fake.url }); t.after(() => r.close());
   // Idle: one request inside the bound, then a pause longer than it.
-  const idle = r.openSession({ billing, idleMs: 150, lifetimeMs: 60_000 });
-  assert.equal((await post(r.url, idle.token)).status, 200);
+  const idle = await open(t, { dir, billing, fake, over: { idleMs: 150, lifetimeMs: 60_000 } });
+  assert.equal((await post(idle.url, idle.token)).status, 200);
   await sleep(400);
-  const late = await post(r.url, idle.token);
-  assert.deepEqual([late.status, late.reason], [401, "GEMINI_RELAY_SESSION_CLOSED"], "a session idle past its bound is closed");
+  const late = await post(idle.url, idle.token);
+  assert.deepEqual([late.status, late.reason], [401, "PANTHEON_SESSION_EXPIRED"], "a session idle past its bound is over");
   assert.equal(fake.requests.length, 1, "the refused request was not forwarded");
   assert.equal(jsonl(join(dir, "usage.jsonl")).length, 1, "the refused request was not charged");
-  // Lifetime: requests every 60 ms keep the session from idling; past its lifetime it closes all the same.
-  const life = r.openSession({ billing, idleMs: 60_000, lifetimeMs: 300 });
+  // Lifetime: requests every 60 ms keep the session from idling; past its lifetime it is over all the same.
+  const life = await open(t, { dir, billing, fake, over: { idleMs: 60_000, lifetimeMs: 300 } });
   const statuses = [];
-  for (const end = Date.now() + 700; Date.now() < end;) { statuses.push((await post(r.url, life.token)).status); await sleep(60); }
+  for (const end = Date.now() + 700; Date.now() < end;) { statuses.push((await post(life.url, life.token)).status); await sleep(60); }
   assert.equal(statuses[0], 200, "a request inside the lifetime is served");
-  assert.equal(statuses.at(-1), 401, "past its lifetime the session is closed although it never idled");
-  const served = statuses.filter(s => s === 200).length;
+  assert.equal(statuses.at(-1), 401, "past its lifetime the session is over although it never idled");
+  const served = statuses.filter(x => x === 200).length;
   assert.equal(fake.requests.length, 1 + served, "only the requests inside the lifetime were forwarded");
   assert.equal(jsonl(join(dir, "usage.jsonl")).length, 1 + served, "only the requests inside the lifetime were charged");
 });

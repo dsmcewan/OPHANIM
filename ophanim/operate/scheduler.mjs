@@ -201,9 +201,11 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     intake({source: 'status', ref: `status:${i.item}`, item: i.item, classification: 'item', why: 'a status ledger item'});
     if (i.ticket) intake({source: 'ticket', ref: `ticket:${i.item}`, item: i.item, classification: 'item', why: i.ticket.invalid ? `the ticket of a status ledger item (invalid: ${String(i.ticket.invalid).slice(0, 200)})` : 'the ticket of a status ledger item'});
     for (const n of i.issues ?? []) intake({source: 'issue', ref: `issue:${n}`, item: i.item, classification: 'item', why: 'a published issue carrying the item\'s marker (issue text is data, never authority)'});
+    if (i.prompt) intake({source: 'prompt', ref: `prompt:${i.item}`, item: i.item, classification: 'item', why: `the owner's prompt the item was registered from, verbatim at ${i.prompt.path} (${i.prompt.digest}; bound by the signed status entry)`});
   }
   for (const o of rec.orphans ?? []) intake({source: 'ticket', ref: `ticket:${path.basename(o.ticket, '.json')}`, item: null, classification: 'candidate', why: o.why});
   for (const c of rec.candidates) intake({source: 'issue', ref: `issue:${c.number}`, item: null, classification: 'candidate', why: c.why});
+  for (const c of rec.prompt_candidates ?? []) intake({source: 'prompt', ref: `prompt:${c.prompt}`, item: null, classification: 'candidate', why: c.why});
   // Evidence recovery: each item Resolved without completion evidence is searched for applicable retained evidence once
   // per status entry and set of sources (evidence-recovery.mjs). What applies becomes an UNSIGNED proposal for the
   // owner; nothing is recorded on the status ledger. No provider is called.
@@ -242,7 +244,12 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
     if (!ctx.refusals.length || ['passed', 'returned'].includes(out.status)) return out;
     const kinds = [...new Set(ctx.refusals.map(r => r.kind))], codes = [...new Set(ctx.refusals.map(r => r.code))];
     const tag = {policy: billing.digest, codes, settings: Object.fromEntries(kinds.map(k => [k, {enabled: billing[SETTING_OF[k]].enabled, budget: billing[SETTING_OF[k]].budget}]))};
-    const what = `${codes.join(', ')}: the Gemini billing policy refused ${ctx.refusals.length} billed request(s) of this ${stage} stage (${kinds.map(k => `${SETTING_OF[k]} ${billing[SETTING_OF[k]].enabled ? `enabled, budget ${billing[SETTING_OF[k]].budget}` : 'off'} (${billing[SETTING_OF[k]].source})`).join('; ')}); nothing billed was sent, and the work so far is kept`;
+    // What the blocker says was billed is what this record shows (usage.gemini.billed): a budget that runs out inside an
+    // SDK session refuses a request of a stage that has already sent others.
+    const sent = ctx.rows.length;
+    const what = `${codes.join(', ')}: the Gemini billing policy refused ${ctx.refusals.length} billed request(s) of this ${stage} stage (${kinds.map(k => `${SETTING_OF[k]} ${billing[SETTING_OF[k]].enabled ? `enabled, budget ${billing[SETTING_OF[k]].budget}` : 'off'} (${billing[SETTING_OF[k]].source})`).join('; ')}); ${sent
+      ? `${sent} billed request(s) of this stage had been sent and charged before the refusal; the refused request(s) were not sent. What the stage had completed is kept; the attempt the refusal ended is not`
+      : 'nothing billed was sent, and the work so far is kept'}`;
     const refused = {status_reported: out.status, ...(out.blocker ? {blocker_reported: out.blocker} : {}), refusals: gemini.refusals};
     // A transient pending the executor already named (the validator's METERED_FAILOVER_DISABLED, a seat pending its retry)
     // keeps its code and gains the billing tag; anything else that did not complete becomes the billing pending.

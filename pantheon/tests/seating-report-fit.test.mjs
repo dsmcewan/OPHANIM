@@ -11,6 +11,7 @@ import { runOpenItem, seatingOf } from "../src/board/run-item.mjs";
 import { seatingPlan } from "../src/role/seating.mjs";
 import { withDispatch } from "./fixtures/dispatch.mjs";
 import { boardFixture } from "./fixtures/board-repo.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOARD_CLI = resolve(HERE, "..", "bin", "pantheon-board.mjs");
@@ -18,7 +19,7 @@ const ROLE = { scout: "scout", plan: "planner", work: "implementer", critique: "
 
 test("fit: run.json's seating report is the selector's choice per role, with class and effort", async () => {
   await withDispatch(async ({ spec, opts }) => {
-    const r = await runOpenItem(spec("seatingFit"), opts({ profile: "fit" }));
+    const r = await runOpenItem(spec("seatingFit"), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
     assert.ok(Array.isArray(run.seating) && run.seating.length, "the run carries its seating report");
@@ -46,7 +47,8 @@ test("pantheon-board run --profile fit prints the selector's seating with class 
   await withDispatch(async ({ dir: repo }) => {
     const { statusRoot, keys } = boardFixture(repo, { item: "seating-item" });
     try {
-      const out = spawnSync(process.execPath, [BOARD_CLI, "run", "seating-item", "--repo", repo, "--status-ledger", statusRoot, "--profile", "fit",
+      // The fit Google implementer is a primary Gemini seat of the billing policy (register L-136): the run declares it.
+      const out = spawnSync(process.execPath, [BOARD_CLI, "run", "seating-item", "--repo", repo, "--status-ledger", statusRoot, "--profile", "fit", "--gemini-api-primary", "100",
         "--clients", join(repo, "clients.fixture.mjs"), "--turn", join(repo, "turn.fixture.mjs"),
         "--dir", join(repo, "board"), "--out", join(repo, "bundle"), "--checked", "2026-11-18"], { encoding: "utf8", env: process.env, timeout: 120_000 });
       const result = JSON.parse(out.stdout);

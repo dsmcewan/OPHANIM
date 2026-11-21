@@ -54,6 +54,7 @@ import {createHash} from 'node:crypto';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {statusHistory, MARKER} from './reconcile.mjs';
 import {bundlesOf} from './evidence-recovery.mjs';
+import {researchView, RESEARCH_VIEW_BYTES} from './research-view.mjs';
 
 export const DOSSIER_SCHEMA = 'ophanim.dossier/v1';
 export const KINDS = Object.freeze(['authoritative-requirement', 'observation', 'derived', 'hypothesis']);
@@ -424,6 +425,12 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // A long history or work record keeps its MOST RECENT rows in the initial view: the latest decisions and findings
   // are the ones a later cycle most needs. The earlier rows are the gap, retrievable from byte 0.
   fetch('observation', `Status history of ${item}, oldest first (${history.length} entries; earlier decisions and attempts)`, {op: 'status', item}, 8000, {as_of: now.checked, tail: true});
+  // RESEARCH (owner direction 2026-11-20; research-view.mjs): what the item's research teams found, source-linked, and
+  // what is still asked for, as ONE derived view. It is evidence, not an attempt: it is outside the work ledger's reserved
+  // share and inside `stable`, so new findings (or a new request) are a change of the evidence a waiting plan is woken
+  // by, and a plan that cites the view is stale when the findings change (gates.mjs evidenceCheck re-derives it).
+  const research = work?.research ? researchView(work, item) : null;
+  if (research) add('derived', `Research on ${item}: findings with their sources and versions, and requests not yet answered (the full records are on the work ledger and in the item's state)`, `research:${item}`, research.as_of, research.text, RESEARCH_VIEW_BYTES);
   const stages = work ? work.stages(item) : [];
   // THE WORK LEDGER'S SHARE OF THE BUDGET IS RESERVED whether or not it has records, and whatever it uses: so recording
   // an attempt never changes how the evidence after it is cut or omitted, and `stable` (which leaves the work ledger

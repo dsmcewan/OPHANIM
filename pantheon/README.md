@@ -137,6 +137,8 @@ text off `/events`. Found by an external review, not by the suite.
 | `src/board/` | the blackboard — CAS, merkle DAG, refs, schema, merge, projections, controller, ship |
 | `src/role/` | roles (the job), seating (which model sits in which chair, at which difficulty) |
 | `src/route/` | routing on measured facts only; refuses any need it cannot justify |
+| `src/pipeline/` | the five-stage pipeline `fit` runs per work unit: dispatch, implement, subagents, pinned review, checkpoints, the per-request charge |
+| `src/antigravity/` | the Google **implementation** transport: the official `google-antigravity` Python SDK on the Gemini API (`GEMINI_API_KEY`), behind the pipeline's implementer interface. The controller side of the bridge (`scripts/antigravity-bridge.py`), the loopback model gateway that alone holds the key, and the governor that pins every subagent to `gemini-4-hydrogen` and enforces the ceilings (Carbon 8, Neon 4, Hydrogen none). No `agy` CLI is involved. `src/config/antigravity-sdk.json` holds the models, ladders and ceilings |
 | `src/context/` | locating and projecting a vendor's conversation store; the proof chain |
 | `src/swarm/` | layered fan-out, delegation, structured discussion |
 | `src/view/` | the live SSE view and its event bus |
@@ -152,6 +154,11 @@ text off `/events`. Found by an external review, not by the suite.
 node --test tests/*.test.mjs           # root suite, including isolated pipeline fixtures
 node --test tests/board-*.test.mjs    # board invariants alone
 node --test tests/seat-lock.test.mjs  # four real processes racing one seat
+
+# the Antigravity SDK contract, on the installed SDK (skipped as UNVERIFIED without it or without bwrap):
+python3 -m venv ~/.local/share/pantheon/venv-antigravity
+~/.local/share/pantheon/venv-antigravity/bin/pip install --require-hashes -r scripts/antigravity-requirements.txt
+node --test tests/antigravity-sdk-contract.test.mjs
 ```
 
 Tests here are written to fail for one reason each, and several exist because a *checker* was wrong
@@ -197,6 +204,11 @@ Not true yet, and load-bearing to say so:
   events had made it look like. Shipped by the seats as board commit `1bbfe335f394` in 89 seconds,
   ticket to eight gates. The rest of the module's behaviour is still covered only by
   `scripts/stream-check.mjs`, which needs a credential.
+- **The Antigravity SDK implementer has not reached the live Gemini API.** `src/antigravity/` is tested against
+  the installed SDK and its bundled runtime with a scripted provider on loopback, inside the real jails. That shows
+  what the SDK and the controller do. It shows nothing about what Google serves: authentication with a real key, the
+  availability of `gemini-4-carbon`, `gemini-4-neon` and `gemini-4-hydrogen`, the name the provider reports for each,
+  and the model a child agent is actually answered by are unverified (`docs/OPEN-LIMITATIONS.md`, L-701).
 - **There is no git remote.** Nothing has left this machine, and a disk loss is total.
 
 ## Contributing

@@ -6,7 +6,13 @@
 //                          seat, extra})` (live: sdk/live.mjs liveTurn). `extra` ({reasoning: {context}}) is passed
 //                          through as given; this module sets no provider option itself.
 //   subagent               a single-turn Grok seat through the same `turn`.
-//   implementer            a MULTI-TURN, TOOL-ENABLED worker on an Antigravity lane, through the `agy` CLI
+//   implementer            a MULTI-TURN, TOOL-ENABLED worker. Which transport runs it is the SEAT's:
+//                          - an ANTIGRAVITY SDK seat ({transport: "antigravity-sdk"}; owner direction 2026-11-19, the
+//                            Google implementation transport): one session of the official google-antigravity SDK on
+//                            the Gemini API (antigravity/turn.mjs runAntigravitySdkTurn). See THE SDK SEAT below. The
+//                            agy CLI is not started, no subscription login is read and no A2A relay is offered.
+//                          - an Antigravity LANE (config/lanes.json), the earlier transport, kept until the SDK path's
+//                            live evidence is in (docs/OPEN-LIMITATIONS.md): through the `agy` CLI
 //                          (board/agy-cli.mjs runAgyWorkerTurn, an async spawn) as the pantheon-unit-worker role card.
 //                          The controller's per-unit control dir becomes the CLI's project root (agy/workspace.mjs
 //                          writes the card, hooks.json, mcp_config.json and jail.json there); the unit's worktree is
@@ -15,7 +21,30 @@
 //                          its subagents through the stdio MCP relay (tool ask_subagent) over the unit's A2A socket.
 //                          No bwrap -> the turn is refused (SANDBOX_UNAVAILABLE) unless agy.allowUnsandboxed is true.
 //
-// THE IMPLEMENTER'S SERVED MODEL. Antigravity names no serving model. The lane model is a required input, and
+// THE SDK SEAT. The session runs in the unit's worktree behind the controller's own tool decisions, model gateway and
+// subagent governor (antigravity/turn.mjs). This adapter adds what the PIPELINE needs around it:
+//   - THE CHARGE, PER REQUEST AND BY CLASS. The gateway admits every billed request before it is forwarded; each is
+//     passed to the pipeline's admitRequest: the session's first request as the implementer's own call (kind
+//     "session"), its later ones as continuations, and every request of a native Hydrogen subagent as kind "subagent"
+//     (run.provider_calls.by_role.native_subagent). A refused charge is a request that is not made.
+//   - THE EVIDENCE. What the session recorded is returned as `session` (and thrown as `e.session` when it failed):
+//     {stop_reason, conversation_id, duration_s, timeout_s, usage, subagents, gateway, availability, runtime, jail,
+//     tool_decisions}. The tool decisions are SUMMARISED ({total, allowed, denied, dropped, by_code, by_who}); the rows
+//     go to <control_dir>/sessions/<n>.tools.json, and the summary carries that file's path and sha256.
+//   - THE SERVED MODEL is the provider's own statement as the gateway saw it (served_model_source "provider"). The
+//     transport's model guard refuses a session in which any answered request was not named as the model it asked for
+//     (AGY_MODEL_MISMATCH, with both identities): the model asked is never recorded in a missing name's place.
+//   - A SESSION IS A PRIMARY GEMINI SEAT OF THE BILLING POLICY (register L-136; route/gemini-billing.mjs, below). The
+//     policy is asked before the transport is entered: with gemini_api_primary off, or its budget spent, nothing is
+//     prepared, spawned, admitted or charged (GEMINI_PRIMARY_DISABLED, METERED_GEMINI_BUDGET_EXHAUSTED). And EVERY
+//     billed request of the session, a native subagent's included, is admitted by the policy and recorded on the
+//     billing ledger before the gateway forwards it (spendGemini: kind "primary", transport "sdk"). The failover
+//     setting neither enables nor disables this seat.
+// The session's failures are thrown as they are (antigravity/turn.mjs FAILURES): the pipeline steps its ladder on
+// quota_exhausted, model_unavailable and lane_failure, and blocks the unit on a fault no rung can cure and on the
+// model guard's refusal.
+//
+// THE IMPLEMENTER'S SERVED MODEL ON A LANE. Antigravity names no serving model. The lane model is a required input, and
 // runAgyCliTurn fails when the model the CLI reports at start is not the one asked for; the answer therefore carries
 // that input, marked `served_model_source: "input"` (owner decision 2026-11-17): the pinned model, not a statement
 // by the provider about this answer.
@@ -47,14 +76,17 @@
 //
 // Inputs: the injected `turn` and `makeClientFor(vendor)` (the lifecycle's own), and `agy` options {cli?, timeoutS?,
 // sandbox?, agy_state_dirs?, allowUnsandboxed?, bwrap?, run?, api?, probe?, billing? (default: both kinds off)} — `run` replaces runAgyWorkerTurn, `api`
-// the metered-API call and `probe` the quota probe, for tests.
+// the metered-API call and `probe` the quota probe, for tests; and `antigravity` options {run?, python?, bridge?,
+// upstream?, apiKey?, sandbox? {enabled, allowUnsandboxed, bwrap, home}, timeoutS?, graceS?, budget?, fetchImpl?,
+// checkAvailability?, allowSdkVersion?} — `run` replaces runAntigravitySdkTurn, for tests; the rest are the transport's
+// options. The SDK implementer is billed through the same `agy.billing` context: it has no setting of its own.
 // Outputs: for every role, {text, served_model, served_model_source} (+ transport, quota_failover on the implementer).
 //
 // Must never: block the event loop on a child process (async spawn only); send a Google API key to the CLI; run the
 // worker unjailed unless told to; reach the metered API after a lane failure that is not a proven quota refusal; write a path the API named outside the unit;
 // invent a served model for a judging seat (a missing one is passed on as missing and refused by the controller).
 import { existsSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { runAgyWorkerTurn, workerEnv } from "../board/agy-cli.mjs";
@@ -63,8 +95,10 @@ import { probeQuota } from "../agy/quota.mjs";
 import { decideWrite } from "../agy/jail-hook.mjs";
 import { quotaFailoverFor, laneParts } from "../route/fit-matrix.mjs";
 import { QUOTA_FAILOVER_RULE } from "../route/frontier.mjs";
-import { isGeminiBillingRefusal, isMeteredGemini, spendGemini, METERED_GEMINI_DISABLED } from "../route/quota-failover.mjs";
-import { keysRefusal, str, strictJson } from "./util.mjs";
+import { isSdkSeat, SDK_TRANSPORT } from "../antigravity/config.mjs";
+import { runAntigravitySdkTurn } from "../antigravity/turn.mjs";
+import { geminiAdmission, isGeminiBillingRefusal, isMeteredGemini, spendGemini, METERED_GEMINI_DISABLED } from "../route/quota-failover.mjs";
+import { keysRefusal, sha256, str, strictJson } from "./util.mjs";
 import { matchesOwned, pathRefusal } from "./paths.mjs";
 import { git } from "./git.mjs";
 
@@ -173,9 +207,46 @@ export function printTimeoutOf({ timeoutS, graceS = 15, deadline = null, now = D
   return left < 1 ? null : Math.min(asked, left);
 }
 
-export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
+/** What a session's tool decisions amount to: {total, allowed, denied, dropped, by_code, by_who}. The rows are not in it. */
+export function toolDecisionSummary(tool_log = [], dropped = 0) {
+  const rows = Array.isArray(tool_log) ? tool_log : [], by_code = {}, by_who = {};
+  for (const r of rows) {
+    const who = (by_who[r.who ?? "unknown"] ??= { allowed: 0, denied: 0 });
+    if (r.allow === true) who.allowed += 1; else { who.denied += 1; by_code[r.code ?? "DENIED"] = (by_code[r.code ?? "DENIED"] ?? 0) + 1; }
+  }
+  const sort = o => Object.fromEntries(Object.entries(o).sort(([x], [y]) => (x < y ? -1 : 1)));
+  return { total: rows.length, allowed: rows.filter(r => r.allow === true).length, denied: rows.filter(r => r.allow !== true).length, dropped: Number.isInteger(dropped) ? dropped : 0, by_code: sort(by_code), by_who: sort(by_who) };
+}
+
+/**
+ * The evidence of one SDK session for the pipeline's record, from what runAntigravitySdkTurn returned or threw (`x`).
+ * The tool log is written to <control_dir>/sessions/<n>.tools.json; a write that fails is recorded (log_error), and
+ * the summary is still returned.
+ */
+async function sessionEvidence(x, { control_dir, seat, unit_id, attempt, timeout_s }) {
+  const rows = Array.isArray(x?.tool_log) ? x.tool_log : [];
+  const tool_decisions = toolDecisionSummary(rows, x?.tool_log_dropped ?? 0);
+  if (str(control_dir)) {
+    try {
+      const dir = join(control_dir, "sessions");
+      await mkdir(dir, { recursive: true });
+      const n = (await readdir(dir)).filter(f => /^\d+\.tools\.json$/.test(f)).length + 1;
+      const file = join(dir, `${String(n).padStart(3, "0")}.tools.json`);
+      const bytes = JSON.stringify({ schema: "pantheon.antigravity-sdk-tool-log/v1", unit_id: unit_id ?? null, attempt: attempt ?? null, vendor: seat.vendor, model: seat.model, effort: seat.effort ?? null, tool_log: rows }, null, 2) + "\n";
+      await writeFile(file, bytes);
+      Object.assign(tool_decisions, { log_file: file, log_digest: sha256(bytes) });
+    } catch (e) { Object.assign(tool_decisions, { log_file: null, log_error: String(e?.message ?? e).slice(0, 300) }); }
+  }
+  const jail = x?.sandbox ? { enabled: x.sandbox.enabled === true, ...(x.sandbox.why ? { why: x.sandbox.why } : {}), ...(x.sandbox.home_dirs_hidden ? { home_dirs_hidden: x.sandbox.home_dirs_hidden.length } : {}) } : null;
+  return { stop_reason: x?.stop_reason ?? null, conversation_id: x?.conversation_id ?? null, duration_s: x?.duration_s ?? null, timeout_s, usage: x?.usage ?? null, subagents: x?.subagents ?? null,
+    gateway: x?.gateway ?? null, availability: x?.availability ?? [], runtime: x?.runtime ?? null, jail, tool_decisions,
+  };
+}
+
+export function pipelineTurns({ makeClientFor = null, turn, agy = {}, antigravity = {} } = {}) {
   if (typeof turn !== "function") throw new Error("pipelineTurns: pass turn({vendor, model, prompt, seat, extra}) for the single-turn seats");
   if (Object.hasOwn(agy ?? {}, "meteredFailover")) throw new Error("pipelineTurns: agy.meteredFailover is replaced by agy.billing (the Gemini billing policy, route/gemini-billing.mjs)");
+  if (Object.hasOwn(antigravity ?? {}, "geminiApiPrimary")) throw new Error("pipelineTurns: antigravity.geminiApiPrimary is replaced by agy.billing (the Gemini billing policy, route/gemini-billing.mjs: gemini_api_primary, with a budget)");
   const billing = agy.billing ?? null;
   const lane = agy.run ?? runAgyWorkerTurn;
   const probe = agy.probe ?? probeQuota;
@@ -190,6 +261,9 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
   // `admitRequest` (optional; the second charge contract of sdk/live.mjs: nothing charged before the turn, every provider
   // call admitted at its point of spend) is passed on as given (self-audit round 3, assignment 3 (sealed bb1287a), L-301).
   const single = seatRole => async ({ vendor, model, prompt, seat = null, extra = undefined, signal = undefined, charge = null, admitRequest = null }) => {
+    // A seat of the SDK transport runs as a session on a work unit, never as one turn: handed on, it would be served
+    // lane-first by the agy CLI or by the metered API (the single-turn Gemini rule). Refused before anything is sent.
+    if (isSdkSeat(seat)) throw fail("SDK_SEAT_NOT_SINGLE_TURN", `${vendor}/${model} is a seat of the Antigravity SDK transport: it runs as a session on a work unit, and is not asked as a single ${seatRole} turn`);
     const r = await turn({ vendor, model, prompt, seat: { ...(seat ?? { vendor, model }), role: seatRole }, ...(extra && Object.keys(extra).length ? { extra } : {}), ...(signal ? { signal } : {}),
       ...(typeof admitRequest === "function" ? { admitRequest } : typeof charge === "function" ? { charge } : {}), ...(billing ? { billing } : {}) });
     // The served model is passed on exactly as the transport named it; a judging seat with none is refused upstream.
@@ -222,12 +296,82 @@ export function pipelineTurns({ makeClientFor = null, turn, agy = {} } = {}) {
   });
 
   /**
+   * THE SDK SEAT's implementer turn (see the header). Inputs as the lane's, plus `allowed_subagents` (the unit's
+   * specialist type names); `a2a`, `env` and `mcp_server` are not used: this transport has no relay.
+   */
+  const sdk = antigravity.run ?? runAntigravitySdkTurn;
+  const sdkImplementer = async ({ vendor, model, seat = null, prompt, cwd, control_dir = null, owned_paths = null, verify_cmd = null, unit_id = null, allowed_subagents = [], sandbox: cap = null,
+    attempt = 1, signal = undefined, charge = null, admitRequest = null, verify_hide = [], deadline = null, timeoutS: askedS = null }) => {
+    if (!str(cwd)) throw fail("NO_WORKTREE", "the implementer turn needs the unit's worktree (cwd)");
+    const s = { vendor: seat?.vendor ?? vendor, model: seat?.model ?? model, effort: seat?.effort ?? null };
+    // A PRIMARY GEMINI SEAT OF THE BILLING POLICY (the header). What one billed request of this session is to the policy:
+    const billed = (info, request) => ({ kind: "primary", vendor: s.vendor, model: str(info?.model) ? info.model : s.model, purpose: info?.class === "subagent" ? "subagent" : "implementer",
+      role: "implementer", transport: "sdk", request });
+    // ASKED HERE, before the transport is entered: off, or its budget spent, and nothing is prepared, spawned, admitted
+    // or charged. Whatever key the environment holds. (This asks; it records nothing: each request below does.)
+    try { geminiAdmission(billing, billed(null, 1)); } catch (e) { throw Object.assign(e, { transport: SDK_TRANSPORT }); }
+    const owned = Array.isArray(owned_paths) ? owned_paths : Array.isArray(cap?.owned_paths) ? cap.owned_paths : [];
+    const grace = antigravity.graceS ?? graceS;
+    const turnS = printTimeoutOf({ timeoutS: Number.isFinite(askedS) && askedS > 0 ? askedS : antigravity.timeoutS ?? timeoutS, graceS: grace, deadline });
+    if (turnS === null) throw fail("DEADLINE", `the stage's deadline leaves no time for an implementer session (${grace} s of kill grace needed beyond a 1 s turn)`);
+    // EVERY BILLED REQUEST of the session, before the gateway forwards it: the billing policy's admission, then the
+    // pipeline's own bound and charge, then the usage row persisted on the billing ledger (spendGemini). The session's
+    // first request is the implementer's own call; an older caller's `charge` contract charged that one up front and
+    // admits the others.
+    // `spent`: the usage row of each request admitted, in order; `refusedAt`: the number of the first request refused.
+    // Both go on the session's record, so a stopped session says exactly where it stopped and what it had been admitted.
+    let own = 0, requests = 0, refusedByBilling = null, refusedAt = null;
+    const spent = [];
+    const admit = (info = {}) => {
+      const kind = info.class === "subagent" ? "subagent" : own++ === 0 ? "session" : "continuation";
+      try {
+        const row = spendGemini(billing, billed(info, ++requests), () => {
+          if (typeof admitRequest === "function") admitRequest({ kind });
+          else if (typeof charge === "function" && kind !== "session") charge("continuation");
+        });
+        spent.push({ request: row?.request ?? requests, kind: row?.kind ?? "primary", model: row?.model ?? null, purpose: row?.purpose ?? null, class: info.class ?? null, used_before: row?.used_before ?? null, at: row?.at ?? null });
+      } catch (e) { refusedAt ??= requests; if (isGeminiBillingRefusal(e)) refusedByBilling ??= e; throw e; }
+    };
+    const billedOf = session => (session ? Object.assign(session, { billed: { requests: spent.length, rows: spent.map(x => ({ ...x })), refused_at: refusedAt } }) : session);
+    let made = null;
+    const ctl = control_dir ?? (made = await mkdtemp(join(tmpdir(), "pantheon-sdk-control-")));
+    const about = { control_dir: made ? null : ctl, seat: s, unit_id, attempt, timeout_s: turnS };
+    try {
+      const r = await sdk({ seat: s, prompt, worktree: cwd, control_dir: ctl, unit: { unit_id, owned_paths: [...owned], verify_cmd, allowed_subagents: [...(allowed_subagents ?? [])] }, admit, signal: signal ?? null,
+        timeoutS: turnS, graceS: grace, verify_hide: Array.isArray(verify_hide) ? verify_hide : [],
+        ...Object.fromEntries(["python", "bridge", "upstream", "apiKey", "sandbox", "budget", "fetchImpl", "checkAvailability", "allowSdkVersion", "base_env"].filter(k => antigravity[k] !== undefined).map(k => [k, antigravity[k]])) });
+      const session = billedOf(await sessionEvidence(r, about));
+      // A REQUEST THE POLICY REFUSED INSIDE THE SESSION STANDS, HOWEVER THE SESSION ENDED. The runtime can end well after
+      // one: the implementer's own request was already in flight when a subagent's was refused, and nothing more was
+      // asked (the gateway forgets a stop once the implementer is answered again). The documented outcome is the
+      // controller's to keep, not the runtime's: the unit is told the policy's refusal, with what the session recorded,
+      // and the session's result is not taken as the unit's work.
+      if (refusedByBilling) throw Object.assign(refusedByBilling, { session, transport: SDK_TRANSPORT, session_request: refusedAt });
+      return { text: r?.text ?? "", served_model: str(r?.served_model) ? r.served_model : null, served_model_source: r?.served_model_source ?? (str(r?.served_model) ? "unknown" : null),
+        transport: SDK_TRANSPORT, requested_model: s.model, effort: s.effort, response_id: r?.conversation_id ?? null, tool_calls: r?.tool_calls ?? null, session };
+    } catch (e) {
+      // What the session recorded up to its failure goes with the error (antigravity/turn.mjs carries it). A refusal
+      // thrown above already carries the finished session's record.
+      if (e && typeof e === "object" && e.transport === SDK_TRANSPORT && !e.session) e.session = billedOf(await sessionEvidence(e, about).catch(() => null));
+      if (e && typeof e === "object" && refusedAt !== null && e.session_request === undefined) e.session_request = refusedAt;
+      // A request the billing policy refused INSIDE the session (its budget was spent on the way): the gateway answered
+      // it as a refused charge and the session ended on it. The pipeline is told the policy's own refusal, with what the
+      // session recorded.
+      if (refusedByBilling && e?.code === "PROVIDER_LIMIT") throw Object.assign(refusedByBilling, { session: e.session ?? null, transport: SDK_TRANSPORT, session_request: refusedAt });
+      throw e;
+    } finally {
+      if (made) await rm(made, { recursive: true, force: true }).catch(() => {});
+    }
+  };
+
+  /**
    * The implementer turn. Inputs (from the pipeline): {vendor, model, seat, prompt, cwd (the worktree), control_dir,
    * a2a {socket, token, roles}, env {PANTHEON_A2A_SOCKET, PANTHEON_A2A_TOKEN, PANTHEON_A2A_ROLES, PANTHEON_UNIT_ID},
    * owned_paths, verify_cmd, unit_id, mcp_server, attempt, signal}. An older caller's {sandbox: {owned_paths}} and
    * {a2a: {url, token}} are still read; without a control_dir a temporary one (outside the worktree) is used and removed.
    */
-  const implementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
+  const implementer = async args => (isSdkSeat(args?.seat) ? sdkImplementer(args) : laneImplementer(args));
+  const laneImplementer = async ({ vendor, model, prompt, cwd, control_dir = null, a2a = null, env = {}, owned_paths = null, verify_cmd = null, unit_id = null,
     mcp_server = null, sandbox: cap = null, attempt = 1, signal = undefined, charge = null, verify_hide = [], deadline = null, timeoutS: askedS = null,
     // `admitRequest` (optional; L-301): the pipeline charged nothing before this turn. The lane's worker session is admitted
     // inside runAgyWorkerTurn between its jail build and its spawn (kind "lane"); a quota failover is admitted before the

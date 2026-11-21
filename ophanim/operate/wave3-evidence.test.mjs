@@ -23,7 +23,7 @@ import {createHash} from 'node:crypto';
 import {makeRetriever, investigate} from './context.mjs';
 import {evidenceCheck} from './gates.mjs';
 import {reconcile} from './reconcile.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {openWorkLedger} from './work-ledger.mjs';
 import {makeExecutors} from './stages.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
