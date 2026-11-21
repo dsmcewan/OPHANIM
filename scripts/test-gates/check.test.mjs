@@ -224,7 +224,12 @@ test('coverage FAILS a workflow that runs the gate on real-bwrap files only, dro
     assert.deepEqual(check(q), []);
     assert.match(check(q.replace('npm run test:gates -- \\', 'npm run test:gates -- --only real-bwrap \\')).join('\n'), /does not run over every suite/);
     assert.match(check(q.replace(/(- name: npm test\n(?:.*\n)*?)\s+timeout-minutes: \d+\n/, '$1')).join('\n'), /step running "test" has no timeout-minutes/);
-    assert.match(check(q.replace(/timeout-minutes: 13/, 'timeout-minutes: 25')).join('\n'), /step running "test:gates" may run 25 minutes, not below the job's 25/);
+    // The gate step bounded at the job's own limit FAILS (both read from the workflow, so a change of either number
+    // keeps this check).
+    const jobMin = /^\s{4}timeout-minutes:\s*(\d+)/m.exec(q)[1];
+    const atJob = q.replace(/(- name: Test gate, every suite[^\n]*\n(?:.*\n)*?\s+timeout-minutes: )\d+/, `$1${jobMin}`);
+    assert.notEqual(atJob, q, 'the gate step has a bound of its own to raise');
+    assert.match(check(atJob).join('\n'), new RegExp(`step running "test:gates" may run ${jobMin} minutes, not below the job's ${jobMin}`));
     assert.match(check(q.replace('--out "$RUNNER_TEMP/test-gate-run"', '--out "$RUNNER_TEMP/test-gate-run" --file-timeout 99999')).join('\n'), /overrides the gate's per-test or per-file bound/);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
   // Through the gate's own entry point: a loosened workflow turns its verdict to FAIL (exit 1), a sound one does not.
@@ -380,7 +385,7 @@ function runStep(repo, needle, {env = {}} = {}) {
     const child = spawn('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', script], {cwd: repo, detached: true, stdio: 'ignore',
       env: {...CLEAN_ENV, RUNNER_TEMP: temp, GITHUB_STEP_SUMMARY: summary, ...env}});
     let killed = false;
-    // No timeout-minutes: GitHub would let the step run to the job's 25 minutes. Give it the same short limit so the
+    // No timeout-minutes: GitHub would let the step run to the job's own limit. Give it the same short limit so the
     // test ends, and report that the step was unbounded.
     const timer = setTimeout(() => { killed = true; try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, STEP_LIMIT_MS);
     child.on('exit', () => { clearTimeout(timer); try { process.kill(-child.pid, 'SIGKILL'); } catch {} });
