@@ -1,0 +1,29 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "KG Slice A",
+  "base_commit": "d017367",
+  "authorization": "owner directive 2026-11-20 (docs/knowledge-graph/directive-2026-11-20.md): the knowledge-graph program; Slice A, the shared graph foundation, and deliverable 2, the versioned architecture and relationship contract",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**", "docs/knowledge-graph/directive-2026-11-20.md", "docs/knowledge-graph/inventory.md", "docs/knowledge-graph/inventory.json"],
+  "dependencies": ["single agent; the region limits are written from the brief's decisions KD1-KD13",
+    "slices B-E follow; this slice integrates with no consumer (KD13)"],
+  "subwaves": {
+    "KGA": {
+      "agent-kg-slice-a": {
+        "branch": "kg/slice-a",
+        "base_commit": "d017367",
+        "findings": ["knowledge-graph Slice A", "deliverable 2 (architecture and relationship contract)", "deliverable 3 (persistence, traversal, update, reconciliation: foundation)"],
+        "files": ["packages/graph/**", "ophanim/graph/**", "docs/knowledge-graph/architecture.md", "ophanim/ledger/layering.test.mjs", "package.json", "package-lock.json"],
+        "new_files": ["packages/graph/**", "ophanim/graph/**", "docs/knowledge-graph/architecture.md"],
+        "region_limits": {
+          "packages/graph/**": "KD1-KD11: the domain-free foundation (schema, identity, kinds, projection, traversal, events, tests, mutation runner); imports only packages/ledger and node built-ins",
+          "ophanim/graph/**": "KD12 only: the one thin, read-only source adapter (the lessons registry) and its test",
+          "ophanim/ledger/layering.test.mjs": "KD2: add the rule that packages/graph imports nothing from pantheon/ or ophanim/; the existing rules unchanged",
+          "package.json": "register the packages/graph workspace and add its test to the test script; nothing else",
+          "package-lock.json": "only the workspace entry npm writes for packages/graph",
+          "docs/knowledge-graph/architecture.md": "deliverable 2: the contract as implemented"
+        }
+      }
+    }
+  }
+}

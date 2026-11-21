@@ -1,0 +1,74 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "af0dc3012688703ccac0f6de31836822a3279eae",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "package.json",
+    "package-lock.json"
+  ],
+  "wave": "KG Slice D1",
+  "base_commit": "fc1126c",
+  "authorization": "owner directive 2026-11-20 (knowledge graphs): Graph D, Graph E, Slice D (its read-only half), demonstrations 1, 2, 5, 7, 8, 9, 12",
+  "dependencies": [
+    "runs concurrently with the snapshot compaction (packages/graph/checkpoint.mjs, projection.mjs, their tests) and another session's port (ophanim/graph/deps/**); disjoint",
+    "region limits written from the brief's decisions KD1-1 to KD1-10; the scheduler, gates and planner wiring (ophanim/operate/**) is D2's, not this slice's"
+  ],
+  "subwaves": {
+    "KGD1": {
+      "agent-kg-slice-d1": {
+        "branch": "kg/slice-d1",
+        "base_commit": "fc1126c",
+        "findings": [
+          "knowledge-graph Slice D1 (work and learning graphs, read-only; shared prerequisites, learning reuse, targeted reassessment)"
+        ],
+        "files": [
+          "ophanim/graph/work.mjs",
+          "ophanim/graph/learning.mjs",
+          "ophanim/graph/reassess.mjs",
+          "ophanim/graph/why.mjs",
+          "ophanim/graph/d1-*.mjs",
+          "ophanim/graph/graph-d*.test.mjs",
+          "ophanim/graph/graph-d1.mutate.mjs",
+          "ophanim/graph/fixtures/**",
+          "ophanim/graph/extract/index.mjs",
+          "ophanim/graph/extract.test.mjs",
+          "ophanim/graph/cli.mjs",
+          "ophanim/graph/cli.test.mjs",
+          "packages/graph/schema.mjs",
+          "docs/knowledge-graph/architecture.md",
+          "docs/knowledge-graph/slice-d1.md"
+        ],
+        "new_files": [
+          "ophanim/graph/work.mjs",
+          "ophanim/graph/learning.mjs",
+          "ophanim/graph/reassess.mjs",
+          "ophanim/graph/why.mjs",
+          "ophanim/graph/d1-*.mjs",
+          "ophanim/graph/graph-d*.test.mjs",
+          "ophanim/graph/graph-d1.mutate.mjs",
+          "ophanim/graph/fixtures/**",
+          "docs/knowledge-graph/slice-d1.md"
+        ],
+        "region_limits": {
+          "ophanim/graph/extract/index.mjs": "KD1-9: registration lines for the new sources only",
+          "ophanim/graph/extract.test.mjs": "KD1-9: the new sources in the every-source assertions; existing assertions unchanged",
+          "ophanim/graph/cli.mjs": "KD1-2, KD1-4, KD1-6: the new queries only",
+          "ophanim/graph/cli.test.mjs": "additions only",
+          "ophanim/graph/fixtures/**": "new fixtures; existing fixtures unchanged except to add what the new sources need",
+          "packages/graph/schema.mjs": "KD1-8: work- or learning-domain types ADDED only, contract 1.3.0; no existing type changed",
+          "docs/knowledge-graph/architecture.md": "KD1-8: only the registry tables and the contract version",
+          "docs/knowledge-graph/slice-d1.md": "KD1-10"
+        }
+      }
+    }
+  }
+}

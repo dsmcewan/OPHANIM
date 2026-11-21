@@ -44,6 +44,25 @@ test('packages/ledger imports nothing outside itself; pantheon/ imports nothing 
   assert.deepEqual(bad, []);
 });
 
+// The knowledge-graph foundation (docs/knowledge-graph/architecture.md, KD2) is domain-free: it imports only
+// packages/ledger and Node built-ins. The domain code that projects OPHANIM's sources (ophanim/graph/) imports it.
+test('packages/graph imports only packages/ledger and Node built-ins: nothing in it imports pantheon/ or ophanim/', () => {
+  const graph = path.join(REPO, 'packages/graph'), ledger = path.join(REPO, 'packages/ledger');
+  // Import and export statements and dynamic imports (stricter than SPEC, which also matches the word "from" before a
+  // quote in code, as in impact: 'to->from').
+  const STATEMENTS = [/^\s*(?:import|export)\s[^;'"]*?\bfrom\s*(['"])([^'"]+)\1/gm, /^\s*import\s*(['"])([^'"]+)\1/gm, /\bimport\s*\(\s*(['"])([^'"]+)\1/g];
+  const files = sources(graph), bad = [];
+  for (const f of files) {
+    for (const m of STATEMENTS.flatMap(re => [...fs.readFileSync(f, 'utf8').matchAll(re)])) {
+      const s = m[2], where = `${path.relative(REPO, f)} -> ${s}`;
+      if (s.startsWith('.') || s.startsWith('/')) { const t = path.resolve(path.dirname(f), s); if (!inside(t, graph) && !inside(t, ledger)) bad.push(where); }
+      else if (!s.startsWith('node:')) bad.push(where);
+    }
+  }
+  assert.ok(files.length >= 8, `the scan reached packages/graph (${files.length} files)`);
+  assert.deepEqual(bad, []);
+});
+
 test('the core\'s canonical form and digest are ophanim/board.mjs\'s, byte for byte', () => {
   const values = [null, false, 0, -0, 1.5e-7, 2 ** 53, 'x', '\u0000😀', [], {}, [1, [2, [3]]],
     {b: {d: 1, c: [true, null]}, a: 'z', '': 0, 'é': 1}, Object.assign(Object.create(null), {k: 'v'})];

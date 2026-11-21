@@ -1,0 +1,27 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "KG Slice E",
+  "base_commit": "c34b98f",
+  "authorization": "owner directive 2026-11-20 (docs/knowledge-graph/directive-2026-11-20.md): Slice E, federated instances (synthetic departments)",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**", "docs/knowledge-graph/directive-2026-11-20.md", "docs/knowledge-graph/inventory.md", "docs/knowledge-graph/inventory.json", "docs/knowledge-graph/architecture.md", "package.json", "package-lock.json"],
+  "dependencies": ["runs concurrently with Slice B (ophanim/graph/** and ophanim/operate/context.mjs); the file sets are disjoint",
+    "Slice A's packages/graph files are frozen except one export line in index.mjs (KE1); the schema is the coordinator's (KE8)"],
+  "subwaves": {
+    "KGE": {
+      "agent-kg-slice-e": {
+        "branch": "kg/slice-e",
+        "base_commit": "c34b98f",
+        "findings": ["knowledge-graph Slice E", "register KG-3 (scope enforcement)"],
+        "files": ["packages/graph/federation.mjs", "packages/graph/index.mjs", "packages/graph/tests/federation*.test.mjs", "packages/graph/tests/federation.mutate.mjs", "packages/graph/tests/federation-*.mjs", "docs/knowledge-graph/slice-e.md"],
+        "new_files": ["packages/graph/federation.mjs", "packages/graph/tests/federation*.test.mjs", "packages/graph/tests/federation.mutate.mjs", "packages/graph/tests/federation-*.mjs", "docs/knowledge-graph/slice-e.md"],
+        "region_limits": {
+          "packages/graph/federation.mjs": "KE1-KE6: instance identity by anchor, policy-enforced exports, read-only central imports, freshness and disconnection, provenance-preserving propagation",
+          "packages/graph/index.mjs": "one export line for federation.mjs; nothing else",
+          "packages/graph/tests/federation*": "the federation tests, fixtures and mutation runner (separate from graph.mutate.mjs)",
+          "docs/knowledge-graph/slice-e.md": "KE9"
+        }
+      }
+    }
+  }
+}

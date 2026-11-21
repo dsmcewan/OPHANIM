@@ -62,7 +62,9 @@ export function agyModelMismatch(identity, { transport = "agy-cli", ...more } = 
 //         from `env`), plus ANTIGRAVITY_AGY_CLEANUP=all and AGY_CLI_DISABLE_AUTO_UPDATE=true;
 //   JAIL  prepareWorkerJail: the worker's bwrap (host read-only, /tmp a fresh tmpfs, --unshare-pid, --new-session,
 //         --die-with-parent, the Gemini state as a per-run scratch copy dropped afterwards, the worktree and the control
-//         dir's run/ writable); SANDBOX_UNAVAILABLE without bwrap -- never a silent unjailed run;
+//         dir's run/ writable); bwrap started through the descriptor closer (src/agy/fd-exec.mjs, a single-threaded
+//         python3 program: no descriptor beyond 0, 1 and 2, KG-11); SANDBOX_UNAVAILABLE without bwrap or a working
+//         closer -- never a silent unjailed run;
 //   ARGV  workerArgv (--mode=accept-edits, --add-dir <abs worktree>, --disable-slash-commands, --log-file
 //         <control>/run/agy.log) + --json-schema, through assertWorkerArgv: NO --sandbox (never inside bwrap,
 //         owner-stated) and NO --dangerously-skip-permissions (it skips the hook);
@@ -215,7 +217,7 @@ async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEve
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy CLI turn was cancelled"), { code: "ABORTED", ...evidence });
   if (run.killedFor === "timeout" || run.signal === "SIGTERM") throw Object.assign(new Error(`agy CLI timed out after ${timeoutS}s`), evidence);
   if (run.killedFor) throw Object.assign(new Error(`agy CLI stopped: ${run.killedFor}`), evidence);
-  if (sandboxRec?.enabled && run.status !== 0 && /^bwrap: /m.test(String(run.stderr ?? "")) && !init) {
+  if (sandboxRec?.enabled && run.status !== 0 && SANDBOX_START_FAILED.test(String(run.stderr ?? "")) && !init) {
     throw Object.assign(new Error(`the sandbox could not start the agy CLI: ${String(run.stderr).trim().slice(0, 300)}`), { code: "lane_failure", kind: "spawn", transport: "agy-cli", ...evidence });
   }
   if (run.status !== 0) throw Object.assign(refused(`agy CLI exited ${run.status}; status ${result?.status ?? "missing"}`, run, result), evidence);
@@ -268,13 +270,15 @@ async function singleTurnIn({ cmd, argv, cwd, env, agent, model, timeoutS, onEve
 //                    unparseable stream) | spawn (the CLI or bwrap could not start it)
 //   AGY_MODEL_MISMATCH  the CLI's init named another agent or model (checked FIRST, before every code above), or a result
 //                    came with no init at all: `identity: {requested, reported}`; never a lane_failure, never quota
-//   SANDBOX_UNAVAILABLE  bwrap is missing or fails its probe and `sandbox.allowUnsandboxed` is not true
+//   SANDBOX_UNAVAILABLE  bwrap is missing or fails its probe, or the descriptor closer does not work here (KG-11), and
+//                    `sandbox.allowUnsandboxed` is not true
 //   ABORTED          the signal fired
 import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { homedir as homeOf } from "node:os";
 import { dirname as dirOf, isAbsolute, relative as relOf, resolve as resolveOf } from "node:path";
 import { bwrapArgs, sandboxAvailable, defaultAgyStateDirs, cliDirOf, geminiState, dropGeminiState } from "../agy/sandbox.mjs";
 import { extendVerifyPolicy, writeVerifyLauncher } from "../agy/verify-jail.mjs";
+import { fdExecArgv, fdExecAvailable, fdExecPython, FD_EXEC_MODULE, FDS_PASSED, closerLine } from "../agy/fd-exec.mjs";
 import { workerVerifyCommand } from "../agy/jail-hook.mjs";
 import { cardTools, validateCardTools } from "../agy/workspace.mjs";
 import { MCP_SERVER as MCP_SERVER_NAME, toolDrift } from "../agy/jail-hook.mjs";
@@ -419,15 +423,24 @@ const toolStepOf = step => ({ tool_name: step.tool_name ?? null, state: step.sta
 const isSubagentStep = s => s.tool_name === "invoke_subagent" || /ask_subagent$/.test(s.tool_name ?? "")
   || (s.tool_name === "call_mcp_tool" && /ask_subagent/.test(JSON.stringify(s.tool_info ?? "")));
 
+/** What the jail prints when it could not start the CLI: bwrap's own line, or the descriptor closer's refusal (fd-exec.mjs). */
+const SANDBOX_START_FAILED = /^(bwrap|pantheon-fds): /m;
 /**
  * Build the worker's jail once (bwrap argv prefix + the agy state layout), so a preflight and the turn run in the SAME
  * one. Returns {prefix, sandboxRec, gstate}; throws SANDBOX_UNAVAILABLE (never a silent unjailed run) or
  * AGY_STATE_LAYOUT (src/agy/sandbox.mjs geminiState). `env` is the child env (workerEnv); its HOME is the default home.
+ * NO DESCRIPTOR BEYOND 0, 1 AND 2 (register KG-11): the prefix starts bwrap through the descriptor closer
+ * (src/agy/fd-exec.mjs: a single-threaded python3 program, run by `sandbox.closerPython`, default the first python3 on
+ * PATH), so the CLI, and everything it starts, inherits nothing the controller was handed but stdin, stdout and stderr. A
+ * closer that does not work here (no python3 included) is the sandbox being unavailable.
  */
 export async function prepareWorkerJail({ cli, control_dir, worktree, env = workerEnv(), sandbox = {}, a2a_socket = null }) {
   const wantSandbox = sandbox.enabled !== false;
   if (wantSandbox) {
-    const probe = await sandboxAvailable(sandbox.bwrap ?? "bwrap");
+    const closerPython = sandbox.closerPython === undefined ? fdExecPython() : sandbox.closerPython;
+    const box = await sandboxAvailable(sandbox.bwrap ?? "bwrap");
+    const fds = box.ok ? await fdExecAvailable({ closerPython }) : null;
+    const probe = !box.ok ? box : fds.ok ? { ok: true } : { ok: false, why: `no descriptor beyond 0, 1 and 2 can be guaranteed: ${fds.why}` };
     if (probe.ok) {
       const extra_ro = [...(sandbox.extra_ro ?? [])];
       const cliDir = cliDirOf(cli); if (cliDir) extra_ro.push(cliDir);
@@ -448,7 +461,8 @@ export async function prepareWorkerJail({ cli, control_dir, worktree, env = work
           ...(a2a_socket ? [dirOf(resolveOf(a2a_socket))] : [])].filter(p => existsSync(p)) });
       }
       catch (e) { await dropGeminiState(gstate).catch(() => null); throw e; }   // the scratch holds the OAuth token: never leave it behind
-      return { prefix: b.argv, gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
+      return { prefix: fdExecArgv(b.argv, { closerPython }), gstate, sandboxRec: { enabled: true, kind: "bwrap", binds: b.binds, git: b.git,
+        descriptors: { passed: [...FDS_PASSED], closer: { python: closerPython, module: FD_EXEC_MODULE } },
         gemini_state: { enabled: gstate.enabled, mode: gstate.mode, gemini_dir: gstate.gemini_dir, cli_dir: gstate.cli_dir, mounts: gstate.mounts, copied: gstate.copied,
           withheld: gstate.withheld, skipped: gstate.skipped, hidden_state: gstate.hidden_state, readonly_subdirs: gstate.readonly_subdirs,
           writable_copies: (gstate.writable_copies ?? []).map(w => ({ path: w.path, dest: w.dest, status: w.status, ...(w.copied ? { copied: w.copied } : {}), ...(w.readonly_subdirs?.length ? { readonly_subdirs: w.readonly_subdirs } : {}), ...(w.why ? { why: w.why } : {}) })),
@@ -617,6 +631,18 @@ export function advertisedTools({ cardTools: card = null, agentsOut = "", logTex
   for (const t of stepNames ?? []) add(t, "stream_step");
   return { discovered, methods: [...methods].sort() };
 }
+/** The preflight auth check's reason (null when logged in). When /usage printed no envelope, it names the exit code and,
+ *  if the jail's descriptor closer spoke, its own `pantheon-fds:` line (redacted like the stderr record), so a closer
+ *  refusal states its cause in the reason itself (KG-11: two integration refusals surfaced only as "exit 125"). */
+export function usageAuthWhy(u, envelope, logged_in, redact = t => t) {
+  if (logged_in) return null;
+  if (u.killed_for) return `/usage was stopped (${u.killed_for})`;
+  if (!envelope) {
+    const fds = closerLine(u.raw?.stderr);
+    return `/usage did not print the JSON envelope (exit ${u.exit_code}${fds ? `; ${redact(fds)}` : ""})`;
+  }
+  return "/usage returned no quota group with buckets: the CLI has no usable session in the jail";
+}
 /** The tool_drift check of the preflight (blocking) or of a turn's record: {ok, why, methods, discovered, unclassified, unknown, note}. */
 export function toolDriftCheck({ discovered, methods }) {
   const d = toolDrift(discovered);
@@ -712,7 +738,7 @@ export async function runAgyPreflight({ cli, control_dir, worktree, env: extraEn
     const envelope = usageEnvelopeOf(u.raw.stdout);
     const logged_in = !u.killed_for && usageHasBuckets(envelope);
     checks.auth = { ok: logged_in, source: "agy --print /usage --output-format json, in the jail",
-      why: logged_in ? null : u.killed_for ? `/usage was stopped (${u.killed_for})` : !envelope ? `/usage did not print the JSON envelope (exit ${u.exit_code})` : "/usage returned no quota group with buckets: the CLI has no usable session in the jail",
+      why: usageAuthWhy(u, envelope, logged_in, red),
       argv: u.argv, exit_code: u.exit_code, killed_for: u.killed_for, envelope: envelope ? envelope.format : null,
       groups: envelope ? [...new Set((envelope.buckets ?? []).map(b => b.group))] : null,
       num_turns: envelope?.spent?.num_turns ?? null, total_tokens: envelope?.spent?.total_tokens ?? null, stderr: red(u.raw.stderr).slice(-4000) };
@@ -918,7 +944,7 @@ async function workerTurnIn({ cli, control_dir, model, prompt, timeoutS, graceS,
   if (run.killedFor === "cancelled") throw Object.assign(new Error("agy worker turn was cancelled"), { code: "ABORTED", ...more });
   if (run.killedFor === "timeout") throw laneFailure("timeout", `agy CLI timed out after ${timeoutS}s (process killed)`, more);
   if (run.killedFor) throw laneFailure("stream", `agy CLI stopped: ${run.killedFor}`, more);
-  if (prefix.length && run.status !== 0 && /^bwrap: /m.test(stderr) && !init) throw laneFailure("spawn", `the sandbox could not start the agy CLI: ${stderr.trim().slice(0, 300)}`, more);
+  if (prefix.length && run.status !== 0 && SANDBOX_START_FAILED.test(stderr) && !init) throw laneFailure("spawn", `the sandbox could not start the agy CLI: ${stderr.trim().slice(0, 300)}`, more);
   const failed = run.status !== 0 || (sawResult && result?.status !== "SUCCESS");
   if (failed) {
     const q = quotaEvidence({ result, stderr });

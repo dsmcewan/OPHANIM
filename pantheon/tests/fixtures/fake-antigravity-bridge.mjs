@@ -22,6 +22,11 @@ import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
 
 const out = o => process.stdout.write(JSON.stringify(o) + "\n");
+// Exit only once everything written has reached the pipe: process.exit() drops what the pipe has not yet taken, so a
+// result line past the pipe's buffer (a probe's listing of a busy host's /tmp ran to 355 KB) arrived cut off and the
+// controller saw "the bridge exited 0 without a result" (found on a long-lived host; a fresh CI runner's /tmp is small).
+// It never resolves, so `await` stops the script here exactly as process.exit() did.
+const exitAfterFlush = code => new Promise(() => { process.stdout.write("", () => process.exit(code)); });
 const sha = s => "sha256:" + createHash("sha256").update(s).digest("hex");
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -88,9 +93,9 @@ for (const s of steps) {
   else if (s.stderr) process.stderr.write(s.stderr);
   else if (s.result) result = { ...result, ...s.result };
 }
-if (cancelled) { out({ type: "result", ok: false, error: { kind: "cancelled", type: null, message: "", reason: cancelled, decisions, requests } }); process.exit(5); }
+if (cancelled) { out({ type: "result", ok: false, error: { kind: "cancelled", type: null, message: "", reason: cancelled, decisions, requests } }); await exitAfterFlush(5); }
 out({ type: "event", event: "trajectory_state", trajectory_id: ROOT, parent_trajectory_id: "", depth: 0, state: "FULLY_IDLE", error: "", error_code: "", stop_reason: result.stop_reason ?? "UNSPECIFIED" });
-if (result.ok === false) { out({ type: "result", ok: false, error: { kind: result.kind ?? "harness", type: "AntigravityExecutionError", message: result.message ?? "scripted failure", decisions, requests } }); process.exit(3); }
+if (result.ok === false) { out({ type: "result", ok: false, error: { kind: result.kind ?? "harness", type: "AntigravityExecutionError", message: result.message ?? "scripted failure", decisions, requests } }); await exitAfterFlush(3); }
 out({ type: "result", ok: true, text: JSON.stringify({ note: result.text, decisions, requests, probes }), structured_output: result.structured_output ?? null, stop_reason: result.stop_reason ?? "UNSPECIFIED",
   usage: { total_token_count: 1 }, trajectory_usages: {}, root_trajectory_id: ROOT, conversation_id: "conv-fake", tool_calls: id, duration_s: 0.1, capabilities: { trajectory_events: true, define_subagent_disabled: true } });
-process.exit(0);
+await exitAfterFlush(0);

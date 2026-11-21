@@ -162,6 +162,14 @@
           "date": "2026-11-17",
           "ref": "4221a94",
           "note": "CI synthetic-proof (WF4 guard) detected paths in a new review record before anyone pointed it out; the owner corrected it (a364832), so this is a detection, not a correction by the mechanism"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "ophanim/knowledge-graphs at c14fed0 (docs/knowledge-graph/inventory.md:300, inventory.json:153)",
+          "detected_by": "ophanim/tests/machine-paths.test.mjs (WF4), the class's registered detector, in CI after the push",
+          "note": "the knowledge-graph inventory named its scratch probe by an absolute home path; the coordinator pushed a documents-only commit without running the cheap proof checks first. Fixed by naming the script without its path. Not counted as mechanism success: the detection came from CI after the push, not before it, and the correction was the integrator's. Next step: run the proof suite's machine-paths and corrections tests before pushing any documents-only commit"
         }
       ],
       "fixed_in": "a364832",
@@ -571,12 +579,175 @@
           "ref": "docs/execution/l150-ownership.json (amended at integration)",
           "detected_by": "the L-150 agent, in its report",
           "note": "the region limit allowed run-item.mjs's SDK branch only, while the design's per-request admission needed one line in turn(); and the brief's list of runners to --check left out wave3-agy-spend.mutate.mjs, whose S6 and G6 the change broke (found by the coordinator). Next step added: --check every committed *.mutate.mjs, not a chosen list"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "kg/slice-c2 e0902da; integration 8df1c4c",
+          "detected_by": "the Slice C2 agent's budget run (every test naming PANTHEON_AGY_TRANSPORT or agy-seat), before its commit",
+          "note": "the C2 brief required every existing SDK-transport test to keep passing (KS2) but the manifest granted only l150-billing and agy-seat-identity; four more suites (wave3-spend, wave3-agy-guard, l136-billing, reliability-r3-a3) spawned the seat with fakes that wrote under /tmp, which the jail hides, and asserted transport agy: 12 failures. The agent stayed inside its manifest and handed over a patch, which the coordinator reviewed and applied. Next step, as before: list every file the brief's own verification list names (here: every test that names the transport) in the manifest before dispatch"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the integration toolkit (1f6e2ae); manifest-reach also caught the guest-seat manifest (2295293)",
+          "detected_by": "scripts/test-gates/manifest-reach.mjs, now this class's detector",
+          "note": "the class now has a mechanical detector: manifest-reach fails a manifest that does not grant or hold every test that imports, and every runner that imports or edits, a module the agent may change. It caught the hand-written guest-seat manifest (capability.mutate.mjs, a target-edit the import-based reach missed) and flagged the D2 and jail-fds manifests. The owner asked for this toolkit (\"after market toolkit\"). Next step: run manifest-reach on every manifest before dispatch"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the pentest slice at integration (45dab29)",
+          "detected_by": "ophanim/ledger/layering.test.mjs and the gate's coverage orphan check (scripts/test-gates/suites.mjs coverage), not manifest-reach",
+          "note": "the brief placed the federation and graph-integrity attacks under packages/graph/tests/pentest/, where importing the shared harness breaks the graph layering rule, and three pentest files where no suite's glob reaches (test:gates would fail, CI would never run them). The brief's verification budget listed neither check. manifest-reach could not see it: both checks find their files by directory scan or glob, not by import. Fixed by moving the files and adding the two pentest directories to test:proof; the layering rule did not loosen. Next step: every brief that adds files lists layering.test.mjs and the coverage orphan check in its budget"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "scripts/test-gates/toolkit-manifest.test.mjs",
+        "name": "manifest reach: a manifest missing a reached test or runner FAILS, naming each"
+      },
+      "fixed_in": "1f6e2ae"
+    },
+    {
+      "id": "text-reader-misses-new-shape",
+      "class": "A reader that parses source code as text (never executing it) is written against the shapes present when it is written; a later file in a new but legal shape is read partly or not at all, and the reader reports what it read without saying what it could not.",
+      "source": "coordinator integration of the knowledge-graph slices, 2026-11-20: the Slice B mutation-runner reader (ophanim/graph/extract/verification.mjs) twice failed on runners written concurrently by other slices",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "dcecdc9",
+          "detected_by": "ophanim/graph/extract.test.mjs (\"mutation runners are read as TEXT\"), the class's registered detector, at integration before the push",
+          "note": "packages/graph/tests/federation.mutate.mjs (Slice E) writes its edit helper as one(from, to, file = FED) and a constant-first test helper; the reader assumed one(FILE, ...) and (file, pattern) helpers, so the E runner's targets were not read. Fixed by reading the helper's own signature"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "e6c4fe0",
+          "detected_by": "ophanim/graph/extract.test.mjs, at integration before the push (it also turned the Slice B mutation runner's baseline red)",
+          "note": "pantheon/tests/capability.mutate.mjs (Slice C1) declares its file constants as template literals built from another constant; the reader read single-quoted constants only, so no C1 mutation had a target file. Fixed by resolving template constants through earlier constants, leaving any other substitution unread. Both runners were written on bases that did not yet contain the reader, so their slices could not have run its test. Next step: every later brief that adds or changes a *.mutate.mjs runner puts ophanim/graph/extract.test.mjs in its verification budget"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "kg/checkpoint fc02390; reader fixed on ophanim/knowledge-graphs",
+          "detected_by": "the checkpoint agent, comparing the reader's count against the runner's own --check count (the same cross-check as the class's detector, ophanim/graph/extract.test.mjs), before its commit",
+          "note": "an apostrophe in a section comment inside the checkpoint runner's MUTATIONS opened a string for the reader, so a bracket in a later edit string closed the table early: 16 of 20 mutations read. The agent reworded its comment (a workaround in the runner, not a fix); the coordinator made the reader blank comments before parsing, with a synthetic case that fails on the old reader, and every committed runner reads identically before and after. The brief's next step (extract.test.mjs in the budget of any brief that adds a runner) caught it before integration this time"
+        },
+        {
+          "observed_by": "mechanism",
+          "by_detector": true,
+          "corrected_by": "integrator",
+          "date": "2026-11-21",
+          "ref": "merge 73dc8d0 of PR #67's branch; reader fixed in 682460e",
+          "detected_by": "ophanim/graph/extract.test.mjs (the class's detector), run on the merged tree before the push",
+          "note": "the base's ophanim/operate/sdk-intake.mutate.mjs lists each mutation's tests as spreads of an object's lists (`[...T.gov, ...T.pipe]`); the reader read `...T` alone, so all 302 mutations had no deciding test and T2 had to run the runner in full. A spread now takes an object key, with a synthetic case that fails on the old reader; T2 then listed 46 of the 302 as touched by this branch. The same run found the history reader listing no path for a merge (now --cc), a sibling shape of the same reader family"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/graph/extract.test.mjs",
+        "name": "mutation runners are read as TEXT"
+      }
+    },
+    {
+      "id": "withheld-path-read",
+      "class": "A repository-wide search or listing run by an agent displays content from withheld paths (the independent reviewers' findings-* directories), which no agent may read; the exposure is accidental, through a command that names no exclusion.",
+      "source": "the coordinator's standing rule that findings-* paths are withheld and must never be read by agents (reviewers must not see each other's findings); disclosed by the Slice B2 agent in its report, 2026-11-20",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/slice-b2 (dd2b578)",
+          "detected_by": "the Slice B2 agent itself, disclosed in its report",
+          "note": "a git grep run without the findings-* exclusion displayed about 6 code lines from 4 tracked files under docs/reviews/.../findings-*/, and tree listings and a test's cited paths showed findings-* path names; nothing was used, no fact, file or commit names a withheld path, and the slice added a test (mutation D12) that no fact does. Not counted as mechanism success: the rule was broken before anything detected it. Next step: every brief gives the exact exclusion for repository-wide searches (git grep ... -- ':(exclude,glob)**/findings-*/**'), and the agent lists only paths outside them"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/jail-fds-closer (552022d)",
+          "detected_by": "the KG-11 closer agent itself, disclosed in its report",
+          "note": "a NEAR MISS: one Grep tool call over **/*.mutate.mjs ran without excluding findings-* paths; no withheld path matched and nothing was shown or used, and every later search used git grep with the exclusion. The brief named the exclusion for git grep only; later briefs name Glob and Grep as well (the self-repair and hub briefs)"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/hub-spoke (7d77566)",
+          "detected_by": "the hub-readiness agent itself, disclosed in its report",
+          "note": "two early commands reached findings-* paths before filtering them out of their output: `git ls-files | grep -v findings` (path names only) and `grep -rln openCentral --include=*.mjs .` without the exclusion (it searched file contents under those paths; matching names were filtered from what was shown). Nothing was displayed or used, and later commands used the exclusion. The third instance in one day: the brief named the exclusion, so the next step is the mechanical one this class already records (a pre-integration scan of an agent transcript for withheld paths)"
         }
       ],
       "detector": {
         "kind": "none",
-        "why": "the brief is prose; check-ownership checks files, not region limits against the brief",
-        "next": "write each region limit from the brief's DESIGN section, list every file the design names, and quote the owner decision into the brief instead of pointing at a file the brief forbids; have the agent run --check on EVERY committed *.mutate.mjs runner"
+        "why": "command conduct inside an agent's session; the slice's own test guards only what reaches the graph",
+        "next": "the exclusion pathspec in every brief; a later check could scan agent transcripts for withheld paths before integration"
+      }
+    },
+    {
+      "id": "runner-deciding-tests-changed-not-rerun",
+      "class": "An integration re-runs a mutation runner in full only when its TARGET files change; a change to one of its DECIDING test files is not treated as a reason, so the runner can go red at baseline unnoticed (CI runs only --check).",
+      "source": "coordinator, at the integration of the knowledge-graph Slice D1 and the shallow-history fix, 2026-11-20",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "D1 merge 02a7916; fixed at the shallow-history integration",
+          "detected_by": "graph-b.mutate.mjs's own red-baseline check (exit 3), when the coordinator ran it in full for an unrelated fix",
+          "note": "Slice D1 added a real-history why-it-exists test to ophanim/graph/cli.test.mjs, a deciding file of graph-b.mutate.mjs, whose copy was a one-commit repository; the D1 brief and the coordinator re-ran only the runners whose targets changed. Next step: briefs and integrations re-run in full every runner whose target OR deciding test files changed"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the integration toolkit (1f6e2ae)",
+          "detected_by": "scripts/test-gates/affected-runners.mjs, now this class's detector",
+          "note": "affected-runners lists every runner whose own file, target files OR deciding test files changed between two commits, and --run runs each in full. The class now has a mechanical detector. Next step: run affected-runners at every integration and re-run what it lists"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "scripts/test-gates/toolkit-affected.test.mjs",
+        "name": "affected runners: a changed DECIDING test lists its runner; a changed target lists its runner"
+      },
+      "fixed_in": "1f6e2ae"
+    },
+    {
+      "id": "test-asserts-whole-environment",
+      "class": "A test asserts about the whole host environment (every open descriptor, every directory in the shared tmpdir) rather than about what it created, so it passes on the machine it was written on and fails where the environment differs: a CI runner that leaks descriptors into its jobs, or two suites sharing one tmpdir.",
+      "source": "self-observed at the jail integration (2026-11-20): CI at d9d626f, and the KG-11 agent's simultaneous suite runs",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "pantheon/tests/jail-fds.test.mjs (CI d9d626f; fixed in 90407d3)",
+          "detected_by": "CI: the GitHub Actions runner leaks descriptors 142 and 145 into every job",
+          "note": "two closer cells expected an exact descriptor list; they now measure the descriptors the host hands down (ambientFds) and expect the handed set plus those, while the closer must still leave stdio only"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": null,
+          "date": "2026-11-20",
+          "ref": "register KG-20",
+          "detected_by": "three simultaneous `cd pantheon && node --test` runs (the KG-11 agent)",
+          "note": "four cells assert that no pantheon-agy-* directory of theirs is left in the shared tmpdir and see the other runs' directories; open"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "no gate runs the suites in an environment that differs on purpose; CI differed by accident here",
+        "next": "a toolkit mode that runs the real-bwrap suites with planted inherited descriptors (a shell holding high fds open) and a pre-populated tmpdir, so a cell that asserts about the whole environment fails at integration rather than in CI"
       }
     },
     {

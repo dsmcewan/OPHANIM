@@ -80,13 +80,18 @@
 //
 // Must never: run the worker unjailed silently (sandboxAvailable is probed and the caller refuses with
 // SANDBOX_UNAVAILABLE unless the caller explicitly allows an unsandboxed run); block the event loop (async spawn).
-import { existsSync, readdirSync, readFileSync, statSync, lstatSync, realpathSync } from "node:fs";
+//
+// THE PYTHON SDK SEAT'S JAIL (sdkSeatJail, below the CLI's) is a second builder with the same conventions, around the WHOLE
+// process of the SDK seat (scripts/agy-seat.py, its interpreter, and every tool it runs); see its header.
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, readdir, readFile, readlink, rm, stat, symlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPromise } from "../board/spawn.mjs";
+import { SEAT_URL_ENV, SEAT_TOKEN_ENV } from "../antigravity/seat-session.mjs";
+import { fdExecArgv, fdExecAvailable, fdExecPrefix, fdExecPython, FDS_PASSED } from "./fd-exec.mjs";
 
 // The source tree the jail hook runs from (src/): it must stay visible inside every jail.
 const HERE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -516,3 +521,243 @@ export function jailReach(binds, p) {
 
 /** The directory to bind read-only so the CLI binary itself is visible inside the sandbox (/tmp is a fresh tmpfs). */
 export const cliDirOf = cli => (cli.includes("/") ? dirname(real(cli)) : null);
+
+// ---- THE PYTHON SDK SEAT'S JAIL ----------------------------------------------------------------------------------------
+// THE PYTHON SDK SEAT'S JAIL (register L-155; owner decision 2026-11-20, "Yes, bubble per seat"; knowledge graphs, Slice C2,
+// docs/knowledge-graph/slice-c2.md). Before it, the SDK seat was a plain child process of the controller: its agent's
+// run_command ran as the controller's user, outside any sandbox, and could read the controller's environment through
+// /proc/<pid>/environ -- which holds GEMINI_API_KEY, the model gateway's real credential -- and spend outside the gateway.
+// Now the seat's WHOLE PROCESS (the python interpreter running scripts/agy-seat.py, and so the SDK's harness and every tool
+// it runs, run_command included) runs inside bwrap, at BOTH spawn points (board/run-item.mjs, the board's SDK seat;
+// bin/agy-seat.mjs, the governed direct launch of L-151), built by this one builder after bwrapArgs's conventions:
+//   - the host READ-ONLY (--ro-bind / /), a fresh /dev, and a fresh tmpfs on /tmp: the seat's scratch, which exists only in
+//     the jail's mount namespace and is gone when its last process exits;
+//   - --unshare-pid with a fresh /proc: no process of the controller is visible in the jail, so no /proc/<pid>/environ of
+//     the controller can be read; --new-session (setsid: no TIOCSTI into the controller's terminal); --die-with-parent;
+//   - HIDDEN, as an empty tmpfs remounted read-only over each directory and /dev/null over each file (sdkSeatHidden): every
+//     HOME the controller has ($HOME, os.homedir(), the passwd entry's), and with it every credential location under it --
+//     the ADC file and the gcloud config under ~/.config/gcloud, the Antigravity CLI's state and OAuth login under ~/.gemini;
+//     the user's runtime dir (XDG_RUNTIME_DIR, /run/user/<uid>: agent sockets); the ssh agent's socket; and the file and
+//     directory the controller's own environment names as Google credentials (GOOGLE_APPLICATION_CREDENTIALS, CLOUDSDK_CONFIG);
+//   - VISIBLE, read-only, bound back where a hidden location covers them: the python interpreter and its venv (and the
+//     venv's base interpreter), the repository, the seat script, and the files the seat reads (its brief, its schema);
+//   - WRITABLE: the workspace and the seat's out dir (the seat's own HOME is a directory inside it), and nothing else but the
+//     jail's /tmp;
+//   - THE ENVIRONMENT IS AN ALLOWLIST (sdkSeatEnv, SDK_JAIL_ENV_ALLOW): the gateway session's URL and token, HOME, PATH, the locale, the
+//     terminal and user names, the proxy and certificate settings, TMPDIR=/tmp. Nothing is inherited by default: the spawn is
+//     given exactly this environment. It is built from agySdkEnvOf's (board/agy-cli.mjs), whose withholding stays, and is
+//     RE-CHECKED here: a credential-named variable (SDK_JAIL_ENV_REFUSED: GEMINI_API_KEY, GOOGLE_*, Vertex, ADC, any
+//     KEY/TOKEN/SECRET name) refuses the seat (SDK_JAIL_ENV) instead of being dropped, so a regression upstream fails loudly.
+//     The one exception is by exact name, SDK_JAIL_CAPABILITY: the gateway session's own URL and token (seat-session.mjs),
+//     which the seat must have to reach the gateway and which is worth nothing once its session closes. (The L-150 relay's
+//     capability was named without TOKEN; the gateway that replaced it, L-724, names its token PANTHEON_AGY_GATEWAY_TOKEN.)
+//   - THE NETWORK IS SHARED, and recorded as RETAINED (runtimes.json limitation sdk-jail-egress, as L-004 is for the CLI
+//     lanes): the gateway listens on loopback and the scout's web tools need egress, so there is no --unshare-net and bwrap
+//     has no egress filter. Host loopback services, the LAN and a cloud metadata endpoint stay reachable from the jail, and
+//     so do host Unix sockets outside the hidden locations (a read-only mount does not stop connect()). It is never claimed
+//     isolated.
+//   - NO DESCRIPTOR BEYOND 0, 1 AND 2 (register KG-11; src/agy/fd-exec.mjs): bwrap is started through the descriptor
+//     closer (`prefix` is [python3, -I, -S, -c, FD_EXEC_PY, bwrap, ...]), a single-threaded process that closes every
+//     descriptor above 2, checks that none is left, and execs bwrap in its place with the environment and the signal
+//     dispositions it was given. The seat is given stdin, stdout and stderr only, on purpose, and nothing else;
+//   - FAIL CLOSED: no bwrap, a failing probe of the jail's own flags, or a descriptor closer that does not work here
+//     (sdkJailAvailable) refuses the seat before the spawn and before anything is admitted or charged (SANDBOX_UNAVAILABLE).
+//     There is NO override: the CLI's allowUnsandboxed is not extended to the SDK seat. A closer that cannot establish the
+//     property at the spawn itself exits 125 and starts nothing.
+//   - SINGLE-ASSIGNMENT LIFETIME: the spawn point removes the seat's HOME after the assignment on every path (success,
+//     refusal, timeout, kill: dropSdkSeatScratch), its /tmp dies with the jail, and the gateway session is closed and its
+//     token revoked.
+// Must never: run the SDK seat without this jail; give it an environment it was not explicitly allowed; make anything but
+// the workspace and the out dir writable on the host; claim the network isolated.
+export const SDK_JAIL_ENV_ALLOW = Object.freeze(["PATH", "HOME", "LANG", "LANGUAGE", "TZ", "TERM", "USER", "LOGNAME", "SHELL",
+  "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", SEAT_URL_ENV, SEAT_TOKEN_ENV]);
+/** The gateway session's own URL and token: allowed by exact name, before the credential-name refusal (its token is named TOKEN). */
+export const SDK_JAIL_CAPABILITY = Object.freeze([SEAT_URL_ENV, SEAT_TOKEN_ENV]);
+export const SDK_JAIL_ENV_PREFIXES = Object.freeze(["LC_"]);
+/** A variable whose name says credential: never in the SDK seat's jail; its presence refuses the seat (the jail's re-check). */
+export const SDK_JAIL_ENV_REFUSED = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|^GOOGLE_|^GEMINI_|^CLOUDSDK_|VERTEX/i;
+const jailError = (code, message, more = {}) => Object.assign(new Error(message), { code, ...more });
+const layoutRefusal = message => jailError("SDK_JAIL_LAYOUT", `the python SDK seat's jail cannot be built: ${message}; refusing to run the python SDK seat unjailed`);
+
+/**
+ * The SDK seat's environment inside its jail: {env, dropped: [names]} -- only the names of SDK_JAIL_ENV_ALLOW, the LC_
+ * locale and what `pass` (the controller's PANTHEON_AGY_ENV_PASS, an explicit operator list) names, plus TMPDIR=/tmp.
+ * Throws SDK_JAIL_ENV (names only, never a value) when `env` carries a credential-named variable.
+ */
+export function sdkSeatEnv(env = {}, { pass = "" } = {}) {
+  const passed = String(pass ?? "").split(/[:,]/).map(s => s.trim()).filter(Boolean);
+  const allowed = k => SDK_JAIL_ENV_ALLOW.includes(k) || SDK_JAIL_ENV_PREFIXES.some(p => k.startsWith(p))
+    || passed.some(p => (p.endsWith("*") ? k.startsWith(p.slice(0, -1)) : k === p));
+  const out = {}, dropped = [], refused = [];
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (v === undefined || v === null) continue;
+    if (SDK_JAIL_CAPABILITY.includes(k)) out[k] = String(v);
+    else if (SDK_JAIL_ENV_REFUSED.test(k)) refused.push(k);
+    else if (allowed(k)) out[k] = String(v);
+    else dropped.push(k);
+  }
+  if (refused.length) throw jailError("SDK_JAIL_ENV", `the python SDK seat's environment carries credential-named variable(s) ${refused.sort().join(", ")}: refusing to run the seat (agySdkEnvOf withholds them; this is the jail's re-check)`, { refused: refused.sort() });
+  out.TMPDIR = "/tmp";
+  return { env: out, dropped: dropped.sort() };
+}
+
+/** Every HOME the controller has: $HOME, os.homedir() and the passwd entry's (real paths, de-duplicated). */
+export function controllerHomes(base = process.env) {
+  let passwd = null;
+  try { passwd = userInfo().homedir; } catch { /* no passwd entry */ }
+  return [...new Set([base?.HOME, homedir(), passwd].filter(h => typeof h === "string" && h).map(real))];
+}
+/**
+ * The host locations the SDK seat's jail hides: [{path, kind: "dir" | "file", why}] for each that exists -- the
+ * controller's HOMEs, the user's runtime dir, the ssh agent's socket, and the Google credential file and gcloud config the
+ * controller's environment `base` names. A HOME of "/" cannot be hidden without hiding the host: refused (SDK_JAIL_LAYOUT).
+ */
+export function sdkSeatHidden(base = process.env, { homes = controllerHomes(base), uid = process.getuid?.() } = {}) {
+  const out = [];
+  const add = (p, why) => {
+    if (typeof p !== "string" || !p) return;
+    const r = real(p);
+    let st;
+    try { st = statSync(r); } catch { return; }
+    if (r === "/") throw layoutRefusal(`${why} is "/", which cannot be hidden without hiding the host`);
+    if (!out.some(h => h.path === r)) out.push({ path: r, kind: st.isDirectory() ? "dir" : "file", why });
+  };
+  for (const h of homes) add(h, "the controller's HOME, and every credential location under it (~/.config/gcloud: the ADC file and the gcloud config; ~/.gemini: the Antigravity CLI's state and login)");
+  add(base?.XDG_RUNTIME_DIR, "the user's runtime dir (agent sockets)");
+  if (Number.isInteger(uid)) add(`/run/user/${uid}`, "the user's runtime dir (agent sockets)");
+  add(base?.SSH_AUTH_SOCK, "the ssh agent's socket");
+  add(base?.GOOGLE_APPLICATION_CREDENTIALS, "the Google credential file the controller's environment names");
+  add(base?.CLOUDSDK_CONFIG, "the gcloud config the controller's environment names");
+  return out;
+}
+
+/**
+ * What of the interpreter `python` must be visible: the path given; its venv (when <python>/../../pyvenv.cfg exists) and the
+ * venv's base interpreter's prefix (pyvenv.cfg `home`); its real path; and, for a binary (not a #! script), the prefix
+ * of its real path (its standard library lives under it).
+ */
+export function interpreterPaths(python) {
+  const p = resolve(python), out = [p];
+  const venv = dirname(dirname(p)), cfg = join(venv, "pyvenv.cfg");
+  if (existsSync(cfg)) {
+    out.push(venv);
+    const m = /^\s*home\s*=\s*(.+?)\s*$/m.exec(readFileSync(cfg, "utf8"));
+    if (m && isAbsolute(m[1])) out.push(dirname(real(m[1])));
+  }
+  const rp = real(p);
+  if (rp !== p) out.push(rp);
+  let head = "";
+  try { const fd = openSync(rp, "r"); try { const b = Buffer.alloc(2); readSync(fd, b, 0, 2, 0); head = b.toString("latin1"); } finally { closeSync(fd); } } catch { /* unreadable: the spawn says so */ }
+  if (head && head !== "#!") out.push(dirname(dirname(rp)));
+  return [...new Set(out)];
+}
+
+/**
+ * THE SDK SEAT'S JAIL (see the header): {prefix: [python3, -I, -S, -c, FD_EXEC_PY, "bwrap", ..., "--"], fds: {argv, passed}, env, home,
+ * binds: [{mode: "tmpfs" | "ro" | "rw" | "null", path}], hidden, visible, writable, dropped, record}. The spawn is
+ * `[...prefix, python, script, ...args]` with `env` and nothing else: the descriptor closer (fds.argv, src/agy/fd-exec.mjs)
+ * first, then bwrap. `env` is agySdkEnvOf's (its HOME must be a directory inside `out_dir`); `read` are files the seat
+ * reads (made visible when hidden); `base` is the controller's environment (the hidden locations, the operator's pass list);
+ * `closerPython` the python3 that runs the closer (on the host, before bwrap).
+ * Throws SDK_JAIL_LAYOUT (a path that would expose a hidden location, a missing workspace or out dir, a HOME outside the out
+ * dir) or SDK_JAIL_ENV (see sdkSeatEnv). Never spawns anything.
+ */
+export function sdkSeatJail({ python, script, repo, workspace, out_dir, env, read = [], bwrap = "bwrap", closerPython = fdExecPython(), base = process.env, hidden = sdkSeatHidden(base) }) {
+  if (!python || !script || !repo || !workspace || !out_dir || !env) throw new Error("sdkSeatJail: pass the python, the script, the repository, the workspace, the out dir and the env");
+  const hiddenDirs = [...hidden.filter(h => h.kind === "dir").map(h => h.path), "/tmp"];
+  const exposes = p => p === "/" || hiddenDirs.includes(p) || hidden.some(h => h.path === p);
+  const writable = [];
+  for (const [name, p0] of [["workspace", workspace], ["out dir", out_dir]]) {
+    const p = real(p0);
+    let st = null;
+    try { st = statSync(p); } catch { /* missing */ }
+    if (!st?.isDirectory()) throw layoutRefusal(`the ${name} ${p} is not a directory`);
+    if (exposes(p)) throw layoutRefusal(`the ${name} ${p} is a location the jail hides (or the whole host): binding it writable would expose it`);
+    if (!writable.includes(p)) writable.push(p);
+  }
+  const out = real(out_dir);
+  const { env: jailEnv, dropped } = sdkSeatEnv(env, { pass: base?.PANTHEON_AGY_ENV_PASS ?? "" });
+  const home = typeof jailEnv.HOME === "string" && jailEnv.HOME ? real(jailEnv.HOME) : null;
+  if (!home || home === out || !inside(out, home)) throw layoutRefusal(`the seat's HOME (${jailEnv.HOME ?? "unset"}) is not a directory of its own inside its out dir ${out}`);
+  // Read-only binds: only what a hidden location (or the fresh /tmp) covers; the rest is visible through the read-only host.
+  const covered = p => hiddenDirs.some(h => inside(h, p)) || hidden.some(h => h.path === p);
+  const visible = [];
+  for (const p0 of [repo, script, ...interpreterPaths(python), ...read].filter(Boolean)) {
+    const p = real(p0);
+    if (!existsSync(p) || !covered(p)) continue;
+    if (exposes(p)) throw layoutRefusal(`${p} is a location the jail hides (or the whole host): binding it back would expose it`);
+    if (!visible.includes(p)) visible.push(p);
+  }
+  // A read-only bind inside another one is redundant unless a hidden location lies between them.
+  const ro = visible.filter(c => !visible.some(p => p !== c && inside(p, c) && !hiddenDirs.some(h => h !== p && inside(p, h) && inside(h, c))));
+  const binds = [...hidden.map(h => ({ mode: h.kind === "dir" ? "tmpfs" : "null", path: h.path })),
+    ...ro.map(p => ({ mode: "ro", path: p })), ...writable.map(p => ({ mode: "rw", path: p }))];
+  // Parent-first by depth (a stable sort: at equal depth, what hides before what is bound), so a deeper bind overrides a
+  // shallower one whatever their kinds.
+  binds.sort((a, b) => depth(a.path) - depth(b.path));
+  const prefix = [bwrap, "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
+  for (const b of binds) {
+    if (b.mode === "tmpfs") prefix.push("--tmpfs", b.path);
+    else if (b.mode === "null") prefix.push("--ro-bind", "/dev/null", b.path);
+    else prefix.push(b.mode === "rw" ? "--bind" : "--ro-bind", b.path, b.path);
+  }
+  // Each hidden directory read-only too, after the binds that need mount points in it: a write there fails inside the jail
+  // instead of landing, unseen, in a tmpfs.
+  for (const h of hidden) if (h.kind === "dir") prefix.push("--remount-ro", h.path);
+  prefix.push("--chdir", real(workspace), "--");
+  // NO DESCRIPTOR BEYOND 0, 1 AND 2 (KG-11): bwrap starts through the descriptor closer, in front of it.
+  const fds = { argv: fdExecPrefix({ closerPython }), passed: [...FDS_PASSED] };
+  return { prefix: fdExecArgv(prefix, { closerPython }), fds, env: jailEnv, home, binds, hidden, visible: ro, writable, dropped,
+    record: { kind: "bwrap", hidden: hidden.map(h => ({ path: h.path, kind: h.kind, why: h.why })), visible: ro, writable, home,
+      env: Object.keys(jailEnv).sort(), dropped, network: "shared (retained: sdk-jail-egress)",
+      descriptors: { passed: [...FDS_PASSED], closer: "src/agy/fd-exec.mjs: a single-threaded python3 closes every descriptor above 2 before bwrap" } } };
+}
+
+const jailProbes = new Map();
+/**
+ * Can the SDK seat's jail be made here? sandboxAvailable, then the jail's own flags (a PID namespace with a fresh /proc, a new
+ * session, a tmpfs remounted read-only), then the descriptor closer with `closerPython` (fdExecAvailable), once per pair
+ * (cached). {ok, why?}; never throws.
+ */
+export function sdkJailAvailable(bwrap = "bwrap", { closerPython = fdExecPython() } = {}) {
+  const key = `${bwrap}\0${closerPython}`;
+  if (!jailProbes.has(key)) {
+    jailProbes.set(key, (async () => {
+      const base = await sandboxAvailable(bwrap);
+      if (!base.ok) return base;
+      try {
+        const r = await spawnPromise(bwrap, ["--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--remount-ro", "/tmp", "true"], { timeout: 10000 });
+        if (r.status !== 0) return { ok: false, why: `the jail probe (a PID namespace, a fresh /proc) exited ${r.status ?? r.killedFor}: ${String(r.stderr ?? "").trim().slice(0, 200)}` };
+      } catch (e) {
+        return { ok: false, why: `bwrap could not be started: ${e?.code ?? e?.message ?? e}` };
+      }
+      // KG-11: the seat starts with no descriptor beyond 0, 1 and 2, or it does not start.
+      const fds = await fdExecAvailable({ closerPython });
+      if (!fds.ok) return { ok: false, why: `no descriptor beyond 0, 1 and 2 can be guaranteed: ${fds.why}` };
+      return { ok: true };
+    })());
+  }
+  return jailProbes.get(key);
+}
+/**
+ * THE GATE of both spawn points, called before anything is admitted, charged or spawned: {bwrap, closerPython, build(spec)}
+ * where build is sdkSeatJail with this bwrap and this python3 (the descriptor closer's). Throws SANDBOX_UNAVAILABLE when the
+ * jail cannot be made, its descriptor closer included (no python3 included). There is no override.
+ */
+export async function sdkSeatJailGate({ bwrap = "bwrap", closerPython = fdExecPython() } = {}) {
+  const probe = await sdkJailAvailable(bwrap, { closerPython });
+  if (!probe.ok) throw jailError("SANDBOX_UNAVAILABLE", `the python SDK seat's bwrap jail is unavailable (${probe.why}); refusing to run the python SDK seat unjailed (there is no override)`, { why: probe.why, provider_requests: 0 });
+  return { bwrap, closerPython, build: spec => sdkSeatJail({ ...spec, bwrap, closerPython }) };
+}
+/**
+ * The seat's single-assignment teardown: its HOME (`jail.home`, a directory of its out dir) removed. The jail's /tmp needs
+ * nothing: it was a tmpfs of the jail's mount namespace. Returns null without a HOME, else {home, removed, removal_error?}:
+ * a removal that fails is surfaced, never swallowed.
+ */
+export async function dropSdkSeatScratch(jail) {
+  const home = jail?.home;
+  if (!home) return null;
+  const err = await rm(home, { recursive: true, force: true }).then(() => null, e => e);
+  const left = existsSync(home);
+  return { home, removed: !err && !left, ...(err || left ? { removal_error: { code: err?.code ?? "STILL_PRESENT", message: String(err?.message ?? `${home} still exists after removal`).slice(0, 300) } } : {}) };
+}

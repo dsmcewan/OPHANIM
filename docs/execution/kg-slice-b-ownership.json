@@ -1,0 +1,29 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "KG Slice B",
+  "base_commit": "c34b98f",
+  "authorization": "owner directive 2026-11-20 (docs/knowledge-graph/directive-2026-11-20.md): Slice B, the OPHANIM systems and evidence graph",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**", "docs/knowledge-graph/directive-2026-11-20.md", "docs/knowledge-graph/inventory.md", "docs/knowledge-graph/inventory.json", "docs/knowledge-graph/architecture.md", "packages/graph/**", "package.json", "package-lock.json"],
+  "dependencies": ["runs concurrently with Slice E (packages/graph/federation.mjs and its tests); the file sets are disjoint",
+    "region limits written from the brief's decisions KB1-KB8; the schema and contract are the coordinator's (KB6)"],
+  "subwaves": {
+    "KGB": {
+      "agent-kg-slice-b": {
+        "branch": "kg/slice-b",
+        "base_commit": "c34b98f",
+        "findings": ["knowledge-graph Slice B"],
+        "files": ["ophanim/graph/extract/**", "ophanim/graph/impact.mjs", "ophanim/graph/cli.mjs", "ophanim/graph/*.test.mjs", "ophanim/graph/graph-b.mutate.mjs", "ophanim/graph/fixtures/**",
+                  "ophanim/operate/context.mjs", "docs/knowledge-graph/slice-b.md"],
+        "new_files": ["ophanim/graph/extract/**", "ophanim/graph/impact.mjs", "ophanim/graph/cli.mjs", "ophanim/graph/*.test.mjs", "ophanim/graph/graph-b.mutate.mjs", "ophanim/graph/fixtures/**", "docs/knowledge-graph/slice-b.md"],
+        "region_limits": {
+          "ophanim/graph/extract/**": "KB1: the repo, verification (mutation runners read as text), ledgers (TELOS read only) and records extractors, registered origins with declared or structural bases",
+          "ophanim/graph/impact.mjs, ophanim/graph/cli.mjs": "KB2, KB3, KB5: impact, traceability and the command-line queries, bounded and explained",
+          "ophanim/graph/*.test.mjs": "new tests only; the Slice A adapter test (lessons.test.mjs) unchanged",
+          "ophanim/operate/context.mjs": "KB4: a graph retrieval operation in OPS and makeRetriever and a versioned derived view in buildDossier, returning references with versions, coverage and continuation inside the existing budgets; the existing operations, citations and re-checks unchanged",
+          "docs/knowledge-graph/slice-b.md": "KB8"
+        }
+      }
+    }
+  }
+}

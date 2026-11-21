@@ -18,7 +18,7 @@
 // runs unchanged against the base commit (the base-failure evidence of register L-136).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -375,7 +375,7 @@ test("pantheon-board run: the reviewer's default transport is the subscription C
     writeFileSync(python, `#!/bin/sh
 for a in "$@"; do case "$prev" in --out) out="$a" ;; --model) model="$a" ;; --role) role="$a" ;; esac; prev="$a"; done
 rows=$(cat ${JSON.stringify(f.repo)}/boards/*/gemini-billing.jsonl 2>/dev/null | wc -l)
-printf '%s %s %s %s\\n' "$role" "$model" "$rows" "\${GEMINI_API_KEY:-no-key}" >> ${JSON.stringify(pyLog)}
+printf '%s %s %s %s\\n' "$role" "$model" "$rows" "\${GEMINI_API_KEY:-no-key}" >> "$out/python.log"
 MODEL="$model" ${JSON.stringify(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_GATEWAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_GATEWAY_TOKEN ?? "" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "review" }] }], sessionId: "1" }) }).then(r => r.text()).catch(() => null)'
 printf 'VERDICT: approve\\n' > "$out/response.md"
 printf '{"ok": true, "role": "%s", "model": "%s", "conversation_id": "fake-sdk", "tool_calls": 0, "subagent_calls": 0}\\n' "$role" "$model"
@@ -397,7 +397,10 @@ s.listen(0, "127.0.0.1", () => console.log(s.address().port));
     const edgeProc = spawn(process.execPath, [edgeScript], { stdio: ["ignore", "pipe", "inherit"] });
     const edgePort = await new Promise(r => edgeProc.stdout.once("data", d => r(String(d).trim())));
     const seats = ["implementer=xai/grok-4.6", "reviewer=agy_google/gemini-3.8-flash"];
-    const spawned = () => (existsSync(pyLog) ? readFileSync(pyLog, "utf8").split("\n").filter(Boolean) : []);
+    // THE SDK SEAT RUNS IN ITS JAIL (knowledge graphs, Slice C2): it writes only its out dir, so each launch is logged there; the
+    // usage rows it counts at launch are the ones visible inside the jail (none: the board dir is not), and "nothing charged
+    // for the launch" rests on the provider edge's count below (1 row persisted when its one request arrived, not 2).
+    const spawned = () => { const d = join(f.repo, "outputs", "open-items"); return (existsSync(d) ? readdirSync(d) : []).flatMap(k => { const s = join(d, k, "agy_google"); return existsSync(s) ? readdirSync(s).flatMap(n => (existsSync(join(s, n, "python.log")) ? readFileSync(join(s, n, "python.log"), "utf8").split("\n").filter(Boolean) : [])) : []; }); };
     const saved = { PANTHEON_AGY_TRANSPORT: process.env.PANTHEON_AGY_TRANSPORT, PANTHEON_AGY_PYTHON: process.env.PANTHEON_AGY_PYTHON, PANTHEON_AGY_GATEWAY_UPSTREAM: process.env.PANTHEON_AGY_GATEWAY_UPSTREAM };
     try {
       process.env.PANTHEON_AGY_PYTHON = python;

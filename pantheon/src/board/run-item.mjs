@@ -37,6 +37,7 @@ import { tokenCapFor } from "../agents/store.mjs";
 import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
 import { spawnPromise } from "./spawn.mjs";
 import { runAgyCliTurn, agySdkEnvOf, agyModelMismatch } from "./agy-cli.mjs";
+import { sdkSeatJailGate, dropSdkSeatScratch } from "../agy/sandbox.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
 import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
 import { routeSeats, isMeteredGemini, geminiAdmission, spendGemini, geminiBilling, geminiKindOf, billingRecord, isGeminiBillingRefusal } from "../route/quota-failover.mjs";
@@ -130,6 +131,11 @@ function usageOf(raw) {
   const output = num(raw.output_tokens) ?? num(raw.completion_tokens) ?? google;
   return { input_tokens: input, output_tokens: output, reported: structuredClone(raw) };
 }
+// THE TRANSPORT AN agy ATTEMPT RAN ON (KG-6; knowledge graphs, Slice C2): an Antigravity seat's own transport is `agy`
+// (route/frontier.mjs seatTransport), which does not say whether the CLI lane or the python SDK seat served it; agyTurn
+// resolves it, and the attempt records the resolved one, so the capability metrics map each attempt to its executable
+// capability (capability/metrics.mjs). A record that says `agy` (written before this) stays readable and is listed unmapped.
+const AGY_TRANSPORT_OF = Object.freeze({ cli: "agy-cli", sdk: "agy-sdk" });
 // What an attempt that ended in an error was: the router's own classification, so a quota refusal recorded
 // here is the same quota refusal the fallback acted on.
 function failureOutcome(e) {
@@ -557,7 +563,9 @@ export async function runOpenItem(spec, opts = {}) {
   // `signal` (the turn's stop: L-306) cancels the CLI's or the SDK seat's process group; `admit` (L-301) is the provider-call
   // admission, called at the point of spend: inside runAgyCliTurn between its jail build and its spawn, or, for the python
   // SDK seat, at EACH request the model gateway admits for it (L-150), never for the launch itself.
-  async function agyTurn({ purpose, model, prompt, declared = null, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900), signal = undefined, admit = () => {} }) {
+  // `onTransport` (KG-6, knowledge graphs Slice C2) is told the transport this turn resolved to, agy-cli or agy-sdk, as soon
+  // as it is known, so the attempt records which of the two served it (or was refused on it), never the ambiguous `agy`.
+  async function agyTurn({ purpose, model, prompt, declared = null, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900), signal = undefined, admit = () => {}, onTransport = () => {} }) {
     const role = purpose === "critique" ? "reviewer" : purpose === "scout" ? "scout" : purpose === "plan" ? "planner"
       : purpose === "work" ? "implementer" : null;
     if (!role) throw new Error(`agy seat: no Antigravity agent is defined for purpose "${purpose}"`);
@@ -572,6 +580,7 @@ export async function runOpenItem(spec, opts = {}) {
     // still governs scout/reviewer, which genuinely support both lanes.
     // A declared lane (lanes.json: transport agy-cli) is served by that transport for every role (audit M6).
     const transport = (role === "planner" || role === "implementer" || declared === "agy-cli") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "cli");
+    onTransport(AGY_TRANSPORT_OF[transport] ?? null);
     const dir = join(outDir, "agy_google", `${purpose}-${++agyN}`); mkdirSync(dir, { recursive: true });
     // The implementer keeps its real NO_TOOLS prompt untouched: it is genuinely tool-less on every
     // transport (run-item.mjs applies its text reply to disk itself -- see the WORK stage above),
@@ -625,9 +634,24 @@ export async function runOpenItem(spec, opts = {}) {
         throw Object.assign(new Error(why), { code: SEAT_VERTEX_UNSUPPORTED, provider_requests: 0 });
       }
       if (!process.env.GEMINI_API_KEY) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (the controller's model gateway holds it; the SDK seat never does)");
+      // THE SEAT'S JAIL (register L-155; owner decision 2026-11-20 "Yes, bubble per seat"; src/agy/sandbox.mjs sdkSeatJail):
+      // the seat's WHOLE process runs in bwrap -- the host read-only, the controller's HOME and credential locations hidden,
+      // its own PID namespace and /proc (the controller's environment out of reach), only the worktree and this seat's out
+      // dir writable, an allowlisted environment. No bwrap, or a failing probe of the jail, refuses the seat HERE, before the
+      // gateway session exists: nothing admitted, charged or spawned. There is no override. (`opts.sdkJail.bwrap` names the binary,
+      // as runAgyCliTurn's sandbox.bwrap does; a binary that is missing or fails the probe refuses.) NO DESCRIPTOR BEYOND 0,
+      // 1 AND 2 (register KG-11): the jail's prefix starts bwrap through the descriptor closer (src/agy/fd-exec.mjs, a
+      // single-threaded python3 program), so the seat inherits nothing this controller was handed but its stdio; a closer
+      // that does not work here (no python3 included) refuses the seat at this gate, as a missing bwrap does.
+      let jailGate;
+      try { jailGate = await sdkSeatJailGate({ bwrap: opts.sdkJail?.bwrap ?? "bwrap" }); }
+      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: String(refusal.message).slice(0, 300) }); record(); throw Object.assign(refusal, { provider_requests: 0 }); }
+      // The seat's progress trail is written inside its out dir (the jail writes nothing else of the run) and copied, line by
+      // line as it grows, into the run's progress.jsonl, where an overseer reads it.
+      const seatTrail = join(dir, "progress.jsonl");
       const args = [join(REPO, "scripts", "agy-seat.py"), "--role", role, "--workspace", worktree, "--repo", REPO,
         "--model", model, "--brief", join(dir, "brief.txt"), "--out", dir,
-        "--progress", join(outDir, "progress.jsonl"),
+        "--progress", seatTrail,
         "--stage", purpose === "critique" ? "check" : purpose === "plan" ? "plan" : "intake",
         "--max-model-calls", String(SDK_MAX_MODEL_CALLS),
         "--timeout", String(timeoutS)];
@@ -650,9 +674,29 @@ export async function runOpenItem(spec, opts = {}) {
       const home = join(dir, "home"); mkdirSync(home, { recursive: true });
       const sdkEnv = agySdkEnvOf(process.env, { capability: session.env, home });
       progress({ event: "seat.env", seat: "agy_google", model, detail: `python SDK seat env: allowlist, credentials passed: ${sdkEnv.credentials.join(", ") || "none"}; gateway capability: ${sdkEnv.capability.join(", ") || "none"}; ${sdkEnv.dropped.length} variable(s) withheld` });
-      let sdkRun;
-      try { sdkRun = await spawnPromise(python, args, { env: sdkEnv.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) }); }
-      finally { await session.close(); record(); }
+      let sdkRun, jail = null, copied = 0;
+      const copyTrail = () => {
+        try {
+          const b = readFileSync(seatTrail), end = b.lastIndexOf(10) + 1;
+          if (end > copied) { appendFileSync(join(outDir, "progress.jsonl"), b.subarray(copied, end)); copied = end; }
+        } catch { /* not written yet */ }
+      };
+      const trail = setInterval(copyTrail, 500); trail.unref?.();
+      try {
+        // A jail that cannot be built (a path that would expose a hidden location, a credential-named variable) refuses the
+        // seat: nothing is spawned, and the gateway session below is closed with nothing admitted.
+        jail = jailGate.build({ python, script: args[0], repo: REPO, workspace: worktree, out_dir: dir, env: sdkEnv.env, read: [join(dir, "brief.txt"), ...(schemaPath ? [schemaPath] : [])] });
+        progress({ event: "seat.jail", seat: "agy_google", model, detail: `python SDK seat jailed (bwrap): ${jail.hidden.length} host location(s) hidden, writable: ${jail.writable.join(", ")}; environment: ${jail.record.env.join(", ")}; descriptors: ${jail.fds.passed.join(", ")} only; network shared (retained)` });
+        const [cmd, ...argv] = [...jail.prefix, python, ...args];
+        sdkRun = await spawnPromise(cmd, argv, { env: jail.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });
+      }
+      // THE SINGLE-ASSIGNMENT TEARDOWN, on every path (an answer, a refusal, the timeout, a kill): the gateway session closed and
+      // its token revoked, the seat's HOME removed (its /tmp was the jail's own tmpfs), the trail's last lines copied.
+      finally {
+        await session.close(); record(); clearInterval(trail); copyTrail();
+        const teardown = await dropSdkSeatScratch(jail ?? { home });
+        progress({ event: "seat.teardown", seat: "agy_google", model, detail: teardown?.removed ? `the seat's HOME ${home} removed; the gateway session closed` : `the seat's HOME ${home} was NOT removed: ${JSON.stringify(teardown?.removal_error ?? null)}` });
+      }
       const made = session.admitted;
       const last = (sdkRun.stdout ?? "").trim().split("\n").filter(Boolean).pop();
       let out = null;
@@ -738,21 +782,26 @@ export async function runOpenItem(spec, opts = {}) {
       refuseIfClosed({ vendor, model, pool, transport: settings.transport, purpose });
       // Each admission is one provider call: the CLI lane's one spawn, or each request the model gateway admits for the SDK seat (L-150).
       let laneCharged = 0;
-      const admitLane = () => { admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose }); laneCharged += 1; };
-      try { r = await agyTurn({ purpose, model, prompt, declared: transport, ...(signal ? { signal } : {}), admit: admitLane }); }
+      // THE ATTEMPT'S TRANSPORT (KG-6): the one agyTurn resolved, agy-cli or agy-sdk; the seat's own (`agy`, or a declared
+      // lane's agy-cli) only when the turn failed before it resolved one. `settings` keeps the seat's transport as selected.
+      let ran = null;
+      const admitLane = () => { admitProviderCall({ vendor, model, pool, transport: ran ?? settings.transport, purpose }); laneCharged += 1; };
+      try { r = await agyTurn({ purpose, model, prompt, declared: transport, ...(signal ? { signal } : {}), admit: admitLane, onTransport: t => { ran = t; } }); }
       catch (e) {
         // An identity mismatch (L-504 invariant 3) is recorded with BOTH identities, the model asked for and the one reported.
-        recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: failureOutcome(e),
+        recordAttempt({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, outcome: failureOutcome(e),
           status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200), usage: null, settings, ms: Date.now() - a0, provider_requests: laneCharged,
           ...(e?.identity ? { identity: e.identity } : {}) });
         progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e;
       }
       const ms = Date.now() - t0;
       const usage = usageOf(r.usage);
-      recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: "ok", status: null, code: null, why: null, usage, settings, ms: Date.now() - a0, provider_requests: laneCharged });
+      recordAttempt({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, outcome: "ok", status: null, code: null, why: null, usage, settings, ms: Date.now() - a0, provider_requests: laneCharged });
       // The agy transports take no effort. The protocol never decides one for these seats; if one
       // arrives anyway it is recorded as not carried rather than silently dropped.
-      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "agy", purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
+      // THE TURN'S TRANSPORT (KG-6): the one agyTurn resolved, agy-cli or agy-sdk, as on the attempt, so the metrics map the
+      // turn (its `accepted` outcome) onto its executable capability; `settings` keeps the seat's transport as selected.
+      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
         tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}),
         served_model: model, served_model_source: "input", ...chosen });
       // FORMAT REQUIREMENT (owner direction 2026-11-17). The Antigravity transports return no serving model. The model

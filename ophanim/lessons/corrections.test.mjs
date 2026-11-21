@@ -67,10 +67,13 @@ test('the current record: repeated classes are named, and success is not claimed
   const r = report(load());
   assert.ok(r.repeated_classes.includes('unqualified-claim-as-measurement'), 'the owner raised it more than once');
   assert.equal(r.success.demonstrated, false);
-  // What the independent reviews of this repository found is on the record as theirs, and no class is counted as
-  // detected by its own registered check: none has been.
+  // What the independent reviews of this repository found is on the record as theirs. One class has been detected by
+  // its own registered check: text-reader-misses-new-shape, whose detector (ophanim/graph/extract.test.mjs) failed on the
+  // merged tree of PR #67's branch (2026-11-21). It is still no success: the integrator corrected it, not the
+  // mechanism, and the owner never raised the class.
   assert.ok(r.review_found.length >= 3, JSON.stringify(r.review_found));
-  assert.deepEqual(r.classes.filter(c => c.detected_by_own_check > 0).map(c => c.id), []);
+  assert.deepEqual(r.classes.filter(c => c.detected_by_own_check > 0).map(c => c.id), ['text-reader-misses-new-shape']);
+  assert.equal(r.classes.find(c => c.id === 'text-reader-misses-new-shape').succeeded, false);
 });
 
 // ---- Findings of the independent review of a1d090f (2026-11-20) ---------------------------------------------------------

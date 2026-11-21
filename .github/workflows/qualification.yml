@@ -5,9 +5,16 @@ permissions:
 jobs:
   synthetic-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Measured 2026-11-21: main's own run of #78 took 24m16s of the old 25, and the gate step 12m24s of the old 13; a
+    # slower runner took the gate step past 13 on the knowledge-graph PR with no test failing. Raised to 40 and 20
+    # (owner decision); every step stays bounded below the job, and the gate's per-test and per-file bounds are unchanged.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The full history: the knowledge graph's why-it-exists demonstrations read the commit that introduced a file
+          # (ophanim/graph/graph-d1-why.test.mjs); a shallow checkout holds one commit and cannot answer.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.1'
@@ -45,7 +52,7 @@ jobs:
       # recorded even if a later step uses up the job's time.
       - name: Test gate, every suite re-run per file (incomplete runs, hangs, cancelled, real-bwrap skips)
         if: always()
-        timeout-minutes: 13
+        timeout-minutes: 20
         shell: bash
         run: |
           status=0

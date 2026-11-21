@@ -1,0 +1,83 @@
+--- a/ophanim/operate/work-ledger.mjs
++++ b/ophanim/operate/work-ledger.mjs
+@@ -83,7 +83,10 @@
+ /** The reservation refusal's own prefix: produced by the claim's re-derivation, mapped to code PROVIDER_CALL_BUDGET by claim(). */
+ export const RESERVE_REFUSAL = 'PROVIDER_CALL_BUDGET:';
+ export const RELEASE_OUTCOMES = Object.freeze(['completed', 'returned', 'failed', 'blocked', 'interrupted', 'expired']);
+-export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket']);
++// 'graph' (knowledge graphs, Slice D part 2, KD2-5): a missing prerequisite no item implements, proposed by the graph loop
++// (ophanim/operate/graph-loop.mjs) as a CANDIDATE only: its intake is classified 'candidate', names no item, and is never
++// executed until the owner adds an item with a signed status entry.
++export const INTAKE_SOURCES = Object.freeze(['status', 'issue', 'ticket', 'graph']);
+ export const INTAKE_CLASSES = Object.freeze(['item', 'candidate', 'coordination']);
+ export const RECOVERY_OUTCOMES = Object.freeze(['recovered', 'not-found']);
+ /** Why a claim may no longer record a result or charge a call at `at` (ms), or null. Shared by append and re-derivation. */
+--- a/ophanim/operate/live-run.mjs
++++ b/ophanim/operate/live-run.mjs
+@@ -97,6 +97,8 @@
+ import {prepareWorkerWorkspace} from '../../pantheon/src/agy/workspace.mjs';
+ import {spawnPromise} from '../../pantheon/src/board/spawn.mjs';
+ import {billingFromConfig, policyRecord} from '../../pantheon/src/route/quota-failover.mjs';
++import {createGraphLoop, loopSources} from './graph-loop.mjs';
++import {originsOf} from '../graph/extract/index.mjs';
+ 
+ const HERE = path.dirname(fileURLToPath(import.meta.url));
+ /**
+@@ -117,8 +119,21 @@
+ export const OTHER_CREDENTIALS = Object.freeze(['OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login']);
+ export const LIMIT_KEYS = Object.freeze(['total_provider_calls', 'stage_provider_calls', 'revisions', 'stage_attempts', 'elapsed_ms']);
+ export const PIPELINE_LIMIT_KEYS = Object.freeze(['max_provider_calls', 'max_revisions', 'max_concurrent_units', 'verify_timeout_ms']);
+-const TOP_KEYS = ['_fill_in', 'schema', 'item', 'candidate_commit', 'profile', 'independence', 'limits', 'billing', 'require_subagent', 'ledgers', 'credentials', 'out_dir'];
+-const OPTIONAL_TOP = new Set(['_fill_in', 'require_subagent']);
++const TOP_KEYS = ['_fill_in', 'schema', 'item', 'candidate_commit', 'profile', 'independence', 'limits', 'billing', 'require_subagent', 'ledgers', 'credentials', 'out_dir', 'graph'];
++const OPTIONAL_TOP = new Set(['_fill_in', 'require_subagent', 'graph']);
++/**
++ * THE GRAPH LOOP OF A LIVE RUN (knowledge graphs, Slice D part 2, KD2-7), when the manifest names one: {dir, anchor,
++ * snapshot_dir, keys_file}. keys_file holds the graph ledger's signers ({operator, extractor, rule, snapshot}: which keys
++ * these are is the owner's decision, KG-4). The sources are the repository at HEAD and the run's work ledger.
++ */
++export function graphLoopOf(m, repo) {
++  const k = JSON.parse(fs.readFileSync(m.graph.keys_file, 'utf8'));
++  return createGraphLoop({dir: m.graph.dir, anchor: m.graph.anchor, origins: originsOf(),
++    sources: () => loopSources({repo, workRoot: m.ledgers.work_root, only: null, lessons: true, deps: true}),
++    snapshot: {dir: m.graph.snapshot_dir, keys: {[k.snapshot.key_id]: k.snapshot.publicJwk}, signer: k.snapshot},
++    writers: {extractor: {signer: k.extractor, order: k.operator}, rule: {signer: k.rule, order: k.operator}},
++    observe: ['ophanim.repo'], stateDir: path.join(m.out_dir, 'operate'), workRoot: m.ledgers.work_root});
++}
+ const ID = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+ const COMMIT = /^[0-9a-f]{40}$/;
+ const plain = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+@@ -184,6 +199,7 @@
+     if (!posInt(m.require_subagent.min_calls)) why.push('require_subagent.min_calls is a positive integer');
+   }
+   if (keys(m.ledgers, 'ledgers', ['status_root', 'work_root'])) for (const k of ['status_root', 'work_root']) if (!str(m.ledgers[k])) why.push(`ledgers.${k} is a path`);
++  if (m.graph !== undefined && keys(m.graph, 'graph', ['dir', 'anchor', 'snapshot_dir', 'keys_file'])) for (const k of ['dir', 'snapshot_dir', 'keys_file']) if (!str(m.graph[k]) || !path.isAbsolute(m.graph[k])) why.push(`graph.${k} is an absolute path`);
+   if (keys(m.credentials, 'credentials', ['required', 'gemini_api_key'])) {
+     const r = m.credentials.required;
+     if (!Array.isArray(r) || !r.every(x => typeof x === 'string')) why.push('credentials.required is a list of credential names');
+@@ -689,6 +705,7 @@
+   const s = seats ?? await liveSeats();
+   // THE ONE BILLING POLICY (register L-136): the manifest's billing, resolved centrally, handed to every tick below.
+   const billing = manifestBilling(m);
++  const graph = m.graph ? graphLoopOf(m, repo) : null;
+   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
+     profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note});
+   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
+@@ -698,7 +715,7 @@
+     lease_ms: L.elapsed_ms + Math.min(60_000, Math.ceil(L.elapsed_ms / 9))};
+   const ticks = [], launcherStops = [], launcherBlockers = [];
+   const maxTicks = STAGES.length * L.stage_attempts * 2;
+-  const gateOf = () => reconcile({repo, statusRoot: m.ledgers.status_root, workLedger: work, issues: null}).items.find(i => i.item === m.item).gate;
++  const gateOf = () => reconcile({repo, statusRoot: m.ledgers.status_root, workLedger: work, issues: null, ...(graph ? {graph: graph.context({write: false})} : {})}).items.find(i => i.item === m.item).gate;
+   let gate = gateOf();
+   // A claim this launcher did not take blocks the item until its lease ends: named, with its expiry (L-305).
+   const noteHeld = () => { const h = gate.gate === 'claimed' ? heldClaim(work, m.item) : null; if (h && !launcherBlockers.some(b => b.claim === h.claim)) { launcherBlockers.push(h); note({event: 'claim.held', ...h}); } };
+@@ -714,7 +731,7 @@
+     }
+     note({event: 'tick', n, gate: gate.gate});
+     const t = await tick({repo, statusRoot: m.ledgers.status_root, workRoot: m.ledgers.work_root, executors, limits: {...limits, elapsed_ms: left}, holder: 'live-run', only: m.item, progress: note, billing,
+-      ...(interrupt ? {interrupt} : {})});
++      ...(interrupt ? {interrupt} : {}), ...(graph ? {graph} : {})});
+     ticks.push(tickRow(t));
+     gate = gateOf();
+     if (t.interrupted.length || interrupt?.aborted) break;

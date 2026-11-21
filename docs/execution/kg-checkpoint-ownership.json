@@ -1,0 +1,65 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "af0dc3012688703ccac0f6de31836822a3279eae",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "package.json",
+    "package-lock.json"
+  ],
+  "wave": "KG replay checkpoint",
+  "base_commit": "f2881f0",
+  "authorization": "owner directive 2026-11-20 (knowledge graphs); register KG-1 (a signed projection checkpoint before Slice D)",
+  "dependencies": [
+    "runs concurrently with Slice C2 (pantheon/**, scripts/test-gates/real-bwrap-suites.json); disjoint",
+    "region limits written from the brief's decisions KP1-KP8; packages/ledger is not this work's"
+  ],
+  "subwaves": {
+    "KGP": {
+      "agent-kg-checkpoint": {
+        "branch": "kg/checkpoint",
+        "base_commit": "f2881f0",
+        "findings": [
+          "knowledge-graph replay checkpoint (KG-1)"
+        ],
+        "files": [
+          "packages/graph/checkpoint.mjs",
+          "packages/graph/index.mjs",
+          "packages/graph/projection.mjs",
+          "packages/graph/kinds.mjs",
+          "packages/graph/tests/checkpoint*.test.mjs",
+          "packages/graph/tests/checkpoint.mutate.mjs",
+          "packages/graph/tests/graph.mutate.mjs",
+          "packages/graph/tests/federation.mutate.mjs",
+          "ophanim/graph/extract/index.mjs",
+          "ophanim/graph/extract.test.mjs",
+          "docs/knowledge-graph/checkpoint.md"
+        ],
+        "new_files": [
+          "packages/graph/checkpoint.mjs",
+          "packages/graph/tests/checkpoint*.test.mjs",
+          "packages/graph/tests/checkpoint.mutate.mjs",
+          "docs/knowledge-graph/checkpoint.md"
+        ],
+        "region_limits": {
+          "packages/graph/index.mjs": "KP2: ONE export line for checkpoint.mjs",
+          "packages/graph/projection.mjs": "KP7: a state serializer and restorer only; with no snapshot, behaviour byte-identical",
+          "packages/graph/kinds.mjs": "KP3/KP7: openGraph's `snapshot` option and its verification field only; with no snapshot, behaviour byte-identical",
+          "packages/graph/tests/graph.mutate.mjs": "retarget a mutation whose target text moves; no mutation removed",
+          "packages/graph/tests/federation.mutate.mjs": "retarget a mutation whose target text moves; no mutation removed",
+          "ophanim/graph/extract/index.mjs": "KP6: an optional snapshot directory and keys for the opener",
+          "ophanim/graph/extract.test.mjs": "KP6: a snapshot-open assertion on the real graph, if needed; existing assertions unchanged",
+          "docs/knowledge-graph/checkpoint.md": "KP8"
+        }
+      }
+    }
+  }
+}

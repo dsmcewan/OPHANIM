@@ -1,0 +1,21 @@
+{
+  "name": "@argo/graph",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./schema": "./schema.mjs",
+    "./identity": "./identity.mjs",
+    "./kinds": "./kinds.mjs",
+    "./projection": "./projection.mjs",
+    "./traverse": "./traverse.mjs",
+    "./events": "./events.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
