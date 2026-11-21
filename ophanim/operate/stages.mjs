@@ -24,12 +24,16 @@
 // Inputs: {repo, makeClientFor (the work seats), turn (single-turn seats: planner, reviewers, validator), n = 3,
 // statusRoot, stateDir, scouts, revisions, seating (the configured reviewer pool, default Pantheon's), facts (its seat facts;
 // tests inject a synthetic pool with both), pipelineLimits (overrides of the pipeline's DEFAULT_LIMITS under `fit`; the
-// provider-call bound is the stage budget, or a lower max_provider_calls given here)}. Every stage stays within
-// ctx.budget.provider_calls; a failed or refused call is counted. Vendor SDKs stay at the edge.
+// provider-call bound is the stage budget, or a lower max_provider_calls given here), antigravity (options of the
+// Antigravity SDK transport: pipeline/turns.mjs `antigravity`; none is needed: it reads GEMINI_API_KEY and
+// PANTHEON_ANTIGRAVITY_PYTHON itself)}. Every stage stays within ctx.budget.provider_calls; a failed or refused call is
+// counted. Vendor SDKs stay at the edge.
 // THE GEMINI BILLING POLICY (register L-136; docs/billing-policy.md) is not an input here: every stage is handed its billing
 // context by the scheduler (ctx.billing: the launcher's declared policy over the work ledger under the stage's claim), and
 // carries it to every point of Gemini spend -- the single-turn seats (each turn call), runOpenItem and the pipeline's turns.
-// A stage without one (a direct caller) runs with both kinds off.
+// A stage without one (a direct caller) runs with both kinds off. The `fit` implementer is an Antigravity SDK session, a
+// PRIMARY seat of that policy: with gemini_api_primary off it is refused before it starts, and the implement stage is
+// pending on that refusal until the launcher declares it.
 // A SELF-REPAIR ROUND (ophanim/operate/self-repair.mjs; docs/self-repair.md) runs these same stages under its own work
 // identity, with ctx.selfRepair {round, defect, base, line, paths}: the planner is told the defect and must state `repair`
 // {defect, root_cause, reproduction} (planRefusal); implement builds on the round's base (the line head when the round
@@ -57,17 +61,20 @@ import {CYCLE_CONTRACT_V3} from '../../pantheon/src/ledger/practice-kinds.mjs';
 import {REVIEW_BRIEF, deriveCycle, ledgerView} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {selectSeat, readPools} from '../../pantheon/src/route/frontier.mjs';
-import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, implementerEscalation} from '../../pantheon/src/route/fit-matrix.mjs';
-import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT, liveOwner, recoverOrphanWorktrees, recoverDeadRunBranch} from '../../pantheon/src/pipeline/index.mjs';
+import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, implementerPath as matrixImplementerPath} from '../../pantheon/src/route/fit-matrix.mjs';
+import {runPipeline, contributionsOf, arbitersOf, validateWorkUnits, PLANNER_PROMPT, liveOwner, recoverOrphanWorktrees, recoverDeadRunBranch, TRANSPORT_BLOCKERS} from '../../pantheon/src/pipeline/index.mjs';
+import {ceilingFor, SUBAGENT_MODEL, SUBAGENT_TYPES, SUBAGENT_TYPE_NAMES} from '../../pantheon/src/antigravity/subagents.mjs';
 import {pipelineTurns} from '../../pantheon/src/pipeline/turns.mjs';
-import {geminiBilling, isGeminiBillingRefusal, METERED_GEMINI_DISABLED} from '../../pantheon/src/route/quota-failover.mjs';
+import {geminiBilling, isGeminiBillingRefusal, METERED_GEMINI_DISABLED, GEMINI_BILLING_REFUSALS} from '../../pantheon/src/route/quota-failover.mjs';
 import {matchesOwned} from '../../pantheon/src/pipeline/paths.mjs';
+import {promptRequirement, promptSection, PROMPT_BASIS_PREFIX} from './prompt-intake.mjs';
 import {git as gitAsync} from '../../pantheon/src/pipeline/git.mjs';
 import {VERIFY_JAIL_MODULE, VERIFY_JAIL_SCHEMA, launcherEnv} from '../../pantheon/src/agy/verify-jail.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {labOf} from '../../pantheon/src/config/models.mjs';
 import {SEATING, candidatesFor} from '../../pantheon/src/role/seating.mjs';
 import {bytesOfRepo} from './reconcile.mjs';
+import {requestResearch, researchOf, researchView, researchContributors, runResearch, teamIdOf, researchTransportRefusal, isResearchTransportStop} from './research.mjs';
 import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, GRAPH_RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 import {requiresRefusal} from './gates.mjs';
 import {repairPlanRefusal, laneProposal, LANE_PROPOSAL_SCHEMA} from './self-repair.mjs';
@@ -180,6 +187,9 @@ function meter(turn, limit, ctx = {}) {
   m.left = () => m.limit - m.made - reserved;
   // The investigation's "may it ask again": false records a budget stop for that seat (it ended on the budget).
   m.canAsk = (reserve, who) => { const ok = m.left() > reserve; if (!ok) stop(who, 'PROVIDER_CALL_LIMIT'); return ok; };
+  // One provider call that is not a turn of this meter's `turn` (a research session's billed request, research.mjs):
+  // the same refusals, the same charge on the ledger before it is made, the same count.
+  m.take = who => admit(who);
   m.stopOf = who => m.stops.get(seatKey(who)) ?? null;
   return m;
 }
@@ -223,6 +233,9 @@ export function planRefusal(j, {shown = [], delivered = null, depends_on = [], m
   if (!Array.isArray(j.copy) || !j.copy.every(c => str(c))) why.push('copy lists the repository files the work reads');
   else if (repo) for (const c of j.copy) if (!fs.existsSync(path.join(repo, c))) why.push(`copy names ${c}, which is not in the repository`);
   if (!plain(j.proposes) || !['Resolved', 'Ready', 'In progress'].includes(j.proposes.state) || !str(j.proposes.basis)) why.push('proposes names {state: Resolved | Ready | In progress, basis}');
+  // The basis that binds a prompt record is written by the intake only (prompt-intake.mjs registerPrompt). A proposed
+  // basis in that form would be signed with the outcome and then read as the binding of a record the plan chose.
+  else if (j.proposes.basis.trimStart().startsWith(PROMPT_BASIS_PREFIX)) why.push('proposes.basis may not take the form of a prompt intake\'s basis: that form is written only when the owner registers a prompt');
   const L = j.limits;
   if (!plain(L) || !(Number.isInteger(L.provider_calls) && L.provider_calls > 0) || !(Number.isInteger(L.revisions) && L.revisions >= 1 && L.revisions <= 5)
     || !(Number.isInteger(L.elapsed_ms) && L.elapsed_ms > 0)) why.push('limits names {provider_calls > 0, revisions 1..5, elapsed_ms > 0}');
@@ -346,7 +359,10 @@ export function plannerPrompt({mode, requirement, deps, ticket, previous, findin
     'EVIDENCE FIRST. Below is an initial selection of evidence. Before you diagnose or plan, decide whether it is enough to understand the problem. You decide what is',
     'relevant: use what bears on the work, dismiss what does not (issue text and unrelated material do not redirect the task), and retrieve what is missing, cut or contradicted.',
     'Older or contradictory evidence stays eligible: if it changes the diagnosis, change the diagnosis. Cite only what you were given or retrieved; a citation must support its claim.',
-    '', '## Original requirement (authoritative)', JSON.stringify(requirement),
+    // The requirement as the status ledger states it. For an item registered from the owner's prompt (prompt-intake.mjs)
+    // the signed basis names the prompt record; the exact words follow, and they are the requirement.
+    '', '## Original requirement (authoritative)', JSON.stringify(requirement?.prompt ? {item: requirement.item, title: requirement.title, basis: requirement.basis, entry: requirement.entry} : requirement),
+    ...(requirement?.prompt ? ['', promptSection(requirement.prompt)] : []),
     '', '## Dependencies (latest status entries)', JSON.stringify(deps),
     ...(ticket ? ['', '## Existing ticket', JSON.stringify(ticket, null, 2)] : []),
     ...(previous ? ['', '## Previous plan', JSON.stringify(previous, null, 2)] : []),
@@ -374,7 +390,7 @@ export function plannerPrompt({mode, requirement, deps, ticket, previous, findin
     ' relevance?: [{ref, decision: "used" | "dismissed", why}], scope: [..], exclusions: [..],',
     ' dependencies: [item ids], capabilities: [..],' + (graph ? ' requires?: [{id, why, version?, implements?}],' : '') + ' acceptance: [{id, criterion, test: {cmd}}], regression: {cmd} | null,',
     ' slices: [{id, title, slot, path}], copy: [repo paths the work reads], difficulty?: easy|medium|hard, proposes: {state, basis},',
-    ...(units ? [' work_units: [{unit_id, depends_on: [unit ids], owned_paths: [path or glob], difficulty: easy|medium|hard, specialist_role, allowed_subagents: [role ids], verify_cmd, invariants: [..]}],'] : []),
+    ...(units ? [` work_units: [{unit_id, depends_on: [unit ids], owned_paths: [path or glob], difficulty: easy|medium|hard, specialist_role, allowed_subagents: [specialist types the unit's implementer may delegate to: any of ${SUBAGENT_TYPE_NAMES.join(', ')}; [] when none is needed], verify_cmd, invariants: [..]}],`] : []),
     ' limits: {provider_calls, revisions, elapsed_ms}, stopping: [..], recovery, rollback, unresolved: [..], evidence: [{ref, why}],',
     ' ticket_assessment?: {still_valid, reasons: [..]}, answers?: [{finding, response}]}',
     'A ref is a dossier id (S3), a source (file:path, status:item, issue:7) or a repository path. If the evidence does NOT support a plan even after retrieval, answer instead',
@@ -539,15 +555,19 @@ const runPolicy = run => {
 };
 
 /**
- * The implementer's REJECTION path at a difficulty, as the fit matrix states it: the lane's next thinking level first
- * (same base model), and only at its top the next rung of the difficulty's ladder. The pipeline raises the implementer
- * one step along this list per rejection. (hard: carbon-high -> hydrogen-xhigh -> argon-high.)
+ * The implementer's REJECTION path at a difficulty, as the fit matrix states it (pantheon/src/route/fit-matrix.mjs
+ * implementerPath): the model's next recorded thinking level first, and only at its top the next rung of the
+ * difficulty's ladder. Every entry is a seat of the Antigravity SDK transport. The pipeline raises the implementer one
+ * step along this list per rejection. (easy: hydrogen@medium -> @high -> @xhigh -> gemini-3.8-flash@high.)
  */
-export function implementerPath(difficulty) {
-  const ladder = IMPLEMENTER_LADDERS[difficulty].map(x => x.model), out = [{...IMPLEMENTER_LADDERS[difficulty][0]}];
-  for (let next; (next = implementerEscalation(out.at(-1), ladder)) && !out.some(x => x.model === next.model);) out.push({vendor: next.vendor, model: next.model});
-  return out;
-}
+export const implementerPath = difficulty => matrixImplementerPath(difficulty);
+
+/**
+ * May the unit's implementer, on the seat the matrix starts it on, delegate to a native subagent? Only when that
+ * model has a ceiling above none and the unit allows a specialist type the controller pins (owner direction
+ * 2026-11-19: Carbon 8, Neon 4, Hydrogen none). The subagent is then a predicted contributor on SUBAGENT_MODEL.
+ */
+export const mayDelegate = unit => ceilingFor(IMPLEMENTER_LADDERS[unit.difficulty][0].model) > 0 && (unit.allowed_subagents ?? []).some(n => Object.hasOwn(SUBAGENT_TYPES, n));
 
 // REVIEW INDEPENDENCE in force for the lifecycle. 'lab' (the rule every recorded cycle was opened under): no reviewer
 // from a lab that contributed. 'model' (pantheon.cycle/v3; owner direction 2026-11-17): no reviewer that IS a contributing
@@ -568,6 +588,14 @@ export const independenceFor = profile => (profile === 'fit' ? 'model' : REVIEW_
  */
 export const workContributions = run => changeScope(run).contributions.map(c => ({purpose: c.purpose, vendor: c.vendor, model: c.model,
   ...(c.requested_model ? {requested_model: c.requested_model} : {}), ...(c.served_model_source ? {served_model_source: c.served_model_source} : {}), lab: c.lab, via: c.via}));
+/** What an SDK implementer's native subagents did in a unit, for the stage record: {subagents: {model, admitted, peak_live, rejected}} or {}. */
+const nativeSubagentsOf = u => {
+  const sessions = (u.attempts ?? []).map(a => a.session?.subagents).filter(Boolean);
+  if (!sessions.length) return {};
+  return {subagents: {model: SUBAGENT_MODEL, admitted: sessions.reduce((n, x) => n + (x.admitted_total ?? 0), 0), peak_live: Math.max(0, ...sessions.map(x => x.peak_live ?? 0)),
+    ceilings: [...new Set(sessions.map(x => x.ceiling))], rejected: sessions.reduce((n, x) => n + (x.rejections?.length ?? 0), 0)}};
+};
+
 // A finder's (or validator's) served name, and the marker of where that name came from (self-audit round 3, assignment 2
 // (sealed 449ca42), D-E/L-203: the marker was dropped on every projection of a finding).
 const withServed = f => ({...(f.served_model && f.served_model !== f.model ? {served_model: f.served_model} : {}), ...(f.served_model_source ? {served_model_source: f.served_model_source} : {})});
@@ -583,16 +611,19 @@ const findingContribution = (f, via) => ({purpose: isAdvisory(f) ? 'dispatcher-r
 // `profile` defaults to `fit` (owner direction 2026-11-17): the lifecycle routes by the fit matrix
 // (pantheon/src/route/fit-matrix.mjs) unless a caller names another profile. Only this default changed; Pantheon's own
 // selectSeat and runOpenItem still default to `argo` when called without one.
+/** How many times the plan stage itself may ask for research on one item's insufficient evidence. */
+export const GAP_RESEARCH_MAX = 3;
 // `graph` (optional; knowledge graphs, Slice D part 2): a graph handle as the graph loop gives a stage (graph-loop.mjs
 // executor(): {graph, cursor, stateOf, at, teamProposal}); the scheduler hands one per stage as ctx.graph, which wins.
 // With it the planner is given the graph's and the learning graph's views and binds its typed requirements (KD2-3), and
 // every stage records an ADVISORY team proposal beside its live seats, which it never changes (KD2-4). Without it
 // every executor is exactly as before.
 export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, statusRoot = null, stateDir = null, scouts = ['xai'], revisions = undefined,
-  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, bundlesDir = null, independence = undefined,
-  pipelineLimits = {}, graph: graphHandle = null, ...rest} = {}) {
+  seating = undefined, facts = undefined, profile = 'fit', checked = null, progress = () => {}, investigation = {}, research = {}, bundlesDir = null, independence = undefined,
+  pipelineLimits = {}, antigravity = {}, graph: graphHandle = null, ...rest} = {}) {
   independence ??= independenceFor(profile);
   if (Object.hasOwn(rest, 'meteredFailover')) throw new Error('makeExecutors: meteredFailover is replaced by the Gemini billing policy, which the scheduler hands every stage (ctx.billing; tick({billing}))');
+  if (Object.hasOwn(rest, 'geminiApiPrimary')) throw new Error('makeExecutors: geminiApiPrimary is replaced by the Gemini billing policy, which the scheduler hands every stage (ctx.billing; tick({billing}): gemini_api_primary, with a budget)');
   if (!repo) throw new Error('makeExecutors: pass the repository');
   if (typeof turn !== 'function') throw new Error('makeExecutors: pass turn({vendor, model, prompt, seat}) for the planner, reviewers and validator');
   if (typeof makeClientFor !== 'function') throw new Error('makeExecutors: pass makeClientFor(vendor) for the work seats');
@@ -634,6 +665,113 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   const needsUnits = profile === 'fit';
   // Evidence for every judging seat (context.mjs): the dossier of the item, and bounded read-only retrieval.
   const INV = {...DEFAULT_INVESTIGATION, ...investigation};
+  // RESEARCH (owner direction 2026-11-20; research.mjs): {enabled = false, limits = {}, sdk = the transport (tests pass
+  // a scripted session), preflight = why the transport cannot start a session here, or null}. Research runs inside the
+  // plan stage, before the planner is asked. IT IS THE LAUNCHER'S CHOICE (enabled): the launchers of this repository turn
+  // it on (cli.mjs tick, watch and serve; live-run.mjs); executors built without it run none, so nothing that builds
+  // executors for another purpose starts a billed research session because a planner's answer or a ledger record asked.
+  const RES = {enabled: false, limits: {}, sdk: undefined, preflight: undefined, ...research};
+  /** Why no research session can start here, told without starting one ({code, message}), or null. A caller's own transport is the caller's to vouch for. */
+  const researchReady = () => (typeof RES.preflight === 'function' ? RES.preflight() : RES.sdk ? null : researchTransportRefusal(antigravity));
+  /**
+   * THE CONTRIBUTION ROWS OF AN ITEM'S RESEARCH: one per distinct model identity that answered in a concluded team (the
+   * model that answered as `model`, the one asked as `requested_model` when they differ, the marker, the lab). Their
+   * findings are in the dossier every later plan of the item is written from, so they are contributors to it like any
+   * other: the review panels exclude them (review independence follows contributions). Eight Hydrogen members are one
+   * row: one model of one lab, never eight reviewers' worth of independence.
+   */
+  const researchRows = (work, item) => {
+    const by = new Map();
+    for (const c of researchContributors(work, item)) {
+      const vendor = c.vendor ?? 'agy_google', model = c.served_model ?? c.requested_model;
+      const row = {purpose: 'research', vendor, model, ...(c.served_model && c.served_model !== c.requested_model ? {requested_model: c.requested_model} : {}),
+        ...markerOf({served_model: c.served_model, served_model_source: c.served_model_source}), lab: labOf(vendor, model)};
+      const k = JSON.stringify(row), e = by.get(k) ?? {row, members: 0, teams: new Set(), deepest: 0};
+      e.members += 1; e.teams.add(c.team); e.deepest = Math.max(e.deepest, c.depth ?? 1);
+      by.set(k, e);
+    }
+    return [...by.values()].map(({row, members, teams, deepest}) => ({...row, via: `research: ${members} member(s) of ${[...teams].join(', ')} answered on this model (deepest level ${deepest}); their findings are in the dossier the plan is written from`}));
+  };
+  /**
+   * RUN THE ITEM'S OPEN RESEARCH REQUESTS, before the planner is asked. Returns {ran, stop}: `stop` is the stage's result
+   * when a team did not conclude (it was refused a charge, stopped or failed): the request stays open, nothing is planned
+   * on research that did not finish, and the stage is retried (a billing refusal is woken by the policy, scheduler.mjs).
+   */
+  /**
+   * THE PLANNER FOUND THE EVIDENCE INSUFFICIENT: record a research request for exactly those gaps (once: the same gaps are
+   * not researched twice) and run it. Returns what happened, for the stage's record. With primary Gemini execution not
+   * declared nothing is requested or run, and the record says so: the planner's answer authorizes no spend.
+   */
+  /**
+   * What a research session must not read although it is inside the repository it reads: the controller's own state (the
+   * item's state directory, with other teams' evidence) and the owner's status keys. The runner adds the work ledger and
+   * the team's directory itself (research.mjs). Independent review of ea858a6..af23623, lifecycle finding 1.
+   */
+  const researchHide = ctx => [stateDir ?? (ctx.work?.root ? path.join(path.dirname(ctx.work.root), 'operate') : null), path.join(statusAt, 'keys')].filter(p => typeof p === 'string' && path.isAbsolute(p));
+  const researchOnGaps = async (ctx, m, {gaps, needed}) => {
+    if (!RES.enabled || !ctx.work?.research) return {ran: false, why: 'research is not enabled for these executors (makeExecutors research.enabled: the launcher\'s choice)'};
+    // BOUNDED PER ITEM (independent review, lifecycle finding 3): "once per set of gaps" is an exact match of the text, so a
+    // planner that words its gaps differently each time got a new team each time, without end. After GAP_RESEARCH_MAX
+    // such requests the plan stage asks for no more on the planner's say; an operator still can (`operate research`).
+    const asked = researchOf(ctx.work, ctx.item).requests.filter(r => r.trigger === 'insufficient-evidence' && r.by === 'plan stage').length;
+    if (asked >= GAP_RESEARCH_MAX) return {ran: false, why: `the plan stage has already asked for research on this item's evidence ${asked} time(s) (at most ${GAP_RESEARCH_MAX}): no further team is started on the planner's say`};
+    if ((ctx.billing ?? geminiBilling()).policy?.gemini_api_primary?.enabled !== true) return {ran: false, why: 'gemini_api_primary is not declared: research is not run, and nothing is requested on the planner\'s say'};
+    // A TRANSPORT THAT CANNOT START A SESSION RUNS NOTHING AND REQUESTS NOTHING: the item waits on its evidence exactly as
+    // it did before research existed, and the record says why.
+    const no = researchReady();
+    if (no) return {ran: false, why: `the research transport cannot start a session here (${no.code}: ${String(no.message).slice(0, 200)}): nothing is requested`};
+    const question = `The planner could not establish the problem from the evidence it was given. Gaps: ${gaps.join('; ') || 'none named'}. Evidence it says is needed: ${needed.join('; ') || 'none named'}.`;
+    let request;
+    try { request = requestResearch({work: ctx.work, item: ctx.item, trigger: 'insufficient-evidence', question, by: 'plan stage'}); }
+    catch (e) { return {ran: false, why: `not requested again: ${String(e.message).slice(0, 200)}`}; }
+    const top = git(repo)(['rev-parse', '--show-toplevel']).trim();
+    const run = await runResearch({work: ctx.work, item: ctx.item, claim: ctx.claim ?? null, request: researchOf(ctx.work, ctx.item).requests.find(r => r.hash === request), repo: top,
+      dir: path.join(dirOf(ctx, 'research'), teamIdOf({item: ctx.item, request})), billing: ctx.billing ?? geminiBilling(), admitRequest: who => m.take(who), head: git(top)(['rev-parse', 'HEAD']).trim(),
+      limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, hide: researchHide(ctx), signal: ctx.signal ?? null, progress}).catch(e => ({team: null, status: 'failed', stop_reason: e?.code ?? 'RESEARCH_FAILED', concluded: false, conclusion: null}));
+    return {ran: true, request, team: run.team, status: run.status, stop_reason: run.stop_reason, concluded: run.concluded, conclusion: run.conclusion};
+  };
+  const researchBefore = async (ctx, m, t0) => {
+    const out = {ran: [], stop: null};
+    if (!ctx.work?.research) return out;
+    const open = researchOf(ctx.work, ctx.item).open;
+    if (!open.length) return out;
+    const spent = () => ({provider_calls: m.made, elapsed_ms: Date.now() - t0});
+    // A REQUEST IS NEVER PLANNED AROUND. Executors that run no research stop here by name; so does a transport that cannot
+    // start a session (told before anything is prepared, or by the session that could not start). Nothing is simulated.
+    if (!RES.enabled) {
+      const what = `RESEARCH_NOT_ENABLED: research was requested for ${ctx.item} (${open.map(r => r.trigger).join(', ')}) and these executors run none (makeExecutors research.enabled: the launcher's choice); the request stays open and nothing is planned around it`;
+      out.stop = result('blocked', {outputs: {stage: 'research', research: []}, usage: spent(), blocker: {code: 'RESEARCH_NOT_ENABLED', what, role: 'lead@orch',
+        resume_when: 'the item is run by a launcher that enables research (operate tick, watch and serve, and the live run, do), and the owner records a new status entry for it'}, next: {stage: 'plan', why: what}});
+      return out;
+    }
+    const transportStop = (request, codes, reason) => {
+      const what = `RESEARCH_TRANSPORT: the research requested for ${ctx.item} (${request.trigger}) could not run: the Antigravity SDK transport cannot start a session (${codes.join(', ')}): ${String(reason ?? '').slice(0, 300)}; the request stays open and nothing is planned around it`;
+      return result('blocked', {outputs: {stage: 'research', research: out.ran, transport_blocker: {codes}}, usage: spent(), blocker: {code: 'RESEARCH_TRANSPORT', what, role: 'lead@orch',
+        resume_when: 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable; then the owner records a new status entry for the item'},
+        next: {stage: 'plan', why: what}});
+    };
+    const no = researchReady();
+    if (no) { out.stop = transportStop(open[0], [no.code], no.message); return out; }
+    const top = git(repo)(['rev-parse', '--show-toplevel']).trim();
+    const head = git(top)(['rev-parse', 'HEAD']).trim();
+    let context = null;
+    try { context = renderDossier(evidenceFor(ctx).dossier); } catch { context = null; }
+    for (const request of open) {
+      const run = await runResearch({work: ctx.work, item: ctx.item, claim: ctx.claim ?? null, request, repo: top, dir: path.join(dirOf(ctx, 'research'), teamIdOf({item: ctx.item, request: request.hash})), billing: ctx.billing ?? geminiBilling(),
+        admitRequest: who => m.take(who), context, head, limits: RES.limits, ...(RES.sdk ? {sdk: RES.sdk} : {}), antigravity, hide: researchHide(ctx), signal: ctx.signal ?? null, progress});
+      out.ran.push({request: request.hash, trigger: request.trigger, team: run.team, status: run.status, stop_reason: run.stop_reason, concluded: run.concluded, conclusion: run.conclusion});
+      if (run.concluded) continue;
+      if (isResearchTransportStop(run.stop_reason)) { out.stop = transportStop(request, [run.stop_reason], run.result?.nodes?.find(x => x.error)?.error?.message); break; }
+      const failed = run.status === 'failed';
+      const what = `${run.stop_reason}: the research requested for ${ctx.item} (${request.trigger}) did not conclude (${run.status}); nothing is planned on research that did not finish, and what it found so far is kept`;
+      out.stop = result(failed ? 'failed' : 'pending', {outputs: {stage: 'research', research: out.ran}, usage: {provider_calls: m.made, elapsed_ms: Date.now() - t0},
+        ...(failed ? {} : {blocker: {code: run.stop_reason, transient: true, what, role: 'decision-authority',
+          resume_when: 'the stage is retried: the team is resumed from what it recorded (a billing refusal waits for the policy to change, a spent stage budget for the next attempt)'}}),
+        next: {stage: 'plan', why: what}});
+      break;
+    }
+    return out;
+  };
   // `G` (the plan stage's graph handle, KD2-3): the dossier ends with the graph's view of the item and the learning graph's
   // view of the files in play, inside the same budget; the retriever serves the `graph` op.
   const evidenceFor = (ctx, extra = {}, G = null) => {
@@ -727,6 +865,20 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   async function plan(ctx) {
     const t0 = Date.now(), item = ctx.item, gate = ctx.gate, mode = gate.mode ?? 'author';
     const m = meter(turn, ctx.budget.provider_calls, ctx);
+    // AN AUTHORIZED PROMPT (prompt-intake.mjs). When the item's SIGNED requirement binds a prompt, the requirement is the
+    // owner's exact words. The record is read and checked against the signed digest HERE, again: reconciliation checked
+    // it when it read the gate, and the record can change in between. The planner -- and, through the plan document,
+    // every later judge -- is shown that text. A record that is missing or is not the signed text is never planned from:
+    // the attempt waits on it (it is retried, within the attempt bound) and no provider is asked.
+    const bound = promptRequirement({repo, requirement: gate.requirement});
+    if (bound?.why) {
+      const what = `PROMPT_RECORD_MISMATCH: ${bound.why}: the item's requirement is the prompt the owner signed, and it is not planned from other text`;
+      return result('pending', {outputs: {mode, stage: 'before-work', prompt: {why: bound.why}}, usage: {provider_calls: 0, elapsed_ms: Date.now() - t0},
+        blocker: {code: 'PROMPT_RECORD_MISMATCH', what: what.slice(0, 600), role: 'decision-authority', transient: true,
+          resume_when: 'the prompt record is restored to the text the owner signed, or the owner records a new status entry of the item'},
+        next: {stage: 'plan', why: what.slice(0, 300)}});
+    }
+    const requirement = bound ? {...gate.requirement, prompt: bound.prompt} : gate.requirement;
     const board = readBoard({statusRoot: statusAt});
     const status = board.items.find(i => i.item === item);
     const deps = Object.fromEntries((status?.depends_on ?? []).map(d => [d, board.items.find(i => i.item === d)?.entry ?? null]));
@@ -763,6 +915,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // The tier the planner was seated at, and why, is on the record (question 4): seatOf keeps only the identity.
     const plannerOut = {...seatOf(planner), selection: planner.selection};
     const team = [{role: 'planner', ...seatOf(planner), tier: plannerTier}];
+    // RESEARCH BEFORE PLANNING (owner direction 2026-11-20; research.mjs). The item's open research requests are run
+    // first, read-only, and what they found is part of the dossier built below. A team that did not conclude ends the
+    // attempt here: the planner is not asked on research that did not finish.
+    const researched = await researchBefore(ctx, m, t0);
+    if (researched.stop) return {...researched.stop, team};
     // Review capacity BEFORE work: the plan needs n reviewer labs outside the planner's.
     // Independence follows contributions (review/scope.mjs): a revision consumes the plan it revises and the findings
     // it answers, so the labs behind those may not review it. A revised plan keeps the lineage of what it revises,
@@ -772,6 +929,9 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // without a lab is dropped by this filter, so the dispatcher's finding must carry its lab).
     const inherited = mode === 'revise' ? [...(prevRec?.contributions ?? []),
       ...(gate.findings ?? []).filter(f => f.lab).map(f => findingContribution(f, `finding ${String(f.id).slice(0, 19)} returned to planning reached the revised plan`))] : [];
+    // The item's research contributed to whatever is planned from its dossier: its members are contributors here, so
+    // the panel below is seated outside them (researchRows).
+    inherited.push(...researchRows(ctx.work, item));
     let planSeats;
     const corrected = gate.rereview?.policy_rules ?? null;
     try { planSeats = panel([{purpose: 'plan', ...seatOf(planner)}, ...inherited], n, corrected); } catch (e) {
@@ -787,6 +947,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const GR = ctx.graph ?? graphHandle ?? null, graphAt = GR ? GR.cursor : null;
     const {dossier: built, retriever} = evidenceFor(ctx, {}, GR);
     let dossier = built;
+    // The research conclusions this attempt's dossier holds: a later conclusion that changes what a plan should rest on,
+    // and is not among them, makes the plan stale (gates.mjs).
+    // GIVEN is what is inside the bytes of the research view the dossier delivers, not every conclusion on the ledger
+    // (independent review, lifecycle finding 2: a material conclusion outside the cut was recorded as given).
+    const researchSeen = ctx.work?.research ? researchView(ctx.work, item)?.given ?? [] : [];
     const investigations = Object.assign([], {dossier});
     // What the planner was given only in part stays an unresolved gap on the record, with the request that continues it.
     // It is what the planner that wrote the CURRENT version was given: that answer's own investigation, never the
@@ -796,6 +961,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     let authorLog = null, authorUnknown = null;
     const plannerGot = () => deliveryOf(dossier, authorLog ?? {requests: []});
     const ctxOut = () => ({dossier: dossierRecord(dossier), investigations: [...investigations], unresolved: gapsOf(plannerGot()),
+      ...(researchSeen.length || researched.ran.length ? {research: researchSeen, research_ran: researched.ran} : {}),
       ...(authorLog ? {author_log: authorLog} : {}),
       ...(authorUnknown ? {author_delivery: {known: false, complete: false, why: authorUnknown}} : {})});
     // The cause of a finding as far as the record can tell: with the author's own investigation unknown, a source the
@@ -884,7 +1050,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       if (resume && m.left() < n) return stop(`stage budget: ${m.left()} provider call(s) left, the plan review needs up to ${n}`);
       for (let k = 0; k < PLANNER_TRIES && !doc; k++) {
         if (m.left() < 1 + n) return stop(`stage budget: ${m.left()} provider call(s) left, a plan and its review need ${1 + n}`);
-        const first = plannerPrompt({mode, requirement: gate.requirement, deps, ticket: ticket?.ticket ?? null, previous: prevDoc, findings,
+        const first = plannerPrompt({mode, requirement, deps, ticket: ticket?.ticket ?? null, previous: prevDoc, findings,
           refusals: refused.filter(r => r.version === v).flatMap(r => r.why), dossier: built, limits: INV, units: needsUnits, graph: Boolean(GR), selfRepair: ctx.selfRepair ?? null});
         let reply, prompt = first, inv = null, rounds = [];
         try {
@@ -916,7 +1082,11 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         // The planner judged the evidence insufficient: no plan is forced. Its gaps are kept and the item waits.
         if (plain(j?.insufficient)) {
           const gaps = (Array.isArray(j.insufficient.gaps) ? j.insufficient.gaps : []).map(String), needed = (Array.isArray(j.insufficient.needed) ? j.insufficient.needed : []).map(String);
-          return result('blocked', {outputs: {mode, insufficient: {gaps, needed}, refused, versions, context: ctxOut(), planner: plannerOut}, team, contributions, usage: usage(),
+          // INSUFFICIENT EVIDENCE ACTIVATES RESEARCH (owner direction 2026-11-20), once per set of gaps, and only where
+          // primary Gemini execution is declared: nothing is authorized by the planner's answer. The request is recorded
+          // and run now; the item still waits, and the findings (a change of its evidence) are what wakes the plan.
+          const auto = await researchOnGaps(ctx, m, {gaps, needed});
+          return result('blocked', {outputs: {mode, insufficient: {gaps, needed}, refused, versions, context: ctxOut(), planner: plannerOut, research_on_gaps: auto}, team, contributions, usage: usage(),
             findings: gaps.map((g, i) => ({id: `gap-${i + 1}`, severity: 'block', cause: 'missing-evidence', text: g, lab: planner.lab})),
             blocker: {code: 'EVIDENCE_INSUFFICIENT', what: `EVIDENCE_INSUFFICIENT: the planner could not establish the problem from the evidence it was given or could retrieve (${gaps.join('; ') || 'no gap named'})`,
               role: 'lead@orch', resume_when: `the evidence changes (${needed.join('; ') || 'the missing records become retrievable'}), or the owner raises the investigation limits`},
@@ -952,7 +1122,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
         const bound = [...Object.entries(plain(j.investigation) ? j.investigation : {}).flatMap(([q, a]) => (a?.examined && Array.isArray(a.sources) ? a.sources.map(x => bindRef(x, `investigation.${q}`)) : [])),
           ...(Array.isArray(j.relevance) ? j.relevance.filter(x => x?.decision === 'used').map(x => bindRef(x.ref, 'relevance: used')) : []),
           ...(Array.isArray(j.copy) ? j.copy.map(c => bindRef(c, 'copy: read by the work')) : [])].filter(Boolean);
-        doc = {schema: PLAN_SCHEMA, item, mode, requirement: gate.requirement, ...j,
+        doc = {schema: PLAN_SCHEMA, item, mode, requirement, ...j,
           // Each citation with how it reached the planner (supplied, retrieved) and its version: a citation of
           // something never delivered was refused above.
           evidence: j.evidence.map(e => {
@@ -1249,8 +1419,12 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
   //
   //   Stage 1  plan        the plan stage above (Claude, read-only): `work_units`, reviewed by three labs with the plan
   //   Stage 2  dispatch    an OpenAI dispatcher per unit (matrix: by the unit's difficulty) + the deterministic controller
-  //   Stage 3  implement   an Antigravity lane per unit, in the unit's own worktree, behind the write jail
-  //   Stage 4  subagents   Grok, one stateless question at a time, over the unit's A2A shim
+  //   Stage 3  implement   an Antigravity SDK session per unit (hard gemini-4-carbon, medium gemini-4-neon, easy
+  //                        gemini-4-hydrogen; the Gemini API, GEMINI_API_KEY), in the unit's own worktree, behind the
+  //                        controller's tool decisions and the write jail
+  //   Stage 4  subagents   the implementer's own gemini-4-hydrogen specialists, admitted by the controller within the
+  //                        implementer model's ceiling (Carbon 8, Neon 4, Hydrogen none); implementation contributors,
+  //                        never reviewers. No other lab's model is spent on this delegation.
   //   Stage 5  review      the dispatcher's exact model, pinned; escalates only inside OpenAI
   //   then                 the integrated tree is committed on pantheon/<item> and handed to the SAME coordinated
   //                        three-lab change review, validator and outcome as every other implement stage.
@@ -1288,13 +1462,13 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     const v = validateWorkUnits({work_units: planDoc.work_units});
     if (!v.ok) return toPlan(`the plan's work units are refused: ${v.refusals.map(r => r.message).join('; ')}`.slice(0, 600),
       v.refusals.map((r, i) => ({id: `units-${i + 1}`, severity: 'block', cause: 'inadequate-plan', text: `[${r.code}] ${r.message}`})));
-    // Review capacity BEFORE work. The predicted contributors are the matrix's: each unit's implementer (the lane the
-    // matrix starts it on; its base model is what counts) and, where the unit allows subagents, its subagent model.
+    // Review capacity BEFORE work. The predicted contributors are the matrix's: each unit's implementer (the seat the
+    // matrix starts it on) and, where that implementer may delegate (mayDelegate), its native subagent model.
     // The dispatcher is an arbiter and is not predicted as a contributor (the decision above).
     // The dispatcher is not a contributor, but it IS excluded from the later review and the validator (Decision 6,
     // owner 2026-11-19), so the capacity check predicts it as an arbiter.
     const predicted = dedupe(v.units.flatMap(u => [{purpose: 'work', ...seatOf(IMPLEMENTER_LADDERS[u.difficulty][0])},
-      ...(u.allowed_subagents.length ? [{purpose: 'subtask', ...seatOf(fitMatrix('subagent', u.difficulty))}] : []),
+      ...(mayDelegate(u) ? [{purpose: 'subtask', ...seatOf(fitMatrix('subagent', u.difficulty))}] : []),
       {purpose: 'arbiter', ...seatOf(fitMatrix('dispatcher', u.difficulty))}]));
     const cap = cycleReviewers({scope: fullScope(null, [...contributions, ...predicted]), n, ...pool, independence, labPolicy});
     if (cap.pending) {
@@ -1376,6 +1550,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // Called with the unit AS DISPATCHED: a difficulty the dispatcher raised moves the implementer and its ladder.
       // The ladder is the matrix's rejection path (thinking level first, then the next rung).
       implementer: u => ({seat: {...IMPLEMENTER_LADDERS[u.difficulty][0]}, ladder: implementerPath(u.difficulty)}),
+      // The implementer's OWN subagents (native, on the SDK transport): this seat is recorded, never asked. Every rung
+      // above is an SDK seat, so the pipeline opens no A2A relay; were one opened, the single-turn path refuses the seat.
       subagent: u => fitMatrix('subagent', u.difficulty),
       // Rung 0 is the dispatcher's exact model (the pin); the rungs above it are the rest of the OpenAI-only path.
       reviewerLadder: d => [pinnedReviewer(d), ...REVIEWER_ESCALATION.slice(REVIEWER_ESCALATION.findIndex(x => x.vendor === d.vendor && x.model === d.model) + 1).map(x => ({...x}))],
@@ -1388,7 +1564,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.2).
     let run, admitted = 0;
     try {
-      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {billing: ctx.billing ?? geminiBilling()}}), dir, sameModel,
+      run = await runPipeline({repo: top, base, plan: {work_units: units}, seats, turns: pipelineTurns({makeClientFor, turn, agy: {billing: ctx.billing ?? geminiBilling()}, antigravity}), dir, sameModel,
         // Checkpoints are sealed under a key held beside the work ledger (outside the item's state directory), and a
         // checkpoint whose seal, review or rubric does not re-derive is not resumed (independent review, assignment 3
         // (OpenAI gpt-6-astra extra review, 09d490f), question 7).
@@ -1431,7 +1607,7 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       const k = JSON.stringify(row);
       authored.set(k, {row, role: c.role, units: [...new Set([...(authored.get(k)?.units ?? []), c.unit_id])]});
     }
-    const VIA = {work: 'wrote in the unit\'s worktree', subtask: 'answered the implementer as a subagent', critique: 'its Stage 5 finding was fed to an implementer revision'};
+    const VIA = {work: 'wrote in the unit\'s worktree', subtask: 'worked for the implementer as its subagent', critique: 'its Stage 5 finding was fed to an implementer revision'};
     const work = [...authored.values()].map(a => ({...a.row, via: `pipeline ${a.role}, unit(s) ${a.units.join(', ')}: ${VIA[a.row.purpose] ?? a.row.purpose}`}));
     const arbiters = arbitersOf(run);
     // DECISION 6 (owner, 2026-11-19): the dispatcher exception is confined to the pinned Stage 5 review of its own unit.
@@ -1447,6 +1623,10 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       ...unitsOut.flatMap(u => [
         ...(u.attempts ?? []).map(a => ({role: 'implementer', ...answered(a), authored: a.status === 'written'})),
         ...(u.a2a?.calls ?? []).filter(c => c.vendor && c.model).map(c => ({role: 'subagent', ...answered(c), authored: c.status === 'answered'})),
+        // An SDK implementer's native subagents: on the team under the attempt's vendor, by the pinned model and each
+        // name the provider answered a subagent request under; authors when the attempt's writes were kept.
+        ...(u.attempts ?? []).flatMap(a => (a.session?.subagents?.instances ?? []).flatMap(i => { const named = a.session?.gateway?.served_models?.[i.model] ?? [];
+          return (named.length ? named : [null]).map(served => ({role: 'subagent', ...answered({vendor: a.vendor, model: i.model, served_model: served, ...(served ? {served_model_source: 'provider'} : {})}), authored: a.status === 'written', native: true})); })),
         ...(u.reviews ?? []).map(r => ({role: 'unit-reviewer', ...answered(r), pinned_to_dispatcher: r.pinned_to_dispatcher, authored: false, fed_revision: Boolean(r.fed_revision)})),
       ]),
     ].map(r => [teamKey(r), r])).values()];
@@ -1455,7 +1635,8 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
     // run.json's served identities and subagent receipt are read from is the record this stage saw (finding 10.1).
     const recordDigestOf = () => (fs.existsSync(recordFile) ? sha256(fs.readFileSync(recordFile)) : null);
     const runOut = {kind: 'pipeline', schema: run.schema, run_id: run.run_id, dir, record: recordFile, record_digest: recordDigestOf(), status: run.status, reason: run.reason, waves: run.waves, provider_calls: run.provider_calls,
-      units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length}]))};
+      units: Object.fromEntries(unitsOut.map(u => [u.unit_id, {status: u.status, reason: u.reason, wave: u.wave, merged: u.merged, difficulty: u.dispatch?.difficulty ?? null, attempts: (u.attempts ?? []).length, reviews: (u.reviews ?? []).length,
+        ...nativeSubagentsOf(u)}]))};
     const common = {run: runOut, arbiters, ticket: ticketOut, carried: {plan: planRec.outputs.plan_digest, lines: carried.length, via: 'appended to every unit\'s invariants'},
       ...(carriedRuns.length ? {carried_runs: carriedRuns} : {}), ...(recovered.length ? {recovered_worktrees: recovered} : {}), ...(recoveredBranches.length ? {recovered_branches: recoveredBranches} : {})};
     // Every finding the run kept (the Stage 5 reviewers' and the controller's own: write jail, ground truth), by unit.
@@ -1513,6 +1694,21 @@ export function makeExecutors({repo, makeClientFor, turn, n = COORDINATED_LABS, 
       // Units that ended blocked or refused: the work, the run record and every finding are kept; nothing is retried
       // from scratch, which would repeat the work and drop the findings.
       const stuck = unitsOut.filter(u => ['blocked', 'refused'].includes(u.status));
+      // THE IMPLEMENTER TRANSPORT COULD NOT RUN (pipeline TRANSPORT_BLOCKERS: the provider refused the key, no
+      // GEMINI_API_KEY, no jail, no SDK, an unqualified SDK version, or the Gemini billing policy refused the seat). No
+      // rung of any ladder can cure that: the stage is blocked on it, by name, and nothing else is run in the
+      // transport's place. (A refusal of the billing policy is then made a transient pending by the scheduler, which
+      // wakes the stage when the launcher's policy changes: scheduler.mjs withBilling.)
+      const noTransport = stuck.filter(u => TRANSPORT_BLOCKERS.includes(u.code));
+      if (noTransport.length && noTransport.length === stuck.length) {
+        const codes = [...new Set(noTransport.map(u => u.code))].sort();
+        return result('blocked', {outputs: {...kept, transport_blocker: {codes, units: noTransport.map(u => u.unit_id)}}, team, contributions: all, findings, usage: usage(calls),
+          blocker: {code: 'IMPLEMENTER_TRANSPORT', what: `IMPLEMENTER_TRANSPORT: the Antigravity SDK transport could not run (${codes.join(', ')}): ${String(noTransport[0].reason).slice(0, 300)}; the run record is kept (${recordFile})`,
+            role: 'lead@orch', resume_when: codes.some(c => GEMINI_BILLING_REFUSALS.includes(c))
+              ? 'the launcher declares primary Gemini execution with a budget that is not spent (gemini_api_primary; --gemini-api-primary N): the fit implementer is an Antigravity SDK session billed on the Gemini API'
+              : 'the Gemini API accepts GEMINI_API_KEY, google-antigravity is installed for PANTHEON_ANTIGRAVITY_PYTHON at the qualified version, and bubblewrap is usable'},
+          next: {stage: 'implement', why: `the implementer transport could not run: ${codes.join(', ')}`}});
+      }
       if (stuck.length) {
         const names = stuck.map(u => `${u.unit_id} (${u.status}: ${String(u.reason).slice(0, 160)})`).join('; ');
         return result('blocked', {outputs: kept, team, contributions: all, findings, usage: usage(calls),

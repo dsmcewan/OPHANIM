@@ -14,8 +14,8 @@
 //                  runVerify, the controller's own launch of the same launcher, with the probe as the verify_cmd. Also the
 //                  POSITIVE CONTROLS: the probe spawned by node directly, and under bwrap without the closer, hold fd 20.
 //   mode "board":  the python SDK seat's board spawn (runOpenItem, PANTHEON_AGY_TRANSPORT=sdk), the seat's python a stub that
-//                  runs the probe inside the jail, then the real agy-seat.py over the L-150 stub SDK through the metering
-//                  relay (its upstream a local fake).
+//                  runs the probe inside the jail, then the real agy-seat.py over the L-150 stub SDK through the model
+//                  gateway (its upstream a local fake).
 // Config: {mode, result, root, secret, needle_hex, probe, model}. Synthetic secrets only; no provider is reached.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync, copyFileSync } from "node:fs";
@@ -100,9 +100,9 @@ reply=''
   try {
     await withDispatch(async ({ dir, spec, opts }) => {
       // THE SEAT'S python: the probe first, inside the jail (its report in the seat's out dir), then the real agy-seat.py over
-      // the L-150 stub SDK, whose requests reach this controller's metering relay.
+      // the L-150 stub SDK, whose requests reach this controller's model gateway.
       const python = seatStub(dir, { needle_hex: cfg.needle_hex });
-      Object.assign(process.env, { GEMINI_API_KEY: KEY, PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: python, PANTHEON_AGY_RELAY_UPSTREAM: fake.url });
+      Object.assign(process.env, { GEMINI_API_KEY: KEY, PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: python, PANTHEON_AGY_GATEWAY_UPSTREAM: fake.url });
       const billing = geminiBilling({ policy: billingFromFlags({ "gemini-api-primary": "100" }), ledger: geminiUsageFile(usage) });
       const r = await runOpenItem(spec(`kg11-${process.pid}`), { ...opts(), maxProviderCalls: 50, billing,
         seatOverrides: { reviewer: seat("agy_google", cfg.model, { transport: "agy" }) } }).catch(e => ({ error: { message: String(e?.message ?? e), code: e?.code ?? null } }));

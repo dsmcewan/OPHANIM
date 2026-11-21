@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { withDispatch } from "./fixtures/dispatch.mjs";
 import { boardFixture } from "./fixtures/board-repo.mjs";
 import { seatTeam } from "../src/board/operate.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOARD_CLI = resolve(HERE, "..", "bin", "pantheon-board.mjs");
@@ -37,7 +38,10 @@ for (const [profile, extra] of [["argo", []], ["fit", []], ["fit", ["--seat", "i
         const preview = [...team.scouts.map(s => ["scout", key(s)]),
           ...team.implementers.map(l => ["implementer", key(l[0])]), ...team.review_panels.flat().map(s => ["reviewer", key(s)])];
 
-        const out = spawnSync(process.execPath, [BOARD_CLI, "run", item, ...common, "--clients", join(repo, "clients.fixture.mjs"),
+        // Under fit the Google implementer is a Gemini API seat, primary execution of the billing policy (register L-136):
+        // the run declares it, with a budget, as an operator does. (`next` only previews: it takes no billing flag.)
+        const declared = profile === "fit" ? ["--gemini-api-primary", "100"] : [];
+        const out = spawnSync(process.execPath, [BOARD_CLI, "run", item, ...common, ...declared, "--clients", join(repo, "clients.fixture.mjs"),
           "--turn", join(repo, "turn.fixture.mjs"), "--dir", join(repo, "board"), "--out", join(repo, "bundle"), "--checked", "2026-11-18"],
           { encoding: "utf8", env: process.env, timeout: 120_000 });
         assert.equal(JSON.parse(out.stdout).shipped, true, `${out.stdout}\n${out.stderr.slice(-2000)}`);

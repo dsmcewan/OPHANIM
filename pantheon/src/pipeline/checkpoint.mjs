@@ -23,6 +23,12 @@
 //   finding was fed to a revision. A resumed unit restores it, so the models that shaped the reused patch stay
 //   contributors for the later three-lab review and the validator (independent review, assignment 2, questions 6 and 8).
 //   A v1 checkpoint (written before the lineage was kept) is not resumed: the unit runs again.
+//   `native_subagents` (2026-11-19; optional, absent on a checkpoint written before it): for a unit an Antigravity SDK
+//   implementer wrote, per attempt whose writes were kept, {attempt, implementer: {vendor, model, effort},
+//   served_models, served_by_type?, subagents (the governor's record: every specialist admitted, its type, scope,
+//   tools, model, digests, states and usage, and every rejection)}. served_models and served_by_type are what the
+//   gateway saw: the names the provider answered under, by model asked and by specialist type. Sealed with the rest; a
+//   resumed unit restores it marked from_checkpoint.
 //
 // A checkpoint is EVIDENCE TO RE-CHECK, never a verdict to trust: checkpointRefusal() refuses one whose schema,
 // key, unit, base, verdict or upstream (unit set, keys and trees) differ from the current run, and whose patch bytes
@@ -49,15 +55,32 @@
 // checkpoint directory. The seal authenticates against whoever cannot read the key; a holder of the key can forge it,
 // as a holder of a ledger's signing key can, and ground truth (tree + verify_cmd, re-run) still has to hold.
 //
+// PARTIAL CHECKPOINTS (owner decision 2026-11-20: requirement 8 of the L-150 decision applies to the SDK implementer;
+// register L-736). An SDK implementer session that a refused charge stopped (the billing policy's budget, or the run's
+// own provider-call bound) has written candidate work. It is kept, never approved: beside the approved checkpoints, at
+// <hex>.partial.json and <hex>.partial.patch, schema pantheon.unit-partial/v1:
+//   {schema, unit_key, unit_id, verdict: "unverified", base_commit, unit_base_commit, upstream: [{unit_id, unit_key,
+//    tree}], commit, tree, changed: [paths of the patch], patch_path, patch_digest,
+//    stopped: {code, attempt, request (the session's request that was refused), used, budget, why, at},
+//    admitted: {requests, rows: [the usage row of each request admitted before the refusal]},
+//    session (the stopped session's evidence), contributions (the unit's authoring lineage up to the stop), recorded_at, seal}
+// It is sealed like an approved checkpoint and is EVIDENCE TO RE-CHECK: partialRefusal() refuses one whose schema,
+// verdict, seal, key, unit, base, upstream or patch digest does not hold, or that names a path outside the unit's own;
+// the controller (index.mjs) then applies the patch on the unit's freshly bound base and requires exactly the recorded
+// tree and only owned paths. A restored partial checkpoint is where the next session STARTS, nothing more: the unit's
+// verify command and Stage 5 still decide the whole change, and a unit is resumed as approved only from an approved
+// checkpoint. When the unit is approved its partial checkpoint is removed.
+//
 // Must never: accept a checkpoint whose upstream trees differ from this run's; accept patch bytes that do not hash
 // to the recorded digest; leave a half-written checkpoint where a reader would find it; resume an approval whose seal,
-// review or rubric does not re-derive.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+// review or rubric does not re-derive; take a partial checkpoint as an approval, or restore one that does not re-verify.
+import { mkdir, readFile, rename, rm, writeFile, readdir } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { canonical } from "../../../packages/ledger/canonical.mjs";
 import { digestOf, isObject, sha256, str } from "./util.mjs";
+import { matchesOwned } from "./paths.mjs";
 import { UNIT_KEYS } from "./work-units.mjs";
 
 export const CHECKPOINT_SCHEMA = "pantheon.unit-checkpoint/v3";
@@ -137,6 +160,82 @@ export async function readCheckpoint({ dir, unit_key }) {
   let patch;
   try { patch = await readFile(join(dir, record.patch_path), "utf8"); } catch (e) { return { found: true, record, patch: null, why: `the checkpoint's patch could not be read: ${e.code ?? e.message}` }; }
   return { found: true, record, patch };
+}
+
+// ---------------------------------------------------------------- partial checkpoints (see the header)
+export const PARTIAL_SCHEMA = "pantheon.unit-partial/v1";
+export const partialFile = (dir, unit_key) => join(dir, `${hexOf(unit_key)}.partial.json`);
+export const partialPatchName = unit_key => `${hexOf(unit_key)}.partial.patch`;
+
+/** Write a partial checkpoint and its patch, sealed under `key`, verdict "unverified". Returns the record as written. */
+export async function writePartial({ dir, record, patch, key }) {
+  await mkdir(dir, { recursive: true });
+  const patch_path = partialPatchName(record.unit_key);
+  const body = JSON.parse(JSON.stringify({ schema: PARTIAL_SCHEMA, ...record, verdict: "unverified", patch_path, patch_digest: sha256(patch), recorded_at: record.recorded_at ?? new Date().toISOString() }));
+  delete body.seal;
+  if (!key) throw Object.assign(new Error("a partial checkpoint is written sealed: pass its key (checkpointKey)"), { code: "CHECKPOINT_KEY" });
+  const full = { ...body, seal: sealOf(body, key) };
+  await atomicWrite(join(dir, patch_path), patch);
+  await atomicWrite(partialFile(dir, record.unit_key), JSON.stringify(full, null, 2) + "\n");
+  return full;
+}
+
+/** Read the partial checkpoint of `unit_key`: {found: false} | {found: true, record, patch, why?}. */
+export async function readPartial({ dir, unit_key }) {
+  let text;
+  try { text = await readFile(partialFile(dir, unit_key), "utf8"); } catch (e) { if (e?.code === "ENOENT") return { found: false }; return { found: true, record: null, patch: null, why: `the partial checkpoint could not be read: ${e.message}` }; }
+  let record;
+  try { record = JSON.parse(text); } catch { return { found: true, record: null, patch: null, why: "the partial checkpoint is not JSON" }; }
+  if (!isObject(record) || !str(record.patch_path) || /[/\\]|^\.\.?$/.test(record.patch_path)) return { found: true, record, patch: null, why: "the partial checkpoint names no patch file beside it" };
+  let patch;
+  try { patch = await readFile(join(dir, record.patch_path), "utf8"); } catch (e) { return { found: true, record, patch: null, why: `the partial checkpoint's patch could not be read: ${e.code ?? e.message}` }; }
+  return { found: true, record, patch };
+}
+
+/** Remove a unit's partial checkpoint (it was approved, so the approved checkpoint stands in its place). */
+/**
+ * The partial checkpoints in `dir` that are of unit `unit_id` under ANOTHER key than `unit_key`: [{unit_key, recorded_at}].
+ * A unit's key follows its base, its plan and what is upstream of it, so a partial checkpoint made before any of them
+ * changed is filed under a key no later run looks up. They are found by the unit's id, to be named and removed.
+ */
+export async function stalePartials({ dir, unit_id, unit_key }) {
+  let names = []; try { names = await readdir(dir); } catch { return []; }
+  const out = [];
+  for (const n of names.filter(x => x.endsWith(".partial.json")).sort()) {
+    try { const r = JSON.parse(await readFile(join(dir, n), "utf8")); if (r?.schema === PARTIAL_SCHEMA && r.unit_id === unit_id && str(r.unit_key) && r.unit_key !== unit_key) out.push({ unit_key: r.unit_key, recorded_at: r.recorded_at ?? null }); } catch { /* not a record: not this unit's */ }
+  }
+  return out;
+}
+export async function removePartial({ dir, unit_key }) {
+  await rm(partialFile(dir, unit_key), { force: true });
+  await rm(join(dir, partialPatchName(unit_key)), { force: true });
+}
+
+/**
+ * Why a read partial checkpoint may not be restored, or null. `expect` is {key, unit_key, unit_id, base_commit,
+ * upstream: [{unit_id, unit_key, tree}], owned_paths} of the CURRENT run. The tree check (apply on the bound base, and
+ * only owned paths in what was applied) is the caller's.
+ */
+export function partialRefusal({ record, patch }, expect) {
+  if (!isObject(record)) return "the partial checkpoint is not an object";
+  if (record.schema !== PARTIAL_SCHEMA) return `the partial checkpoint's schema is ${record.schema}, not ${PARTIAL_SCHEMA}`;
+  // THE SEAL FIRST: nothing a record says about itself is read as true before the controller's key vouches for it.
+  const want = Buffer.from(String(record.seal ?? "")), have = Buffer.from(sealOf(record, expect.key));
+  if (want.length !== have.length || !timingSafeEqual(want, have)) return "the partial checkpoint's seal does not verify under this run's checkpoint key";
+  if (record.verdict !== "unverified") return `a partial checkpoint's verdict is "unverified", not ${JSON.stringify(record.verdict)}: it is never an approval`;
+  if (record.unit_key !== expect.unit_key) return "the partial checkpoint is for another unit key";
+  if (record.unit_id !== expect.unit_id) return `the partial checkpoint is for unit ${record.unit_id}`;
+  if (record.base_commit !== expect.base_commit) return `the partial checkpoint was recorded on base ${record.base_commit}, not ${expect.base_commit}`;
+  if (!str(record.tree) || !/^[0-9a-f]{40,64}$/.test(record.tree)) return "the partial checkpoint records no tree";
+  if (!Array.isArray(record.changed) || !record.changed.length || !record.changed.every(str)) return "the partial checkpoint names no changed path";
+  for (const p of record.changed) if (!matchesOwned(p, expect.owned_paths ?? [])) return `the partial checkpoint changes ${p}, and ${p} is outside the unit's owned paths`;
+  if (!isObject(record.stopped) || !str(record.stopped.code)) return "the partial checkpoint does not say what stopped the session";
+  if (typeof patch !== "string") return "the partial checkpoint's patch is missing";
+  if (sha256(patch) !== record.patch_digest) return "the partial checkpoint's patch does not hash to the recorded digest";
+  const norm = list => (Array.isArray(list) ? list : []).map(u => `${u?.unit_id}\u0000${u?.unit_key}\u0000${u?.tree}`).sort();
+  const got = norm(record.upstream), now = norm(expect.upstream);
+  if (!Array.isArray(record.upstream) || got.length !== now.length || got.some((x, i) => x !== now[i])) return "the partial checkpoint's upstream units or their trees differ from this run's";
+  return null;
 }
 
 /**

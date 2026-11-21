@@ -3,7 +3,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import {openPantheonLedger} from '../../pantheon/src/ledger/system.mjs';
 import {contributorKeys, candidateRefusal} from '../../pantheon/src/review/identity.mjs';

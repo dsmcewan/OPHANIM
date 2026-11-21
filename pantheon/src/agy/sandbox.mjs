@@ -90,7 +90,7 @@ import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPromise } from "../board/spawn.mjs";
-import { RELAY_URL_ENV, RELAY_CAPABILITY_ENV } from "../route/gemini-relay.mjs";
+import { SEAT_URL_ENV, SEAT_TOKEN_ENV } from "../antigravity/seat-session.mjs";
 import { fdExecArgv, fdExecAvailable, fdExecPrefix, fdExecPython, FDS_PASSED } from "./fd-exec.mjs";
 
 // The source tree the jail hook runs from (src/): it must stay visible inside every jail.
@@ -526,7 +526,7 @@ export const cliDirOf = cli => (cli.includes("/") ? dirname(real(cli)) : null);
 // THE PYTHON SDK SEAT'S JAIL (register L-155; owner decision 2026-11-20, "Yes, bubble per seat"; knowledge graphs, Slice C2,
 // docs/knowledge-graph/slice-c2.md). Before it, the SDK seat was a plain child process of the controller: its agent's
 // run_command ran as the controller's user, outside any sandbox, and could read the controller's environment through
-// /proc/<pid>/environ -- which holds GEMINI_API_KEY, the metering relay's real credential -- and spend outside the relay.
+// /proc/<pid>/environ -- which holds GEMINI_API_KEY, the model gateway's real credential -- and spend outside the gateway.
 // Now the seat's WHOLE PROCESS (the python interpreter running scripts/agy-seat.py, and so the SDK's harness and every tool
 // it runs, run_command included) runs inside bwrap, at BOTH spawn points (board/run-item.mjs, the board's SDK seat;
 // bin/agy-seat.mjs, the governed direct launch of L-151), built by this one builder after bwrapArgs's conventions:
@@ -543,13 +543,16 @@ export const cliDirOf = cli => (cli.includes("/") ? dirname(real(cli)) : null);
 //     venv's base interpreter), the repository, the seat script, and the files the seat reads (its brief, its schema);
 //   - WRITABLE: the workspace and the seat's out dir (the seat's own HOME is a directory inside it), and nothing else but the
 //     jail's /tmp;
-//   - THE ENVIRONMENT IS AN ALLOWLIST (sdkSeatEnv, SDK_JAIL_ENV_ALLOW): the relay capability, HOME, PATH, the locale, the
+//   - THE ENVIRONMENT IS AN ALLOWLIST (sdkSeatEnv, SDK_JAIL_ENV_ALLOW): the gateway session's URL and token, HOME, PATH, the locale, the
 //     terminal and user names, the proxy and certificate settings, TMPDIR=/tmp. Nothing is inherited by default: the spawn is
 //     given exactly this environment. It is built from agySdkEnvOf's (board/agy-cli.mjs), whose withholding stays, and is
 //     RE-CHECKED here: a credential-named variable (SDK_JAIL_ENV_REFUSED: GEMINI_API_KEY, GOOGLE_*, Vertex, ADC, any
-//     KEY/TOKEN/SECRET name) refuses the seat (SDK_JAIL_ENV) instead of being dropped, so a regression upstream fails loudly;
+//     KEY/TOKEN/SECRET name) refuses the seat (SDK_JAIL_ENV) instead of being dropped, so a regression upstream fails loudly.
+//     The one exception is by exact name, SDK_JAIL_CAPABILITY: the gateway session's own URL and token (seat-session.mjs),
+//     which the seat must have to reach the gateway and which is worth nothing once its session closes. (The L-150 relay's
+//     capability was named without TOKEN; the gateway that replaced it, L-724, names its token PANTHEON_AGY_GATEWAY_TOKEN.)
 //   - THE NETWORK IS SHARED, and recorded as RETAINED (runtimes.json limitation sdk-jail-egress, as L-004 is for the CLI
-//     lanes): the relay listens on loopback and the scout's web tools need egress, so there is no --unshare-net and bwrap
+//     lanes): the gateway listens on loopback and the scout's web tools need egress, so there is no --unshare-net and bwrap
 //     has no egress filter. Host loopback services, the LAN and a cloud metadata endpoint stay reachable from the jail, and
 //     so do host Unix sockets outside the hidden locations (a read-only mount does not stop connect()). It is never claimed
 //     isolated.
@@ -562,12 +565,14 @@ export const cliDirOf = cli => (cli.includes("/") ? dirname(real(cli)) : null);
 //     There is NO override: the CLI's allowUnsandboxed is not extended to the SDK seat. A closer that cannot establish the
 //     property at the spawn itself exits 125 and starts nothing.
 //   - SINGLE-ASSIGNMENT LIFETIME: the spawn point removes the seat's HOME after the assignment on every path (success,
-//     refusal, timeout, kill: dropSdkSeatScratch), its /tmp dies with the jail, and the relay session is closed and its
-//     capability revoked.
+//     refusal, timeout, kill: dropSdkSeatScratch), its /tmp dies with the jail, and the gateway session is closed and its
+//     token revoked.
 // Must never: run the SDK seat without this jail; give it an environment it was not explicitly allowed; make anything but
 // the workspace and the out dir writable on the host; claim the network isolated.
 export const SDK_JAIL_ENV_ALLOW = Object.freeze(["PATH", "HOME", "LANG", "LANGUAGE", "TZ", "TERM", "USER", "LOGNAME", "SHELL",
-  "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", RELAY_URL_ENV, RELAY_CAPABILITY_ENV]);
+  "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", SEAT_URL_ENV, SEAT_TOKEN_ENV]);
+/** The gateway session's own URL and token: allowed by exact name, before the credential-name refusal (its token is named TOKEN). */
+export const SDK_JAIL_CAPABILITY = Object.freeze([SEAT_URL_ENV, SEAT_TOKEN_ENV]);
 export const SDK_JAIL_ENV_PREFIXES = Object.freeze(["LC_"]);
 /** A variable whose name says credential: never in the SDK seat's jail; its presence refuses the seat (the jail's re-check). */
 export const SDK_JAIL_ENV_REFUSED = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|^GOOGLE_|^GEMINI_|^CLOUDSDK_|VERTEX/i;
@@ -586,7 +591,8 @@ export function sdkSeatEnv(env = {}, { pass = "" } = {}) {
   const out = {}, dropped = [], refused = [];
   for (const [k, v] of Object.entries(env ?? {})) {
     if (v === undefined || v === null) continue;
-    if (SDK_JAIL_ENV_REFUSED.test(k)) refused.push(k);
+    if (SDK_JAIL_CAPABILITY.includes(k)) out[k] = String(v);
+    else if (SDK_JAIL_ENV_REFUSED.test(k)) refused.push(k);
     else if (allowed(k)) out[k] = String(v);
     else dropped.push(k);
   }

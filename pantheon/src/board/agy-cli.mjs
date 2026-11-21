@@ -7,7 +7,7 @@ import { tmpdir as tmpdirOf } from "node:os";
 import { join } from "node:path";
 import { parseUsageEnvelope, quotaEvidence, scopeQuota } from "../agy/quota.mjs";
 import { prepareSingleTurnWorkspace } from "../agy/workspace.mjs";
-import { RELAY_URL_ENV, RELAY_CAPABILITY_ENV } from "../route/gemini-relay.mjs";
+import { SEAT_URL_ENV, SEAT_TOKEN_ENV } from "../antigravity/seat-session.mjs";
 
 // A QUOTA REFUSAL by Antigravity, read from what the CLI itself reported (its result event and its stderr): an HTTP
 // 429, RESOURCE_EXHAUSTED, or a quota/rate-limit/spend-cap/prepaid-balance message. The CLI has no status code of its
@@ -354,9 +354,10 @@ export function workerEnvOf(extra = {}, base = null) {
 // bb1287a), L-410: it was spawned with the whole process.env, so OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY and every
 // other secret of the controller reached a non-default seat process). It is the worker's allowlist (workerEnvAllows: no
 // secret-named variable), and nothing else: no provider key, no PANTHEON_* switch but what PANTHEON_AGY_ENV_PASS lists.
-// THE SEAT HOLDS NO CREDENTIAL (register L-150, L-151): every Gemini request of the SDK goes through the controller's
-// metering relay (route/gemini-relay.mjs), which holds the real key and charges each request before it forwards it. The
-// child gets ONLY the relay's scoped capability (its URL and the session's random token, `capability`), never
+// THE SEAT HOLDS NO CREDENTIAL (register L-150, L-151, L-724): every Gemini request of the SDK goes through the
+// controller's model gateway (antigravity/gateway.mjs, opened for this seat by seat-session.mjs), which holds the real key
+// and has each request charged before it forwards it. The child gets ONLY the session's scoped capability (the gateway's
+// URL and the session's random token, `capability`), never
 // GEMINI_API_KEY, GOOGLE_API_KEY, a Vertex project or an ADC file: AGY_SDK_WITHHELD is dropped even when
 // PANTHEON_AGY_ENV_PASS names it, and `home` (a fresh directory of the session) replaces HOME, so no ~/.config/gcloud ADC
 // file or ~/.gemini login is in reach of the SDK's own credential discovery. A launch without a capability gets none of it
@@ -364,12 +365,12 @@ export function workerEnvOf(extra = {}, base = null) {
 export const AGY_SDK_WITHHELD = Object.freeze(["GEMINI_API_KEY", "GOOGLE_API_KEY", "PANTHEON_AGY_VERTEX_PROJECT", "PANTHEON_AGY_VERTEX_LOCATION",
   "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_GENAI_USE_VERTEXAI",
   "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL", "CLOUDSDK_CONFIG", "ANTIGRAVITY_LS_ADDRESS",
-  RELAY_URL_ENV, RELAY_CAPABILITY_ENV]);
+  SEAT_URL_ENV, SEAT_TOKEN_ENV]);
 /** No credential is ever passed to the python SDK seat (the list of names its env carries a credential under: empty). */
 export const AGY_SDK_CREDENTIALS = Object.freeze([]);
 /**
  * {env, dropped: [names], credentials: [], capability: [names]} for the python SDK seat (never a value in the names).
- * `capability`: the relay session's {PANTHEON_AGY_RELAY_URL, PANTHEON_AGY_RELAY_CAPABILITY}; `home`: the child's HOME.
+ * `capability`: the gateway session's {PANTHEON_AGY_GATEWAY_URL, PANTHEON_AGY_GATEWAY_TOKEN}; `home`: the child's HOME.
  */
 export function agySdkEnvOf(base = process.env, { capability = null, home = null } = {}) {
   const pass = base.PANTHEON_AGY_ENV_PASS ?? process.env.PANTHEON_AGY_ENV_PASS ?? "";
@@ -379,7 +380,7 @@ export function agySdkEnvOf(base = process.env, { capability = null, home = null
     if (!AGY_SDK_WITHHELD.includes(k) && workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k);
   }
   const given = [];
-  for (const k of [RELAY_URL_ENV, RELAY_CAPABILITY_ENV]) {
+  for (const k of [SEAT_URL_ENV, SEAT_TOKEN_ENV]) {
     if (typeof capability?.[k] === "string" && capability[k]) { env[k] = capability[k]; given.push(k); }
   }
   if (typeof home === "string" && home) env.HOME = home;

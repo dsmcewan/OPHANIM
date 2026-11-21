@@ -13,7 +13,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {tick, watch} from './scheduler.mjs';
+import {watch} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {openWorkLedger, outputsDigest, handoffRefusal} from './work-ledger.mjs';
 import {makeExecutors} from './stages.mjs';

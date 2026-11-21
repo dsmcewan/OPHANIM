@@ -263,7 +263,8 @@ export async function qualifyMeasurement(options){
           // Forecast information value net of what this investigation and any rollout would cost.
           conditionalNetInformationValueMs:grossInformationValueMs-totalMs-costs.rolloutMs-costs.regressionMs-
             costs.opportunityMs},
-        scopeLimit:'Forecast applies to the declared qualification scenario only. Historical value remains unquantified.',
+        scopeLimit:
+          'Forecast applies to the declared qualification scenario only. Historical value remains unquantified.',
         policy:{proposed:[],accepted:[],historicalWideSetting:'refused-stage-p95'},...ZERO};
       publish(finalFile,report);
       return {...report,reportFile:finalFile,reportSha:read(finalFile).sha,executed:true};

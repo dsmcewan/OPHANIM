@@ -1,5 +1,5 @@
-// THE PROVIDER EDGE OF REGISTER L-150: a LOCAL fake Gemini API (never a real provider), the upstream of the metering relay
-// (src/route/gemini-relay.mjs) in every test and in the real-SDK proof. It records every request it receives -- method,
+// THE PROVIDER EDGE OF REGISTER L-150: a LOCAL fake Gemini API (never a real provider), the upstream of the model gateway
+// (src/antigravity/gateway.mjs, through seat-session.mjs) in every test and in the real-SDK proof. It records every request it receives -- method,
 // path, the key it was sent with, the SDK's sessionId, whether it is a subagent's (its tools hold no invoke_subagent), and
 // the number of usage rows ALREADY PERSISTED when it arrived ("charged before it was sent", asserted at the edge itself) --
 // and answers as a model would, so the SDK (the real google-antigravity harness, or the stub of fixtures/l150-sdk-stub)
@@ -30,7 +30,7 @@ function answer({ mode, final, workspace }, j) {
   if (mode === "text") return [{ text: final }];
   if (mode === "loop") return call("view_file", { AbsolutePath: `${workspace}/README.md` });
   if (Array.isArray(j.tools) && j.tools.some(t => t.googleSearch)) return [{ text: "1. https://example.invalid/result -- a search result" }];
-  if (mode === "scout") return done.includes("search_web") ? [{ text: final }] : call("search_web", { query: "metering relay" });
+  if (mode === "scout") return done.includes("search_web") ? [{ text: final }] : call("search_web", { query: "model gateway" });
   if (sub) return [{ text: "subagent: ran the check, exit 0" }];
   if (done.length === 0) return call("view_file", { AbsolutePath: `${workspace}/README.md` });
   if (!done.includes("invoke_subagent")) return call("invoke_subagent", { Subagents: [{ TypeName: "pantheon-fact-checker", Role: "Fact checker", Prompt: "Run: echo ok" }] });

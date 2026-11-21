@@ -6,6 +6,8 @@ import {execFileSync} from 'node:child_process';
 import {openStatusLedger} from '../../packages/ledger/status.mjs';
 import {SEATING} from '../../pantheon/src/role/seating.mjs';
 import {SEAT_FACTS} from '../../pantheon/src/route/router.mjs';
+import {tick as schedulerTick} from './scheduler.mjs';
+import {optInPolicy} from '../../pantheon/tests/fixtures/billing.mjs';
 
 
 export const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], {encoding: 'utf8'});
@@ -128,6 +130,13 @@ export function scriptedTurn(over = {}, {serve = null} = {}) {
   return fn;
 }
 export const LIMITS = {total_provider_calls: 1000, stage_provider_calls: 40};
+
+// THE FIT IMPLEMENTER IS A PRIMARY GEMINI SEAT (register L-136; the Antigravity SDK transport). Primary Gemini execution is
+// off unless the launcher declares it with a budget, so a lifecycle test that reaches the implement stage declares it on
+// every tick, the way an operator does (`--gemini-api-primary N`). The failover stays off. A test that passes its own
+// `billing` says otherwise, for that tick.
+export const PRIMARY_DECLARED = optInPolicy({primary: 100000});
+export const tickWithPrimary = args => schedulerTick({billing: PRIMARY_DECLARED, ...args});
 // A SYNTHETIC fifth reviewer lab, injected only through the reviewer pool these tests pass. It exists nowhere in the
 // configuration and qualifies nothing (no fifth lab is set up; owner 2026-11-17). It lets the full lifecycle run past
 // the coordinated change review, which under the four configured labs is a recorded capacity pending once a model

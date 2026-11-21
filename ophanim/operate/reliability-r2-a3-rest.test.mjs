@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import * as LR from './live-run.mjs';
 import {fixture, scriptedTurn, planFor, json, git, FIVE, SIX, LIMITS, stagesOf} from './test-fixtures.mjs';
@@ -19,8 +19,8 @@ import {digest} from '../../packages/ledger/canonical.mjs';
 const mkTmp = prefix => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 const APPROVE = '```json\n{"verdict":"approve","findings":[]}\n```';
 const manifestFor = ({root, f, item, head, name, limits, over = {}}) => LR.validateManifest({schema: LR.LIVE_RUN_SCHEMA, item, candidate_commit: head, profile: 'fit', independence: 'model',
-  limits, billing: {scope: 'test', metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
-  credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
+  limits, billing: {scope: 'test', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(root, name, 'work')},
+  credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(root, name), ...over}, {baseDir: root});
 const confirmed = (root, m, turn, d, extra = {}) => LR.runConfirmed({manifest: m, digest: 'sha256:' + d.repeat(64), file: path.join(root, `${d}.json`)}, {ok: true},
   LR.statusLedgerState(m.ledgers.status_root), LR.inspectWorkRoot(m.ledgers.work_root, m.item),
   {repo: extra.repo, seats: {turn, makeClientFor: () => ({})}, makeExecutorsImpl: extra.makeExecutorsImpl ?? (opts => makeExecutors({...opts, seating: FIVE.seating, facts: FIVE.facts}))});
@@ -226,7 +226,9 @@ test('finding 6: a validator refused for quota with the metered failover off is 
   await withDispatch(async ({dir: repo, makeClientFor}) => {
     const f = fixture(repo, [{item: 'q'}]);
     const turn = scriptedTurn({validator: () => { throw Object.assign(new Error('agy: 429 RESOURCE_EXHAUSTED'), {status: 429, code: 'quota_exhausted', quota_failover: {used: false, disabled: true, lanes: ['x']}}); }});
-    // The metered failover is not declared: off by default (register L-136).
+    // The metered failover is not declared: off by default (register L-136). Primary Gemini execution is declared on the
+    // ticks (the fit implementer is an SDK session): the two are separate, and the validator's lane refusal with the
+    // failover off is what this test is about.
     const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: f.stateDir, checked: '2026-11-17', ...SIX});
     await tick({repo, statusRoot: f.statusRoot, workRoot: f.workRoot, executors: ex, limits: LIMITS});
     const val = openWorkLedger({root: f.workRoot}).stages('q').find(s => s.stage === 'validate');
@@ -276,9 +278,10 @@ test('finding 9: a live run\'s stage gets the run\'s remaining elapsed time (no 
   const head = git(repo, 'rev-parse', 'HEAD').trim();
   const m = manifestFor({root, f, item: 'timed', head, name: 'out', limits: {total_provider_calls: 50, stage_provider_calls: 5, revisions: 1, stage_attempts: 1, elapsed_ms: 60_000,
     pipeline: {max_provider_calls: 5, max_revisions: 1, max_concurrent_units: 1, verify_timeout_ms: 10_000}}});
-  let given = null;
-  await confirmed(root, m, scriptedTurn(), '9', {repo, makeExecutorsImpl: () => ({plan: async ctx => { given = ctx.budget.elapsed_ms;
-    return {status: 'pending', outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, blocker: {what: 'x', role: 'lead@orch', resume_when: 'later'}, next: {stage: 'plan', why: 'x'}}; }})});
+  let given = null, built = null;
+  await confirmed(root, m, scriptedTurn(), '9', {repo, makeExecutorsImpl: opts => { built = opts; return {plan: async ctx => { given = ctx.budget.elapsed_ms;
+    return {status: 'pending', outputs: {}, team: [], contributions: [], findings: [], usage: {provider_calls: 0}, blocker: {what: 'x', role: 'lead@orch', resume_when: 'later'}, next: {stage: 'plan', why: 'x'}}; }}; }});
+  assert.equal(built.research?.enabled, true, 'the live run builds executors that run requested research (stages.mjs: the launcher\'s choice)');
   assert.ok(given > 58_000, `the plan stage was given ${given} ms of a 60000 ms run`);
   // The verifier: what is left of the bound, never the fixed 120 s past it.
   assert.equal(typeof LR.verifyTimeout, 'function');

@@ -392,3 +392,36 @@ Each test below fails with the sources of `5f24c68` put back; projections the ba
 - **Live run and public record.** `servedIdentities` and `subagentReceipt` keep the marker and vendor; provenance no longer counts an input-stamped name as reported by the provider; the public record's evidence and work sections show the model asked, the model served and the marker.
 - **Tests.** `ophanim/operate/wave3-identity.test.mjs`, `pantheon/tests/wave3-identity.test.mjs`, `pantheon/tests/wave3-agy-guard.test.mjs`.
 - **Open.** L-140 (the own-dispatcher exemption in `stage5Keys` also exempts an author that model served), L-141 (`subagentReceipt` resolves non-xAI subagents by string), L-142 (a fixture marker outside the vocabulary).
+
+## Native Hydrogen subagents are implementation contributors (owner direction 2026-11-19)
+
+> "Google's internal Hydrogen subagents are implementation contributors, not independent reviewers. Preserve: OpenAI dispatch and pinned in-run review according to existing contracts; Grok/xAI as an eligible independent adversarial review laboratory; the existing cross-lab review requirements; contributor exclusion and model identity verification; independent validation and deterministic acceptance gates. Do not spend Grok on routine Google implementation delegation when native Hydrogen specialists can perform that work."
+
+The `fit` implementer is now an Antigravity SDK session on the Gemini API, and its subagents are its own, on `gemini-4-hydrogen` (`docs/routing-task-profile.md`, "The Google implementer on the Antigravity SDK transport"). Nothing in the identity policy, the panel rules or the ledger kinds changed. What changed is who contributes.
+
+**What is recorded as a contributor** (`pantheon/src/pipeline/record.mjs` `contributionsOf`)
+
+- `work`: each implementer attempt whose writes were kept, by the model asked and the name the provider answered under.
+- `subtask`: the native subagents of such an attempt, on `agy_google/gemini-4-hydrogen`: one row per unit and per name the provider answered a subagent request under, with the specialist types that ran (`role: "subagent:code-explorer+test-constructor"`). A subagent that was admitted and never answered is one row with no served name, marked `unnamed`: its served model is unknown and is never recorded as the model asked (L-504 invariant 2). The subagents of an attempt that failed or was discarded are not contributors, as its implementer is not.
+- A unit resumed from its checkpoint restores these rows (`from_checkpoint: true`) and its subagent receipts (`native_subagents`).
+- Before any work, the capacity check predicts a native subagent contributor only for a unit whose starting implementer may delegate (a ceiling above none and an allowed specialist type; `ophanim/operate/stages.mjs` `mayDelegate`).
+
+**What follows for each judgment**
+
+- **Stage 5** is unchanged: the unit's dispatcher model, pinned, escalating only inside OpenAI. A unit's authoring contributors, native subagents included, are excluded from its Stage 5 ladder by identity (`stage5Keys`).
+- **The three-lab change review and the validator** exclude every row above, by canonical identity, at selection and again at admission, as for any contributor. The three-lab floor is not lowered and nothing falls back.
+- **The model guard decides what can be a contribution at all** (L-504 invariant 3, at the SDK transport's entry point). A session in which any answered request, the implementer's or a subagent's, was not named by the provider as the model it asked for is refused whole (`AGY_MODEL_MISMATCH`, both identities recorded): another declared model, a name the policy does not declare, or no name. Nothing of such a session is a contribution, and its unit blocks without a retry or a ladder step. So every `work` and `subtask` row of an SDK attempt carries the provider's own name for the model asked, or, for a subagent that was never answered, no name and the `unnamed` marker.
+- **xAI is no longer a contributor of Google-implemented work.** The earlier `fit` subagent row spent `grok-4.6` or `grok-4.7` on delegation, which made that model a contributor whenever an answer was returned. Those seats are not asked now, so both Grok models stay eligible for the change panel and the validator. The cost moves to Google: when a Carbon or Neon implementer delegates, `gemini-4-hydrogen` contributes beside the implementer's model, so a Google seat on the panel must be a third Google model.
+- **The dispatcher exception** (Decisions 5 and 6) is untouched.
+
+**Shown by tests** (scripted seats and a scripted provider; nothing here is a live model's behaviour)
+
+- `pantheon/tests/antigravity-turn.test.mjs`: the model guard, for the implementer and for a subagent, on another model, an undeclared name, no name, and ahead of a quota refusal or a failure. `pantheon/tests/pipeline-antigravity-sdk.test.mjs`: the guard's refusal blocks the unit with no retry, no ladder step and no contribution; two declared names of one model are two rows of one identity; an unanswered subagent is `unnamed`.
+- `ophanim/operate/wave3-identity.test.mjs`: the base's projection tests, driven by the SDK implementer and its native subagents: asked name, served name and marker through the stage's rows, the change cycle, the validator's exclusions, the live record, the receipt and the public work view, and the `unnamed` subagent through the same projections.
+- `ophanim/operate/fit-lifecycle.test.mjs`: a `fit` item whose hard unit delegates to a native `code-explorer`; `gemini-4-hydrogen` and the three implementer models are contributors, every contributor resolves, an xAI model sits on the change panel, and no Grok seat was asked during implementation.
+- `ophanim/operate/wave2-identity.test.mjs` (L-205): a native subagent answered under a dated snapshot name; the asked and the served name are both excluded, and an xAI model reviews.
+- `ophanim/operate/sdk-intake.mutate.mjs`: mutations that drop the native subagents from the contributors, drop a subagent answered under two names, drop the `unnamed` marker, or weaken the guard (the implementer's answers, the subagents', an undeclared name, an unnamed answer, the guard's precedence) are each killed.
+
+**Not shown.** The name Google's API reports for these models has not been observed (register L-701). If it is not a declared name or a dated snapshot of one, the model guard will refuse every live implementer session with that name in the reason, until the identity policy declares it (register L-705).
+
+**Where the A2A subagent and the unnamed implementer still exist.** Only on an explicit Antigravity lane seat, which the lifecycle no longer seats. Their projections are driven at the pipeline's own entry (`pantheon/tests/wave3-identity.test.mjs`), no longer through a lifecycle run (register L-714).

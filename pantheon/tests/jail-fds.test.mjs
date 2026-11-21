@@ -259,12 +259,12 @@ test("CLI worker: started from a controller holding fd 20 on a secret, the agy w
 });
 
 // ---- the python SDK seat: the board and the direct launcher ---------------------------------------------------------------
-test("SDK board: started from a controller holding fd 20 on a secret, the python SDK seat's whole process holds no descriptor beyond 0-2, and the seat still answers through the relay", jailed, async t => {
+test("SDK board: started from a controller holding fd 20 on a secret, the python SDK seat's whole process holds no descriptor beyond 0-2, and the seat still answers through the gateway", jailed, async t => {
   const w = world(t);
   const b = await controller(w, "board", { model: MODEL_SDK }, { GEMINI_API_KEY: KEY });
   assert.equal(b.board.shipped, true, b.said + JSON.stringify(b.board));
   assert.deepEqual(b.board.critique.map(a => [a.transport, a.outcome]), [["agy-sdk", "ok"]], JSON.stringify(b.board.critique));
-  assert.ok(b.board.requests >= 1, "the seat's requests reached the provider through the relay");
+  assert.ok(b.board.requests >= 1, "the seat's requests reached the provider through the gateway");
   clean(b.board.probe, w, "the SDK seat at the board");
 });
 
@@ -277,8 +277,8 @@ test("SDK launcher: the governed direct launch (bin/agy-seat.mjs), itself holdin
   const python = seatStub(bin, { needle_hex: w.needle_hex });
   const r = await withLeak(w, process.execPath, [LAUNCHER, "--gemini-api-primary", "10", "--gemini-usage", usage, "--python", python, "--",
     "--role", "reviewer", "--workspace", ws, "--model", MODEL_SDK, "--brief", join(w.root, "brief.txt"), "--out", out, "--timeout", "60"],
-  { env: { ...w.env, GEMINI_API_KEY: KEY, PANTHEON_AGY_RELAY_UPSTREAM: fake.url } });
+  { env: { ...w.env, GEMINI_API_KEY: KEY, PANTHEON_AGY_GATEWAY_UPSTREAM: fake.url } });
   assert.equal(r.code, 0, `${r.stdout.slice(-1500)}\n${r.stderr.slice(-2500)}`);
-  assert.ok(fake.requests.length >= 1, "the seat's requests reached the provider through the relay");
+  assert.ok(fake.requests.length >= 1, "the seat's requests reached the provider through the gateway");
   clean(readJson(join(out, "jail-fds-seat.json")), w, "the SDK seat at the direct launcher");
 });

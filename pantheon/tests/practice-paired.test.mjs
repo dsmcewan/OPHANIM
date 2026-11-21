@@ -27,6 +27,7 @@ import { runBoardItem } from "../src/board/operate.mjs";
 import { currentPolicy } from "../src/ledger/practice-kinds.mjs";
 import { openStatusLedger } from "../../packages/ledger/status.mjs";
 import { withDispatch } from "./fixtures/dispatch.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOARD_CLI = resolve(HERE, "..", "bin", "pantheon-board.mjs");
@@ -315,11 +316,12 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
     try {
       let before = null, after = null, pairDir = null;
       // agy.log is the fake Antigravity CLI's own call log (tests/fixtures/dispatch.mjs writes it into the fixture
-      // directory, which is this test's repository): the fit counterpart's implementer is an Antigravity lane, so the
-      // fake CLI appends to it. It is the fixture's file, not the target repository's.
+      // directory, which is this test's repository): a lane seat of either arm appends to it. It is the fixture's file,
+      // not the target repository's. (The fit arm's Google implementer is a Gemini API seat: primary execution of the
+      // billing policy, declared in runOpts below.)
       const skipFor = () => [join(repo, "store"), pairDir, join(repo, "cooldowns"), join(repo, "agy.log")].filter(Boolean);
       const r = await runBoardItem({ repo, item: "pair-a", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-a"), out: join(repo, "bundles", "pair-a"),
-        runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, pairBudgetCalls: 200,
+        runOpts: { scouts: ["xai"], revisions: 2, billing: optIn({ primary: 100 }) }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, pairBudgetCalls: 200,
         progress: ev => {
           if (ev.event === "pair.start") { pairDir = ev.board; before = snapshot(repo, skipFor()); }
           if (ev.event === "pair.end") after = snapshot(repo, skipFor());
@@ -371,13 +373,15 @@ test("counterpart: runs the other profile in a dry board on a snapshot; the targ
       // Pairing without a bound: refused by name, recorded, and no provider is called for a counterpart.
       const n0 = calls.length;
       const b = await runBoardItem({ repo, item: "pair-b", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-b"), out: join(repo, "bundles", "pair-b"),
-        runOpts: { scouts: ["xai"], revisions: 2, profile: "fit" }, evidenceStore: store, pairRate: 1, pairBudgetCalls: 200 });
+        runOpts: { scouts: ["xai"], revisions: 2, billing: optIn({ primary: 100 }), profile: "fit" }, evidenceStore: store, pairRate: 1, pairBudgetCalls: 200 });
       assert.equal(b.bundle.pair.status, "refused");
       assert.equal(b.bundle.pair.refusal.code, "PAIR_UNBOUNDED");
       const brec = JSON.parse(readFileSync(join(store, "pairs", b.bundle.pair.pair_id, "pair.json"), "utf8"));
       assert.deepEqual([brec.status, brec.refusal.code, brec.counterpart], ["refused", "PAIR_UNBOUNDED", null]);
       const primaryRun = JSON.parse(readFileSync(join(repo, "boards", "pair-b", "run.json"), "utf8"));
-      assert.equal(calls.length - n0, primaryRun.attempts.filter(a => a.vendor !== "agy_google").length, "every provider call after the refusal is the primary's");
+      // (The scripted API clients record every API request; an Antigravity lane turn is not one. Since 2026-11-19 the fit
+      // matrix's Google implementer is an API request too.)
+      assert.equal(calls.length - n0, primaryRun.attempts.filter(a => a.transport === "api").length, "every provider call after the refusal is the primary's");
       const e2 = evaluate({ runs: store });
       assert.equal(e2.paired.refused.length, 1, "a refused pair is listed, not dropped, and is no outcome of either arm");
       assert.equal(e2.paired.pairs.length, 1);
@@ -391,7 +395,7 @@ test("counterpart: a failure under its bound is kept as an outcome (not accepted
     const store = join(repo, "store");
     try {
       const r = await runBoardItem({ repo, item: "pair-c", statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", "pair-c"), out: join(repo, "bundles", "pair-c"),
-        runOpts: { scouts: ["xai"], revisions: 2 }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 1, pairBudgetCalls: 100 });
+        runOpts: { scouts: ["xai"], revisions: 2, billing: optIn({ primary: 100 }) }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 1, pairBudgetCalls: 100 });
       // Both arms run under the same 1-call bound (comparable starting conditions), so both fail alike; the
       // counterpart's failure is still kept as an outcome of the pair, not dropped.
       assert.equal(r.bundle.run.shipped, false, "the sampled primary ran under the counterpart's bound too");
@@ -414,7 +418,7 @@ test("owner condition 3: no total boundary, an exhausted boundary, or a differen
     const { statusRoot, keys } = boardRepo(repo, ["pt-a", "pt-b", "pt-c", "pt-d"]);
     const store = join(repo, "store");
     const go = (item, extra) => runBoardItem({ repo, item, statusRoot, makeClientFor, turn: approve, dir: join(repo, "boards", item), out: join(repo, "bundles", item),
-      runOpts: { scouts: ["xai"], revisions: 2, ...(extra.runOpts ?? {}) }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, ...extra.top });
+      runOpts: { scouts: ["xai"], revisions: 2, billing: optIn({ primary: 100 }), ...(extra.runOpts ?? {}) }, evidenceStore: store, pairRate: 1, pairMaxProviderCalls: 40, ...extra.top });
     const primaryCalls = item => JSON.parse(readFileSync(join(repo, "boards", item, "run.json"), "utf8")).attempts.filter(a => a.vendor !== "agy_google").length;
     try {
       let n0 = calls.length;

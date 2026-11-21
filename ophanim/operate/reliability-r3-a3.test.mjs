@@ -153,7 +153,9 @@ const SYNTHETIC_ENV = {ANTHROPIC_API_KEY: 'sk-ant-SYNTHETIC-r3a3', OPENAI_API_KE
 // hang and ignore the stop (deaf), or answer (pass). Its exit code is the launcher's (or 128 + signal from the hard stop).
 const CHILD = mods => `import {main} from ${JSON.stringify(mods.liveRun)};
 import {scriptedTurn} from ${JSON.stringify(mods.fixtures)};
-import {scriptedClients} from ${JSON.stringify(mods.dispatch)};
+import {scriptedClients, installScriptedGemini} from ${JSON.stringify(mods.dispatch)};
+// The Google implementer's provider, scripted in THIS process (the launcher's preflight and its sessions ask it).
+installScriptedGemini();
 const [manifest, confirm, repo, mode] = process.argv.slice(2);
 const base = scriptedTurn();
 const turn = async args => {
@@ -186,8 +188,8 @@ async function withLauncher(fn) {
     const before = process.env.HOME; process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture: scripted providers and the fake agy only', metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
-      credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: path.join(outside, 'run')};
+      billing: {scope: 'fixture: scripted providers and the fake agy only', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
+      credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     const file = path.join(outside, 'manifest.json'); fs.writeFileSync(file, JSON.stringify(manifest));
     const childFile = path.join(outside, 'launcher-child.mjs');
     const url = p => pathToFileURL(path.join(ROOT, p)).href;
@@ -293,8 +295,8 @@ test('L-307 (self-audit round 3, assignment 3 (sealed bb1287a)): the run.json on
     const before = process.env.HOME; process.env.HOME = home;
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const manifest = {schema: LIVE_RUN_SCHEMA, item: 'two', candidate_commit: head, profile: 'fit', independence: 'model', limits: structuredClone(LIMITS),
-      billing: {scope: 'fixture', metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
-      credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'not-used'}, out_dir: path.join(outside, 'run')};
+      billing: {scope: 'fixture', gemini_api_primary: true, gemini_primary_budget: 500, metered_gemini_failover: false, note: ''}, ledgers: {status_root: f.statusRoot, work_root: path.join(outside, 'run', 'work')},
+      credentials: {required: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login'], gemini_api_key: 'required'}, out_dir: path.join(outside, 'run')};
     const file = path.join(outside, 'manifest.json'); fs.writeFileSync(file, JSON.stringify(manifest));
     const runFile = path.join(manifest.out_dir, 'run.json');
     // What is on disk at the moment the verifier child is started (what a kill during verification leaves).

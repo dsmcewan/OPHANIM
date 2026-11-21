@@ -19,13 +19,25 @@ jobs:
       - name: Prepare the isolated runner
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap python3-venv
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           OPHANIM_TELOS_ROOT="$RUNNER_TEMP/ophanim-telos"
           printf 'OPHANIM_TELOS_ROOT=%s\n' "$OPHANIM_TELOS_ROOT" >> "$GITHUB_ENV"
           git clone --no-checkout https://github.com/dsmcewan/TELOS.git "$OPHANIM_TELOS_ROOT"
           git -C "$OPHANIM_TELOS_ROOT" checkout --detach 0c9b539ddbb08e1464603faf786e0d5cdfc33fb8
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      # The Antigravity SDK transport's contract suite (pantheon/tests/antigravity-sdk-contract.test.mjs) runs the
+      # INSTALLED google-antigravity SDK and its bundled runtime in the real jail, against a scripted provider on
+      # loopback. Without the SDK every test of it skips as UNVERIFIED, and the gate below FAILS on a skip in a
+      # real-bwrap suite. So the pinned SDK is installed here, hash-checked, at the transport's default path. No
+      # credential is involved and nothing reaches Google.
+      - name: Install the pinned Antigravity SDK (hash-checked)
+        timeout-minutes: 4
+        run: |
+          python3 -m venv "$HOME/.local/share/pantheon/venv-antigravity"
+          "$HOME/.local/share/pantheon/venv-antigravity/bin/pip" install --no-input --disable-pip-version-check \
+            --require-hashes -r pantheon/scripts/antigravity-requirements.txt
+          "$HOME/.local/share/pantheon/venv-antigravity/bin/python" pantheon/scripts/antigravity-bridge.py --identity
       # The test gate, run mode over EVERY suite (scripts/test-gates/check.mjs; L-503, L-505, L-506). Each test file runs
       # in its own `node --test` with a per-file event reporter, so every result is attributed to its file. A suite
       # FAILS on fail or cancelled > 0, on a failing describe()/before() that node:test leaves out of `fail`, on any

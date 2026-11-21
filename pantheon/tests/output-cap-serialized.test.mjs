@@ -24,7 +24,7 @@ for (const output of ["xs", "xl"]) {
       // here and the quota failover (gemini-4-hydrogen through the API) carries the declared cap.
       agyQuota(["gemini-4-hydrogen-high", "gemini-4-argon-high"]);
       // The metered failover is OFF by default (register L-136): this row exercises it, so it opts in explicitly.
-      const r = await runOpenItem(spec(`fitCap_${output}`, { output }), opts({ profile: "fit", billing: optIn({ failover: 100 }) }));
+      const r = await runOpenItem(spec(`fitCap_${output}`, { output }), opts({ profile: "fit", billing: optIn({ failover: 100, primary: 100 }) }));
       assert.equal(r.shipped, true, JSON.stringify(r.error));
       const sent = [...capsOf(calls, PLAN), ...capsOf(calls, WORK)];
       assert.ok(sent.length >= 2, JSON.stringify(sent));

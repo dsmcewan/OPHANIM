@@ -20,7 +20,7 @@
 // Each mutation names its edits: {file, from, to}, the EXACT text replaced. The runner EXITS NON-ZERO when a target does
 // not occur exactly once (2), when the unmutated suites are not green -- a skip included: the jail cells skip where bwrap
 // does not work, and such a host proves nothing (3) -- or when any mutation SURVIVES (1): its deciding tests stay green with
-// it. Synthetic keys only; the relay's upstream is a local fake; no test reaches a provider.
+// it. Synthetic keys only; the gateway's upstream is a local fake; no test reaches a provider.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
