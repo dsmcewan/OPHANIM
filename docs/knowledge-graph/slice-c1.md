@@ -169,7 +169,7 @@ Since the base's `f58dfc0` the `fit` implementer is an Antigravity SDK session: 
 | environment | `bridge-jail`: the worker's bwrap profile, the HOME's credential directories covered; refused rather than started unjailed unless a caller passes `sandbox.allowUnsandboxed` (no launcher here does) | turn.mjs |
 | credential scope | `bridge-gateway`: the gateway session's URL and token in the start message; the environment a short allowlist | turn.mjs |
 | tools | `antigravity-sdk/read`, `/write`, `/run_command`, `/invoke_subagent` | turn.mjs |
-| limitations | `bridge-egress` (network shared, retained as L-004), `L-715` (three unhooked runtime tools), `bridge-state-persists` (KG-24) | sandbox.mjs, config, turn.mjs, pipeline/index.mjs |
+| limitations | `L-704` (network shared, as L-004 for the CLI lanes), `L-715` (three unhooked runtime tools), `bridge-state-persists` (KG-24) | sandbox.mjs, config, turn.mjs, pipeline/index.mjs |
 
 The serving rule `sdk-config-models` serves the SDK config's five models; `capabilityOfSeat` maps a seat whose `session_transport` is `antigravity-sdk` to them. **The bubble:** sandbox, credentials and tools hold; **lifetime does not**: the gateway session is closed and the process group killed on every path, but the session's HOME and the SDK's state stay in the unit's control dir after the run (KG-24). So the bridge's capabilities are established and **not isolated**, and a decision that requires the bubble excludes them, naming the lifetime.
 

@@ -39,7 +39,7 @@ test('KG-23: the bridge capability is established on found quotes: jailed, crede
     assert.deepEqual([a.runtime, a.transport, a.environment, a.pool], ['antigravity-sdk-bridge', 'antigravity-sdk', 'bridge-jail', 'bridge-gateway'], m);
     assert.deepEqual(Object.fromEntries(Object.entries(a.bubble).map(([k, v]) => [k, v.holds])), {sandbox: true, credentials: true, tools: true, lifetime: false}, m);
     assert.equal(a.isolated, false, `${m}: isolation is never claimed while a component does not hold`);
-    assert.ok(['bridge-egress', 'L-715', 'bridge-state-persists'].every(l => a.limitations.includes(l)), `${m}: ${a.limitations}`);
+    assert.ok(['L-704', 'L-715', 'bridge-state-persists'].every(l => a.limitations.includes(l)), `${m}: ${a.limitations}`);
     assert.ok(a.roles.includes('implementer'), m);
   }
 });
