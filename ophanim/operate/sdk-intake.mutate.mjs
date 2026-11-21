@@ -616,7 +616,7 @@ export const MUTATIONS = [
   {id: 'RV30', what: 'the lessons report counts a success for a class with no registered check', file: 'ophanim/lessons/corrections.mjs', tests: ['ophanim/lessons/corrections.test.mjs'],
     from: "    const byOwnCheck = c.detector.kind === 'test' ? byMechanism.filter(i => i.by_detector === true) : [];", to: "    const byOwnCheck = byMechanism.filter(i => i.by_detector === true);"},
   {id: 'RV31', what: 'a lessons success survives the owner raising the class again afterwards', file: 'ophanim/lessons/corrections.mjs', tests: ['ophanim/lessons/corrections.test.mjs'],
-    from: ' && !byOwner.some(o => day(o.date) > day(i.date))),', to: '),'},
+    from: 'byOwner.every(o => day(o.date) < day(i.date))', to: 'byOwner.some(o => day(o.date) < day(i.date))'},
   // ---- A BUDGET-EXHAUSTED SESSION KEEPS ITS WORK (owner decision 2026-11-20: requirement 8 of the L-150 decision; register L-736)
   {id: 'PC1', what: 'a session a refused charge stopped has its writes discarded (the work of the attempt is not kept)', file: IMP, tests: T.pipe,
     from: '    const stop = native ? budgetStopOf(e) : null;', to: '    const stop = null;'},
