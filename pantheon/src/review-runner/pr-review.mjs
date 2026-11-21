@@ -256,6 +256,14 @@ export function reviewerSections(findings) {
   return { found_marker: i >= 0, ...out };
 }
 
+/** The relay record of a transcript (relay.mjs), per request, as the result records it. */
+export const relaySummary = tr => ({
+  counts: tr.counts ?? null,
+  requests: (tr.requests ?? []).map(q => ({ id: q.id, command: q.command, requested_by: q.requested_by ?? null, decision: q.decision, why: q.why ?? null,
+    executed_by: q.executed_by ?? null, result: q.result ? { exit_code: q.result.exit_code, killed_for: q.result.killed_for ?? null, jail_refused: q.result.jail_refused ?? false,
+      duration_ms: q.result.duration_ms ?? null, output_sha256: q.result.output_sha256 ?? null } : null, reviewer_conclusion: q.reviewer_conclusion ?? null })),
+});
+
 const readJson = async p => { try { return JSON.parse(await readFile(p, "utf8")); } catch { return null; } };
 const listFiles = async dir => {
   const out = [];
@@ -306,6 +314,9 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
     tests: cov ? { tests_run: cov.tests_run ?? 0, tests_allowed: cov.tests_allowed ?? null, tests_refused: cov.tests_refused ?? null, source_reads: cov.source_reads ?? 0, denied_reads: cov.denied_reads ?? 0, method: cov.method ?? null } : null,
     coverage_gate: t?.coverage_gate ?? null,
     review_tests: t?.review_tests ?? null,
+    // A reviewer whose sandbox cannot start the verify jail (codex) has its tests RELAYED (relay.mjs): per request, who
+    // requested it, which runner executed it, its result, and what the reviewer concluded from it.
+    relayed_tests: t?.test_relay ? relaySummary(t.test_relay) : null,
     reviewer_sections: { tests_run: sections.tests_run, unresolved_questions: sections.unresolved_questions, blockers_for_merging: sections.blockers_for_merging },
     files,
   };

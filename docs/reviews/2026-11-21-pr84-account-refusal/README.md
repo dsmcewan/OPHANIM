@@ -69,9 +69,16 @@ node pantheon/scripts/review-pr.mjs --binding docs/reviews/2026-11-21-pr84-accou
 - A timeout, a refusal to start (a sign-in the CLI does not have, for one) and missing evidence each leave that lab's
   review **incomplete**, recorded with the reason. So does the runner's coverage gate: a review that read no source
   file, or ran no test where the testing limit allows tests, is incomplete.
-- **Known before the run:** the OpenAI leg runs on Codex, and the Codex transport runs no test (register L-404). Under
-  this testing limit its review will be recorded incomplete, with its findings kept. A complete OpenAI review needs the
-  metered API (`--via api`), which is the owner's spend to choose.
+- **How each lab's tests run.** Every test runs in the runner's verify jail (no network, no credentials, its own process
+  namespace) on the review copy of the head, never in a reviewer's own sandbox.
+  - **xAI and Google** run the review's verify launchers themselves.
+  - **OpenAI** runs on Codex, signed in to the owner's subscription. Codex's own sandbox cannot start the verify jail
+    (register L-404), so its tests are **relayed**: Codex picks a test from the authorized list, the runner checks it
+    against the review's test policy, runs it in the verify jail, and returns the result to Codex to judge
+    (`pantheon/src/review-runner/relay.mjs`). The transcript and `result.json` record, per relayed test, who requested
+    it, which runner executed it, its result, and what Codex concluded. A relayed test that ran and that Codex did not
+    conclude on leaves the review incomplete.
+  - No lab runs on the metered API.
 - `--dry-run` checks the bindings and prints each lab's run-review plan, and runs nothing.
 
 ## Out of scope

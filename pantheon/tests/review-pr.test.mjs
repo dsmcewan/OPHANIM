@@ -248,6 +248,14 @@ test("PR REVIEW: each lab runs alone through run-review, its output staged under
     assert.ok(x.files.some(y => y.path === `findings-1-${x.lab.toLowerCase()}.md` && /^[0-9a-f]{64}$/.test(y.sha256)));
     assert.ok(existsSync(join(r.releaseDir, x.lab_key, `findings-1-${x.lab.toLowerCase()}.md`)));
   }
+  // The OpenAI seat's relayed test (relay.mjs): who requested it, which runner executed it, what codex concluded.
+  const openai = result.reviewers.find(x => x.lab_key === "openai");
+  assert.deepEqual(openai.relayed_tests.counts, { requested: 1, run: 1, ran_in_jail: 1, refused: 0, not_run: 0, concluded: 1, unconcluded: [] });
+  const [q] = openai.relayed_tests.requests;
+  assert.deepEqual([q.id, q.requested_by.transport, q.requested_by.lab, q.requested_by.model, q.executed_by.launcher, q.executed_by.commit, q.result.exit_code, q.reviewer_conclusion],
+    ["R1", "codex-sdk", "OpenAI", "gpt-6-astra", "pantheon-test", f.head, 0, "FAKE-RELAY-CONCLUSION"]);
+  assert.match(q.executed_by.runner, /run-review\.mjs \(the runner process, outside the reviewer's sandbox\)/);
+  assert.equal(result.reviewers.find(x => x.lab_key === "xai").relayed_tests, null, "a lab that runs its own tests in the jail relays none");
   assert.equal(result.telos.matches_ci_pin, false, "the TELOS checkout's head is recorded against CI's pin");
   assert.deepEqual(result.pr_head_after, { sha: f.head, still_bound_head: true });
   assert.deepEqual(result.prior_releases_visible, []);

@@ -50,7 +50,12 @@ else {
   const transcript = { schema: "ophanim.review-transcript/v2-subscription", via: "subscription", transport: { xai: "grok-cli", google: "agy-cli", openai: "codex-sdk" }[labKey],
     assignment: Number(a.assignment), lab: LABS[labKey], requested_model: behaviour === "wrongmodel" ? "another-model" : model, commit: behaviour === "wrongcommit" ? "f".repeat(40) : a.commit, prompt, status,
     stop_reason: status === "complete" ? "final answer" : "coverage gate: no test command ran", coverage: { source_reads: 9, denied_reads: 0, tests_run: status === "complete" ? 2 : 0, tests_allowed: true, tests_refused: null, method: "fake" },
-    coverage_gate: gate, review_tests: { files: [{ path: ".review-tests/stop.test.mjs" }] } };
+    coverage_gate: gate, review_tests: { files: [{ path: ".review-tests/stop.test.mjs" }] },
+    // The codex transport's tests are relayed (relay.mjs): one request, run by the runner in its verify jail, concluded on.
+    ...(labKey === "openai" ? { test_relay: { schema: "ophanim.review-test-relay/v1", counts: { requested: 1, run: 1, ran_in_jail: 1, refused: 0, not_run: 0, concluded: 1, unconcluded: [] },
+      requests: [{ id: "R1", command: "/c/pantheon-test .review-tests/stop.test.mjs", requested_by: { transport: "codex-sdk", lab: "OpenAI", model, thread_id: "thread-1", turn: 1 }, decision: "run",
+        why: "node --test on 1 allowed test file(s)", executed_by: { runner: "pantheon/scripts/run-review.mjs (the runner process, outside the reviewer's sandbox)", launcher: "pantheon-test", jail: "the verify jail", commit: a.commit },
+        result: { exit_code: 0, killed_for: null, jail_refused: false, duration_ms: 40, output_sha256: "e".repeat(64), output_tail: "pass 1" }, reviewer_conclusion: "FAKE-RELAY-CONCLUSION" }] } } : {}) };
   const sections = [
     "## Findings", "1. holds (ophanim/operate/scheduler.mjs:1)",
     "## Tests run", "- node --test .review-tests/stop.test.mjs: exit 0",

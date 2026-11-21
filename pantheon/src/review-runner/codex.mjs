@@ -71,8 +71,8 @@
 //     ENOENT/EACCES inside).
 // Still failing inside it, and said so to the reviewer: anything that starts bwrap (nested user namespaces are
 // refused: "Creating new namespace failed" / "Failed to create NETLINK_ROUTE socket"), and a node fetch to a server
-// the test started unless NO_PROXY names loopback (codex clears NO_PROXY and sets NODE_USE_ENV_PROXY=1), which is why
-// codex's listed test commands carry an `env NO_PROXY=...` prefix.
+// the test started unless NO_PROXY names loopback (codex clears NO_PROXY and sets NODE_USE_ENV_PROXY=1). Since the
+// test relay (relay.mjs) no test runs in this sandbox: the runner runs codex's requested tests in its verify jail.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -140,8 +140,8 @@ const inlineToml = o => `{${Object.entries(o).map(([k, v]) => `${tq(k)}=${v && t
 // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): reviewed tests ran here, in codex's own sandbox, as the
 // codex CLI's children. Codex's sandbox cannot start the verify jail (nested namespaces are refused), so the code under
 // review must not run here at all: `denyPaths` (the node and npm binaries the runner finds: codex.mjs callers pass them)
-// are DENIED, and the node install is no longer a read root. The listed commands name no test (cli-common.mjs
-// allowedCommands testsRefused).
+// are DENIED, and the node install is no longer a read root. Codex runs no test itself: it REQUESTS the review's verify
+// launchers and the runner runs them outside this sandbox (relay.mjs; owner direction 2026-11-21).
 export function codexPermissionProfile({ worktree, write_allowed, scratchTmp, readRoots = [], denyPaths = [] }) {
   const name = REVIEW_PERMISSION_PROFILE;
   for (const p of [worktree, scratchTmp, ...readRoots, ...denyPaths]) if (!String(p ?? "").startsWith("/")) throw new Error(`codex permission profile: ${p} is not an absolute path`);

@@ -15,7 +15,10 @@
 //              (a verify launcher) that finished (step DONE) -> a test run; a tool step the hook never approved
 //              (`unhooked`) or an advertised tool the hook does not classify (`tool_drift`) -> incomplete
 //   codex-sdk  the SDK's command_execution items: a read command (cat, sed -n, head, ...) that exited 0 -> a source read;
-//              a command whose output says the sandbox refused it -> a denied read; no test (the transport runs none, L-404)
+//              a command whose output says the sandbox refused it -> a denied read; no test runs in codex's sandbox
+//              (L-404): a test run is a RELAYED test (relay.mjs) that ran in the verify jail -- requested by codex, run
+//              by the runner, its result returned to codex; one that ran with no conclusion from codex is listed in
+//              `relay.unconcluded`, and the gate refuses it
 //   grok-cli   the stream's tool calls: read_file completed, or a read-only shell command completed -> a source read; a
 //              read tool or read command that failed for a permission / cancellation -> a denied read; a verify launcher
 //              command completed -> a test run
@@ -25,6 +28,7 @@
 import { READ_TOOLS, REVIEW_SUITE_LAUNCHER, REVIEW_TEST_LAUNCHER } from "../agy/jail-hook.mjs";
 import { VERIFY_JAIL_REFUSED } from "../agy/verify-jail.mjs";
 import { READ_ONLY_SHELL, REVIEW_TESTS_DIR } from "./cli-common.mjs";
+import { ranInJail } from "./relay.mjs";
 
 export const COVERAGE_SCHEMA = "ophanim.review-coverage/v1";
 const SAMPLE = 20;
@@ -82,14 +86,17 @@ const FILE_ARG = /(?:^|\s|['"])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-
 const filesOf = (cmd, worktree) => [...String(cmd).matchAll(FILE_ARG)].map(m => (m[1].startsWith("/") ? relTo(worktree, m[1]) : m[1])).filter(isSource);
 
 /** The codex transport: the SDK's command_execution items (codex.mjs applyCodexEvent: {command, exit_code, status, denied}). */
-export function coverageOfCodex({ commands = [] } = {}, { worktree, tests_allowed, tests_refused }) {
+export function coverageOfCodex({ commands = [] } = {}, { worktree, tests_allowed, tests_refused = null, relay = null }) {
   const reads = new Set(), denied = [];
   for (const c of commands) {
     const cmd = String(c?.command ?? "");
     if (c?.denied) { denied.push({ tool: "command_execution", path: null, why: cmd.slice(0, 200) }); continue; }
     if (c?.exit_code === 0 && READ_CMD.test(cmd)) { const f = filesOf(cmd, worktree); for (const x of f) reads.add(x); if (!f.length) reads.add(`(a read command) ${cmd.slice(0, 80)}`); }
   }
-  return result({ method: "codex-sdk: the SDK's command_execution items", reads, denied, tests: 0, tests_allowed, tests_refused });
+  const relayed = (relay?.requests ?? []).filter(ranInJail);
+  return result({ method: relay ? "codex-sdk: the SDK's command_execution items; tests relayed through the runner's verify jail (relay.mjs)" : "codex-sdk: the SDK's command_execution items",
+    reads, denied, tests: relayed.length, tests_allowed, tests_refused,
+    extra: relay ? { relay: { requested: relay.counts?.requested ?? 0, ran_in_jail: relayed.length, refused: relay.counts?.refused ?? 0, unconcluded: relayed.filter(r => !r.reviewer_conclusion).map(r => r.id) } } : {} });
 }
 
 /** The grok transport: the stream's tool calls (grok.mjs parseGrokStream tool_calls). */
@@ -129,6 +136,7 @@ export function coverageGate(cov) {
   if (!cov.source_reads) reasons.push("no source file was read");
   if (cov.denied_reads) reasons.push(`${cov.denied_reads} read(s) were denied by the hook or the sandbox`);
   if (cov.tests_allowed && !cov.tests_run) reasons.push(cov.tests_refused ? `no test ran although the testing limit allows tests: ${cov.tests_refused}` : "no test command ran although the testing limit allows tests");
+  if (cov.relay?.unconcluded?.length) reasons.push(`relayed test(s) ${cov.relay.unconcluded.join(", ")} ran and the reviewer gave no conclusion on them (no line under "Relayed test conclusions")`);
   if (cov.unhooked?.length) reasons.push(`tool steps the hook never approved: ${cov.unhooked.map(u => `${u.tool} (${u.done} done, ${u.approved} approved)`).join(", ")}`);
   if (cov.tool_drift && cov.tool_drift.ok === false) reasons.push(`tools the hook does not classify: ${cov.tool_drift.unclassified.map(u => u.name).join(", ")}`);
   return { ok: reasons.length === 0, reasons };

@@ -16,7 +16,7 @@
     "dir": "docs/reviews/2026-11-21-pr84-account-refusal",
     "assignment": 1,
     "files": {
-      "README.md": "9b3a1ae0f4e02cb9d3b1d75cb4a3a263bd23d767f6f65a1b4d265115b98b8ccd",
+      "README.md": "d8645b778efebbd5b60dd9e325ba391672a4551580a93ee602c7f86c18e12a4d",
       "1-account-refusal.md": "e25c85f98ddc6e74c84f379097d4f153fcdeada7e1852e83ac45608fee7269c8",
       "HARNESS.md": "e5eb44e00b3cb83c561f1439d726fc25abb2e11cda960d07ea2fbdb42921d821",
       "HARNESS-cli.md": "db5b9adb1d185ca03d43a81c1016370674969945cb39efa8d07c1e6b17f7ac90"
@@ -41,7 +41,7 @@
     {
       "lab": "openai",
       "model": "gpt-6-astra",
-      "known_limit": "Codex runs no test (register L-404), so under this testing limit the coverage gate records this review incomplete, with its findings kept. A complete OpenAI review needs the metered API, the owner’s spend to choose."
+      "tests": "relayed: Codex, on the owner’s subscription, picks an authorized test; the runner runs it in its verify jail on the review copy of the head and returns the result for Codex to judge (pantheon/src/review-runner/relay.mjs). Codex’s own sandbox cannot start the verify jail (register L-404)."
     }
   ],
   "telos": {
