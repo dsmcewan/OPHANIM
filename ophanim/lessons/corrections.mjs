@@ -36,7 +36,10 @@ export function load(file = REGISTRY) {
   return reg;
 }
 
-/** Problems with the registry itself: a class with no usable detector statement, or a test detector that does not exist. */
+/**
+ * Problems with the registry itself: a class with no usable detector statement, or a test detector that does not
+ * exist.
+ */
 export function problems(reg, {root = ROOT} = {}) {
   const out = [], ids = new Set();
   for (const c of reg.classes) {
@@ -55,7 +58,8 @@ export function problems(reg, {root = ROOT} = {}) {
     if (d?.kind === 'test') {
       const f = path.join(root, d.file);
       if (!fs.existsSync(f)) out.push(`${c.id}: detector file ${d.file} does not exist`);
-      else if (!d.name || !fs.readFileSync(f, 'utf8').includes(d.name)) out.push(`${c.id}: no test named "${d.name}" in ${d.file}`);
+      else if (!d.name || !fs.readFileSync(f, 'utf8').includes(d.name))
+        out.push(`${c.id}: no test named "${d.name}" in ${d.file}`);
     } else if (d?.kind === 'none') {
       if (!d.why || !d.next) out.push(`${c.id}: a missing detector states why and the next step`);
     } else out.push(`${c.id}: detector kind must be test or none`);
@@ -91,7 +95,8 @@ export function report(reg) {
       repeated: byOwner.length > 1};
   });
   const series = {};
-  for (const c of reg.classes) for (const i of c.instances) if (i.observed_by === 'owner') series[i.date] = (series[i.date] ?? 0) + 1;
+  for (const c of reg.classes) for (const i of c.instances) if (i.observed_by === 'owner') series[i.date] =
+    (series[i.date] ?? 0) + 1;
   const dates = Object.keys(series).sort();
   // Success, per the owner: a previously observed class detected BY ITS OWN REGISTERED CHECK and corrected by the
   // mechanism, without the owner pointing it out. What a review found, or another check, is on the record and is not this.

@@ -40,13 +40,15 @@ const EVENT_FIELDS={
 const PHASES={
   readyToStartMs:'Readiness to dispatch, including controller scheduling and batch wait.',
   startToPersistMs:'Dispatch to candidate persistence, including worker activity, lease handling and publication.',
-  persistToGateMs:'Persistence to gate acceptance, including controller scheduling, verification and event publication.',
+  persistToGateMs:
+    'Persistence to gate acceptance, including controller scheduling, verification and event publication.',
   gateToAcceptedMs:'Gate acceptance to obligation acceptance, including effects and controller publication.',
 };
 // Finer signals from the retained worker callback intervals, bound inside the startToPersist interval.
 const WORKER_SIGNALS={
   workerCallbackMs:'Retained driver callback span, including configured timer wait and the transformation. Bound to its enclosing committed interval.',
-  nonCallbackBeforePersistMs:'Remainder of dispatch-to-persistence outside the driver callback. Does not assign it to a particular mechanism.',
+  nonCallbackBeforePersistMs:
+    'Remainder of dispatch-to-persistence outside the driver callback. Does not assign it to a particular mechanism.',
 };
 // Every outcome states it grants no authority.
 const AUTHORITY=Object.freeze({execution:false,policyActivation:false});
@@ -302,7 +304,8 @@ const SIGNAL_CONTRASTS={
     {id:'verifier-elapsed',componentId:'review',observable:'verifier-body-wall-ms',
       explanation:'The independent check may have elapsed longer under the observed overlap.'},
     {id:'gate-envelope-residual',componentId:'scheduling',observable:'gate-envelope-non-check-ms',
-      explanation:'The extra interval may have accumulated in waiting, controller work or publication around the check.'},
+      explanation:
+        'The extra interval may have accumulated in waiting, controller work or publication around the check.'},
   ],
   gateToAcceptedMs:[
     {id:'effect-operations',componentId:'effects',observable:'effect-adapter-wall-ms',
