@@ -465,7 +465,7 @@ A **provider call** is one billed request to a model provider. Every bound count
 - `STAGE_BUDGET_EXCEEDED`, a pipeline's own bound (`PIPELINE_PROVIDER_CALLS`), or pipeline turns refused at the limit;
 - a stage the scheduler charged its whole budget that did not pass (`usage.budget_exhausted`).
 
-An elapsed stop is never listed as a provider-call stop.
+An elapsed stop is never listed as a provider-call stop. A provider refusing the account (`stop.code` `PROVIDER_ACCOUNT_REFUSED`, register KG-39: no credit, an exhausted quota or spend cap, a key it does not accept) is not a budget stop either and is not listed: the stage is pending on it for the owner, and it counts against no attempt bound.
 
 ## Live-run hardening (2026-11-18)
 
