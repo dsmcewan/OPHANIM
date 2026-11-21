@@ -8,6 +8,7 @@ export class MCPClient {
     this.stderr = '';
     this.child.stderr.on('data', data => { this.stderr = (this.stderr + data).slice(-2000); });
     this.child.on('error', e => this.rejectAll(e));
+    this.child.stdin.on('error', e => this.rejectAll(e));
     this.child.on('exit', code => this.rejectAll(new Error(`MCP process exited ${code}: ${this.stderr}`)));
     createInterface({ input: this.child.stdout }).on('line', line => {
       let msg; try { msg = JSON.parse(line); } catch { return; }

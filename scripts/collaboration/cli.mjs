@@ -31,6 +31,7 @@ try {
     case 'outbox': result = store.outbox(o.route); break;
     case 'delivery-begin': result = store.beginDelivery(id, o.route); break;
     case 'delivery-finish': result = store.finishDelivery(id, o.state, JSON.parse(o.evidence ?? '{}')); break;
+    case 'delivery-resolve': result = store.resolveDelivery(id, o.state, JSON.parse(o.evidence ?? '{}')); break;
     case 'delivery-recover': result = store.recoverDeliveries(o.route); break;
     case 'health': result = store.meta(`${o.route}-health`, JSON.parse(o.evidence ?? '{}')); break;
     case 'bridge': await runGithubBridge(store, JSON.parse(readFileSync(o.config ?? join(root, 'config.json'), 'utf8')), o.once); break;

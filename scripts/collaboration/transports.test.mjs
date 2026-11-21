@@ -67,6 +67,64 @@ test('native Claude CLI dispatch records its session receipt without posting a G
   assert.equal(store.get(msg.id).acknowledged_at, null);
 });
 
+test('an oversized incoming reply cannot block another outgoing message', async t => {
+  const { store } = fixture(t), msg = store.send(message);
+  const comments = [{ id: 99, user: { login: 'owner' }, body: 'OPHANIM-COLLAB REPLY\n' + 'x'.repeat(40000), html_url: 'https://github.com/test/99' }];
+  const api = async (_, body) => body ? { id: 100, html_url: 'https://github.com/test/100' } : comments;
+  await githubTick(store, config, api);
+  assert.equal(store.get(msg.id).delivery_state, 'delivered');
+  assert.equal(store.events().filter(e => e.kind === 'github-import-rejected').length, 1);
+  await githubTick(store, config, api);
+  assert.equal(store.events().filter(e => e.kind === 'github-import-rejected').length, 1);
+});
+
+test('only a first-line protocol header imports a reply', t => {
+  const { store } = fixture(t);
+  assert.equal(store.importComment({ id: 110, user: { login: 'owner' }, body: 'Owner note\n\nOPHANIM-COLLAB ACK' }, ['owner']), null);
+});
+
+test('quoted ACK text is not an acknowledgement', t => {
+  const { store } = fixture(t), msg = store.send(message);
+  store.importComment({ id: 111, user: { login: 'owner' }, body: `OPHANIM-COLLAB REPLY\n\nYou wrote: ACK ${msg.id}; I have not read it yet.` }, ['owner']);
+  assert.equal(store.get(msg.id).acknowledged_at, null);
+});
+
+test('a genuine reply can quote an outbound message marker', async t => {
+  const { store } = fixture(t);
+  await githubTick(store, config, async () => [{ id: 112, user: { login: 'owner' }, body: `OPHANIM-COLLAB REPLY\n\nRegarding ${marker('a-message-id')}: my finding follows.` }]);
+  assert.equal(store.inbox('codex').length, 1);
+});
+
+test('a recipient header ACK reconciles an uncertain native cloud send', async t => {
+  const { store } = fixture(t), msg = store.send(message);
+  store.beginDelivery(msg.id, 'claude-cloud');
+  store.finishDelivery(msg.id, 'uncertain', { reason: 'response lost' });
+  assert.equal(store.status().uncertain_deliveries[0].id, msg.id);
+  store.importComment({ id: 113, user: { login: 'owner' }, body: `OPHANIM-COLLAB REPLY\nACK ${msg.id}\n\nRead.` }, ['owner']);
+  assert.equal(store.get(msg.id).delivery_state, 'delivered');
+  assert.notEqual(store.get(msg.id).acknowledged_at, null);
+});
+
+test('manual uncertain-delivery resolution requires evidence and is recorded', t => {
+  const { store } = fixture(t), msg = store.send(message);
+  store.beginDelivery(msg.id, 'claude-cloud');
+  store.finishDelivery(msg.id, 'uncertain', { reason: 'lost response' });
+  assert.throws(() => store.resolveDelivery(msg.id, 'queued', {}), /evidence/i);
+  store.resolveDelivery(msg.id, 'queued', { basis: 'Recipient confirmed this request was never received.' });
+  assert.equal(store.get(msg.id).delivery_state, 'queued');
+  assert.equal(store.get(msg.id).route, null);
+  assert.equal(store.events(msg.id).filter(e => e.kind === 'delivery-resolved').length, 1);
+});
+
+test('a late transport result cannot undo a recipient acknowledgement', t => {
+  const { store } = fixture(t), msg = store.send(message);
+  store.beginDelivery(msg.id, 'claude-cloud');
+  store.ack('claude', msg.id, 'Read while sender awaited its response.');
+  store.finishDelivery(msg.id, 'uncertain', { reason: 'sender lost the response' });
+  assert.equal(store.get(msg.id).delivery_state, 'delivered');
+  assert.notEqual(store.get(msg.id).acknowledged_at, null);
+});
+
 test('MCP connects two independent processes and fixes each sender identity', async t => {
   const { path } = fixture(t);
   const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));

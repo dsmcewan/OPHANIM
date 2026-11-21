@@ -62,7 +62,16 @@ Only the configured GitHub account is imported. The record preserves the account
 
 SQLite transactions and unique sender/request keys prevent duplicate durable requests. A dispatcher first claims a queued message. A successful CLI or app-tools response records delivery. Only an explicit acknowledgement records reading. None of these establishes completion, independent review, acceptance, merge or release.
 
-A dispatcher crash or lost response leaves an uncertain delivery, held without automatic replay. GitHub publications can be reconciled by their exact message marker. Claude CLI and desktop deliveries with unknown outcomes require reconciliation with the recipient; the bridge does not silently retry them or switch transports. Inspect `collab status` and `collab events MESSAGE_UUID`.
+A dispatcher crash or lost response leaves an uncertain delivery, held without automatic replay. GitHub publications can be reconciled by their exact message marker. A recipient's explicit header ACK also proves delivery and resolves an uncertain Claude CLI send. Other unknown outcomes require reconciliation with the recipient; the bridge does not silently retry them or switch transports. `collab status` lists uncertain message IDs and routes. Inspect `collab events MESSAGE_UUID` for the receipt history.
+
+An operator can resolve an uncertain send after checking the evidence:
+
+```bash
+~/Projects/OPHANIM-shared/collab delivery-resolve MESSAGE_UUID --state delivered \
+  --evidence '{"basis":"Recipient confirmed receipt at the cited URL."}'
+```
+
+Use `--state queued` only after confirming the recipient never received it. This is an explicit replay decision, recorded with its required evidence. The MCP tools do not expose this operator operation. Only a literal first-line protocol header imports a reply, and only exact unquoted `ACK UUID` lines in the header block (before its first blank line) count as acknowledgements. Quoted markers in a genuine reply do not suppress it. Oversized replies are recorded once per comment revision as rejected, with their URL and digest, and do not block other traffic.
 
 The Windows companion can only deliver to the fixed Codex thread in its local config. It does not expose Codex's wider app-management toolset to peers. Acknowledgements do not automatically generate another message, avoiding an acknowledgement loop. Local roles are assertions by processes running as the same owner; this is not an adversarial multi-user broker.
 
@@ -80,7 +89,7 @@ systemctl --user disable --now ophanim-collaboration.service
 
 The user service is enabled for the normal WSL user lifecycle; it does not enable system-wide lingering or change account settings. The bridge uses an OS file lock to prevent two GitHub/Claude dispatchers. Mailbox state lives at `~/Projects/OPHANIM-shared/collaboration/state/collaboration.sqlite`, with owner-only creation permissions. State is not committed.
 
-Run `start-desktop.ps1` from a Codex desktop task on Windows. It inherits the app's existing named-pipe connection and starts a hidden Node process. It does not export the connection to the network or store account secrets. Runtime files are under `run/` and `desktop.local.json`, both ignored. The helper is idempotent while its existing process is alive. Use `stop-desktop.ps1` to stop only the verified companion process.
+Run `start-desktop.ps1` from a Codex desktop task on Windows. It inherits the app's existing named-pipe connection and starts a hidden PowerShell supervisor with a Node child. An owner/thread-scoped Windows mutex is held for the child's whole lifetime; the PID file is status metadata, not a lock. It does not export the connection to the network or store account secrets. Runtime files are under `run/` and `desktop.local.json`, both ignored. The helper is idempotent for an unchanged connection and implementation, and restarts its verified child when those change. Use `stop-desktop.ps1` to stop only the verified companion process.
 
 The current Windows helper is installed under `C:\Users\dsmce\Documents\Codex\2026-11-21\ophanim-collaboration`. After a desktop app restart/update, run `start-desktop.ps1` again from a fresh Codex task so it inherits the current connection. The companion is not a Windows logon service. A running computer, WSL and desktop app are required. The installed app-tools protocol is a local bundled integration and may need adjustment after app updates.
 
@@ -90,6 +99,6 @@ The current Windows helper is installed under `C:\Users\dsmce\Documents\Codex\20
 node --test scripts/collaboration/store.test.mjs scripts/collaboration/transports.test.mjs
 ```
 
-The 15 focused tests cover durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease fencing, input limits, GitHub account/marker filtering, immutable comment revisions, ambiguous-publish reconciliation, native CLI routing, two real MCP processes, concurrent retries and a held SQLite startup transaction.
+The 22 focused tests cover durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease-token rejection, input limits, first-line GitHub headers and unquoted ACKs, immutable comment revisions, oversized replies, ambiguous-publish reconciliation, evidence-based recovery, native CLI routing, two real MCP processes, concurrent retries and a held SQLite startup transaction. Task claims remain advisory; the tokens fence claim metadata, not arbitrary filesystem writes.
 
 The initial live proof used the original sessions: Claude answered the first GitHub wake-up; the desktop companion automatically delivered that reply to Codex. Next, the installed Claude CLI accepted a direct follow-up to the same cloud session. Claude answered with `NATIVE-CLI-ACK 20261121-ophanim` in [comment 7070419893](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070419893), and that reply automatically reached the original Codex thread. These are live transport checks, separate from review of the implementation.

@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { sendCloud } from './cloud-transport.mjs';
+import { createHash } from 'node:crypto';
+import { replyHeader } from './store.mjs';
 const exec = promisify(execFile);
 export const marker = id => `<!-- ophanim-collab-message:${id} -->`;
 
@@ -20,6 +22,7 @@ export async function githubAPI(path, body, command = process.env.OPHANIM_GH ?? 
     const timeout = setTimeout(() => { child.kill(); reject(new Error('GitHub request timed out; delivery outcome unknown')); }, 30000);
     child.stdout.on('data', x => { out += x; }); child.stderr.on('data', x => { err = (err + x).slice(-2000); });
     child.on('error', e => { clearTimeout(timeout); reject(e); });
+    child.stdin.on('error', e => { clearTimeout(timeout); reject(e); });
     child.on('close', code => { clearTimeout(timeout); if (code) reject(new Error(`GitHub exit ${code}: ${err}`)); else { try { resolve(JSON.parse(out)); } catch (e) { reject(e); } } });
     child.stdin.end(JSON.stringify(body));
   });
@@ -33,7 +36,18 @@ export async function githubTick(store, config, api = githubAPI, cloud = sendClo
     comments.push(...part); if (part.length < 100) break;
   }
   for (const comment of comments) {
-    if (comment.id > config.afterComment && !comment.body?.includes('<!-- ophanim-collab-message:')) store.importComment(comment, config.allowedAuthors);
+    if (comment.id <= config.afterComment || !config.allowedAuthors.includes(comment.user?.login) || !replyHeader(comment.body)) continue;
+    if (Buffer.byteLength(comment.body) > 32768) {
+      const hash = createHash('sha256').update(comment.body).digest('hex');
+      const key = `rejected-comment-${comment.id}-${hash}`;
+      if (!store.meta(key)) {
+        const evidence = { comment_id: comment.id, url: comment.html_url, sha256: hash, reason: 'Reply exceeds the 32768-byte message limit; read the source comment.' };
+        store.event(null, 'github-import-rejected', 'github', evidence);
+        store.meta(key, evidence);
+      }
+      continue;
+    }
+    store.importComment(comment, config.allowedAuthors);
   }
   for (const pending of store.uncertain('github')) {
     const found = comments.find(c => config.allowedAuthors.includes(c.user?.login) && c.body?.includes(marker(pending.id)));

@@ -11,6 +11,7 @@ export async function sendCloud(config, text) {
     child.stdout.on('data', x => { out += x; });
     child.stderr.on('data', x => { err = (err + x).slice(-2000); });
     child.on('error', e => { clearTimeout(timer); reject(e); });
+    child.stdin.on('error', e => { clearTimeout(timer); reject(e); });
     child.on('close', code => {
       clearTimeout(timer);
       if (code) { reject(new Error(`Claude CLI exited ${code}: ${err}`)); return; }

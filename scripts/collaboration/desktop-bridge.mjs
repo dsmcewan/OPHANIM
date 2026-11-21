@@ -1,5 +1,5 @@
 // Runs on Windows as the signed-in owner. No listening port, remote shell or credential export.
-import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -10,18 +10,12 @@ const root = dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(readFileSync(process.argv[2] ?? join(root, 'desktop.local.json'), 'utf8'));
 if (process.platform !== 'win32') throw new Error('Run the desktop bridge on Windows');
 if (!/^[0-9a-f-]{36}$/.test(config.codexThreadId)) throw new Error('Invalid fixed destination thread');
+if (process.env.OPHANIM_DESKTOP_MUTEX_HELD !== '1') throw new Error('Start through run-desktop.ps1, which holds the Windows process mutex');
 mkdirSync(join(root, 'run'), { recursive: true });
 const lockPath = join(root, 'run', 'desktop.lock');
-if (existsSync(lockPath)) {
-  const old = JSON.parse(readFileSync(lockPath, 'utf8'));
-  let alive = true;
-  try { process.kill(old.pid, 0); } catch (e) { if (e.code === 'ESRCH') alive = false; else throw e; }
-  if (alive) throw new Error(`Desktop bridge already running as PID ${old.pid}`);
-  unlinkSync(lockPath);
-}
-const lock = openSync(lockPath, 'wx');
-writeFileSync(lock, JSON.stringify({ pid: process.pid, started_at: Date.now() }));
-const cleanup = () => { try { closeSync(lock); unlinkSync(lockPath); } catch {} };
+// This file is status metadata only. The supervisor owns an OS mutex for the complete child lifetime.
+writeFileSync(lockPath, JSON.stringify({ pid: process.pid, supervisor_pid: Number(process.env.OPHANIM_DESKTOP_SUPERVISOR_PID), started_at: Date.now() }));
+const cleanup = () => { try { if (JSON.parse(readFileSync(lockPath, 'utf8')).pid === process.pid) unlinkSync(lockPath); } catch {} };
 process.on('exit', cleanup);
 process.on('SIGINT', () => process.exit(0)); process.on('SIGTERM', () => process.exit(0));
 const cli = async (...args) => {

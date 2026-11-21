@@ -15,6 +15,20 @@ const bounded = (value, name, max, fallback) => {
   return value;
 };
 
+export function replyHeader(body) {
+  if (typeof body !== 'string') return null;
+  const lines = body.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const header = /^OPHANIM-COLLAB (REPLY|ACK)(?: ([0-9a-f-]{36}))?$/.exec(lines[0]);
+  if (!header) return null;
+  const acknowledgements = header[2] ? [header[2]] : [];
+  for (const line of lines.slice(1)) {
+    if (line === '') break;
+    const match = /^ACK ([0-9a-f-]{36})$/.exec(line);
+    if (match) acknowledgements.push(match[1]);
+  }
+  return { kind: header[1], acknowledgements };
+}
+
 export class Store {
   constructor(path = process.env.OPHANIM_COLLAB_DB ?? DEFAULT_DB, now = Date.now) {
     this.now = now;
@@ -95,6 +109,11 @@ export class Store {
       const msg = this.get(id);
       if (!msg || msg.to !== who) throw new Error('Only the message recipient may acknowledge it');
       if (msg.acknowledged_at === null) {
+        if (['dispatching', 'uncertain'].includes(msg.delivery_state)) {
+          const evidence = { basis: 'Explicit recipient acknowledgement proves receipt', note, previous_state: msg.delivery_state };
+          this.db.prepare("UPDATE messages SET delivery_state='delivered',delivery_evidence=? WHERE id=?").run(JSON.stringify(evidence), id);
+          this.event(id, 'delivered', who, evidence);
+        }
         this.db.prepare('UPDATE messages SET acknowledged_at=? WHERE id=?').run(this.now(), id);
         this.event(id, 'acknowledged', who, { note });
       }
@@ -119,6 +138,10 @@ export class Store {
     if (!['delivered', 'uncertain'].includes(state)) throw new Error('Invalid delivery state');
     return this.transaction(() => {
       const msg = this.get(id);
+      if (msg?.delivery_state === 'delivered' && msg.acknowledged_at !== null) {
+        this.event(id, 'delivery-transport-result', msg.route, { reported_state: state, evidence });
+        return msg;
+      }
       if (!msg || !['dispatching', 'uncertain'].includes(msg.delivery_state)) throw new Error('No active delivery to finish');
       this.db.prepare('UPDATE messages SET delivery_state=?,delivery_evidence=? WHERE id=?').run(state, JSON.stringify(evidence), id);
       this.event(id, state, msg.route, evidence);
@@ -136,6 +159,18 @@ export class Store {
     });
   }
   uncertain(route) { return this.db.prepare("SELECT * FROM messages WHERE route=? AND delivery_state='uncertain'").all(route).map(r => this.decode(r)); }
+  resolveDelivery(id, state, evidence) {
+    if (!['delivered', 'queued'].includes(state)) throw new Error('Resolution state must be delivered or queued');
+    bounded(evidence?.basis, 'resolution evidence', 4000);
+    return this.transaction(() => {
+      const msg = this.get(id);
+      if (!msg || msg.delivery_state !== 'uncertain') throw new Error('Only an uncertain delivery can be resolved');
+      this.db.prepare('UPDATE messages SET delivery_state=?,route=?,delivery_evidence=? WHERE id=?')
+        .run(state, state === 'queued' ? null : msg.route, JSON.stringify(evidence), id);
+      this.event(id, 'delivery-resolved', 'operator', { state, ...evidence });
+      return this.get(id);
+    });
+  }
   events(id = null) {
     return this.db.prepare(`SELECT * FROM events ${id ? 'WHERE message_id=?' : ''} ORDER BY seq DESC LIMIT 200`).all(...(id ? [id] : [])).map(r => ({ ...r, data: JSON.parse(r.data) }));
   }
@@ -175,15 +210,16 @@ export class Store {
   }
   importComment(comment, allowedAuthors) {
     const author = comment.user?.login;
-    if (!allowedAuthors.includes(author) || !/^OPHANIM-COLLAB (?:REPLY|ACK)\b/m.test(comment.body ?? '')) return null;
+    const header = replyHeader(comment.body);
+    if (!allowedAuthors.includes(author) || !header) return null;
     // Authenticates the GitHub account, not a model or cloud session. The envelope retains that distinction.
     const revision = createHash('sha256').update(comment.body).digest('hex').slice(0, 20);
     const legacy = this.decode(this.db.prepare('SELECT * FROM messages WHERE from_agent=? AND request_key=?').get('claude', `github-comment-${comment.id}`));
     const imported = legacy?.text === comment.body ? legacy : this.send({ from: 'claude', to: 'codex', key: `github-comment-${comment.id}-${revision}`,
       subject: 'Claude GitHub reply', text: comment.body,
       provenance: { transport: 'github', author, comment_id: comment.id, url: comment.html_url ?? comment.url, revision, identity: 'GitHub account verified; agent role asserted' } });
-    for (const match of comment.body.matchAll(/\bACK\s+([0-9a-f-]{36})\b/gi)) {
-      const original = this.get(match[1]);
+    for (const id of header.acknowledgements) {
+      const original = this.get(id);
       if (original?.to === 'claude') this.ack('claude', original.id, `GitHub account ${author} acknowledged at ${comment.html_url ?? comment.id}`);
     }
     return imported;
@@ -198,6 +234,7 @@ export class Store {
       schema: 'ophanim.collaboration/v1',
       messages: this.db.prepare('SELECT to_agent,delivery_state,acknowledged_at IS NOT NULL AS acknowledged,count(*) AS count FROM messages GROUP BY to_agent,delivery_state,acknowledged').all(),
       active_claims: this.db.prepare('SELECT resource,owner,generation,expires_at FROM claims WHERE released=0 AND expires_at>?').all(this.now()),
+      uncertain_deliveries: this.db.prepare("SELECT id,to_agent,route,created_at,delivery_evidence FROM messages WHERE delivery_state='uncertain' ORDER BY created_at").all(),
       bridge: this.meta('github-health'), desktop: this.meta('desktop-health'),
     };
   }
