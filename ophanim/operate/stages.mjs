@@ -78,6 +78,7 @@ import {requestResearch, researchOf, researchView, researchContributors, runRese
 import {buildDossier, renderDossier, makeRetriever, investigate, deliveryOf, gapsOf, refOf, withheld, advisoryText, RETRIEVAL_HELP, GRAPH_RETRIEVAL_HELP, DEFAULT_INVESTIGATION} from './context.mjs';
 import {requiresRefusal} from './gates.mjs';
 import {repairPlanRefusal, laneProposal, LANE_PROPOSAL_SCHEMA} from './self-repair.mjs';
+import {accountRefusal, ACCOUNT_REFUSED} from './account-refusal.mjs';
 
 export const PLAN_SCHEMA = 'ophanim.plan/v1';
 export const VERDICTS = Object.freeze(['accept', 'implementation_defect', 'plan_defect', 'diagnosis_defect', 'missing_evidence']);
@@ -164,9 +165,19 @@ function meter(turn, limit, ctx = {}) {
     m.made++;
     m.stops.delete(seatKey(who));   // a seat that is admitted again is no longer stopped: its LAST refusal is what counts
   };
+  // THE ACCOUNT (register KG-39): a vendor that refused the ACCOUNT this stage's calls are made on (no credit, a spend
+  // cap or exhausted quota, a key it does not accept; account-refusal.mjs) is sent nothing more in the stage. Every later
+  // call to it is refused here, unsent, and the refusal is reported once to the scheduler (ctx.accountRefused), which
+  // records the stage pending on it, counts it against no attempt bound and stops the tick.
+  const refusedAccounts = new Map();
   m.turn = args => {
     const who = {vendor: args?.vendor ?? null, model: args?.model ?? null};
     try { closed(who); } catch (e) { return Promise.reject(e); }
+    const before = refusedAccounts.get(who.vendor);
+    if (before) {
+      return Promise.reject(Object.assign(new Error(`${ACCOUNT_REFUSED}: ${who.vendor} refused the account earlier in this stage (${before.kind}: ${before.why.slice(0, 160)}); this call was not sent`),
+        {code: ACCOUNT_REFUSED, account_refused: before}));
+    }
     reserved++;
     let held = true, admitted = 0;
     const release = () => { if (held) { held = false; reserved--; } };
@@ -182,7 +193,12 @@ function meter(turn, limit, ctx = {}) {
           if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch { m.late_uncharged = (m.late_uncharged ?? 0) + 1; } }
         }
         return r;
-      }, e => { release(); throw e; });
+      }, e => {
+        release();
+        const a = accountRefusal(e, who);
+        if (a && !refusedAccounts.has(who.vendor)) { refusedAccounts.set(who.vendor, a); ctx.accountRefused?.(a); }
+        throw e;
+      });
   };
   m.left = () => m.limit - m.made - reserved;
   // The investigation's "may it ask again": false records a budget stop for that seat (it ended on the budget).
