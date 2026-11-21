@@ -83,3 +83,19 @@ test('cli: the Slice D part 1 queries -- why-exists and learning on real compone
     assert.deepEqual([f.items.length, f.existence.exists], [3, false]);
   } finally { fs.default.rmSync(w.dir, {recursive: true, force: true}); }
 });
+
+// The hub-readiness determination (hub.mjs; docs/knowledge-graph/hub-and-spoke.md): ADVISORY, on a synthetic federation
+// of three departments sized from THIS graph, here at a tiny scale so the cell stays fast.
+test('cli: hub-readiness -- the determination on this repository, sized from its own graph, with its criteria and verdict', () => {
+  const built = realGraph();
+  const r = run(['hub-readiness', '--scales', '0.002'], {built});
+  assert.equal(r.code, 0, r.output.slice(0, 300));
+  const a = JSON.parse(r.output);
+  assert.deepEqual([a.schema, a.graph.commit, a.criteria.map(c => c.id)], ['ophanim.hub-readiness/v1', built.commit, ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12']]);
+  assert.equal(a.sizing.measured.entities, built.graph.view().stats().entities, 'each department is sized from this graph');
+  assert.ok(['APPROPRIATE', 'APPROPRIATE WITH CONDITIONS', 'NOT APPROPRIATE NOW'].includes(a.verdict.verdict));
+  assert.ok(a.verdict.failing.every(id => a.criteria.find(c => c.id === id).blocking), 'a failing criterion is a blocking one');
+  assert.ok(a.criteria.every(c => c.threshold) && a.code_facts.every(f => f.at), 'every threshold stated, every code fact located');
+  assert.ok(a.register['KG-14'].graph_id && a.register['KG-4'].status, 'the register is read through the graph\'s records source');
+  assert.equal(run(['hub-readiness', '--scales', '0'], {built}).code, 2);
+});

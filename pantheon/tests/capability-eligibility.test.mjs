@@ -35,8 +35,10 @@ test('automatic: every capability the evidence admits, each exclusion with its r
   assert.ok(d.excluded.every(x => x.why.length > 0), 'every exclusion says why');
   assert.match(d.explanation[0], /^automatic .* eligible for implementer on capability evidence \(snapshot sha256:/);
   assert.match(d.explanation.join('\n'), /excluded \d+: .*availability \d+/);
-  const placed = d.eligible.find(e => e.capability === 'agy-cli/agy_google/gemini-4-hydrogen-high').placed;
-  assert.ok(placed.some(p => p.table === 'fit' && p.evidence_type === 'owner-direction'), 'owner direction reported beside the evidence, never as it');
+  // The owner's seating table places a lane for the implementer. (Since the base's f58dfc0 the fit matrix seats the
+  // implementer on the Antigravity SDK transport, which has no executable capability in this graph yet: register KG-23.)
+  const placed = d.eligible.find(e => e.capability === 'agy-cli/agy_google/gemini-4-carbon-high').placed;
+  assert.ok(placed.some(p => p.table === 'seating' && p.evidence_type === 'owner-direction'), 'owner direction reported beside the evidence, never as it');
 });
 
 test('preferred: the operator\'s capability, with its documented fallback (its pools only: no other capability)', () => {
@@ -133,11 +135,12 @@ test('demonstration 4: a data change alone (a lane retired, a lane removed, a li
   assert.ok(!reach.nodes.some(n => n.id === capabilityId('api', 'openai', 'gpt-6-astra')), 'an unrelated capability is not');
   const d2 = decide({index: indexOfView(w.graph.view()), digest: w.graph.digest(), sources: w.graph.view().sources()}, pick);
   assert.deepEqual([d1.target.would_refuse, d2.target.would_refuse], [false, true]);
-  // Live selection is unchanged by any of it: the owner-directed matrix still seats the lane.
-  const live = selectSeat('implementer', {profile: 'fit', difficulty: 'medium', advisory: false});
-  const before = selectSeat('implementer', {profile: 'fit', difficulty: 'medium'});
+  // Live selection is unchanged by any of it: a ticket pinned to the lane still seats it. (The fit matrix itself no longer
+  // seats an Antigravity CLI lane for the implementer since the base's f58dfc0; a pin keeps lane semantics, a2b35e5.)
+  const live = selectSeat('implementer', {profile: 'fit', difficulty: 'medium', pin: 'gemini-4-hydrogen-high', advisory: false});
+  const before = selectSeat('implementer', {profile: 'fit', difficulty: 'medium', pin: 'gemini-4-hydrogen-high'});
   const retired = capabilitySnapshot(cases[0].reg);
-  const advised = selectSeat('implementer', {profile: 'fit', difficulty: 'medium', capability: retired});
+  const advised = selectSeat('implementer', {profile: 'fit', difficulty: 'medium', pin: 'gemini-4-hydrogen-high', capability: retired});
   assert.equal(JSON.stringify(strip(advised)), JSON.stringify(live));
   assert.equal(JSON.stringify(strip(before)), JSON.stringify(live));
   assert.equal(advised.seat.model, 'gemini-4-hydrogen-high');

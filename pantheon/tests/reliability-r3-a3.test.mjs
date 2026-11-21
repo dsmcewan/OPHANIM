@@ -240,7 +240,7 @@ printf '{"ok":true,"model":"%s","conversation_id":"fake-sdk","usage":{"input_tok
 const SYNTHETIC = { OPENAI_API_KEY: "sk-SYNTHETIC-openai-r3a3", ANTHROPIC_API_KEY: "sk-ant-SYNTHETIC-r3a3", XAI_API_KEY: "xai-SYNTHETIC-r3a3",
   CONTROLLER_SECRET_TOKEN: "SYNTHETIC-controller-token-r3a3", GEMINI_API_KEY: "gk-SYNTHETIC-gemini-r3a3" };
 
-test("L-410 (self-audit round 3, assignment 3 (sealed bb1287a)), tightened by L-150: the python SDK seat gets the allowlist plus the metering relay's scoped capability, never the Gemini credential or the other provider keys", async () => {
+test("L-410 (self-audit round 3, assignment 3 (sealed bb1287a)), tightened by L-150: the python SDK seat gets the allowlist plus the model gateway's scoped capability, never the Gemini credential or the other provider keys", async () => {
   await withDispatch(async ({ dir, spec, opts }) => {
     const python = fakePython(dir);
     await withEnv({ ...SYNTHETIC, PANTHEON_AGY_TRANSPORT: "sdk", PANTHEON_AGY_PYTHON: python }, async () => {
@@ -249,11 +249,11 @@ test("L-410 (self-audit round 3, assignment 3 (sealed bb1287a)), tightened by L-
       assert.ok(run.turns.some(t => t.vendor === "agy_google" && t.purpose === "critique"), JSON.stringify(run.turns.map(t => [t.purpose, t.vendor])));
       const sdkEnvFile = join(dir, "outputs", "open-items", "sdkEnv", "agy_google", "critique-1", "sdk-env.txt");
       const env = Object.fromEntries(lines(sdkEnvFile).map(l => /^([^=]*)=(.*)$/s.exec(l)).filter(Boolean).map(m => [m[1], m[2]]));
-      // L-150: the seat holds NO credential. The Gemini key stays with the controller's metering relay, which charges each
-      // request before it forwards it; the seat gets the relay's URL and a per-session capability instead.
+      // L-150: the seat holds NO credential. The Gemini key stays with the controller's model gateway, which charges each
+      // request before it forwards it; the seat gets the gateway's URL and a per-session token instead.
       assert.equal(env.GEMINI_API_KEY, undefined, "the Gemini credential is withheld from the SDK seat");
-      assert.match(env.PANTHEON_AGY_RELAY_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/, "the relay's loopback URL is passed");
-      assert.match(env.PANTHEON_AGY_RELAY_CAPABILITY ?? "", /^ophanim-relay-[0-9a-f]{64}$/, "the session's capability is passed");
+      assert.match(env.PANTHEON_AGY_GATEWAY_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/, "the gateway's loopback URL is passed");
+      assert.match(env.PANTHEON_AGY_GATEWAY_TOKEN ?? "", /^pantheon-gw-[0-9a-f]{48}$/, "the session's capability is passed");
       for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "CONTROLLER_SECRET_TOKEN"]) assert.equal(env[k], undefined, `${k} never reaches the SDK seat`);
       const text = readFileSync(sdkEnvFile, "utf8");
       for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "CONTROLLER_SECRET_TOKEN", "GEMINI_API_KEY"]) assert.equal(text.includes(SYNTHETIC[k]), false, `no value of ${k} anywhere in its env`);

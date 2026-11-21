@@ -16,6 +16,69 @@
 // read issue text as authority; or route a blocked item to execution.
 import {STAGES, outputsDigest} from './work-ledger.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
+import {idRefusal, parseId, endpointAllowed} from '../../packages/graph/index.mjs';
+
+// ---- TYPED GRAPH REQUIREMENTS OF A PLAN (knowledge graphs, Slice D part 2, KD2-3; docs/knowledge-graph/slice-d2.md) ----
+// A plan (ophanim.plan/v1) MAY state `requires`: [{id, version, why, implements?}], each a graph entity id (a capability,
+// feature, runtime, tool, component, service, api, interface, contract or module a work item can require) with the
+// VERSION of it the graph stated when the plan was made (graph-loop.mjs requirementState: GRAPH_ABSENT when no source
+// states that it exists). `implements: true` declares that this plan builds the prerequisite itself. The free-text
+// `capabilities` field stays. The graph informs the plan; it never constrains it (directive section 8).
+/** The version of a requirement no source other than the plans that name it states: a missing prerequisite. */
+export const GRAPH_ABSENT = 'absent';
+const plainObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** The typed requirements a plan document states, each with the line that states it ([] when none or malformed). */
+export function graphRequiresOf(doc) {
+  if (!plainObj(doc) || !Array.isArray(doc.requires)) return [];
+  return doc.requires.map((r, i) => (plainObj(r) && typeof r.id === 'string' ? {id: r.id, version: typeof r.version === 'string' ? r.version : null, why: typeof r.why === 'string' ? r.why : null,
+    implements: r.implements === true, line: `requires[${i}]`, statement: JSON.stringify(r).slice(0, 300)} : null)).filter(Boolean);
+}
+/**
+ * THE BOUND typed requirements of a plan RECORD (KD2-3): the requirements its document states, each with the line that
+ * states it, and each VERSION taken from the binding the plan stage recorded (outputs.graph.requires: the version the
+ * graph stated when the plan was made, GRAPH_ABSENT for a missing prerequisite; stages.mjs). The document's own `version`
+ * is optional in the planner's answer, so it is read only for a record that predates the binding (no
+ * outputs.graph.requires) or a requirement the binding does not name. Every consumer of a plan's typed requirements reads
+ * them here: planValidity (the re-check), graph-loop.mjs analyzePlan (the block and the unlock), its reassessment filter
+ * and the requirements it reports. (D2 fixes, outside-lab review: the binding was recorded and never read.)
+ */
+export function boundRequiresOf(rec) {
+  const stated = graphRequiresOf(rec?.outputs?.plan), binding = rec?.outputs?.graph?.requires;
+  if (!Array.isArray(binding)) return stated;
+  const bound = new Map();
+  for (const b of binding) if (plainObj(b) && typeof b.id === 'string' && !bound.has(b.id)) bound.set(b.id, typeof b.version === 'string' ? b.version : null);
+  return stated.map(r => (bound.has(r.id) ? {...r, version: bound.get(r.id)} : r));
+}
+/** Whether a plan may require `id` (a typed requirement the work graph admits as requires-capability or depends-on). */
+export function requirableRefusal(id) {
+  const bad = typeof id === 'string' ? idRefusal(id) : 'not a string';
+  if (bad) return `is not a graph entity id (${bad})`;
+  const to = parseId(id), from = {domain: 'work', type: 'plan'};
+  return endpointAllowed('requires-capability', from, to) || endpointAllowed('depends-on', from, to) ? null : `${to.domain}/${to.type} is not something a work item can require`;
+}
+/**
+ * Why a plan's `requires` is not acceptable (a list; empty when it is). `stateOf(id)` (the graph, graph-loop.mjs
+ * requirementState) returns {version}; without it no typed requirement can be bound to a version, and one is refused.
+ */
+export function requiresRefusal(requires, {stateOf = null} = {}) {
+  if (requires === undefined) return [];
+  if (!Array.isArray(requires)) return ['requires is a list of typed graph requirements [{id, why, version?, implements?}]'];
+  if (requires.length && typeof stateOf !== 'function') return ['requires names graph entities, but no knowledge graph is supplied to this run: drop requires (keep the free-text capabilities) or run with the graph'];
+  const why = [], seen = new Set();
+  requires.forEach((r, i) => {
+    if (!plainObj(r) || typeof r.id !== 'string' || typeof r.why !== 'string' || r.why.trim().length < 10) { why.push(`requires[${i}] is {id: <graph entity id>, why: <a sentence>, version?, implements?}`); return; }
+    if (r.implements !== undefined && typeof r.implements !== 'boolean') why.push(`requires[${i}].implements is true or false`);
+    const bad = requirableRefusal(r.id);
+    if (bad) { why.push(`requires[${i}] ${r.id} ${bad}`); return; }
+    if (seen.has(r.id)) why.push(`requires[${i}] names ${r.id} twice`);
+    seen.add(r.id);
+    if (r.version !== undefined) {
+      const now = stateOf(r.id)?.version;
+      if (typeof r.version !== 'string' || r.version !== now) why.push(`requires[${i}] cites version ${String(r.version).slice(0, 24)} of ${r.id}; the graph states ${String(now).slice(0, 24)}: retrieve it ({"op":"graph","query":"node","subject":"${r.id}"}) or drop the version`);
+    }
+  });
+  return why;
+}
 
 /** The original requirement of an item: its id and title with the basis of its latest Ready status (else latest). */
 export function requirementOf(history) {
@@ -52,8 +115,25 @@ export function completionEvidence(status) {
 // ticket digest, file bytes or view version; "unreadable" when it could not be read): the routing basis of the re-plan
 // the staleness causes (earliestGate `route`). Two stalenesses on the same present state are the same work; a change
 // of that state is new work (self-audit round 3, assignment 1 (sealed 323361a), question 1).
-export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => null, versionOf = null}) {
+// `graph` (optional; KD2-3): the graph-derived input of the item (graph-loop.mjs gateInput): `version(id)` the present
+// version of a typed requirement and `reassessed(record)` the recorded reassessment sets (ophanim/graph/reassess.mjs) a
+// record is a member of. A requirement the plan cited as EXISTING whose version changed, and a plan a reassessment reached,
+// make it stale: it is re-planned, never executed on stale validity. A requirement cited as ABSENT is the gate's block
+// and unlock (graph-loop.mjs analyzePlan), not a staleness. A plan with typed requirements and no graph here cannot be
+// re-checked, and is stale (never presumed unchanged). The version a requirement was cited at is the BOUND one
+// (boundRequiresOf: the record's binding, not the document's optional version).
+export function planValidity(plan, {requirement, deps, ticket, bytesOf = () => null, versionOf = null, graph = null}) {
   const why = [], observed = {};
+  const typed = boundRequiresOf(plan);
+  if (typed.length && !graph) { why.push('the plan cites graph facts, and no knowledge graph is supplied here to re-check them'); observed.graph = 'unreadable'; }
+  if (graph) {
+    for (const r of typed) {
+      if (r.version === null || r.version === GRAPH_ABSENT) continue;
+      const now = graph.version(r.id);
+      if (now !== r.version) { why.push(`graph fact ${r.id} changed (cited ${r.version.slice(0, 19)}, now ${String(now).slice(0, 19)})`); observed[`graph:${r.id}`] = now; }
+    }
+    for (const x of graph.reassessed(plan.hash)) { why.push(`reassessed: ${x.why}`); observed[`reassess:${x.key}`] = x.event; }
+  }
   if (plan.identity.requirement !== requirementDigest(requirement)) { why.push('the original requirement changed'); observed.requirement = requirementDigest(requirement); }
   for (const [d, entry] of Object.entries(plan.outputs.deps ?? {})) if ((deps[d]?.entry ?? null) !== entry) { why.push(`dependency ${d} changed`); observed[`dep:${d}`] = deps[d]?.entry ?? null; }
   for (const d of Object.keys(deps)) if (!(d in (plan.outputs.deps ?? {}))) { why.push(`dependency ${d} was added`); observed[`dep:${d}`] = deps[d]?.entry ?? null; }
@@ -103,8 +183,11 @@ export function evidenceCheck(ev, {bytesOf = () => null, versionOf = null, rec =
  * its sources carried versions binds nothing and is reused as before. (Self-audit round 3, assignment 1 (sealed
  * 323361a), question 5: only the plan's citations were bound and re-checked.)
  */
-export function validationEvidence(rec, {bytesOf = () => null, versionOf = null} = {}) {
+// `graph` (optional; KD2-3): a validation a recorded reassessment set reached (a qualification resting on a changed input)
+// is not reused: it is validated again.
+export function validationEvidence(rec, {bytesOf = () => null, versionOf = null, graph = null} = {}) {
   const why = [], observed = {};
+  for (const x of graph ? graph.reassessed(rec?.hash) : []) { why.push(`reassessed: ${x.why}`); observed[`reassess:${x.key}`] = x.event; }
   for (const s of rec?.outputs?.sources ?? []) {
     if (!s?.delivered || s.version === undefined || s.version === null) continue;
     const file = typeof s.source === 'string' && s.source.startsWith('file:') ? s.source.slice(5) : null;
@@ -134,11 +217,18 @@ export function attemptInputs(gate, stages = []) {
     // A re-review after a reassessment is new work on the same inputs: it is named by the reassessment it answers.
     ...(gate.rereview ? {rereview: gate.rereview.reassessment} : {}),
     ...(gate.route ? {route: gate.route} : {}),
+    // THE GRAPH-DERIVED INPUT (KD2-2): the basis of the item's typed requirements as the graph states them now (each one's
+    // existence and version, graph-loop.mjs analyzePlan), so an attempt after an unlock is new work. Absent for an item
+    // whose plan states no typed requirement: its identity is exactly as before.
+    ...(gate.graph?.basis ? {graph: gate.graph.basis} : {}),
     ...(gate.entry ? {status_entry: gate.entry} : {})};
 }
 /** The fields of a stage record's inputs that are its attempt identity (a stage adds others, e.g. the plan's mode). */
 export const IDENTITY_FIELDS = Object.freeze(['upstream', 'requirement', 'returned_by', 'rereview', 'route', 'status_entry']);
-export const sameAttempt = (a, b) => IDENTITY_FIELDS.every(k => (a?.[k] ?? null) === (b?.[k] ?? null));
+/** The graph-derived field of the attempt identity (KD2-2; attemptInputs above), compared with the others. */
+export const GRAPH_IDENTITY_FIELD = 'graph';
+const ATTEMPT_FIELDS = Object.freeze([...IDENTITY_FIELDS, GRAPH_IDENTITY_FIELD]);
+export const sameAttempt = (a, b) => ATTEMPT_FIELDS.every(k => (a?.[k] ?? null) === (b?.[k] ?? null));
 /** A blocker the gate can observe the end of: review capacity (a reviewer pool signature recorded on the blocker). */
 export const isCapacityBlock = b => b?.code === 'REVIEW_CAPACITY_PENDING' || /^REVIEW_CAPACITY_PENDING/.test(String(b?.what ?? ''));
 
@@ -173,8 +263,35 @@ function chainFrom(plan, stages, usable = () => true) {
 // (stages.mjs capacityOf), so a stage pending on review capacity is re-dispatched when the pool changed. Without it
 // (a caller with no executors: a status view) such a stage stays blocked.
 // `outcomeRecheck(record)` (optional): why a passed outcome's proposal would now be refused at apply, or null.
-export function earliestGate({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, versionOf = null, now = Date.now(), recovery = null, recoverySources = null,
-  evidenceStable = null, reassessments = [], capacity = null, outcomeRecheck = null}) {
+// `graph` (optional; knowledge graphs, Slice D part 2, KD2-2 and KD2-3): the item's GRAPH-DERIVED INPUT (graph-loop.mjs
+// gateInput): {version(id), reassessed(record), plan(record)}. It re-checks the typed requirements and reassessments of the
+// plan and validation the gate would reuse (planValidity, validationEvidence), and a stage after the plan whose plan
+// requires a prerequisite the graph shows MISSING is BLOCKED, with the prerequisite's id and the plan line that states it
+// (withGraph below). Only an established requirement blocks; a hypothetical one is advisory. Without it the gate is
+// exactly as before.
+export function earliestGate(args) {
+  return withGraph(gateOf(args), args.graph ?? null);
+}
+/**
+ * The graph-derived block and unlock of a gate (KD2-2). A stage after the plan (implement, review, validate, outcome) the
+ * gate routes is held when the plan it rests on requires a prerequisite the graph shows missing (and the plan does not
+ * implement it), or is part of a prerequisite cycle, or when the graph has not observed the plan's requirements: the gate
+ * is `blocked`, its blocker naming the prerequisite, the plan line and who implements it, and what it routed. Otherwise
+ * the gate carries the graph report: the basis (attemptInputs `graph`) and what was UNLOCKED since the plan was made.
+ * An item whose plan states no typed requirement is returned exactly as it was.
+ */
+function withGraph(g, graph) {
+  if (!graph || typeof graph.plan !== 'function' || !STAGES.includes(g.gate) || g.gate === 'plan' || !g.reuse?.plan) return g;
+  const a = graph.plan(g.reuse.plan);
+  if (!a?.basis) return a?.advisory?.length ? {...g, graph: {advisory: a.advisory}} : g;
+  if (a.block) {
+    return {item: g.item, state: g.state, ...(g.entry ? {entry: g.entry} : {}), gate: 'blocked', stage: g.gate, requirement: g.requirement, reuse: g.reuse, ...(g.from ? {from: g.from} : {}),
+      stale: g.stale ?? [], routed: {gate: g.gate, mode: g.mode ?? null, reason: g.reason ?? null, route: g.route ?? null}, graph: a.report, blocker: a.block, reason: a.block.what};
+  }
+  return {...g, graph: a.report};
+}
+function gateOf({item, history, depStatus, ticket = null, stages = [], activeClaim = null, bytesOf, versionOf = null, now = Date.now(), recovery = null, recoverySources = null,
+  evidenceStable = null, reassessments = [], capacity = null, outcomeRecheck = null, graph = null, research = null}) {
   const base = {item: item.item, state: item.state, ...(item.entry ? {entry: item.entry} : {})};
   // THE ROUTING BASIS of the gate returned (see attemptInputs): the present state it read, never a record hash, so a
   // re-route on the same present state is the same work (refused as done) and a change of that state is new work.
@@ -293,7 +410,18 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
   let valid = null, planReassessed = null;
   const observed = {};
   for (const p of [...passedPlans].reverse()) {
-    const v = planValidity(p, {requirement, deps: Object.fromEntries(Object.entries(deps).map(([d, s]) => [d, s ? {entry: s.entry} : null])), ticket: t, bytesOf, versionOf});
+    const v = planValidity(p, {requirement, deps: Object.fromEntries(Object.entries(deps).map(([d, s]) => [d, s ? {entry: s.entry} : null])), ticket: t, bytesOf, versionOf, graph});
+    // RESEARCH (work.research; operate/research.mjs). Two things put what a plan rests on in question, and neither is
+    // decided by the plan's own citations: a request for research that no conclusion has answered yet (the plan stage
+    // runs it, then plans on its findings), and a conclusion that says what it found CHANGES what a plan should rest on
+    // and that this plan was not given (its record lists the conclusions its dossier held: outputs.context.research).
+    if (research) {
+      const open = research.open ?? [], seen = new Set(p.outputs?.context?.research ?? []);
+      const unseen = (research.conclusions ?? []).filter(c => c.material && !seen.has(c.hash));
+      if (open.length) { v.valid = false; v.why.push(`research was requested and is not answered yet (${open.map(r => r.trigger).join(', ')})`); }
+      if (unseen.length) { v.valid = false; v.why.push(`research concluded that what it found changes what a plan should rest on, and this plan was not given it (${unseen.map(c => c.team).join(', ')})`); }
+      if (open.length || unseen.length) v.observed.research = [...open.map(r => r.hash), ...unseen.map(c => c.hash)].sort().join(',');
+    }
     const bad = hit(p);
     if (bad) { planReassessed ??= bad; stale.push({stage: 'plan', record: p.hash, why: [`its plan review was disqualified by reassessment ${bad.hash.slice(0, 19)}`]}); continue; }
     if (v.valid) { valid = p; break; }
@@ -311,7 +439,7 @@ export function earliestGate({item, history, depStatus, ticket = null, stages = 
         : t ? 'a ticket exists; its assumptions, scope, dependencies and acceptance criteria need re-checking' : 'no approved plan and no ticket: evaluation and planning'};
   }
   // A passed validation is reused only while the evidence its validator relied on is unchanged (validationEvidence).
-  const evidenceOf = s => (s.stage === 'validate' ? validationEvidence(s, {bytesOf, versionOf}) : {why: [], observed: {}});
+  const evidenceOf = s => (s.stage === 'validate' ? validationEvidence(s, {bytesOf, versionOf, graph}) : {why: [], observed: {}});
   const chain = chainFrom(valid, stages, s => !hit(s) && !evidenceOf(s).why.length);
   const reuse = Object.fromEntries(chain.map(s => [s.stage, s.hash]));
   const last = chain.at(-1);

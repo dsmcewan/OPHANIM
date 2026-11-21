@@ -61,6 +61,8 @@ import {digest} from '../../packages/ledger/canonical.mjs';
 import {statusHistory, MARKER} from './reconcile.mjs';
 import {bundlesOf} from './evidence-recovery.mjs';
 import {graphReferences, RETRIEVAL_BOUNDS} from '../graph/impact.mjs';
+import {learningReuse} from '../graph/learning.mjs';
+import {researchView, RESEARCH_VIEW_BYTES} from './research-view.mjs';
 
 export const DOSSIER_SCHEMA = 'ophanim.dossier/v1';
 export const KINDS = Object.freeze(['authoritative-requirement', 'observation', 'derived', 'hypothesis']);
@@ -451,7 +453,13 @@ const words = s => [...new Set(String(s ?? '').match(/[A-Za-z0-9_][A-Za-z0-9_.\/
 // re-derive a plan's dossier views as it was given them, without the ticket it wrote (reconcile.mjs ticketGiven).
 // `graph` (optional, Slice B KB4): an opened knowledge graph (or a function returning one). When given, the view ends with
 // a DERIVED entry of its references around the item; without it the dossier is exactly as before (no entry, no omission).
-export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}, ticketText = undefined, graph = null}) {
+// `learning` (optional, Slice D part 2 KD2-3): an opened graph (or a function returning one) whose learning sources
+// (ophanim/graph/learning.mjs) relate the files in play to established failure classes and prior corrections (D1
+// learningReuse): a DERIVED entry `learning:<item>#reuse` after the graph's, inside the same initial-view budget and with
+// the same citation rules. Views derived from the graph are left out of `stable`, as the work ledger's own records are:
+// the graph moves with the lifecycle's own consequences (each recorded stage is observed into it), which are not new
+// evidence, so they never wake a plan that waits for evidence by themselves. Without it the dossier is as before.
+export function buildDossier({repo, statusRoot, item, work = null, issues = null, bundlesDir = null, budget = 30_000, each = 10_000, limits = {}, ticketText = undefined, graph = null, learning = null}) {
   const G = gitOf(repo);
   // The full bytes of every view derived here, so a cut entry is continued from the same bytes ({"op":"dossier"}).
   const derived = new Map();
@@ -503,6 +511,12 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
   // A long history or work record keeps its MOST RECENT rows in the initial view: the latest decisions and findings
   // are the ones a later cycle most needs. The earlier rows are the gap, retrievable from byte 0.
   fetch('observation', `Status history of ${item}, oldest first (${history.length} entries; earlier decisions and attempts)`, {op: 'status', item}, 8000, {as_of: now.checked, tail: true});
+  // RESEARCH (owner direction 2026-11-20; research-view.mjs): what the item's research teams found, source-linked, and
+  // what is still asked for, as ONE derived view. It is evidence, not an attempt: it is outside the work ledger's reserved
+  // share and inside `stable`, so new findings (or a new request) are a change of the evidence a waiting plan is woken
+  // by, and a plan that cites the view is stale when the findings change (gates.mjs evidenceCheck re-derives it).
+  const research = work?.research ? researchView(work, item) : null;
+  if (research) add('derived', `Research on ${item}: findings with their sources and versions, and requests not yet answered (the full records are on the work ledger and in the item's state)`, `research:${item}`, research.as_of, research.text, RESEARCH_VIEW_BYTES);
   const stages = work ? work.stages(item) : [];
   // THE WORK LEDGER'S SHARE OF THE BUDGET IS RESERVED whether or not it has records, and whatever it uses: so recording
   // an attempt never changes how the evidence after it is cut or omitted, and `stable` (which leaves the work ledger
@@ -624,11 +638,42 @@ export function buildDossier({repo, statusRoot, item, work = null, issues = null
       }
     }
   }
+  // 7. Learning reuse (Slice D part 2, KD2-3; D1 learningReuse): the established failure classes, prior corrections and
+  // the tests to run for the files in play (the requirement's and ticket's, else the guessed candidates), with what is
+  // textual or hypothetical kept apart. REFERENCES with their sources and versions, not a summary in place of the records.
+  if (learning) {
+    const g = typeof learning === 'function' ? learning() : learning;
+    const files = [...named, ...guessed.map(([f]) => f)].slice(0, 3);
+    if (!g) omissions.push(`the learning graph's view of ${item} is NOT shown: the graph could not be opened`);
+    else if (!files.length) omissions.push(`the learning graph's view of ${item} is NOT shown: no file is in play to relate to earlier failures`);
+    else {
+      const view = g.view(), rows = files.map(f => { const r = learningReuse(view, {component: f}); return {component: f, established: {
+        classes: r.established.classes.map(c => ({id: c.id, class: c.class, detector: c.detector.test, repairs: c.repairs.map(x => x.id), defects: c.defects.length, mechanisms: c.mechanisms.map(m => m.with)})),
+        findings: r.established.findings.map(x => ({id: x.id, severity: x.severity, repairs: x.repairs.map(y => y.id)})), tests: r.established.tests.map(t => t.id)},
+        next: r.next, textual: r.textual.register.map(x => x.id), hypothetical: r.hypothetical.links.length, gaps: r.gaps.map(x => `${x.category}: ${x.why}`), sources: r.sources}; });
+      const source = `learning:${item}#reuse`;
+      const body = [`(learning REFERENCES at graph cursor ${view.seq}: the established failure classes, prior corrections and tests the learning graph relates to the files in play; textual and hypothetical relations are listed apart and are NOT established. Retrieve the records it names; {"op":"graph","query":"node","subject":ID} shows each.)`,
+        ...rows.map(r => JSON.stringify(r))].join('\n');
+      const version = sha(body), request = {op: 'dossier', source};
+      derived.set(source, {version, body});
+      // The same share of the initial view as the graph's view (GRAPH_RETRIEVAL.dossier_bytes), and what is left of it.
+      const share = GRAPH_RETRIEVAL.dossier_bytes, room = Math.min(share, left());
+      if (room < 200) omissions.push(`the learning graph's view of ${item} is NOT shown: the initial view's ${LIM.dossier_bytes}-byte budget is spent; retrieve it with ${JSON.stringify(request)}`);
+      else {
+        const w = windowBytes(body, 0, room);
+        push('derived', `Learning reuse: earlier failures, corrections and tests related to the files in play of ${item} (a projection of the learning graph at cursor ${view.seq}, NOT evidence: retrieve the records it names)`, source, version, null, w.text,
+          {complete: w.to === w.total, unit: 'bytes', from: 0, to: w.to, total: w.total, rows: rows.length,
+            ...(w.to < w.total ? {note: `the first ${w.to} of ${w.total} bytes of this view; continue with next`, next: {...request, offset: w.to}} : {})}, request);
+      }
+    }
+  }
   const core = entries.map(e => ({id: e.id, kind: e.kind, source: e.source, version: e.version, coverage: {complete: e.coverage.complete, from: e.coverage.from, to: e.coverage.to, total: e.coverage.total}}));
   // `stable` leaves out the work ledger's own records, so recording an attempt does not itself look like new evidence.
-  const outside = core.filter(e => !e.source.startsWith('work:')).map(({id, ...e}) => e);
+  // It leaves out the views derived from the knowledge graph too, for the same reason (the `learning` note above).
+  const derivedFromGraph = e => (learning || graph) && (e.source.startsWith('graph:') || e.source.startsWith('learning:'));
+  const outside = core.filter(e => !e.source.startsWith('work:') && !derivedFromGraph(e)).map(({id, ...e}) => e);
   const d = {schema: DOSSIER_SCHEMA, item, head, entries, omissions, digest: 'sha256:' + digest({item, head, core, omissions}),
-    stable: 'sha256:' + digest({item, head, core: outside, omissions: omissions.filter(o => !/work ledger/i.test(o))})};
+    stable: 'sha256:' + digest({item, head, core: outside, omissions: omissions.filter(o => !/work ledger/i.test(o) && !((learning || graph) && /knowledge graph's view|learning graph's view/.test(o)))})};
   // The derived views' full bytes travel with the dossier (not enumerable: never recorded or rendered), for the
   // retriever given to the seats that are shown it.
   Object.defineProperty(d, 'views', {value: derived, enumerable: false});

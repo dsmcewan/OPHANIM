@@ -1,0 +1,99 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "c090500c0842b8a058ef1ef98e9e32311e4426a2",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "package.json",
+    "package-lock.json",
+    "packages/ledger/**",
+    "scripts/test-gates/**",
+    "scripts/pentest/**"
+  ],
+  "wave": "Self-repair lane (the inner wheel): one Detect -> Diagnose -> Repair -> Verify round per tick",
+  "base_commit": "c090500",
+  "authorization": "owner, 2026-11-20: \"When Ophanim dispatches ... have it dispatch 1 ticket each round that is to Detect -> Diagnose -> Repair -> Verify itself\"; \"OPHANIM doesn't implement anything that can't be rolled back ... so I didn't have to babysit robots\"; \"The recursion loops are outside of the self repair loops ... wheels on wheels\"; \"Do it now\"",
+  "dependencies": [
+    "concurrent with the jail integration (pantheon/src/agy/**, pantheon/src/board/**); disjoint",
+    "reach: T1 scripts/test-gates/reach.mjs over the six changed modules at c090500 (39 tests, 7 runners), all granted"
+  ],
+  "subwaves": {
+    "KGSR": {
+      "agent-kg-self-repair": {
+        "branch": "kg/self-repair",
+        "base_commit": "c090500",
+        "findings": [
+          "owner request: the self-repair lane"
+        ],
+        "files": [
+          "ophanim/operate/scheduler.mjs",
+          "ophanim/operate/reconcile.mjs",
+          "ophanim/operate/stages.mjs",
+          "ophanim/operate/gates.mjs",
+          "ophanim/operate/work-ledger.mjs",
+          "ophanim/operate/cli.mjs",
+          "ophanim/operate/self-repair.mjs",
+          "ophanim/operate/self-repair*.test.mjs",
+          "ophanim/operate/self-repair.mutate.mjs",
+          "ophanim/operate/fixtures/self-repair*",
+          "ophanim/operate/pentest/g-self-repair.test.mjs",
+          "docs/self-repair.md",
+          "ophanim/graph/graph-context.test.mjs",
+          "ophanim/operate/cli-stop-wave2b.test.mjs",
+          "ophanim/operate/cli.test.mjs",
+          "ophanim/operate/context-bounds.test.mjs",
+          "ophanim/operate/context.test.mjs",
+          "ophanim/operate/evidence-recovery.test.mjs",
+          "ophanim/operate/exec-reliability-a3.test.mjs",
+          "ophanim/operate/exec-reliability.test.mjs",
+          "ophanim/operate/fit-lifecycle.test.mjs",
+          "ophanim/operate/graph-d2-concurrency.test.mjs",
+          "ophanim/operate/graph-d2-demo11.test.mjs",
+          "ophanim/operate/graph-d2-loop.test.mjs",
+          "ophanim/operate/graph-d2-real.test.mjs",
+          "ophanim/operate/graph-d2-stages.test.mjs",
+          "ophanim/operate/independence-r2-a2.test.mjs",
+          "ophanim/operate/independence.test.mjs",
+          "ophanim/operate/l136-billing.test.mjs",
+          "ophanim/operate/lifecycle-evidence-r2.test.mjs",
+          "ophanim/operate/lifecycle-evidence-review.test.mjs",
+          "ophanim/operate/lifecycle-identity-r3.test.mjs",
+          "ophanim/operate/live-run.test.mjs",
+          "ophanim/operate/pentest/d-authorization.test.mjs",
+          "ophanim/operate/plan-lineage.test.mjs",
+          "ophanim/operate/planner-tier.test.mjs",
+          "ophanim/operate/reliability-r2-a3-rest.test.mjs",
+          "ophanim/operate/reliability-r2-a3-stop-signal.test.mjs",
+          "ophanim/operate/reliability-r2-a3.test.mjs",
+          "ophanim/operate/reliability-r3-a3.test.mjs",
+          "ophanim/operate/reliability-wave2b.test.mjs",
+          "ophanim/operate/revision-reassessment.test.mjs",
+          "ophanim/operate/scheduler.test.mjs",
+          "ophanim/operate/service.test.mjs",
+          "ophanim/operate/stages.test.mjs",
+          "ophanim/operate/validator-identity.test.mjs",
+          "ophanim/operate/wave2-identity.test.mjs",
+          "ophanim/operate/wave3-evidence.test.mjs",
+          "ophanim/operate/wave3-identity.test.mjs",
+          "ophanim/operate/wave3-wake.test.mjs",
+          "ophanim/public/work-projection.test.mjs",
+          "ophanim/graph/graph-b.mutate.mjs",
+          "ophanim/operate/graph-d2.mutate.mjs",
+          "ophanim/operate/reliability-wave2b.mutate.mjs",
+          "ophanim/operate/wave2-identity.mutate.mjs",
+          "ophanim/operate/wave3-evidence.mutate.mjs",
+          "ophanim/operate/wave3-identity.mutate.mjs",
+          "pantheon/tests/l136-billing.mutate.mjs"
+        ]
+      }
+    }
+  }
+}

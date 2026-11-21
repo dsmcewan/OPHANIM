@@ -73,8 +73,9 @@ test('every live selection records the advisory decision beside it: the snapshot
   assert.equal(s.candidates[1].selection.advisory.record, undefined, 'the whole decision rides on the seat; the fallbacks carry its digest');
   assert.equal(s.candidates[1].selection.advisory.decision, rec.digest);
   // A quota failover is judged as one: the metered Gemini API id behind its lane.
-  const fit = selectSeat('implementer', {profile: 'fit', difficulty: 'hard'});
-  const spare = fit.candidates.find(c => c.quota_failover);
+  // (argo's implementer: since the base's f58dfc0 the fit implementer is an Antigravity SDK session, with no lane to fail over from.)
+  const argo = selectSeat('implementer', {profile: 'argo'});
+  const spare = argo.candidates.find(c => c.quota_failover);
   assert.deepEqual([spare.model, spare.selection.advisory.capability, spare.selection.advisory.eligible], ['gemini-4-carbon', 'api/agy_google/gemini-4-carbon', true]);
 });
 

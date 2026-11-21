@@ -33,11 +33,14 @@ import {deriveCycle} from '../../pantheon/src/ledger/cycle-kinds.mjs';
 import {fileId, changeId} from './extract/repo.mjs';
 import {mutationId} from './extract/verification.mjs';
 import {recordId, ENTRY_ID} from './extract/records.mjs';
+import {readWorkLedgerOnly, entriesTo} from './work.mjs';
 
 export const LEARNING_SOURCE = 'ophanim.learning', LEARNING_EXTRACTOR = 'ophanim.learning.extractor';
 export const LEARNING_ORIGIN = Object.freeze({kind: 'extractor', basis: 'declared', sources: [LEARNING_SOURCE]});
 export const CYCLE_LEARNING_SOURCE = 'ophanim.cycle-learning', CYCLE_LEARNING_EXTRACTOR = 'ophanim.cycle-learning.extractor';
 export const CYCLE_LEARNING_ORIGIN = Object.freeze({kind: 'extractor', basis: 'declared', sources: [CYCLE_LEARNING_SOURCE]});
+export const LANE_LEARNING_SOURCE = 'ophanim.lane-learning', LANE_LEARNING_EXTRACTOR = 'ophanim.lane-learning.extractor';
+export const LANE_LEARNING_ORIGIN = Object.freeze({kind: 'extractor', basis: 'declared', sources: [LANE_LEARNING_SOURCE]});
 /** The rule that admits a shared failure mechanism: DECLARED, from inputs that state it. */
 export const LEARNING_RULE = 'ophanim.learning.rule';
 export const LEARNING_RULE_ORIGIN = Object.freeze({kind: 'rule', basis: 'declared'});
@@ -179,6 +182,63 @@ export function cycleLearningSource({root, anchor, extractor = CYCLE_LEARNING_EX
     authority: 'a review-cycle ledger (pantheon/src/ledger/cycle-kinds.mjs; its findings and resolutions are ledger entries; read only against its pinned anchor)',
     current: () => ({version: at().head}),
     readAt: version => cycleLearningFacts(at(), version),
+  };
+}
+
+// ---- the self-repair lane's rounds (owner, 2026-11-20: "wire the rounds into the learning graph") ------------------------
+/**
+ * THE LANE'S OWN ROUNDS as learning, from the work ledger's work.repair events through its own reader (read only, against
+ * its pinned anchor). Each REPAIR round's defect is a FINDING on its site, so learningReuse joins it exactly as it joins a
+ * review finding (the finding names the file); its reproduction is `derived-from` it; and when the round LANDED, its repair
+ * is `introduced-because-of` it, `derived-from` the landed commit and `verified-by` the reproduction's test. A rollback round
+ * marks the repair it reverted. Nothing is inferred: every fact is an event the lane recorded, with its entry as the ref.
+ * So a Diagnose touching a file sees the lane's earlier rounds there -- what was tried, what landed, what was reverted.
+ */
+export function laneLearningFacts(W, version) {
+  const opens = new Map(), lands = new Map(), closes = new Map(), reverted = new Map();
+  for (const r of entriesTo(W, version)) {
+    if (r.kind !== 'work.repair' || !plain(r.payload)) continue;
+    const p = r.payload;
+    if (p.event === 'open' && Number.isInteger(p.round)) {
+      opens.set(p.round, {p, hash: r.hash});
+      if (p.kind === 'rollback' && Number.isInteger(p.culprit?.round)) reverted.set(p.culprit.round, p.round);
+    } else if (p.event === 'land') lands.set(p.round, {p, hash: r.hash});
+    else if (p.event === 'close') closes.set(p.round, p);
+  }
+  const drafts = [], changes = new Set(), files = new Set();
+  for (const [n, {p, hash}] of [...opens].sort((a, b) => a[0] - b[0])) {
+    if (p.kind !== 'repair' || !plain(p.defect)) continue;
+    const d = p.defect, F = L('finding', `lane/${n}`), ref = `status/work#${hash}`;
+    const file = (d.site ?? []).find(x => typeof x === 'string' && x !== '' && !WITHHELD.test(x)) ?? null;
+    drafts.push({entity: F, ref, attributes: {finding: `self-repair.r${n}`, lane_round: n, defect: cut(d.id, 300), defect_kind: d.kind ?? null, title: cut(d.title, 300),
+      file, severity: null, outcome: closes.get(n)?.outcome ?? 'open', reverted_by_round: reverted.get(n) ?? null, recurrence: p.recurrence?.kind ?? null}});
+    const rp = plain(d.reproduction) ? d.reproduction : null;
+    if (rp) {
+      const P = L('reproduction', `lane/${n}`);
+      drafts.push({entity: P, ref, attributes: {finding: `self-repair.r${n}`, kind: rp.kind ?? null, run: cut(`${rp.file ?? ''}${rp.name ? `#${rp.name}` : ''}`, 600)}});
+      drafts.push({type: 'derived-from', from: P, to: F, ref, attributes: {basis: 'the reproduction the self-repair round names for its defect'}});
+    }
+    const land = lands.get(n);
+    if (!land || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(land.p.commit ?? '')) continue;
+    const R = L('repair', `lane/${n}`), rref = `status/work#${land.hash}`, commit = land.p.commit;
+    const test = rp && /\.test\.(mjs|js|cjs)$/.test(rp.file ?? '') && !WITHHELD.test(rp.file) ? rp.file : null;
+    drafts.push({entity: R, ref: rref, attributes: {finding: `self-repair.r${n}`, commit, test, line: land.p.line ?? null, reverted_by_round: reverted.get(n) ?? null}});
+    drafts.push({type: 'introduced-because-of', from: R, to: F, ref: rref, attributes: {basis: 'the self-repair round landed this repair for its defect'}});
+    if (!changes.has(commit)) { changes.add(commit); drafts.push({entity: changeId(commit), ref: rref, attributes: {commit}}); }
+    drafts.push({type: 'derived-from', from: R, to: changeId(commit), ref: rref, attributes: {basis: 'the commit the round landed on its line'}});
+    if (test) {
+      if (!files.has(test)) { files.add(test); drafts.push({entity: fileId(test), ref: rref, attributes: {path: test}}); }
+      drafts.push({type: 'verified-by', from: R, to: fileId(test), ref: rref, attributes: {basis: 'the reproduction the round ran failing on its base and validate ran passing after the repair'}});
+    }
+  }
+  return drafts;
+}
+export function laneLearningSource({root, anchor, extractor = LANE_LEARNING_EXTRACTOR}) {
+  return {
+    id: LANE_LEARNING_SOURCE, extractor, ref: 'status/work (work.repair)',
+    authority: 'the self-repair lane\'s rounds on the work ledger (ophanim/operate/work-ledger.mjs work.repair; controller-signed, append-only; read only against its pinned anchor)',
+    current: () => { const v = readWorkLedgerOnly({root, anchor}).verify(); if (!v.ok) throw new Error(`the work ledger does not verify: ${v.why}`); return {version: v.head}; },
+    readAt: version => laneLearningFacts(readWorkLedgerOnly({root, anchor}), version),
   };
 }
 
@@ -346,7 +406,9 @@ export function learningReuse(view, defect = {}) {
       .map(e => ({id: e.from, ...pick(view.node(e.from).attributes, ['commit', 'test']), sources: edgeSources(view, e)}));
     const reproductions = view.edgesOf(f, {mode: 'established', types: ['derived-from']}).filter(e => e.to === f && kindOf(e.from) === 'learning/reproduction')
       .map(e => ({id: e.from, ...pick(view.node(e.from).attributes, ['kind', 'run']), sources: edgeSources(view, e)}));
-    findings.push({id: f, severity: view.node(f).attributes.severity ?? null, join: 'the finding names this file', repairs: note(repairs), reproductions: note(reproductions),
+    const fa = view.node(f).attributes;
+    findings.push({id: f, severity: fa.severity ?? null, join: 'the finding names this file', ...(Number.isInteger(fa.lane_round) ? {lane: pick(fa, ['lane_round', 'defect', 'outcome', 'reverted_by_round', 'recurrence'])} : {}),
+      repairs: note(repairs), reproductions: note(reproductions),
       mechanisms: note(mechanismLinks(view, f).map(e => step(view, e))), sources: note([{sources: view.node(f).assertions.map(sourceOf)}])[0].sources});
   }
   // Mutation outcomes of the mutations that edit it (observed, with their run).

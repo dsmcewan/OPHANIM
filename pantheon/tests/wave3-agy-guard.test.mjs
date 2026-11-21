@@ -82,9 +82,9 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"fake-g
   return cli;
 }
 // THE FAKE python SDK seat: it is spawned as `<python> scripts/agy-seat.py --role R ... --model M ... --out D ...`. It makes
-// ONE Gemini request through the controller's metering relay with the capability it was given (register L-150: the seat
-// holds no key, and each request is charged at the relay before it is forwarded -- here to this file's provider edge, the
-// replaced fetch), so the seat's one provider request is one the relay admitted, not a charge for the launch.
+// ONE Gemini request through the controller's model gateway with the capability it was given (register L-150: the seat
+// holds no key, and each request is charged at the gateway before it is forwarded -- here to this file's provider edge, the
+// replaced fetch), so the seat's one provider request is one the gateway admitted, not a charge for the launch.
 function writeFakePython(bin, state) {
   const py = join(bin, "python");
   writeFileSync(py, `#!/bin/sh
@@ -92,7 +92,7 @@ S=${sh1(state)}
 role=none; model=none; out=/nonexistent
 for a in "$@"; do case "$prev" in --role) role="$a" ;; --model) model="$a" ;; --out) out="$a" ;; esac; prev="$a"; done
 printf '%s\\n' "$*" >> "$out/python.log"
-MODEL="$model" ${sh1(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_RELAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_RELAY_CAPABILITY ?? "" }, body: "{}" }).then(r => r.text()).catch(() => null)'
+MODEL="$model" ${sh1(process.execPath)} -e 'fetch(process.env.PANTHEON_AGY_GATEWAY_URL + "/v1beta/models/" + process.env.MODEL + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": process.env.PANTHEON_AGY_GATEWAY_TOKEN ?? "" }, body: "{}" }).then(r => r.text()).catch(() => null)'
 served="\${FAKE_SDK_SERVED:-$model}"
 mode="\${FAKE_SDK_MODE:-answer}"
 if [ "$mode" = failure ]; then printf '{"ok": false, "role": "%s", "model": "%s", "error": "vendor error"}\\n' "$role" "$served"; exit 3; fi

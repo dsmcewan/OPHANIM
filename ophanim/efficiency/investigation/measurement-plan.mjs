@@ -36,7 +36,8 @@ const capability={
       purpose:'Measure excess time from timer scheduling to JavaScript callback entry after the requested wait.',
       unit:'ms',scope:'one timer in one matched obligation',
       collection:'Monotonic scheduling and callback entry marks, minus the configured delay.',
-      limitation:'Includes timer precision and any delay before callback entry. Does not identify the source of the delay.'},
+      limitation:
+        'Includes timer precision and any delay before callback entry. Does not identify the source of the delay.'},
     {id:'transform-body-wall-ms',
       purpose:'Measure elapsed time inside the transformation boundary independently of timer resumption.',
       unit:'ms',scope:'one transform in one matched obligation',

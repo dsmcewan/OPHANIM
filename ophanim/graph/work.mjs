@@ -75,7 +75,7 @@ export function readWorkLedgerOnly({root, anchor}) {
   return openWorkLedger({root, anchor, create: false, keys: null});
 }
 /** The entries of the work ledger up to and including `version`: [{hash, kind, derived_from, payload}]. */
-function entriesTo(W, version) {
+export function entriesTo(W, version) {
   if (!HASH.test(version ?? '')) throw new Error(`${version} is not a ledger entry hash`);
   const out = [];
   for (const e of W.ledger.read()) {

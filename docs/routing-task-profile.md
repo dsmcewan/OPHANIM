@@ -333,17 +333,19 @@ Not done:
 |---|---|---|---|
 | planner | `claude-sonnet-5` | `claude-opus-5-5` | `claude-fable-5-2` |
 | dispatcher | `gpt-6-luna` | `gpt-6.1-sol` | `gpt-6-astra` |
-| implementer | `gemini-4-hydrogen-medium` | `gemini-4-hydrogen-high` | `gemini-4-carbon-high` |
-| subagent | `grok-4.6` | `grok-4.6` | `grok-4.7` |
+| implementer | `gemini-4-hydrogen` (thinking `medium`) | `gemini-4-neon` | `gemini-4-carbon` (thinking `high`) |
+| subagent | `gemini-4-hydrogen`, native to the implementer's session | same | same |
 | reviewer | the dispatcher's exact model for that unit, pinned | | |
+
+The implementer and subagent rows are the owner's direction of 2026-11-19: see [The Google implementer on the Antigravity SDK transport](#the-google-implementer-on-the-antigravity-sdk-transport-owner-direction-2026-11-19). The rows of 2026-11-17 were Antigravity CLI lanes (`gemini-4-hydrogen-medium`, `gemini-4-hydrogen-high`, `gemini-4-carbon-high`) and Grok subagents (`grok-4.6`, `grok-4.6`, `grok-4.7`). Every other row is unchanged.
 
 - **Column.** The ticket's difficulty, raised by the profile's class floor when that floor is higher (stakes; ambiguity for the planner). `fast`, `standard` and `frontier` are the easy, medium and hard columns. A floor never lowers a pick. `easy` now carries low stakes by default, so an easy ticket reaches the easy column.
 - **OpenAI order.** `classes.json` now places `gpt-6-luna` < `gpt-6-sol` (and `gpt-6.1-sol`) < `gpt-6-astra`. The medium dispatcher is `gpt-6.1-sol`; other OpenAI medium seats stay `gpt-6-sol`.
 - **Reviewer.** Pinned to the dispatcher's model. It escalates only inside OpenAI: `gpt-6-luna` -> `gpt-6.1-sol` -> `gpt-6-astra` (`pinnedReviewer`, `reviewerEscalation`). Where a review needs more labs, or OpenAI is excluded for independence, the rest of the order is the class order described above.
-- **Implementer ladders** (Antigravity lanes, in order). easy: `gemini-4-hydrogen-medium` -> `gemini-3.8-flash-high`. medium: `gemini-4-hydrogen-high` -> `gemini-4-argon-high`. hard: `gemini-4-carbon-high` -> `gemini-4-hydrogen-xhigh` -> `gemini-4-argon-high`.
-- **Rejection.** The lane's thinking level rises first (`hydrogen-medium` -> `-high` -> `-xhigh`; `carbon-high` has none above it), then the next rung of the ladder. The decision is an escalation record (`raise_thinking` or `step_rung`) that carries its ladder and re-derives from it.
+- **Implementer ladders** (Gemini API models at a thinking level, in order; since 2026-11-19). easy: `gemini-4-hydrogen@medium` -> `gemini-3.8-flash@high`. medium: `gemini-4-neon` -> `gemini-4-argon@high`. hard: `gemini-4-carbon@high` -> `gemini-4-hydrogen@xhigh` -> `gemini-4-argon@high`. The head of each is the owner's pick; the rungs after it are the base models of the 2026-11-17 ladders.
+- **Rejection.** The same model's thinking level rises first where a higher one is recorded (`hydrogen@medium` -> `@high` -> `@xhigh`; `carbon@high` has none above it, and no level of `gemini-4-neon` is recorded), then the next rung of the ladder. The decision is an escalation record (`raise_thinking` or `step_rung`) that carries its ladder and re-derives from it.
 
-Gemini goes through Antigravity first under both `argo` and `fit`:
+Gemini goes through Antigravity first under both `argo` and `fit`. Since 2026-11-19 this holds for every role **except the `fit` implementer**, which is the Gemini API itself (the SDK transport), with no lane in front of it and no metered failover behind it:
 
 - A policy seat naming a metered Gemini API id is served by that model's Antigravity lane first (`-high` unless the seat carries an effort).
 - The API id stays in the order only as the lane's quota failover. The dispatcher reaches it only after a lane of the same base model was refused for quota: HTTP 429 or a quota-exhausted code, as `packages/model-client` `classifyFailure` classifies it (`pantheon/src/route/quota-failover.mjs`). Any other lane failure does not reach it.
@@ -363,8 +365,8 @@ Under `fit`, the lifecycle's implement stage runs the plan's work units through 
 
 1. **Plan** (Claude, read-only). The plan stage's planner writes `work_units` with the plan. The three-lab plan review sees them. A `fit` plan without valid `work_units` is refused like any other malformed plan.
 2. **Dispatch** (OpenAI, read-only). One turn per unit: is the unit cohesive, what role, what difficulty (it may raise it, never lower it), and the acceptance rubric. The controller freezes and hashes the rubric.
-3. **Implement** (Gemini through an Antigravity lane). One worker owns the whole unit in the unit's own git worktree and writes the files itself.
-4. **Subagents** (Grok). The implementer may ask one stateless question at a time over a local A2A endpoint. A subagent has no tools and no files.
+3. **Implement** (Gemini, an Antigravity SDK session on the Gemini API). One implementer owns the whole unit in the unit's own git worktree and writes the files itself.
+4. **Subagents** (Gemini 4 Hydrogen, native to the implementer's session). A Carbon or Neon implementer may delegate specific assignments to specialist subagents, within a ceiling the controller enforces. They are implementation contributors, never reviewers.
 5. **Review** (OpenAI, read-only). The dispatcher's exact model, pinned. It judges the diff and the output of the unit's `verify_cmd`, both read from disk by the controller.
 
 After the pipeline: the same coordinated three-lab change review, the validator and the outcome as before. Stage 5 is the in-run reviewer. It replaces none of them.
@@ -375,29 +377,31 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 |---|---|---|---|
 | planner | claude-sonnet-5 | claude-opus-5-5 | claude-fable-5-2 |
 | dispatcher | gpt-6-luna | gpt-6.1-sol | gpt-6-astra |
-| implementer | gemini-4-hydrogen-medium | gemini-4-hydrogen-high | gemini-4-carbon-high |
-| subagent | grok-4.6 | grok-4.6 | grok-4.7 |
+| implementer | gemini-4-hydrogen (medium) | gemini-4-neon | gemini-4-carbon (high) |
+| subagent | gemini-4-hydrogen (native) | same | same |
 | reviewer | the unit's dispatcher model | same | same |
 
-- The dispatcher, implementer, subagent and reviewer are seated per unit, by the unit's difficulty. A difficulty the dispatcher raises moves the implementer and the subagent with it.
+- The dispatcher, implementer and reviewer are seated per unit, by the unit's difficulty. A difficulty the dispatcher raises moves the implementer with it, and with the implementer its subagent ceiling (Carbon 8, Neon 4, Hydrogen none).
 - The plan-stage planner is seated before any unit exists, so it is the medium seat.
 
 **Ladders**
 
-- Implementer, on a rejection: the lane's thinking level first, then the next rung. Easy: `hydrogen-medium -> hydrogen-high -> hydrogen-xhigh -> 3.8-flash-high`. Medium: `hydrogen-high -> hydrogen-xhigh -> argon-high`. Hard: `carbon-high -> hydrogen-xhigh -> argon-high`.
+- Implementer, on a rejection: the same model's thinking level first, then the next rung (`implementerPath`). Easy: `hydrogen@medium -> hydrogen@high -> hydrogen@xhigh -> 3.8-flash@high`. Medium: `neon -> argon@high`. Hard: `carbon@high -> hydrogen@xhigh -> argon@high`.
 - Reviewer: raised one rung only after two consecutive rejections by the same reviewer, and only inside OpenAI: `gpt-6-luna -> gpt-6.1-sol -> gpt-6-astra`.
 - Revisions per unit are bounded (default 3). When they run out the unit is blocked with every finding kept.
-- Quota: the metered Gemini API of the lane's base model is used only after the lane was refused for quota (429). It cannot write files, so its whole reply must be `{"files": [{"path", "content"}]}`; the adapter writes those files and the write jail then checks them. Any other reply is a failed attempt.
+- Quota, on the SDK transport: a quota refusal (or the provider reporting the model unavailable) skips that model's other thinking levels and steps to the next rung, recorded on the unit (`lane_failures[]`, `escalations[]`). There is no second, metered seat behind an SDK seat: it already is the Gemini API.
+- Quota, on an explicit lane seat (kept for the lane path only): the metered Gemini API of the lane's base model is used only after the lane was refused for quota (429). It cannot write files, so its whole reply must be `{"files": [{"path", "content"}]}`; the adapter writes those files and the write jail then checks them. Any other reply is a failed attempt.
 
 **Work unit** (`work-units.mjs`; unknown keys are refused)
 
 ```json
 {"unit_id": "codec", "depends_on": [], "owned_paths": ["src/codec/**"], "difficulty": "medium",
- "specialist_role": "node-esm-library-engineer", "allowed_subagents": [], "verify_cmd": "node src/codec/codec.test.mjs",
+ "specialist_role": "node-esm-library-engineer", "allowed_subagents": ["code-explorer"], "verify_cmd": "node src/codec/codec.test.mjs",
  "invariants": ["encode and decode round-trip"]}
 ```
 
 - A unit is one cohesive multi-file change. Coupled types, implementation and tests stay in one unit.
+- `allowed_subagents` names the specialist types the unit's implementer may delegate to: `code-explorer`, `dependency-analyst`, `context-retriever` (read only), `test-constructor`, `bounded-implementer` (write, inside the unit's owned paths). `[]` allows none. A name that is not one of these types is not offered to the implementer and is recorded on the session (`subagents.ignored_types`).
 - Under `fit`, every slice path of the plan must be owned by a unit.
 - The plan's exclusions, and the findings a revision must answer, are appended to every unit's invariants for the run.
 
@@ -423,6 +427,7 @@ After the pipeline: the same coordinated three-lab change review, the validator 
 This list was first written on 2026-11-17. Three of its entries were overtaken by later work and are corrected here (self-audit round 3, assignment 3, L-308):
 
 - Most tests use scripted model turns and a fake `agy` CLI. The first live worker turn is described under [Live-run hardening](#live-run-hardening-2026-11-18).
+- **Superseded for the `fit` implementer (2026-11-19).** The next two entries, the worker card and the socket relay, describe the agy CLI worker. A `fit` implementer is now an Antigravity SDK session with native subagents (see [the SDK transport](#the-google-implementer-on-the-antigravity-sdk-transport-owner-direction-2026-11-19)); the CLI worker runs only for a seat that names an Antigravity lane explicitly.
 - The worker is the `pantheon-unit-worker` card, which edits files itself. The `pantheon-implementer` card (reply with file text) stays for the `argo`/`legacy` per-file path.
 - **Corrected.** The implementer is sandboxed at OS level: it runs in `bwrap`, and its one command runs in the verify jail. See [Live-run hardening](#live-run-hardening-2026-11-18) and [Credential isolation](#credential-isolation-2026-11-19). The write jail after the turn stays as a third layer.
 - The worker reaches its subagents over a Unix socket and a stdio MCP relay, not TCP.
@@ -444,6 +449,7 @@ A **provider call** is one billed request to a model provider. Every bound count
 | Antigravity CLI, unit worker (`runAgyWorkerTurn`) | One worker session, however many turns it takes inside | `charge`, after the jail is built and before the spawn |
 | Python agy SDK seat (`PANTHEON_AGY_TRANSPORT=sdk`; the board's reviewer and scout default to the CLI lane) | One seat process, a billed Gemini API primary request (`gemini_api_primary`) | Right before the spawn, after the Gemini billing policy admitted it and its usage row was persisted |
 | Metered Gemini failover of a lane | A provider call of its own, plus each further request of the API turn | Before the API is asked (`charge`, or `admitRequest` with kind `failover`), after the Gemini billing policy admitted it (`metered_gemini_failover`) and its usage row was persisted |
+| Antigravity SDK session (`runAntigravitySdkTurn`: the `fit` implementer) | Each generation request the session's runtime sends (`generateContent`, `streamGenerateContent`): the implementer's own, and each native subagent's | The model gateway's `admit`, before the request is forwarded to the Gemini API: kind `session` (the implementer's first), `continuation` (its later ones), `subagent` (a subagent's). A refused admission is answered to the runtime as a refusal and nothing is forwarded. Buckets in `provider_calls.by_role`: `implementer`, `continuation`, `native_subagent`.. Before each one the Gemini billing policy admits it (`gemini_api_primary`) and its usage row is persisted; the policy is also asked before the session is started |
 
 **Two contracts for a single-turn `turn`** (`pantheon/src/sdk/live.mjs`):
 
@@ -485,6 +491,8 @@ An elapsed stop is never listed as a provider-call stop.
 - Any other lane failure (timeout, non-zero exit, stream drop, spawn) is retried once on the same lane, then the unit steps down its Antigravity ladder. Lane failures spend no review revision. An exhausted ladder blocks the unit with every failure recorded.
 
 **Resume.** Each approved unit is checkpointed: its key, the Stage 5 verdict, the rubric hash, the commit and the tree. A retried implement stage re-verifies each checkpoint by patch digest and resulting tree, skips units that pass with no provider calls, and runs the rest. A tampered or stale checkpoint is rejected and the unit re-runs.
+
+**A session stopped by a refused charge.** When the Gemini billing policy or the run's provider-call bound refuses a request inside an SDK implementer session, the files the session had written are kept as a partial checkpoint (`pantheon.unit-partial/v1`, beside the approved checkpoints). It is sealed with the same key, its verdict is `unverified`, and it records the refused request, the requests admitted before it, the session's evidence and who wrote the files. A later run restores it only when the seal, unit, base, upstream, patch digest, owned paths and resulting tree all hold; otherwise the unit starts from its base and the record says why. A restored partial checkpoint is where the next session starts. It approves nothing: the unit still runs its verify command and Stage 5, and the model that wrote the restored files stays a contributor. A session that failed for any other reason is discarded as before (register L-736).
 
 **Observed on the owner's machine (agy 1.5.10, 2026-11-18).**
 
@@ -591,11 +599,124 @@ The launcher fails closed. If bwrap cannot start the jail, it exits 125 and the 
 6. **What the allowlist itself exposes.** `/usr` whole (no secrets by convention, but a site might put one under `/usr/local/etc`), the certificate stores, the main repository's objects and refs, and `extra_ro` (the review runner's TELOS root for `test:proof`). *Bounded plan:* if a site keeps secrets under `/usr/local`, list `/usr/local/etc` as a hidden path in the policies.
 7. **No network means no package install inside a verify run.** Deliberate: the policy refuses `network` instead of granting it.
 8. **Same-uid processes outside every jail.** Verify code cannot see them (PID namespace). A controller crash leaves the token file in a 0600 file under the run dir, which the next run removes.
+9. **The SDK bridge's jail (since 2026-11-19; register L-704).** Like the trusted CLI's jail, it shares the host network (it must reach the controller's loopback gateway; bwrap has no egress filter) and sees the host read-only, minus the home's credential-bearing directories, the controller's other control dirs and the host's `/tmp`. It holds no provider key and no login. What it could still do if the SDK runtime itself were subverted: read a same-uid file outside those directories and send it, or the unit's source, to any reachable host.
 
 **Spawn sites** (every `spawn`, `exec`, `execFile` or `spawnSync` in `pantheon/src` and `ophanim/operate`).
 
 - Through a verify launcher, all worker- or review-controlled code: the worker's `run_command` (hook: the launcher only); `pipeline/review.mjs` `runVerify`; `ophanim/operate/stages.mjs` validate (acceptance and regression commands); the review runner's agy and grok reviewers (`pantheon-test`, `pantheon-suite-*`); the API runner's `run_tests` and `run_suite` (`--inline`).
 - The agy CLI itself (credential-bearing), every launch in the worker's jail, allowlist and argv checks: `board/agy-cli.mjs` `runAgyWorkerTurn` (the worker, the agy reviewer), `runAgyPreflight` (its subcommands; also `ophanim/operate/live-run.mjs`), `runAgyCliTurn` (the single-turn seats: `sdk/agy-turn.mjs`, `board/run-item.mjs`), and `agy/quota.mjs` `probeQuota`. Outside `pantheon/src`: `scripts/agy-worker-probe.mjs` and `scripts/agy-smoke.mjs` run `agy --version` with the minimal env, unjailed (fixed argv, no model, no worker text); `scripts/agy-layout-bisect.mjs` runs its own diagnostic layouts on the owner's request.
+- The Antigravity SDK bridge (holds no credential; since 2026-11-19): `antigravity/turn.mjs` spawns `python antigravity-bridge.py` in the worker's bwrap profile with the home's credential dirs covered and an allow-listed environment; the launcher's dry run also runs `python antigravity-bridge.py --identity --hash` unjailed (fixed argv, no model, no worker text).
 - Already isolated by its own allowlist jail: `board/acceptance.mjs` (`--unshare-all`, `/usr` only, `--clearenv`).
 - Trusted programs on trusted input, not worker code: `git.mjs` `git`, `board/operate.mjs`, `operate/context.mjs`, `evidence-recovery.mjs`, `live-run.mjs` (git, the child entry), `board/run-item.mjs` (the python SDK seat, `process.env` whole: a separate, opt-in transport, `PANTHEON_AGY_TRANSPORT=sdk`, recorded here as not jailed), `seat/conformance.mjs` (`--help`), the `sandbox.mjs` probe, `review-runner/index.mjs` git.
 - A reviewer CLI with its own sandbox and no test: the review runner's codex transport (codex's bwrap under the runner's permission profile; node denied).
+
+## The Google implementer on the Antigravity SDK transport (owner direction 2026-11-19)
+
+Owner direction: the Google **implementation** transport is the official `google-antigravity` Python SDK on the Gemini API with `GEMINI_API_KEY`. No subscription OAuth, no `agy` CLI, no ACP or CLI wrapper. The assignments apply to Google implementation routing only; planning, investigation, dispatch and review seats are unchanged.
+
+**Routing** (`pantheon/src/config/antigravity-sdk.json`, read by `pantheon/src/route/fit-matrix.mjs`; no call site types a model id).
+
+| Difficulty | Implementer | Thinking level sent | Hydrogen subagents live at once, at most |
+|---|---|---|---|
+| hard | `gemini-4-carbon` | `high` | 8 |
+| medium | `gemini-4-neon` | none (no level of it is recorded here, so the provider's default applies) | 4 |
+| easy | `gemini-4-hydrogen` | `medium` | 0 (no delegation) |
+
+- A seat is `{vendor: "agy_google", model, transport: "antigravity-sdk", effort}`. `isSdkSeat` (`antigravity/config.mjs`) is the one test of it. `pipelineTurns` sends such a seat to the SDK transport and every other implementer seat down the lane path; an SDK seat asked as a single turn is refused (`SDK_SEAT_NOT_SINGLE_TURN`).
+- **A ticket that pins an Antigravity lane keeps lane semantics** (owner decision 2026-11-20, register L-721; `fit-matrix.mjs lanePinFallback`, config `lane_pin`). The matrix's own implementer is a primary Gemini API seat, and an exhausted lane is no authorization to bill it. After a lane pin the selector seats that lane's own metered failover (the same model, admitted only as the failover kind) and then the other lanes of the lane ladder for the ticket's difficulty: easy `gemini-4-hydrogen-medium`, `gemini-3.8-flash-high`; medium `gemini-4-hydrogen-high`, `gemini-4-argon-high`; hard `gemini-4-carbon-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high`. No seat of the SDK transport is on that walk. With every lane refused the work is refused and the run records each refusal. An operator's fallback seat after the pin is an explicit authorization and stands. A pin that names a Gemini API id is followed by the matrix, as before.
+- **Selection stays capability-based.** The selector's admission (a documented context window against the estimate), the class floors, a ticket's pin and an operator's override all still apply. `gemini-4-neon` has no recorded window, so the selector excludes it whenever a context estimate is given and says why; the pipeline, which seats a unit by difficulty, asks the provider instead (next point).
+- **Availability is asked, not assumed.** Before a session's first request the gateway asks the Gemini API for the model (`GET /v1beta/models/<model>`), and for the subagent model when the unit may delegate. What it answers is on the session record (`availability`).
+- **No silent substitution.** A model the provider does not serve fails the attempt as `MODEL_UNAVAILABLE`. The unit then steps to the next rung of its ladder, skipping the same model's other thinking levels (`skipped_same_base`), and that step is an `escalations[]` record with cause `model_unavailable` beside the `lane_failures[]` entry. A quota refusal (HTTP 429) steps the same way with cause `quota`. An exhausted ladder blocks the unit (`LANE_LADDER_EXHAUSTED`); nothing else answers in its place.
+- **Who answered: the model guard** (register L-504 invariant 3, the rule `board/agy-cli.mjs` states for the CLI, at this transport's entry point). The gateway reads the provider's `modelVersion` on every response. Before any result of the session is acted on, its answer, its failure classification or its quota refusal, every answered request is checked: the name must resolve, under the identity policy, to the model that request asked for. An answer under another declared model, under a name the policy does not declare, or under no name at all refuses the session with `AGY_MODEL_MISMATCH` and both identities. That is not a lane failure: the attempt is not retried, no rung is stepped, and the unit blocks with the session's record kept. The model asked is never recorded in the place of a name the provider did not give; a kept attempt's `served_model` is always the provider's own name (`served_model_source: "provider"`).
+- **An SDK session is a primary seat of the Gemini billing policy** (owner decision 2026-11-19, register L-136; [docs/billing-policy.md](billing-policy.md)). `gemini_api_primary` is off unless the launcher declares it with a budget of billed requests (`--gemini-api-primary N` on `operate tick`, `watch` and `serve`; `billing.gemini_api_primary` with `billing.gemini_primary_budget` in the live-run manifest). The policy is asked before the transport is entered: off, or the budget spent, and there is no gateway, bridge, admission or charge (`GEMINI_PRIMARY_DISABLED`, `METERED_GEMINI_BUDGET_EXHAUSTED`). Declared, every billed request of the session, a native subagent's included, is admitted by the policy and recorded on the billing ledger before the gateway forwards it; a budget that runs out inside a session refuses that request and ends the session. The failover setting neither enables nor disables the seat, and the presence of `GEMINI_API_KEY` never stands for either.
+- **A fault no rung can cure blocks the unit at once**: `CREDENTIAL_REFUSED` (the provider rejected the key), `NO_API_KEY`, `SANDBOX_UNAVAILABLE`, `SDK_UNAVAILABLE`, `SDK_VERSION`, and the billing policy's two refusals of the seat. The lifecycle reports it by name (blocker `IMPLEMENTER_TRANSPORT`) instead of walking the ladder; for a refusal of the billing policy the scheduler then holds the stage pending on that refusal and wakes it when the launcher's policy changes.
+
+**The transport** (`pantheon/src/antigravity/`; no pipeline module imports the SDK).
+
+- **The bridge** (`pantheon/scripts/antigravity-bridge.py`) runs the SDK's agent and decides nothing. It runs in the worker's bwrap profile: the host read-only, the unit's worktree and the control dir's `run/` writable, a PID namespace of its own, other units' control dirs hidden. The home's credential-bearing directories (`.ssh`, `.gemini`, `.codex`, `.config`, `.local/share`, …) are empty to it; the SDK's own venv is bound back read-only. Its environment is an allow-list with no key and no proxy. Without a usable bwrap the session does not start (`SANDBOX_UNAVAILABLE`) unless the caller allowed an unjailed one, which is recorded.
+- **The model gateway** (`gateway.mjs`) is a loopback HTTP server inside the controller. It alone holds `GEMINI_API_KEY`. The bridge is given the gateway's address and a per-session token; the gateway checks the token, admits each generation request against the run's provider-call bound before forwarding it, puts the real key on the forwarded request (`x-goog-api-key`), and refuses any model that is not the implementer's or the pinned subagent model.
+- **Tool decisions** (`turn.mjs` `toolDecision`, fail closed). A call is decided only on exactly the argument names its tool declares: the runtime also reads other spellings of a declared name (`commandline` as `CommandLine`, `subagents` as `Subagents`), so any other key refuses the whole call (`ARGS_UNDECLARED`). The table of declared names is in the transport's config, and the contract suite compares it with the installed runtime. Reads resolve inside the unit's worktree. Writes are checked against the unit's owned paths before they happen. The implementer's one command is the unit's verify launcher, which runs `verify_cmd` in the verify jail (no credential, no host file, no network), once: a persistent terminal, or the terminal of an earlier command, is refused. A subagent runs no command; a read-only specialist, and a child the controller cannot attribute to an admitted subagent, write nothing. A tool the table does not name is denied. Every decision is on the session's tool log (`<control dir>/sessions/<n>.tools.json`, bound by digest in the attempt record). The pipeline's post-turn write jail still judges the worktree from disk.
+- **Cancellation.** The caller's signal stops the bridge's process group and aborts the gateway: a request in flight is cut and nothing is forwarded afterwards.
+- **Structured output.** A schema becomes the runtime's `finish` tool; its arguments come back as `structured_output`.
+- **Version.** The SDK is pinned with hashes (`pantheon/scripts/antigravity-requirements.txt`, `google-antigravity==0.1.24`). Another installed version is refused at launch (`SDK_VERSION`) until the contract suite has passed on it.
+
+**Native subagents** (`subagents.mjs`, the governor; the types are in the config).
+
+| Type | May write | Tools |
+|---|---|---|
+| `code-explorer`, `dependency-analyst`, `context-retriever` | no | `view_file`, `list_directory`, `search_directory`, `find_file` |
+| `test-constructor`, `bounded-implementer` | the unit's owned paths only | the read tools, `create_file`, `edit_file` |
+
+- Every type is configured with the model `gemini-4-hydrogen`. A subagent is created when the implementer invokes one with a role and a specific assignment; the ceilings are limits, not team sizes, and the implementer prompt says so.
+- **The limits are enforced by the controller, at two independent layers.** (1) The SDK's pre-tool hook for `invoke_subagent` is decided by the governor: a type the controller did not pin (`SUBAGENT_TYPE_NOT_PINNED`), a type the unit does not allow (`SUBAGENT_TYPE_NOT_ALLOWED`), a model or tier named on the invocation (`SUBAGENT_MODEL_OVERRIDE`), a workspace of its own (`SUBAGENT_WORKSPACE`), a call from a child (`SUBAGENT_RECURSION`), an assignment that is not specific (`SUBAGENT_ASSIGNMENT`), any call by a Hydrogen implementer (`SUBAGENT_NOT_ALLOWED`) and a call that would pass the ceiling (`SUBAGENT_LIMIT`) are refused whole and recorded. (2) The gateway refuses, on the wire, a subagent request for any model but Hydrogen and any child session past the ceiling, whatever the hook admitted.
+- **What is counted.** Every subagent admitted in an implementer session holds its slot until that session ends. The runtime lets a parent wake an idle child with no hook and no policy firing, and reports no event when a child is ended, so no state the controller observes proves a child cannot run again. The bound enforced is therefore "admitted in this session ≤ ceiling", which is stricter than "concurrently active ≤ ceiling" and implies it. An implementer gives an idle subagent its next task rather than replacing it.
+- **The record**, per subagent: id, type, role, scope, tool permissions, model, the invoking call, admission time, the assignment's digest and size, its trajectory, every state it went through, its usage, its output's digest and size, and any error. Rejections are kept with their code, the count live and the ceiling. A child trajectory the controller cannot attribute is listed, never dropped. Assignment and answer text are not kept.
+- **Contribution lineage.** A written attempt's subagents are `subtask` contributions of the run (`pipeline/record.mjs`): one row per unit and per name the provider answered a subagent request under, so the pinned model and every served name are excluded from every later review of the work. A subagent that was admitted and never answered is one row with no served name, marked `unnamed`. The gateway also records the names by specialist type (`served_by_type`), which is what a required-subagent receipt counts. An approved unit's checkpoint keeps its subagent receipts (`native_subagents`); a resumed run restores them marked `from_checkpoint`.
+- Grok is no longer spent on Google implementation delegation: the `fit` subagent row is native Hydrogen, and the A2A relay is opened only for a unit that still has a lane rung.
+
+**What is shown, and against what.**
+
+- `pantheon/tests/antigravity-sdk-contract.test.mjs` runs the real bridge, the installed SDK 0.1.24 with its bundled runtime, the real controller and the real jails against a **scripted provider** on loopback. It shows: the runtime's requests carry the controller's key and never its own token; a Carbon implementer's subagents send their requests to `gemini-4-hydrogen`, each in its own session; the pin holds against a model or tier named on the invocation; `define_subagent` is not offered and an unpinned type cannot be invoked; nine subagents in one call are refused whole and eight run; a Neon implementer's fifth is refused; writes and the one command go through the controller; a second spelling of `CommandLine` or of `Subagents` does not run what the controller never judged; the declared-names table matches the runtime's; a stop cuts a session with subagents in flight; 429 and 404 end the turn by status; structured output; the session budget; and that nothing the runtime wrote holds the key or the token. Without the SDK or bwrap each of these tests is skipped as UNVERIFIED, never passed.
+- `pantheon/tests/pipeline-antigravity-sdk.test.mjs`, `antigravity-turn.test.mjs`, `antigravity-gateway.test.mjs`, `antigravity-subagents.test.mjs` and `fit-sdk-routing.test.mjs` pin the controller's side, the model guard and the primary-execution setting included; `ophanim/operate/sdk-intake.mutate.mjs` mutates it (ceilings, pins, the key path, charging, the ladder, the jail, the guard, the setting, the prompt intake) and fails on any mutation the suites let through.
+- **Not shown: anything about the live Gemini API.** No request of this transport has reached Google from this repository's sessions: authentication with a real key, whether the three models and `gemini-3.8-flash`/`gemini-4-argon` are served to that key, the name the provider reports for each, the wording of a quota refusal, and the model a child is actually served by are UNVERIFIED (register L-701). `ophanim/operate/live-run.mjs` asks exactly these questions in its dry run (`sdkPreflight`) and records the answers.
+
+**What still uses the `agy` CLI.** Only seats outside Google implementation routing, and an explicit lane seat: the single-turn Gemini seats of other roles (planner, reviewers, validator through `laneFirstTurn`), the `argo`/`legacy` per-file board's Antigravity seats, the review runner's agy reviewer, and an implementer seat that names an Antigravity lane by hand. The CLI worker path is kept for those and is not retired by this change (register L-703).
+
+**The per-file board under `fit`.** `runOpenItem` runs one tool-less turn per file, not a session, so it cannot run an SDK seat. The selector gives it the matrix's model as one Gemini API turn (`boardSeat` in `route/frontier.mjs`: `transport: "api"`, no lane in front, no metered failover behind), and a seat that still names the SDK transport is refused there before any call (`SDK_SEAT_NEEDS_PIPELINE`). On that path there are no native subagents and no ceilings to enforce.
+
+## The research roles on the Antigravity SDK transport (owner direction 2026-11-20)
+
+Owner direction: `gemini-4-carbon` is the preferred model of three roles of the investigation, on the same SDK transport as the Google implementer (the Gemini API with `GEMINI_API_KEY`; no `agy` CLI, no subscription login). They are not implementer rows and not reviewers.
+
+| Role | What it is for | Seat | Default for the trigger |
+|---|---|---|---|
+| scout | discover the systems, evidence, capabilities, dependencies and unknowns that bear on a question | `gemini-4-carbon`, thinking level `high` | `intake` |
+| explorer | investigate uncertain assumptions, competing explanations, alternatives and relationships not yet known | `gemini-4-carbon`, `high` | `contradiction`, `relationship`, `reflection` |
+| researcher | a detailed, source-backed investigation: execution paths, dependencies, the evidence a plan or decision needs | `gemini-4-carbon`, `high` | `insufficient-evidence`, `review-finding`, `invalidated-evidence` |
+
+**Routing** (`pantheon/src/config/antigravity-sdk.json` `research`, read by `route/fit-matrix.mjs researchSeat`).
+
+- Each role has a list of candidates in preference order (today one: Carbon). `researchSeat(role, {qualified})` seats the first candidate the caller's test does not reject, and returns the record of the choice with the seat: the candidates, the one chosen, each one passed over with its reason, a digest of the configuration it was made under, and the basis. That record is on the team's `work.research` entry. With no candidate qualified nothing is substituted (`RESEARCH_NO_QUALIFIED_MODEL`). A capability-based selector plugs in as that test; none is wired today, so the first candidate is always the one chosen.
+- The research roles are not rows of the fit matrix. The implementer's hard, medium and easy assignments and the `fit` selection policy's digest are unchanged, and a test pins both.
+- Subordinate specialists are the subagent model, `gemini-4-hydrogen` at `medium`. The configuration is refused when it names another (one Hydrogen policy, not two), a depth over 10, a model the transport does not declare, a thinking level not recorded for a model, or a tool that is not a read tool.
+
+**The team** (`pantheon/src/antigravity/research.mjs`, the controller's side; `ophanim/operate/research.mjs`, the runner).
+
+- **One coordinator, level 1.** It reads the repository itself and answers with a report and, when it needs them, delegations. It says when the question is answered (`satisfied`), and the team stops there, whatever depth or capacity is unused.
+- **A delegation is a request the controller admits.** It names an open question of its parent's own report (`addresses`), its own question, one of ten specialties (source inventory, history and cause, dependency map, execution trace, contract and invariant, evidence retrieval, contradiction analysis, alternative hypothesis, change impact, acceptance criteria), a scope inside the team's, read tools, bounds within the node bounds, the evidence expected and why the gap matters. Anything else is refused and recorded (`RESEARCH_UNJUSTIFIED`, `RESEARCH_PARENT_UNKNOWN`, `RESEARCH_SPECIALTY`, `RESEARCH_SCOPE`, `RESEARCH_TOOLS`, `RESEARCH_BOUNDS`, `RESEARCH_DUPLICATE`, `RESEARCH_NODE_BUDGET`). No specialist exists by default.
+- **Depth.** A delegation that pursues an open question of a node at level d is level d + 1 and names that node as its parent. Level 11 is refused (`RESEARCH_DEPTH_EXCEEDED`), by the controller and again by the work ledger, which takes no research node above level 10 and no specialist whose parent is not a recorded node one level above it. The limit is a constant in code; configuration can lower it and cannot raise it.
+- **Hydrogen does not delegate.** A specialist reports its open questions and the next steps it recommends; the coordinator, shown them, asks for the next level, and the controller opens it. Every level below the coordinator is opened that way. A specialist's session is offered no subagent tool and is refused one if it asks.
+- **Concurrency.** At most the coordinator model's existing subagent ceiling of specialists run at once (Carbon 8, Neon 4); the rest wait for a slot. A coordinator on Hydrogen delegates to none (`RESEARCH_NO_SUBORDINATES`). Depth is not concurrency: ten levels may be ten specialists run one after another.
+- **Bounds** (`research.bounds`): 40 specialists per team, 240 billed requests per team, 12 coordinator rounds, and per member 24 model calls, 80 tool calls and 900 seconds. Reaching level 10 takes at least ten coordinator rounds, and the configuration is refused if the round bound is below the depth.
+
+**Each member is a read-only session** (`turn.mjs`, research mode).
+
+- It is given the read tools only (`view_file`, `list_directory`, `search_directory`, `find_file`) and the structured answer. A write, a command, a native delegation or any other tool is refused before it happens (`RESEARCH_READ_ONLY`), and the repository is bound read-only inside the jail, so a call the decision missed could not write either.
+- Its assignment's tools and scope are the session's: a read tool it was not given is neither offered nor served (`RESEARCH_TOOL_NOT_GIVEN`), and a read inside the repository and outside its scope is refused (`RESEARCH_SCOPE`).
+- The session's own directory is made outside the repository it reads and removed when the session ends.
+- There is no capability for an experiment that writes or runs something. A question that needs one is reported as unresolved (register L-728).
+
+**Evidence.**
+
+- A member answers with seven parts: the question it investigated, the sources it examined, observations, hypotheses with what supports and contradicts each, dependencies and the contracts they touch, unresolved questions and what limited the evidence, and the next investigation or planning obligations it recommends.
+- The controller records what each session read as it allows the read: the path, and for a file the digest and size of its bytes at that moment. A report may cite only that (for the coordinator, also what a finished member examined). The version of every cited source is the controller's digest, never the model's. A report that cites anything else, or a finding with no source, fails its node, and nothing of it is taken.
+- The full record of each finished member is a file of the item's state, cited by digest on the work ledger. The coordinator is shown each member's findings concisely, each with its source and version, bounded in bytes; transcripts are not passed up the levels.
+- The same claim from the same source and version is one piece of evidence that names every member that examined it. The same claim from another source is a second piece.
+- The team's record distinguishes the depth reached, the peak of specialists active at once, the specialists created, billed requests by model and tokens by model.
+
+**In the lifecycle** ([docs/operating-workflow.md](operating-workflow.md), [docs/billing-policy.md](billing-policy.md), [docs/context-and-evidence.md](context-and-evidence.md)). A request on the work ledger is run by the item's plan stage before the planner is asked; the findings are a view of the item's dossier; an open request, or a conclusion that changes what a plan should rest on and that a plan was not given, makes the plan stale through the existing gate; every member that answered is a contributor to the plan, so the review panels are seated outside those models. Several Hydrogen members are one model of one lab.
+
+**What the installed SDK does, and what OPHANIM does.**
+
+| | The installed SDK (google-antigravity 0.1.24) | OPHANIM |
+|---|---|---|
+| A child's model | a subagent type may name its model (`SubagentConfig.model`); used by the implementer's native Hydrogen subagents, and shown on the installed runtime against a scripted provider | seats every research member itself: each is its own session on the seat the controller chose |
+| Nesting | its capabilities declare a subagent depth (`max_subagent_depth`, default 1). A depth above 1 was read in its types and **not exercised here** | the transport keeps the native depth at 1 and gives a research session no subagent type. Levels 2 to 10 are sessions the controller opens, each recorded with its parent |
+| Concurrency | no event when a child ends (register L-706), so the runtime cannot be asked how many children are active | a pool in the controller: at most the ceiling of specialists run at once, counted by the sessions it started and saw end |
+| Tool scope | a list of enabled tools per session; a hook before most tool calls (three tools run with none: register L-715) | decides every hooked call: reads only, inside the repository, inside the assignment's scope and tools; binds the repository read-only |
+| Spend | none: it sends requests | every request of every member passes the billing policy, the team's bound and the stage's bound before the controller's gateway forwards it |
+| Evidence | the tool results the model saw | the digest of each file as the controller allowed the read; reports checked against that |
+
+So the hierarchy is OPHANIM-controlled delegation, not native SDK delegation. It was chosen because the owner's rule forbids Hydrogen to delegate and because the runtime cannot report active children; it is not a claim that the SDK cannot nest.
+
+**What is shown, and against what.** `pantheon/tests/research-routing.test.mjs`, `research-team.test.mjs`, `antigravity-turn.test.mjs`, `ophanim/operate/research.test.mjs` and `research-lifecycle.test.mjs` pin the controller with scripted sessions. One test in `antigravity-sdk-contract.test.mjs` runs a two-level team (a Carbon coordinator, one Hydrogen specialist, the coordinator again) on the installed SDK in the real jail against a scripted provider. Nothing of it has reached the live Gemini API: whether Carbon and Hydrogen follow the report format, how good their findings are and what a team costs are UNVERIFIED (register L-726).

@@ -59,6 +59,17 @@ test('metrics: each defined metric is extracted per executable capability from t
   assert.equal(M.capabilities['api/anthropic/claude-opus-5-5'].tokens.input, 1000);
 });
 
+test('KG-6: the accepted outcome of an agy work turn maps onto the capability its turn records (agy-cli); a turn recorded before, saying agy, stays readable and is listed unmapped', () => {
+  const LANE = 'gemini-4-hydrogen-high';
+  const shippedRun = transport => ({providers: {kind: 'synthetic'}, shipped: true, gates: [{gate: 'REVIEW', ok: true}], revisions: [{slots: [{}]}], attempts: [],
+    turns: [{vendor: 'agy_google', model: LANE, purpose: 'work', transport, selection: null}]});
+  const N = extractMetrics({runs: [{run: shippedRun('agy-cli'), source: 'new', practice: false}, {run: shippedRun('agy'), source: 'old', practice: false}],
+    stages: [], transcripts: [], gemini: [], relay: [], unreadable: [], read: {}}, {snapshot: SNAP});
+  assert.deepEqual(N.capabilities[`agy-cli/agy_google/${LANE}`]?.outcomes, {implementer: {unrecorded: counts({accepted: 1})}}, 'the new turn\'s accepted outcome is mapped');
+  assert.deepEqual(N.unmapped.map(u => [u.source, u.seat.transport, u.role, u.why]),
+    [['old', 'agy', 'implementer', 'the turn records transport agy, which does not say whether the CLI or the SDK seat served it']], 'the old turn is listed, never guessed');
+});
+
 test('no qualified-for without an owner-defined criterion; the metrics are observed assertions that a registered tool admits, never a qualification', t => {
   assert.equal(QUALIFICATION_CRITERION, null, 'the owner has defined no criterion');
   assert.deepEqual(M.qualification.emitted, []);

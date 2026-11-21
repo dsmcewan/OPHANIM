@@ -18,6 +18,8 @@
 //       "npm test" is accepted for test). Every suite that script runs must be in its log. A text log cannot show a
 //       silent mid-file exit; that is run mode's job, and CI runs run mode over every suite.
 //   node scripts/test-gates/check.mjs run [--only real-bwrap] [--suite ID ...] [--json FILE] [--out DIR]
+//   either mode: [--self-repair-records DIR | --no-self-repair-records] -- whether a whole run feeds the self-repair
+//   lane's Detect (feed.mjs; by default only while the owner-signed switch is on, and only for a clean tree)
 //                                         [--file-timeout SECONDS] [--test-timeout MS]
 //       Runs the suites itself, one `node --test` per file (the suite's flags and file concurrency), with the spec
 //       reporter captured and events-reporter.mjs to a file, and judges every file exactly (this is `npm run
@@ -348,6 +350,8 @@ export async function main(argv) {
     else if (a === '--allow-unverified') opt.allowUnverified = true;
     else if (a === '--file-timeout') opt.fileTimeoutS = positive(argv[++i], '--file-timeout');
     else if (a === '--test-timeout') opt.testTimeoutMs = positive(argv[++i], '--test-timeout');
+    else if (a === '--no-self-repair-records') opt.feed = false;
+    else if (a === '--self-repair-records') { const d = argv[++i]; if (!d || d.startsWith('--')) throw new Error('--self-repair-records takes a directory'); opt.feed = path.resolve(d); }
     else if (mode === 'logs' && a.includes('=')) { const k = a.indexOf('='); opt.logs.push({script: a.slice(0, k), file: a.slice(k + 1)}); }
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -392,6 +396,14 @@ export async function main(argv) {
   console.log(text);
   if (opt.report) fs.writeFileSync(opt.report, text + '\n');
   if (opt.json) fs.writeFileSync(opt.json, JSON.stringify(record, null, 2) + '\n');
+  // Feed the self-repair lane's Detect: a whole run only. feed.mjs is loaded LAZILY, so this gate runs, and its verdict
+  // and exit stand, whether or not the feed (or the lane behind it) can be loaded: the outer wheel never depends on it.
+  try {
+    const f = await import('./feed.mjs');
+    console.log(f.feedLine(f.gatePartial(mode, opt)
+      ? {skipped: 'a partial gate run (--only, --suite) is not fed: Detect reads the latest gate record as the whole picture'}
+      : await f.feedDetect({kind: 'gate', record, feed: opt.feed})));
+  } catch (e) { console.log(`self-repair: no record for Detect (the feed could not be loaded: ${String(e?.message ?? e).slice(0, 160)})`); }
   return worst === PASS ? 0 : worst === FAIL ? 1 : opt.allowUnverified ? 0 : 2;
 }
 

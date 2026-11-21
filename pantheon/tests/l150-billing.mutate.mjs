@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // MUTATION RUNNER for registers L-150 and L-151: every Gemini request of the python Antigravity SDK seat is authorized and
-// charged before it is sent, through spendGemini, at the controller's metering relay (src/route/gemini-relay.mjs), which
-// holds the real credential; the seat gets a scoped capability and no key; agy-seat.py without one makes no request. Every
-// mutation re-introduces a plausible regression -- the one charge per launch, a charge after the forward, the session cap
-// ignored or counting outcomes, an unknown method forwarded, any capability accepted, the real key passed to the child,
-// the seat running on a key without a capability, an admitted row refunded when its session dies, per-session counts, the
-// run's provider-call bound charged once, Vertex let through, the seat's HOME kept, a refusal swallowed by the board or
-// sent without its recovery, an upstream that is not Google or loopback accepted, the launcher's up-front check removed,
-// the subagent's attribution lost -- on a DISPOSABLE COPY of this tree (never the tree itself); only the tests that decide
-// it run there (`tests`: --test-name-pattern over pantheon/tests/l150-billing.test.mjs), and the mutation is undone.
+// charged before it is sent, through spendGemini, at the controller's model gateway (src/antigravity/gateway.mjs, opened
+// for the seat by seat-session.mjs), which holds the real credential; the seat gets a scoped token and no key; agy-seat.py
+// without one makes no request. Written against the L-150 metering relay; since the owner's decision of 2026-11-20
+// (register L-724) the gateway is the one mechanism, and every mutation here is the same regression, made in the gateway
+// or its seat session: the one charge per launch, a charge after the forward, the session cap ignored or counting
+// answers, an unserved method or another model forwarded, any token accepted, the real key passed to the child, the seat
+// running on a key without a capability, an admitted row refunded when its session dies, per-session counts, the run's
+// provider-call bound charged once, Vertex let through, the seat's HOME kept, a refusal swallowed by the board or sent
+// without its recovery, an upstream that is not Google or loopback accepted, the launcher's up-front check removed, the
+// subagent's attribution lost, a refused charge answered with a status the harness retries -- on a DISPOSABLE COPY of
+// this tree (never the tree itself); only the tests that decide it run there (`tests`: --test-name-pattern over
+// pantheon/tests/l150-billing.test.mjs), and the mutation is undone.
 //
 //   node pantheon/tests/l150-billing.mutate.mjs [--only M1,M7] [--log DIR] [--copy-root DIR] [--check]
 //
@@ -24,75 +27,74 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SUITE = 'pantheon/tests/l150-billing.test.mjs';
-const RELAY = 'pantheon/src/route/gemini-relay.mjs', ITEM = 'pantheon/src/board/run-item.mjs', CLI = 'pantheon/src/board/agy-cli.mjs';
+const GW = 'pantheon/src/antigravity/gateway.mjs', SS = 'pantheon/src/antigravity/seat-session.mjs', ITEM = 'pantheon/src/board/run-item.mjs', CLI = 'pantheon/src/board/agy-cli.mjs';
 const SEAT = 'pantheon/scripts/agy-seat.py', LAUNCH = 'pantheon/bin/agy-seat.mjs';
 const one = (file, from, to) => ({file, from, to});
 // The tests that decide each mutation (top-level test names, anchored).
-const T = {relay3: '^relay three requests', methods: '^relay unsupported methods', cap: '^relay capability', sesscap: '^relay session cap',
-  conc: '^relay concurrent', bounds: '^relay bounds', direct: '^seat direct run', governed: '^seat governed run', search: '^seat web search',
+const T = {relay3: '^gateway session, three requests', methods: '^gateway session, calls it does not serve', cap: '^gateway session token', sesscap: '^gateway session cap',
+  conc: '^gateway sessions competing', bounds: '^gateway session bounds', direct: '^seat direct run', governed: '^seat governed run', search: '^seat web search',
   exhaust: '^seat exhaustion', procs: '^seat concurrency across processes', crash: '^seat crash cancel restart', board: '^board sdk seat: each request',
-  bexh: '^board sdk seat exhaustion', seeded: '^board sdk seat seeded', bound: '^board sdk seat provider-call bound', vertex: '^board sdk seat vertex', life: '^relay idle and lifetime bounds'};
-const CHARGE = '      if (m.billed && !charge()) return;\n';
-const CAP = '        if (session.admitted >= session.maxRequests) {';
-const OPEN = '      const session = relay.openSession({ billing: BILLING, admit: () => admit(),';
+  bexh: '^board sdk seat exhaustion', seeded: '^board sdk seat seeded', bound: '^board sdk seat provider-call bound', vertex: '^board sdk seat vertex', life: '^gateway session idle and lifetime bounds'};
+const CHARGE = 'subagents: { model: null, ceiling: 0, markers: {} }, admit: charge,';
+const CAP = '    if (maxRequests !== null && admitted >= maxRequests) {';
+const OPEN = '      const session = await openSeatSession({ apiKey: process.env.GEMINI_API_KEY,';
 
 export const MUTATIONS = [
   // ---- per-request charging (owner items 1, 2, 10) ---------------------------------------------------------------------
-  {id: 'M1', path: 'run-item SDK seat + relay', what: 'the one charge per launch restored: charged once at the spawn, the relay forwarding uncharged', tests: [T.board, T.bexh],
-    edits: [one(RELAY, CHARGE, '      if (false && m.billed && !charge()) return;\n'),
-      one(ITEM, '      const relay = await startGeminiRelay({ apiKey: process.env.GEMINI_API_KEY,', '      spendGemini(BILLING, spend, () => admit()); record();\n      const relay = await startGeminiRelay({ apiKey: process.env.GEMINI_API_KEY,')]},
-  {id: 'M2', path: 'relay', what: 'each request is charged after it was forwarded', tests: [T.relay3, T.governed],
-    edits: [one(RELAY, CHARGE, ''), one(RELAY, '      const tap = responseTap();', '      if (m.billed && !charge()) return;\n      const tap = responseTap();')]},
+  {id: 'M1', path: 'run-item SDK seat + gateway session', what: 'the one charge per launch restored: charged once at the spawn, the gateway forwarding uncharged', tests: [T.board, T.bexh],
+    edits: [one(SS, CHARGE, 'subagents: { model: null, ceiling: 0, markers: {} }, admit: () => {},'),
+      one(ITEM, OPEN, '      spendGemini(BILLING, spend, () => admit()); record();\n' + OPEN)]},
+  {id: 'M2', path: 'gateway session', what: 'each request is charged after it was forwarded', tests: [T.relay3, T.governed],
+    edits: [one(SS, CHARGE, 'subagents: { model: null, ceiling: 0, markers: {} }, admit: info => { setTimeout(() => { try { charge(info); } catch { /* charged late */ } }, 150); },')]},
   {id: 'M11', path: 'run-item SDK seat', what: 'the run\'s provider-call bound is charged once at the spawn, not per request', tests: [T.board, T.bound],
-    edits: [one(ITEM, OPEN, '      admit();\n      const session = relay.openSession({ billing: BILLING, admit: () => {},')]},
+    edits: [one(ITEM, OPEN, '      admit();\n' + OPEN), one(ITEM, '        model, billing: BILLING, admit: () => admit(),', '        model, billing: BILLING, admit: () => {},')]},
   // ---- the session's own bound (owner items 3, 4) ----------------------------------------------------------------------
-  // ---- the channel's idle and lifetime bounds (owner item 4; added by the coordinator at integration) ------------------
-  {id: 'M20', path: 'relay', what: 'the idle bound is ignored: a session idle past it still admits', tests: [T.life],
-    edits: [one(RELAY, '    if (session.closed || now > session.expires || now - session.last > session.idleMs) {', '    if (session.closed || now > session.expires) {')]},
-  {id: 'M21', path: 'relay', what: 'the lifetime bound is ignored: an active session never expires', tests: [T.life],
-    edits: [one(RELAY, '    if (session.closed || now > session.expires || now - session.last > session.idleMs) {', '    if (session.closed || now - session.last > session.idleMs) {'),
-      one(RELAY, '    const timer = setTimeout(() => session.close(), lifetimeMs); timer.unref?.();', '    const timer = setTimeout(() => {}, lifetimeMs); timer.unref?.();')]},
-  {id: 'M3', path: 'relay', what: 'the session\'s maximum request count is ignored', tests: [T.sesscap],
-    edits: [one(RELAY, CAP, '        if (false) {')]},
-  {id: 'M9', path: 'relay', what: 'the session cap counts completed outcomes instead of admissions', tests: [T.sesscap],
-    edits: [one(RELAY, CAP, '        if (session.outcomes.filter(o => !o.refused && o.status === 200).length >= session.maxRequests) {')]},
+  {id: 'M20', path: 'gateway', what: 'the idle bound is ignored: a session idle past it still admits', tests: [T.life],
+    edits: [one(GW, '    else if (idleMs !== null && now - last > idleMs) expired =', '    else if (false) expired =')]},
+  {id: 'M21', path: 'gateway', what: 'the lifetime bound is ignored: an active session never expires', tests: [T.life],
+    edits: [one(GW, '    if (lifetimeMs !== null && now - opened > lifetimeMs) expired =', '    if (false) expired =')]},
+  {id: 'M3', path: 'gateway', what: 'the session\'s maximum request count is ignored', tests: [T.sesscap],
+    edits: [one(GW, CAP, '    if (false) {')]},
+  {id: 'M9', path: 'gateway', what: 'the session cap counts answered requests instead of admissions', tests: [T.sesscap],
+    edits: [one(GW, CAP, '    if (maxRequests !== null && requests.filter(r => r.answered).length >= maxRequests) {')]},
   // ---- fail closed (owner item 9) --------------------------------------------------------------------------------------
-  {id: 'M4', path: 'relay', what: 'an unknown method is forwarded (uncharged) instead of refused', tests: [T.methods],
-    edits: [one(RELAY, '  if (!m || !Object.hasOwn(RELAY_METHODS, m[3])) return null;',
-      '  if (!m) return null;\n  if (!Object.hasOwn(RELAY_METHODS, m[3])) return { version: m[1], model: m[2], name: m[3], billed: false, stream: false, sse: false };')]},
-  {id: 'M16', path: 'relay', what: 'an upstream that is neither a Google API host nor loopback is accepted (the real key sent anywhere)', tests: [T.cap],
-    edits: [one(RELAY, '  if (!(loopback || google) || u.username', '  if (false || u.username')]},
+  {id: 'M4', path: 'gateway', what: 'a method the gateway does not serve is forwarded instead of refused', tests: [T.methods],
+    edits: [one(GW, '    if (req.method !== "POST" || !m || !verbs.has(m[2])) {', '    if (req.method !== "POST" || !m) {')]},
+  {id: 'M16', path: 'gateway', what: 'an upstream that is neither a Google API host nor loopback is accepted (the real key sent anywhere)', tests: [T.cap],
+    edits: [one(GW, '  if (!(loopback || google)) return', '  if (false) return')]},
+  {id: 'M22', path: 'gateway', what: 'a model other than the seat\'s is served', tests: [T.methods],
+    edits: [one(GW, '    if (!allowedModel(model)) {', '    if (false) {'), one(GW, '    if (!type && model !== root.model) {', '    if (false) {')]},
   // ---- the capability (D2, L-151) --------------------------------------------------------------------------------------
-  {id: 'M5', path: 'relay', what: 'the capability check removed: a request without one rides the open session', tests: [T.cap],
-    edits: [one(RELAY, '    const session = sessionOf(token);', '    const session = sessionOf(token) ?? [...sessions.values()][0] ?? null;')]},
+  {id: 'M5', path: 'gateway', what: 'the token check removed: a request without one rides the open session', tests: [T.cap],
+    edits: [one(GW, '    if (got.length !== want.length || !timingSafeEqual(got, want)) {', '    if (false) {')]},
   {id: 'M6', path: 'agySdkEnvOf', what: 'the real GEMINI_API_KEY is passed to the SDK child', tests: [T.governed, T.board],
     edits: [one(CLI, '    if (!AGY_SDK_WITHHELD.includes(k) && workerEnvAllows(k, pass)) env[k] = v; else dropped.push(k);',
       '    if (k === "GEMINI_API_KEY" || (!AGY_SDK_WITHHELD.includes(k) && workerEnvAllows(k, pass))) env[k] = v; else dropped.push(k);')]},
   {id: 'M13', path: 'agySdkEnvOf', what: 'the child keeps the controller\'s HOME (its ADC file and logins in reach)', tests: [T.governed],
     edits: [one(CLI, '  if (typeof home === "string" && home) env.HOME = home;\n', '')]},
   {id: 'M7', path: 'agy-seat.py', what: 'agy-seat.py runs without a capability when a key is in its environment (a credential-based exception)', tests: [T.direct],
-    edits: [one(SEAT, '  cap, refused = relay_capability()\n',
-      '  cap, refused = relay_capability()\n  if refused is not None and os.environ.get("GEMINI_API_KEY"):\n    cap, refused = {"url": os.environ.get("GOOGLE_GEMINI_BASE_URL") or "http://127.0.0.1:9", "token": os.environ["GEMINI_API_KEY"]}, None\n')]},
+    edits: [one(SEAT, '  cap, refused = gateway_capability()\n',
+      '  cap, refused = gateway_capability()\n  if refused is not None and os.environ.get("GEMINI_API_KEY"):\n    cap, refused = {"url": os.environ.get("GOOGLE_GEMINI_BASE_URL") or "http://127.0.0.1:9", "token": os.environ["GEMINI_API_KEY"]}, None\n')]},
   {id: 'M18', path: 'bin/agy-seat.mjs', what: 'the launcher spawns the seat without the policy\'s up-front check', tests: [T.crash],
     edits: [one(LAUNCH, 'try { geminiAdmission(billing, spend); }', 'try { /* no up-front check */ }')]},
   // ---- crash, cancellation and restart (owner item 7) ------------------------------------------------------------------
-  {id: 'M8', path: 'relay', what: 'an admitted request is refunded (its row dropped) when its session dies before the answer', tests: [T.crash],
-    edits: [one(RELAY, '        outcome({ ...where, request_id, seq: n, method: m.name, model: m.model, billed: m.billed, status: "upstream_error",',
-      '        if (row && session.billing.ledger?.where) { const fs = process.getBuiltinModule("node:fs"), f = session.billing.ledger.where; '
-      + 'fs.writeFileSync(f, fs.readFileSync(f, "utf8").split("\\n").filter(l => l && !l.includes(request_id)).map(l => l + "\\n").join("")); }\n'
-      + '        outcome({ ...where, request_id, seq: n, method: m.name, model: m.model, billed: m.billed, status: "upstream_error",')]},
+  {id: 'M8', path: 'gateway session', what: 'an admitted request is refunded (its row dropped) when its session dies before the answer', tests: [T.crash],
+    edits: [one(SS, 'status: summary, fetchImpl, signal });',
+      'status: summary, signal, fetchImpl: async (...a) => { try { return await fetchImpl(...a); } catch (e) { if (billing.ledger?.where) { const fs = process.getBuiltinModule("node:fs"), f = billing.ledger.where; '
+      + 'const lines = fs.readFileSync(f, "utf8").split("\\n").filter(Boolean); lines.pop(); fs.writeFileSync(f, lines.map(l => l + "\\n").join("")); } throw e; } } });')]},
   // ---- concurrency (owner item 5) --------------------------------------------------------------------------------------
-  {id: 'M10', path: 'relay', what: 'each session counts its own requests (a per-session ledger): concurrent sessions overspend', tests: [T.conc, T.procs],
-    edits: [one(RELAY, '      id, token, billing, admit, onAdmitted,',
-      '      id, token, billing: (rows => ({ ...billing, refusals: [], rows: [], ledger: { where: "per-session", used: k => rows.filter(r => r.kind === k).length, record: r => { rows.push(r); } } }))([]), admit, onAdmitted,')]},
+  {id: 'M10', path: 'gateway session', what: 'each session counts its own requests (a per-session ledger): concurrent sessions overspend', tests: [T.conc, T.procs],
+    edits: [one(SS, '  let admitted = 0, root = null, closed = false;',
+      '  let admitted = 0, root = null, closed = false;\n  billing = (rows => ({ ...billing, refusals: [], rows: [], ledger: { where: "per-session", used: k => rows.filter(r => r.kind === k).length, record: r => { rows.push(r); } } }))([]);')]},
   // ---- exhaustion and its record (owner items 6, 8) --------------------------------------------------------------------
-  {id: 'M14', path: 'run-item SDK seat', what: 'the board drops the relay\'s billing refusal (the seat\'s exit is a plain error)', tests: [T.bexh],
+  {id: 'M14', path: 'run-item SDK seat', what: 'the board drops the gateway session\'s billing refusal (the seat\'s exit is a plain error)', tests: [T.bexh],
     edits: [one(ITEM, '      if (refused) throw Object.assign(refused, { provider_requests: made });\n', '')]},
-  {id: 'M15', path: 'relay', what: 'a refusal is sent without its recovery condition', tests: [T.relay3],
-    edits: [one(RELAY, '    const message = `${RELAY_MARK} ${code}: ${why} (recovery: ${recovery})`;', '    const message = `${RELAY_MARK} ${code}: ${why}`;'),
-      one(RELAY, 'metadata: { recovery } }] } }));', 'metadata: {} }] } }));')]},
-  {id: 'M19', path: 'relay', what: 'a subagent\'s request is not attributed to it (every conversation recorded as the root)', tests: [T.governed, T.board],
-    edits: [one(RELAY, 'const conversation = sdk_session === null ? "unattributed" : sdk_session === session.root ? "root" : "subagent";', 'const conversation = sdk_session === null ? "unattributed" : "root";')]},
+  {id: 'M15', path: 'gateway session', what: 'a refusal is sent without its recovery condition', tests: [T.relay3],
+    edits: [one(SS, 'throw Object.assign(new Error(`${SEAT_REFUSED_MARK} ${code}: ${r.why} (recovery: ${r.recovery})`), { code });', 'throw Object.assign(new Error(`${SEAT_REFUSED_MARK} ${code}: ${r.why}`), { code });')]},
+  {id: 'M19', path: 'gateway session', what: 'a subagent\'s request is not attributed to it (every conversation recorded as the root)', tests: [T.governed, T.board],
+    edits: [one(SS, 'const conversation = sdk_session === null ? "unattributed" : sdk_session === root ? "root" : "subagent";', 'const conversation = sdk_session === null ? "unattributed" : "root";')]},
+  {id: 'M23', path: 'gateway', what: 'a refused charge is answered with a status the SDK\'s harness retries (429): each retry asks the run\'s admission again', tests: [T.bound],
+    edits: [one(GW, '      refuse(res, rec, 403, GATEWAY_REFUSALS.BUDGET, String(e?.message ?? e).slice(0, 900), "PERMISSION_DENIED");', '      refuse(res, rec, 429, GATEWAY_REFUSALS.BUDGET, String(e?.message ?? e).slice(0, 900), "RESOURCE_EXHAUSTED");')]},
   // ---- Vertex (D8) -----------------------------------------------------------------------------------------------------
   {id: 'M12', path: 'run-item SDK seat', what: 'Vertex through the SDK seat is not refused by the board', tests: [T.vertex],
     edits: [one(ITEM, '      if (process.env.PANTHEON_AGY_VERTEX_PROJECT) {', '      if (false) {')]},

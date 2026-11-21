@@ -4,16 +4,23 @@
 // the jail dropped at either spawn point, the controller's processes or HOME visible from the jail, an unjailed fallback when
 // bwrap is missing, the seat's HOME kept after the timeout or after the direct launch, the environment inherited instead of
 // allowlisted, a credential-named variable dropped instead of refusing the seat, the hidden locations or the host writable,
-// the SDK bubble recorded as holding without its quotes found, the attempt's transport recorded as the ambiguous `agy` -- on
-// a DISPOSABLE COPY of this tree (never the tree itself). Only the tests that decide it run there (`tests`: each [file,
+// the SDK bubble recorded as holding without its quotes found, the attempt's transport recorded as the ambiguous `agy`; and
+// (register KG-11, F1-F11) the descriptor closer removed at each spawn point (the verify launcher, the CLI worker's jail,
+// the SDK seat's board spawn and direct launcher), its refusal replaced by an unprotected run, a gate's check of it dropped,
+// it closing only what a POSIX shell can name, its single-thread check dropped (the race-prone closer), the command handed
+// python's own environment, or SIGPIPE left ignored -- on a DISPOSABLE COPY of this tree (never the tree itself). Only the tests that decide it run there (`tests`: each [file,
 // --test-name-pattern]); the copy is thrown away.
 //
 //   node pantheon/tests/agy-sdk-jail.mutate.mjs [--only J1,J7] [--log DIR] [--copy-root DIR] [--check]
 //
+// The copy goes under /var/tmp by default, NOT /tmp: the CLI worker's jail replaces /tmp with a fresh tmpfs, so a copy under
+// /tmp hides its own source tree (the jail hook, the descriptor probe) from the CLI worker suites (jail-fds, the isolation
+// test), and their baseline fails (observed: 30/32, exit 3, with the copy under /tmp).
+//
 // Each mutation names its edits: {file, from, to}, the EXACT text replaced. The runner EXITS NON-ZERO when a target does
 // not occur exactly once (2), when the unmutated suites are not green -- a skip included: the jail cells skip where bwrap
 // does not work, and such a host proves nothing (3) -- or when any mutation SURVIVES (1): its deciding tests stay green with
-// it. Synthetic keys only; the relay's upstream is a local fake; no test reaches a provider.
+// it. Synthetic keys only; the gateway's upstream is a local fake; no test reaches a provider.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,11 +29,15 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const JAIL = 'pantheon/tests/agy-sdk-jail.test.mjs', GRAPHT = 'pantheon/tests/capability-graph.test.mjs';
-const SUITES = [JAIL, GRAPHT];
+const JFDS = 'pantheon/tests/jail-fds.test.mjs', ISO = 'pantheon/tests/verify-jail-credential-isolation.test.mjs';
+const SUITES = [JAIL, GRAPHT, JFDS, ISO];
 const SB = 'pantheon/src/agy/sandbox.mjs', RI = 'pantheon/src/board/run-item.mjs', LA = 'pantheon/bin/agy-seat.mjs', GRAPH = 'pantheon/src/capability/graph.mjs';
+const VJ = 'pantheon/src/agy/verify-jail.mjs', CLI = 'pantheon/src/board/agy-cli.mjs', FDX = 'pantheon/src/agy/fd-exec.mjs';
 const one = (file, from, to) => ({file, from, to});
 const jail = pattern => [JAIL, pattern];
 const graph = pattern => [GRAPHT, pattern];
+const fds = pattern => [JFDS, pattern];
+const iso = pattern => [ISO, pattern];
 const PREFIX = 'const prefix = [bwrap, "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];';
 
 export const MUTATIONS = [
@@ -65,6 +76,35 @@ export const MUTATIONS = [
   // ---- the transport on each attempt (KS4, KG-6) -----------------------------------------------------------------------
   {id: 'J10', what: 'the attempt\'s transport recorded as agy (agyTurn\'s resolved transport not reported)', tests: [jail('^board: the SDK seat'), jail('^KG-6:')],
     edits: [one(RI, 'onTransport(AGY_TRANSPORT_OF[transport] ?? null);', 'onTransport(null);')]},
+  {id: 'J15', what: 'the turn\'s transport recorded as agy (the attempt says agy-cli or agy-sdk, the run\'s turns row does not)', tests: [jail('^board: the SDK seat'), jail('^KG-6:')],
+    edits: [one(RI, 'transport: ran ?? settings.transport, purpose, ms, chars: r.text.length,', 'transport: transport ?? "agy", purpose, ms, chars: r.text.length,')]},
+  // ---- no descriptor beyond 0, 1 and 2 at any spawn point (register KG-11; src/agy/fd-exec.mjs) -------------------------
+  {id: 'F1', what: 'the descriptor closer removed at the verify launcher (bwrap spawned directly: what the launcher inherited reaches the verify_cmd)',
+    tests: [fds('^CLI worker:'), iso('^credential isolation, WORKER path'), iso('^credential isolation, CONTROLLER path')],
+    edits: [one(VJ, 'try { const [closer, ...argv] = fdExecArgv([file, ...args]); child = spawn(closer, argv, { cwd, env, stdio: "inherit" }); }',
+      'try { child = spawn(file, args, { cwd, env, stdio: "inherit" }); }')]},
+  {id: 'F2', what: 'the descriptor closer dropped at the SDK seat\'s board spawn (the jail\'s bwrap argv used without the closer in front of it)', tests: [fds('^SDK board:')],
+    edits: [one(RI, 'const [cmd, ...argv] = [...jail.prefix, python, ...args];', 'const [cmd, ...argv] = [...jail.prefix.slice(jail.fds.argv.length), python, ...args];')]},
+  {id: 'F3', what: 'the descriptor closer dropped at the SDK seat\'s direct launcher (bin/agy-seat.mjs)', tests: [fds('^SDK launcher:')],
+    edits: [one(LA, 'const [cmd, ...argv] = [...jail.prefix, python, SEAT, ...args];', 'const [cmd, ...argv] = [...jail.prefix.slice(jail.fds.argv.length), python, SEAT, ...args];')]},
+  {id: 'F4', what: 'the descriptor closer removed from the CLI worker\'s jail (prepareWorkerJail: the agy CLI inherits what the controller holds)', tests: [fds('^CLI worker:')],
+    edits: [one(CLI, 'return { prefix: fdExecArgv(b.argv, { closerPython }), gstate,', 'return { prefix: b.argv, gstate,')]},
+  {id: 'F5', what: 'the closer\'s refusal replaced by an unprotected run (no /proc, a descriptor still open, another thread: it execs the command anyway)', tests: [fds('^closer fails closed')],
+    edits: [one(FDX, '    say("refused: %s; the jail was not started" % why)\n    os._exit(125)', '    say("refused: %s; the jail was not started" % why)\n    os.execvp(sys.argv[1], sys.argv[1:])')]},
+  {id: 'F6', what: 'the SDK seat\'s gate stops checking the descriptor closer (a closer that does not work here is not refused at the gate)', tests: [fds('^gates fail closed')],
+    edits: [one(SB, '      if (!fds.ok) return { ok: false, why: `no descriptor beyond 0, 1 and 2 can be guaranteed: ${fds.why}` };\n', '')]},
+  {id: 'F7', what: 'the CLI worker\'s gate stops checking the descriptor closer', tests: [fds('^gates fail closed')],
+    edits: [one(CLI, 'const probe = !box.ok ? box : fds.ok ? { ok: true } : { ok: false, why: `no descriptor beyond 0, 1 and 2 can be guaranteed: ${fds.why}` };', 'const probe = box;')]},
+  {id: 'F8', what: 'the closer closes only the descriptors a POSIX shell can name (3 to 9): fd 20 survives',
+    tests: [fds('^closer:'), fds('^closer on the host'), fds('^CLI worker:'), fds('^SDK board:'), fds('^SDK launcher:')],
+    edits: [one(FDX, '    os.closerange(3, max(fds + [2]) + 1)', '    os.closerange(3, 10)')]},
+  {id: 'F9', what: 'the closer\'s single-thread check dropped (the race-prone closer: another thread of its process could open a descriptor between its check and its exec, as a node closer\'s can)',
+    tests: [fds('^closer fails closed')],
+    edits: [one(FDX, '    if len(threads) != 1: refuse(', '    if False: refuse(')]},
+  {id: 'F10', what: 'the closer hands the command python\'s own environment (LC_CTYPE coerced under the C locale) instead of the one it was given', tests: [fds('^closer fidelity')],
+    edits: [one(FDX, 'try: os.execve(path, sys.argv[1:], env)', 'try: os.execve(path, sys.argv[1:], os.environb)')]},
+  {id: 'F11', what: 'SIGPIPE left ignored across the exec (python ignores it at its startup): the jailed command inherits it ignored', tests: [fds('^closer fidelity')],
+    edits: [one(FDX, '_signal.signal(_signal.SIGPIPE, _signal.SIG_DFL)\n', '')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
@@ -105,7 +145,7 @@ if (bad.length || strays.length) {
   process.exit(2);
 }
 if (process.argv.includes('--check')) { console.log(`${chosen.length} mutation(s), every target occurring exactly once`); process.exit(0); }
-const copyRoot = path.resolve(arg('--copy-root', os.tmpdir()));
+const copyRoot = path.resolve(arg('--copy-root', fs.existsSync('/var/tmp') ? '/var/tmp' : os.tmpdir()));
 const logDir = path.resolve(arg('--log', path.join(copyRoot, `agy-sdk-jail-mutations-${Date.now()}`)));
 fs.mkdirSync(logDir, {recursive: true});
 const copy = fs.mkdtempSync(path.join(copyRoot, 'agy-sdk-jail-mutate-'));

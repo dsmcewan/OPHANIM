@@ -120,14 +120,16 @@ const bump = (o, role, task, outcome, n = 1) => { ((o[role] ??= {})[task] ??= Ob
  */
 export function extractMetrics(records, {snapshot}) {
   const ix = snapshot.index, per = new Map(), unmapped = [];
-  const capOf = (seat, role) => {
-    if (seat?.transport === 'agy') return {id: null, why: 'the attempt records transport agy, which does not say whether the CLI or the SDK seat served it'};
+  // `kind`: the record the seat comes from (an attempt, or a turn: KG-6, the run's turns record agy-cli or agy-sdk too, and
+  // one written before says agy, listed unmapped as an attempt is).
+  const capOf = (seat, role, kind = 'attempt') => {
+    if (seat?.transport === 'agy') return {id: null, why: `the ${kind} records transport agy, which does not say whether the CLI or the SDK seat served it`};
     const vendor = seat?.vendor === 'google' ? 'agy_google' : seat?.vendor ?? null;
     const id = seat?.model ? capabilityOfSeat(ix, {vendor, model: seat.model, transport: seat.transport ?? null}, {role}) : null;
     return id ? {id: decodeURIComponent(id.split('/').slice(3).join('/'))} : {id: null, why: `${seat?.vendor ?? '?'}/${seat?.model ?? '?'} is not an executable capability of the capability graph`};
   };
-  const slot = (seat, role, source) => {
-    const c = capOf(seat, role);
+  const slot = (seat, role, source, kind = 'attempt') => {
+    const c = capOf(seat, role, kind);
     if (!c.id) { unmapped.push({seat: {vendor: seat?.vendor ?? null, model: seat?.model ?? null, transport: seat?.transport ?? null}, role, source, why: c.why}); return null; }
     if (!per.has(c.id)) per.set(c.id, blank());
     const m = per.get(c.id); m.sources.add(source); return m;
@@ -160,7 +162,7 @@ export function extractMetrics(records, {snapshot}) {
     const gates = Array.isArray(run.gates) ? Object.fromEntries(run.gates.map(g => [g.gate, g.ok === true])) : {};
     if (run.shipped === true && gates.REVIEW === true) {
       const work = turns.filter(t => t.purpose === 'work'), n = Math.max(1, run.revisions?.at(-1)?.slots?.length ?? 1);
-      for (const t of work.slice(-n)) { const m = slot(t, 'implementer', source); if (m) bump(m.outcomes, 'implementer', taskKeyOf(t.selection), 'accepted'); }
+      for (const t of work.slice(-n)) { const m = slot(t, 'implementer', source, 'turn'); if (m) bump(m.outcomes, 'implementer', taskKeyOf(t.selection), 'accepted'); }
     }
     // revised: a rejection the escalation protocol recorded against the seat that produced the work.
     for (const e of run.escalations ?? []) {

@@ -6,7 +6,7 @@
 // THE STUB SEAT. The google-antigravity SDK is not installed here: the seat's python is the stub interpreter of
 // fixtures/agy-sdk-jail-helpers.mjs, which runs fixtures/agy-sdk-jail-probe.py INSIDE the real jail, launched through the
 // real spawn path, and then the real scripts/agy-seat.py over the L-150 stub SDK, whose requests reach the controller's real
-// metering relay (its upstream a local fake). The controller is a process of its own (fixtures/agy-sdk-jail-board.mjs, or
+// model gateway (its upstream a local fake). The controller is a process of its own (fixtures/agy-sdk-jail-board.mjs, or
 // the launcher), started with a SYNTHETIC GEMINI_API_KEY in its environment, so /proc/<pid>/environ holds it. Its HOME is a
 // directory of its own OUTSIDE /tmp (under /var/tmp, the FHS temp directory that persists; removed after each test):
 // the jail replaces /tmp with a fresh tmpfs, so a HOME under /tmp would prove nothing about hiding HOME.
@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { sandboxAvailable, sdkSeatJail, sdkSeatEnv, sdkSeatHidden, interpreterPaths, SDK_JAIL_ENV_ALLOW } from "../src/agy/sandbox.mjs";
+import { fdExecPrefix } from "../src/agy/fd-exec.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { capabilitySnapshot } from "../src/capability/graph.mjs";
 import { extractMetrics } from "../src/capability/metrics.mjs";
@@ -87,7 +88,7 @@ function assertJailed(p, w, { workspace, out }) {
   assert.ok(p.home.startsWith(out + "/"), `the seat's HOME ${p.home} is a directory of its out dir`);
   assert.equal(p.tmpdir, "/tmp");
   assert.equal(p.cwd, workspace, "the jail starts in the workspace");
-  assert.deepEqual([p.relay?.session_with_capability, p.relay?.request_without_capability], [200, 401], "the relay is reachable with the capability, and refuses a request without it");
+  assert.deepEqual([p.gateway?.session_with_capability, p.gateway?.request_without_capability], [200, 401], "the gateway is reachable with the session's token, and refuses a request without it");
 }
 /** Each request the provider saw was charged (its usage row persisted) before it arrived. */
 const chargedBefore = edge => edge.forEach((r, i) => assert.ok(r.usage_rows >= i + 1, `request ${i + 1} reached the provider with ${r.usage_rows} usage row(s) persisted`));
@@ -121,7 +122,7 @@ function launch(t, w, { budget = 10, hang = 0, onSpawn = null, env = {} } = {}) 
       "--role", "reviewer", "--workspace", ws, "--model", MODEL, "--brief", join(w.root, "brief.txt"), "--out", out, "--timeout", "60"];
     // sh writes its own pid, then becomes the launcher (exec keeps the pid): the controller's pid is known before it starts.
     const child = spawn("/bin/sh", ["-c", 'printf %s "$$" > "$0"; exec "$@"', pidFile, process.execPath, LAUNCHER, ...args],
-      { env: { ...w.env, PANTHEON_AGY_RELAY_UPSTREAM: fake.url, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      { env: { ...w.env, PANTHEON_AGY_GATEWAY_UPSTREAM: fake.url, ...env }, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
     child.stdout.on("data", d => { stdout += d; }); child.stderr.on("data", d => { stderr += d; });
     onSpawn?.(child, { out });
@@ -146,7 +147,7 @@ test("the builder: the host read-only, a PID namespace with a fresh /proc, the c
   const ip = interpreterPaths(python);
   assert.ok(ip.includes(python) && ip.includes(venv) && ip.every(p => p.startsWith("/")), `a venv's interpreter and its root: ${ip.join(", ")}`);
   const base = { HOME: w.home, XDG_RUNTIME_DIR: rt, SSH_AUTH_SOCK: sock, GOOGLE_APPLICATION_CREDENTIALS: w.gac, CLOUDSDK_CONFIG: gcfg, PANTHEON_AGY_ENV_PASS: "" };
-  const env = { PATH: "/usr/bin:/bin", HOME: join(out, "home"), LANG: "C.UTF-8", LC_ALL: "C.UTF-8", PANTHEON_AGY_RELAY_URL: "http://127.0.0.1:9", PANTHEON_AGY_RELAY_CAPABILITY: "ophanim-relay-x",
+  const env = { PATH: "/usr/bin:/bin", HOME: join(out, "home"), LANG: "C.UTF-8", LC_ALL: "C.UTF-8", PANTHEON_AGY_GATEWAY_URL: "http://127.0.0.1:9", PANTHEON_AGY_GATEWAY_TOKEN: "ophanim-relay-x",
     AGY_C2_JAIL_CANARY: CANARY, XDG_CONFIG_HOME: join(w.home, ".config") };
   const j = sdkSeatJail({ python, script: SEAT_PY, repo: REPO, workspace: ws, out_dir: out, env, read: [join(w.root, "absent-brief.txt")], base });
   // What is hidden: the controller's HOME (and this process's own, and the passwd entry's), the runtime dir, the gcloud
@@ -154,9 +155,11 @@ test("the builder: the host read-only, a PID namespace with a fresh /proc, the c
   const hidden = Object.fromEntries(j.hidden.map(h => [h.path, h.kind]));
   for (const d of [w.home, rt, gcfg]) assert.equal(hidden[d], "dir", `${d} hidden`);
   for (const f of [w.gac, sock]) assert.equal(hidden[f], "file", `${f} hidden`);
-  // THE WHOLE ARGV: the jail's flags first, the workspace and the end of options last, and every operation between them.
+  // THE WHOLE ARGV: the descriptor closer (KG-11: bwrap starts through it, so no descriptor the controller inherited reaches
+  // the seat), the jail's flags, the workspace and the end of options last, and every operation between them.
   const a = j.prefix;
-  const HEAD = ["bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
+  assert.deepEqual([j.fds.argv, j.fds.passed, j.record.descriptors.passed], [fdExecPrefix(), [0, 1, 2], [0, 1, 2]], "the closer runs with this host's python3; only stdio is passed");
+  const HEAD = [...fdExecPrefix(), "bwrap", "--die-with-parent", "--unshare-pid", "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
   const TAIL = ["--chdir", realpathSync(ws), "--"];
   const middle = a.filter((_, i) => i >= HEAD.length && i < a.length - TAIL.length);
   assert.deepEqual(a, [...HEAD, ...middle, ...TAIL]);
@@ -173,7 +176,7 @@ test("the builder: the host read-only, a PID namespace with a fresh /proc, the c
   assert.ok(pairs.findIndex(q => q[0] === "--ro-bind" && q[1] === venv) > pairs.findIndex(q => q[0] === "--tmpfs" && q[1] === w.home), "the bind-back follows the hide");
   assert.ok(pairs.findIndex(q => q[0] === "--remount-ro") > pairs.findLastIndex(q => q[0] === "--bind" || (q[0] === "--ro-bind" && q[1] !== "/dev/null")), "the hidden dirs are made read-only after every bind");
   assert.ok(!a.includes("--unshare-net"), "the network is shared (retained, never claimed isolated)");
-  assert.deepEqual(Object.keys(j.env).sort(), ["HOME", "LANG", "LC_ALL", "PANTHEON_AGY_RELAY_CAPABILITY", "PANTHEON_AGY_RELAY_URL", "PATH", "TMPDIR"]);
+  assert.deepEqual(Object.keys(j.env).sort(), ["HOME", "LANG", "LC_ALL", "PANTHEON_AGY_GATEWAY_TOKEN", "PANTHEON_AGY_GATEWAY_URL", "PATH", "TMPDIR"]);
   assert.deepEqual(j.dropped, ["AGY_C2_JAIL_CANARY", "XDG_CONFIG_HOME"], "anything not allowlisted is dropped");
   assert.equal(j.home, realpathSync(join(out, "home")));
   // The jail's re-check of agySdkEnvOf's withholding: a credential-named variable refuses the seat, it is not dropped.
@@ -190,24 +193,25 @@ test("the builder: the host read-only, a PID namespace with a fresh /proc, the c
 });
 
 // ---- the board's spawn point (runOpenItem) -----------------------------------------------------------------------------
-test("board: the SDK seat's whole process runs in the jail -- the controller's environment, HOME and credentials out of its reach, nothing outside the workspace and its out dir writable -- each request still charged at the relay; its HOME is gone afterwards; its attempt records transport agy-sdk and maps onto the SDK capability", jailed, async t => {
+test("board: the SDK seat's whole process runs in the jail -- the controller's environment, HOME and credentials out of its reach, nothing outside the workspace and its out dir writable -- each request still charged at the gateway; its HOME is gone afterwards; its attempt records transport agy-sdk and maps onto the SDK capability", jailed, async t => {
   const w = world(t);
   const b = await board(t, w);
   assert.equal(b.result.shipped, true, b.said.slice(-2000) + JSON.stringify(b.result));
   assertJailed(b.probe, w, { workspace: b.worktree, out: b.seat_dirs[0].dir });
   assert.ok(b.progress.some(e => e.event === "seat.jail" && /jailed \(bwrap\)/.test(e.detail)), "the jail is on the progress trail");
-  // The relay: each request charged before it was sent, exactly as before the jail (L-150).
-  assert.ok(b.fake.requests.length >= 3, `the seat's requests reached the provider through the relay: ${b.fake.requests.length}`);
+  // The gateway: each request charged before it was sent, exactly as before the jail (L-150).
+  assert.ok(b.fake.requests.length >= 3, `the seat's requests reached the provider through the gateway: ${b.fake.requests.length}`);
   chargedBefore(b.fake.requests);
   assert.ok(b.fake.requests.every(q => q.key === KEY), "forwarded with the controller's key, which the seat never held");
   assert.equal(b.usage.length, b.fake.requests.length, "one usage row per request");
   // KG-6: the attempt says which transport served it, and the metrics map it onto its executable capability.
   assert.deepEqual(critique(b.run).map(a => [a.transport, a.outcome, a.provider_requests]), [["agy-sdk", "ok", b.fake.requests.length]], JSON.stringify(critique(b.run)));
   assert.equal(critique(b.run)[0].settings.transport, "agy", "the seat's transport as selected is kept in its settings");
+  assert.deepEqual(b.run.turns.filter(x => x.vendor === "agy_google").map(x => [x.purpose, x.transport, x.settings.transport]), [["critique", "agy-sdk", "agy"]], "the turn records the transport it ran on too (KG-6)");
   const M = extractMetrics({ runs: [{ run: b.run, source: "board", practice: false }], stages: [], transcripts: [], gemini: [], relay: [], unreadable: [], read: {} }, { snapshot: capabilitySnapshot(registries()) });
   assert.equal(M.capabilities[CAPABILITY]?.attempts, 1, JSON.stringify(Object.keys(M.capabilities)));
   assert.deepEqual(M.unmapped.filter(u => u.seat.vendor === "agy_google"), [], "the SDK attempt is not listed unmapped");
-  // The single-assignment lifetime: the seat's HOME removed, its processes gone, the relay closed.
+  // The single-assignment lifetime: the seat's HOME removed, its processes gone, the gateway session closed.
   assert.equal(b.seat_dirs[0].home, false, "the seat's HOME is removed after the assignment");
   assert.ok(b.progress.some(e => e.event === "seat.teardown" && /removed/.test(e.detail)));
   assert.equal(b.pgrep_after, "", "no process of the seat is left");
@@ -238,7 +242,7 @@ test("board kill path: the run's stop kills the jailed seat; its HOME is removed
   assert.deepEqual([b.fake.requests.length, b.usage.length], [0, 0]);
 });
 
-test("board without bwrap: the SDK seat is refused before the relay, the spawn or any charge (SANDBOX_UNAVAILABLE; no override)", { timeout: 240_000 }, async t => {
+test("board without bwrap: the SDK seat is refused before the gateway session, the spawn or any charge (SANDBOX_UNAVAILABLE; no override)", { timeout: 240_000 }, async t => {
   const w = world(t);
   const b = await board(t, w, { bwrap: "/nonexistent/bwrap" });
   assert.deepEqual(critique(b.run).map(a => [a.transport, a.code, a.provider_requests]), [["agy-sdk", "SANDBOX_UNAVAILABLE", 0]], JSON.stringify(critique(b.run)) + b.said.slice(-1500));
@@ -246,11 +250,11 @@ test("board without bwrap: the SDK seat is refused before the relay, the spawn o
   assert.deepEqual([b.fake.requests.length, b.usage.length], [0, 0], "nothing was sent or charged");
   assert.deepEqual(b.seat_dirs.map(d => d.home), [false], "no HOME was made");
   assert.ok(b.progress.some(e => e.event === "turn.refused" && /SDK seat's bwrap jail is unavailable.*no override/.test(e.detail)), JSON.stringify(b.progress));
-  assert.ok(!b.progress.some(e => e.event === "seat.env"), "the relay's capability was never issued");
+  assert.ok(!b.progress.some(e => e.event === "seat.env"), "the gateway session's token was never issued");
 });
 
 // ---- the direct launcher's spawn point (bin/agy-seat.mjs, L-151) --------------------------------------------------------
-test("launcher: the governed direct launch runs the seat in the same jail; each request charged at the relay; the seat's HOME is removed afterwards", jailed, async t => {
+test("launcher: the governed direct launch runs the seat in the same jail; each request charged at the gateway; the seat's HOME is removed afterwards", jailed, async t => {
   const w = world(t);
   const fake = await startFakeGemini({ mode: "review", usage: join(w.root, "usage.jsonl"), workspace: join(w.root, "ws") }); t.after(() => fake.close());
   const r = await launch(t, w)(fake);
@@ -259,7 +263,7 @@ test("launcher: the governed direct launch runs the seat in the same jail; each 
   assertJailed(r.probe, w, { workspace: r.ws, out: r.out });
   assert.ok(fake.requests.length >= 3, r.said);
   chargedBefore(fake.requests);
-  assert.deepEqual([r.usage.length, r.report?.relay?.admitted], [fake.requests.length, fake.requests.length]);
+  assert.deepEqual([r.usage.length, r.report?.gateway?.admitted], [fake.requests.length, fake.requests.length]);
   assert.equal(r.report?.jail?.kind, "bwrap", "the launcher's report names the jail");
   assert.deepEqual(r.report?.jail?.writable?.sort(), [r.out, r.ws].sort());
   assert.deepEqual([r.report?.teardown?.removed, existsSync(join(r.out, "home"))], [true, false], "the seat's HOME is removed after the assignment");
@@ -280,7 +284,7 @@ test("launcher kill path: SIGTERM to the launcher stops the jailed seat; its HOM
   assert.equal(pgrep(r.python), "");
 });
 
-test("launcher without bwrap: refused before the relay, the spawn or any charge (exit 2, SANDBOX_UNAVAILABLE; no override)", { timeout: 240_000 }, async t => {
+test("launcher without bwrap: refused before the gateway session, the spawn or any charge (exit 2, SANDBOX_UNAVAILABLE; no override)", { timeout: 240_000 }, async t => {
   const w = world(t);
   const fake = await startFakeGemini({ mode: "review", usage: join(w.root, "usage.jsonl") }); t.after(() => fake.close());
   // No bwrap on PATH: the launcher's jail is the binary PATH names, so a PATH without it is a host without it.
@@ -297,6 +301,7 @@ test("KG-6: an agy seat on the CLI lane records transport agy-cli on its attempt
     const r = await runOpenItem(spec("c2-cli"), { ...opts(), seatOverrides: { reviewer: seat("agy_google", MODEL, { transport: "agy" }) } });
     const run = JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
     assert.deepEqual(critique(run).map(a => [a.transport, a.outcome, a.settings.transport]), [["agy-cli", "ok", "agy"]], JSON.stringify(critique(run)));
+    assert.deepEqual(run.turns.filter(x => x.vendor === "agy_google").map(x => [x.purpose, x.transport, x.settings.transport]), [["critique", "agy-cli", "agy"]], "the turn records the transport it ran on too, the seat's own in its settings");
     const old = { ...run, attempts: critique(run).map(a => ({ ...a, transport: "agy" })) };
     const M = extractMetrics({ runs: [{ run, source: "new" }, { run: old, source: "old" }], stages: [], transcripts: [], gemini: [], relay: [], unreadable: [], read: {} }, { snapshot: capabilitySnapshot(registries()) });
     assert.equal(M.capabilities[`agy-cli/agy_google/${MODEL}`]?.attempts, 1);

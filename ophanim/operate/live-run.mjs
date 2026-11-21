@@ -5,7 +5,7 @@
 //   node ophanim/operate/live-run.mjs --manifest FILE --confirm-spend "<item>@<first 7 of candidate_commit>"
 //   [--repo DIR]  the checkout (default: this one)
 //
-// THE MANIFEST (schema ophanim.live-run/v1; ophanim/operate/live-run.example.json) is filled in by the owner. Every
+// THE MANIFEST (schema ophanim.live-run/v2; ophanim/operate/live-run.example.json) is filled in by the owner. Every
 // field is required unless marked, unknown keys are refused, and no limit has a default: a null is refused.
 //   item                 the status item id                candidate_commit   40-hex; must be HEAD, tracked files clean
 //   profile: "fit"       independence: "model"             (anything else is refused by this launcher)
@@ -13,30 +13,42 @@
 //                         pipeline: {max_provider_calls, max_revisions, max_concurrent_units, verify_timeout_ms}}:
 //                         positive integers; stage_provider_calls <= total_provider_calls and
 //                         pipeline.max_provider_calls <= stage_provider_calls (a pipeline runs inside one stage)
-//   billing              {scope: owner text, metered_gemini_failover: true|false, metered_gemini_budget?, note}. false
-//                         DISABLES the metered Gemini API failover of every Antigravity lane in the run (pipeline turns
-//                         and single-turn seats): a proven quota refusal is not answered by the API; the pipeline unit
-//                         ends blocked. true needs metered_gemini_budget, a positive integer of billed Gemini requests the
-//                         run's work ledger may record (register L-136); it is resolved through the one billing policy
-//                         (pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md), and primary Gemini API
-//                         execution (gemini_api_primary) stays off in a live run
-//   require_subagent     (optional) {role, model: grok-4.6|grok-4.7, min_calls >= 1}: the run is NOT accepted unless
-//                         that many ANSWERED subagent calls of that role, served by that model, are recorded
+//   billing              {scope: owner text, gemini_api_primary: true, gemini_primary_budget, metered_gemini_failover:
+//                         true|false, metered_gemini_budget?, note}. Resolved through the ONE billing policy
+//                         (pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md; register L-136): two separate
+//                         authorizations, each with a declared budget of billed Gemini requests that the run's work
+//                         ledger may record, each enforced at the point of spend and never by the presence of a key:
+//                         gemini_api_primary       PRIMARY Gemini execution. The Google implementer of a fit run is an
+//                                                  Antigravity SDK session billed on the Gemini API (GEMINI_API_KEY):
+//                                                  every model request of it, and of each of its native subagents, is
+//                                                  one billed request against gemini_primary_budget (a positive
+//                                                  integer). This launcher runs only fit, so it REFUSES a manifest
+//                                                  that does not say true: the run could plan and then not implement.
+//                         metered_gemini_failover  whether a proven quota refusal of an Antigravity lane (a single-turn
+//                                                  Gemini seat: a reviewer, the validator) may be answered by the
+//                                                  metered Gemini API. true needs metered_gemini_budget; false must not
+//                                                  carry one. It neither enables nor disables the implementer.
+//   require_subagent     (optional) {type: a specialist type, model: gemini-4-hydrogen, min_calls >= 1}: the run is NOT
+//                         accepted unless that many NATIVE subagents of that type, admitted by the controller and
+//                         answered by the provider under that model, are recorded in an implementer session whose
+//                         work was kept
 //   ledgers              {status_root: opened READ-ONLY, never written (its files are digested before and after),
 //                         work_root: EMPTY or absent: a separately anchored, single-item work ledger this launcher
 //                         creates (--init semantics: the controller key is generated there), or one it created
 //                         earlier for THIS item (LIVE-RUN.json marker) to resume}
-//   credentials          {required: [ANTHROPIC_API_KEY | anthropic-oauth, OPENAI_API_KEY, XAI_API_KEY, agy-login],
-//                         gemini_api_key: "required" | "not-used"} -- PRESENCE only, never a value; agy-login is the
-//                         zero-spend in-jail /usage of the preflight. gemini_api_key is "required" exactly when
-//                         billing.metered_gemini_failover is true; "not-used" withholds GEMINI_API_KEY/GOOGLE_API_KEY
-//                         from this process
+//   credentials          {required: [ANTHROPIC_API_KEY | anthropic-oauth, OPENAI_API_KEY, XAI_API_KEY, agy-login?],
+//                         gemini_api_key: "required"} -- PRESENCE only, never a value. gemini_api_key is "required":
+//                         the implementer's transport. agy-login is OPTIONAL: name it when the run may seat a
+//                         single-turn Gemini seat on an Antigravity lane (then the zero-spend in-jail /usage of the agy
+//                         preflight must pass); without it no agy preflight runs and the implementer needs no CLI
 //   out_dir              outside the repository: run.json, the stage state (operate/), the pipeline runs
 //
 // ALWAYS (dry run and confirmed): validate the manifest; verify the status ledger (read-only) and record its head and
 // the digest of its files; check candidate_commit is HEAD and the tracked tree clean; check credential presence; run
-// the zero-spend agy preflight (runAgyPreflight: card tools, in-jail /usage auth, the lane quota) and probeQuota for the
-// matrix implementer lane of each difficulty; reconcile and show the item's gate; predict the seats per stage from the
+// the zero-spend ANTIGRAVITY SDK preflight (sdkPreflight: the SDK's identity and version from its own python, the jail,
+// and the provider's answer about every implementer and subagent model: GET models/<id>, not a generation call) and, when
+// agy-login is named, the zero-spend agy preflight (runAgyPreflight: card tools, in-jail /usage auth) with probeQuota for
+// the lane a single-turn Gemini seat starts on; reconcile and show the item's gate; predict the seats per stage from the
 // fit matrix (planner from the ticket's tier; dispatcher, implementer ladder, subagent and pinned reviewer per
 // difficulty); record the policy hashes (selectionPolicy('fit'), the identity policy digest, the escalation rules).
 // The dry run prints ONE JSON plan (ophanim.live-run-plan/v1) and makes no provider call.
@@ -46,7 +58,7 @@
 // until the item reaches its outcome or a stop or blocker; bounded by total_provider_calls (the work ledger's own
 // spend, which counts a resumed run's earlier stages too) and elapsed_ms (counted from before the preflight; it bounds
 // the preflight's probes, every stage and the verifier). NOTE: the provider-call counters bound
-// CALLS, not dollars; inside the native agy CLI a call is a whole multi-turn worker session on the subscription.
+// CALLS, not dollars; an implementer session is charged one call per model request it makes.
 // It writes <out_dir>/run.json (ophanim.live-run-record/v1): the manifest digest, the plan, every tick's dispatch log,
 // every stage record (hash, inputs, outputs digest, findings, evidence, usage, next, blocker), budget stops, served
 // identities (stage teams and the pipeline records), the subagent receipt check, the pipeline.json paths, the final
@@ -77,7 +89,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {openWorkLedger, outputsDigest, STAGES} from './work-ledger.mjs';
-import {tick, spent, releaseInterrupted, STOP_CODES, billingStatus} from './scheduler.mjs';
+import {tick, spent, releaseInterrupted, STOP_CODES, billingStatus, billingChanged} from './scheduler.mjs';
 import {reconcile} from './reconcile.mjs';
 import {openWorkReadOnly} from './cli.mjs';
 import {makeExecutors, implementerPath} from './stages.mjs';
@@ -87,7 +99,11 @@ import {systemKinds, systemDomains} from '../ledger/system.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {selectSeat, readPools, selectionPolicy} from '../../pantheon/src/route/frontier.mjs';
-import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, FIT_DIFFICULTIES, FIT_MATRIX_BODY} from '../../pantheon/src/route/fit-matrix.mjs';
+import {fitMatrix, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION, pinnedReviewer, FIT_DIFFICULTIES, FIT_MATRIX_BODY, laneFor} from '../../pantheon/src/route/fit-matrix.mjs';
+import {SDK_CONFIG} from '../../pantheon/src/antigravity/config.mjs';
+import {ceilingFor, SUBAGENT_MODEL, SUBAGENT_TYPE_NAMES} from '../../pantheon/src/antigravity/subagents.mjs';
+import {sdkPython, sdkVersionRefusal, BRIDGE_SCRIPT} from '../../pantheon/src/antigravity/turn.mjs';
+import {providerAvailability} from '../../pantheon/src/antigravity/gateway.mjs';
 import {taskProfile} from '../../pantheon/src/route/task-profile.mjs';
 import {currentPolicy, policyDigest, resolveModel, IDENTITY_POLICY_SCHEMA} from '../../pantheon/src/review/identity.mjs';
 import {PROTOCOL_V2} from '../../pantheon/src/route/protocol.mjs';
@@ -100,21 +116,41 @@ import {billingFromConfig, policyRecord} from '../../pantheon/src/route/quota-fa
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /**
- * THE MANIFEST'S BILLING, through the one billing policy (register L-136): billing.metered_gemini_failover (unchanged in
- * meaning) with its budget billing.metered_gemini_budget; primary Gemini API execution is not declared by a live run and
- * stays off. Throws GEMINI_BILLING_INVALID (an enabled failover without a budget, a budget without the failover).
+ * THE MANIFEST'S BILLING, through the one billing policy (register L-136): billing.gemini_api_primary with its budget
+ * billing.gemini_primary_budget (a fit run's Google implementer is an Antigravity SDK session, a primary seat: the
+ * manifest must declare it, validateManifest), and billing.metered_gemini_failover with its budget
+ * billing.metered_gemini_budget. Throws GEMINI_BILLING_INVALID (an enabled kind without a budget, a budget without its kind).
  */
-export const manifestBilling = m => billingFromConfig({metered_gemini_failover: {enabled: m.billing.metered_gemini_failover,
-  ...(m.billing.metered_gemini_budget !== undefined ? {budget: m.billing.metered_gemini_budget} : {})}}, 'live-run manifest billing');
+export const manifestBilling = m => billingFromConfig({
+  metered_gemini_failover: {enabled: m.billing.metered_gemini_failover, ...(m.billing.metered_gemini_budget !== undefined ? {budget: m.billing.metered_gemini_budget} : {})},
+  gemini_api_primary: {enabled: m.billing.gemini_api_primary, ...(m.billing.gemini_primary_budget !== undefined ? {budget: m.billing.gemini_primary_budget} : {})}}, 'live-run manifest billing');
+/**
+ * THE SCHEDULER'S BILLING WAKE, AS THE LAUNCHER MUST SEE IT (docs/billing-policy.md, "A changed policy wakes it at
+ * once"). A stage pending on a billing refusal is dispatched again at once when the policy now declared differs, for a
+ * kind that was refused, from the settings it was refused under. The launcher decides whether there is anything to
+ * dispatch BEFORE it reaches `tick`; reading only the plain gate, it answered "blocked: nothing to dispatch" until the
+ * pending's own retry time, although the owner had raised the budget in the manifest. It applies the scheduler's own
+ * test (`billingChanged`). `tick` still decides the wake itself (the attempt bound under the settings now in force), and
+ * a tick that dispatches nothing ends the run. Returns {refused_under, now} (policy digests), or null.
+ */
+const billingWakeOf = (gate, policy) => (gate?.gate === 'blocked' && gate.blocker?.transient === true && policy && billingChanged(gate.blocker, policy)
+  ? {refused_under: gate.blocker.billing?.policy ?? null, now: policy.digest} : null);
 export const REPO_ROOT = path.resolve(HERE, '../..');
-export const LIVE_RUN_SCHEMA = 'ophanim.live-run/v1';
+// v2 (2026-11-19): the Google implementer is billed on the Gemini API (billing.gemini_api_primary), the required
+// subagent is a native one ({type, model}), and agy-login is optional. A v1 manifest is refused: it authorized neither.
+export const LIVE_RUN_SCHEMA = 'ophanim.live-run/v2';
 export const PLAN_SCHEMA = 'ophanim.live-run-plan/v1';
 export const RECORD_SCHEMA = 'ophanim.live-run-record/v1';
 export const WORK_MARKER_SCHEMA = 'ophanim.live-run-work/v1';
 export const WORK_MARKER = 'LIVE-RUN.json';
-export const SUBAGENT_MODELS = Object.freeze(['grok-4.6', 'grok-4.7']);
+/** The model a required (native) subagent runs on: the one model the controller pins every implementer's subagents to. */
+export const SUBAGENT_MODELS = Object.freeze([SUBAGENT_MODEL]);
+/** The Antigravity lane a single-turn Gemini seat (a reviewer, the validator) starts on: what the agy preflight probes. */
+export const REVIEW_LANE = laneFor('gemini-4-carbon')?.model ?? null;
 export const ANTHROPIC_CREDENTIALS = Object.freeze(['ANTHROPIC_API_KEY', 'anthropic-oauth']);
-export const OTHER_CREDENTIALS = Object.freeze(['OPENAI_API_KEY', 'XAI_API_KEY', 'agy-login']);
+export const OTHER_CREDENTIALS = Object.freeze(['OPENAI_API_KEY', 'XAI_API_KEY']);
+/** May be named, need not be: the Antigravity CLI login a single-turn Gemini seat on a lane uses. The implementer uses none. */
+export const OPTIONAL_CREDENTIALS = Object.freeze(['agy-login']);
 export const LIMIT_KEYS = Object.freeze(['total_provider_calls', 'stage_provider_calls', 'revisions', 'stage_attempts', 'elapsed_ms']);
 export const PIPELINE_LIMIT_KEYS = Object.freeze(['max_provider_calls', 'max_revisions', 'max_concurrent_units', 'verify_timeout_ms']);
 const TOP_KEYS = ['_fill_in', 'schema', 'item', 'candidate_commit', 'profile', 'independence', 'limits', 'billing', 'require_subagent', 'ledgers', 'credentials', 'out_dir'];
@@ -168,19 +204,22 @@ export function validateManifest(m, {baseDir = process.cwd()} = {}) {
       why.push('limits.pipeline.max_provider_calls is at most limits.stage_provider_calls (the pipeline runs inside the implement stage, whose budget bounds it)');
     }
   }
-  if (keys(m.billing, 'billing', ['scope', 'metered_gemini_failover', 'metered_gemini_budget', 'note'], new Set(['metered_gemini_budget']))) {
+  if (keys(m.billing, 'billing', ['scope', 'gemini_api_primary', 'gemini_primary_budget', 'metered_gemini_failover', 'metered_gemini_budget', 'note'], new Set(['metered_gemini_budget']))) {
     if (!str(m.billing.scope)) why.push('billing.scope is the owner\'s text naming what may be billed');
-    if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether a quota refusal of an Antigravity lane may be answered by the metered Gemini API');
-    // THE BUDGET (register L-136, owner decision 2026-11-19, item 5): enabling the failover declares how many billed Gemini
+    if (m.billing.gemini_api_primary !== true) why.push('billing.gemini_api_primary is true: the Google implementer of a fit run is an Antigravity SDK session, a primary Gemini seat of the billing policy (GEMINI_API_KEY), and primary Gemini execution is off unless the owner declares it; without it this run could plan and not implement');
+    if (typeof m.billing.metered_gemini_failover !== 'boolean') why.push('billing.metered_gemini_failover is true or false: whether a quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API');
+    // THE BUDGETS (register L-136, owner decision 2026-11-19, item 5): each enabled kind declares how many billed Gemini
     // requests it may make; resolved through the one billing policy (pantheon/src/route/gemini-billing.mjs).
-    else {
-      try { manifestBilling(m); } catch (e) { why.push(`billing: ${String(e.message).replace(/^GEMINI_BILLING_INVALID: /, '')} (billing.metered_gemini_budget is the budget: a positive integer, present exactly when billing.metered_gemini_failover is true)`); }
+    else if (m.billing.gemini_api_primary === true) {
+      // The owner chooses the primary budget like every limit: the example's null is refused as one, by name.
+      if (m.billing.gemini_primary_budget === null) why.push('billing.gemini_primary_budget is null: the owner must choose it (no default is filled in)');
+      else try { manifestBilling(m); } catch (e) { why.push(`billing: ${String(e.message).replace(/^GEMINI_BILLING_INVALID: /, '')} (billing.gemini_primary_budget is the budget of primary Gemini requests, a positive integer; billing.metered_gemini_budget is the failover's, a positive integer, present exactly when billing.metered_gemini_failover is true)`); }
     }
     if (typeof m.billing.note !== 'string') why.push('billing.note is a string (empty when there is nothing to add)');
   }
-  if (m.require_subagent !== undefined && keys(m.require_subagent, 'require_subagent', ['role', 'model', 'min_calls'])) {
-    if (!/^[a-z][a-z0-9-]{0,63}$/.test(m.require_subagent.role ?? '')) why.push('require_subagent.role is a subagent role id (e.g. api-designer)');
-    if (!SUBAGENT_MODELS.includes(m.require_subagent.model)) why.push(`require_subagent.model is one of ${SUBAGENT_MODELS.join(', ')}`);
+  if (m.require_subagent !== undefined && keys(m.require_subagent, 'require_subagent', ['type', 'model', 'min_calls'])) {
+    if (!SUBAGENT_TYPE_NAMES.includes(m.require_subagent.type)) why.push(`require_subagent.type is a specialist type: one of ${SUBAGENT_TYPE_NAMES.join(', ')}`);
+    if (!SUBAGENT_MODELS.includes(m.require_subagent.model)) why.push(`require_subagent.model is ${SUBAGENT_MODELS.join(', ')} (the model every implementer's native subagents run on)`);
     if (!posInt(m.require_subagent.min_calls)) why.push('require_subagent.min_calls is a positive integer');
   }
   if (keys(m.ledgers, 'ledgers', ['status_root', 'work_root'])) for (const k of ['status_root', 'work_root']) if (!str(m.ledgers[k])) why.push(`ledgers.${k} is a path`);
@@ -188,15 +227,12 @@ export function validateManifest(m, {baseDir = process.cwd()} = {}) {
     const r = m.credentials.required;
     if (!Array.isArray(r) || !r.every(x => typeof x === 'string')) why.push('credentials.required is a list of credential names');
     else {
-      for (const x of r) if (![...ANTHROPIC_CREDENTIALS, ...OTHER_CREDENTIALS].includes(x)) why.push(`credentials.required: unknown credential "${x}"`);
+      for (const x of r) if (![...ANTHROPIC_CREDENTIALS, ...OTHER_CREDENTIALS, ...OPTIONAL_CREDENTIALS].includes(x)) why.push(`credentials.required: unknown credential "${x}"`);
       if (new Set(r).size !== r.length) why.push('credentials.required names each credential once');
       if (r.filter(x => ANTHROPIC_CREDENTIALS.includes(x)).length !== 1) why.push(`credentials.required names exactly one Anthropic credential: ${ANTHROPIC_CREDENTIALS.join(' or ')}`);
       for (const x of OTHER_CREDENTIALS) if (!r.includes(x)) why.push(`credentials.required includes ${x}`);
     }
-    if (!['required', 'not-used'].includes(m.credentials.gemini_api_key)) why.push('credentials.gemini_api_key is "required" or "not-used"');
-    else if (typeof m.billing?.metered_gemini_failover === 'boolean' && (m.credentials.gemini_api_key === 'required') !== m.billing.metered_gemini_failover) {
-      why.push('credentials.gemini_api_key is "required" exactly when billing.metered_gemini_failover is true (the key is used for nothing else in a fit run)');
-    }
+    if (m.credentials.gemini_api_key !== 'required') why.push('credentials.gemini_api_key is "required": the Google implementer runs on the Gemini API with GEMINI_API_KEY (no subscription login is used for it)');
   }
   if (!str(m.out_dir)) why.push('out_dir is a path outside the repository');
   if (why.length) refuse(why, 'MANIFEST');
@@ -303,19 +339,20 @@ export function credentialPresence(m, env, {home = env.HOME ?? os.homedir()} = {
     try { const t = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken; present = typeof t === 'string' && t.length > 0; } catch { /* absent */ }
     return {name, present, source: '~/.claude/.credentials.json (claudeAiOauth.accessToken)'};
   });
-  const gemini = m.credentials.gemini_api_key === 'required'
-    ? {name: 'GEMINI_API_KEY', required: true, present: nonEmpty('GEMINI_API_KEY'), source: 'env GEMINI_API_KEY'}
-    : {name: 'GEMINI_API_KEY', required: false, present: nonEmpty('GEMINI_API_KEY') || nonEmpty('GOOGLE_API_KEY'), withheld: true, source: 'not used: withheld from this process for the run'};
+  // The implementer's transport: held by this process (the controller's model gateway), never given to a worker.
+  const gemini = {name: 'GEMINI_API_KEY', required: true, present: nonEmpty('GEMINI_API_KEY'), source: 'env GEMINI_API_KEY', use: 'the Antigravity SDK implementer (the Gemini API)'};
   return {rows, gemini};
 }
 
 // ---- the zero-spend agy preflight ------------------------------------------------------------------------------
 const onPath = (name, PATH) => String(PATH ?? '').split(':').filter(Boolean).map(d => path.join(d, name)).find(p => fs.existsSync(p)) ?? null;
-/** The matrix implementer lane each difficulty starts on. */
-export const matrixLanes = () => FIT_DIFFICULTIES.map(d => ({difficulty: d, lane: IMPLEMENTER_LADDERS[d][0].model}));
+/** The lanes the agy preflight probes: the one a single-turn Gemini seat starts on. The implementer has no lane. */
+export const reviewLanes = () => (REVIEW_LANE ? [{use: 'single-turn Gemini seats (a reviewer, the validator)', lane: REVIEW_LANE}] : []);
 /**
  * runAgyPreflight (card tools, in-jail /usage auth, agents, the lane quota, the log scan) in a disposable control dir
- * and worktree, then probeQuota for the matrix implementer lane of every difficulty. No model turn.
+ * and worktree, then probeQuota for that lane. No model turn. Run only when the manifest names agy-login. A spent lane
+ * quota is a WARNING: that seat is then unavailable (or answered by the metered API, when billing allows), and the run
+ * does not depend on it.
  */
 // `deadline` (ms, optional): the run's elapsed bound. Every probe is given what is left of it (at most its own timeout),
 // and a preflight with nothing left is a refusal, not an overrun (independent review round 2, assignment 3 (Google
@@ -324,7 +361,7 @@ export async function agyPreflight({env, home = env.HOME ?? os.homedir(), deadli
   const secondsLeft = cap => Math.min(cap, Math.floor((deadline - Date.now()) / 1000));
   const spentOut = (lanes, cli, step) => ({ok: false, cli, failed: ['elapsed'], why: `the run's elapsed limit was spent during the preflight (before ${step})`, lanes});
   const cli = env.PANTHEON_AGY_CLI ?? onPath('agy', env.PATH) ?? (fs.existsSync(path.join(home, '.local', 'bin', 'agy')) ? path.join(home, '.local', 'bin', 'agy') : null);
-  const lanes = matrixLanes();
+  const lanes = reviewLanes();
   if (!cli || !fs.existsSync(cli)) return {ok: false, cli: cli ?? null, failed: ['cli'], why: 'the agy CLI was not found ($PANTHEON_AGY_CLI, $PATH, ~/.local/bin/agy)', lanes};
   const box = await sandboxAvailable('bwrap');
   if (!box.ok) return {ok: false, cli, failed: ['sandbox'], why: `the bwrap sandbox is unavailable (${box.why}): the worker never runs unjailed`, lanes};
@@ -335,7 +372,7 @@ export async function agyPreflight({env, home = env.HOME ?? os.homedir(), deadli
     await prepareWorkerWorkspace({control_dir: ctl, worktree: wt, unit_id: 'live-run-preflight', owned_paths: ['preflight/**'], verify_cmd: 'node -e "process.exit(0)"'});
     let pf;
     if (secondsLeft(60) < 1) return spentOut(lanes, cli, 'the in-jail preflight');
-    try { pf = await runAgyPreflight({cli, control_dir: ctl, worktree: wt, model: lanes.find(l => l.difficulty === 'medium').lane, env: {HOME: home}, sandbox: {home}, timeoutS: secondsLeft(60)}); }
+    try { pf = await runAgyPreflight({cli, control_dir: ctl, worktree: wt, model: REVIEW_LANE, env: {HOME: home}, sandbox: {home}, timeoutS: secondsLeft(60)}); }
     catch (e) { return {ok: false, cli, failed: ['preflight'], why: `the preflight could not run: ${e.code ?? ''} ${String(e.message ?? e).slice(0, 300)}`, lanes}; }
     const quota = [];
     for (const l of lanes) {
@@ -345,18 +382,76 @@ export async function agyPreflight({env, home = env.HOME ?? os.homedir(), deadli
     }
     const exhausted = quota.filter(q => q.state === 'exhausted');
     const c = pf.checks;
-    return {ok: pf.ok && !exhausted.length, cli, failed: [...pf.failed, ...exhausted.map(q => `lane_quota:${q.lane}`)], warnings: [...pf.warnings, ...quota.filter(q => q.state === 'unknown').map(q => `lane_quota:${q.lane} unknown (not blocking)`)],
+    return {ok: pf.ok, cli, failed: [...pf.failed], warnings: [...pf.warnings, ...quota.filter(q => q.state === 'unknown').map(q => `lane_quota:${q.lane} unknown (not blocking)`),
+        ...exhausted.map(q => `lane_quota:${q.lane} exhausted: a Gemini single-turn seat on it is unavailable until it resets (not blocking: the implementer uses no lane)`)],
       checks: {card_tools: {ok: c.card_tools?.ok ?? null, why: c.card_tools?.why ?? null}, auth: {ok: c.auth?.ok ?? null, why: c.auth?.why ?? null, groups: c.auth?.groups ?? null, num_turns: c.auth?.num_turns ?? null, total_tokens: c.auth?.total_tokens ?? null},
         lane_quota: {ok: c.lane_quota?.ok ?? null, model: c.lane_quota?.model ?? null, state: c.lane_quota?.quota_scope?.state ?? null}, agents: {ok: c.agents?.ok ?? null, why: c.agents?.why ?? null},
         mcp_list: {ok: c.mcp_list?.ok ?? null, why: c.mcp_list?.why ?? null}, log_scan: {ok: c.log_scan?.ok ?? null, why: c.log_scan?.why ?? null}},
-      lanes: quota, why: pf.ok ? (exhausted.length ? `lane quota exhausted: ${exhausted.map(q => q.lane).join(', ')}` : null) : `preflight failed: ${pf.failed.map(k => `${k} (${c[k]?.why})`).join('; ')}`};
+      lanes: quota, why: pf.ok ? null : `preflight failed: ${pf.failed.map(k => `${k} (${c[k]?.why})`).join('; ')}`};
   } finally {
     fs.rmSync(root, {recursive: true, force: true});
   }
 }
 
+// ---- the zero-spend Antigravity SDK preflight -------------------------------------------------------------------
+/** The matrix implementer each difficulty starts on, with the thinking level and the subagent ceiling of its model. */
+export const matrixImplementers = () => FIT_DIFFICULTIES.map(d => { const x = IMPLEMENTER_LADDERS[d][0]; return {difficulty: d, model: x.model, effort: x.effort ?? null, subagent_ceiling: ceilingFor(x.model)}; });
+/**
+ * What the implementer's transport needs, checked without a generation call:
+ *   key       GEMINI_API_KEY is present (never read into the record)
+ *   sdk       the SDK's own python runs the bridge's --identity: google-antigravity is installed at the qualified version
+ *   sandbox   bubblewrap is usable (an implementer session never runs unjailed)
+ *   models    the provider's answer about every model of every implementer path, and the subagent model
+ *             (GET /v1beta/models/<id>: metadata, not a billed call), with the limits it states
+ * A refused key, an unreachable provider, a missing or unqualified SDK and a missing jail FAIL the preflight. A model
+ * the provider does not serve is a WARNING naming what follows: the pipeline steps that unit's ladder with the cause
+ * recorded (or, for the subagent model, runs no native subagent). Nothing is substituted here.
+ */
+export async function sdkPreflight({env, deadline = Infinity, fetchImpl = fetch}) {
+  const secondsLeft = cap => Math.min(cap, Math.floor((deadline - Date.now()) / 1000));
+  const keyEnv = SDK_CONFIG.api.key_env, key = typeof env[keyEnv] === 'string' && env[keyEnv].trim() !== '' ? env[keyEnv] : null;
+  const picks = matrixImplementers();
+  const out = {ok: false, transport: SDK_CONFIG.transport, failed: [], warnings: [], why: null, key: {name: keyEnv, present: Boolean(key)}, python: sdkPython(env), sdk: null, sandbox: null,
+    implementers: picks, subagents: {model: SUBAGENT_MODEL, ceilings: {...SDK_CONFIG.subagents.ceilings}}, models: []};
+  const fail = (k, why) => { out.failed.push(k); out.why ??= why; };
+  if (!key) fail('key', `${keyEnv} is not present: the Google implementer runs on the Gemini API`);
+  if (out.python.includes('/') && !fs.existsSync(out.python)) fail('sdk', `the Antigravity SDK's python is absent at ${out.python} (set PANTHEON_ANTIGRAVITY_PYTHON to the venv that has ${SDK_CONFIG.sdk.distribution} ${SDK_CONFIG.sdk.version})`);
+  else if (secondsLeft(60) < 1) fail('elapsed', 'the run\'s elapsed limit was spent during the preflight (before the SDK identity)');
+  else {
+    // The identity is the SDK's own python's statement, in a minimal environment: no key and no token is given to it.
+    const r = await spawnPromise(out.python, [BRIDGE_SCRIPT, '--identity', '--hash'], {env: {PATH: env.PATH ?? '', HOME: env.HOME ?? os.homedir(), LANG: env.LANG ?? 'C.UTF-8'}, timeout: secondsLeft(60) * 1000});
+    let identity = null;
+    try { identity = JSON.parse(String(r.stdout ?? '').trim().split('\n').filter(Boolean).pop()); } catch { identity = null; }
+    out.sdk = identity ? {status: identity.sdk?.status ?? null, distribution: identity.sdk?.distribution ?? null, version: identity.sdk?.version ?? null, qualified: SDK_CONFIG.sdk.version, harness: identity.harness ? {bytes: identity.harness.bytes ?? null, sha256: identity.harness.sha256 ?? null} : null} : null;
+    const allow = env.PANTHEON_ANTIGRAVITY_SDK_ALLOW ? String(env.PANTHEON_ANTIGRAVITY_SDK_ALLOW).split(',').map(x => x.trim()) : null;
+    const why = identity ? sdkVersionRefusal(identity, {allow}) : `the bridge printed no identity (exit ${r.status ?? r.signal}): ${String(r.stderr ?? '').trim().split('\n').slice(-2).join(' | ').slice(0, 300)}`;
+    if (why) fail('sdk', why);
+  }
+  const box = await sandboxAvailable('bwrap');
+  out.sandbox = {ok: box.ok, why: box.ok ? null : box.why};
+  if (!box.ok) fail('sandbox', `the bwrap sandbox is unavailable (${box.why}): an implementer session never runs unjailed`);
+  if (key) {
+    const names = [...new Set([...FIT_DIFFICULTIES.flatMap(d => implementerPath(d).map(x => x.model)), SUBAGENT_MODEL])];
+    for (const model of names) {
+      if (secondsLeft(30) < 1) { fail('elapsed', `the run's elapsed limit was spent during the preflight (before asking the provider about ${model})`); break; }
+      const a = await providerAvailability({apiKey: key, model, fetchImpl, timeoutMs: secondsLeft(30) * 1000});
+      out.models.push({model, available: a.available, status: a.status, kind: a.kind, limits: a.limits ? {input_token_limit: a.limits.input_token_limit, output_token_limit: a.limits.output_token_limit} : null, why: a.why});
+    }
+    const refused = out.models.find(a => a.kind === 'auth');
+    if (refused) fail('credential', `the Gemini API refused ${keyEnv} (HTTP ${refused.status}): ${refused.why}`);
+    else if (out.models.length && out.models.every(a => !a.available && a.kind !== 'model_unavailable')) fail('provider', `the Gemini API could not be asked about any model: ${out.models[0].why ?? `HTTP ${out.models[0].status}`}`);
+    for (const a of out.models.filter(x => x.kind === 'model_unavailable')) {
+      const starts = picks.filter(x => x.model === a.model).map(x => x.difficulty);
+      out.warnings.push(`${a.model} is not served by the Gemini API for this key (HTTP ${a.status})` + (starts.length ? `: a ${starts.join('/')} unit steps its implementer ladder at once, with the cause recorded` : '')
+        + (a.model === SUBAGENT_MODEL ? '; no native subagent will run (SUBAGENT_MODEL_UNAVAILABLE)' : ''));
+    }
+  }
+  out.ok = !out.failed.length;
+  return out;
+}
+
 // ---- what the plan predicts ------------------------------------------------------------------------------------
-const seatRow = s => ({vendor: s.vendor, model: s.model});
+const seatRow = s => ({vendor: s.vendor, model: s.model, ...(s.transport ? {transport: s.transport} : {}), ...(s.effort !== undefined ? {effort: s.effort ?? null} : {})});
 /** The seats per stage, from the fit matrix: the planner from the ticket's tier, the rest per unit difficulty. */
 export function predictedSeats({repo, item}) {
   const t = fs.existsSync(path.join(repo, 'tickets', `${item}.json`)) ? readTicket({repo, item}) : null;
@@ -367,7 +462,8 @@ export function predictedSeats({repo, item}) {
   const per = Object.fromEntries(FIT_DIFFICULTIES.map(d => {
     const dispatcher = fitMatrix('dispatcher', d);
     return [d, {dispatcher: seatRow(dispatcher), implementer: {start: seatRow(IMPLEMENTER_LADDERS[d][0]), ladder: implementerPath(d).map(seatRow)},
-      subagent: seatRow(fitMatrix('subagent', d)), reviewer: {pinned: seatRow(pinnedReviewer(dispatcher)),
+      // The implementer's own subagents (native, never a seat of its own): how many it may have live at this difficulty.
+      subagent: {...seatRow(fitMatrix('subagent', d)), native: true, ceiling: ceilingFor(IMPLEMENTER_LADDERS[d][0].model)}, reviewer: {pinned: seatRow(pinnedReviewer(dispatcher)),
         escalation: REVIEWER_ESCALATION.slice(REVIEWER_ESCALATION.findIndex(x => x.model === dispatcher.model)).map(seatRow)}}];
   }));
   return {planner: {...seatRow(planner), tier: declared.difficulty ?? 'medium', source: ticket ? (Object.keys(declared).length ? 'ticket' : 'ticket declares none: medium') : (t?.why ? `ticket invalid (${t.why}): medium` : 'no ticket: medium'), declared},
@@ -379,7 +475,7 @@ export function policyHashes() {
   const sel = selectionPolicy('fit');
   return {selection: {policy: sel.policy, profile: sel.profile, hash: sel.hash}, identity: {schema: IDENTITY_POLICY_SCHEMA, digest: policyDigest(currentPolicy())},
     escalation: {fit_matrix: {schema: FIT_MATRIX_BODY.schema, digest: 'sha256:' + digest(FIT_MATRIX_BODY)},
-      implementer: 'the matrix ladder of the unit difficulty: the next thinking level of the same base model first, then the next rung (stages.mjs implementerPath)',
+      implementer: 'the matrix ladder of the unit difficulty: the next recorded thinking level of the same model first, then the next rung (fit-matrix.mjs implementerPath); a model the provider does not serve, and a quota refusal, step past that model with the cause recorded',
       reviewer: 'pinned to the unit\'s dispatcher model; escalates inside OpenAI only (REVIEWER_ESCALATION)', run_item_protocol: PROTOCOL_V2,
       run_item_note: 'the per-file runOpenItem path (escalation protocol v2) is used only for a plan without work units; a fit plan carries them'},
     independence: 'model'};
@@ -400,10 +496,17 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
   add(null, checkout.why);
   const creds = credentialPresence(m, env);
   for (const c of creds.rows) if (!c.present) add(`credential ${c.name} is not present (${c.source}); load it locally and run again`);
-  if (creds.gemini.required && !creds.gemini.present) add('credential GEMINI_API_KEY is not present, and the manifest requires it (metered_gemini_failover: true)');
-  const preflight = await agyPreflight({env, deadline});
+  if (!creds.gemini.present) add('credential GEMINI_API_KEY is not present: the Google implementer runs on the Gemini API (the Antigravity SDK transport); load it locally and run again');
+  // THE IMPLEMENTER'S TRANSPORT, without a generation call: the SDK, the jail, and what the provider serves.
+  const sdk = await sdkPreflight({env, deadline});
+  for (const k of sdk.failed.filter(x => x !== 'key')) add(`Antigravity SDK preflight (${k}): ${sdk.why}`);
+  // The agy CLI is used by no implementer. Its preflight runs only when the manifest names agy-login (a single-turn
+  // Gemini seat on an Antigravity lane).
+  const wantsAgy = m.credentials.required.includes('agy-login');
+  const preflight = wantsAgy ? await agyPreflight({env, deadline})
+    : {ok: true, skipped: true, why: null, lanes: [], note: 'credentials.required does not name agy-login: no Antigravity CLI check was run, and the implementer needs none'};
   if (!preflight.ok) add(`agy preflight: ${preflight.why}`);
-  const agyLogin = {name: 'agy-login', present: preflight.checks?.auth?.ok === true, source: 'the preflight\'s in-jail agy --print /usage (zero spend)'};
+  const agyLogin = wantsAgy ? [{name: 'agy-login', present: preflight.checks?.auth?.ok === true, source: 'the preflight\'s in-jail agy --print /usage (zero spend)'}] : [];
   if (status) {
     const it = status.item(m.item);
     if (!it) add(`item "${m.item}" is not on the status ledger at ${m.ledgers.status_root}`);
@@ -413,7 +516,11 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
         const g = rec.items.find(i => i.item === m.item).gate;
         // A claim held by a run that was killed (L-305): named, with its holder and the end of its lease, not only "claimed".
         const held = g.gate === 'claimed' && work?.work ? heldClaim(work.work, m.item) : null;
-        gate = {gate: g.gate, reason: g.reason ?? null, mode: g.mode ?? null, status: it.state, blocker: g.blocker ?? null, runnable: STAGES.includes(g.gate), ...(held ? {held} : {})};
+        let policy = null;
+        try { policy = manifestBilling(m); } catch { policy = null; }   // an invalid billing block is a refusal of its own (validateManifest)
+        const wake = billingWakeOf(g, policy);
+        gate = {gate: g.gate, reason: g.reason ?? null, mode: g.mode ?? null, status: it.state, blocker: g.blocker ?? null, runnable: STAGES.includes(g.gate) || wake !== null,
+          ...(wake ? {billing_wake: wake} : {}), ...(held ? {held} : {})};
         if (held) add(held.why);
         else if (!gate.runnable) add(`item "${m.item}" is at gate "${g.gate}" (${g.reason ?? 'no reason given'}): nothing to dispatch`);
       } catch (e) { add(`reconcile failed: ${e.message}`); }
@@ -427,13 +534,15 @@ export async function buildPlan({manifest: m, digest: manifestDigest, file}, {re
     status_ledger: status ? {root: status.root, read_only: true, anchor: status.anchor, head: status.head, entries: status.entries, items: status.items, files_digest: status.files.digest, files: status.files.files, keys: 'not read'} : null,
     work_ledger: work ? {root: work.root, state: work.state, ...(work.state === 'resumable' ? {anchor: work.anchor, head: work.head, entries: work.entries, spent: work.spent} : {will_create: 'a separately anchored single-item work ledger, its controller key generated there (--init semantics)'})} : null,
     out_dir: m.out_dir,
-    credentials: {required: [...creds.rows, agyLogin], gemini_api_key: creds.gemini, values: 'never read into the record: presence only'},
-    preflight, gate, seats, policy: policyHashes(), profile: 'fit', independence: 'model',
-    limits: L, billing: m.billing, gemini_billing: policyRecord(manifestBilling(m)), metered_gemini_failover: m.billing.metered_gemini_failover
-      ? `ALLOWED: a proven quota refusal of an Antigravity lane may be answered by the metered Gemini API of the same base model, at most ${m.billing.metered_gemini_budget} billed request(s) on this run's work ledger`
-      : 'DISABLED: a quota refusal of an Antigravity lane is not answered by the metered Gemini API; the unit steps down its subscription ladder and is blocked when it is spent',
+    credentials: {required: [...creds.rows, ...agyLogin], gemini_api_key: creds.gemini, values: 'never read into the record: presence only'},
+    antigravity_sdk: sdk, preflight, gate, seats, policy: policyHashes(), profile: 'fit', independence: 'model',
+    limits: L, billing: m.billing, gemini_billing: policyRecord(manifestBilling(m)),
+    gemini_api_primary: `ENABLED by the manifest, at most ${m.billing.gemini_primary_budget} billed request(s) on this run's work ledger: the Google implementer is an Antigravity SDK session on the Gemini API (GEMINI_API_KEY; no subscription login, no agy CLI): every model request of it and of each native subagent is one billed request, admitted and recorded before it is sent`,
+    metered_gemini_failover: m.billing.metered_gemini_failover
+      ? `ALLOWED: a proven quota refusal of an Antigravity lane (a single-turn Gemini seat) may be answered by the metered Gemini API of the same base model, at most ${m.billing.metered_gemini_budget} billed request(s) on this run's work ledger`
+      : 'DISABLED: a quota refusal of an Antigravity lane (a single-turn Gemini seat) is not answered by the metered Gemini API',
     require_subagent: m.require_subagent ?? null,
-    notes: ['The provider-call limits bound CALLS, not dollars. Inside the native agy CLI one call is a whole multi-turn worker session on the Antigravity subscription; its cost is not metered here.',
+    notes: ['The provider-call limits bound CALLS, not dollars. An implementer session is charged one call per model request it makes, and so is each of its native subagents; a long session spends many calls.',
       'The total counts every stage on the isolated work ledger: a resumed run continues against the same total.'],
     provider_calls: 0,
     next: mode === 'dry-run' ? `node ophanim/operate/live-run.mjs --manifest ${file} --confirm-spend "${confirmString(m)}"` : null};
@@ -466,6 +575,9 @@ export function servedIdentities(stages) {
       for (const a of u.attempts ?? []) out.push({...row('implementer', a), ...(a.quota_failover ? {quota_failover: a.quota_failover} : {})});
       for (const v of u.reviews ?? []) out.push(row('unit-reviewer', v));
       for (const c of u.a2a?.calls ?? []) out.push({...row('subagent', c), subagent_role: c.role});
+      // An SDK implementer's native subagents: the pinned model asked, and the name the provider answered under.
+      for (const n of nativeSubagentsOfUnit(u)) out.push({...row('subagent', {vendor: n.vendor, model: n.model, served_model: n.served_model, served_model_source: n.served_model_source, status: n.status}),
+        subagent_type: n.type, native: true, implementer: n.implementer, ...(n.from_checkpoint ? {from_checkpoint: true} : {})});
       // A resumed unit's seats, from its sealed checkpoint (finding 7.3, above).
       if (u.resumed && u.checkpoint) {
         if (u.checkpoint.dispatch) out.push({...row('dispatcher', u.checkpoint.dispatch), from_checkpoint: true});
@@ -476,27 +588,42 @@ export function servedIdentities(stages) {
   }
   return out;
 }
-const sameModel = (a, b) => { const x = resolveModel('xai', a), y = resolveModel('xai', b); return x?.known && y?.known ? x.id === y.id : a === b; };
-/** The required subagent receipt: answered calls of the role, asked of AND served by the model, in the accepted implement record. */
+/**
+ * Every native subagent a unit's implementer sessions were admitted, with the session it belonged to: the attempts of
+ * this run whose writes were kept, and -- for a unit resumed from a checkpoint -- the ones sealed with its approval.
+ * `served_model` is the one name the provider answered that specialist under (null when it answered none of its
+ * requests, or under more than one name); `served_names` is every such name. Each row carries its vendor, the model asked, the
+ * model that answered and the marker (wave 3, L-504 invariant 2): "provider", or "unnamed" for a subagent no request
+ * of which was answered, whose served model is unknown and is never the model asked.
+ */
+export function nativeSubagentsOfUnit(u) {
+  // The names the provider answered THIS specialist under: by its type where the gateway recorded that (served_by_type),
+  // else, on a record made before it did, by the subagent model for the whole session.
+  const rows = (attempt, implementer, vendor, gateway, subagents, extra = {}) => (subagents?.instances ?? []).map(i => {
+    const named = (gateway?.served_by_type ? gateway.served_by_type[i.type] : gateway?.served_models?.[i.model]) ?? [];
+    return {unit: u.unit_id, attempt, implementer, vendor, id: i.id, type: i.type, model: i.model, status: i.status, started: Boolean(i.trajectory_id), output_digest: i.output?.digest ?? null,
+      served_model: named.length === 1 ? named[0] : null, served_model_source: named.length ? 'provider' : 'unnamed', served_names: named, ...extra};
+  });
+  return [
+    ...(u.attempts ?? []).filter(a => a.status === 'written' && a.session?.subagents).flatMap(a => rows(a.n, a.model, a.vendor, a.session.gateway, a.session.subagents)),
+    ...(u.resumed ? (u.checkpoint?.native_subagents ?? []).flatMap(x => rows(x.attempt, x.implementer?.model ?? null, x.implementer?.vendor ?? null, x, x.subagents, {from_checkpoint: true})) : []),
+  ];
+}
+const sameModel = (a, b) => { const x = resolveModel(SDK_CONFIG.vendor, a), y = resolveModel(SDK_CONFIG.vendor, b); return x?.known && y?.known ? x.id === y.id : a === b; };
+/**
+ * The required subagent receipt: NATIVE subagents of the type, admitted by the controller in an implementer session of
+ * the accepted implement record whose work was kept, that started, and that the provider answered under the model.
+ */
 export function subagentReceipt(stages, req) {
   if (!req) return {required: false, met: true};
   const impls = stages.filter(s => s.stage === 'implement' && s.status === 'passed');
   const accepted = impls.at(-1) ?? null;
-  const callsOf = s => {
-    const r = s?.outputs?.run?.record ? readJson(s.outputs.run.record) : null;
-    // A unit RESUMED from a checkpoint made its calls in the run that approved it: they are restored from the sealed
-    // checkpoint (u.checkpoint.a2a_calls, from_checkpoint) and count here (independent review round 2, assignment 3
-    // (Google gemini-4-carbon, manual, 77480d6), finding 7.3).
-    const callsOfUnit = u => [...(u.a2a?.calls ?? []), ...(u.resumed ? u.checkpoint?.a2a_calls ?? [] : [])];
-    // Each call by its vendor, the model asked, the model that answered and the marker (wave 3, L-504 invariant 2).
-    return Object.values(r?.units ?? {}).flatMap(u => callsOfUnit(u).map(c => ({unit: u.unit_id, role: c.role, status: c.status, vendor: c.vendor ?? null, model: c.model, served_model: c.served_model ?? null,
-      served_model_source: c.served_model_source ?? null, answer_digest: c.answer_digest ?? null, ...(c.from_checkpoint ? {from_checkpoint: true} : {})})));
-  };
-  const all = pipelinesOf(stages).flatMap(p => callsOf(stages.find(s => s.hash === p.stage_record)));
-  const counted = callsOf(accepted).filter(c => c.status === 'answered' && c.role === req.role && c.model === req.model && c.served_model && sameModel(c.served_model, req.model));
-  return {required: true, role: req.role, model: req.model, min_calls: req.min_calls, counted: counted.length, met: counted.length >= req.min_calls,
+  const of = s => { const r = s?.outputs?.run?.record ? readJson(s.outputs.run.record) : null; return Object.values(r?.units ?? {}).flatMap(nativeSubagentsOfUnit); };
+  const all = pipelinesOf(stages).flatMap(p => of(stages.find(s => s.hash === p.stage_record)));
+  const counted = of(accepted).filter(c => c.type === req.type && c.model === req.model && c.started && c.served_model && sameModel(c.served_model, req.model));
+  return {required: true, type: req.type, model: req.model, min_calls: req.min_calls, counted: counted.length, met: counted.length >= req.min_calls,
     from: accepted ? {stage_record: accepted.hash, record: accepted.outputs?.run?.record ?? null} : null, calls: counted, all_calls_recorded: all,
-    why: counted.length >= req.min_calls ? null : `${counted.length} answered ${req.role} call(s) served by ${req.model} in the accepted implement record; ${req.min_calls} required`};
+    why: counted.length >= req.min_calls ? null : `${counted.length} native ${req.type} subagent(s) answered by ${req.model} in the accepted implement record; ${req.min_calls} required`};
 }
 /** A stage record as the run record shows it. */
 const stageRow = s => ({hash: s.hash, stage: s.stage, attempt: s.attempt, status: s.status, identity: s.identity, inputs: s.inputs, outputs_digest: outputsDigest(s.outputs),
@@ -685,12 +812,17 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   const work = workInfo.state === 'resumable' ? openWorkLedger({root: m.ledgers.work_root, create: false}) : createWorkRoot(m.ledgers.work_root, {item: m.item, manifestDigest});
   const progressFile = path.join(m.out_dir, 'progress.jsonl');
   const note = e => { fs.appendFileSync(progressFile, JSON.stringify({at: new Date().toISOString(), ...e}) + '\n'); progress(e); };
-  if (m.credentials.gemini_api_key === 'not-used' && !seats) { delete process.env.GEMINI_API_KEY; delete process.env.GOOGLE_API_KEY; }
+  // GEMINI_API_KEY stays in this process: the implementer's model gateway holds it (it is never given to a worker), and
+  // its presence authorizes nothing: the billing policy below does.
   const s = seats ?? await liveSeats();
   // THE ONE BILLING POLICY (register L-136): the manifest's billing, resolved centrally, handed to every tick below.
+  //   billing.gemini_api_primary       primary Gemini execution: the SDK implementer and its native subagents
+  //   billing.metered_gemini_failover  the metered fallback of a single-turn Gemini lane seat
   const billing = manifestBilling(m);
   const executors = await makeExecutorsImpl({repo, makeClientFor: s.makeClientFor, turn: s.turn, statusRoot: m.ledgers.status_root, stateDir: path.join(m.out_dir, 'operate'),
-    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note});
+    profile: 'fit', independence: 'model', revisions: L.revisions, pipelineLimits: {...L.pipeline}, progress: note,
+    // Research is on for a live run (stages.mjs `research.enabled`); each of its requests is the billing policy's to admit.
+    research: {enabled: true}});
   // THE LEASE is the elapsed bound PLUS the scheduler's recording grace (min(60 s, lease/10)), so a stage's own elapsed
   // budget is what is left of elapsed_ms: with lease_ms = elapsed_ms every stage lost that grace, up to 60 s, from its
   // budget (finding 9). The stage's budget is still the run's remaining elapsed time (tick's elapsed_ms below).
@@ -703,7 +835,7 @@ export async function runConfirmed({manifest: m, digest: manifestDigest, file}, 
   // A claim this launcher did not take blocks the item until its lease ends: named, with its expiry (L-305).
   const noteHeld = () => { const h = gate.gate === 'claimed' ? heldClaim(work, m.item) : null; if (h && !launcherBlockers.some(b => b.claim === h.claim)) { launcherBlockers.push(h); note({event: 'claim.held', ...h}); } };
   noteHeld();
-  for (let n = 0; n < maxTicks && STAGES.includes(gate.gate); n++) {
+  for (let n = 0; n < maxTicks && (STAGES.includes(gate.gate) || billingWakeOf(gate, billing) !== null); n++) {
     if (interrupt?.aborted) break;
     const left = deadline - Date.now();
     if (left <= 0) { launcherStops.push({source: 'launcher', kind: 'elapsed', code: 'ELAPSED_LIMIT', why: `elapsed limit ${L.elapsed_ms} ms reached`}); break; }

@@ -15,7 +15,7 @@
 #   writes          host paths outside the workspace and the out dir that must not be writable
 #   hang            seconds to sleep after the report (the timeout and kill paths)
 #   tag             names the marker it writes in each writable place (its /tmp included), so the host can be searched for it
-# Synthetic needles only; the relay is reached on loopback, its upstream a local fake.
+# Synthetic needles only; the gateway is reached on loopback, its upstream a local fake.
 import json, os, sys, time, urllib.error, urllib.request
 
 def arg(name):
@@ -97,8 +97,8 @@ for d in [x for x in (out, ws, own.get("HOME"), "/tmp") if x]:
   control.append({**r, "dir": d})
 rep["control_writes"] = control
 
-# The metering relay: reachable with the capability (its session account, not a provider request), refused without it.
-url, cap = own.get("PANTHEON_AGY_RELAY_URL"), own.get("PANTHEON_AGY_RELAY_CAPABILITY")
+# The model gateway: reachable with the capability (its session account, not a provider request), refused without it.
+url, cap = own.get("PANTHEON_AGY_GATEWAY_URL"), own.get("PANTHEON_AGY_GATEWAY_TOKEN")
 direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 def status(req):
   try:
@@ -109,8 +109,8 @@ def status(req):
   except Exception as e:
     return repr(e)[:200]
 if url:
-  rep["relay"] = {
-    "session_with_capability": status(urllib.request.Request(url + "/_relay/session", headers={"x-goog-api-key": cap or ""})),
+  rep["gateway"] = {
+    "session_with_capability": status(urllib.request.Request(url + "/_pantheon/session", headers={"x-goog-api-key": cap or ""})),
     "request_without_capability": status(urllib.request.Request(url + "/v1beta/models/m:streamGenerateContent?alt=sse", method="POST",
                                                                 data=b'{"contents":[]}', headers={"content-type": "application/json"})),
   }

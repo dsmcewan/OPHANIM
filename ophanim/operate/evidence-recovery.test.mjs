@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {openStatusLedger, applyProposal, proposalRefusal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors} from './stages.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';

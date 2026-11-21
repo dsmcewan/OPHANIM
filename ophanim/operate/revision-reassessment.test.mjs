@@ -14,7 +14,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {openStatusLedger, applyProposal} from '../../packages/ledger/status.mjs';
 import {openWorkLedger, outputsDigest} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {reconcile} from './reconcile.mjs';
 import {makeExecutors, REVIEW_INDEPENDENCE} from './stages.mjs';
 import {reassessItem} from './reassess.mjs';

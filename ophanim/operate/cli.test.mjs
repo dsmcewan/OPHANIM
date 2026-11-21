@@ -150,7 +150,7 @@ test('tick and watch dispatch through makeExecutors only within the declared pro
   fs.writeFileSync(stagesFile, `
     export const seen = [];
     export function makeExecutors(ctx) {
-      seen.push({repo: ctx.repo, limits: ctx.limits});
+      seen.push({repo: ctx.repo, limits: ctx.limits, research: ctx.research});
       const pass = stage => async x => ({status: 'passed', outputs: {[stage]: true}, team: [{role: stage}], contributions: [], findings: [],
         usage: {provider_calls: 2}, next: {stage: null, why: 'ok'}});
       return Object.fromEntries(['plan', 'implement', 'review', 'validate', 'outcome'].map(s => [s, pass(s)]));
@@ -171,6 +171,8 @@ test('tick and watch dispatch through makeExecutors only within the declared pro
   assert.deepEqual(JSON.parse(w.out).ticks[0].dispatched.map(d => d.stage), ['review'], 'iterations bound it; plan and implement are reused');
   const mod = await import(new URL(`file://${stagesFile}`).href);
   assert.ok(mod.seen.every(s => s.repo === f.repo && s.limits.total_provider_calls >= 0));
+  // RESEARCH IS THIS LAUNCHER'S CHOICE, AND IT MAKES IT: the executors it builds run requested research (stages.mjs).
+  assert.ok(mod.seen.length > 0 && mod.seen.every(s => s.research?.enabled === true), JSON.stringify(mod.seen.map(s => s.research)));
   assert.equal((await cli(['tick', '--iterations', 'x', ...at(f)], {stagesFile})).code, 2, 'a bad limit is a usage error');
   assert.equal(limitsOf({}).total_provider_calls, 0);
 });

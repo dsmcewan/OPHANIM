@@ -1,0 +1,347 @@
+// THE MODEL GATEWAY: the controller's own loopback door between the Antigravity SDK's runtime and the Gemini API.
+//
+// The SDK's runtime (the localharness binary google-antigravity bundles) makes the model calls itself. It is given
+// this gateway's address as its base URL and a per-session TOKEN as its "API key" (both are options the SDK documents:
+// GeminiAPIEndpoint base_url and api_key). The controller keeps the real GEMINI_API_KEY and puts it on the forwarded
+// request. So:
+//   CREDENTIAL   the key never enters the SDK process, its environment, its argv, its state directory, a worktree, a
+//                subagent or a log. What the runtime holds is a token that is worth nothing once this gateway closes.
+//   ACCOUNTING   every billed request -- the implementer's and each subagent's -- is admitted by `admit` BEFORE it is
+//                forwarded (the per-request charge contract of sdk/live.mjs: charged on the work ledger first, and a
+//                refused charge means the request is not made).
+//   IDENTITY     only two models are served: the implementer's and the pinned subagent model. A subagent (recognised
+//                by the marker the controller put in its system instructions) asking for any other model is REFUSED
+//                on the wire, so a child can never run as a clone of its parent, whatever the SDK or the model did.
+//                The model the PROVIDER says answered (`modelVersion`) is recorded for every request.
+//   CEILING      a subagent session past the implementer's ceiling is refused on the wire: the second line behind the
+//                governor's admission at invoke_subagent (subagents.mjs).
+//   STOP         ANY abort() (whatever its reason says, an empty one included) cuts every request in flight and
+//                forwards nothing afterwards. A request that was not already being charged when the stop came is not
+//                charged either, and one that arrives after it is answered at once, its body unread.
+//   UPSTREAM     the real key is forwarded only to a Google API host over https, or to a loopback provider (a test's
+//                edge): any other upstream is refused before the gateway starts.
+//   BOUNDS       optional, the caller's: the session's own maximum request count (admissions, not answers), the
+//                requests in flight at once, an idle bound and a lifetime. Past any of them the request is refused
+//                before it is charged.
+//   SHAPE        a call carries exactly the query its verb takes, and a body that is not a JSON object is not a
+//                request: both are refused before they are charged.
+//   OUTCOMES     optional: each request's outcome is appended to a file of its own as the request ends (fsynced). No
+//                count reads it: the caller's charge is the count, made before the request is sent, so a request that
+//                was admitted and never answered stays counted.
+//
+// THE ONE MECHANISM (owner decision 2026-11-20, register L-724). The L-150 metering relay, built for the board's python
+// SDK seat, was this gateway built a second time. It is retired: that seat is served here too (seat-session.mjs), and
+// what the relay protected and this gateway did not (UPSTREAM, BOUNDS, SHAPE, OUTCOMES, the session's own account) is
+// above. There is one path by which a billed Gemini request of an SDK process is admitted, charged and forwarded.
+//
+// Observed on google-antigravity 0.1.24 (pantheon/tests/antigravity-sdk-contract.test.mjs repeats it): the runtime
+// calls POST /v1beta/models/<model>:streamGenerateContent?alt=sse over HTTP/1.1 with the key in x-goog-api-key and a
+// `sessionId` in the body that is stable per agent (the implementer's and each subagent's differ).
+//
+// Inputs: {upstream, apiKey, root: {model, marker}, subagents: {model, ceiling, markers: {type: marker}}, admit,
+// signal?, fetchImpl?, requestTimeoutMs?, maxBodyBytes?, maxRequests?, maxConcurrent?, idleMs?, lifetimeMs?, outcomes?,
+// outcomeTag? (merged into each outcome row: whose session it is), status?}. Outputs: {url, token, record(), availability(model), abort(why), close()}.
+// Must never: forward a request it did not admit; forward the runtime's token; write the key or the token anywhere;
+// serve a model, path or verb outside the two models' generation calls; answer a caller that does not hold the token.
+import { createServer } from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { dirname } from "node:path";
+import { SDK_CONFIG } from "./config.mjs";
+
+export const GATEWAY_REFUSALS = Object.freeze({
+  UNAUTHORIZED: "PANTHEON_GATEWAY_UNAUTHORIZED", PATH: "PANTHEON_PATH_NOT_SERVED", MODEL: "PANTHEON_MODEL_NOT_ALLOWED", NOT_PINNED: "PANTHEON_SUBAGENT_NOT_PINNED",
+  CEILING: "PANTHEON_SUBAGENT_CEILING", BUDGET: "PANTHEON_PROVIDER_LIMIT", ABORTED: "PANTHEON_GATEWAY_ABORTED", TOO_LARGE: "PANTHEON_REQUEST_TOO_LARGE",
+  UPSTREAM: "PANTHEON_UPSTREAM_NOT_ALLOWED", SESSION_CAP: "PANTHEON_SESSION_CAP", BUSY: "PANTHEON_SESSION_BUSY", EXPIRED: "PANTHEON_SESSION_EXPIRED", MALFORMED: "PANTHEON_REQUEST_MALFORMED" });
+export const GATEWAY_OUTCOME_SCHEMA = "pantheon.gateway-outcome/v1";
+/** The path the session's own account is served at, to the holder of its token (no provider request, never counted). */
+export const GATEWAY_STATUS_PATH = "/_pantheon/session";
+const MAX_BODY = 64 * 1024 * 1024;
+const str = v => typeof v === "string" && v.trim() !== "";
+const FORWARD_HEADERS = Object.freeze(["content-type", "accept", "user-agent", "x-goog-api-client"]);
+
+/** What a provider status means for the turn: quota | model_unavailable | auth | provider_error | bad_request. */
+export function stopKindOf(status) {
+  if (status === 429) return "quota";
+  if (status === 404) return "model_unavailable";
+  if (status === 401 || status === 403) return "auth";
+  if (status >= 500) return "provider_error";
+  return "bad_request";
+}
+const usageOf = u => (u && typeof u === "object" ? Object.fromEntries(Object.entries({ prompt_token_count: u.promptTokenCount, cached_content_token_count: u.cachedContentTokenCount,
+  candidates_token_count: u.candidatesTokenCount, thoughts_token_count: u.thoughtsTokenCount, total_token_count: u.totalTokenCount }).filter(([, v]) => Number.isFinite(v))) : null);
+const addUsage = (a, b) => { const out = { ...(a ?? {}) }; for (const [k, v] of Object.entries(b ?? {})) out[k] = (out[k] ?? 0) + v; return out; };
+
+/**
+ * Why `apiKey` cannot be sent as a header value, or null. A key with a line break, a space or a non-ASCII character (a
+ * pasted key) is rejected by the HTTP layer with the VALUE in its error text: it is refused here, unsent and unquoted.
+ */
+export const keyRefusal = apiKey => (typeof apiKey !== "string" || apiKey === "" ? "no key was given"
+  : /[^\x21-\x7e]/.test(apiKey) ? "it contains whitespace, a control character or a non-ASCII character (a pasted line break?)" : null);
+const withoutKey = (text, apiKey) => (typeof apiKey === "string" && apiKey ? String(text).split(apiKey).join("<key>") : String(text));
+/**
+ * Why the real key may not be forwarded to `upstream`, or null. Only a Google API host over https, or a loopback
+ * provider (a test's edge, a local fake), is one: with no path, query, fragment or credentials of its own.
+ */
+export function upstreamRefusal(upstream) {
+  let u;
+  try { u = new URL(String(upstream)); } catch { return "it is not a URL"; }
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && (u.protocol === "http:" || u.protocol === "https:");
+  const google = u.protocol === "https:" && /(^|\.)googleapis\.com$/.test(u.hostname);
+  if (!(loopback || google)) return "the real credential is forwarded only to a Google API host (https://*.googleapis.com) or to a loopback provider";
+  if (u.username || u.password || u.search || u.hash || !["", "/"].includes(u.pathname)) return "an upstream is a bare origin: no credentials, path, query or fragment";
+  return null;
+}
+/** Append one fsynced JSON line (the outcome record). */
+function appendLine(file, row) {
+  mkdirSync(dirname(file), { recursive: true });
+  const fd = openSync(file, "a");
+  try { writeSync(fd, JSON.stringify(row) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/**
+ * Ask the provider whether it serves `model` (GET /v1beta/models/<model>) with `apiKey`. Not a billed call.
+ * Returns {model, at, available, status, kind, limits, name, why, provider_status?}; never throws.
+ */
+export async function providerAvailability({ upstream = SDK_CONFIG.api.base_url, apiKey, keyHeader = SDK_CONFIG.api.key_header, model, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+  const out = { model, at: new Date().toISOString(), available: false, status: null, kind: null, limits: null, name: null, why: null };
+  const bad = keyRefusal(apiKey);
+  if (bad) return { ...out, kind: "auth", why: `the key is not usable as a key (${bad}): it was not sent` };
+  const notHere = upstreamRefusal(upstream);
+  if (notHere) return { ...out, kind: "bad_request", why: `${GATEWAY_REFUSALS.UPSTREAM}: ${notHere}: the key was not sent` };
+  try {
+    const r = await fetchImpl(`${String(upstream).replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(model)}`, { headers: { [keyHeader]: apiKey }, signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
+    out.status = r.status;
+    const j = await r.json().catch(() => null);
+    if (r.status === 200) {
+      Object.assign(out, { available: true, name: j?.name ?? null, limits: { input_token_limit: j?.inputTokenLimit ?? null, output_token_limit: j?.outputTokenLimit ?? null, thinking: j?.thinking ?? null,
+        supported_generation_methods: Array.isArray(j?.supportedGenerationMethods) ? j.supportedGenerationMethods : null } });
+    } else Object.assign(out, { kind: stopKindOf(r.status), why: String(j?.error?.message ?? `HTTP ${r.status}`).slice(0, 300), provider_status: j?.error?.status ?? null });
+  } catch (e) { Object.assign(out, { kind: "provider_error", why: withoutKey(e?.message ?? e, apiKey).slice(0, 300) }); }
+  return out;
+}
+
+/** Rows kept for callers without the session token (each further one is counted only). */
+const MAX_UNAUTHORIZED_ROWS = 20;
+export async function startModelGateway({ upstream = SDK_CONFIG.api.base_url, apiKey, keyHeader = SDK_CONFIG.api.key_header, root, subagents = { model: null, ceiling: 0, markers: {} }, admit = () => {},
+  signal = null, fetchImpl = fetch, requestTimeoutMs = 10 * 60_000, maxBodyBytes = MAX_BODY, port = 0,
+  maxRequests = null, maxConcurrent = null, idleMs = null, lifetimeMs = null, outcomes = null, outcomeTag = null, status = null } = {}) {
+  // No key, or one that cannot be a header value: the one refusal (keyRefusal covers both).
+  { const bad = keyRefusal(apiKey); if (bad) throw Object.assign(new Error(`the gateway was given a key that is not usable as a key (${bad}); ${SDK_CONFIG.api.key_env} is held by the controller only, and nothing was sent`), { code: "NO_API_KEY" }); }
+  if (!str(root?.model) || !str(root?.marker)) throw new Error("startModelGateway: pass root {model, marker}");
+  if (!Number.isInteger(maxBodyBytes) || maxBodyBytes < 1) throw new Error("startModelGateway: maxBodyBytes is a positive whole number of bytes");
+  for (const [k, v] of Object.entries({ maxRequests, maxConcurrent, idleMs, lifetimeMs })) if (v !== null && !(Number.isSafeInteger(v) && v > 0)) throw new Error(`startModelGateway: ${k} is a positive whole number, or null for no bound`);
+  // THE REAL KEY GOES TO GOOGLE OR TO LOOPBACK, nowhere else: refused here, before a port is opened or anything is sent.
+  { const notHere = upstreamRefusal(upstream); if (notHere) throw Object.assign(new Error(`${GATEWAY_REFUSALS.UPSTREAM}: ${notHere}; nothing was sent`), { code: GATEWAY_REFUSALS.UPSTREAM }); }
+  const base = String(upstream).replace(/\/+$/, "");
+  const sub = { model: subagents?.model ?? null, ceiling: Number.isInteger(subagents?.ceiling) ? subagents.ceiling : 0, markers: { ...(subagents?.markers ?? {}) } };
+  const token = `pantheon-gw-${randomBytes(24).toString("hex")}`;
+  const want = Buffer.from(token);
+  const verbs = new Set(SDK_CONFIG.api.generation_verbs);
+  const requests = [], sessions = new Map(), availabilityLog = [], inflight = new Set(), counts = { root: 0, subagent: 0, aux: 0 };
+  let stop = null, aborted = null, budgetRefusals = 0, closed = false, unauthorized = 0;
+  // THE SESSION'S OWN BOUNDS (the caller's; null: none). `admitted` counts admissions, whatever the provider then answered.
+  const opened = Date.now();
+  let admitted = 0, capRefusals = 0, active = 0, last = opened, expired = null;
+  const expiry = () => {
+    if (expired) return expired;
+    const now = Date.now();
+    if (lifetimeMs !== null && now - opened > lifetimeMs) expired = `the session is past its lifetime of ${lifetimeMs} ms`;
+    else if (idleMs !== null && now - last > idleMs) expired = `the session was idle for more than ${idleMs} ms`;
+    return expired;
+  };
+  // EACH REQUEST'S OUTCOME, as it ends: a record of its own. A write that fails decides nothing (the charge already counted it).
+  const settle = rec => { if (!outcomes || rec.unlisted) return; try { appendLine(outcomes, { schema: GATEWAY_OUTCOME_SCHEMA, ...(outcomeTag ?? {}), ...rec }); } catch { /* the outcome record is evidence, never an admission */ } };
+
+  const allowedModel = m => m === root.model || (sub.ceiling > 0 && str(sub.model) && m === sub.model);
+  const send = (res, status, body) => { if (res.destroyed || res.headersSent) return; const s = JSON.stringify(body); res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(s) }); res.end(s); };
+  const refuse = (res, rec, status, code, why, providerStatus = "FAILED_PRECONDITION") => {
+    Object.assign(rec, { forwarded: false, status, refusal: code });
+    send(res, status, { error: { code: status, message: `${code}: ${why}`, status: providerStatus } });
+  };
+
+  async function handle(req, res) {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const m = /^\/v1beta\/models\/([^:/]+):(\w+)$/.exec(url.pathname);
+    const rec = { seq: requests.length + 1, at: new Date().toISOString(), class: null, type: null, session: null, model: m?.[1] ?? null, verb: m?.[2] ?? null, forwarded: false, status: null,
+      refusal: null, provider_status: null, served_model: null, usage: null, ms: null };
+    requests.push(rec);
+    const t0 = Date.now();
+    const done = () => { rec.ms = Date.now() - t0; settle(rec); };
+    // The caller holds this session's token, or it is not served.
+    const got = Buffer.from(String(req.headers[keyHeader] ?? ""));
+    if (got.length !== want.length || !timingSafeEqual(got, want)) {
+      req.resume(); refuse(res, rec, 401, GATEWAY_REFUSALS.UNAUTHORIZED, "this gateway serves the one SDK session it was started for", "UNAUTHENTICATED");
+      // Anyone on the host can reach a loopback port: such callers are COUNTED, and only the first rows are kept.
+      if (++unauthorized > MAX_UNAUTHORIZED_ROWS) { requests.splice(requests.indexOf(rec), 1); rec.unlisted = true; }
+      return done();
+    }
+    // THE SESSION'S OWN ACCOUNT, for the seat that holds the token: no provider request, not a row of the record.
+    if (req.method === "GET" && url.pathname === GATEWAY_STATUS_PATH) {
+      req.resume(); requests.splice(requests.indexOf(rec), 1);
+      if (typeof status !== "function") return send(res, 404, { error: { code: 404, message: `${GATEWAY_REFUSALS.PATH}: this gateway serves no session account`, status: "NOT_FOUND" } });
+      let account = null; try { account = status(); } catch { account = null; }
+      return send(res, 200, account ?? {});
+    }
+    // THE STOP IS READ THREE TIMES, and each reading does what the other two cannot (the first was removed once as a
+    // duplicate, because no test told them apart; an independent review of 6ee0fea showed what it alone does):
+    //   1. on arrival        a stopped gateway answers at once and reads no body: a stalled upload is neither waited
+    //                        for nor held, and "stopped" comes before "not served" and "too large"
+    //   2. with the body     a request whose body was still arriving at the stop is not charged
+    //   3. after its charge  a request whose admission was pending at the stop is not sent (its charge stands)
+    const stopped = () => (aborted ?? (closed ? "the gateway closed" : null));
+    if (stopped()) { req.resume(); refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
+    if (req.method !== "POST" || !m || !verbs.has(m[2])) { req.resume(); refuse(res, rec, 404, GATEWAY_REFUSALS.PATH, `only POST /v1beta/models/<model>:${[...verbs].join("|")} is served`, "NOT_FOUND"); return done(); }
+    // EXACTLY THE QUERY THE VERB TAKES: a stream may say alt=sse, and nothing else is carried to the provider.
+    { const q = [...url.searchParams.entries()], stream = m[2] === "streamGenerateContent";
+      if (!(q.length === 0 || (stream && q.length === 1 && q[0][0] === "alt" && q[0][1] === "sse"))) { req.resume(); refuse(res, rec, 404, GATEWAY_REFUSALS.PATH, `${m[2]} is served with ${stream ? "no query, or alt=sse alone" : "no query"}`, "NOT_FOUND"); return done(); } }
+    // THE SESSION'S BOUNDS, before a body is read or anything is charged: its lifetime and idle time, its requests in flight.
+    if (expiry()) { req.resume(); refuse(res, rec, 401, GATEWAY_REFUSALS.EXPIRED, `${expiry()}: nothing is charged or sent, and its token is worth nothing now`, "UNAUTHENTICATED"); return done(); }
+    last = Date.now();
+    if (maxConcurrent !== null && active >= maxConcurrent) { req.resume(); refuse(res, rec, 429, GATEWAY_REFUSALS.BUSY, `the session has ${active} request(s) in flight, its bound is ${maxConcurrent}`, "RESOURCE_EXHAUSTED"); return done(); }
+    active += 1;
+    res.once("close", () => { active -= 1; });
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > maxBodyBytes) { req.destroy(); refuse(res, rec, 413, GATEWAY_REFUSALS.TOO_LARGE, `the request is over ${maxBodyBytes} bytes`); return done(); } chunks.push(c); }
+    const raw = Buffer.concat(chunks);
+    // 2. With the body in hand: a request whose body was still arriving at the stop is not charged.
+    if (stopped()) { refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
+    let body = null; try { body = JSON.parse(raw.toString("utf8")); } catch { body = null; }
+    // A BODY THAT IS NOT A JSON OBJECT IS NOT A REQUEST: refused before it is charged, never sent for the provider to refuse.
+    if (body === null || typeof body !== "object" || Array.isArray(body)) { refuse(res, rec, 400, GATEWAY_REFUSALS.MALFORMED, "the request body is not a JSON object: it is not charged and not sent", "INVALID_ARGUMENT"); return done(); }
+    const model = m[1], system = JSON.stringify(body?.systemInstruction ?? "");
+    const type = Object.entries(sub.markers).find(([, mark]) => str(mark) && system.includes(mark))?.[0] ?? null;
+    rec.session = body?.sessionId !== undefined && body?.sessionId !== null ? String(body.sessionId) : null;
+    rec.type = type;
+    rec.class = type ? "subagent" : system.includes(root.marker) ? "root" : "aux";
+    if (!allowedModel(model)) { refuse(res, rec, 403, GATEWAY_REFUSALS.MODEL, `${model} is not served: this session's models are ${root.model}${sub.ceiling > 0 && sub.model ? ` and ${sub.model} (subagents)` : ""}`, "PERMISSION_DENIED"); return done(); }
+    // A subagent runs on the pinned subagent model, and only a subagent does (unless the two models are the same one).
+    if (type && model !== sub.model) { refuse(res, rec, 403, GATEWAY_REFUSALS.NOT_PINNED, `a ${type} subagent asked for ${model}: subagents run on ${sub.model} only, never as a copy of the implementer`, "PERMISSION_DENIED"); return done(); }
+    if (!type && model !== root.model) { refuse(res, rec, 403, GATEWAY_REFUSALS.MODEL, `${model} is served to this session's subagents only`, "PERMISSION_DENIED"); return done(); }
+    const key = rec.session ?? `nosession:${rec.class}:${type ?? ""}`;
+    if (rec.class === "subagent" && !sessions.has(key)) {
+      const liveSubs = [...sessions.values()].filter(s => s.class === "subagent").length;
+      if (liveSubs >= sub.ceiling) { refuse(res, rec, 429, GATEWAY_REFUSALS.CEILING, `${liveSubs} subagent session(s) are live and the ceiling is ${sub.ceiling}`, "RESOURCE_EXHAUSTED"); return done(); }
+    }
+    // THE SESSION'S OWN MAXIMUM REQUEST COUNT, checked with the charge and with no await between them: two requests of
+    // one session cannot both take the last unit. It counts admissions: a request the provider failed was still made.
+    if (maxRequests !== null && admitted >= maxRequests) {
+      capRefusals += 1;
+      // FINAL REFUSALS ARE NOT ANSWERED WITH A STATUS THE SDK'S HARNESS RETRIES (429, 500, 503): the cap is 403 and an
+      // expired session 401, as the refused charge is 403 (independent review of f4bd6bc, finding 2: the seat retried
+      // each of them several times; the relay had answered 403 and 401).
+      refuse(res, rec, 403, GATEWAY_REFUSALS.SESSION_CAP, `the session has made ${admitted} of its ${maxRequests} permitted request(s): ${m[2]} for ${model} is not charged and not sent`, "PERMISSION_DENIED");
+      return done();
+    }
+    // ADMITTED BEFORE IT IS FORWARDED: the caller's charge. A refused charge is a refused request. The session's unit is
+    // taken BEFORE the charge is awaited and given back when the charge is refused.
+    admitted += 1;
+    try { await admit({ class: rec.class, type, model, session: rec.session, n: counts[rec.class] + 1, seq: rec.seq, verb: rec.verb }); }
+    catch (e) {
+      admitted -= 1;
+      budgetRefusals += 1;
+      stop = { kind: "budget", status: 429, provider_status: null, code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 300), class: rec.class };
+      // ANSWERED 403, NOT 429: the SDK's harness retries a 429 (and a 500, a 503), and each retry of a refused charge
+      // would ask the caller's admission again. A refused charge is final for this session: the runtime is told so.
+      refuse(res, rec, 403, GATEWAY_REFUSALS.BUDGET, String(e?.message ?? e).slice(0, 900), "PERMISSION_DENIED");
+      return done();
+    }
+    rec.charged = true;   // from here on, whatever happens to the request, it was charged: the account says so
+    // Admitted (and charged), and the session was stopped meanwhile: the charge stands on the caller's record, and the
+    // request is still not sent.
+    if (stopped()) { refuse(res, rec, 503, GATEWAY_REFUSALS.ABORTED, `the session was stopped: ${stopped()}`, "UNAVAILABLE"); return done(); }
+    counts[rec.class] += 1;
+    const s = sessions.get(key) ?? sessions.set(key, { session: rec.session, class: rec.class, type, model, requests: 0, usage: null, served_models: [], errors: [] }).get(key);
+    s.requests += 1;
+    const ac = new AbortController();
+    const entry = { ac, res };
+    inflight.add(entry);
+    const timer = setTimeout(() => ac.abort(new Error(`no answer from the provider within ${requestTimeoutMs} ms`)), requestTimeoutMs);
+    res.on("close", () => { if (!res.writableEnded) ac.abort(new Error("the runtime closed the connection")); });
+    try {
+      const headers = Object.fromEntries(FORWARD_HEADERS.filter(h => req.headers[h] !== undefined).map(h => [h, req.headers[h]]));
+      headers[keyHeader] = apiKey;
+      // A REDIRECT IS NOT FOLLOWED: the upstream was checked when the gateway started (UPSTREAM), and a redirect would carry
+      // the real key to an origin nobody checked (independent review of f4bd6bc, finding 1). The session is given the 3xx.
+      const up = await fetchImpl(`${base}${url.pathname}${url.search}`, { method: "POST", headers, body: raw, signal: ac.signal, redirect: "manual" });
+      rec.forwarded = true; rec.status = up.status;
+      res.writeHead(up.status, { "content-type": up.headers.get("content-type") ?? "application/json", "cache-control": "no-cache" });
+      const dec = new TextDecoder();
+      let buf = "", all = "";
+      const scan = line => {
+        const t = line.startsWith("data:") ? line.slice(5).trim() : null;
+        if (!t || t === "[DONE]") return;
+        try { const j = JSON.parse(t); if (str(j.modelVersion)) rec.served_model = j.modelVersion; const u = usageOf(j.usageMetadata); if (u) rec.usage = u; } catch { /* a partial or non-JSON event carries no identity */ }
+      };
+      for await (const chunk of up.body ?? []) {
+        if (!res.destroyed) res.write(chunk);
+        const txt = dec.decode(chunk, { stream: true });
+        if (up.status === 200 && rec.verb === "streamGenerateContent") { buf += txt; let i; while ((i = buf.indexOf("\n")) >= 0) { scan(buf.slice(0, i).trimEnd()); buf = buf.slice(i + 1); } }
+        else if (all.length < 1024 * 1024) all += txt;
+      }
+      if (buf) scan(buf.trimEnd());
+      if (!res.destroyed) res.end();
+      if (up.status === 200) {
+        rec.answered = true;   // the provider's 200, read to its end: an ANSWER, named or not (the model guard reads this)
+        if (rec.verb !== "streamGenerateContent") { try { const j = JSON.parse(all); if (str(j.modelVersion)) rec.served_model = j.modelVersion; rec.usage = usageOf(j.usageMetadata); } catch { /* not JSON: nothing is recorded */ } }
+        if (rec.usage) s.usage = addUsage(s.usage, rec.usage);
+        if (rec.served_model && !s.served_models.includes(rec.served_model)) s.served_models.push(rec.served_model);
+        if (rec.class !== "subagent") stop = null;
+      } else {
+        let err = null; try { err = JSON.parse(all)?.error ?? null; } catch { err = null; }
+        rec.provider_status = str(err?.status) ? err.status : null;
+        const failure = { kind: stopKindOf(up.status), status: up.status, provider_status: rec.provider_status, message: String(err?.message ?? all).slice(0, 300), class: rec.class };
+        s.errors.push(failure);
+        if (rec.class !== "subagent") stop = failure;
+      }
+    } catch (e) {
+      rec.refusal = aborted ? GATEWAY_REFUSALS.ABORTED : "PANTHEON_UPSTREAM_FAILED";
+      const failure = { kind: aborted ? "aborted" : "provider_error", status: null, provider_status: null, message: String(e?.message ?? e).slice(0, 300), class: rec.class };
+      s.errors.push(failure);
+      if (rec.class !== "subagent" && !aborted) stop = failure;
+      if (!res.headersSent) send(res, 502, { error: { code: 502, message: `${rec.refusal}: ${failure.message}`, status: "UNAVAILABLE" } });
+      else res.destroy();
+    } finally { clearTimeout(timer); inflight.delete(entry); done(); }
+  }
+
+  const server = createServer((req, res) => { handle(req, res).catch(() => { try { res.destroy(); } catch { /* gone */ } }); });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
+  const abort = why => {
+    if (aborted) return;
+    // The stop is kept as its reason, and the reason is what every later reading tests: it is NEVER EMPTY. An abort("")
+    // or a signal aborted with an error that has no message read as "not stopped", and the next request was charged and
+    // forwarded (independent review of 6ee0fea).
+    aborted = (String(why ?? "").trim() || "aborted, no reason given").slice(0, 300);
+    for (const e of inflight) { e.ac.abort(new Error(aborted)); try { e.res.destroy(); } catch { /* gone */ } }
+  };
+  const onSignal = () => abort(signal?.reason?.message ?? "the caller's signal aborted");
+  if (signal?.aborted) onSignal(); else signal?.addEventListener("abort", onSignal, { once: true });
+
+  /** Ask the provider whether it serves `model`, with the controller's key (providerAvailability). Recorded. */
+  async function availability(model) {
+    const out = await providerAvailability({ upstream: base, apiKey, keyHeader, model, fetchImpl });
+    availabilityLog.push(out);
+    return out;
+  }
+
+  return {
+    url: `http://127.0.0.1:${server.address().port}`, token, availability, abort,
+    record: () => {
+      // By model asked: every name the provider answered under, and how many ANSWERS carried no name at all. And by the
+      // specialist TYPE of the subagent whose request it answered: which specialist the provider answered, and as what.
+      const served = {}, unnamed = {}, byType = {};
+      const add = (into, k, name) => { (into[k] ??= []).includes(name) || into[k].push(name); };
+      for (const r of requests) if (r.forwarded) {
+        if (r.served_model) { add(served, r.model, r.served_model); if (r.class === "subagent" && r.type) add(byType, r.type, r.served_model); }
+        else if (r.answered) unnamed[r.model] = (unnamed[r.model] ?? 0) + 1;
+      }
+      return { root: { model: root.model }, subagents: { model: sub.model, ceiling: sub.ceiling }, requests: requests.map(r => ({ ...r })),
+        sessions: [...sessions.values()].map(s => ({ ...s, usage: s.usage ? { ...s.usage } : null, served_models: [...s.served_models], errors: s.errors.map(e => ({ ...e })) })),
+        subagent_sessions: [...sessions.values()].filter(s => s.class === "subagent").length, served_models: served, served_by_type: byType, unnamed, unauthorized,
+        totals: { received: requests.length, forwarded: requests.filter(r => r.forwarded).length, refused: requests.filter(r => r.refusal).length, by_class: { ...counts } },
+        budget_refusals: budgetRefusals, stop: stop ? { ...stop } : null, aborted, availability: availabilityLog.map(a => ({ ...a })),
+        ...(maxRequests !== null ? { session_cap: { max_requests: maxRequests, admitted, refused: capRefusals } } : {}), expired };
+    },
+    close: () => (closed ? Promise.resolve() : new Promise(resolve => { closed = true; signal?.removeEventListener("abort", onSignal); for (const e of inflight) { e.ac.abort(new Error("the gateway closed")); try { e.res.destroy(); } catch { /* gone */ } } server.close(() => resolve()); server.closeAllConnections?.(); })),
+  };
+}

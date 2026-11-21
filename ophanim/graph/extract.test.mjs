@@ -18,7 +18,7 @@ import {recordsFacts, recordId, RECORDS_ORIGIN, registerEntries} from './extract
 import {statusSource, workSource, cycleSource, readStatusLedger, STATUS_ANCHOR, itemId as statusItem} from './extract/ledgers.mjs';
 import {sourcesOf, openSystemsGraph, observeAll, ORIGIN_SPEC, ORDER, EXTRACTOR_MODULES, extractorVersionOf} from './extract/index.mjs';
 import {pathToFileURL} from 'node:url';
-import {treeAt, WITHHELD} from './extract/git.mjs';
+import {treeAt, historyAt, WITHHELD} from './extract/git.mjs';
 import {fixtureWorkLedger, fixtureCycleLedger} from './fixtures/ledgers.mjs';
 import {fixtureBoard} from './fixtures/board.mjs';
 import {tempRepo, realGraph, closeRealGraph, git, ROOT, T0, at, PACKAGE, LIB_PACKAGE, WORKFLOW} from './fixtures/repo.mjs';
@@ -186,7 +186,30 @@ test('extract: mutation runners are read as TEXT, never imported -- every commit
   // the table early), as a section comment in the checkpoint runner hid 4 of its 20 mutations.
   const ap = mutationTable("const A = 'lib/a.mjs';\nconst SUITES = ['lib/a.test.mjs'];\nconst MUTATIONS = [\n  {id: 'X1', file: A, from: 'x', to: 'y'},\n  // the runner's note\n  {id: 'X2', file: A, from: 'a]', to: 'b'},\n  {id: 'X3', file: A, from: 'p', to: 'q'},\n];\n");
   assert.deepEqual(ap.mutations.map(x => x.id), ['X1', 'X2', 'X3'], 'a comment is not read as code or as a string');
+  // A spread of an object's list (`tests: [...T.gov, ...T.pipe]`, ophanim/operate/sdk-intake.mutate.mjs, which the merge of
+  // PR #67's branch brought in): before the fix the spread read `T` alone, and the mutation had no deciding test.
+  const sp = mutationTable("const T = {a: ['lib/a.test.mjs'], b: ['lib/b.test.mjs', 'lib/c.test.mjs']};\nconst F = 'lib/a.mjs';\nconst MUTATIONS = [{id: 'X1', file: F, tests: [...T.a, ...T.b]}];");
+  assert.deepEqual(sp.mutations.map(x => [x.id, x.files, x.tests]), [['X1', ['lib/a.mjs'], ['lib/a.test.mjs', 'lib/b.test.mjs', 'lib/c.test.mjs']]], 'a spread of an object key is read');
   t.diagnostic(`${runners.length} runners, ${mutations} mutations read as text, each with its target and deciding tests`);
+});
+
+test('extract: a merge that resolves a file differently from both sides is a commit the file derives from', t => {
+  // `git log --name-only` lists no path for a merge, so a file a merge resolved (its content in neither parent) derived
+  // from no commit after the merge's parents, and "the last commit that changed it" was a commit the graph never linked
+  // (found at the merge of PR #67's branch, 73dc8d0: 15 files resolved by hand). A merge that took one side's file as it
+  // was changed nothing of it, and is not listed for it.
+  const {repo, commit} = tempRepo(t);
+  commit({'a.mjs': 'export const a = 0;\n', 'b.mjs': 'export const b = 0;\n'}, 'base');
+  git(repo, 'checkout', '-q', '-b', 'side');
+  commit({'a.mjs': 'export const a = 1;\n', 'b.mjs': 'export const b = 1;\n'}, 'side');
+  git(repo, 'checkout', '-q', '-');
+  commit({'a.mjs': 'export const a = 2;\n'}, 'main');
+  try { git(repo, 'merge', '-q', '--no-edit', 'side'); } catch { /* the conflict in a.mjs, resolved below */ }
+  const merge = commit({'a.mjs': 'export const a = 3;\n'}, 'merge, a.mjs resolved by hand');
+  const h = historyAt(repo, merge);
+  assert.equal(h[0].commit, merge);
+  assert.equal(h[0].parents.length, 2);
+  assert.deepEqual(h[0].paths, ['a.mjs'], 'the merge changed a.mjs (in neither parent), and took b.mjs from one side as it was');
 });
 
 test('extract: suites and workflows through the gate\'s own reader at the commit', () => {

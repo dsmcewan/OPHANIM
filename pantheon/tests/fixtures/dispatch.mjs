@@ -15,9 +15,30 @@
 // is sourced with $dir (the worktree), $unit, $model, $agent and $prompt set and may set $reply. Every such launch is
 // logged to "$FAKE_AGY_LOG.ctx" as: agent, model, --add-dir, and whether PANTHEON_A2A_URL / _TOKEN and a Google API
 // key were in its environment (`agyContext()`).
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+//
+// THE GOOGLE IMPLEMENTER OF THE PIPELINE IS AN ANTIGRAVITY SDK SESSION (owner direction 2026-11-19; src/antigravity).
+// While a fixture is active the REAL transport runs it -- its model gateway, its subagent governor, its tool decisions
+// and its jail -- against two scripted ends:
+//   the session   PANTHEON_ANTIGRAVITY_PYTHON points at a launcher (written here) that runs FAKE_SDK_SESSION in place of
+//                 the SDK's bridge: a thin relay that speaks the bridge's protocol, sends the unit prompt to the
+//                 provider through the controller's gateway, and does what the scripted provider answers.
+//   the provider  requests to generativelanguage.googleapis.com are answered IN THIS PROCESS (globalThis.fetch is
+//                 wrapped while the fixture is active; every other URL goes to the real fetch). A session's first
+//                 request RUNS THE WORKER as the model's work: `agyWorker(sh)` as before (sourced with $dir, $unit,
+//                 $model, $effort (the session's thinking level, "" when none), $prompt), else `export const ok = true;`
+//                 to the unit's first owned path. The worker asks for a
+//                 native subagent with `sdk_subagent <type> "<assignment>"`; the relay then puts each request to the
+//                 controller (invoke_subagent), and an admitted one makes its own request on the subagent model.
+//                 `sdk_subagent_unasked <type> "<assignment>"` is admitted the same way and then never asked: no
+//                 request of it reaches the provider.
+// The switches are the lane's, by MODEL name: agyQuota (HTTP 429 RESOURCE_EXHAUSTED), agyFail (HTTP 500), agyQuotaOnce,
+// agyHang; `sdkUnavailable([...models])` makes the provider answer 404 for those models; `serve(f)` names the model
+// that answered. `sdk()` lists what the provider saw: [{agent: "sdk-implementer" | "sdk-subagent:<type>", model, unit}].
+// GEMINI_API_KEY is a synthetic value held by this process (the controller); it is never given to a worker.
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // The worker's env is an ALLOWLIST (src/board/agy-cli.mjs workerEnv; independent review round 2, assignment 4, question
 // 7): the fake CLI's own switches (FAKE_*) reach it only because the operator variable lists them.
@@ -556,22 +577,169 @@ function setWorker(dir, sh) {
 
 export const WORK = /Output ONLY the complete new contents of/;
 
+/** The synthetic Gemini API key a fixture's controller holds (never a real key; never given to a worker). */
+export const FIXTURE_GEMINI_KEY = "AIza-synthetic-fixture-key-not-a-credential";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com";
+// The session relay (see the header): the bridge's protocol on stdio, the provider through the controller's gateway.
+const FAKE_SDK_SESSION = String.raw`import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
+const out = o => process.stdout.write(JSON.stringify(o) + "\n");
+const sha = s => "sha256:" + createHash("sha256").update(s).digest("hex");
+const waiting = new Map();
+let start = null, cancelled = null, onStart;
+const started = new Promise(r => { onStart = r; });
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", line => {
+  let m; try { m = JSON.parse(line); } catch { return; }
+  if (m.type === "start") { start = m; onStart(); }
+  else if (m.type === "decision") { waiting.get(m.id)?.(m); waiting.delete(m.id); }
+  else if (m.type === "cancel") { cancelled = m.reason ?? "cancelled"; for (const f of waiting.values()) f({ allow: false, message: "cancelled" }); }
+});
+rl.on("close", () => { cancelled ??= "the controller closed the channel"; if (!start) process.exit(2); });
+await started;
+out({ type: "identity", runtime: { python: "fixture", executable: process.execPath, sdk: { module: "google.antigravity", status: "installed", distribution: "google-antigravity", version: "0.1.24", path: "/fixture" }, harness: null } });
+out({ type: "ready", conversation_id: "conv-fixture", capabilities: { trajectory_events: true, define_subagent_disabled: true } });
+const ROOT = "root-traj";
+const state = (id, st, parent = "", depth = 0) => out({ type: "event", event: "trajectory_state", trajectory_id: id, parent_trajectory_id: parent, depth, state: st, error: "", error_code: "", stop_reason: "UNSPECIFIED" });
+const fail = (kind, message, code = 3) => { out({ type: "result", ok: false, error: { kind, type: "AntigravityExecutionError", message } }); process.exit(code); };
+const ask = async (model, system, payload) => {
+  const r = await fetch(start.gateway.url + "/v1beta/models/" + model + ":streamGenerateContent?alt=sse", { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": start.gateway.token },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: JSON.stringify(payload) }] }], sessionId: payload.session, systemInstruction: { parts: [{ text: system }] } }) });
+  const body = await r.text();
+  if (r.status !== 200) return { status: r.status, body };
+  let text = ""; try { text = JSON.parse(body.split("\n").find(l => l.startsWith("data:")).slice(5)).candidates[0].content.parts[0].text; } catch { /* not the scripted shape */ }
+  return { status: 200, text };
+};
+state(ROOT, "RUNNING");
+const first = await ask(start.model, start.system, { session: "sess-root", fixture_session: { workspace: start.workspace, prompt: start.prompt, model: start.model, thinking: start.thinking ?? null } }).catch(e => ({ status: null, body: String(e?.message ?? e) }));
+if (cancelled) fail("cancelled", cancelled, 5);
+if (first.status !== 200) fail("harness", "the model request failed (HTTP " + first.status + "): " + String(first.body).slice(0, 300));
+let plan; try { plan = JSON.parse(first.text); } catch { fail("harness", "the scripted provider did not answer with a plan"); }
+let n = 0;
+for (const sub of plan.subagents ?? []) {
+  if (cancelled) break;
+  const id = ++n, decided = new Promise(r => waiting.set(id, r));
+  out({ type: "hook", id, tool: "invoke_subagent", args: { Subagents: [{ TypeName: sub.type, Role: sub.type, Prompt: sub.assignment }] }, call_id: "call-" + id, step_id: ROOT + ":" + id, trajectory_id: ROOT, server_name: null });
+  const d = await decided;
+  const spec = (start.subagents ?? []).find(x => x.name === sub.type);
+  if (!d.allow || !spec) continue;
+  if (sub.unasked) continue;   // admitted by the controller, and the implementer never gave it its task
+  const child = "child-" + id;
+  out({ type: "event", event: "child_started", trajectory_id: child, parent_trajectory_id: ROOT, prompt_key: sha(String(sub.assignment).trim()) });
+  state(child, "RUNNING", ROOT, 1);
+  const a = await ask(spec.model, spec.system, { session: "sess-" + child, fixture_subagent: { type: sub.type } }).catch(e => ({ status: null, body: String(e?.message ?? e) }));
+  if (a.status === 200) out({ type: "event", event: "child_output", trajectory_id: child, digest: sha(a.text ?? ""), bytes: Buffer.byteLength(a.text ?? "") });
+  state(child, "FULLY_IDLE", ROOT, 1);
+}
+if (cancelled) fail("cancelled", cancelled, 5);
+state(ROOT, "FULLY_IDLE");
+if (plan.exit) fail("harness", "the scripted worker exited " + plan.exit + ": " + String(plan.stderr ?? "").slice(0, 300));
+out({ type: "result", ok: true, text: plan.note ?? "done", structured_output: null, stop_reason: "UNSPECIFIED", usage: { total_token_count: 1290 }, trajectory_usages: {}, root_trajectory_id: ROOT,
+  conversation_id: "conv-fixture", tool_calls: n, duration_s: 0.1, capabilities: { trajectory_events: true, define_subagent_disabled: true } });
+process.exit(0);
+`;
+
+/** Write the SDK session stand-in into `dir`; returns the launcher to name in PANTHEON_ANTIGRAVITY_PYTHON. */
+export function fakeSdkSession(dir) {
+  writeFileSync(join(dir, "fake-sdk-session.mjs"), FAKE_SDK_SESSION);
+  const launcher = join(dir, "fake-antigravity-python");
+  // Started as `<python> <bridge>`: the bridge argument is ignored, and the relay runs in its place. `<python> <bridge>
+  // --identity` (the launcher's zero-spend preflight) prints the identity the real bridge would, for the qualified SDK.
+  const identity = JSON.stringify({ python: "fixture", executable: launcher, sdk: { module: "google.antigravity", status: "installed", distribution: "google-antigravity", version: "0.1.24", path: "/fixture" }, harness: { path: "/fixture/localharness", bytes: 1, sha256: "sha256:fixture" } });
+  writeFileSync(launcher, `#!/bin/sh\nhere=$(cd "$(dirname "$0")" && pwd)\ncase " $* " in *" --identity "*) printf '%s\\n' '${identity}'; exit 0 ;; esac\nexec ${JSON.stringify(process.execPath)} "$here/fake-sdk-session.mjs"\n`, { mode: 0o755 });
+  return launcher;
+}
+
+/** Run the scripted worker as "the model's work" of one session: {exit, stderr, subagents: [{type, assignment}], note}. */
+function runSdkWorker({ dir, unit, model, prompt, effort = null }) {
+  const scratch = mkdtempSync(join(tmpdir(), "pantheon-sdk-worker-")), asked = join(scratch, "subagents");
+  const first = (/PATHS YOU OWN[^\n]*\n((?:- .*\n)+)/.exec(prompt)?.[1] ?? "").split("\n")[0].replace(/^- /, "");
+  const script = [
+    `sdk_subagent() { printf '%s\\t%s\\n' "$1" "$2" >> "$SDK_SUBAGENTS"; }`,
+    // Admitted and never asked: the controller holds its slot and no request of it reaches the provider.
+    `sdk_subagent_unasked() { printf 'unasked:%s\\t%s\\n' "$1" "$2" >> "$SDK_SUBAGENTS"; }`,
+    `agy_ask() { echo "agy_ask: an Antigravity SDK implementer has no A2A relay; its subagents are its own (sdk_subagent <type> <assignment>)" >&2; return 1; }`,
+    process.env.FAKE_AGY_WORKER ? `. "$FAKE_AGY_WORKER"` : `mkdir -p "$(dirname "$dir/$first")" && printf 'export const ok = true;\\n' > "$dir/$first"`,
+  ].join("\n");
+  return new Promise(resolve => {
+    const done = r => { rmSync(scratch, { recursive: true, force: true }); resolve(r); };
+    const c = spawn("sh", ["-c", script, "sdk-worker"], { cwd: dir, env: { ...process.env, dir, unit: unit ?? "", model, effort: effort ?? "", prompt, first, agent: "sdk-implementer", SDK_SUBAGENTS: asked }, stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    c.stderr.on("data", d => { err += d; });
+    c.on("error", e => done({ exit: 127, stderr: String(e?.message ?? e), subagents: [], note: "" }));
+    c.on("close", code => done({ exit: code ?? 1, stderr: err.slice(-300), note: "done",
+      subagents: existsSync(asked) ? readFileSync(asked, "utf8").split("\n").filter(Boolean).map(l => { const [type, ...rest] = l.split("\t"), unasked = type.startsWith("unasked:");
+        return { type: unasked ? type.slice(8) : type, assignment: rest.join("\t"), ...(unasked ? { unasked: true } : {}) }; }) : [] }));
+  });
+}
+
+/**
+ * Answer Gemini API requests IN THIS PROCESS (see the header): {sessions, unavailable, restore}. withDispatch installs it
+ * for its own process; a test that runs the lifecycle in a CHILD process calls this there (the child inherits the
+ * fixture's environment, not its wrapped fetch).
+ */
+export function installScriptedGemini({ served = () => null } = {}) {
+  const real = globalThis.fetch, sessions = [], unavailable = new Set();
+  const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+  const sse = (model, text) => new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text }] }, finishReason: "STOP", index: 0 }], usageMetadata: GOOGLE_USAGE,
+    modelVersion: served("agy_google", model) ?? model })}\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+  const has = (k, model) => ` ${process.env[k] ?? ""} `.includes(` ${model} `);
+  const quota = () => json(429, { error: { code: 429, message: "Resource has been exhausted (e.g. check quota).", status: "RESOURCE_EXHAUSTED" } });
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input?.url ?? input);
+    if (!url.startsWith(`${GEMINI_BASE}/`)) return real(input, init);
+    const m = /^\/v1beta\/models\/([^:/]+)(?::(\w+))?$/.exec(new URL(url).pathname);
+    if (!m) return json(404, { error: { code: 404, message: "no such path on the scripted endpoint", status: "NOT_FOUND" } });
+    const model = m[1];
+    if ((init.method ?? "GET") === "GET") {
+      return unavailable.has(model) ? json(404, { error: { code: 404, message: `models/${model} is not found for API version v1beta, or is not supported for generateContent.`, status: "NOT_FOUND" } })
+        : json(200, { name: `models/${model}`, displayName: model, inputTokenLimit: 1048576, outputTokenLimit: 65536, supportedGenerationMethods: ["generateContent", "countTokens"] });
+    }
+    let payload = null;
+    try { payload = JSON.parse(JSON.parse(Buffer.from(init.body).toString("utf8")).contents.at(-1).parts[0].text); } catch { payload = null; }
+    // THE PROVIDER EDGE OF THE L-136 OPERATE TESTS (test-only names; ophanim/operate/l136-billing.test.mjs): each generation
+    // request is recorded with the number of work.billing entries already persisted on the work ledger when it arrived;
+    // L136_HANG leaves it unanswered (the process is killed with the request in flight).
+    if (process.env.L136_EDGE_LOG) {
+      const chain = process.env.L136_WORK_CHAIN;
+      const billings = chain && existsSync(chain) ? readFileSync(chain, "utf8").split("\n").filter(l => l.includes('"kind":"work.billing"')).length : 0;
+      appendFileSync(process.env.L136_EDGE_LOG, JSON.stringify({ vendor: "agy_google", model, work_billings: billings, pid: process.pid }) + "\n");
+      if (process.env.L136_HANG === "1") await new Promise(() => {});
+    }
+    if (payload?.fixture_subagent) { sessions.push({ agent: `sdk-subagent:${payload.fixture_subagent.type}`, model, unit: null }); return sse(model, "a specialist's answer"); }
+    const s = payload?.fixture_session;
+    if (!s) return json(400, { error: { code: 400, message: "the scripted endpoint serves the fixture's session relay only", status: "INVALID_ARGUMENT" } });
+    const unit = /work unit "([^"]+)"/.exec(s.prompt)?.[1] ?? null;
+    sessions.push({ agent: "sdk-implementer", model, unit, thinking: s.thinking });
+    if (has("FAKE_AGY_QUOTA", model)) return quota();
+    const once = process.env.FAKE_AGY_QUOTA_ONCE;
+    if (once && s.prompt.includes(once) && !existsSync(`${process.env.FAKE_AGY_LOG}.once`)) { writeFileSync(`${process.env.FAKE_AGY_LOG}.once`, ""); return quota(); }
+    if (has("FAKE_AGY_FAIL", model)) return json(500, { error: { code: 500, message: "scripted provider failure", status: "INTERNAL" } });
+    if (has("FAKE_AGY_HANG", model)) { await new Promise(r => init.signal?.addEventListener("abort", r, { once: true })); throw new Error("the request was aborted"); }
+    return sse(model, JSON.stringify(await runSdkWorker({ dir: s.workspace, unit, model, prompt: s.prompt, effort: s.thinking })));
+  };
+  return { sessions, unavailable, restore: () => { globalThis.fetch = real; } };
+}
+
 export async function withDispatch(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pantheon-dispatch-"));
   const keys = ["PANTHEON_COOLDOWN_DIR", "PANTHEON_AGY_CLI", "PANTHEON_AGY_PYTHON", "PANTHEON_AGY_TRANSPORT", "FAKE_AGY_LOG",
-    "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "PANTHEON_AGY_STATE_DIRS", ...AGY_SWITCHES];
+    "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "PANTHEON_AGY_STATE_DIRS", "PANTHEON_ANTIGRAVITY_PYTHON", "PANTHEON_ANTIGRAVITY_SDK_ALLOW", ...AGY_SWITCHES];
   const before = Object.fromEntries(keys.map(k => [k, process.env[k]]));
   const agyLog = join(dir, "agy.log");
   fakeAgy(dir);
   Object.assign(process.env, { PANTHEON_COOLDOWN_DIR: join(dir, "cooldowns"), PANTHEON_AGY_CLI: join(dir, "fake-agy"),
     PANTHEON_AGY_PYTHON: "/nonexistent/no-agy-sdk-in-tests", FAKE_AGY_LOG: agyLog, PANTHEON_AGY_STATE_DIRS: dir });
-  for (const k of ["PANTHEON_AGY_TRANSPORT", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", ...AGY_SWITCHES]) delete process.env[k];
+  for (const k of ["PANTHEON_AGY_TRANSPORT", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPHANIM_LEDGER", "PANTHEON_POOLS_FILE", "PANTHEON_ANTIGRAVITY_SDK_ALLOW", ...AGY_SWITCHES]) delete process.env[k];
+  // The pipeline's Google implementer: the real SDK transport, between the session relay and the in-process provider.
+  Object.assign(process.env, { PANTHEON_ANTIGRAVITY_PYTHON: fakeSdkSession(dir), GEMINI_API_KEY: FIXTURE_GEMINI_KEY });
   const calls = [];
   let implement = () => "export const ok = true;\n";
   let fault = () => null;
   let review = () => null;
   let served = () => null;
   const makeClientFor = scriptedClients(calls, prompt => implement(prompt), call => fault(call), call => review(call), (vendor, model) => served(vendor, model));
+  const gemini = installScriptedGemini({ served: (vendor, model) => served(vendor, model) });
   let n = 0;
   const lines = file => existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(l => { const [agent, model] = l.split(" "); return { agent, model }; }) : [];
   const agy = () => lines(agyLog);
@@ -584,8 +752,10 @@ export async function withDispatch(fn) {
       agyQuota: models => { process.env.FAKE_AGY_QUOTA = models.join(" "); }, agyFail: models => { process.env.FAKE_AGY_FAIL = models.join(" "); },
       agyQuotaOnce: marker => { process.env.FAKE_AGY_QUOTA_ONCE = marker; }, agyMode: mode => { process.env.FAKE_AGY_MODE = mode; },
       agyContext: () => contextOf(agyLog), agyWorker: sh => setWorker(dir, sh), ...workerControls(dir),
+      sdk: () => gemini.sessions.map(x => ({ ...x })), sdkUnavailable: models => { gemini.unavailable.clear(); for (const m of models) gemini.unavailable.add(m); },
       opts: (extra = {}) => ({ dir: join(dir, `board-${++n}`), makeClientFor, scouts: ["xai"], ...extra }) });
   } finally {
+    gemini.restore();
     for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     rmSync(dir, { recursive: true, force: true });
   }

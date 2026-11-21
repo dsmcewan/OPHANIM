@@ -19,7 +19,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {openWorkLedger} from './work-ledger.mjs';
-import {tick} from './scheduler.mjs';
+import {tickWithPrimary as tick} from './test-fixtures.mjs';   // every tick declares primary Gemini execution: the fit implementer is an SDK session
 import {makeExecutors} from './stages.mjs';
 import {sandboxAvailable} from '../../pantheon/src/agy/sandbox.mjs';
 import {runPipeline} from '../../pantheon/src/pipeline/index.mjs';
@@ -43,6 +43,7 @@ test('the bwrap jail is available on this host (the lane tests run the real boun
 function lifecycle(ctx, {turn = scriptedTurn(), investigation = {}, items = ['alpha']} = {}) {
   const repo = ctx.dir;
   const f = fixture(repo, items.map(item => ({item})));
+  // Primary Gemini API execution is enabled: every test here runs the implementer (an SDK session, off by default).
   const ex = makeExecutors({repo, makeClientFor: ctx.makeClientFor, turn, stateDir: f.stateDir, independence: 'model', seating: FIVE.seating, facts: FIVE.facts, investigation});
   const at = {repo, statusRoot: f.statusRoot, workRoot: f.workRoot};
   return {repo, f, ex, turn, at, w: () => openWorkLedger({root: f.workRoot, create: false}), last: item => openWorkLedger({root: f.workRoot, create: false}).stages(item).at(-1)};
@@ -50,39 +51,43 @@ function lifecycle(ctx, {turn = scriptedTurn(), investigation = {}, items = ['al
 
 // ---- L-301: the stage meter and the pipeline admission, per request ----------------------------------------------------
 
-test('L-301 (self-audit round 3, assignment 3 (sealed bb1287a)): the implement stage charges a lane that failed before its spawn NOTHING; a spawned lane is charged once, before its spawn', real, async () => {
+test('L-301 (self-audit round 3, assignment 3 (sealed bb1287a)): the implement stage charges an implementer session that could not start NOTHING; a session that ran is charged each request it made', real, async () => {
   await withDispatch(async ctx => {
     ctx.agyWorker(WRITE_ALPHA);
     const L = lifecycle(ctx, {items: ['alpha', 'beta']});
     await tick({...L.at, executors: {plan: L.ex.plan}, limits: LIMITS});
     assert.deepEqual(['alpha', 'beta'].map(i => `${L.last(i).stage}:${L.last(i).status}`), ['plan:passed', 'plan:passed']);
-    // alpha: every lane of the unit's ladder fails BEFORE its spawn -- the agy CLI is absent, and pipelineTurns refuses
-    // it before the worker session is admitted. The dispatcher (a scripted seat) answered.
-    const cli = process.env.PANTHEON_AGY_CLI;
-    process.env.PANTHEON_AGY_CLI = path.join(ctx.dir, 'no-such-agy');
+    // alpha: the implementer session cannot start -- the Antigravity SDK's python is absent, and the transport refuses
+    // it before any request is admitted. No rung can cure that, so the unit blocks at once (the ladder is not walked)
+    // and the stage is blocked on the transport, by name. The dispatcher (a scripted seat) answered.
+    const python = process.env.PANTHEON_ANTIGRAVITY_PYTHON;
+    process.env.PANTHEON_ANTIGRAVITY_PYTHON = path.join(ctx.dir, 'no-such-venv', 'bin', 'python');
     let t;
     const d0 = L.turn.log.filter(l => l.kind === 'dispatcher').length;
-    try { t = await tick({...L.at, executors: {implement: L.ex.implement}, limits: LIMITS, only: 'alpha'}); } finally { process.env.PANTHEON_AGY_CLI = cli; }
+    try { t = await tick({...L.at, executors: {implement: L.ex.implement}, limits: LIMITS, only: 'alpha'}); } finally { process.env.PANTHEON_ANTIGRAVITY_PYTHON = python; }
     const impl = L.last('alpha');
-    assert.equal(impl.stage, 'implement');
+    assert.deepEqual([impl.stage, impl.status, impl.blocker?.code], ['implement', 'blocked', 'IMPLEMENTER_TRANSPORT']);
+    assert.deepEqual(impl.outputs.transport_blocker.codes, ['SDK_UNAVAILABLE']);
     const rec = JSON.parse(fs.readFileSync(impl.outputs.run.record, 'utf8'));
-    const failures = Object.values(rec.units).flatMap(u => u.attempts.flatMap(a => a.lane_failures ?? []));
-    assert.ok(failures.length >= 2 && failures.every(x => x.kind === 'spawn' && /CLI absent/.test(x.why)), JSON.stringify(failures));
-    assert.equal(rec.provider_calls.by_role.implementer, 0, 'no lane was spawned, so none is a provider call');
+    const attempts = Object.values(rec.units).flatMap(u => u.attempts);
+    assert.ok(attempts.length >= 1 && attempts.every(a => a.code === 'SDK_UNAVAILABLE' && a.transport_blocker === true && /python is absent/.test(a.why)), JSON.stringify(attempts.map(a => [a.code, a.why])));
+    assert.deepEqual(ctx.sdk(), [], 'no request reached the provider');
+    assert.equal(rec.provider_calls.by_role.implementer, 0, 'no session started, so none is a provider call');
     const dispatched = L.turn.log.filter(l => l.kind === 'dispatcher').length - d0;
     assert.ok(dispatched >= 1);
     assert.equal(rec.provider_calls.total, dispatched);
     assert.equal(spendOf(L.w(), L.w().claims('alpha').at(-1).hash), dispatched, 'the work ledger was charged the dispatcher\'s call(s) only');
     assert.equal(impl.usage.provider_calls, dispatched);
     assert.equal(t.dispatched[0].provider_calls, dispatched);
-    // beta: the CLI is present, so every lane spawns; each is charged exactly once.
-    const before = ctx.agy().length;
+    // beta: the transport runs, so every session reaches the provider; each of its requests is charged exactly once.
+    const before = ctx.sdk().length;
     await tick({...L.at, executors: {implement: L.ex.implement}, limits: LIMITS, only: 'beta'});
     const ok = L.last('beta');
     assert.equal(`${ok.stage}:${ok.status}`, 'implement:passed', JSON.stringify(ok.next));
     const rec2 = JSON.parse(fs.readFileSync(ok.outputs.run.record, 'utf8'));
-    assert.ok(ctx.agy().length > before);
-    assert.equal(rec2.provider_calls.by_role.implementer, ctx.agy().length - before, 'one charged call per lane spawned');
+    assert.ok(ctx.sdk().length > before);
+    assert.equal(rec2.provider_calls.by_role.implementer, ctx.sdk().length - before, 'one charged call per request the provider saw');
+    assert.deepEqual(ctx.agy(), [], 'no agy CLI process was launched');
     assert.equal(spendOf(L.w(), L.w().claims('beta').at(-1).hash), rec2.provider_calls.total);
   });
 });
@@ -198,25 +203,27 @@ test('L-304 (self-audit round 3, assignment 3 (sealed bb1287a)): the next implem
     const L = lifecycle(ctx);
     await tick({...L.at, executors: {plan: L.ex.plan}, limits: LIMITS});
     assert.equal(`${L.last('alpha').stage}:${L.last('alpha').status}`, 'plan:passed');
-    const release = `${process.env.FAKE_AGY_LOG}.release`;
-    // The lane holds until released, so the attempt is killed with its unit worktree and integration branch in place.
-    ctx.agyWorker(`while [ ! -e "${release}" ]; do sleep 0.1; done\nexit 1\n`);
+    const release = `${process.env.FAKE_AGY_LOG}.release`, begun = `${process.env.FAKE_AGY_LOG}.begun`;
+    // The implementer session holds until released (its worker says when it has begun), so the attempt is killed with
+    // its unit worktree and integration branch in place.
+    ctx.agyWorker(`: > "${begun}"\nwhile [ ! -e "${release}" ]; do sleep 0.1; done\nexit 1\n`);
     const itemDir = path.join(L.f.stateDir, 'alpha');
     const others = [];
     try {
       // ATTEMPT 1, in a real child process: tick dispatches the implement stage, which is SIGKILLed mid-run.
       const url = p => JSON.stringify(pathToFileURL(path.join(ROOT, p)).href);
-      const code = `import {tick} from ${url('ophanim/operate/scheduler.mjs')};
+      const code = `import {tickWithPrimary as tick} from ${url('ophanim/operate/test-fixtures.mjs')};   // the implementer is a primary Gemini seat: the tick declares it
         import {makeExecutors} from ${url('ophanim/operate/stages.mjs')};
         import {scriptedTurn, FIVE, LIMITS} from ${url('ophanim/operate/test-fixtures.mjs')};
-        import {scriptedClients} from ${url('pantheon/tests/fixtures/dispatch.mjs')};
+        import {scriptedClients, installScriptedGemini} from ${url('pantheon/tests/fixtures/dispatch.mjs')};
+        installScriptedGemini();   // the implementer's provider, scripted in this child (it inherits the fixture's environment only)
         const ex = makeExecutors({repo: ${JSON.stringify(L.repo)}, makeClientFor: scriptedClients(), turn: scriptedTurn(), stateDir: ${JSON.stringify(L.f.stateDir)}, independence: 'model', seating: FIVE.seating, facts: FIVE.facts});
         await tick({repo: ${JSON.stringify(L.repo)}, statusRoot: ${JSON.stringify(L.f.statusRoot)}, workRoot: ${JSON.stringify(L.f.workRoot)}, executors: {implement: ex.implement}, limits: LIMITS});`;
       const child = spawn(process.execPath, ['--input-type=module', '-e', code], {cwd: ROOT, env: process.env, stdio: ['ignore', 'ignore', 'pipe']});
       let err = ''; child.stderr.on('data', d => { err += d; });
       const closed = new Promise(r => child.on('close', r));
       others.push(child);
-      await until(() => branches(L.repo, 'pantheon/pipeline/*').length === 1 && ctx.agy().some(a => a.agent === 'pantheon-unit-worker'), 60_000, `attempt 1's branch and lane (${err.slice(-500)})`);
+      await until(() => branches(L.repo, 'pantheon/pipeline/*').length === 1 && fs.existsSync(begun), 60_000, `attempt 1's branch and implementer session (${err.slice(-500)})`);
       child.kill('SIGKILL'); await closed;
       const [killedDir] = fs.readdirSync(itemDir).filter(n => /^pipeline-1-/.test(n)).map(n => path.join(itemDir, n));
       const killedRun = JSON.parse(fs.readFileSync(path.join(killedDir, 'owner.json'), 'utf8')).run_id;

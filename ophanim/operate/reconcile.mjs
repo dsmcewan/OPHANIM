@@ -7,18 +7,33 @@
 // owner, never executed (issue text and comments are task data, not authority). A ticket for an item that is not
 // on the ledger is an orphan, reported. Two issues carrying the same item marker are reported as a duplicate.
 //
+// THE SELF-REPAIR LANE (ophanim/operate/self-repair.mjs; docs/self-repair.md). The owner-signed item `self-repair` is the
+// lane's ON switch, never work: its gate is `lane` (never dispatched). While it is In progress, every OPEN round on the work
+// ledger (work.repair) is reconciled as an item of its own (`self-repair.r<N>`, its row built from its open event), through
+// the same gates as every other item. Without the item (or with it in another state) no round is listed: the
+// reconciliation is exactly as before.
+//
+// A PROMPT (prompt-intake.mjs) is joined the same way. An item whose SIGNED basis binds a prompt record carries it
+// (`prompt: {path, digest, verified}`); when the record is missing or is not the text whose digest the owner signed, the
+// item is BLOCKED (PROMPT_RECORD_MISMATCH) for as long as that is so, and nothing is planned from changed text. A prompt
+// record with no signed entry, or that its item's signed basis does not bind, is a `prompt_candidates` row: recorded,
+// reported, never executed.
+//
 // Inputs: repo, statusRoot, workLedger (openWorkLedger), issues (a snapshot array {number, title, body, state,
-// labels}) or null, bundlesDir or null. Output: {items: [{item, status, history, ticket, issues, runs, gate,
-// stages}], candidates, orphans, duplicates, counts}. Pure apart from reading those files.
+// labels}) or null, bundlesDir or null. Output: {items: [{item, status, history, ticket, prompt, issues, runs, gate,
+// stages}], candidates, prompt_candidates, orphans, duplicates, counts}. Pure apart from reading those files.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {openStatusLedger, checkEvidenceLedgers} from '../../packages/ledger/status.mjs';
 import {readTicket} from '../../pantheon/src/board/operate.mjs';
 import {buildDossier, makeRetriever, admitFile} from './context.mjs';
-import {earliestGate, completionEvidence, attemptInputs} from './gates.mjs';
+import {earliestGate, completionEvidence, attemptInputs, requirementOf} from './gates.mjs';
+import {researchOf} from './research-view.mjs';
+import {promptBinding, promptRequirement, promptRecords} from './prompt-intake.mjs';
 import {sourcesDigest, bundlesOf} from './evidence-recovery.mjs';
 import {STAGES, workKey} from './work-ledger.mjs';
+import {LANE_ITEM, laneSwitch, roundsOf, roundRow, isRound} from './self-repair.mjs';
 
 export const MARKER = /<!--\s*ophanim:item=([a-z0-9][a-z0-9.-]{0,63})\s*-->/;
 
@@ -97,9 +112,21 @@ export function ticketGiven(rec) {
 
 // `capacity(stage)` (optional): the reviewer-pool signature of the stage executors (stages.mjs), passed to the gate
 // so a capacity-pending stage is dispatched again when the pool changed. A caller without executors leaves it out.
-export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesDir = null, now = Date.now(), capacity = null}) {
+// `graph` (optional; knowledge graphs, Slice D part 2, KD2-2, KD2-3, KD2-5): the graph loop's context
+// (graph-loop.mjs createGraphLoop().context). Prepared once per reconciliation: D1's reassessWork on each observation event
+// (recorded when the context writes) and its members mapped onto planValidity and validationEvidence; each item's
+// graph-derived gate input; the waits a prerequisite creates (`graph_depends_on`, for dependencyOrder); and the
+// discoveries, which become intake CANDIDATES only (`graph.candidates`, recorded unsigned, never executed). Without it
+// the reconciliation is exactly as before.
+export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesDir = null, now = Date.now(), capacity = null, graph = null}) {
   const {board, byItem} = statusHistory(statusRoot);
+  const G = graph ? graph.prepare({items: board.items, byItem, stagesOf: i => (workLedger ? (i === undefined ? workLedger.stages() : workLedger.stages(i)) : [])}) : null;
   const latest = new Map(board.items.map(i => [i.item, i]));
+  // The lane's switch and its open rounds (only while the switch is on); every round, open or closed, owns its ticket.
+  const lane = laneSwitch(board);
+  const allRounds = workLedger?.repairs ? roundsOf(workLedger) : [];
+  const rounds = lane.on ? allRounds.filter(r => !r.close) : [];
+  const roundIds = new Set(allRounds.map(r => r.item));
   const runs = retainedRuns(bundlesDir);
   const ticketsDir = path.join(repo, 'tickets');
   const ticketItems = fs.existsSync(ticketsDir) ? fs.readdirSync(ticketsDir).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)) : [];
@@ -132,7 +159,10 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
         const before = [];
         for (const x of workLedger ? workLedger.stages(item) : []) { if (x.hash === plan.hash) break; before.push(x); }
         const work = workLedger ? {root: workLedger.root, stages: i => (i === undefined ? workLedger.stages() : i === item ? before : workLedger.stages(i))} : null;
-        v = buildDossier({repo, statusRoot, item, work, issues, bundlesDir, ticketText: ticketGiven(plan)}).views;
+        // A plan made with the graph's views (stages.mjs, outputs.graph) is re-derived with the graph AS IT STOOD at the
+        // cursor the plan was made at; without the graph here those views are gone, and a citation of one is stale.
+        const at = G && Number.isInteger(plan.outputs?.graph?.cursor) ? G.at(plan.outputs.graph.cursor) : null;
+        v = buildDossier({repo, statusRoot, item, work, issues, bundlesDir, ticketText: ticketGiven(plan), ...(at ? {graph: at, learning: at} : {})}).views;
       } catch { v = null; }
       views.set(plan.hash, v);
     }
@@ -159,7 +189,12 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     if (checks?.checked !== 'structural') return `its evidence does not re-check as apply would: ${checks?.why ?? Object.entries(checks ?? {}).filter(([k, v]) => k !== 'checked' && !v).map(([k]) => k).join(', ')}`;
     return null;
   };
-  const items = board.items.map(s => {
+  const items = [...board.items, ...rounds.map(roundRow)].map(s => {
+    if (s.item === LANE_ITEM) {
+      return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length, ticket: null, issues: issueByItem.get(s.item) ?? [],
+        runs: [], stages: 0, gate: {item: s.item, state: s.state, entry: s.entry, gate: 'lane', lane: {on: lane.on, rounds_open: rounds.length},
+          reason: lane.on ? `the self-repair lane's switch is ON: ${rounds.length} round(s) open; the item itself is never dispatched` : lane.why}};
+    }
     const ticketFile = path.join(ticketsDir, `${s.item}.json`);
     const ticket = fs.existsSync(ticketFile) ? readTicket({repo, item: s.item}) : null;
     const stages = workLedger ? workLedger.stages(s.item) : [];
@@ -172,8 +207,9 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
     const recs = workLedger ? workLedger.recoveries(s.item).filter(r => r.status_entry === s.entry) : [];
     const recovery = recs.filter(r => r.sources === recoverySources).at(-1) ?? recs.at(-1) ?? null;
     let gate = earliestGate({item: s, history: byItem.get(s.item) ?? [s], depStatus: d => latest.get(d) ?? null, ticket, stages, activeClaim, bytesOf, versionOf, now,
-      recovery, recoverySources, capacity, outcomeRecheck,
+      recovery, recoverySources, capacity, outcomeRecheck, ...(G && !isRound(s.item) ? {graph: G.gateInput(s.item, stages)} : {}),
       reassessments: workLedger?.reassessments ? workLedger.reassessments(s.item) : [],
+      research: workLedger?.research ? (r => ({open: r.open, conclusions: r.conclusions}))(researchOf(workLedger, s.item)) : null,
       // Only for a plan waiting on evidence: what the evidence looks like now (context.mjs), so a change wakes it.
       evidenceStable: stages.filter(x => x.stage === 'plan').at(-1)?.blocker?.code === 'EVIDENCE_INSUFFICIENT'
         ? (() => { try { return buildDossier({repo, statusRoot, item: s.item, work: workLedger, issues, bundlesDir}).stable; } catch { return null; } })() : null});
@@ -195,14 +231,35 @@ export function reconcile({repo, statusRoot, workLedger, issues = null, bundlesD
           reason: what.slice(0, 600)};
       }
     }
+    // THE OWNER'S PROMPT, when the item's signed requirement binds one. Read and checked now, on every reconciliation:
+    // a record that is missing or is not the signed text blocks the item for as long as that is so (it is not a stage
+    // result, so restoring the record makes the item plannable again at once).
+    const requirement = requirementOf(byItem.get(s.item) ?? [s]);
+    const bound = promptBinding(requirement?.basis)?.item === s.item ? promptBinding(requirement.basis) : null;
+    const promptNow = bound ? promptRequirement({repo, requirement}) : null;
+    if (promptNow?.why && STAGES.includes(gate.gate)) {
+      const what = `PROMPT_RECORD_MISMATCH: ${promptNow.why}: the item's requirement is the prompt the owner signed, and it is not planned or built from other text`;
+      gate = {item: gate.item, state: gate.state, ...(gate.entry ? {entry: gate.entry} : {}), gate: 'blocked', stage: gate.gate, requirement: gate.requirement, stale: gate.stale ?? [],
+        routed: {gate: gate.gate, mode: gate.mode ?? null, reason: gate.reason ?? null, route: gate.route ?? null},
+        blocker: {code: 'PROMPT_RECORD_MISMATCH', what: what.slice(0, 600), role: 'decision-authority', resume_when: `${bound.record} is restored to the text the owner signed (${bound.sha256}), or the owner records a new status entry of the item`},
+        reason: what.slice(0, 600)};
+    }
     return {item: s.item, title: s.title, status: s.state, entry: s.entry, depends_on: s.depends_on ?? [], history: (byItem.get(s.item) ?? []).length,
       ticket: ticket ? (ticket.why ? {invalid: ticket.why} : {path: ticket.path, digest: ticket.digest}) : null,
-      issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate};
+      prompt: bound ? {path: bound.record, digest: bound.sha256, verified: !promptNow?.why, ...(promptNow?.why ? {why: promptNow.why} : {})} : null,
+      issues: issueByItem.get(s.item) ?? [], runs: runs.get(s.item) ?? [], stages: stages.length, gate,
+      // The items this one waits for because they implement a prerequisite it requires (KD2-2): dependencyOrder runs them first.
+      ...(G && !isRound(s.item) ? {graph_depends_on: G.dependsOn(s.item), claimed_paths: G.paths(s.item)} : {}), ...(isRound(s.item) ? {round: s.round} : {})};
   });
-  const orphans = ticketItems.filter(i => !latest.has(i)).map(i => ({ticket: `tickets/${i}.json`, why: 'a ticket for an item that is not on the status ledger'}));
+  const orphans = ticketItems.filter(i => !latest.has(i) && !roundIds.has(i)).map(i => ({ticket: `tickets/${i}.json`, why: 'a ticket for an item that is not on the status ledger'}));
+  // Prompt records nobody signed for, or that their item's signed basis does not bind: data, never work.
+  const boundTo = new Map(items.filter(i => i.prompt).map(i => [i.item, i.prompt.path]));
+  const prompt_candidates = promptRecords(repo).filter(r => boundTo.get(r.item) !== r.record).map(r => ({prompt: r.item, record: r.record, digest: r.prompt_sha256,
+    why: latest.has(r.item) ? 'a prompt record the item\'s signed status entry does not bind: not its requirement; never executed on its own'
+      : 'a prompt with no owner-signed status entry: an intake candidate for the owner to authorize; never executed on its own'}));
   const gateCounts = {};
   for (const i of items) gateCounts[i.gate.gate] = (gateCounts[i.gate.gate] ?? 0) + 1;
-  return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, orphans, duplicates,
-    counts: {items: items.length, issues: (issues ?? []).length, linked_issues: [...issueByItem.values()].flat().length, candidates: candidates.length,
+  return {at: new Date(now).toISOString(), ledger: {head: board.head, entries: board.entries}, items, candidates, prompt_candidates, orphans, duplicates, ...(G ? {graph: G.report()} : {}),
+    counts: {items: items.length, issues: (issues ?? []).length, linked_issues: [...issueByItem.values()].flat().length, candidates: candidates.length, prompt_candidates: prompt_candidates.length,
       tickets: ticketItems.length, orphans: orphans.length, items_with_runs: items.filter(i => i.runs.length).length, by_gate: gateCounts}};
 }

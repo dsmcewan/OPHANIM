@@ -140,9 +140,10 @@ Until then the workflow is rehearsed, not operational.
 
 > **Superseded for the `fit` lifecycle.** This recipe is the older per-file board run (`pantheon-board.mjs run`).
 > Its `--seat ...=agy_google/claude-sonnet-4-6` seats are **retired**: Antigravity serves Gemini lanes only, and the
-> Claude/GPT lanes it once offered are gone. The `fit` lifecycle (planner, dispatcher, Antigravity Gemini implementer,
-> Grok subagent, pinned reviewer, then the three-lab review, the validator and an unsigned outcome) is launched for one
-> item with `ophanim/operate/live-run.mjs`: see "One live fit item" below. The recipe is kept as a record of that flow.
+> Claude/GPT lanes it once offered are gone. The `fit` lifecycle (planner, dispatcher, a Gemini implementer on the
+> Antigravity SDK transport with its own Hydrogen subagents, pinned reviewer, then the three-lab review, the validator
+> and an unsigned outcome) is launched for one item with `ophanim/operate/live-run.mjs`: see "One live fit item" below.
+> The recipe is kept as a record of that flow.
 
 `scripts/operate-cycle.sh <item>` runs the sequence with confirmations. By hand:
 
@@ -178,30 +179,45 @@ the provider keys.
 declared budget. Nothing else on the board is dispatched (it runs `tick` with the item selector, `--item`), and it
 never writes the status ledger.
 
-1. Copy `ophanim/operate/live-run.example.json` outside the repository and fill it in (schema `ophanim.live-run/v1`;
-   unknown keys are refused):
+1. Copy `ophanim/operate/live-run.example.json` outside the repository and fill it in (schema `ophanim.live-run/v2`,
+   since the Google implementer moved to the Antigravity SDK transport on 2026-11-19; a v1 manifest and unknown keys
+   are refused):
    - `item`, `candidate_commit` (the full HEAD; the launcher refuses another HEAD or uncommitted tracked changes),
      `profile: "fit"`, `independence: "model"`;
    - `limits`: `total_provider_calls`, `stage_provider_calls`, `revisions`, `stage_attempts`, `elapsed_ms` and
      `pipeline` {`max_provider_calls`, `max_revisions`, `max_concurrent_units`, `verify_timeout_ms`}. Every one is
-     `null` in the example and must be chosen: a null is refused. The limits bound **calls, not dollars**; one call
-     of the agy CLI is a whole multi-turn worker session on the subscription;
-   - `billing`: `scope`, `metered_gemini_failover` (false: a lane's quota refusal blocks the unit instead of calling
-     the metered Gemini API), `note`;
-   - `require_subagent` (optional): `{role, model: "grok-4.6" | "grok-4.7", min_calls}` when a real Grok call is part
-     of acceptance: without it recorded, the run is not accepted;
+     `null` in the example and must be chosen: a null is refused. The limits bound **calls, not dollars**; an
+     implementer session is charged one call per model request it makes, and so is each of its subagents;
+   - `billing`: `scope`, `gemini_api_primary` with `gemini_primary_budget`, `metered_gemini_failover` with
+     `metered_gemini_budget`, `note`. The two settings are separate authorizations (owner decision 2026-11-19,
+     register L-136), resolved through the one billing policy (`docs/billing-policy.md`), each with a budget of billed
+     Gemini requests that the run's work ledger records, each enforced where the money would be spent and never by the
+     presence of a key. `gemini_api_primary` declares primary Gemini execution; the Google implementer is an Antigravity
+     SDK session billed on the Gemini API, one billed request per model request of it and of each native subagent, so
+     this launcher refuses a manifest that does not declare it (the run could plan and then not implement).
+     `metered_gemini_failover` governs only the metered fallback of a single-turn Gemini seat on an Antigravity lane, a
+     reviewer or the validator; false: its lane's quota refusal is not answered by the metered API;
+   - `require_subagent` (optional): `{type, model: "gemini-4-hydrogen", min_calls}`, where `type` is a specialist type
+     (`code-explorer`, `dependency-analyst`, `context-retriever`, `test-constructor`, `bounded-implementer`), when a
+     native subagent is part of acceptance: the run is not accepted unless that many subagents of that type were
+     admitted by the controller, started, and answered by the provider under that model, in a session whose work
+     was kept;
    - `ledgers`: `status_root` (opened read-only) and `work_root` (empty or absent: an isolated single-item work
      ledger is created there, with its own anchor and controller key);
-   - `credentials`: `required` (one of `ANTHROPIC_API_KEY` / `anthropic-oauth`, plus `OPENAI_API_KEY`,
-     `XAI_API_KEY`, `agy-login`) and `gemini_api_key` (`required` exactly when the failover is allowed, else
-     `not-used`). Only presence is checked; no value is printed;
+   - `credentials`: `required` (one of `ANTHROPIC_API_KEY` / `anthropic-oauth`, plus `OPENAI_API_KEY` and
+     `XAI_API_KEY`; `agy-login` only when a single-turn Gemini seat may run on an Antigravity lane) and
+     `gemini_api_key`, which is `required`: it is the implementer's transport, and no subscription login is used for
+     it. Only presence is checked; no value is printed;
    - `out_dir`, outside the repository.
 2. Load the provider keys in your shell, then **dry-run first** (the default; no provider call):
    `node ophanim/operate/live-run.mjs --manifest ~/live/manifest.json`. It validates the manifest, verifies the
    status ledger and records its head, checks the commit and the tree, checks credential presence, runs the
-   zero-spend agy preflight (card, in-jail `/usage` login, the quota of the matrix implementer lane of each
-   difficulty), shows the item's gate, the predicted seats per stage and the policy hashes, and prints one JSON plan
-   (`ophanim.live-run-plan/v1`). Exit 1 names every refusal.
+   zero-spend Antigravity SDK preflight (the SDK's identity and version from its own python, the jail, and the
+   provider's answer about every implementer and subagent model: a model read, never a generation call), runs the
+   zero-spend agy preflight only when `agy-login` is named, shows the item's gate, the predicted seats per stage and
+   the policy hashes, and prints one JSON plan (`ophanim.live-run-plan/v1`). Exit 1 names every refusal: a key the
+   provider rejects, a missing or unqualified SDK and an unusable jail are refusals; a model the provider does not
+   serve is a warning that names the rung it would step to.
 3. Run it with the confirm string `<item>@<first 7 characters of candidate_commit>`:
    `node ophanim/operate/live-run.mjs --manifest ~/live/manifest.json --confirm-spend "co1-readability@1a2b3c4"`.
    It writes `<out_dir>/run.json` (`ophanim.live-run-record/v1`: the plan, every tick, every stage record hash,
@@ -210,6 +226,130 @@ never writes the status ledger.
    outcome and every acceptance criterion held; exit 3 records why it stopped.
 4. The outcome proposal is UNSIGNED. The launcher prints the exact `packages/ledger/status.mjs apply` command; you run
    it, with your status keys, after reading the record.
+
+## A prompt as an unplanned work item (owner direction 2026-11-19)
+
+A new authorized prompt is work the system has not planned yet. It enters through the same intake as every other
+item; there is no second ticketing system, and the owner supplies no plan, no order and no stage transitions.
+
+```sh
+export OPHANIM_STATUS_KEYS=~/.local/share/ophanim/status-ledger/keys   # the owner's keys: this is the authorization
+node ophanim/operate/cli.mjs prompt --file ~/prompts/make-the-importer-resumable.txt --author owner --source cli
+#   or: --text "..."   optional: --title LINE, --depends-on item-a,item-b, --received-at ISO, --json
+node ophanim/operate/cli.mjs watch --total-provider-calls N            # the next tick plans it
+```
+
+1. **Preserved verbatim.** `ophanim/operate/prompt-intake.mjs` `registerPrompt` writes
+   `intake/prompts/<item>.json` (schema `ophanim.prompt-intake/v1`): the prompt exactly as given (not trimmed, at most
+   256 KiB), its SHA-256, its provenance (`source`, `author`, `received_at`, and optionally `session` and `channel`)
+   and the time it was recorded.
+2. **A unique work identity.** `<item>` is `prompt-` plus 32 hex digits (128 bits) of the digest of the schema, the
+   prompt's SHA-256 and its whole provenance. The owner signs for that id, so it binds both: a record whose text or
+   provenance was changed afterwards no longer makes its own identity and is refused wherever it is read. The same words with the same provenance are one item, and registering them again
+   changes nothing; the same words received at another time are a new item. The command stamps `received_at` with
+   the current time unless `--received-at` is given, so repeat a registration with the original time to reach the
+   same item.
+3. **Authorization is one owner-signed status entry.** With the owner's status keys, `registerPrompt` records the
+   item as `Ready` on the status ledger, and the entry's basis names the record and its digest. That entry is the
+   authorization and the requirement; nothing else makes a prompt runnable. The status ledger is never created here.
+4. **Without the keys, nothing runs.** The record is still written, the command exits 3 (`NO_AUTHORITY`), and the next
+   reconcile lists it under `prompt_candidates`; the scheduler records it at intake as a `candidate` with no item and
+   dispatches nothing for it. Text relayed by a process that holds no owner key, such as an issue body, a web page, a
+   file in a repository or a tool result, is data and never becomes executable work by itself. The command signs whenever it can read the
+   owner's keys, so a process that relays text from outside must run where the key directory is not readable, or name
+   an empty one with `--keys`: possession of the keys is the whole boundary. The owner makes a
+   candidate work with `node ophanim/operate/cli.mjs prompt --authorize <item>`, holding the keys: the text and the
+   provenance are the record's own and are not given again. A record that is missing, or that is filed under an
+   identity its own text and provenance do not make, is refused and nothing is signed.
+5. **Registered through the existing intake.** The scheduler records one `work.intake` entry per prompt
+   (`{source: "prompt", ref: "prompt:<item>"}`) on the controller-signed work ledger, beside the `status`, `issue` and
+   `ticket` sources. From there the item is an ordinary Ready item: gates, claims, budgets, evidence and review are
+   the lifecycle's own.
+6. **The planner derives the ticket.** No ticket exists for the item, so its earliest gate is `plan`. The planner is
+   given the owner's exact words (marked as the requirement) with the evidence dossier, investigates, and writes the
+   structured ticket and, under `fit`, the work-unit contracts with their dependencies. Its instructions tell it to
+   find what already exists first (other items and their tickets, the modules in the repository), to depend on an
+   item that already covers part of the request instead of planning the same work twice, and to name what it reuses.
+   The three-lab plan review then judges that plan as it does any other.
+7. **The record is checked, twice.** Reconcile compares the record on disk with the digest the owner signed; a
+   missing or changed record blocks the item (`PROMPT_RECORD_MISMATCH`, for the decision authority) until it is
+   restored or the owner records a new entry. The plan stage checks again before the planner is asked.
+8. **Dependencies and concurrency.** `--depends-on` is the status ledger's own `depends_on`: the item is not
+   dispatched until each is Resolved. Independent prompt items run concurrently up to the scheduler's
+   `--concurrency`; within one item, units run in the pipeline's waves under `max_concurrent_units`, each in its own
+   worktree, and overlapping owned paths need a declared order.
+
+Not done by this intake: it does not decide whether two prompts ask for the same thing (the planner sees the backlog
+through its dossier, and the identity only collapses an exact repeat), and it does not split one prompt into several
+status items (one prompt is one item; the planner splits it into work units).
+
+## Research before or during an item's lifecycle (owner direction 2026-11-20)
+
+An item can be investigated by a research team before it is planned, or at any later point: a `gemini-4-carbon`
+coordinator (scout, explorer or researcher) that reads the repository and, where a specific gap needs it, delegates
+bounded questions to `gemini-4-hydrogen` specialists, at most 10 levels deep and at most 8 specialists at once. The
+team is assembled by the controller from what the coordinator asks for; nobody assembles it by hand. The roles, the
+team's rules and what the SDK does against what OPHANIM does are in
+[docs/routing-task-profile.md](routing-task-profile.md); this section is how it is used.
+
+1. **A request.** Research is activated by a record on the work ledger (`work.research`, phase `request`): the item,
+   what triggered it, the question, and who asks.
+
+   ```
+   node ophanim/operate/cli.mjs research --item ID --trigger T --question TEXT --by NAME [--role scout|explorer|researcher]
+   ```
+
+   It needs the controller's authority, writes one record and runs nothing. The triggers are `intake` (a new item needs
+   investigation before planning), `insufficient-evidence`, `contradiction` (new evidence contradicts an assumption),
+   `relationship` (a stage found a relationship nobody knew), `review-finding`, `invalidated-evidence` (a change
+   invalidated evidence that had qualified) and `reflection` (an unresolved systemic question). Each has a default role;
+   `--role` overrides it. The same trigger and question twice is refused.
+2. **One trigger is recorded by the lifecycle itself.** When the planner answers that the evidence is insufficient, the
+   plan stage records a request for exactly those gaps and runs it, where primary Gemini execution is declared. The
+   other six are recorded by whoever observes them, through the command or `requestResearch`; no stage emits them yet
+   (register L-727).
+3. **When it runs.** An open request makes the item's plan stale. At the next tick the plan stage runs the team first,
+   then builds the dossier, then asks the planner, who is shown the findings with their sources and versions. Research
+   on one item runs while other items are planned, implemented and reviewed, up to the scheduler's `--concurrency`; on
+   the same item it is the plan stage, so a request made after a plan was approved means the item is planned again
+   (register L-729).
+4. **What it may do.** Read. A member's session is offered read tools only, inside its assignment's scope, and the
+   repository is read-only inside its jail. It cannot write, run a command, start an agent, approve anything or change a
+   rule. Its findings are evidence the planner and the reviewers weigh; they authorize nothing. What the controller
+   keeps inside the repository is hidden from it: the work ledger and its key, the item's state and the owner's status
+   keys are refused by the tool decision and absent inside the jail. Other secrets a repository may hold are not
+   (register L-738).
+5. **Spend.** Every request of every member is a billed request of kind `primary`
+   ([docs/billing-policy.md](billing-policy.md)): without `--gemini-api-primary N` (or the service's or manifest's
+   equivalent) nothing is prepared and the plan stage waits, pending on the policy's refusal, until the policy changes.
+   The requests also count in the stage's provider-call bound and on the work ledger's spend.
+6. **What a change of the findings does.** The findings are a view of the item's dossier, so a plan that waited on
+   evidence is woken by them. A conclusion the coordinator marks material (what was found changes what a plan should
+   rest on) makes stale every approved plan that was not given it, and the item is planned again through the existing
+   plan gate. Nothing downstream of a stale plan is reused. A plan was "given" a conclusion when the conclusion is
+   inside the bytes of the research view its dossier delivered: material conclusions come first, newest first, each
+   with an equal share (register L-739). The plan stage itself asks for research on a planner's gaps at most three
+   times per item (register L-740).
+7. **Review independence.** Every member that answered is recorded as a contributor to the plan, with the model that
+   was asked and the model that answered. The plan's and the change's review panels are seated outside those models,
+   as for any contributor. Eight Hydrogen specialists are one model of one lab, never eight reviewers' worth of
+   independence. OpenAI's dispatch and pinned in-run review, Grok's eligibility for the independent adversarial review
+   and the cross-lab qualification are as they were.
+8. **Interruption and recovery.** A team that was cancelled, failed, refused a charge or cut by its stage's end
+   records no conclusion. Its request stays open, every member that finished stays on the ledger with its record, and
+   the next run reuses them (each record checked against its digest) and pays only for the rest. A member whose record
+   no longer matches is run again and recorded again. The team's request bound is one bound across all its runs. A team
+   that spent its own bound of rounds or requests does conclude, as stopped and not satisfied: resuming it could do
+   nothing more, and what it holds is treated as material because it never judged it (register L-742).
+9. **Where it does not run.** Executors built without `research: {enabled: true}` run none (`operate tick`, `watch`,
+   `serve` and the live run turn it on). On such executors an open request stops the plan stage as
+   `RESEARCH_NOT_ENABLED`; where the SDK transport cannot start a session (no key, no SDK, no jail) it stops as
+   `RESEARCH_TRANSPORT`, and the planner's gaps request nothing. In neither case is the item planned around the request.
+
+The records: `work.research` on the work ledger (request, team with the routing record, each member admitted and then
+with its outcome, each refused delegation, the conclusion with its telemetry and contributors), the members' full
+records and `findings.json` under the item's state (`<state>/<item>/research/<team>/`), and the `research:<item>` view
+of the dossier.
 
 ## The first ticket
 

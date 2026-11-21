@@ -61,7 +61,11 @@
   "model_lab": {
     "claude-opus-4-6": "anthropic",
     "gemini-3.8-flash": "google",
-    "gemini-4-hydrogen": "google"
+    "gemini-4-hydrogen": "google",
+    "gemini-4-neon": "google"
+  },
+  "model_lab_basis": {
+    "gemini-4-neon": "owner direction 2026-11-19: the medium Google implementer on the Antigravity SDK transport (config/antigravity-sdk.json). A Gemini model named by the owner; neither models.json nor lanes.json declares it, so it is declared here: an implementer whose model does not resolve would leave no reviewer eligible."
   },
   "routes": [
     "agy_google"

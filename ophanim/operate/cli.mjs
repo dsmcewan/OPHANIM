@@ -6,6 +6,18 @@
 //       candidates (issues with no item marker), orphan tickets, duplicate issue markers, issues naming no ledger
 //       item, projection drift (issue open/closed against the item's state), and the counts. Read-only: the work
 //       ledger is verified, never created; the controller authority held here is reported.
+//   node ophanim/operate/cli.mjs prompt (--text TEXT | --file FILE) [--author NAME] [--source ID] [--received-at ISO] [--title LINE] [--depends-on a,b] [--keys DIR] [--json]
+//       Register one user prompt as an UNPLANNED WORK ITEM (prompt-intake.mjs). The text is kept verbatim with its
+//       provenance and a unique work identity (intake/prompts/<item>.json), and ONE owner-signed status entry (Ready)
+//       binds its digest: that entry is the authorization. No ticket, plan or order is supplied; the next tick/watch/
+//       serve plans it like any Ready item (the planner investigates and derives the ticket and the work units). The
+//       owner's status keys are --keys or OPHANIM_STATUS_KEYS (default <status ledger>/keys). WITHOUT them the prompt is
+//       recorded as an intake CANDIDATE and nothing is dispatched for it (exit 3, NO_AUTHORITY): text relayed by a
+//       process that holds no owner key is data, never work. No provider is called.
+//   node ophanim/operate/cli.mjs prompt --authorize ITEM [--title LINE] [--depends-on a,b] [--keys DIR] [--json]
+//       Authorize a prompt that is already recorded (a candidate), by the identity `prompt` printed for it. The text
+//       and the provenance are the record's own: neither is given again. It needs the owner's status keys like any
+//       registration; a record that is missing, or filed under an identity its own text does not make, is refused.
 //   node ophanim/operate/cli.mjs tick  [limits] [--item ID] [--issues FILE | --github] [--bundles DIR] [--holder ID] [--init] [--turn MODULE] [--clients MODULE] [--json]
 //   node ophanim/operate/cli.mjs watch [limits] [--item ID] [--interval S] [--once] [same as tick]
 //       Run the scheduler (scheduler.mjs) with the stage executors of ophanim/operate/stages.mjs `makeExecutors`
@@ -32,12 +44,26 @@
 //       Read-only: the evidence dossier a judging seat is given for the item (context.mjs), or one retrieval result.
 //       Works for any item, Resolved ones included; nothing is recorded, reopened or signed.
 //   node ophanim/operate/cli.mjs reassess --item ID
+//   node ophanim/operate/cli.mjs research --item ID --trigger T --question TEXT --by NAME [--role scout|explorer|researcher]
+//       Record a REQUEST for research on an item (operate/research.mjs; owner direction 2026-11-20). T is what triggered it:
+//       intake | insufficient-evidence | contradiction | relationship | review-finding | invalidated-evidence | reflection.
+//       It writes one work.research record with the controller key and runs nothing. An open request makes the item's plan
+//       stale: at the next tick the plan stage runs the research (read-only SDK sessions, under the declared limits and
+//       the Gemini billing policy) and plans on what it found.
 //       Reassess the item's recorded model-rule reviews under the current identity policy; record any disqualification
 //       on the work ledger (new evidence: the review's own ledger and the status ledger are not touched).
 //   node ophanim/operate/cli.mjs serve --config FILE [--max-ticks N]
 //       The execution service (service.mjs): watch under a validated config (declared provider-call cap, interval,
 //       issue source, seats), one instance per work ledger, status and log files under its state directory.
 //       Templates: ophanim/operate/service/ (systemd user unit, launchd agent, example config).
+//   node ophanim/operate/cli.mjs self-repair [--records DIR] [--base-ref REF] [--line REF] [--json]
+//       THE SELF-REPAIR LANE'S VIEW (self-repair.mjs; docs/self-repair.md), a DRY RUN: the lane's state (the owner's
+//       switch, the line, the open and closed rounds), what the next round would select, and what it would route to the
+//       owner. Detect and the selection only: no provider call, nothing written (no ledger entry, candidate or ref).
+//   node ophanim/operate/cli.mjs self-repair record --kind gate|stress|pentest --commit SHA --file FILE [--records DIR]
+//       Wrap one of OPHANIM's own machine records (check.mjs --json, stress.mjs --json, scripts/pentest/run.mjs's report)
+//       with the commit it ran on, into the lane's records directory (default status/operate/self-repair/records): Detect
+//       reads nothing else. Issue text is never a record.
 //   node ophanim/operate/cli.mjs report --out FILE [--issues FILE | --github] [--issues-label TEXT] [--bundles DIR]
 //       The backlog reconciliation as Markdown (FILE) and JSON (FILE with .json): every item by earliest unmet
 //       gate with its ticket, issues, runs, blocker, responsible role and resume condition, and the evidence gap
@@ -67,6 +93,7 @@ import {openWorkLedger, STAGES} from './work-ledger.mjs';
 import {reconcile, MARKER} from './reconcile.mjs';
 import {tick, watch, releaseInterrupted, DEFAULT_LIMITS} from './scheduler.mjs';
 import {readIssuesFile, fetchIssues} from './issues.mjs';
+import {registerPrompt, authorizePrompt} from './prompt-intake.mjs';
 import {billingFromFlags} from '../../pantheon/src/route/quota-failover.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -114,7 +141,7 @@ export function launcherStop({workRoot, proc = process, signals = ['SIGINT', 'SI
 const BOOLEAN = new Set(['json', 'github', 'once', 'init']);
 export function parseArgs(argv) {
   const [first, ...rest] = argv;
-  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, tick, watch, serve, context, reassess or report');
+  if (!first || first.startsWith('--')) usage('a verb is required: reconcile, prompt, tick, watch, serve, context, reassess, research, self-repair or report');
   const opts = {}, pos = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { pos.push(rest[i]); continue; }
@@ -239,6 +266,7 @@ export function reconcileText(v) {
     }
   }
   if (v.candidates.length) out.push('', '[intake candidates] recorded, never executed', ...v.candidates.map(c => `  #${c.number} (${c.state}) ${c.title}`));
+  if (v.prompt_candidates?.length) out.push('', '[prompt candidates] recorded, never executed', ...v.prompt_candidates.map(c => `  ${c.prompt} (${c.record}): ${c.why}`));
   if (v.orphans.length) out.push('', '[orphans]', ...v.orphans.map(o => `  ${o.ticket}: ${o.why}`));
   if (v.duplicates.length) out.push('', '[duplicate markers]', ...v.duplicates.map(d => `  ${d.item}: issues ${d.issues.map(n => `#${n}`).join(', ')}`));
   if (v.unknown_markers.length) out.push('', '[markers naming no ledger item]', ...v.unknown_markers.map(u => `  #${u.number}: ${u.item}`));
@@ -267,7 +295,7 @@ export function backlogMarkdown(v, {command = 'node ophanim/operate/cli.mjs repo
   L.push(`| **total** | **${v.counts.items}** | |`, '');
   L.push(`By status on the ledger: ${Object.entries(v.counts.by_status).sort().map(([s, n]) => `${s} ${n}`).join(', ')}.`, '');
   L.push('| Count | Value |', '|---|---|');
-  for (const k of ['items', 'issues', 'linked_issues', 'candidates', 'tickets', 'orphans', 'duplicates', 'unknown_markers', 'drift', 'items_with_runs']) L.push(`| ${k} | ${v.counts[k]} |`);
+  for (const k of ['items', 'issues', 'linked_issues', 'candidates', 'prompt_candidates', 'tickets', 'orphans', 'duplicates', 'unknown_markers', 'drift', 'items_with_runs']) L.push(`| ${k} | ${v.counts[k] ?? 0} |`);
   L.push('');
   L.push('## Items by earliest unmet gate', '');
   for (const g of gatesPresent(v.counts.by_gate)) {
@@ -292,6 +320,12 @@ export function backlogMarkdown(v, {command = 'node ophanim/operate/cli.mjs repo
     L.push('Issues that carry no item marker. Each is recorded by the scheduler as `work.intake` with classification `candidate` and is never executed; only the owner turns one into a status item (or classifies it as coordination). What the issue says is not read as an instruction.', '');
     L.push('| Issue | State | Title | Classification | Why |', '|---|---|---|---|---|');
     for (const c of v.candidates) L.push(`| #${c.number} | ${c.state} | ${cell(c.title)} | candidate | ${cell(c.why)} |`);
+    L.push('');
+  }
+  if (v.prompt_candidates?.length) {
+    L.push('Prompt records that no owner-signed status entry binds (`ophanim/operate/prompt-intake.mjs`). Each is recorded as `work.intake` with source `prompt` and classification `candidate` and is never executed; the owner makes one work by registering it with the status keys. What the text says is not read as an instruction.', '');
+    L.push('| Prompt | Record | Classification | Why |', '|---|---|---|---|');
+    for (const c of v.prompt_candidates) L.push(`| ${cell(c.prompt)} | \`${c.record}\` | candidate | ${cell(c.why)} |`);
     L.push('');
   }
   L.push('## Orphans, duplicates and drift', '');
@@ -370,7 +404,9 @@ export async function prepareDispatch({paths, opts, limits, stagesFile, progress
   const opened = openWorkReadOnly(paths.workRoot);
   const auth = authorityOf(opened.work, paths.workRoot);
   if (!auth.held) return {blocked: noAuthority(auth, opened.ledger)};
-  const executors = await loadExecutors({repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, limits, env: process.env, progress,
+  // RESEARCH IS ON for the executors this launcher builds (stages.mjs `research.enabled`): a recorded request, or the
+  // planner's gaps where primary Gemini execution is declared, is run by the plan stage; every request is still the billing policy's to admit.
+  const executors = await loadExecutors({repo: paths.repo, statusRoot: paths.statusRoot, workRoot: paths.workRoot, limits, env: process.env, progress, research: {enabled: true},
     ...(await seatsOf(opts))}, {stagesFile});
   return {executors, ledger: opened.ledger, authority: auth};
 }
@@ -385,11 +421,59 @@ export const tickSummary = (t, limits) => ({
   ...(limits.total_provider_calls === 0 ? {note: 'no --total-provider-calls declared: nothing that may call a provider was dispatched'} : {}),
 });
 
+/** The self-repair view as plain text (the `self-repair` verb). */
+export function selfRepairText(v) {
+  const out = [];
+  out.push(`self-repair lane: ${v.lane.on ? `ON (switch entry ${v.lane.entry})` : `DORMANT -- ${v.lane.why}`}`);
+  out.push(`line ${v.line.ref}: ${v.line.exists ? `head ${v.line.head}` : `not started (it starts from ${v.line.base_ref} when the first round opens)`}; commit under repair ${v.commit ?? 'none'}`);
+  out.push(`rounds: ${v.rounds.open.length} open, ${v.rounds.closed.length} closed; records: gate ${v.records.gate}, stress ${v.records.stress}, pentest ${v.records.pentest}, unreadable ${v.records.unreadable}`);
+  out.push(`detect: ${v.detect.defects} defect(s) (${Object.entries(v.detect.by_kind).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'})`);
+  for (const x of v.detect.ignored) out.push(`  ignored ${x.source}: ${x.why}`);
+  out.push('', v.next ? `NEXT ROUND WOULD SELECT: ${v.next.id} (${v.next.kind}) -- ${v.next.title}; site ${v.next.site.join(', ')}` : 'NEXT ROUND WOULD SELECT: nothing');
+  out.push(`queued behind it: ${v.queue.length}${v.queue.length ? ` (${v.queue.slice(0, 12).join(', ')}${v.queue.length > 12 ? ', ...' : ''})` : ''}`);
+  out.push('', `ROUTED TO THE OWNER (unsigned candidates, never selected): ${v.owner.length}`, ...v.owner.map(o => `  ${o.id} [${o.subject ?? '-'}]: ${o.why}`));
+  out.push('', `pending the owner's decision (the register): ${v.owner_decision.length}`, ...v.owner_decision.map(o => `  ${o.id}: ${o.why}`));
+  out.push('', `unlocated (no path of the tree named): ${v.unlocated.length}${v.unlocated.length ? ` (${v.unlocated.join(', ')})` : ''}`);
+  if (v.other.length) out.push('', 'other skips:', ...v.other.map(o => `  ${o.id}: ${o.why}`));
+  out.push('', `written: ${v.written}`);
+  return out.join('\n');
+}
+
 export async function main(argv = process.argv.slice(2), {log = console.log, err = console.error, env = process.env, fetchImpl, stagesFile, proc = process, exit, graceMs} = {}) {
   const stopOpts = {proc, err, ...(exit ? {exit} : {}), ...(graceMs !== undefined ? {graceMs} : {})};
   try {
-    const {verb, opts} = parseArgs(argv);
+    const {verb, opts, pos} = parseArgs(argv);
     const paths = pathsOf({opts, env});
+    if (verb === 'prompt') {
+      // Register one user prompt (the header; prompt-intake.mjs). No provider call, and no work ledger is needed: the
+      // scheduler records the intake when it next runs.
+      const keysFlag = opts.keys ?? env.OPHANIM_STATUS_KEYS ?? null;
+      const common = {repo: paths.repo, statusRoot: paths.statusRoot, keys: keysFlag ? path.resolve(keysFlag) : null, title: opts.title ?? null,
+        depends_on: opts['depends-on'] ? opts['depends-on'].split(',').map(x => x.trim()).filter(Boolean) : []};
+      let r;
+      if (opts.authorize !== undefined) {
+        // A recorded candidate, by its identity: its text and its provenance are the record's, never given again.
+        for (const k of ['text', 'file', 'author', 'source', 'received-at', 'session', 'channel']) {
+          if (opts[k] !== undefined) usage(`prompt --authorize ITEM takes the recorded prompt and its recorded provenance: --${k} is not given with it`);
+        }
+        r = authorizePrompt({...common, item: opts.authorize});
+      } else {
+        if ((opts.text === undefined) === (opts.file === undefined)) usage('prompt needs the text: --text TEXT or --file FILE (exactly one), or --authorize ITEM for a prompt already recorded');
+        const text = opts.text ?? fs.readFileSync(path.resolve(opts.file), 'utf8');
+        const author = opts.author ?? env.USER ?? env.LOGNAME;
+        if (!author) usage('prompt needs --author NAME (who submitted it)');
+        const provenance = {source: opts.source ?? 'cli', author, received_at: opts['received-at'] ?? new Date().toISOString(),
+          ...(opts.session ? {session: opts.session} : {}), ...(opts.channel ? {channel: opts.channel} : {})};
+        r = registerPrompt({...common, prompt: text, provenance});
+      }
+      // The receive time is part of a prompt's identity and this command stamps it, so registering the same words again
+      // is another item: a candidate is authorized by ITS identity.
+      const out = r.authorized ? {...r, next: 'the scheduler plans it: node ophanim/operate/cli.mjs tick (or watch, or serve)'}
+        : {...r, blocked: 'NO_AUTHORITY', next: `the owner authorizes this record with the status keys: node ophanim/operate/cli.mjs prompt --authorize ${r.item} (--keys DIR or OPHANIM_STATUS_KEYS); until then it is an intake candidate and nothing is dispatched for it`};
+      log(opts.json ? JSON.stringify(out, null, 2) : [`${out.item}: ${r.authorized ? 'registered as a Ready item (unplanned)' : 'recorded as an intake CANDIDATE (NO_AUTHORITY)'}`,
+        `  prompt  ${r.record} (${r.prompt_sha256}${r.created ? '' : '; already recorded'})`, ...(r.authorized ? [`  status  ${r.status_entry}`] : [`  why     ${r.why}`]), `  next    ${out.next}`].join('\n'));
+      return r.authorized ? 0 : 3;
+    }
     if (verb === 'reconcile' || verb === 'report') {
       if (verb === 'report' && !opts.out) usage('report needs --out FILE');
       const {issues, source} = await loadIssues(opts, {fetchImpl, env});
@@ -465,6 +549,45 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
         skipped: r.skipped.map(x => ({stage: x.stage, cycle: x.cycle, why: x.why}))}, null, 2));
       return 0;
     }
+    if (verb === 'self-repair') {
+      const sr = await import('./self-repair.mjs');
+      const stateDir = path.join(path.dirname(paths.workRoot), 'operate');
+      const records = opts.records ? path.resolve(opts.records) : sr.recordsDirOf(stateDir);
+      if (pos[0] === 'record') {
+        if (!opts.kind || !opts.commit || !opts.file) usage('self-repair record needs --kind gate|stress|pentest --commit SHA --file FILE');
+        const text = fs.readFileSync(path.resolve(opts.file), 'utf8');
+        const record = opts.kind === 'pentest' ? {report: text} : JSON.parse(text);
+        const f = sr.writeRecord({dir: records, kind: opts.kind, commit: opts.commit, record});
+        log(path.relative(process.cwd(), f));
+        return 0;
+      }
+      if (pos.length) usage(`self-repair takes no argument but "record" (got ${pos[0]})`);
+      const {openStatusLedger} = await import('../../packages/ledger/status.mjs');
+      const board = openStatusLedger({root: paths.statusRoot, create: false}).board();
+      const {work} = openWorkReadOnly(paths.workRoot);
+      const config = sr.laneConfig({...(opts['base-ref'] ? {base_ref: opts['base-ref']} : {}), ...(opts.line ? {line: opts.line} : {})});
+      const v = sr.laneView({repo: paths.repo, board, work, stateDir, config, records});
+      log(opts.json ? JSON.stringify(v, null, 2) : selfRepairText(v));
+      return 0;
+    }
+    if (verb === 'research') {
+      // Record a request for research (research.mjs). Nothing is run here: the plan stage runs it at the next tick.
+      const item = opts.item ?? usage('research needs --item ID');
+      if (!/^[a-z0-9][a-z0-9.-]{0,63}$/.test(item)) usage('--item names one status item id');
+      const trigger = opts.trigger ?? usage('research needs --trigger (what triggered it)');
+      const question = opts.question ?? usage('research needs --question TEXT');
+      const by = opts.by ?? usage('research needs --by NAME (who asks)');
+      const opened = openWorkReadOnly(paths.workRoot);
+      const auth = authorityOf(opened.work, paths.workRoot);
+      if (!auth.held) { log(JSON.stringify(noAuthority(auth, opened.ledger), null, 2)); return 3; }
+      const {requestResearch, researchOf} = await import('./research.mjs');
+      const work = openWorkLedger({root: paths.workRoot});
+      let request;
+      try { request = requestResearch({work, item, trigger, question, by, ...(opts.role !== undefined ? {role: opts.role} : {})}); }
+      catch (e) { if (['RESEARCH_TRIGGER', 'RESEARCH_ROLE', 'RESEARCH_QUESTION'].includes(e.code)) usage(e.message); throw e; }
+      log(JSON.stringify({item, request, trigger, open: researchOf(work, item).open.map(r => ({request: r.hash, trigger: r.trigger, by: r.by}))}, null, 2));
+      return 0;
+    }
     if (verb === 'serve') {
       // The execution service (service.mjs): watch, with a config, a single-instance lock, status and log files.
       if (!opts.config) usage('serve needs --config FILE (see ophanim/operate/service/service.example.json)');
@@ -481,7 +604,7 @@ export async function main(argv = process.argv.slice(2), {log = console.log, err
     }
     usage(`unknown verb: ${verb}`);
   } catch (e) {
-    err(e.usage ? `${e.message}\nusage: cli.mjs reconcile|tick|watch|report ... (see the header of ophanim/operate/cli.mjs)` : `refused: ${e.message}`);
+    err(e.usage ? `${e.message}\nusage: cli.mjs reconcile|prompt|tick|watch|report ... (see the header of ophanim/operate/cli.mjs)` : `refused: ${e.message}`);
     return e.usage ? 2 : 1;
   }
 }
