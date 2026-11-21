@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {capabilitySnapshot, extractionCounts, indexOfView, capabilityId, E, S, SOURCE_ORDER, DECLARED, STRUCTURAL} from '../src/capability/graph.mjs';
 import {decide} from '../src/capability/eligibility.mjs';
 import {seatTransport, ARGO_SEATS} from '../src/route/frontier.mjs';
+import {sdkModels, SDK_VENDOR} from '../src/antigravity/config.mjs';
 import {SEATING, INTAKE, modelOf} from '../src/role/seating.mjs';
 import {FIT_MATRIX, IMPLEMENTER_LADDERS, REVIEWER_ESCALATION} from '../src/route/fit-matrix.mjs';
 import {ROSTER} from '../src/team/roster.mjs';
@@ -31,7 +32,9 @@ test('extraction: every source projects its own registry, counted against the re
   assert.equal(c[S.roles].types.chair, Object.keys(ROSTER).length);
   // The executable capabilities, counted by the live selector's OWN transport rule (frontier.mjs seatTransport).
   const want = models.flatMap(m => (seatTransport(m.vendor, m.model) === 'agy' ? [`agy-cli/${m.vendor}/${m.model}`, `agy-sdk/${m.vendor}/${m.model}`] : [`${seatTransport(m.vendor, m.model)}/${m.vendor}/${m.model}`]))
-    .concat(lanes.map(l => `agy-cli/${REG.lanes.agy_cli[l].vendor}/${l}`)).sort();
+    .concat(lanes.map(l => `agy-cli/${REG.lanes.agy_cli[l].vendor}/${l}`))
+    // and the Antigravity SDK transport's models, as the live code lists them (antigravity/config.mjs; register KG-23).
+    .concat(sdkModels().map(m => `antigravity-sdk/${SDK_VENDOR}/${m}`)).sort();
   assert.deepEqual(IX.ofType('capability').map(n => tail(n.id)).sort(), want, 'every registry model and lane, served as the selector serves it');
   for (const l of lanes) assert.equal(seatTransport(REG.lanes.agy_cli[l].vendor, l), 'agy-cli', `${l} is served by its lane's transport`);
   const seatRows = new Set([...Object.entries(SEATING).flatMap(([r, rows]) => rows.map(x => `seating/${r}/${x.vendor}/${modelOf(x)}`)),
