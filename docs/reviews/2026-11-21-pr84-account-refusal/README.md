@@ -13,8 +13,8 @@ build is not a review, so nothing in this PR has been independently reviewed yet
 
 There is one assignment, and every lab of the panel reviews all of it, separately: xAI (`grok-4.7`), Google
 (`gemini-4-carbon`) and OpenAI (`gpt-6-astra`). The table names xAI because the runner's table takes one reviewer per
-row; the other two run the same assignment with `--reviewer`. Name the lab and the model that actually served your
-review in your findings.
+row. The other two run the same assignment with `--reviewer`. Report the lab and the requested model from the
+runner. Record the served model only if the transport attests to it. Otherwise report it as unknown.
 
 ## Ground rules
 
@@ -45,11 +45,13 @@ Then:
 - **Unresolved questions:** what you could not settle, and the evidence that would settle it.
 - **Blockers for merging:** the defects you would block merging this PR on, or `none`.
 
-Name your lab and model and the commit you reviewed.
+Include the reviewed commit in your findings.
 
 ## Running this review
 
-The owner runs it on their own machine, with one command, from a checkout that holds this directory:
+Use a Linux runner with the three authenticated subscription clients, working verification jails, and a checkout
+that contains this brief and the bound commit. A cloud runner can run the same command. Add `--dry-run` first
+to check this host’s bindings and subscription prerequisites. A completed panel requires live findings from all three labs.
 
 ```
 node pantheon/scripts/review-pr.mjs --binding docs/reviews/2026-11-21-pr84-account-refusal/binding.json \

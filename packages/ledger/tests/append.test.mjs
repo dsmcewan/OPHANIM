@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync, spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {Worker} from 'node:worker_threads';
 import {openLedger, createLedger, defineKinds, generateSigner, CHECKPOINT, AUTHORITY} from '../chain.mjs';
 
 const chainUrl = new URL('../chain.mjs', import.meta.url).href;
@@ -32,6 +34,41 @@ function withLedger(fn, opts = {}) {
 }
 const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const timed = fn => { const t = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - t) / 1e6; };
+
+test('a reader sees a complete signed append even when the writer has published only the first half', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-reader-'));
+  const file = path.join(dir, 'chain.jsonl');
+  const latch = new Int32Array(new SharedArrayBuffer(4));
+  const anchor = createLedger({dir, authority, operator, order: orderer});
+  const L = openLedger({dir, kinds, anchor});
+  const writer = new Worker(new URL('./fixtures/partial-append.mjs', import.meta.url), {
+    workerData: {dir, anchor, seat, orderer, latch},
+  });
+  const exited = once(writer, 'exit');
+  const releaseWriter = () => { Atomics.store(latch, 0, 1); Atomics.notify(latch, 0); };
+  try {
+    assert.deepEqual(await once(writer, 'message'), ['partial']);
+    // Hold the writer until read() has actually observed its incomplete tail twice. A single
+    // unconditional re-read cannot pass, and the interleaving is independent of CPU speed.
+    let partialReads = 0;
+    const readFile = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (name, ...args) => {
+      const bytes = readFile(name, ...args);
+      if (name === file && !bytes.toString().endsWith('\n') && ++partialReads === 2) releaseWriter();
+      return bytes;
+    });
+    assert.deepEqual(L.read().map(e => e.kind), ['genesis', 'measure']);
+    assert.deepEqual(await exited, [0]);
+    assert.equal(L.verify().ok, true);
+    // The same missing delimiter with no completing writer really is corruption.
+    fs.truncateSync(file, fs.statSync(file).size - 1);
+    assert.throws(() => L.read(), /torn append/);
+    assert.throws(() => measure(L, 2), /torn append/);
+  } finally {
+    releaseWriter();
+    try { await exited; } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+  }
+});
 
 test('SY5: append time for entry 1000 is within a small constant factor of entry 10', () => withLedger((L, dir, anchor) => {
   const around = {};
