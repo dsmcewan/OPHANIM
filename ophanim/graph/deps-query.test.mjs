@@ -109,6 +109,20 @@ test('THE AUDIT COMPARES EACH PINNED DIGEST with the sibling\'s own file at the 
   assert.deepEqual(pinFacts(withSibling), pinFacts(without));
 });
 
+test('THE AUDIT DOES NOT COMPARE A PIN with a sibling read at another commit: a checkout named at another ref is read as named, and the pin is said not checked', t => {
+  const home = tempRepo(t), sib = tempRepo(t), pinned = sib.commit(SIBLING_FILES, 'pinned');
+  const later = sib.commit({'lib/a.mjs': lines("import {b} from './b.mjs';", "export function a() { return b() + 1; }")}, 'later');
+  home.commit({...HOME_FILES, 'ophanim/governance.mjs': lines(`export const TELOS_COMMIT = '${pinned}';`, 'export const TELOS_PINS = Object.freeze({',
+    `  'lib/a.mjs': '${sha(SIBLING_FILES['lib/a.mjs'])}',`, '});',
+    "for (const [rel, sha] of Object.entries(TELOS_PINS)) if (rawHash(regular(path.join(telosRoot, rel))) !== sha) fail('Pinned TELOS source changed: ' + rel);")}, 'pins');
+  const g = dependencyGraph({repo: home.repo, ...OPTS, siblings: {telos: {repo: sib.repo, ref: later}}});
+  t.after(g.close);
+  assert.deepEqual([g.observed['sibling.telos.code'].version, g.pinned], [later, {}], 'a ref given for the checkout is read as given; nothing is pinned by it');
+  // lib/a.mjs at the later commit is not the pinned file: compared there, the pin would be reported broken.
+  assert.deepEqual(audit(g.graph.view()).pins, [{repository: 'telos', pinned_commit: pinned, pinned_in: 'ophanim/governance.mjs', read_at: later, checked: false, pinned: 1,
+    why: 'the sibling was read at another commit than the pinned one'}]);
+});
+
 test('A SUBJECT is named the way a person writes it: what Slice B2 names, and also a function, a sibling\'s file and a sibling\'s function', t => {
   const {v} = setup(t);
   assert.deepEqual(['app/main.mjs', 'app/main.mjs#run', 'npm:leftpad@1.0.4', 'package:leftpad', 'env:APP_HOME', 'node:fs', 'telos:lib/a.mjs', 'telos:lib/a.mjs#a', fileId('app/util.mjs')].map(s => subjectOf(v, s).id),

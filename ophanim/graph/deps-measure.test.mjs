@@ -6,7 +6,10 @@ import assert from 'node:assert/strict';
 import {dependencies, blastRadius, relevance, riskClass, classOf, assess, coverageOf, RISK} from './deps/measure.mjs';
 import {repoSource, fileId} from './extract/repo.mjs';
 import {openSystemsGraph} from './extract/index.mjs';
-import {tempRepo, T0} from './fixtures/repo.mjs';
+import {codeSource, codeOrigin, CODE_EXTRACTOR, sourceIdOf} from './deps/code.mjs';
+import {textSource, textOrigin, TEXT_EXTRACTOR, textSourceIdOf} from './deps/text.mjs';
+import {fileIdIn} from './deps/ids.mjs';
+import {tempRepo, T0, at} from './fixtures/repo.mjs';
 
 // hub.mjs is imported by twelve leaves; mid.mjs imports hub and is imported by three; a.mjs and b.mjs import each other.
 const FILES = {
@@ -82,4 +85,19 @@ test('RELEVANCE weighs a direct dependent at 3 and a check that verifies the nod
   const view = {seq: 1, subjects: () => [a, b, x, check], nodeIn: () => true,
     edgesOf: (n, {types}) => edges.filter(e => (e.from === n || e.to === n) && types.includes(e.type))};
   assert.deepEqual([relevance(view, a), relevance(view, b), relevance(view, x)], [1, 2 / 3, 0]);
+});
+
+test('A MENTION IS NOT FOLLOWED: a file that names another file in a string neither needs it nor counts among what depends on it', t => {
+  // names.mjs NAMES data/table.json in a string (a mention: the textual source); uses.mjs imports names.mjs (a dependency).
+  const {repo, commit} = tempRepo(t);
+  commit({'names.mjs': "export const table = 'data/table.json';\n", 'uses.mjs': "import {table} from './names.mjs';\nexport const used = table;\n", 'data/table.json': '[]\n'}, 'a mention');
+  const g = openSystemsGraph({sources: [codeSource({repo, name: 'argo'}), textSource({repo, name: 'argo'})],
+    extraOrigins: {[CODE_EXTRACTOR]: {...codeOrigin(['argo']), keys: ['graph-extractor']}, [TEXT_EXTRACTOR]: {...textOrigin(['argo']), keys: ['graph-extractor']}}});
+  t.after(g.close);
+  for (const [id, i] of [[sourceIdOf('argo'), 0], [textSourceIdOf('argo'), 1]]) { const o = g.graph.observe(id, {...g.by, observed_at: at(i)}); assert.equal(o.recorded, true, o.why); }
+  const v = g.graph.view(), F = p => fileIdIn('argo', p), table = F('data/table.json');
+  assert.deepEqual(v.edgesOf(F('names.mjs'), {mode: 'established', types: ['mentions']}).map(e => e.to), [table], 'the mention is in the graph, established');
+  assert.deepEqual(dependencies(v, F('uses.mjs')).nodes, [F('names.mjs')], 'what the importer needs: the file it imports, not the file that file names');
+  assert.deepEqual(blastRadius(v, table), {count: 0, nodes: []}, 'nothing depends on the file that is only named');
+  assert.equal(relevance(v, table), 0, 'a mention is no dependent: it adds nothing to how central the named file is');
 });

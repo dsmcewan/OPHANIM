@@ -41,6 +41,15 @@ test('A TRACKED PATH NAMED IN A STRING is a mention only when the string is exac
   assert.ok(facts.every(d => !d.type || d.type === 'mentions'), 'this source states mentions and nothing else');
 });
 
+test('A STRING THAT ONLY ENDS A TRACKED PATH is not a mention of that file: a path is matched exactly, never by its ending', t => {
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'app/client.mjs': lines("const short = 'data/table.json';", "const exact = 'app/data/table.json';", 'export const both = [short, exact];'), 'app/data/table.json': '[]\n'}, 'endings');
+  const facts = textFacts(repo, head, {name: 'argo'}), client = fileIdIn('argo', 'app/client.mjs');
+  assert.deepEqual(facts.filter(d => d.type === 'mentions').map(d => [d.from, d.to, d.attributes]),
+    [[client, fileIdIn('argo', 'app/data/table.json'), {basis: 'the file names this path in a string', lines: [2], as_written: 'app/data/table.json'}]],
+    'only the string that IS the path, from the root, names the file; data/table.json is no tracked path');
+});
+
 test('A PATH THE CODE READS is already stated as a read by the structural source: it is not repeated here as a mention', t => {
   const {repo, commit} = tempRepo(t);
   const head = commit({'a.mjs': lines("import fs from 'node:fs';", "const t = fs.readFileSync(new URL('./t.json', import.meta.url));", "const again = './t.json';", "export const x = [t, again];"), 't.json': '[]\n'}, 'read');

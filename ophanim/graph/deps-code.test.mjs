@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import {codeFacts, codeSource, codeOrigin, CODE_EXTRACTOR, sourceIdOf} from './deps/code.mjs';
 import {npmPackageId, unresolvedPackageId, builtinId, pythonModuleId, envId, executableId, fileIdIn, symbolIdIn, repositoryId} from './deps/ids.mjs';
 import {parserVersion} from './deps/parse.mjs';
+import {readTree} from './deps/read.mjs';
 import {repoSource, fileId, symbolId} from './extract/repo.mjs';
 import {sourcesOf, openSystemsGraph, observeAll} from './extract/index.mjs';
 import {impact} from './impact.mjs';
@@ -90,6 +91,20 @@ test('THIS REPOSITORY: an import that names no package and no file states no cal
   const head = commit({'package.json': json({name: 'alias'}), 'a.mjs': lines("import {x} from '#internal/x';", "import {y} from '/abs/y.mjs';", "export function f() { return x() + y(); }")}, 'aliases');
   const facts = codeFacts(repo, head);
   assert.deepEqual(facts.filter(d => d.from === symbolId('a.mjs', 'f')), []);
+});
+
+test('THIS REPOSITORY: a call whose definition is not found is counted unresolved, never matched by name to a function of another file', t => {
+  // f calls helper from a file the tree does not hold and other from a file that does not export it; b.mjs and c.mjs
+  // define functions of those names, which a resemblance by name would take as the callees.
+  const {repo, commit} = tempRepo(t);
+  const head = commit({'package.json': json({name: 'names'}),
+    'a.mjs': lines("import {helper} from './gone.mjs';", "import {other} from './b.mjs';", "export function f() { return helper() + other(); }"),
+    'b.mjs': lines("export function helper() { return 1; }"), 'c.mjs': lines("export function other() { return 2; }")}, 'names');
+  for (const name of ['ophanim', S]) {
+    const facts = codeFacts(repo, head, {name});
+    assert.deepEqual(facts.filter(d => d.type === 'depends-on' && d.from === symbolIdIn(name, 'a.mjs', 'f')), [], `${name}: no call is stated from f`);
+    assert.deepEqual([ent(facts, repositoryId(name)).attributes.counts.calls, ent(facts, repositoryId(name)).attributes.unresolved.calls], [0, 2], `${name}: both calls are counted as unresolved`);
+  }
 });
 
 test('THIS REPOSITORY, IN THE GRAPH: observed after Slice B2\'s sources, a call is established, and a change to a package reaches the function that calls into it', t => {
@@ -210,6 +225,19 @@ test('READ AT THE COMMIT, never the working tree, and the same commit gives the 
     assert.ok(!JSON.stringify(facts).includes('only-in-the-working-tree'), `${name}: an uncommitted import is not in the commit`);
     assert.deepEqual(codeFacts(repo, head, {name}), facts);
   }
+});
+
+test('READ ONCE PER COMMIT, AND ONLY A FEW COMMITS KEPT: a reading is reused while it is kept, and the oldest is let go once more than six commits have been read', t => {
+  const {repo, commit} = tempRepo(t), heads = [];
+  for (let i = 0; i < 7; i++) heads.push(commit({'a.mjs': `export const a = ${i};\n`}, `commit ${i}`));
+  const first = readTree(repo, heads[0]);
+  assert.equal(readTree(repo, heads[0]), first, 'read again while it is kept: the same reading, not a second one');
+  let last = null;
+  for (const h of heads) last = readTree(repo, h);   // seven commits read: one more than are kept
+  assert.equal(readTree(repo, heads[6]), last, 'the newest reading is still kept');
+  const again = readTree(repo, heads[0]);
+  assert.notEqual(again, first, 'the oldest reading was let go: no more than a few commits\' readings are kept in memory');
+  assert.deepEqual(again, first, 'read again from the commit, it is the same reading');
 });
 
 test('A SIBLING, IN THE GRAPH: its facts are established under their own source, and a change to a file it reads by path reaches the reader', t => {
