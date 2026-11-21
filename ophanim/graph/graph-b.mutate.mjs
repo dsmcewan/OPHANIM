@@ -71,6 +71,11 @@ export const MUTATIONS = [
   {id: 'B9', what: 'the graph op\'s traversal bounds are not clamped: a request takes the traversal ceilings', tests: [[CONTEXT_TEST, '^graph op: bounded in nodes']],
     edits: [one(CONTEXT, '  const C = GRAPH_RETRIEVAL.ceilings, pick = (v, d, c, lo = 1) => Math.min(Number.isInteger(v) && v >= lo ? v : d, c);',
       '  const C = {depth: 16, maxNodes: 10000, maxEdges: 50000}, pick = (v, d, c, lo = 1) => Math.min(Number.isInteger(v) && v >= lo ? v : d, c);')]},
+  // ---- the directive's demonstrations 6 and 12 at this level (the operational report: every cell decided) -------------
+  {id: 'B15', what: 'the graph op lists no CONFLICT line: a disagreement between two observations reads as settled', tests: [[CONTEXT_TEST, '^graph op: a contradictory pair']],
+    edits: [one(CONTEXT, "    ...(r.conflicts ?? []).map(x => `CONFLICT ${x.attribute}: ${JSON.stringify(x.values)}`),\n", '')]},
+  {id: 'B16', what: 'a ticket slot path the tree lacks gets an implements edge: a broken reference made an edge', tests: [[EXTRACT_TEST, '^extract: demonstration 12']],
+    edits: [one(REPO, "    if (slot && paths.has(slot)) drafts.push({type: 'implements', from: fileId(slot), to: ticketId(t.item),", "    if (slot) drafts.push({type: 'implements', from: fileId(slot), to: ticketId(t.item),")]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
