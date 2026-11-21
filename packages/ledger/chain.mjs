@@ -116,6 +116,8 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
   if (!dir || !path.isAbsolute(dir)) fail('an absolute ledger directory is required');
   if (typeof anchor !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(anchor)) fail('a pinned genesis hash (anchor) is required');
   const file = path.join(dir, 'chain.jsonl');
+  const lock = file + '.lock';
+  let holdsWriteLock = false;
   const objects = path.join(dir, 'objects');
   fs.mkdirSync(objects, {recursive: true});
   const objectPath = ref => path.join(objects, ref.slice('sha256:'.length) + '.json');
@@ -134,10 +136,29 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
     return H(value) === ref ? value : null;           // tampered object: refused, never repaired
   }
 
+  // An unlocked reader can catch a live append before its final newline. Read again even if the
+  // writer has already released its lock. Never discard an incomplete tail or repair the file.
+  function readAfterPartial() {
+    const deadline = Date.now() + lockTimeoutMs;
+    let delay = 1;
+    for (;;) {
+      const before = fileId();
+      const writing = !holdsWriteLock && fs.existsSync(lock) && !staleLock(lock, lockStaleMs);
+      const text = fs.readFileSync(file, 'utf8');
+      if (!text.length || text.endsWith('\n')) return text;
+      if (holdsWriteLock || (!writing && sameId(before, fileId())) || Date.now() >= deadline) {
+        fail('ledger ends mid-line (torn append)');
+      }
+      sleepSync(Math.min(delay, deadline - Date.now()));
+      delay = Math.min(2 * delay, 100);
+    }
+  }
+
   function read() {
     if (!fs.existsSync(file)) return [];
-    const lines = fs.readFileSync(file, 'utf8').split('\n');
-    if (lines.at(-1) !== '') fail('ledger ends mid-line (torn append)');
+    let text = fs.readFileSync(file, 'utf8');
+    if (text.length && !text.endsWith('\n')) text = readAfterPartial();
+    const lines = text.split('\n');
     return lines.slice(0, -1).map((line, i) => { try { return JSON.parse(line); } catch { return fail(`line ${i} is not JSON`); } });
   }
 
@@ -268,7 +289,6 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
   // `lockStaleMs` (independent review 2026-11-16, SY5: 200 immediate retries, and a crash under the lock
   // blocked every later append). A holder removes only its own lock.
   function locked(fn) {
-    const lock = file + '.lock';
     const token = JSON.stringify({pid: process.pid, host: LOCK_HOST, time: Date.now(), nonce: randomBytes(8).toString('hex')});
     const deadline = Date.now() + lockTimeoutMs;
     let fd = null, wait = 1;
@@ -286,8 +306,10 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
       sleepSync(Math.min(left, wait / 2 + Math.random() * wait));
       wait = Math.min(wait * 2, 100);
     }
+    holdsWriteLock = true;
     try { return fn(); }
     finally {
+      holdsWriteLock = false;
       fs.closeSync(fd);
       let held = null; try { held = fs.readFileSync(lock, 'utf8'); } catch {}
       if (held === token) fs.rmSync(lock, {force: true});
@@ -399,7 +421,17 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
       head = null;                                       // a failed or partial write leaves no cache behind
       const fd = fs.openSync(file, 'a');
       let id;
-      try { fs.writeSync(fd, lines.join('')); fs.fsyncSync(fd); id = fileId(fd); } finally { fs.closeSync(fd); }
+      try {
+        const bytes = Buffer.from(lines.join(''));
+        let offset = 0;
+        while (offset < bytes.length) {
+          const count = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+          if (count === 0) fail('ledger append wrote no bytes');
+          offset += count;
+        }
+        fs.fsyncSync(fd);
+        id = fileId(fd);
+      } finally { fs.closeSync(fd); }
       // Extend the head with what was just written: the entry was checked above, the checkpoint is ours.
       let auth = authority;
       for (const x of written) {
