@@ -640,6 +640,15 @@
           "ref": "kg/checkpoint fc02390; reader fixed on ophanim/knowledge-graphs",
           "detected_by": "the checkpoint agent, comparing the reader's count against the runner's own --check count (the same cross-check as the class's detector, ophanim/graph/extract.test.mjs), before its commit",
           "note": "an apostrophe in a section comment inside the checkpoint runner's MUTATIONS opened a string for the reader, so a bracket in a later edit string closed the table early: 16 of 20 mutations read. The agent reworded its comment (a workaround in the runner, not a fix); the coordinator made the reader blank comments before parsing, with a synthetic case that fails on the old reader, and every committed runner reads identically before and after. The brief's next step (extract.test.mjs in the budget of any brief that adds a runner) caught it before integration this time"
+        },
+        {
+          "observed_by": "mechanism",
+          "by_detector": true,
+          "corrected_by": "integrator",
+          "date": "2026-11-21",
+          "ref": "merge 73dc8d0 of PR #67's branch; reader fixed in 682460e",
+          "detected_by": "ophanim/graph/extract.test.mjs (the class's detector), run on the merged tree before the push",
+          "note": "the base's ophanim/operate/sdk-intake.mutate.mjs lists each mutation's tests as spreads of an object's lists (`[...T.gov, ...T.pipe]`); the reader read `...T` alone, so all 302 mutations had no deciding test and T2 had to run the runner in full. A spread now takes an object key, with a synthetic case that fails on the old reader; T2 then listed 46 of the 302 as touched by this branch. The same run found the history reader listing no path for a merge (now --cc), a sibling shape of the same reader family"
         }
       ],
       "detector": {
