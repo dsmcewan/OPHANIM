@@ -10,7 +10,8 @@
 //   node ophanim/public/github.mjs cycles [--ledger DIR] [--anchor A] [--out docs/cycles]
 //                                  (default ledger: PANTHEON_CYCLE_LEDGER, else <git common dir>/pantheon-cycles)
 //
-// Common: --status-ledger DIR (default status/ledger, or OPHANIM_STATUS_LEDGER), --owner-login LOGIN
+// Common: --status-ledger DIR (default status/ledger, or OPHANIM_STATUS_LEDGER), --work-ledger DIR (default
+// status/work, or OPHANIM_WORK_LEDGER: each issue's Work section, read-only; absent is said so), --owner-login LOGIN
 // (or OPHANIM_OWNER_LOGIN): the one real person who may be assigned, and only to decision-authority
 // items. Default: nobody is ever assigned.
 //
@@ -96,7 +97,7 @@ const sameSet = (a, b) => a.length === b.length && [...a].sort().join('\n') === 
  * marker and updated only where they differ; a second run over an unchanged ledger writes nothing.
  * Returns a summary of what was done.
  */
-export async function apply({record, repo, token, fetchImpl, ownerLogin = null, writePause = 1000, log = console.log}) {
+export async function apply({record, work = null, repo, token, fetchImpl, ownerLogin = null, writePause = 1000, log = console.log}) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) throw new Error('GITHUB_REPOSITORY (owner/name) is required to apply');
   const gh = restClient({token, fetchImpl, writePause, log});
   const R = `/repos/${repo}`;
@@ -104,7 +105,7 @@ export async function apply({record, repo, token, fetchImpl, ownerLogin = null, 
     issues: {created: [], updated: [], unchanged: [], duplicates: []}};
 
   // Labels: create the missing; update only those carrying the ownership prefix.
-  const desired = plan(record, {ownerLogin});
+  const desired = plan(record, {ownerLogin, work});
   const existing = new Map((await gh.paginate(`${R}/labels?per_page=100`)).map(l => [l.name, l]));
   for (const l of desired.labels) {
     const have = existing.get(l.name);
@@ -136,7 +137,7 @@ export async function apply({record, repo, token, fetchImpl, ownerLogin = null, 
   // Create what is missing, dependencies first, so most bodies link correctly at creation.
   for (const want of desired.issues) {
     if (owned.has(want.item)) continue;
-    const now = plan(record, {numbers, ownerLogin}).issues.find(x => x.item === want.item);
+    const now = plan(record, {numbers, ownerLogin, work}).issues.find(x => x.item === want.item);
     const {data} = await gh.request('POST', `${R}/issues`, {title: now.title, body: now.body, labels: now.labels,
       ...(now.assignees.length ? {assignees: now.assignees} : {})});
     owned.set(want.item,
@@ -146,7 +147,7 @@ export async function apply({record, repo, token, fetchImpl, ownerLogin = null, 
   }
 
   // Then bring every owned issue to the final plan (with every number known).
-  const final = plan(record, {numbers, ownerLogin});
+  const final = plan(record, {numbers, ownerLogin, work});
   for (const want of final.issues) {
     const have = owned.get(want.item);
     const haveLabels = (have.labels ?? []).map(l => (typeof l === 'string' ? l : l.name));
@@ -256,9 +257,17 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const statusRoot = path.resolve(opts['status-ledger'] ?? process.env.OPHANIM_STATUS_LEDGER ?? DEFAULT_ROOT);
   const ownerLogin = opts['owner-login'] ?? (process.env.OPHANIM_OWNER_LOGIN || null);
   const record = () => readStatusRecord({root: statusRoot});
+  const workRoot = path.resolve(opts['work-ledger'] ?? process.env.OPHANIM_WORK_LEDGER ?? path.join(REPO_ROOT, 'status', 'work'));
+  // The work ledger's view of every item (work.mjs), read-only; a work ledger that does not verify is said so.
+  const work = async () => {
+    const {readWorkRecord} = await import('./work.mjs');
+    const w = readWorkRecord({repo: REPO_ROOT, statusRoot, workRoot});
+    if (w.ledger.state === 'unverified') console.error(`warning: the work ledger did not verify (${w.ledger.why}); issues say so and show nothing from it`);
+    return w;
+  };
   try {
     if (verb === 'plan') {
-      const p = plan(record(), {ownerLogin});
+      const p = plan(record(), {ownerLogin, work: await work()});
       if (opts.out) {
         const out = path.resolve(opts.out);
         fs.mkdirSync(path.join(out, 'issues'), {recursive: true});
@@ -269,7 +278,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       }
       console.log(opts.json ? JSON.stringify(p, null, 2) : planSummary(p));
     } else if (verb === 'apply') {
-      const s = await apply({record: record(), repo: process.env.GITHUB_REPOSITORY, token: process.env.GITHUB_TOKEN,
+      const s = await apply({record: record(), work: await work(), repo: process.env.GITHUB_REPOSITORY, token: process.env.GITHUB_TOKEN,
         ownerLogin});
       console.log(JSON.stringify({labels: Object.fromEntries(Object.entries(s.labels).map(([k, v]) => [k, v.length])),
         issues: Object.fromEntries(Object.entries(s.issues).map(([k, v]) => [k, v.length])), writes: s.writes}));
@@ -301,7 +310,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         console.log(files.map(f => path.relative(process.cwd(), f)).join('\n'));
       } else {
         if (!opened)
-          throw Object.assign(new Error('pr-provenance needs --ledger DIR (a system or review-cycle ledger)'), {usage: true});
+          throw Object.assign(new Error('pr-provenance needs --ledger DIR (a system or review-cycle ledger)'),
+            {usage: true});
         const cycles = P.listCycles(opened.view).filter(c => !opts.scope || c.scope === opts.scope);
         const cycle = opts.cycle ?? cycles.at(-1)?.hash;
         if (!cycle) throw new Error('no cycle on this ledger');

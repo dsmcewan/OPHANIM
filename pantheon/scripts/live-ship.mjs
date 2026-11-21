@@ -19,7 +19,12 @@
 // and run, and the exit code is what the TESTS gate reads.
 //
 //   source ~/Projects/agentic-pipeline/sdk/keys-from-windows.sh
-//   node scripts/live-ship.mjs [--dir <path>]
+//   node scripts/live-ship.mjs [--dir <path>] [--gemini-api-primary N]
+//
+// THE GEMINI BILLING POLICY (register L-146; docs/billing-policy.md), OFF when absent: an agy_google seat here (a scout,
+// or a planner or implementer the seating falls through to) is the metered Gemini API, so it runs only with
+// --gemini-api-primary N, at most N billed requests counted from <dir>/gemini-billing.jsonl (written before each request).
+// A key authorizes nothing; a refused seat stops the run with the board and <dir>/gemini-billing-runs.jsonl kept.
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
@@ -29,6 +34,7 @@ import { readArtifact, writeArtifact } from "../src/board/artifact-files.mjs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { makeClient } from "../src/sdk/adapter.mjs";
+import { operatorGemini } from "../src/sdk/live.mjs";
 import { sdkTurn } from "../src/sdk/seat-sdk.mjs";
 import { openBoard } from "../src/board/index.mjs";
 import { publish, treeSlots } from "../src/board/dag.mjs";
@@ -45,6 +51,7 @@ import { modelId } from "../src/config/models.mjs";
 const argv = process.argv.slice(2);
 const flag = (n, d = null) => { const i = argv.indexOf(n); return i === -1 ? d : argv[i + 1]; };
 const root = flag("--dir") ?? join(homedir(), ".pantheon", "boards", `live-${Date.now()}`);
+const gemini = operatorGemini(argv, { script: "live-ship", runDir: () => root, make: v => makeClient(v, { OpenAI, GoogleGenAI, Anthropic }) });
 mkdirSync(root, { recursive: true });
 const worktree = join(root, "worktree");
 mkdirSync(worktree, { recursive: true });
@@ -66,13 +73,11 @@ const bar = s => console.log(`\n\x1b[1m${s}\x1b[0m`);
 const say = (k, v) => console.log(`  ${String(k).padEnd(13)} ${v}`);
 let failures = 0;
 const check = (ok, line) => { if (!ok) failures++; console.log(`  ${ok ? "\x1b[32mok  \x1b[0m" : "\x1b[31mFAIL\x1b[0m"}  ${line}`); };
-const clients = {};
-const clientFor = v => (clients[v] ??= makeClient(v, { OpenAI, GoogleGenAI, Anthropic }));
 
 /** One real turn on one real seat. Returns the text, or throws with the vendor's own words. */
 async function turn({ vendor, purpose, model, prompt }) {
   const t0 = Date.now();
-  const r = await sdkTurn({ vendor, purpose, cwd: worktree, prompt, model, client: clientFor(vendor), home });
+  const r = await sdkTurn({ vendor, purpose, cwd: worktree, prompt, model, client: gemini.clientFor(vendor, { model, purpose }), home });
   if (!r.ok) throw new Error(`${vendor}/${purpose}: ${r.why}`);
   const text = r.result.text ?? "";
   say("", `${vendor} · ${model} · ${((Date.now() - t0) / 1000).toFixed(1)}s · ${text.length} chars · id=${r.result.response_id?.slice(0, 18) ?? "(none)"}`);

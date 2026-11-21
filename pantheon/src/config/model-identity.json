@@ -1,0 +1,80 @@
+{
+  "note": "Rules for which model ids name the SAME model, and which lab made a model, for review independence (review/identity.mjs). `same_model` maps a name to the model it is: an effort or thinking variant, a lane or route name, or an alias. `model_lab` declares the lab of models that models.json and lanes.json do not themselves declare. `routes` are vendors that can serve models of several labs: the lab of a model reached through one is never taken from the route. `route_labs` lists the labs a route may be seated for. A cycle opened under pantheon.cycle/v3 carries the whole policy built from these files, so editing them never changes how a recorded cycle verifies.",
+  "same_model": {
+    "claude-opus-4-6-thinking": {
+      "model": "claude-opus-4-6",
+      "basis": "the agy lane name for claude-opus-4-6 with thinking enabled: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-3.8-flash-high": {
+      "model": "gemini-3.8-flash",
+      "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking; the API model is gemini-3.8-flash (config/lanes.json basis)"
+    },
+    "gemini-4-carbon-low": {
+      "model": "gemini-4-carbon",
+      "basis": "the Antigravity lane name for gemini-4-carbon at low thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-carbon-medium": {
+      "model": "gemini-4-carbon",
+      "basis": "the Antigravity lane name for gemini-4-carbon at medium thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-carbon-high": {
+      "model": "gemini-4-carbon",
+      "basis": "the Antigravity lane name for gemini-4-carbon at high thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-argon-low": {
+      "model": "gemini-4-argon",
+      "basis": "the Antigravity lane name for gemini-4-argon at low thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-argon-medium": {
+      "model": "gemini-4-argon",
+      "basis": "the Antigravity lane name for gemini-4-argon at medium thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-argon-high": {
+      "model": "gemini-4-argon",
+      "basis": "the Antigravity lane name for gemini-4-argon at high thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-hydrogen-low": {
+      "model": "gemini-4-hydrogen",
+      "basis": "the Antigravity lane name for gemini-4-hydrogen at low thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-hydrogen-medium": {
+      "model": "gemini-4-hydrogen",
+      "basis": "the Antigravity lane name for gemini-4-hydrogen at medium thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-hydrogen-high": {
+      "model": "gemini-4-hydrogen",
+      "basis": "the Antigravity lane name for gemini-4-hydrogen at high thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-4-hydrogen-xhigh": {
+      "model": "gemini-4-hydrogen",
+      "basis": "the Antigravity lane name for gemini-4-hydrogen at xhigh thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-3.8-flash-low": {
+      "model": "gemini-3.8-flash",
+      "basis": "the Antigravity lane name for gemini-3.8-flash at low thinking: an effort setting, not another model (config/lanes.json)"
+    },
+    "gemini-3.8-flash-medium": {
+      "model": "gemini-3.8-flash",
+      "basis": "the Antigravity lane name for gemini-3.8-flash at medium thinking: an effort setting, not another model (config/lanes.json)"
+    }
+  },
+  "model_lab": {
+    "claude-opus-4-6": "anthropic",
+    "gemini-3.8-flash": "google",
+    "gemini-4-hydrogen": "google",
+    "gemini-4-neon": "google"
+  },
+  "model_lab_basis": {
+    "gemini-4-neon": "owner direction 2026-11-19: the medium Google implementer on the Antigravity SDK transport (config/antigravity-sdk.json). A Gemini model named by the owner; neither models.json nor lanes.json declares it, so it is declared here: an implementer whose model does not resolve would leave no reviewer eligible."
+  },
+  "routes": [
+    "agy_google"
+  ],
+  "route_labs": {
+    "agy_google": [
+      "google"
+    ]
+  },
+  "route_labs_basis": "owner direction 2026-11-17: Antigravity serves Gemini models only. A seat on a route vendor is asked, and its answer admitted, only for a model of a listed lab. Contributors are still resolved by model, whatever route reached them.",
+  "orchestrators_note": "`gemini-pro-orchestrator` and `gemini-pro-orchestrator-argon` (Orchestrator (Carbon)/(Argon)) are NOT declared: the docs describe each as pairing two Gemini 4 models in one conversation (a planner model plus Gemini 4 Hydrogen), so one answer is two models' work and has no single identity. They are unresolved names and cannot be seated."
+}

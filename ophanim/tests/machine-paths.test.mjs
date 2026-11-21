@@ -16,6 +16,9 @@ const SKIP_DIRS = new Set(['.git', 'node_modules']);
 // cards under .claude/ and .agents/ are instructions a seat acts on, so they are scanned too.
 const SOURCE = /\.(mjs|cjs|js|ts|py|sh|json|ya?ml|toml)$/;
 const FIXTURE_USERS = new Set(['u', 'x', 'fixture']);
+// Recorded review runs (docs/reviews/<date>/findings-*/) are verbatim evidence of where a review ran,
+// covered by their own SHA256SUMS; like Markdown, they are history, not code a machine depends on.
+const RECORDED = /^docs\/reviews\/[^/]+\/findings-[^/]+\//;
 const HOME = /(?<![\w.-])\/home\/([A-Za-z0-9._-]+)/g;
 
 // The repository's own files: those git tracks (and not, say, an ignored agent worktree checked out
@@ -24,12 +27,13 @@ function* files(dir, rel = '') {
   let tracked = null;
   try { tracked = execFileSync('git', ['-C', root, 'ls-files', '-z'], {encoding: 'utf8'}).split('\0').filter(Boolean); } catch {}
   if (tracked) {
-    for (const r of tracked) if ((SOURCE.test(r) || /(^|\/)\.(claude|agents)\//.test(r)) && fs.existsSync(path.join(root, r))) yield r;
+    for (const r of tracked) if (!RECORDED.test(r) && (SOURCE.test(r) || /(^|\/)\.(claude|agents)\//.test(r)) && fs.existsSync(path.join(root, r))) yield r;
     return;
   }
   for (const d of fs.readdirSync(dir, {withFileTypes: true})) {
     if (SKIP_DIRS.has(d.name)) continue;
     const r2 = rel ? `${rel}/${d.name}` : d.name;
+    if (RECORDED.test(r2 + '/')) continue;
     if (d.isDirectory()) yield* files(path.join(dir, d.name), r2);
     else if (d.isFile() && (SOURCE.test(d.name) || /(^|\/)\.(claude|agents)\//.test(r2))) yield r2;
   }
@@ -55,5 +59,7 @@ test('WF4: the scan catches a home path and passes the synthetic fixtures', () =
   const user = ['col', 'chis'].join('');                // assembled, so this file stays clean itself
   assert.deepEqual(machinePaths(`const REPO = "/home/${user}/Projects/pantheon";`), [`/home/${user}`]);
   assert.deepEqual(machinePaths('cwd: "/home/x/my repo", home: "/home/u", p: "/home/fixture/a"'), []);
+  assert.ok(RECORDED.test('docs/reviews/2026-11-18-independent-review/findings-2-openai-09d490f/run-summary.json'));
+  assert.ok(!RECORDED.test('docs/reviews/2026-11-18-independent-review/HARNESS.md') && !RECORDED.test('pantheon/src/findings-x/a.mjs'));
   assert.deepEqual(machinePaths('url: "https://example.org/home/page"'), [], 'only a path that starts at /home');
 });

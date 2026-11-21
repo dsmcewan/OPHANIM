@@ -1,0 +1,13 @@
+{
+  "note": "A FIXTURE executable capability (knowledge graphs, Slice C2): the negative example of the property 'isolation is never claimed without code evidence' (graph.mjs bubbleComponent, Slice C1). The SDK seat was that example until its jail made its bubble hold; this fixture stands in its place. capability-graph.test.mjs adds it to a COPY of the real registries (its profile under profiles.fixture-unquoted, its serving rule appended); it is never part of the graph. Its sandbox claims to hold with a quote the code does not contain; its other components hold or do not apply on quotes the code does contain. `found` is a quote the code does contain, for the control: the same claim with it holds.",
+  "profile": {"runtime": "antigravity-sdk", "transport": "agy-sdk", "environment": "sdk-jail", "pool": "gemini-gateway", "tools": [],
+    "bubble": {
+      "sandbox": {"holds": true, "why": "claimed by the fixture, on a quote the code does not contain", "evidence": [{"file": "pantheon/src/agy/sandbox.mjs", "quote": "a bwrap jail around the fixture seat, quoted from nowhere"}]},
+      "credentials": {"holds": true, "why": "the fixture is given no credential", "evidence": [{"file": "pantheon/src/board/agy-cli.mjs", "quote": "export const AGY_SDK_CREDENTIALS = Object.freeze([]);"}]},
+      "tools": {"holds": "not-applicable", "why": "the fixture is given no tool", "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const NO_TOOLS = \"You have NO tools in this seat: nothing you write executes and you cannot read files. \" +"}]},
+      "lifetime": {"holds": true, "why": "the fixture's session is closed with its turn", "evidence": [{"file": "pantheon/src/antigravity/seat-session.mjs", "quote": "worth nothing once the session is closed"}]}
+    }},
+  "serving": {"profile": "fixture-unquoted", "select": "registry-agy-not-frontier", "why": "the fixture serves what the SDK profile serves",
+    "evidence": [{"file": "pantheon/src/board/run-item.mjs", "quote": "const SDK_MAX_MODEL_CALLS = 40;"}]},
+  "found": {"file": "pantheon/src/agy/sandbox.mjs", "quote": "THE WORKER'S CONTAINMENT: a bubblewrap (bwrap) mount namespace around the agy CLI process."}
+}

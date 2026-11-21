@@ -1,0 +1,31 @@
+{
+  "assignment": 1,
+  "lab": "Google",
+  "requested_model": "gemini-4-carbon",
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "status": "complete",
+  "stop_reason": "final answer",
+  "via": "api",
+  "transport": "api",
+  "started_at": "2026-11-19T00:29:22.539Z",
+  "ended_at": "2026-11-19T00:55:57.627Z",
+  "worktree_check": null,
+  "original_transcript_sha256": "491950658617e05a98249b1620e5c38f02d41d6799ce559df7e1eaafc01252d6",
+  "original_report_transcript_hash_verified": true,
+  "delivered_transcript_sha256": "491950658617e05a98249b1620e5c38f02d41d6799ce559df7e1eaafc01252d6",
+  "credential_prefix_redactions": 0,
+  "reproductions": [
+    {
+      "path": "reproductions/.review-tests/lifecycle-evidence-audit.test.mjs",
+      "original_path": ".review-tests/lifecycle-evidence-audit.test.mjs",
+      "truncated": false,
+      "sha256": "ebe26faa05ed83ed9241003c6fa022b5334922602359a9032de8c38423a0e367"
+    }
+  ],
+  "source_report": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-1/docs/reviews/2026-11-18-independent-review/findings-1-google.md",
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-1/docs/reviews/2026-11-18-independent-review/findings-1-google.transcript.json",
+  "served_model_note": "Provider identities are recorded in served_models",
+  "provider_served_models": [
+    "gemini-4-carbon"
+  ]
+}

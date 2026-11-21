@@ -7,14 +7,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {openStatusLedger, propose, proposalRefusal, proposalDigest, applyProposal, evidenceRefusal, renderBoard, EVIDENCE_SCHEMA} from '../status.mjs';
+import {openStatusLedger, propose, proposalRefusal, proposalDigest, applyProposal, evidenceRefusal, renderBoard, EVIDENCE_SCHEMA, EVIDENCE_SCHEMA_V1} from '../status.mjs';
 
 const h = c => 'sha256:' + c.repeat(64);
 const commit = 'a'.repeat(40);
 const evidence = (over = {}) => ({
   run: {ledger_anchor: h('1'), ledger_head: h('2'), run_json_digest: h('3'), shipped: true, gate_entry: h('4')},
   review: {cycle_ledger_anchor: h('1'), cycle: h('5'), close_entry: h('6'), outcome: 'verified',
-    reviewers: [{vendor: 'xai', model: 'grok-4.7', served_model: 'grok-4.7', lab: 'xai'}, {vendor: 'openai', model: 'gpt-6-sol', served_model: null, lab: 'openai'}]},
+    reviewers: [{vendor: 'xai', model: 'grok-4.7', served_model: 'grok-4.7', lab: 'xai'}, {vendor: 'openai', model: 'gpt-6-sol', served_model: null, lab: 'openai'},
+      {vendor: 'agy_google', model: 'gemini-3.5-pro', served_model: null, lab: 'google'}]},
   commit, tests: {cmd: 'npm test', exit: 0}, ticket: {path: 'tickets/k1.json', digest: h('7'), slice: 'all of it'}, ...over,
 });
 const to = (state = 'Resolved') => ({state, basis: 'shipped and reviewed', checked: '2026-11-18'});
@@ -51,15 +52,31 @@ test('a proposal is made against the latest status without any key, and is well 
   refuse(evidence({review: {...evidence().review, outcome: 'unverified'}}), /accept_unverified_reason/);
   assert.equal(proposalRefusal({...p, evidence: evidence({review: {...evidence().review, outcome: 'unverified'}}), accept_unverified_reason: 'owner accepts the deferred note'}), null);
   refuse(evidence({review: {...evidence().review, reviewers: [evidence().review.reviewers[0], evidence().review.reviewers[0]]}}), /share a lab/);
+  // Three independent labs (86ce18a review, defect 2): a smaller panel is never completion evidence.
+  refuse(evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 2)}}), /at least 3 reviewers on 3 distinct labs \(this one has 2\)/);
+  refuse(evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 1)}}), /at least 3 reviewers/);
+  // test-lint: allow truncated-sequence -- reviewers.slice(0, 1) builds the INPUT, a one-reviewer panel; proposalRefusal's whole result for that proposal is compared, to null
+  assert.equal(proposalRefusal({...p, to: to('Ready'), evidence: evidence({review: {...evidence().review, reviewers: evidence().review.reviewers.slice(0, 1)}})}), null,
+    'a slice that leaves the item Ready is not completion evidence');
   refuse(evidence({ticket: {path: '/abs/t.json', digest: h('7'), slice: 's'}}), /repository-relative/);
+  // Bound to the item (86ce18a review, defect 1): every proposal names this item's own ticket.
+  refuse(evidence({ticket: undefined}), /carries evidence.ticket: the ticket of "k1" \(tickets\/k1.json\)/);
+  refuse(evidence({ticket: {path: 'tickets/k2.json', digest: h('7'), slice: 's'}}), /not the ticket of "k1"/);
+  assert.match(proposalRefusal({...p, to: to('Ready'), evidence: evidence({ticket: undefined})}), /evidence.ticket/, 'any evidence-bearing proposal');
   assert.match(proposalRefusal({...p, to: {...to(), state: 'Done'}}), /to.state/);
   assert.match(proposalRefusal({...p, locations: {run_ledger: 'relative/dir'}}), /absolute/);
   // To a state other than Resolved, an open cycle is fine (a slice that leaves the item Ready).
   assert.equal(proposalRefusal({...p, to: to('Ready'), evidence: evidence({review: {...evidence().review, close_entry: null, outcome: null}})}), null);
 }));
 
+// 86ce18a review, defect 1: this test used to apply a change to RESOLVED with no cited ledger on the machine
+// (checked: not-available). Completion evidence must now be verifiable at apply, so that is refused (asserted
+// below), and the recording mechanics are shown on a change to Ready, which may still be not-available.
 test('apply records the status with evidence using keys it only reads; a stale proposal is refused', () => withLedger(({root, keys}) => {
-  const p = propose(openStatusLedger({root, create: false}).board(), {item: 'k1', to: to(), evidence: evidence()});
+  const resolved = propose(openStatusLedger({root, create: false}).board(), {item: 'k1', to: to(), evidence: evidence()});
+  assert.throws(() => applyProposal({root, proposal: resolved, keys}),
+    /a change to Resolved is applied only when its completion evidence is verifiable at apply: the run ledger, the review-cycle ledger, run.json, the ticket not available here/);
+  const p = propose(openStatusLedger({root, create: false}).board(), {item: 'k1', to: to('Ready'), evidence: evidence()});
   const before = fs.readdirSync(keys).map(f => [f, fs.readFileSync(path.join(keys, f), 'utf8')]);
   assert.throws(() => applyProposal({root, proposal: p}), /can be verified, not changed/, 'no keys under the ledger');
   assert.equal(fs.existsSync(path.join(root, 'keys')), false, 'a missing key directory is not created');
@@ -67,12 +84,12 @@ test('apply records the status with evidence using keys it only reads; a stale p
   assert.deepEqual(fs.readdirSync(keys).map(f => [f, fs.readFileSync(path.join(keys, f), 'utf8')]), before, 'keys only read');
   const item = r.board.items.find(i => i.item === 'k1');
   assert.equal(item.entry, r.entry);
-  assert.equal(item.state, 'Resolved');
+  assert.equal(item.state, 'Ready');
   assert.equal(item.owner_role, 'impl@build', 'carried from the previous status');
   assert.equal(item.evidence.schema, EVIDENCE_SCHEMA);
   assert.equal(item.evidence.proposal, proposalDigest(p));
   assert.equal(item.evidence.checked, 'not-available', 'no cited ledger was on this machine');
-  assert.match(renderBoard(r.board), /evidence: commit aaaaaaaaaaaa; tests exit 0; review cycle 555555555555 verified \(xai, openai\)/);
+  assert.match(renderBoard(r.board), /evidence: commit aaaaaaaaaaaa; tests exit 0; review cycle 555555555555 verified \(xai, openai, google\)/);
   assert.throws(() => applyProposal({root, proposal: p, keys}), /stale proposal/);
   // Reopened from disk, the evidence re-validates.
   assert.equal(openStatusLedger({root, create: false}).board().items[0].evidence.commit, commit);
@@ -88,6 +105,12 @@ test('the evidence field is optional, validated when present, and statuses witho
   assert.equal(evidenceRefusal({schema: EVIDENCE_SCHEMA, proposal: h('9'), checked: 'structural', ...evidence()}, 'Resolved'), null);
   assert.match(evidenceRefusal({schema: 'x'}, 'Ready'), /ophanim.status-evidence\/v1/);
   assert.match(evidenceRefusal({schema: EVIDENCE_SCHEMA, proposal: h('9'), checked: 'maybe', ...evidence()}, 'Ready'), /evidence.checked/);
+  // Versioned (86ce18a review, defect 1): a v1 entry, as recorded before, keeps v1's rules (a Resolved status checked
+  // nowhere, with no ticket, still verifies); v2, which apply writes from now on, names its ticket and was checked.
+  const {ticket: _t, ...noTicket} = evidence();
+  assert.equal(evidenceRefusal({schema: EVIDENCE_SCHEMA_V1, proposal: h('9'), checked: 'not-available', ...noTicket}, 'Resolved'), null);
+  assert.match(evidenceRefusal({schema: EVIDENCE_SCHEMA, proposal: h('9'), checked: 'not-available', ...evidence()}, 'Resolved'), /checked structurally/);
+  assert.match(evidenceRefusal({schema: EVIDENCE_SCHEMA, proposal: h('9'), checked: 'structural', ...noTicket}, 'Ready'), /names the item's ticket/);
   assert.throws(() => S.set({item: 'k2', title: 'X', state: 'Resolved', basis: 'b', checked: '2026-11-18',
     evidence: (({review, ...rest}) => ({schema: EVIDENCE_SCHEMA, proposal: h('9'), checked: 'structural', ...rest}))(evidence())}), /review-cycle close/);
   S.set({item: 'k2', title: 'X', state: 'Resolved', basis: 'b', checked: '2026-11-18'});

@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-19T01:37:29.347Z",
+  "commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "worktree": "/tmp/ophanim-review-U4Ctdv/worktree",
+  "normal_runner_withholding_applied": true,
+  "additionally_removed_empty_findings_directories": [
+    "docs/reviews/2026-11-18-independent-review/findings-3-xai-7997657",
+    "docs/reviews/2026-11-18-independent-review/findings-runs-7997657"
+  ],
+  "findings_paths_remaining_before_model_start": [],
+  "git_history_access_explicitly_prohibited": true,
+  "override_note_sha256": "f60a6c3bd1a53a7ef570f94c040bd1decb1ae35c0d36577758aec18e40330079"
+}

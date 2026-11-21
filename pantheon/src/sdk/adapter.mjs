@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { streamTurn } from "./stream.mjs";
+import { streamTurn, untilAborted } from "./stream.mjs";
 import { modelId } from "../config/models.mjs";
 import { defaultOutputFor } from "../config/tiers.mjs";
 import { SEAT_FACTS } from "../route/router.mjs";
@@ -236,8 +236,17 @@ const sentSettings = req => !req || typeof req !== "object" ? null : {
   max_output_tokens: req.max_output_tokens ?? req.max_tokens ?? req.config?.maxOutputTokens ?? null,
   effort: req.reasoning?.effort ?? req.output_config?.effort ?? req.config?.thinkingConfig?.thinkingLevel?.toLowerCase() ?? null,
 };
+// EVERY BILLED REQUEST IS ADMITTED (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+// finding 1.1). One turn can make several generation requests: Google's long-decode continuation hops (up to 16, each
+// billed), and an Anthropic compaction before the turn. By default the caller charged the turn's FIRST request and every
+// further one is passed to `seen.onRequest` BEFORE it is sent; with `seen.chargeFirst` (sendTurn's `chargeFirstRequest`,
+// self-audit round 3, assignment 3 (sealed bb1287a), L-301) the FIRST one is passed to it too, at the point of spend, so
+// a turn the seat layer refuses before any request is charged nothing. A throw there refuses the request (it is not
+// sent). Token counts (countTokens / inputTokens.count) are not generation requests and are not billed by the
+// providers: they are not charged here (L-604; docs/routing-task-profile.md, "What one provider call is").
 function observe(fn, seen) {
   return async (...args) => {
+    if (((seen.requests ?? 0) >= 1 || seen.chargeFirst === true) && typeof seen.onRequest === "function") await seen.onRequest({ request: (seen.requests ?? 0) + 1 });
     seen.requests = (seen.requests ?? 0) + 1;
     seen.sent = sentSettings(args[0]);
     const out = await fn(...args);
@@ -262,9 +271,11 @@ function observedClient(client, seen) {
 }
 
 export async function sendTurn(args) {
-  const seen = { model: null, sent: null, requests: 0 };
+  // `onRequest` (optional): called before every generation request after the first (observe, above), and before the first
+  // as well when `chargeFirstRequest` is true; a throw refuses it.
+  const seen = { model: null, sent: null, requests: 0, onRequest: typeof args.onRequest === "function" ? args.onRequest : null, chargeFirst: args.chargeFirstRequest === true };
   let result;
-  try { result = await sendTurnOn({ ...args, client: args.client ? observedClient(args.client, seen) : args.client }); }
+  try { const { onRequest, chargeFirstRequest, ...rest } = args; result = await sendTurnOn({ ...rest, client: args.client ? observedClient(args.client, seen) : args.client }); }
   catch (e) {
     // A failed request's evidence: what it carried and how many requests reached the SDK. Attached to
     // the error the caller already receives, never in place of it.
@@ -303,7 +314,11 @@ async function sendTurnOn({
   }
   // The direct path has no frontier client in front of it, so its context admission is done here, from
   // the cited capability facts, before any generation call.
-  const admit = req => admitDirect({ client, vendor, spec, req, signal });
+  // The stage's stop reaches the direct path's unary requests as well as its streams: each request carries it (SDK
+  // request options; Google config.abortSignal), an aborted signal sends nothing, and the turn rejects as soon as it
+  // fires (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 9).
+  const admit = async req => { signal?.throwIfAborted(); await admitDirect({ client, vendor, spec, req, signal }); signal?.throwIfAborted(); };
+  const opt = signal ? [{ signal }] : [];
 
   // Streaming is an OBSERVATION channel, not a second result format: streamTurn accumulates
   // into the same shape the non-streaming path returns, so the seat layer hashes one thing.
@@ -315,7 +330,7 @@ async function sendTurnOn({
     // given its own identity instead of overwriting the vendor's pane with another model's
     // output -- two models writing one pane is a display that lies about who said what.
     await admit(req);
-    const acc = await streamTurn({ client, surface: spec.surface, req, seat: label ?? vendor, onEvent });
+    const acc = await streamTurn({ client, surface: spec.surface, req, seat: label ?? vendor, onEvent, signal });
     if (mode === "replay") {
       // EVERY OUTPUT ITEM, on this path too. The unary Responses replay below keeps res.output so the
       // reasoning items (encrypted_content) survive to the next turn; this streaming branch rebuilt the
@@ -362,7 +377,7 @@ async function sendTurnOn({
     const items = [...(history ?? []), { role: "user", content: prompt }];
     const req = withEffort(spec.surface, model ?? spec.default_model, effort, buildRequest({ spec, vendor, model, prompt, history, extra, mode }));
     await admit(req);
-    const res = await client.responses.create(req);
+    const res = await untilAborted(client.responses.create(req, ...opt), signal);
     const n = { ...normalize(res, vendor, (history ?? []).length > 0), reasoning_context: reasoningContextReport(req.reasoning?.context, res) };
     const hasOutput = Array.isArray(res?.output) && res.output.length > 0;
     return {
@@ -386,16 +401,16 @@ async function sendTurnOn({
       ...extra,
     });
     await admit(req);
-    const res = await client.responses.create(req);
+    const res = await untilAborted(client.responses.create(req, ...opt), signal);
     return normalize(res, vendor, Boolean(previousResponseId));
   }
-  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort, admit });
+  return sendReplayTurn({ client, vendor, spec, model, prompt, history, extra, effort, admit, signal });
 }
 
 // Replay surfaces. `history` is the prior conversation in the vendor's own message shape; the
 // caller owns it and gets an updated copy back. Returning the new history rather than mutating
 // the input keeps a failed turn from corrupting the caller's record.
-async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort, admit }) {
+async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [], extra, effort, admit, signal }) {
   const resumed = history.length > 0;
   if (spec.surface === "genai") {
     const contents = [...history, { role: "user", parts: [{ text: prompt }] }];
@@ -403,7 +418,13 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
       model: model ?? spec.default_model, contents, ...extra,
     });
     await admit(req);
-    const res = await client.models.generateContent(req);
+    // NO HIDDEN BILLED REQUEST (register L-136, a sibling of L-301): the pinned @google/genai SDK continues a unary turn ON
+    // ITS OWN by default (config.automaticContinuation), sending further billed requests inside this ONE generateContent
+    // call, which neither the per-request charge nor the Gemini billing policy sees (observed: a CONTINUATION answer was
+    // followed by a second request past a spent budget). Off here, as the frontier path's own continuation loop does
+    // (packages/model-client wire.mjs); a CONTINUATION finish is then an incomplete turn, never an unadmitted request.
+    const sent = { ...req, config: { ...req.config, automaticContinuation: false, ...(signal ? { abortSignal: signal } : {}) } };
+    const res = await untilAborted(client.models.generateContent(sent), signal);
     const candidate = res?.candidates?.[0];
     const text = typeof res?.text === "string" ? res.text : collectGenaiText(res);
     const terminal = terminalState("genai", { finishReason: candidate?.finishReason ?? null, blocked: Boolean(res?.promptFeedback?.blockReason) });
@@ -426,7 +447,7 @@ async function sendReplayTurn({ client, vendor, spec, model, prompt, history = [
       ...extra,
     });
     await admit(req);
-    const res = await client.messages.create(req);
+    const res = await untilAborted(client.messages.create(req, ...(signal ? [{ signal }] : [])), signal);
     const text = (res?.content ?? []).filter(b => b?.type === "text").map(b => b.text).join("");
     const tools = [...new Set((res?.content ?? []).filter(b => b?.type === "tool_use").map(b => b.name))].sort();
     // A max_tokens stop is a truncated reply, not a complete exchange.

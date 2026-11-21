@@ -12,6 +12,13 @@ import { createBus, reduceSeats } from "./bus.mjs";
 import { originPolicy, json, badId } from "./http-safety.mjs";
 import { sdkTurn } from "../sdk/seat-sdk.mjs";
 import { ADAPTERS } from "../sdk/adapter.mjs";
+import { isGeminiBillingRefusal } from "../route/gemini-billing.mjs";
+
+// A refusal by the injected client factory's billing boundary (register L-148: bin/pantheon-view.mjs gates every Gemini
+// request through sdk/live.mjs operatorGemini): its code and the condition that would admit the request, for the pane
+// and for the client. Read off the refusal only; nothing in a request can supply or change either.
+const billingRefusal = err => (isGeminiBillingRefusal(err) || typeof err?.recovery === "string"
+  ? { code: err.code ?? err.billing?.code ?? null, recovery: err.recovery ?? err.billing?.recovery ?? null } : null);
 
 const PAGE = fileURLToPath(new URL("./app.html", import.meta.url));
 
@@ -48,7 +55,8 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
     if (running.has(key)) return { ok: false, why: `seat ${key} is already running a turn` };
     running.add(key);
     try {
-      const client = makeClientFor(vendor);
+      // The factory is the provider-call boundary: it is told which model and seat the turn is for, never the request.
+      const client = makeClientFor(vendor, { model: model ?? ADAPTERS[vendor]?.default_model ?? null, purpose, label: label ?? null });
       const r = await sdkTurn({
         vendor, purpose, cwd, prompt, model, client, home, label, reseatModel: reseat === true,
         onEvent: e => bus.publish(e),
@@ -63,9 +71,10 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
       return r;
     } catch (err) {
       // The view must show a failure, not just stop updating. A pane frozen mid-stream is
-      // indistinguishable from a slow model.
-      bus.publish({ seat: label ?? vendor, type: "error", at: Date.now(), text: String(err?.message ?? err).slice(0, 300) });
-      return { ok: false, why: String(err?.message ?? err) };
+      // indistinguishable from a slow model. A billing refusal says why and what would admit it.
+      const refusal = billingRefusal(err);
+      bus.publish({ seat: label ?? vendor, type: "error", at: Date.now(), text: String(err?.message ?? err).slice(0, 300), ...(refusal ?? {}) });
+      return { ok: false, why: String(err?.message ?? err), ...(refusal ?? {}) };
     } finally {
       running.delete(key);
     }
@@ -224,6 +233,7 @@ export function createViewServer({ makeClientFor, home, cwd = process.cwd(), boa
           ok: results[i].status === "fulfilled" && results[i].value?.ok === true,
           why: results[i].status === "rejected" ? String(results[i].reason) : (results[i].value?.why ?? null),
           code: results[i].status === "fulfilled" ? (results[i].value?.code ?? null) : null,
+          ...(results[i].status === "fulfilled" && results[i].value?.recovery ? { recovery: results[i].value.recovery } : {}),
           model_gen: results[i].status === "fulfilled" ? (results[i].value?.seat?.model_gen ?? null) : null,
           // For a refused switch: which model holds the conversation, and which one was asked for, so the
           // operator approving a reseat sees what they approve.

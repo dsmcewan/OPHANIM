@@ -1,0 +1,34 @@
+You are an independent reviewer. Another engineer wrote a change; your job is to find where it does not do what its requirements say, by reading the code and by running reproductions. You have not been given the author's conclusions on purpose. Be adversarial and concrete; do not praise.
+
+## What to review
+Repository: /home/user/OPHANIM-sdk (git). The change under review is the diff `ea858a6..af23623`. Review the FINAL state at af23623. Your slice is RESEARCH IN THE LIFECYCLE, in `ophanim/operate/` (another reviewer covers the team controller in pantheon/src/antigravity/research.mjs and the session; others cover the billing gateway and checkpoints):
+- `ophanim/operate/research.mjs` (requestResearch, runResearch: ledger records, billing of each request, evidence files, temporary control directories, transport refusal)
+- `ophanim/operate/work-ledger.mjs`: the `work.research` kind (validate and rederive), `recordResearch`, `openResearchRequests`
+- `ophanim/operate/stages.mjs`: search for `research` (RES, researchReady, researchOnGaps, researchBefore, researchRows; stops RESEARCH_NOT_ENABLED and RESEARCH_TRANSPORT; how research members become contributions and affect who may review the plan)
+- `ophanim/operate/gates.mjs` (an open request or an unseen material conclusion makes a plan stale), `context.mjs` and `research-view.mjs` (the research view of the dossier), `reconcile.mjs`, `cli.mjs` (verb `research`), `live-run.mjs`
+- tests: `ophanim/operate/research.test.mjs`, `research-lifecycle.test.mjs`, the research assertions in `cli.test.mjs` and `reliability-r2-a3-rest.test.mjs`
+See the diff with: `git -C /home/user/OPHANIM-sdk diff ea858a6 af23623 -- <path>`.
+
+## The owner's requirements for this capability (verbatim points)
+Scout, explorer and researcher run on `gemini-4-carbon` through the Antigravity SDK on the Gemini API (no CLI, no OAuth). Maximum delegation depth 10; at most 8 concurrently active Hydrogen agents. Every billed request passes the centralized charge-before-send boundary. Research is read-only. Research activates on triggers: intake, insufficient evidence, contradiction, a newly found relationship, a review finding, invalidated evidence, reflection. "Do not build a second orchestration framework." "Do not weaken existing invariants." "Do not simulate success."
+To be demonstrated: (2) research can activate before a structured plan exists; (7) shared request budgets hold under concurrent and nested execution; (8) source identity, findings and lineage survive every delegation boundary; (9) cancellation and interruption preserve recoverable work; (10) independent review eligibility remains correct (a model or lab that contributed research must not review the plan built on it); (11) research ends when its objective is met.
+Existing invariants that must hold: the status ledger is the only authority for what work is authorized; the work ledger is written only with the controller key and every entry re-derives; a stage acts only under an unexpired claim (lease fence); provider calls are charged against the stage's budget before they are made; the Gemini billing policy (`pantheon/src/route/gemini-billing.mjs`) admits each billed Gemini request and its usage row is persisted before the request is sent; with nothing declared, nothing that bills Gemini runs.
+
+## What to look for
+A research request or record that can be written twice, out of order, for the wrong item, or by something other than the controller. A level-11 node or a parentless specialist accepted by the ledger. A request billed with no stage charge or no billing row, or a session started after a refused charge. A stopped or failed team that leaves a conclusion, or a resumed team that pays again for finished members or trusts a tampered evidence file. A plan that stays valid although research changed what it rests on; or a plan made stale forever. A research contributor that can end up on the panel reviewing the plan (check both `independence: 'model'` and `'lab'` if you can). Research that runs when the launcher did not enable it, or silently does nothing when it was required. Control directories or evidence left inside the repository being read. Tests that would still pass if the property they name were removed (say which line you changed and what you observed). Statements in comments or docs that the code does not do.
+
+## How to work
+- Do NOT modify /home/user/OPHANIM-sdk or /home/user/OPHANIM, do not commit, push, or run any `*.mutate.mjs` file there. Make your own scratch checkout: `S=/tmp/claude-0/-home-user-OPHANIM/0c68b45d-d13a-54b8-88c4-e615fa8b38a0/scratchpad/review-2 && git -C /home/user/OPHANIM-sdk worktree add --detach $S af23623 && ln -s /home/user/OPHANIM-sdk/node_modules $S/node_modules && ln -s /home/user/OPHANIM-sdk/pantheon/node_modules $S/pantheon/node_modules`. Write repro scripts and edits only there.
+- Every command: `export PATH=/opt/node24/bin:$PATH OPHANIM_TELOS_ROOT=/root/.local/share/ophanim/telos`. Run a test file with `timeout -k 2 400 node --test --test-timeout=120000 <file> > out.txt 2>&1` and read the summary lines; never run the whole suite, only targeted files. The test helpers in `ophanim/operate/test-fixtures.mjs` and `pantheon/tests/fixtures/` build a temporary repository with real ledgers and scripted providers; reuse them in your own scripts.
+- Never call a real provider: no request to generativelanguage.googleapis.com, api.openai.com or api.x.ai, and never print an environment variable's value or any credential.
+- Do NOT read `docs/execution/research-team-report.md`, any pull request text, or `docs/OPEN-LIMITATIONS.md` before you have formed your findings. `docs/operating-workflow.md`, `docs/context-and-evidence.md` and `docs/billing-policy.md` are the author's claims: test them against the code. At the very end you may grep `docs/OPEN-LIMITATIONS.md` for entries L-725 to L-736 only to label a finding "already recorded as L-nnn".
+- To check whether a test really decides a property, edit the source line in YOUR scratch checkout, run that test file, record the result, and revert.
+- `ophanim/operate/stages.mjs` is about 2,000 lines: grep, do not read it whole.
+- Budget: about 40 tool calls. Depth over breadth: three verified findings beat ten guesses.
+
+## What to return
+A report of at most 900 words:
+1. Findings, most severe first. For each: a one-line statement; severity (REQUIREMENT VIOLATED / DEFECT / CLAIM WITH NO DECIDING TEST / DOC OR COMMENT MISMATCH); file:line; the reproduction you ran and what you observed, or "read only, not reproduced"; whether it is already recorded as a limitation.
+2. What you checked and found sound, with how you checked (one line each).
+3. What you could not check, and why.
+Do not soften a finding and do not invent one: if you found nothing in an area, say so.

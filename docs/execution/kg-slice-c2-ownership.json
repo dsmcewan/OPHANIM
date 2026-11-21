@@ -1,0 +1,76 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "af0dc3012688703ccac0f6de31836822a3279eae",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "package.json",
+    "package-lock.json"
+  ],
+  "wave": "KG Slice C2",
+  "base_commit": "f2881f0",
+  "authorization": "owner directive 2026-11-20 and the owner's Slice C decision of 2026-11-20 (\"Yes, bubble per seat\"); register L-155 decided by the owner",
+  "dependencies": [
+    "runs concurrently with the replay checkpoint (packages/graph/**, ophanim/graph/extract/index.mjs, docs/knowledge-graph/checkpoint.md); disjoint",
+    "region limits written from the brief's decisions KS1-KS5; API-seat teardown, the review runner's toolbox profile and the capability ledger input are NOT this slice's"
+  ],
+  "subwaves": {
+    "KGC2": {
+      "agent-kg-slice-c2": {
+        "branch": "kg/slice-c2",
+        "base_commit": "f2881f0",
+        "findings": [
+          "knowledge-graph Slice C2 (the SDK seat's bubble, L-155; the agy transport on each attempt, KG-6)"
+        ],
+        "files": [
+          "pantheon/src/agy/sandbox.mjs",
+          "pantheon/src/board/run-item.mjs",
+          "pantheon/bin/agy-seat.mjs",
+          "pantheon/scripts/agy-seat.py",
+          "pantheon/src/capability/runtimes.json",
+          "pantheon/src/capability/graph.mjs",
+          "pantheon/src/capability/metrics.mjs",
+          "pantheon/tests/agy-sdk-jail*.test.mjs",
+          "pantheon/tests/agy-sdk-jail.mutate.mjs",
+          "pantheon/tests/fixtures/agy-sdk-jail*",
+          "pantheon/tests/capability-*.test.mjs",
+          "pantheon/tests/capability.mutate.mjs",
+          "pantheon/tests/fixtures/capability-*",
+          "pantheon/tests/l150-billing.test.mjs",
+          "pantheon/tests/agy-seat-identity.test.mjs",
+          "scripts/test-gates/real-bwrap-suites.json",
+          "docs/knowledge-graph/slice-c2.md"
+        ],
+        "new_files": [
+          "pantheon/tests/agy-sdk-jail*.test.mjs",
+          "pantheon/tests/agy-sdk-jail.mutate.mjs",
+          "pantheon/tests/fixtures/agy-sdk-jail*",
+          "docs/knowledge-graph/slice-c2.md"
+        ],
+        "region_limits": {
+          "pantheon/src/agy/sandbox.mjs": "KS1: ONE builder for the SDK seat's jail, beside bwrapArgs; the CLI lanes' jail unchanged",
+          "pantheon/src/board/run-item.mjs": "KS1: the transport === 'sdk' branch spawns the seat inside the jail, fail closed, scratch removed on every path; KS4: the attempt's transport recorded as agy-cli or agy-sdk; nothing else",
+          "pantheon/bin/agy-seat.mjs": "KS1: the direct launch spawns the seat inside the same jail, fail closed",
+          "pantheon/scripts/agy-seat.py": "KS1: only what running inside the jail requires (paths, HOME); its tool policy and relay use unchanged",
+          "pantheon/src/capability/runtimes.json": "KS3: profiles.agy-sdk.bubble and its limitations; the retained egress recorded",
+          "pantheon/src/capability/graph.mjs": "KS3: only if the bubble's evidence needs it; C1's isolation rule unchanged",
+          "pantheon/src/capability/metrics.mjs": "KS4: map agy-cli and agy-sdk attempts; old agy records stay listed unmapped",
+          "pantheon/tests/capability-*.test.mjs": "KS3: the isolation-without-evidence property moved onto a fixture capability; the SDK seat's new bubble asserted",
+          "pantheon/tests/capability.mutate.mjs": "KS3: retarget mutations whose targets move; no mutation removed",
+          "pantheon/tests/l150-billing.test.mjs": "KS2: only to designate or adapt for the jail; its assertions unchanged",
+          "pantheon/tests/agy-seat-identity.test.mjs": "KS2: only to designate or adapt for the jail; its assertions unchanged",
+          "scripts/test-gates/real-bwrap-suites.json": "KS2: the new jail suite (and any SDK suite that now needs bwrap) designated",
+          "docs/knowledge-graph/slice-c2.md": "KS5"
+        }
+      }
+    }
+  }
+}

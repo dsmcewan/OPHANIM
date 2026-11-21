@@ -1,0 +1,130 @@
+{
+  "commit": "7997657e77d597c6dfda8b7d971d0e4499c88b3a",
+  "attempts": [
+    {
+      "status": "incomplete",
+      "stop_reason": "provider stopped: finishReason:MAX_TOKENS",
+      "provider_calls": 17,
+      "tool_calls": 38,
+      "limits": {
+        "max_turns": 40,
+        "max_tool_calls": 120,
+        "max_output_tokens": 16000,
+        "timeout_s": 600
+      },
+      "started_at": "2026-11-18T22:35:15.102Z",
+      "ended_at": "2026-11-18T22:40:52.410Z",
+      "served_models": [
+        "gemini-4-carbon"
+      ],
+      "usage_totals": {
+        "promptTokenCount": 1526079,
+        "candidatesTokenCount": 1314,
+        "totalTokenCount": 1547784,
+        "thoughtsTokenCount": 20391,
+        "cachedContentTokenCount": 1312891
+      },
+      "attempt": "initial",
+      "test_runs": []
+    },
+    {
+      "status": "incomplete",
+      "stop_reason": "max_turns reached (23)",
+      "provider_calls": 23,
+      "tool_calls": 52,
+      "limits": {
+        "max_turns": 23,
+        "max_tool_calls": 82,
+        "max_output_tokens": 32000,
+        "timeout_s": 600
+      },
+      "started_at": "2026-11-18T22:46:38.285Z",
+      "ended_at": "2026-11-18T23:16:16.712Z",
+      "served_models": [
+        "gemini-4-carbon"
+      ],
+      "usage_totals": {
+        "promptTokenCount": 4962145,
+        "candidatesTokenCount": 9761,
+        "totalTokenCount": 5049710,
+        "thoughtsTokenCount": 77804,
+        "cachedContentTokenCount": 4667658
+      },
+      "attempt": "retry-1",
+      "test_runs": [
+        {
+          "n": 44,
+          "turn": 16,
+          "name": "run_tests",
+          "args": {
+            "files": [
+              "ophanim/operate/scheduler.test.mjs",
+              "ophanim/operate/planner-tier.test.mjs",
+              "ophanim/operate/evidence-recovery.test.mjs",
+              "ophanim/operate/context-bounds.test.mjs"
+            ]
+          },
+          "exit_code": 1,
+          "timed_out": false,
+          "duration_ms": 14208,
+          "result_sha256": "0b124b1785a1c01177d2c0c56c8265c91e44c55303eb4a86364ecf1a5e2564b1",
+          "result_bytes": 6796
+        },
+        {
+          "n": 47,
+          "turn": 19,
+          "name": "run_tests",
+          "args": {
+            "files": [
+              "ophanim/operate/stages.test.mjs",
+              "ophanim/operate/fit-lifecycle.test.mjs"
+            ]
+          },
+          "exit_code": 1,
+          "timed_out": false,
+          "duration_ms": 14046,
+          "result_sha256": "efa6583895be446bb77c081f47bea7c76033d05cc1b547694ed68ab5048b006a",
+          "result_bytes": 10245
+        },
+        {
+          "n": 51,
+          "turn": 22,
+          "name": "run_suite",
+          "args": {
+            "suite": "pantheon"
+          },
+          "exit_code": null,
+          "timed_out": true,
+          "duration_ms": 600013,
+          "result_sha256": "bdda2edf1f7aad6c2569d1ff442fcbd026e483537b9ca4e100df3f6c84562cc4",
+          "result_bytes": 20417
+        }
+      ]
+    }
+  ],
+  "timeout_records": [
+    {
+      "attempt": "retry-1",
+      "transcript": "gemini/retry-1/findings-1-google.transcript.json",
+      "event_array_index": 72,
+      "event": {
+        "type": "tool_call",
+        "n": 51,
+        "turn": 22,
+        "id": "call_3334129117874369547",
+        "name": "run_suite",
+        "args": {
+          "suite": "pantheon"
+        },
+        "outcome": "ok",
+        "exit_code": null,
+        "timed_out": true,
+        "result_sha256": "bdda2edf1f7aad6c2569d1ff442fcbd026e483537b9ca4e100df3f6c84562cc4",
+        "result_bytes": 20417,
+        "result_text": "exit_code: null signal: SIGKILL (timed out, process group killed)\nduration_ms: 600013  output_bytes: 20306\n---\n\n> pantheon@0.0.0 test\n> node --test\n\n▶ conform\n  ✔ succeeds, reports OK per vendor, exits 0, and writes nothing anywhere (121.232732ms)\n✔ conform (122.306702ms)\n▶ argument validation\n  ✔ no verb at all -> usage, exit code 2, nothing written (69.690378ms)\n  ✔ unknown verb -> usage, exit code 2, nothing written (97.685246ms)\n  ✔ turn: no args -> usage, exit code 2, nothing written (66.487798ms)\n  ✔ turn: vendor only -> usage, exit code 2, nothing written (70.603987ms)\n  ✔ turn: vendor+purpose only -> usage, exit code 2, nothing written (71.220097ms)\n  ✔ turn: missing prompt -> usage, exit code 2, nothing written (71.157424ms)\n  ✔ snapshot: no args -> usage, exit code 2, nothing written (72.657784ms)\n  ✔ snapshot: vendor only -> usage, exit code 2, nothing written (81.476892ms)\n  ✔ snapshot: vendor+purpose only (missing cwd) -> usage, exit code 2, nothing written (87.118185ms)\n  ✔ verify-resume: no args -> usage, exit code 2, nothing written (81.433035ms)\n  ✔ verify-resume: vendor only -> usage, exit code 2, nothing written (106.113802ms)\n  ✔ verify-resume: vendor+purpose only (missing cwd) -> usage, exit code 2, nothing written (72.849763ms)\n  ✔ verify-resume: vendor+purpose+cwd only (missing record.json) -> usage, exit code 2, nothing written (89.598741ms)\n✔ argument validation (1041.177658ms)\n▶ trailing arguments (ambiguous — documented, not asserted as a defect)\n  ✔ snapshot silently ignores a trailing extra argument instead of rejecting it as malformed (89.936306ms)\n✔ trailing arguments (ambiguous — documented, not asserted as a defect) (90.064792ms)\n▶ unknown vendor\n  ✔ turn with an unknown vendor exits with the unknown-vendor code, without spawning anything, writes nothing (82.684743ms)\n  ✔ snapshot with an unknown vendor exits with the unknown-vendor code, writes nothing (92.446721ms)\n  ✔ verify-resume with an unknown vendor exits with the unknown-vendor code, writes nothing (99.364324ms)\n✔ unknown vendor (274.784938ms)\n▶ unconfirmed vendor stores (spec §6.3)\n  ✔ snapshot grok refuses rather than fabricating continuity, writes nothing (93.215096ms)\n  ✔ snapshot agy refuses rather than fabricating continuity, writes nothing (72.126679ms)\n✔ unconfirmed vendor stores (spec §6.3) (165.551727ms)\n▶ write containment (spec §2, \"Trustworthy operation\")\n  ✔ a representative command sequence writes only inside PANTHEON_HOME (629.503125ms)\n✔ write containment (spec §2, \"Trustworthy operation\") (629.624451ms)\n▶ exit code distinctness\n  ✔ bad-arguments (usage) uses a distinct code from an unknown vendor for turn (168.287381ms)\n  ✔ unknown-vendor and identity-unresolvable use distinct codes for snapshot (144.190943ms)\n✔ exit code distinctness (314.034051ms)\n▶ CONTRACT (spec §6.2)\n  ✔ 1. snapshot then verify-resume on an unchanged conversation reports RESUMED (153.208954ms)\n  ✔ 2. verify-resume against a DIFFERENT, SAME-LENGTH conversation under the same session id reports NOT RESUMED, caught by content (not length) (152.503274ms)\n  ✔ 3. a record with length: 0 must not verify anything (72.164963ms)\n  ✔ 4. a tampered record (valid shape, wrong head) must not verify (125.36643ms)\n  ✔ 5. (new behaviour, per §6.1 binding) verify-resume refuses a record taken against a DIFFERENT session id, reporting NOT RESUMED with that reason (155.659474ms)\n✔ CONTRACT (spec §6.2) (659.310957ms)\n▶ FINDING: verify-resume does not fail closed on a malformed record.json\n  ✔ nonexistent record.json path exits nonzero WITHOUT an uncaught-exception stack trace (64.55437ms)\n  ✔ malformed JSON in record.json exits nonzero WITHOUT an uncaught-exception stack trace (66.931388ms)\n  ✔ valid JSON but missing required fields exits nonzero WITHOUT an uncaught-exception stack trace (66.493665ms)\n✔ FINDING: verify-resume does not fail closed on a malformed record.json (198.236558ms)\n▶ refused stale seat (exit 5)\n  ✔ turn refuses, before any vendor call, a seat whose stored chain the live transcript no longer extends (189.706688ms)\n✔ refused stale seat (exit 5) (189.851677ms)\n✔ acceptance uses real filesystem/network isolation and still runs local tools (162.800265ms)\n✔ an unavailable isolation launcher fails closed without running the command (35.903038ms)\n✔ real nested-namespace denial never falls back to an ordinary shell (151.119139ms)\n✔ the delegated-code oracle uses the same boundary and preserves its legitimate control (438.908439ms)\n✔ an alternatives chain out of /usr/bin binds the alternatives directory, read-only (5.374052ms)\n✔ the sandbox resolves this host's /usr/bin/python3 however it is linked (90.676467ms)\nℹ /usr/bin/python3 -> python3.13\n✔ an unspecified anthropic call falls back to sonnet -- deliberately NOT the cheapest (1.273413ms)\n✔ every vendor's default_model is already its cheapest recorded tier (0.315295ms)\n✔ every declared format renders every seat without throwing (2.767152ms)\n✔ an unknown format is refused rather than silently defaulting (0.412594ms)\n✔ the antigravity filename is EXACTLY what agy-seat.py opens (0.206418ms)\n✔ two seats of one role are REFUSED for antigravity, not silently renamed (0.496635ms)\n✔ antigravity renders .agents/agents/<name>/agent.md with real tools (1.444478ms)\n✔ an SDK seat rendered for antigravity carries NO tools and says why (0.554588ms)\n✔ claude-code renders .claude/agents/<name>.md with tools as a CSV string (0.535959ms)\n✔ claude-code maps a vendor model onto a Claude tier, and reports the substitution (0.583575ms)\n✔ codex renders a SEAT SPEC, because Codex has no agent file format at all (0.545172ms)\n✔ only the implementer gets a writable sandbox; every other seat is read-only (0.835606ms)\n✔ approval_mode is always deny_all -- Pantheon's controller is the approver (0.470729ms)\n✔ the codex seat spec carries the cross-lab rule as data, not as prose only (2.523334ms)\n✔ codex reports losing the token cap -- thread_start has no field for it (0.393276ms)\n✔ the charter reaches every format verbatim, never paraphrased (0.499795ms)\n✔ claude-code quotes and escapes the description -- a real YAML parser reads it (0.656465ms)\n✔ antigravity does NOT quote the description, because its loader keeps the quotes (0.375279ms)\n✔ the rendered name is a safe filename, with no slash or dot from the model id (1.118766ms)\n✔ two different seats of the same role render to different filenames (0.391375ms)\n✔ every listed agent names a role that actually exists in ROLES (2.424372ms)\n✔ the implementer ladder is the three openai rungs then the two Antigravity Gemini fallbacks, in the seating table's order (1.700339ms)\n✔ scout is listed even though it sits OUTSIDE the board -- it comes from INTAKE, not SEATING (0.303214ms)\n✔ a tier-seated chair reports model null rather than inventing a spelling (0.282295ms)\n✔ an agent id is role@vendor/model, and round-trips through getAgent (0.463841ms)\n✔ a tier-seated id round-trips without a model segment (0.229666ms)\n✔ getAgent carries the role's charter and context policy VERBATIM from ROLES (0.192498ms)\n✔ getAgent refuses an unknown id rather than returning a hollow definition (1.039035ms)\n✔ the reviewer's cross-lab requirement travels with the definition (0.833383ms)\n✔ each vendor's token-cap SHAPE matches what run-item.mjs actually sends (0.643842ms)\n✔ agy_google is the only vendor that is NOT toolless (0.456169ms)\n✔ the scout's 700-token cap and the reviewer's 4000 are carried, with the re-ask (0.175869ms)\n✔ a resolved agent merges its role tuning onto its vendor tuning (1.244775ms)\n✔ the cap exception is per MODEL, not per role -- the store cannot diverge from the pipeline (0.321436ms)\n✔ the agy_google reviewer resolves toolless:false while the xai reviewer does not (0.248585ms)\n✔ the worker card's tools are exactly view_file, write_file, replace_file_content, run_command (the names the CLI was observed to use) (3.312739ms)\n✔ the card's text no longer tells the worker to use call_mcp_tool or the depre… (20417 bytes, truncated)",
+        "duration_ms": 600013
+      }
+    }
+  ],
+  "output_retention_note": "The runner retained result_text as an excerpt capped at 8192 bytes, plus result_bytes and SHA256 for the full tool result. The full timed-out command output cannot be recovered from that excerpt alone."
+}

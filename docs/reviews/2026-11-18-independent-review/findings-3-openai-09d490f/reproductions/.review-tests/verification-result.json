@@ -1,0 +1,27 @@
+{
+  "ok": false,
+  "why": "the verifier process printed no verdict (exit 0): ",
+  "process": {
+    "entry": "/tmp/ophanim-review-U4Ctdv/worktree/ophanim/operate/verify-run.mjs",
+    "exit_code": 0
+  },
+  "in_process": {
+    "work": {
+      "root": "/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive-EnH3H0/runwork",
+      "anchor": "sha256:1008f8c6c47c54e6d807fee8da8d9a0542b3333c03867043c86d4ef843ab617e",
+      "ok": true,
+      "head": "sha256:325a6399f23cf8064bef5a155ab3587f82425eab2713431324acdd6a3a0d4c88",
+      "entries": 6
+    },
+    "run_ledgers": [],
+    "status": {
+      "root": "/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive-EnH3H0/status",
+      "ok": true,
+      "head": "sha256:7151931a8dcfedee743f7e9b6b94419ad0d0b05bb45aa1bdaf7fad456a50c437",
+      "entries": 2,
+      "files_digest": "sha256:3c7c7be8c708daed00da97d93c7fc436659510da93539a7fbe29f5c29d763398",
+      "unchanged": true
+    },
+    "ok": true
+  }
+}

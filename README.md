@@ -13,6 +13,12 @@ npm test
 
 The [provenance record](PROVENANCE.json) records the ARGO source and filtered Git lineage. ARGO retains the historical `pantheon-seat-core/` as an archive.
 
+The current [planning lessons](docs/planning/LESSONS.md) study how to derive and evaluate a plan's requirements. The owner clarified that this is a learning exercise. The earlier [Phase 0–2 packet](docs/planning/phase0-2-evaluation/README.md) is retained as historical, mis-scoped output and is superseded as the direction of this exercise; it is not an active execution backlog.
+
+Continue with the [six-phase learning progression](docs/planning/FUNDAMENTALS.md), [planning coach charter](docs/planning/PLANNING_COACH.md), [progress record](docs/planning/LEARNING_PROGRESS.md) and [CLI resume prompt](docs/planning/CLI_HANDOFF.md). No phase is marked learned until its exercise supplies the required evidence.
+
+The [learning ticket board](docs/planning/BOARD.md) has a portable seed and local initialization/status commands. LF-001 is ready and later phases are blocked; initialization does not launch a background runner or satisfy learning acceptance. The [class protocol](docs/planning/CLASS_PROTOCOL.md) separates a [lesson planner](.codex/agents/lesson-planner.toml), terminal [planning coach](.codex/agents/planning-coach.toml), independent twin [class evaluator](.codex/agents/class-evaluator.toml) and authorized coordinator. Every class retains its evidence, next itinerary and following package, then passes verification and is committed before completion.
+
 ## Run the synthetic planning proof
 
 Use a separate TELOS checkout at `0c9b539ddbb08e1464603faf786e0d5cdfc33fb8` and set `OPHANIM_TELOS_ROOT` to its absolute path. Ophanim checks the TELOS source files against built-in digests before loading the governance code. The proof creates local fixture identities and a synthetic queue inside the output directory.

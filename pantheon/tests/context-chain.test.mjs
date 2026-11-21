@@ -35,7 +35,9 @@ test("a silently-fresh conversation fails on prefix hash mismatch, not on length
 test("a truncated thread fails as shorter than recorded", () => {
   const r = record(A);
   const v = verifyExtends(A.slice(0, 2), r);
+  // test-lint: allow truncated-sequence -- A.slice(0, 2) builds the INPUT, the thread truncated to two turns; v is verifyExtends' whole result {ok, why}, ok compared here
   assert.equal(v.ok, false);
+  // test-lint: allow truncated-sequence -- A.slice(0, 2) builds the INPUT, the thread truncated to two turns; v is verifyExtends' whole result {ok, why}, why compared here
   assert.equal(v.why, "shorter than recorded");
 });
 
@@ -50,6 +52,7 @@ test("a tampered middle turn fails on prefix hash mismatch", () => {
 test("a role swap with identical text is caught", () => {
   const r = record(A.slice(0, 2));
   const swapped = [turn("assistant", "a1"), turn("user", "a2"), ...A.slice(2)];
+  // test-lint: allow truncated-sequence -- A.slice builds the INPUTS (r records two turns; swapped is the whole thread, its first two roles swapped); verifyExtends' rejection reason is compared
   assert.equal(verifyExtends(swapped, r).why, "prefix hash mismatch");
 });
 

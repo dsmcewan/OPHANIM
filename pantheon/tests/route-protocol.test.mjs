@@ -9,6 +9,7 @@ import { nextStep, escalationRecord, verifyEscalation, routeFor, classifyOutcome
 import { withEffort } from "../src/sdk/adapter.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { openCooldownStore } from "../../packages/model-client/index.mjs";
+import { withFakeAgy } from "./fixtures/dispatch.mjs";
 
 const rejected = { kind: "acceptance", exit: 1 };
 const sol = { vendor: "openai", model: "gpt-6-sol" };
@@ -46,7 +47,7 @@ test("a truncated reply raises only the output budget, within the documented cei
 });
 
 test("an agy seat's effort is not carried, so a rejection steps a rung instead of raising a dropped dial", () => {
-  assert.equal(carriesEffort({ vendor: "agy_google", model: "claude-sonnet-4-6" }), false, "CLI lane model");
+  assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-3.8-flash-high" }), false, "CLI lane model");
   assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-3.6-flash" }), false, "agy-seat.py takes no effort either");
   assert.equal(carriesEffort({ vendor: "agy_google", model: "gemini-4-argon" }), true, "frontier client carries it");
   assert.equal(carriesEffort(sol), true);
@@ -60,10 +61,16 @@ test("an agy seat's effort is not carried, so a rejection steps a rung instead o
   assert.match(d.why, /not carried by the agy transport/);
   const rec = escalationRecord({ role: "implementer", seat: agy, outcome: rejected, steps: 0, seating });
   assert.equal(verifyEscalation([rec], { seating }).ok, true);
-  // The planner's default ladder: the Sonnet lane rung steps to the Opus lane rung, then stops.
-  const up = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "claude-sonnet-4-6" }, outcome: rejected });
-  assert.deepEqual([up.action, up.to.model], ["step_rung", "claude-opus-4-6-thinking"]);
-  const top = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "claude-opus-4-6-thinking" }, outcome: rejected });
+  // A ladder of agy rungs: the lower rung steps to the lane rung above it, then stops. A fixture seating, because
+  // the default planner ladder's agy rungs (Sonnet lane -> Opus lane) were removed 2026-11-17 (owner: Antigravity
+  // serves Gemini models only) and no default ladder has two agy rungs now.
+  const agyLadder = { planner: [
+    { vendor: "agy_google", model: "gemini-3.6-flash", band: "easy", basis: "TASTE", why: "x" },
+    { vendor: "agy_google", model: "gemini-3.8-flash-high", band: "hard", basis: "TASTE", why: "x" },
+  ] };
+  const up = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "gemini-3.6-flash" }, outcome: rejected, seating: agyLadder });
+  assert.deepEqual([up.action, up.to.model, up.to.effort], ["step_rung", "gemini-3.8-flash-high", null]);
+  const top = nextStep({ role: "planner", seat: { vendor: "agy_google", model: "gemini-3.8-flash-high" }, outcome: rejected, seating: agyLadder });
   assert.equal(top.action, "stop");
   assert.match(top.why, /not carried by the agy transport and there is no higher banded rung/);
   const frontier = nextStep({ role: "implementer", seat: { vendor: "agy_google", model: "gemini-4-argon" }, outcome: rejected,
@@ -174,6 +181,13 @@ function scripted({ review = () => "approve", cutAt = 0 } = {}) {
         { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: cut ? "TITLE: fi" : answer(promptOf(req)) } },
         { type: "message_delta", delta: { stop_reason: cut ? "max_tokens" : "end_turn" } }, { type: "message_stop" }]);
     } },
+    // A Google seat, for a review that must avoid every lab that contributed (the planner's, the maker's, and a
+    // reviewer whose findings reached the revision).
+    models: { countTokens: async () => ({ totalTokens: 10 }), generateContentStream: async req => {
+      const prompt = (req.contents?.at?.(-1)?.parts ?? []).map(p => p.text ?? "").join("") || String(req.contents ?? "");
+      sent.push({ model: req.model, effort: null, prompt });
+      return stream([{ candidates: [{ finishReason: "STOP", content: { parts: [{ text: answer(prompt) }] } }] }]);
+    } },
   }) };
 }
 async function runFixture(dir, clients, extraOpts = {}) {
@@ -231,13 +245,17 @@ test("a reviewer's rejection of passing work escalates the maker, and resume rev
 
     reject = false;
     const before = clients.sent.length;
-    const second = await runOpenItem({ key: "escFixture", repo_root: dir, title: "one file", goal: "g", copy: ["seed"],
+    // The selector's reviewer here is the Google seat, served by its Antigravity lane first (owner direction
+    // 2026-11-17): the fake CLI answers it.
+    const second = await withFakeAgy(dir, () => runOpenItem({ key: "escFixture", repo_root: dir, title: "one file", goal: "g", copy: ["seed"],
       acceptance_cmd: "grep -q fixed alpha.mjs", question: "q", slots: [{ slot: "alpha", path: "alpha.mjs", goal: "g" }] },
     { dir: join(dir, "board"), makeClientFor: clients.makeClientFor, scouts: ["xai"], revisions: 2, resume: first.board,
       cooldown: openCooldownStore(join(dir, "cooldown")),
       seatOverrides: { planner: { vendor: "anthropic", model: "claude-sonnet-5", rank: 0, pool: "anthropic", band: null, basis: "OPERATOR", why: "s" },
-        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" },
-        reviewer: { vendor: "xai", model: "grok-4.6", rank: 0, pool: "xai", band: null, basis: "OPERATOR", why: "s" } } });
+        // 86ce18a review, defect 3: the xai reviewer's findings are given to the worker as revision input, so xai is
+        // a contributor to the revised bytes and may not review them. This resume used to pin xai again (and so had
+        // the rejecting lab approve the revision its own findings shaped); it now leaves the reviewer to the selector.
+        implementer: { vendor: "openai", model: "gpt-6-sol", rank: 0, pool: "openai", band: null, basis: "OPERATOR", why: "s" } } }));
     assert.equal(second.shipped, true, JSON.stringify(second.error));
     const revised = clients.sent.slice(before).find(s => s.model === "gpt-6-sol" && /Output ONLY the complete new contents/.test(s.prompt));
     assert.ok(revised, "resume revised the rejected slot instead of re-reviewing the same bytes");
@@ -277,7 +295,8 @@ test("K3: with a ledger, the run verifies it first and records each escalation a
     const esc = entries.filter(e => e.kind === "escalation");
     assert.equal(esc.length, 1, "the one truncation decision is on the ledger");
     assert.deepEqual(ledger.payloadOf(esc[0]).decision.to.output, 32768);
-    assert.deepEqual(esc[0].derived_from.slice(0, 2), [recorder.inputs.facts, recorder.inputs.seating], "it cites the inputs it was decided under");
+    // The whole citation list: the inputs it was decided under and, as the first escalation of its work, nothing else.
+    assert.deepEqual(esc[0].derived_from, [recorder.inputs.facts, recorder.inputs.seating], "it cites the inputs it was decided under");
     const turns = entries.filter(e => e.kind === "turn").map(e => ledger.payloadOf(e));
     assert.ok(turns.some(t => t.purpose === "plan") && turns.some(t => t.purpose === "work") && turns.some(t => t.purpose === "critique"),
       "every model turn of the run is on the ledger, each signed by its own seat");

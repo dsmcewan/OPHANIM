@@ -1,0 +1,68 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "frozen": {
+    "candidate": "af0dc3012688703ccac0f6de31836822a3279eae",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**",
+    "ophanim/lessons/**",
+    "docs/knowledge-graph/directive-2026-11-20.md",
+    "docs/knowledge-graph/inventory.md",
+    "docs/knowledge-graph/inventory.json",
+    "package.json",
+    "package-lock.json"
+  ],
+  "wave": "KG Slice B2",
+  "base_commit": "5c7fc8c",
+  "authorization": "owner directive 2026-11-20, Graph B (\"Systems, Components & Dependency Graph\": inputs, outputs, interfaces, dependencies, downstream consumers, deployment and integrations, versions); register KG-7 (governs and authorizes from the ownership manifests)",
+  "dependencies": [
+    "runs concurrently with Slice C2 (pantheon/**, scripts/test-gates/real-bwrap-suites.json); disjoint",
+    "region limits written from the brief's decisions KD2-1 to KD2-10; function-level calls and the vendor documentation are NOT this slice's"
+  ],
+  "subwaves": {
+    "KGB2": {
+      "agent-kg-slice-b2": {
+        "branch": "kg/slice-b2",
+        "base_commit": "5c7fc8c",
+        "findings": [
+          "knowledge-graph Slice B2 (the dependency sources of Graph B; KG-7 governs and authorizes)"
+        ],
+        "files": [
+          "ophanim/graph/extract/**",
+          "ophanim/graph/impact.mjs",
+          "ophanim/graph/cli.mjs",
+          "ophanim/graph/extract-deps*.test.mjs",
+          "ophanim/graph/extract.test.mjs",
+          "ophanim/graph/impact.test.mjs",
+          "ophanim/graph/cli.test.mjs",
+          "ophanim/graph/graph-b2.mutate.mjs",
+          "ophanim/graph/fixtures/**",
+          "packages/graph/schema.mjs",
+          "docs/knowledge-graph/architecture.md",
+          "docs/knowledge-graph/slice-b2.md"
+        ],
+        "new_files": [
+          "ophanim/graph/extract/**",
+          "ophanim/graph/extract-deps*.test.mjs",
+          "ophanim/graph/graph-b2.mutate.mjs",
+          "ophanim/graph/fixtures/**",
+          "docs/knowledge-graph/slice-b2.md"
+        ],
+        "region_limits": {
+          "ophanim/graph/extract/**": "KD2-1 to KD2-6: the new sources and their registration in index.mjs (ORDER, sourcesOf, EXTRACTOR_MODULES); existing extractors' facts unchanged; verification.mjs: only exporting blankComments",
+          "ophanim/graph/impact.mjs": "KD2-8: traverse the new relationships per their impact behaviour; existing answers unchanged",
+          "ophanim/graph/cli.mjs": "KD2-8: the new queries",
+          "ophanim/graph/extract.test.mjs": "KD2-1: the new sources in the every-source assertions; existing assertions unchanged",
+          "ophanim/graph/impact.test.mjs": "KD2-8 additions only",
+          "ophanim/graph/cli.test.mjs": "KD2-8 additions only",
+          "packages/graph/schema.mjs": "KD2-7: systems-domain types ADDED, contract version 1.2.0; no existing type changed",
+          "docs/knowledge-graph/architecture.md": "KD2-7: only the registry tables and the contract version",
+          "docs/knowledge-graph/slice-b2.md": "KD2-10"
+        }
+      }
+    }
+  }
+}

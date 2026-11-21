@@ -16,7 +16,8 @@
   "google": {
     "gemini-3.6-flash": "gemini-3.6-flash",
     "carbon": "gemini-4-carbon",
-    "argon": "gemini-4-argon"
+    "argon": "gemini-4-argon",
+    "hydrogen": "gemini-4-hydrogen"
   },
   "anthropic": {
     "haiku": "claude-haiku-4-5-20251001",

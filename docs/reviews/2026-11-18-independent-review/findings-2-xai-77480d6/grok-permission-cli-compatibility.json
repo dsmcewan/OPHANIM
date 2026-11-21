@@ -1,0 +1,16 @@
+{
+  "reason": "Installed Grok 1.0.44 inspect loaded zero rules from the README structured rules array. The equivalent allow string array is added without changing the allowed tools or commands.",
+  "readme_structured_rules_retained": true,
+  "equivalent_allow_rules": [
+    "Read",
+    "Grep",
+    "Edit",
+    "Bash(node --test *)",
+    "Bash(npm run test:proof)",
+    "Bash(npm test)"
+  ],
+  "config_sha256_before": "aa9a9d0949397e67e5117a1683d3b1945b506d9b45749545b157cbd5fc2067d9",
+  "config_sha256_after": "95d99e68a6872e59b61bfcd8648f6198dc992df67c9a5d205d09f81f7d344df5",
+  "permission_mode": "default ask; no auto or always-approve",
+  "reviewed_source_changed": false
+}

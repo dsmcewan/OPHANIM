@@ -51,6 +51,16 @@
 // makeClientFor(vendor). Cycle reviewers: live SDK turns by default, or `--turn MODULE` whose default
 // export is the reviewer turn (pantheon/bin/cycle-review-http-turn.mjs for the HTTPS path).
 //
+// THE GEMINI BILLING POLICY (register L-136; docs/billing-policy.md), on run and resume, both OFF when absent:
+//   --metered-gemini-failover N   the metered Gemini API may answer an Antigravity lane's quota refusal (the in-run walk's
+//                                 failover, a cycle reviewer's lane), at most N billed requests for this board run
+//   --gemini-api-primary N        primary Gemini API / SDK execution (an operator's or a ticket's Gemini API seat, the
+//                                 python SDK seat under PANTHEON_AGY_TRANSPORT=sdk), at most N billed requests
+// N is a positive integer; anything else is a usage error (exit 2) and nothing runs. A GEMINI_API_KEY in the environment
+// authorizes nothing. Every billed request is recorded BEFORE it is sent in <board>/gemini-billing.jsonl (the budget's
+// consumption, counted from that file: `resume` of the same board continues it, never resets it) and on run.json.
+// The board's reviewer and scout default to the Antigravity CLI lane (the subscription), never to a billed seat.
+//
 // Exit codes: 0 done, 1 refused (not dispatchable, not shipped, the cycle cannot close yet, a check
 // failed), 2 usage.
 import { dirname, resolve, join } from "node:path";
@@ -60,6 +70,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { boardNext, runBoardItem, resumeBoardItem, proposeFromBundle, checkProposal, defaultStatusRoot } from "../src/board/operate.mjs";
 import { evaluate, defaultEvidenceStore } from "../src/practice/evaluate.mjs";
 import { capacityReport } from "../src/practice/review-capacity.mjs";
+import { billingFromFlags, geminiBilling, geminiUsageFile, billingRecord } from "../src/route/quota-failover.mjs";
 
 const REPO_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const [verb, ...argv] = process.argv.slice(2);
@@ -73,7 +84,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k in multi) multi[k].push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] [--max-provider-calls N] [--plan-title model|ticket] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json] | capacity [--bundles DIR] [--evidence-store DIR] [--json]`);
+  console.error(`${why}\nusage: pantheon-board next [--json] [--profile argo|legacy|fit] | run <item> [--turn MODULE] [--clients MODULE] [--seat role=vendor/model] [--profile argo|legacy|fit] [--interleave] [--evidence-store DIR] [--pair-rate R --pair-max-provider-calls N --pair-budget-calls TOTAL] [--max-provider-calls N] [--plan-title model|ticket] [--metered-gemini-failover N] [--gemini-api-primary N] | resume <item> --out DIR [--turn MODULE] [--max-provider-calls N] [--metered-gemini-failover N] [--gemini-api-primary N] | propose --bundle DIR | check <proposal.json> | evaluate [--runs DIR] [--json] | capacity [--bundles DIR] [--evidence-store DIR] [--json]`);
   process.exit(2);
 }
 const repo = resolve(opts.repo ?? REPO_DEFAULT);
@@ -84,15 +95,12 @@ const practice = opts["practice-outcome"] || opts["practice-question"]
   ? { outcome: opts["practice-outcome"] ?? usage("--practice-question needs --practice-outcome"), question: opts["practice-question"] ?? usage("--practice-outcome needs --practice-question") }
   : null;
 
-async function liveClients() {
-  const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient }] = await Promise.all([
-    import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("../src/sdk/adapter.mjs")]);
-  const clients = {};
-  const make = (v, { pool = v, poolConfig } = {}) => (clients[`${v}:${pool}`] ??= makeClient(v, { OpenAI, GoogleGenAI, Anthropic, poolConfig }));
-  // The run records what answered: the vendor SDKs are live providers (continuous evaluation reads this).
-  make.providers = { kind: "live" };
-  return make;
-}
+// The live seats (src/sdk/live.mjs): the vendor SDKs are imported there, at the edge.
+const { liveClients, liveTurn, billedTurnModule } = await import("../src/sdk/live.mjs");
+// THE BILLING POLICY of a run or resume, resolved before any work (a malformed or unbudgeted flag is a usage error).
+const billingPolicy = () => { try { return billingFromFlags(opts); } catch (e) { return usage(e.message); } };
+const billingOf = (policy, boardDir) => geminiBilling({ policy, ledger: geminiUsageFile(join(boardDir, "gemini-billing.jsonl")) });
+const billingShown = b => { const r = billingRecord(b); return { policy: r.policy, where: r.where, used: Object.fromEntries(["failover", "primary"].map(k => [k, b.ledger.used(k)])), refusals: r.refusals }; };
 // A positive integer flag, or null when absent.
 const intFlag = name => {
   if (opts[name] === undefined) return null;
@@ -144,18 +152,6 @@ function printPaired(e) {
       `${w.pairs_needed_at_observed ?? "not reachable"} for the expected 99% bound to clear -${e.thresholds.NONINFERIORITY_MARGIN}; ${w.pairs_needed_80 ?? "-"} for 80% power (Wald)`);
     console.log(`             ${x.why}`);
   }
-}
-async function liveTurn() {
-  // As bin/pantheon-review-cycle.mjs: the vendor SDKs are imported here, at the edge.
-  const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient, sendTurn }] = await Promise.all([
-    import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("../src/sdk/adapter.mjs")]);
-  const clients = new Map();
-  return async ({ vendor, model, prompt }) => {
-    if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
-    const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-cycle-review` });
-    if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
-    return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null };
-  };
 }
 const seatOverrides = Object.fromEntries(multi.seat.map(s => {
   const [role, vm] = s.split("="), [vendor, model] = (vm ?? "").split("/");
@@ -212,13 +208,17 @@ try {
     const maxCalls = intFlag("max-provider-calls");
     const planTitle = opts["plan-title"] ?? null;
     if (planTitle !== null && !["model", "ticket"].includes(planTitle)) usage(`--plan-title is model or ticket, got ${planTitle}`);
+    // The board directory is named here (as runBoardItem would), so the run's Gemini usage record lives beside its run.json.
+    const policy = billingPolicy();
+    const boardDir = opts.dir ? resolve(opts.dir) : join(homedir(), ".pantheon", "boards", `board-${args[0]}-${Date.now()}`);
+    const billing = billingOf(policy, boardDir);
     const makeClientFor = opts.clients ? await load(opts.clients) : await liveClients();
-    const turn = opts.turn ? await load(opts.turn) : await liveTurn();
+    const turn = opts.turn ? billedTurnModule(await load(opts.turn), billing) : await liveTurn({ billing });
     const r = await runBoardItem({ repo, item: args[0], statusRoot, anchor, makeClientFor, turn, n: Number(opts.n ?? 3),
-      dir: opts.dir ? resolve(opts.dir) : null, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
+      dir: boardDir, out: opts.out ? resolve(opts.out) : null, branch: opts.branch ?? null,
       // --profile selects the routing profile for this run only; omitted, runOpenItem's default (argo) applies.
       // --interleave: the ticket's hash-assigned arm for an eligible stratum; an explicit --profile still wins.
-      checked: opts.checked, runOpts: { seatOverrides, ...(maxCalls !== null ? { maxProviderCalls: maxCalls } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}), ...(planTitle ? { planTitle } : {}) }, practice,
+      checked: opts.checked, runOpts: { seatOverrides, billing, ...(maxCalls !== null ? { maxProviderCalls: maxCalls } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.interleave ? { interleave: true } : {}), ...(planTitle ? { planTitle } : {}) }, practice,
       evidenceStore: opts["evidence-store"] ? resolve(opts["evidence-store"]) : null,
       pairRate, pairMaxProviderCalls: pairMax, pairBudgetCalls: pairTotal,
       progress: ev => {
@@ -228,7 +228,7 @@ try {
     // Refused before any work: the cycle review the change needs cannot be formed from the configured pool.
     if (!r.bundle && r.pending) {
       console.error(`pending: ${r.why}`);
-      console.log(JSON.stringify({ pending: r.pending, why: r.why, shipped: false }, null, 2));
+      console.log(JSON.stringify({ pending: r.pending, why: r.why, shipped: false, gemini_billing: billingShown(billing) }, null, 2));
       process.exit(1);
     }
     // The seating report: what the selector chose per role (class and effort under fit), from the run's turns.
@@ -241,20 +241,26 @@ try {
       practice_warning: pw ?? null,
       provider_calls: r.bundle.provider_calls ?? null,
       seating: (r.bundle.run.seating ?? []).map(({ line, ...row }) => row), shipped: r.bundle.run.shipped, commit: r.bundle.commit, branch: r.bundle.branch, cycle: r.bundle.review?.cycle ?? null,
-      outcome: r.bundle.review?.outcome ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
+      outcome: r.bundle.review?.outcome ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [], gemini_billing: billingShown(billing) }, null, 2));
     process.exit(r.proposal ? 0 : 1);
   }
   if (verb === "resume") {
     if (args.length !== 1) usage("resume names one item");
     if (!opts.out) usage("resume needs --out DIR, the run's evidence bundle");
     const maxCalls = intFlag("max-provider-calls");
-    const turn = opts.turn ? await load(opts.turn) : await liveTurn();
+    // The resumed board's own Gemini usage record (beside its run.json): its consumption continues, never resets.
+    const policy = billingPolicy();
+    let boardOf = null;
+    try { boardOf = JSON.parse(readFileSync(join(resolve(opts.out), "evidence.json"), "utf8")).board ?? null; } catch { boardOf = null; }
+    const billing = billingOf(policy, boardOf ?? resolve(opts.out));
+    const turn = opts.turn ? billedTurnModule(await load(opts.turn), billing) : await liveTurn({ billing });
     const r = await resumeBoardItem({ maxProviderCalls: maxCalls, repo, item: args[0], dir: resolve(opts.out), statusRoot, anchor, turn,
       max_attempts: opts["max-attempts"] === undefined ? undefined : Number(opts["max-attempts"]), practice,
       progress: ev => console.error(JSON.stringify(ev)) });
     console.log(JSON.stringify({ bundle: `${r.dir}/evidence.json`, proposal: r.proposal ? `${r.dir}/proposal.json` : null, why: r.why ?? null,
       cycle: r.bundle.review?.cycle ?? null, outcome: r.bundle.review?.outcome ?? null, failed: r.bundle.review?.failed ?? [],
-      resumes: r.bundle.review?.resumes ?? [], provider_calls: r.bundle.provider_calls ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [] }, null, 2));
+      resumes: r.bundle.review?.resumes ?? [], provider_calls: r.bundle.provider_calls ?? null, findings: r.bundle.review?.reviews.flatMap(x => x.findings) ?? [],
+      gemini_billing: billingShown(billing) }, null, 2));
     process.exit(r.proposal ? 0 : 1);
   }
   if (verb === "propose") {
@@ -288,6 +294,9 @@ try {
     console.log(`coordinated review capacity (rule: ${r.rule.enough_rate * 100}% of >= ${r.rule.min_runs} board runs complete)`);
     console.log(`  ${r.needed} needed a coordinated review; ${r.completed} completed; verdict: ${r.verdict.outcome} -- ${r.verdict.why}`);
     for (const [k, n] of Object.entries(r.counts)) if (n) console.log(`  ${k.padEnd(26)} ${n}  ${r.classes[k] ?? ""}`);
+    console.log(`  over ${r.rule.over}: ${r.files} bundle/refusal file(s), ${r.unique} unique (${r.duplicates} duplicate copies), ` +
+      `${r.unverified.count} unverified (outside the rate), ${r.synthetic.observations} synthetic (reported apart)`);
+    for (const [k, n] of Object.entries(r.synthetic.counts)) if (n) console.log(`  synthetic ${k.padEnd(16)} ${n}`);
     process.exit(0);
   }
   usage(`unknown verb: ${verb ?? "(none)"}`);

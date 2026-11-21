@@ -1,0 +1,554 @@
+{
+ "schema": "pantheon.capability-records-fixture/v1",
+ "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written execution records that exercise the metric definitions; not live records. pantheon/tests/fixtures/capability-helpers.mjs writeRecords lays them out on disk as the real records are laid out.",
+ "boards": {
+  "board-a": {
+   "format": 2,
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "key": "synthetic-a",
+   "started_at": "2026-11-20T10:00:00.000Z",
+   "finished_at": "2026-11-20T10:30:00.000Z",
+   "providers": {
+    "kind": "synthetic"
+   },
+   "profile": "fit",
+   "shipped": true,
+   "gates": [
+    {
+     "gate": "ACCEPTANCE",
+     "ok": true
+    },
+    {
+     "gate": "REVIEW",
+     "ok": true
+    }
+   ],
+   "revisions": [
+    {
+     "rev": 1,
+     "exit": 1,
+     "slots": [
+      {
+       "slot": "code"
+      }
+     ]
+    },
+    {
+     "rev": 2,
+     "exit": 0,
+     "slots": [
+      {
+       "slot": "code"
+      }
+     ]
+    }
+   ],
+   "turns": [
+    {
+     "vendor": "anthropic",
+     "model": "claude-opus-5-5",
+     "transport": "api",
+     "purpose": "plan",
+     "selection": {
+      "profile": "fit",
+      "source": "policy",
+      "policy": "pantheon.selection/v1",
+      "task": {
+       "stakes": {
+        "value": "normal",
+        "basis": "legacy-difficulty"
+       },
+       "depth": {
+        "value": "standard",
+        "basis": "legacy-difficulty"
+       }
+      }
+     }
+    },
+    {
+     "vendor": "agy_google",
+     "model": "gemini-4-hydrogen-high",
+     "transport": "agy-cli",
+     "purpose": "work",
+     "selection": {
+      "profile": "fit",
+      "source": "policy",
+      "policy": "pantheon.selection/v1",
+      "task": {
+       "stakes": {
+        "value": "normal",
+        "basis": "legacy-difficulty"
+       },
+       "depth": {
+        "value": "standard",
+        "basis": "legacy-difficulty"
+       }
+      }
+     }
+    },
+    {
+     "vendor": "openai",
+     "model": "gpt-6.1-sol",
+     "transport": "api",
+     "purpose": "critique",
+     "selection": {
+      "profile": "fit",
+      "source": "policy",
+      "policy": "pantheon.selection/v1",
+      "task": {
+       "stakes": {
+        "value": "normal",
+        "basis": "legacy-difficulty"
+       },
+       "depth": {
+        "value": "standard",
+        "basis": "legacy-difficulty"
+       }
+      }
+     }
+    },
+    {
+     "vendor": "agy_google",
+     "model": "gemini-4-hydrogen-high",
+     "transport": "agy-cli",
+     "purpose": "work",
+     "selection": {
+      "profile": "fit",
+      "source": "policy",
+      "policy": "pantheon.selection/v1",
+      "task": {
+       "stakes": {
+        "value": "normal",
+        "basis": "legacy-difficulty"
+       },
+       "depth": {
+        "value": "standard",
+        "basis": "legacy-difficulty"
+       }
+      }
+     }
+    },
+    {
+     "vendor": "openai",
+     "model": "gpt-6.1-sol",
+     "transport": "api",
+     "purpose": "critique",
+     "selection": {
+      "profile": "fit",
+      "source": "policy",
+      "policy": "pantheon.selection/v1",
+      "task": {
+       "stakes": {
+        "value": "normal",
+        "basis": "legacy-difficulty"
+       },
+       "depth": {
+        "value": "standard",
+        "basis": "legacy-difficulty"
+       }
+      }
+     }
+    }
+   ],
+   "attempts": [
+    {
+     "n": 1,
+     "purpose": "plan",
+     "vendor": "anthropic",
+     "model": "claude-opus-5-5",
+     "pool": "anthropic",
+     "transport": "api",
+     "outcome": "ok",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 200
+     },
+     "ms": 1200,
+     "provider_requests": 1
+    },
+    {
+     "n": 2,
+     "purpose": "work",
+     "vendor": "agy_google",
+     "model": "gemini-4-hydrogen-high",
+     "pool": "agy_google",
+     "transport": "agy-cli",
+     "outcome": "ok",
+     "usage": {
+      "input_tokens": 800,
+      "output_tokens": 1500
+     },
+     "ms": 5000,
+     "provider_requests": 1
+    },
+    {
+     "n": 3,
+     "purpose": "critique",
+     "vendor": "openai",
+     "model": "gpt-6.1-sol",
+     "pool": "openai",
+     "transport": "api",
+     "outcome": "ok",
+     "usage": {
+      "input_tokens": 700,
+      "output_tokens": 100
+     },
+     "ms": 2000,
+     "provider_requests": 1
+    },
+    {
+     "n": 4,
+     "purpose": "work",
+     "vendor": "agy_google",
+     "model": "gemini-4-hydrogen-high",
+     "pool": "agy_google",
+     "transport": "agy-cli",
+     "outcome": "error",
+     "code": "AGY_MODEL_MISMATCH",
+     "usage": null,
+     "ms": 900,
+     "provider_requests": 1,
+     "identity": {
+      "requested": {
+       "agent": "pantheon-implementer",
+       "model": "gemini-4-hydrogen-high"
+      },
+      "reported": {
+       "agent": "pantheon-implementer",
+       "model": "gemini-4-hydrogen-medium"
+      }
+     }
+    },
+    {
+     "n": 5,
+     "purpose": "work",
+     "vendor": "agy_google",
+     "model": "gemini-4-hydrogen-high",
+     "pool": "agy_google",
+     "transport": "agy-cli",
+     "outcome": "ok",
+     "usage": null,
+     "ms": 6000,
+     "provider_requests": null
+    },
+    {
+     "n": 6,
+     "purpose": "critique",
+     "vendor": "openai",
+     "model": "gpt-6.1-sol",
+     "pool": "openai",
+     "transport": "api",
+     "outcome": "ok",
+     "usage": {
+      "input_tokens": 650,
+      "output_tokens": 90
+     },
+     "ms": 1800,
+     "provider_requests": 1
+    }
+   ],
+   "escalations": [
+    {
+     "schema": "pantheon.escalation/v2",
+     "role": "implementer",
+     "seat": {
+      "vendor": "agy_google",
+      "model": "gemini-4-hydrogen-high"
+     },
+     "outcome": {
+      "kind": "critique",
+      "verdict": "request_changes"
+     },
+     "steps": 0,
+     "decision": {
+      "action": "raise_thinking"
+     }
+    }
+   ]
+  },
+  "board-b": {
+   "format": 2,
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "key": "synthetic-b",
+   "started_at": "2026-11-20T11:00:00.000Z",
+   "providers": {
+    "kind": "undeclared"
+   },
+   "profile": "argo",
+   "shipped": false,
+   "gates": null,
+   "turns": [
+    {
+     "vendor": "xai",
+     "model": "grok-4.3",
+     "transport": "api",
+     "purpose": "scout",
+     "selection": {
+      "profile": "argo",
+      "source": "profile",
+      "difficulty": "medium"
+     }
+    }
+   ],
+   "attempts": [
+    {
+     "n": 1,
+     "purpose": "scout",
+     "vendor": "xai",
+     "model": "grok-4.3",
+     "pool": "xai",
+     "transport": "api",
+     "outcome": "transient",
+     "usage": null,
+     "ms": 100,
+     "provider_requests": 1
+    },
+    {
+     "n": 2,
+     "purpose": "scout",
+     "vendor": "xai",
+     "model": "grok-4.3",
+     "pool": "xai",
+     "transport": "api",
+     "outcome": "ok",
+     "usage": {
+      "input_tokens": 300,
+      "output_tokens": 50
+     },
+     "ms": 900,
+     "provider_requests": 1,
+     "usd": 0.01
+    },
+    {
+     "n": 3,
+     "purpose": "work",
+     "vendor": "agy_google",
+     "model": "gemini-4-carbon",
+     "pool": "agy_google",
+     "transport": "api",
+     "outcome": "refused_metered",
+     "code": "METERED_GEMINI_DISABLED",
+     "usage": null,
+     "provider_requests": 0
+    },
+    {
+     "n": 4,
+     "purpose": "critique",
+     "vendor": "agy_google",
+     "model": "gemini-3.6-flash",
+     "pool": "agy_google",
+     "transport": "agy",
+     "outcome": "ok",
+     "usage": null,
+     "ms": 7000,
+     "provider_requests": 2
+    }
+   ]
+  }
+ },
+ "practice_pairs": {
+  "pair-1": {
+   "pair": {
+    "schema": "pantheon.pair/v1",
+    "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+    "pair_id": "pair-1",
+    "stakes": "low",
+    "counterpart": null
+   },
+   "primary": {
+    "format": 2,
+    "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+    "key": "synthetic-pair-1",
+    "providers": {
+     "kind": "synthetic"
+    },
+    "profile": "argo",
+    "shipped": false,
+    "turns": [
+     {
+      "vendor": "xai",
+      "model": "grok-4.6",
+      "transport": "api",
+      "purpose": "work",
+      "selection": {
+       "profile": "argo",
+       "source": "operator-override",
+       "difficulty": "easy"
+      }
+     }
+    ],
+    "attempts": [
+     {
+      "n": 1,
+      "purpose": "work",
+      "vendor": "xai",
+      "model": "grok-4.6",
+      "pool": "xai",
+      "transport": "api",
+      "outcome": "ok",
+      "usage": {
+       "input_tokens": 400,
+       "output_tokens": 600
+      },
+      "ms": 3000,
+      "provider_requests": 1
+     }
+    ]
+   }
+  }
+ },
+ "work_stages": [
+  {
+   "schema": "ophanim.work/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "stage": "implement",
+   "status": "passed",
+   "attempt": 1,
+   "identity": {
+    "item": "synthetic-item"
+   },
+   "team": [
+    {
+     "role": "implementer",
+     "vendor": "agy_google",
+     "model": "gemini-4-hydrogen-high",
+     "lab": "google"
+    }
+   ],
+   "usage": {
+    "provider_calls": 3
+   },
+   "inputs": {},
+   "outputs": {},
+   "contributions": [],
+   "findings": [],
+   "next": null
+  },
+  {
+   "schema": "ophanim.work/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "stage": "review",
+   "status": "returned",
+   "attempt": 1,
+   "identity": {
+    "item": "synthetic-item"
+   },
+   "team": [
+    {
+     "role": "reviewer",
+     "vendor": "openai",
+     "model": "gpt-6.1-sol",
+     "lab": "openai"
+    },
+    {
+     "role": "reviewer",
+     "vendor": "xai",
+     "model": "grok-4.7",
+     "lab": "xai"
+    }
+   ],
+   "usage": {
+    "provider_calls": 2
+   },
+   "inputs": {},
+   "outputs": {},
+   "contributions": [],
+   "findings": [],
+   "next": {
+    "stage": "implement",
+    "why": "synthetic"
+   }
+  }
+ ],
+ "transcripts": {
+  "synthetic-1-xai.transcript.json": {
+   "schema": "ophanim.review-transcript/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "assignment": 1,
+   "lab": "xai",
+   "vendor": "xai",
+   "requested_model": "grok-4.7",
+   "via": "api",
+   "started_at": "2026-11-20T12:00:00.000Z",
+   "ended_at": "2026-11-20T12:20:00.000Z",
+   "status": "complete",
+   "stop_reason": "final answer",
+   "provider_calls": 4,
+   "tool_calls": 9,
+   "served_models": [
+    "grok-4.7"
+   ],
+   "usage_totals": {
+    "input_tokens": 5000,
+    "output_tokens": 700
+   },
+   "gemini_billing": null,
+   "events": []
+  }
+ },
+ "gemini_usage": [
+  {
+   "schema": "ophanim.gemini-billing/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "kind": "primary",
+   "setting": "gemini_api_primary",
+   "vendor": "agy_google",
+   "model": "gemini-3.6-flash",
+   "purpose": "critique",
+   "role": "reviewer",
+   "transport": "sdk",
+   "source": "synthetic",
+   "budget": 3,
+   "policy": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+   "request": 1,
+   "used_before": 0,
+   "remaining_after": 2,
+   "at": "2026-11-20T13:00:00.000Z"
+  },
+  {
+   "schema": "ophanim.gemini-billing/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "kind": "failover",
+   "setting": "gemini_api_failover",
+   "vendor": "agy_google",
+   "model": "gemini-4-hydrogen",
+   "purpose": "work",
+   "role": "implementer",
+   "transport": "api",
+   "source": "synthetic",
+   "budget": 3,
+   "policy": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+   "request": 1,
+   "used_before": 0,
+   "remaining_after": 2,
+   "at": "2026-11-20T13:01:00.000Z"
+  }
+ ],
+ "relay_outcomes": [
+  {
+   "schema": "ophanim.gemini-relay-outcome/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "at": "2026-11-20T13:02:00.000Z",
+   "relay_session": "synthetic-session",
+   "model": "gemini-3.6-flash",
+   "method": "streamGenerateContent",
+   "refused": {
+    "code": "METERED_GEMINI_BUDGET_EXHAUSTED",
+    "status": 429,
+    "why": "synthetic"
+   },
+   "provider_requests": 0
+  },
+  {
+   "schema": "ophanim.gemini-relay-outcome/v1",
+   "synthetic": "SYNTHETIC test fixture (knowledge graphs, Slice C1): hand-written to exercise the metric definitions; not a live record",
+   "at": "2026-11-20T13:03:00.000Z",
+   "relay_session": "synthetic-session",
+   "model": "gemini-3.6-flash",
+   "method": "streamGenerateContent",
+   "billed": true,
+   "status": 200,
+   "ms": 1500
+  }
+ ]
+}

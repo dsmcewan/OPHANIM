@@ -1,6 +1,8 @@
 // A task profile: independent dimensions of a ticket, each driving its OWN dial (the `fit` routing
-// candidate, docs/routing-task-profile.md). It replaces nothing: `argo` stays the approved default, and a
-// ticket that names only `difficulty` still runs -- the legacy label maps to a default profile here.
+// profile, docs/routing-task-profile.md). `fit` is the lifecycle's default since 2026-11-17 (owner direction);
+// `argo` is still what the selector uses when no profile is named. A ticket that names only `difficulty` still
+// runs -- the legacy label maps to a default profile here, and under `fit` it also names the matrix column
+// (fit-matrix.mjs), which the floors below can raise and never lower.
 //
 //   depth      none|light|standard|deep|max  -> the effort rung, mapped proportionally onto the chosen
 //                                               model's OWN documented ladder (capability-facts.json)
@@ -28,7 +30,9 @@ const DECLARED = ["depth", "output", "stakes", "ambiguity", "latency", "kind"];
 
 /** The default profile for an old ticket's single label. Explicit dimension fields win over it. */
 export const LEGACY_PROFILE = Object.freeze({
-  easy: Object.freeze({ depth: "light", output: "s", stakes: "normal", ambiguity: "settled" }),
+  // `easy` carries LOW stakes (owner direction 2026-11-17, the fit matrix): with normal stakes its class floor was
+  // `standard`, so no easy ticket could reach the easy column (gpt-6-luna and its peers). Stated stakes still raise it.
+  easy: Object.freeze({ depth: "light", output: "s", stakes: "low", ambiguity: "settled" }),
   medium: Object.freeze({ depth: "standard", output: "m", stakes: "normal", ambiguity: "open" }),
   hard: Object.freeze({ depth: "deep", output: "l", stakes: "high", ambiguity: "open" }),
 });

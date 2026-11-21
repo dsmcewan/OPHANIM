@@ -1,0 +1,43 @@
+{
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "assignments": [
+    {
+      "assignment": 1,
+      "lab": "Google",
+      "requested_model": "gemini-4-carbon",
+      "status": "complete",
+      "transport": "api",
+      "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+      "folder": "/mnt/c/users/dsmce/documents/codex/2026-11-16/he/outputs/OPHANIM-independent-review-09d490f-20261119T001425Z/findings-folders/assignment-1-google",
+      "zip": "/mnt/c/users/dsmce/documents/codex/2026-11-16/he/outputs/OPHANIM-independent-review-09d490f-20261119T001425Z/findings-folders/assignment-1-google.zip",
+      "reproduction_files": 1
+    },
+    {
+      "assignment": 2,
+      "lab": "OpenAI",
+      "requested_model": "gpt-6-astra",
+      "status": "complete",
+      "transport": "codex-sdk",
+      "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+      "folder": "/mnt/c/users/dsmce/documents/codex/2026-11-16/he/outputs/OPHANIM-independent-review-09d490f-20261119T001425Z/findings-folders/assignment-2-openai",
+      "zip": "/mnt/c/users/dsmce/documents/codex/2026-11-16/he/outputs/OPHANIM-independent-review-09d490f-20261119T001425Z/findings-folders/assignment-2-openai.zip",
+      "reproduction_files": 4
+    },
+    {
+      "assignment": 3,
+      "status": "incomplete",
+      "stop_reason": "grok returned no final text (6722 event(s), 0 unparsed line(s))"
+    },
+    {
+      "assignment": 4,
+      "lab": "OpenAI",
+      "requested_model": "gpt-6.1-sol",
+      "status": "complete",
+      "transport": "codex-sdk",
+      "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+      "folder": "/mnt/c/users/dsmce/documents/codex/2026-11-16/he/outputs/OPHANIM-independent-review-09d490f-20261119T001425Z/findings-folders/assignment-4-openai",
+      "zip": "/mnt/c/users/dsmce/documents/codex/2026-11-16/he/outputs/OPHANIM-independent-review-09d490f-20261119T001425Z/findings-folders/assignment-4-openai.zip",
+      "reproduction_files": 0
+    }
+  ]
+}

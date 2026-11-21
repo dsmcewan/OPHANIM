@@ -94,11 +94,18 @@ test("every vendor declares a prompt_flag key, even when its value is null", () 
   }
 });
 
+// The one vendor whose prompt is positional (after its subcommand; the test below). Every other vendor MUST have a print
+// flag: a null there launches it interactive, the defect this block pins, so the set is asserted, not read from VENDORS.
+const POSITIONAL = ["codex"];
+
 test("a prompt is placed after its vendor's print flag, last in argv", () => {
+  assert.deepEqual(Object.keys(VENDORS).filter(v => VENDORS[v].prompt_flag === null), POSITIONAL,
+    "only the subcommand vendor takes its prompt positionally; every other vendor has a print flag");
   for (const [vendor, c] of Object.entries(VENDORS)) {
     const { args } = buildArgv({ vendor, cwd: "/repo", prompt: "do the thing" });
     assert.equal(args.at(-1), "do the thing", `${vendor}: the prompt must be the final argument`);
-    if (c.prompt_flag) {
+    if (!POSITIONAL.includes(vendor)) {
+      assert.equal(typeof c.prompt_flag, "string", `${vendor}: a print flag is declared`);
       assert.equal(args.at(-2), c.prompt_flag,
         `${vendor}: the prompt must be immediately preceded by ${c.prompt_flag}`);
     }
@@ -118,7 +125,9 @@ test("omitting the prompt omits the flag too -- no empty trailing argument", () 
   for (const [vendor, c] of Object.entries(VENDORS)) {
     const { args } = buildArgv({ vendor, cwd: "/repo", sessionId: "s" });
     assert.ok(args.every(a => a !== ""), `${vendor}: empty string in argv`);
-    if (c.prompt_flag) {
+    // A positional vendor has no print flag to omit; every other vendor's flag is asserted present, then absent from argv.
+    if (!POSITIONAL.includes(vendor)) {
+      assert.equal(typeof c.prompt_flag, "string", `${vendor}: a print flag is declared`);
       assert.ok(!args.includes(c.prompt_flag),
         `${vendor}: the print flag must not appear when there is no prompt to print`);
     }

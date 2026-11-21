@@ -36,14 +36,20 @@ import { modelId, labOf, vendorsOfLab } from "../config/models.mjs";
 import { tokenCapFor } from "../agents/store.mjs";
 import { ticketContainmentRefusal, ticketRuntimeRefusal, normalizeSlots, isUnder } from "./ticket-safety.mjs";
 import { spawnPromise } from "./spawn.mjs";
-import { runAgyCliTurn } from "./agy-cli.mjs";
+import { runAgyCliTurn, agySdkEnvOf, agyModelMismatch } from "./agy-cli.mjs";
+import { sdkSeatJailGate, dropSdkSeatScratch } from "../agy/sandbox.mjs";
 import { nextOccupancy } from "./occupancy.mjs";
-import { escalationRecord } from "../route/protocol.mjs";
+import { escalationRecord, PROTOCOLS } from "../route/protocol.mjs";
+import { routeSeats, isMeteredGemini, geminiAdmission, spendGemini, geminiBilling, geminiKindOf, billingRecord, isGeminiBillingRefusal } from "../route/quota-failover.mjs";
+import { openSeatSession, seatUpstreamOf, SEAT_VERTEX_UNSUPPORTED } from "../antigravity/seat-session.mjs";
+import { laneParts } from "../route/fit-matrix.mjs";
+import { currentPolicy as currentIdentityPolicy, policyDigest as identityPolicyDigest, contributorKeys, candidateRefusal, reviewerRefusal, resolveModel } from "../review/identity.mjs";
 import { defaultOutputFor, outputBudgetFor, TOKEN_TIERS } from "../config/tiers.mjs";
 import { frontierCandidates, readPools, selectSeat, selectionPolicy } from "../route/frontier.mjs";
 import { loadPractice, withPractice } from "../ledger/practice-kinds.mjs";
-import { reviewScope } from "../review/scope.mjs";
+import { reviewScope, CRITIQUE_VIA } from "../review/scope.mjs";
 import { taskProfile, requirementsOf } from "../route/task-profile.mjs";
+import { SDK_TRANSPORT } from "../antigravity/config.mjs";
 import { shadowSeat, withShadow } from "../practice/shadow.mjs";
 import { assignArm, explicitAssignment, DEFAULT_ASSIGNMENT_POLICY } from "../practice/assign.mjs";
 import { routeCall, openCooldownStore, isFrontier, classifyFailure } from "../../../packages/model-client/index.mjs";
@@ -125,19 +131,30 @@ function usageOf(raw) {
   const output = num(raw.output_tokens) ?? num(raw.completion_tokens) ?? google;
   return { input_tokens: input, output_tokens: output, reported: structuredClone(raw) };
 }
+// THE TRANSPORT AN agy ATTEMPT RAN ON (KG-6; knowledge graphs, Slice C2): an Antigravity seat's own transport is `agy`
+// (route/frontier.mjs seatTransport), which does not say whether the CLI lane or the python SDK seat served it; agyTurn
+// resolves it, and the attempt records the resolved one, so the capability metrics map each attempt to its executable
+// capability (capability/metrics.mjs). A record that says `agy` (written before this) stays readable and is listed unmapped.
+const AGY_TRANSPORT_OF = Object.freeze({ cli: "agy-cli", sdk: "agy-sdk" });
 // What an attempt that ended in an error was: the router's own classification, so a quota refusal recorded
 // here is the same quota refusal the fallback acted on.
 function failureOutcome(e) {
   if (/^CONTEXT_|^INPUT_CEILING$/.test(String(e?.code ?? ""))) return "refused_preflight";
+  // A metered Gemini seat refused at its point of spend by the billing policy (route/gemini-billing.mjs: off, or its
+  // budget spent): nothing was sent.
+  if (isGeminiBillingRefusal(e)) return "refused_metered";
   const f = classifyFailure(e);
   return f.quota ? "quota" : f.retryable ? "transient" : "error";
 }
 // The run's resource summary, derived from its attempts. Cost is not estimated: no versioned price source
 // is attached, so USD is unknown (null) and says why.
-// The provider calls an attempt list made: every attempt but one the seat layer refused before sending any
-// request (`provider_requests: 0`), which reached no provider. Unknown (null) counts as a call.
+// The provider calls an attempt list made: THE BILLED REQUESTS, per attempt (self-audit round 3, assignment 3 (sealed
+// bb1287a), L-301: a 3-request Google long-decode turn is 3 provider calls, and was counted as 1). An attempt counts its
+// `provider_requests` (0 when the seat layer refused it before any request, or a lane turn failed before its spawn); an
+// attempt whose count is unknown (null) counts as ONE call, never zero. docs/routing-task-profile.md, "What one provider
+// call is".
 export function providerCallsOf(attempts = []) {
-  return attempts.filter(a => a?.provider_requests !== 0).length;
+  return attempts.reduce((n, a) => n + (Number.isInteger(a?.provider_requests) && a.provider_requests >= 0 ? a.provider_requests : 1), 0);
 }
 // THE SEATING REPORT: what the selector actually chose, per role, read from the turns the run made (each carries
 // its selection), not the legacy SEATING table. One row per role and seat that answered, in the order seated:
@@ -237,7 +254,8 @@ export async function runOpenItem(spec, opts = {}) {
     : opts.profile !== undefined && opts.profile !== null ? explicitAssignment({ profile: opts.profile, stakes: stakesOfTicket(), interleave: true })
     : { ...assignArm({ ticketKey: spec.key, stakes: stakesOfTicket(), policy: ASSIGNMENT_POLICY }), policy: ASSIGNMENT_POLICY };
   const profile = opts.profile ?? ASSIGNMENT?.arm ?? "argo";
-  // `fit` is a selectable candidate (src/route/task-profile.mjs), never the default: argo is the approved policy.
+  // A run called without a profile runs under argo. The lifecycle names `fit` (ophanim/operate/stages.mjs, its default
+  // since 2026-11-17); `fit` is selected, never assumed, here.
   if (!["argo", "legacy", "fit"].includes(profile)) throw new Error("unknown routing profile");
   const pools = opts.pools ?? readPools();
   const cooldown = opts.cooldown ?? openCooldownStore(join(process.env.PANTHEON_COOLDOWN_DIR ?? join(homedir(), ".cache", "pantheon"), "v2"));
@@ -292,6 +310,19 @@ export async function runOpenItem(spec, opts = {}) {
   // this reasoning does not cover; removing it here rather than leaving it dark is the honest move.
   const RESUME = resume;
   // `retryStopped: "<reason>"` (resume only): the explicit action that lifts recorded escalation stops.
+  // The escalation protocol the run decides a checker's rejection under (route/protocol.mjs). Default v1, as always;
+  // "pantheon.escalation/v2" lets the same seat revise when no stronger one exists (the lifecycle asks for it).
+  const ESCALATION = opts.escalation ?? null;
+  if (ESCALATION !== null && !PROTOCOLS.includes(ESCALATION)) throw new Error(`unknown escalation protocol "${ESCALATION}"`);
+  // IN-RUN REVIEW INDEPENDENCE. Default: the lab rule, as always (a reviewer shares no lab with a contribution to the
+  // bytes it judges). `independence: "model"` (the lifecycle passes it only when the model rule is in force) seats the
+  // in-run checker by MODEL identity instead, under a pinned identity policy: no reviewer that is a contributing model
+  // -- the worker's, or a reviewer's whose findings reached a revision -- labs that did not contribute first, then a
+  // non-contributing model of a contributing lab. Its reviews are recorded with that policy, and the ledger checks
+  // them under it (lineage-kinds.mjs). The run records which rule it ran under.
+  const IN_RUN_MODEL = opts.independence === "model";
+  if (opts.independence !== undefined && !["lab", "model"].includes(opts.independence)) throw new Error(`unknown in-run independence "${opts.independence}"`);
+  const ID_POLICY = IN_RUN_MODEL ? opts.identityPolicy ?? currentIdentityPolicy() : null;
   const RETRY_STOPPED = typeof opts.retryStopped === "string" && opts.retryStopped.trim() ? opts.retryStopped.trim() : null;
   if (opts.retryStopped !== undefined && (!RETRY_STOPPED || !RESUME)) throw new Error("retryStopped is a stated reason, and applies only to a resume");
   // `maxProviderCalls`: a bound on the provider calls this invocation may make, checked at the generation
@@ -327,9 +358,19 @@ export async function runOpenItem(spec, opts = {}) {
   const applyDecision = (c, rec, rev) => {
     const { action, to, cause, why } = rec.decision;
     if (action === "raise_effort") c.effort = to.effort;
-    if (action === "step_rung") { c.forced = { vendor: to.vendor, model: to.model }; c.effort = null; }
+    // raise_thinking (fit, Antigravity lanes): the same base model's next thinking level is another lane name, so it
+    // is applied as a seat, like a rung.
+    if (action === "step_rung" || action === "raise_thinking") { c.forced = { vendor: to.vendor, model: to.model, ...(action === "raise_thinking" ? { why: "thinking level raised" } : {}) }; c.effort = null; }
     if (action === "stop") c.stopped = { action, rev, cause, why };
     if (!["hold", "wait", "stop"].includes(action)) c.escalationSteps = (c.escalationSteps ?? 0) + 1;
+  };
+  // Under `fit`, an implementer on an Antigravity lane escalates on its matrix ladder (route/fit-matrix.mjs): the
+  // ladder travels on the decision's seat, so the record re-derives from its own inputs (protocol.mjs nextStep).
+  // Only a seat that RAN on a lane has one: the metered API answering as a quota failover carries effort and climbs
+  // its own documented ladder, as any API seat does.
+  const laneLadderOf = c => {
+    const ladder = profile === "fit" ? c.choice?.seat?.selection?.matrix?.ladder : null;
+    return Array.isArray(ladder) && laneParts(c.ranModel ?? c.choice.seat.model) ? { lane_ladder: ladder } : {};
   };
   // The output-token tier for this ticket's turns (config/tiers.mjs): the ticket's difficulty, else medium.
   // Under `fit` the tier is the profile's own `output` dimension (xs..xl, or the legacy label's default).
@@ -405,7 +446,39 @@ export async function runOpenItem(spec, opts = {}) {
     profile, ...(ASSIGNMENT ? { assignment: ASSIGNMENT } : {}) };
   // Admitted at the generation boundary, before the call: past the bound, nothing is sent and the refusal
   // is named (PROVIDER_CALL_LIMIT). The routers treat it as non-retryable, so it ends the role's routing.
+  // THE GEMINI BILLING POLICY (register L-136, extending L-124; route/gemini-billing.mjs, docs/billing-policy.md).
+  // `opts.billing` (a geminiBilling context: the policy and the persistent usage record its consumption is derived from;
+  // default: both kinds OFF) admits every billed Gemini request of this run at its point of spend: a walk's quota-failover
+  // candidate and its requests (metered_gemini_failover), and every primary Gemini seat -- an operator's or a ticket pin's
+  // Gemini API id, the python Antigravity SDK seat (gemini_api_primary). A key in the environment admits nothing. The
+  // policy, every usage row and every refusal are kept on run.json (`billing`).
+  if (opts.meteredFailover !== undefined) throw new Error("runOpenItem: meteredFailover is replaced by `billing` (the Gemini billing policy, route/gemini-billing.mjs)");
+  if (opts.billing !== undefined && opts.billing !== null && !(opts.billing.policy && Array.isArray(opts.billing.refusals))) throw new Error("runOpenItem: billing is a geminiBilling() context (route/gemini-billing.mjs)");
+  const BILLING = opts.billing ?? geminiBilling();
+  run.billing = { ...billingRecord(BILLING), rows: [], refusals: [] };
+  const billingSeen = { rows: BILLING.rows.length, refusals: BILLING.refusals.length };
+  // The run's own record of billing: the policy in force, and every usage row and refusal since the last write, appended.
+  const syncBilling = () => {
+    const b = billingRecord(BILLING);
+    run.billing = { ...(run.billing ?? {}), policy: b.policy, where: b.where, rows: [...(run.billing?.rows ?? []), ...b.rows.slice(billingSeen.rows)],
+      refusals: [...(run.billing?.refusals ?? []), ...b.refusals.slice(billingSeen.refusals)] };
+    billingSeen.rows = b.rows.length; billingSeen.refusals = b.refusals.length;
+  };
+  // `opts.signal` (optional): the caller's stop (a lifecycle stage's elapsed bound). Once it fires no provider call is
+  // admitted, and every turn carries it to its request (independent review round 2, assignment 3 (Google
+  // gemini-4-carbon, manual, 77480d6), finding 9).
+  // `closedFor` (no charge): the refusal admitProviderCall would make now, thrown, so a turn whose bound is already reached
+  // or whose run is stopped is refused before its seat is opened (no request, no attempt); the charge itself is made per
+  // request at the point of spend (admitProviderCall).
+  function refuseIfClosed({ vendor, model, pool, transport, purpose }) {
+    if (opts.signal?.aborted || (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS)) admitProviderCall({ vendor, model, pool, transport, purpose });
+  }
   function admitProviderCall({ vendor, model, pool, transport, purpose }) {
+    if (opts.signal?.aborted) {
+      const why = `ABORTED: ${opts.signal.reason?.message ?? "the run was stopped"}; ${vendor}/${model} (${purpose}) was not called`;
+      progress({ event: "turn.refused", seat: vendor, model, detail: why });
+      throw Object.assign(new Error(why), { code: opts.signal.reason?.code ?? "ABORTED", name: "AbortError", cause: opts.signal.reason });
+    }
     if (MAX_PROVIDER_CALLS !== null && providerCalls >= MAX_PROVIDER_CALLS) {
       const why = `PROVIDER_CALL_LIMIT: this run has made ${providerCalls} of its ${MAX_PROVIDER_CALLS} permitted provider call(s); ` +
         `${vendor}/${model} (${purpose}) was not called`;
@@ -415,22 +488,35 @@ export async function runOpenItem(spec, opts = {}) {
       record();
       throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT" });
     }
+    // `onCharge` (optional): the caller's charge (a lifecycle stage's work-ledger spend), made BEFORE the call, so a
+    // call that leaves the process is counted even if the process dies before the stage record; a refused charge
+    // refuses the call (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 1.3).
+    if (typeof opts.onCharge === "function") {
+      try { opts.onCharge({ vendor, model, purpose }); }
+      catch (e) {
+        const why = `PROVIDER_CALL_LIMIT: the caller refused to charge ${vendor}/${model} (${purpose}): ${String(e?.message ?? e).slice(0, 300)}`;
+        run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls,
+          refused: { code: "PROVIDER_CALL_LIMIT", at: new Date().toISOString(), vendor, model, pool: pool ?? vendor, transport, purpose, why } };
+        progress({ event: "turn.refused", seat: vendor, model, detail: why });
+        record();
+        throw Object.assign(new Error(why), { code: "PROVIDER_CALL_LIMIT", cause: e });
+      }
+    }
     providerCalls++;
     run.provider_calls = { ...run.provider_calls, limit: MAX_PROVIDER_CALLS, made: providerCalls, refused: null };
   }
+  // Every provider call is admitted (and charged) at its POINT OF SPEND, request by request (admitProviderCall from the
+  // seat's onRequest, or from the lane's charge hook between its jail build and its spawn), so a turn the seat layer
+  // refuses before any request was never charged and nothing is refunded: the run's bound and the caller's charge
+  // (onCharge, the work ledger) count the same calls (self-audit round 3, assignment 3 (sealed bb1287a), L-301 and 1.C).
   function recordAttempt(a) {
     const attempts = (run.attempts ??= []);
     attempts.push({ n: attempts.length + 1, at: new Date().toISOString(), ...a });
     run.resources = resourcesOf(attempts);
-    // Admitted before the call, but the seat layer refused it before any request was sent: no provider was
-    // called, so it does not count against the bound.
-    if (a.provider_requests === 0 && providerCalls > 0) {
-      providerCalls--;
-      run.provider_calls = { ...run.provider_calls, made: providerCalls };
-    }
   }
   let seatingShown = 0;
   const record = () => {
+    syncBilling();
     if (!recordAllowed) return;
     // The seating report, as the selector chose it (seatingOf): kept on the run and streamed as each seat answers.
     run.seating = seatingOf(run);
@@ -465,11 +551,21 @@ export async function runOpenItem(spec, opts = {}) {
   const enter = (name, detail = "") => { stage = name; progress({ event: "stage.start", detail }); };
 
   // THE ANTIGRAVITY SEAT. The CLI's --agent lane consumes cached OAuth and emits NDJSON events.
-  // Keep the SDK as default until a live OAuth turn produces an observed answer: the CLI can exit
-  // zero with SUCCESS, zero turns and empty response on print timeout. Renaming an OAuth token
-  // GEMINI_API_KEY cannot authenticate the SDK. PANTHEON_AGY_TRANSPORT=cli opts into the new lane.
+  // THE SUBSCRIPTION CLI LANE IS THE DEFAULT for every role (owner decision 2026-11-19, register L-136): the python SDK
+  // seat is billed to GEMINI_API_KEY or Vertex on every turn -- primary Gemini execution -- so the reviewer and the scout
+  // no longer default to it. PANTHEON_AGY_TRANSPORT=sdk still selects it for those two roles, and the seat is then
+  // admitted only by the billing policy's gemini_api_primary (with a budget), at its point of spend. Renaming an OAuth
+  // token GEMINI_API_KEY cannot authenticate the SDK.
   let agyN = 0;
-  async function agyTurn({ purpose, model, prompt, declared = null, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900) }) {
+  // THE SDK SEAT'S OWN MAXIMUM REQUEST COUNT (owner decision L-150, item 3): the BudgetConfig.max_model_calls the seat's Agent
+  // is given (scripts/agy-seat.py --max-model-calls) and the session cap its gateway session enforces, the same number.
+  const SDK_MAX_MODEL_CALLS = 40;
+  // `signal` (the turn's stop: L-306) cancels the CLI's or the SDK seat's process group; `admit` (L-301) is the provider-call
+  // admission, called at the point of spend: inside runAgyCliTurn between its jail build and its spawn, or, for the python
+  // SDK seat, at EACH request the model gateway admits for it (L-150), never for the launch itself.
+  // `onTransport` (KG-6, knowledge graphs Slice C2) is told the transport this turn resolved to, agy-cli or agy-sdk, as soon
+  // as it is known, so the attempt records which of the two served it (or was refused on it), never the ambiguous `agy`.
+  async function agyTurn({ purpose, model, prompt, declared = null, timeoutS = Number(process.env.PANTHEON_AGY_TIMEOUT ?? 900), signal = undefined, admit = () => {}, onTransport = () => {} }) {
     const role = purpose === "critique" ? "reviewer" : purpose === "scout" ? "scout" : purpose === "plan" ? "planner"
       : purpose === "work" ? "implementer" : null;
     if (!role) throw new Error(`agy seat: no Antigravity agent is defined for purpose "${purpose}"`);
@@ -483,7 +579,8 @@ export async function runOpenItem(spec, opts = {}) {
     // unconditionally, for these two roles specifically, is the actual fix; PANTHEON_AGY_TRANSPORT
     // still governs scout/reviewer, which genuinely support both lanes.
     // A declared lane (lanes.json: transport agy-cli) is served by that transport for every role (audit M6).
-    const transport = (role === "planner" || role === "implementer" || declared === "agy-cli") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "sdk");
+    const transport = (role === "planner" || role === "implementer" || declared === "agy-cli") ? "cli" : (process.env.PANTHEON_AGY_TRANSPORT ?? "cli");
+    onTransport(AGY_TRANSPORT_OF[transport] ?? null);
     const dir = join(outDir, "agy_google", `${purpose}-${++agyN}`); mkdirSync(dir, { recursive: true });
     // The implementer keeps its real NO_TOOLS prompt untouched: it is genuinely tool-less on every
     // transport (run-item.mjs applies its text reply to disk itself -- see the WORK stage above),
@@ -496,7 +593,7 @@ export async function runOpenItem(spec, opts = {}) {
         : role === "scout"
           ? `\n\nYou have read tools in this seat. The workspace ${worktree} is the ticket's project tree before implementation. Inspect the files you cite; no artifact exists yet.`
           : `\n\nYou have tools in this seat. The workspace ${worktree} is the tree under review, with the artifact already written into it. ` +
-            "Run the acceptance command yourself and quote what it printed; open the files you cite. Hand the fact-checker subagent one direct check at a time.");
+            "Run the acceptance command yourself, through the launcher named below, and quote what it printed; open the files you cite. Hand the fact-checker subagent one direct check at a time.");
     writeFileSync(join(dir, "brief.txt"), brief);
     let schemaPath = null;
     if (role === "reviewer") {
@@ -507,25 +604,120 @@ export async function runOpenItem(spec, opts = {}) {
     if (transport === "cli") {
       const cli = process.env.PANTHEON_AGY_CLI ?? join(homedir(), ".local", "bin", "agy");
       if (cli.includes("/") && !existsSync(cli)) throw new Error(`agy seat: CLI absent at ${cli} (set PANTHEON_AGY_CLI)`);
+      // THE ACCEPTANCE COMMAND, IN THE VERIFY JAIL (self-audit round 3, assignment 3 (sealed bb1287a), L-407): the reviewer
+      // and the scout run the ticket's acceptance command through a verify launcher (src/agy/verify-jail.mjs), the one
+      // command their jail hook approves. The jail binds the worktree only: the run dir around it (seats, ledger, run.json)
+      // and the controller's environment do not exist there.
+      const verify = role === "reviewer" || role === "scout" ? { cmd: CMD } : null;
       res = await runAgyCliTurn({ cli, repo: REPO, worktree, role, model, prompt: brief,
-        timeoutS, schemaPath, onEvent: ev => progress({ seat: "agy_google", model, ...ev }) });
+        timeoutS, schemaPath, onEvent: ev => progress({ seat: "agy_google", model, ...ev }), ...(signal ? { signal } : {}), charge: admit,
+        ...(verify ? { verify } : {}) });
+      if (res.verify) progress({ event: "seat.verify", seat: "agy_google", model, detail: res.verify.offered ? `acceptance launcher offered: ${res.verify.command}` : `no command offered: ${res.verify.why}` });
     } else if (transport === "sdk") {
+      // THE POINT-OF-SPEND GUARD OF THE SDK SEAT (L-124, split by L-136; L-504 invariant 4). The python SDK seat's requests
+      // are billed to GEMINI_API_KEY (through the model gateway below, request by request: L-150): it has no subscription
+      // mode, so it is PRIMARY Gemini execution. Unless the billing policy's gemini_api_primary admits it (the failover
+      // switch never does), it is refused HERE, before the venv and key checks, before anything is admitted (charged) and
+      // before anything is spawned, whatever credential the environment holds (live-run's withholding of the key is not
+      // what protects it). The CLI transport above (the OAuth subscription) is never refused by this.
+      const spend = { kind: "primary", vendor: "agy_google", model, purpose, role, transport: "sdk" };
+      try { geminiAdmission(BILLING, spend); }
+      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }
       const python = process.env.PANTHEON_AGY_PYTHON ?? join(homedir(), "Projects", "agentic-pipeline", "sdk", ".venv-antigravity", "bin", "python");
       if (!existsSync(python)) throw new Error(`agy seat: venv python absent at ${python} (set PANTHEON_AGY_PYTHON)`);
-      if (!process.env.GEMINI_API_KEY && !process.env.PANTHEON_AGY_VERTEX_PROJECT) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (or set PANTHEON_AGY_VERTEX_PROJECT for Vertex ADC)");
+      // VERTEX THROUGH THE SDK SEAT IS REFUSED (register L-150, design D8): the model gateway holds the Gemini API key and
+      // no Vertex credential it could forward with, and a Vertex request the gateway did not carry would be neither charged
+      // nor bounded. Fail closed, before anything is admitted or spawned.
+      if (process.env.PANTHEON_AGY_VERTEX_PROJECT) {
+        const why = `${SEAT_VERTEX_UNSUPPORTED}: PANTHEON_AGY_VERTEX_PROJECT asks for Vertex, and the python SDK seat's requests are carried only by the controller's model gateway, which forwards to the Gemini API with GEMINI_API_KEY; nothing was admitted or spawned`;
+        progress({ event: "turn.refused", seat: "agy_google", model, detail: why.slice(0, 300) }); record();
+        throw Object.assign(new Error(why), { code: SEAT_VERTEX_UNSUPPORTED, provider_requests: 0 });
+      }
+      if (!process.env.GEMINI_API_KEY) throw new Error("agy seat: GEMINI_API_KEY is not in the environment (the controller's model gateway holds it; the SDK seat never does)");
+      // THE SEAT'S JAIL (register L-155; owner decision 2026-11-20 "Yes, bubble per seat"; src/agy/sandbox.mjs sdkSeatJail):
+      // the seat's WHOLE process runs in bwrap -- the host read-only, the controller's HOME and credential locations hidden,
+      // its own PID namespace and /proc (the controller's environment out of reach), only the worktree and this seat's out
+      // dir writable, an allowlisted environment. No bwrap, or a failing probe of the jail, refuses the seat HERE, before the
+      // gateway session exists: nothing admitted, charged or spawned. There is no override. (`opts.sdkJail.bwrap` names the binary,
+      // as runAgyCliTurn's sandbox.bwrap does; a binary that is missing or fails the probe refuses.) NO DESCRIPTOR BEYOND 0,
+      // 1 AND 2 (register KG-11): the jail's prefix starts bwrap through the descriptor closer (src/agy/fd-exec.mjs, a
+      // single-threaded python3 program), so the seat inherits nothing this controller was handed but its stdio; a closer
+      // that does not work here (no python3 included) refuses the seat at this gate, as a missing bwrap does.
+      let jailGate;
+      try { jailGate = await sdkSeatJailGate({ bwrap: opts.sdkJail?.bwrap ?? "bwrap" }); }
+      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: String(refusal.message).slice(0, 300) }); record(); throw Object.assign(refusal, { provider_requests: 0 }); }
+      // The seat's progress trail is written inside its out dir (the jail writes nothing else of the run) and copied, line by
+      // line as it grows, into the run's progress.jsonl, where an overseer reads it.
+      const seatTrail = join(dir, "progress.jsonl");
       const args = [join(REPO, "scripts", "agy-seat.py"), "--role", role, "--workspace", worktree, "--repo", REPO,
         "--model", model, "--brief", join(dir, "brief.txt"), "--out", dir,
-        "--progress", join(outDir, "progress.jsonl"),
+        "--progress", seatTrail,
         "--stage", purpose === "critique" ? "check" : purpose === "plan" ? "plan" : "intake",
+        "--max-model-calls", String(SDK_MAX_MODEL_CALLS),
         "--timeout", String(timeoutS)];
       if (schemaPath) args.push("--schema", schemaPath);
-      const run = await spawnPromise(python, args, { env: process.env, timeout: (timeoutS + 60) * 1000 });
-      const last = (run.stdout ?? "").trim().split("\n").filter(Boolean).pop();
+      signal?.throwIfAborted();
+      // THE MODEL GATEWAY (register L-150, L-151, L-724; antigravity/gateway.mjs through seat-session.mjs): EVERY Gemini
+      // request the SDK makes -- each model call, retry, continuation, subagent call, web search -- reaches the controller's
+      // loopback gateway with the session's token, and is admitted there by the session's own maximum request count (the
+      // --max-model-calls the seat is given), then by spendGemini: the policy, then the run's admission (`admit`: its
+      // provider-call bound and the caller's charge), then the usage row persisted -- all before it is forwarded with the
+      // real key. The launch itself is charged nothing. It is the gateway the pipeline's SDK sessions use: one mechanism.
+      const session = await openSeatSession({ apiKey: process.env.GEMINI_API_KEY, upstream: seatUpstreamOf(process.env), outcomes: join(dir, "gateway-outcomes.jsonl"),
+        model, billing: BILLING, admit: () => admit(), spend: { vendor: "agy_google", purpose, role },
+        maxRequests: SDK_MAX_MODEL_CALLS, lifetimeMs: (timeoutS + 60) * 1000,
+        lineage: { board_run: { key: run.key, board: root, started_at: run.started_at }, seat: { vendor: "agy_google", model, role, purpose, launch: `${purpose}-${agyN}` } },
+        onAdmitted: row => { record(); progress({ event: "gateway.admitted", seat: "agy_google", model: row.model, detail: `request ${row.request} of the session (${row.identity.request_id}, ${row.lineage.conversation}): charged before it was sent; ${row.remaining_after} of the budget left` }); },
+        onRefused: r => progress({ event: "turn.refused", seat: "agy_google", model, detail: `model gateway: ${r.code}: ${String(r.why).slice(0, 240)}` }) });
+      // THE SCRUBBED ENVIRONMENT (L-410, tightened by L-150): the worker's allowlist and the session's scoped capability, a HOME
+      // of its own, and NO credential: never GEMINI_API_KEY, GOOGLE_API_KEY, Vertex or ADC. The stop reaches its process group (L-306).
+      const home = join(dir, "home"); mkdirSync(home, { recursive: true });
+      const sdkEnv = agySdkEnvOf(process.env, { capability: session.env, home });
+      progress({ event: "seat.env", seat: "agy_google", model, detail: `python SDK seat env: allowlist, credentials passed: ${sdkEnv.credentials.join(", ") || "none"}; gateway capability: ${sdkEnv.capability.join(", ") || "none"}; ${sdkEnv.dropped.length} variable(s) withheld` });
+      let sdkRun, jail = null, copied = 0;
+      const copyTrail = () => {
+        try {
+          const b = readFileSync(seatTrail), end = b.lastIndexOf(10) + 1;
+          if (end > copied) { appendFileSync(join(outDir, "progress.jsonl"), b.subarray(copied, end)); copied = end; }
+        } catch { /* not written yet */ }
+      };
+      const trail = setInterval(copyTrail, 500); trail.unref?.();
+      try {
+        // A jail that cannot be built (a path that would expose a hidden location, a credential-named variable) refuses the
+        // seat: nothing is spawned, and the gateway session below is closed with nothing admitted.
+        jail = jailGate.build({ python, script: args[0], repo: REPO, workspace: worktree, out_dir: dir, env: sdkEnv.env, read: [join(dir, "brief.txt"), ...(schemaPath ? [schemaPath] : [])] });
+        progress({ event: "seat.jail", seat: "agy_google", model, detail: `python SDK seat jailed (bwrap): ${jail.hidden.length} host location(s) hidden, writable: ${jail.writable.join(", ")}; environment: ${jail.record.env.join(", ")}; descriptors: ${jail.fds.passed.join(", ")} only; network shared (retained)` });
+        const [cmd, ...argv] = [...jail.prefix, python, ...args];
+        sdkRun = await spawnPromise(cmd, argv, { env: jail.env, timeout: (timeoutS + 60) * 1000, ...(signal ? { signal } : {}) });
+      }
+      // THE SINGLE-ASSIGNMENT TEARDOWN, on every path (an answer, a refusal, the timeout, a kill): the gateway session closed and
+      // its token revoked, the seat's HOME removed (its /tmp was the jail's own tmpfs), the trail's last lines copied.
+      finally {
+        await session.close(); record(); clearInterval(trail); copyTrail();
+        const teardown = await dropSdkSeatScratch(jail ?? { home });
+        progress({ event: "seat.teardown", seat: "agy_google", model, detail: teardown?.removed ? `the seat's HOME ${home} removed; the gateway session closed` : `the seat's HOME ${home} was NOT removed: ${JSON.stringify(teardown?.removal_error ?? null)}` });
+      }
+      const made = session.admitted;
+      const last = (sdkRun.stdout ?? "").trim().split("\n").filter(Boolean).pop();
       let out = null;
       try { out = last ? JSON.parse(last) : null; } catch { /* malformed vendor envelope */ }
-      if (run.status !== 0 || !out?.ok) {
-        const tail = (run.stderr ?? "").split("\n").filter(l => l && !l.startsWith("{")).slice(-3).join(" | ");
-        throw new Error(`agy SDK seat exited ${run.status ?? run.signal}: ${out?.error ?? tail}`);
+      // THE MODEL GUARD OF THE SDK SEAT (L-504 invariant 3), before the stop, the exit status or the answer is read: the
+      // model the seat's envelope reports it ran (`served_model` when it names one, else the `model` agy-seat.py configured
+      // its Agent with) is compared with the model asked for. Another model, or a completed turn that reports none, fails
+      // closed with AGY_MODEL_MISMATCH and both identities; nothing of it is stamped as served.
+      const reported = typeof out?.served_model === "string" && out.served_model ? out.served_model : typeof out?.model === "string" && out.model ? out.model : null;
+      if ((reported !== null && reported !== model) || (reported === null && sdkRun.status === 0 && out?.ok === true)) {
+        throw agyModelMismatch({ requested: { agent: `pantheon-${role}`, model }, reported: { agent: typeof out?.role === "string" ? `pantheon-${out.role}` : null, model: reported } }, { transport: "agy-sdk", provider_requests: made });
+      }
+      if (sdkRun.killedFor === "cancelled") throw Object.assign(new Error("agy SDK seat was cancelled"), { code: "ABORTED", provider_requests: made });
+      // A REFUSAL OF THE BILLING POLICY OR OF THE RUN'S OWN ADMISSION, made at the gateway at a request's point of spend
+      // (owner item 8): the seat ended its turn on it, keeping its output and progress, and the run records it as that
+      // refusal (L-136: refused_metered, recoverable), with the requests admitted before it still counted.
+      const refused = session.billingRefusal;
+      if (refused) throw Object.assign(refused, { provider_requests: made });
+      if (sdkRun.status !== 0 || !out?.ok) {
+        const tail = (sdkRun.stderr ?? "").split("\n").filter(l => l && !l.startsWith("{")).slice(-3).join(" | ");
+        throw Object.assign(new Error(`agy SDK seat exited ${sdkRun.status ?? sdkRun.signal}: ${out?.error ?? tail}`), { provider_requests: made });
       }
       res = { text: existsSync(join(dir, "response.md")) ? readFileSync(join(dir, "response.md"), "utf8") : "",
         structured_output: out.structured_output ?? null, response_id: out.conversation_id ?? null,
@@ -548,9 +740,25 @@ export async function runOpenItem(spec, opts = {}) {
     return { text, response_id: res.response_id, usage: res.usage, tool_calls: res.tool_calls, subagent_calls: res.subagent_calls };
   }
 
-  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal, effort = null, transport = null, selection = null }) {
+  // A quota failover that was NOT used is on the progress trail with its reason, so "the metered API was not called"
+  // is a recorded fact rather than an absence.
+  function skippedFailover({ seat, why }) { progress({ event: "quota_failover.skipped", seat: seat.vendor, model: seat.model, detail: why }); }
+
+  async function turn({ vendor, purpose, model, prompt, extra = undefined, pool, poolConfig, signal = opts.signal, effort = null, transport = null, selection = null, quota_failover = null }) {
     const t0 = Date.now();
+    // The metered Gemini API answering as the QUOTA FAILOVER of an Antigravity lane (route/quota-failover.mjs): the
+    // lane refusal it followed is recorded on every attempt and on the turn, beside the selection that carries it too.
+    const failover = quota_failover?.used ? { quota_failover } : {};
+    if (failover.quota_failover) progress({ event: "quota_failover", seat: vendor, model, detail: `metered API used as quota failover of ${quota_failover.lanes.join(", ")}: ${quota_failover.after.map(a => `${a.lane} ${a.outcome} (${a.source})`).join("; ")}` });
     progress({ event: "turn.start", seat: vendor, model, detail: `${purpose}, ${prompt.length} chars of prompt` });
+    // A SEAT OF THE ANTIGRAVITY SDK TRANSPORT IS NOT RUN HERE (owner direction 2026-11-19): it is a tool-enabled session
+    // on a work unit, with its own jail, gateway and subagent governor (src/pipeline, src/antigravity). The selector
+    // gives this per-file board the fit matrix's Google implementer in the board's own form (route/frontier.mjs
+    // boardSeat: the same model as one tool-less Gemini API turn), so a seat that still names the SDK transport was
+    // seated by hand. It is refused before any call or charge, and no agy CLI lane is started in its place.
+    if (transport === SDK_TRANSPORT) {
+      throw Object.assign(new Error(`${vendor}/${model} is a seat of the Antigravity SDK transport: it runs as a session on a work unit (the pipeline), and the per-file board does not run it. Nothing is run in its place`), { code: "SDK_SEAT_NEEDS_PIPELINE" });
+    }
     // The seat's own transport decides the path; a seat built before transports were recorded falls back
     // to the rule the transports encode (a non-frontier agy_google model is not an API id).
     const lane = transport ? transport !== "api" : vendor === "agy_google" && !isFrontier(model);
@@ -558,25 +766,50 @@ export async function runOpenItem(spec, opts = {}) {
     if (lane) {
       // The lane takes no effort or output cap: none is sent, so none is recorded as sent.
       const settings = { model, pool: pool ?? vendor, transport: transport ?? "agy", effort: null, max_output_tokens: null, output_budget_policy: null };
-      admitProviderCall({ vendor, model, pool, transport: settings.transport, purpose });
+      // Antigravity serves Gemini models only (owner direction 2026-11-17). Refused before any call or charge: a known
+      // non-Google model AND an undeclared name, exactly as agySingleTurn refuses them (sdk/agy-turn.mjs). The output
+      // below carries the input model as served; an undeclared name must not be stamped as who answered (independent
+      // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 9).
+      const made = resolveModel(vendor, model);
+      if (!made?.known || made.lab !== "google") {
+        throw Object.assign(new Error(`the Antigravity transport serves Gemini models only: ${model} is ${made?.known ? `a ${made.lab} model` : "not a declared model"}`), { code: "AGY_GEMINI_ONLY" });
+      }
       let r;
       const a0 = Date.now();
-      try { r = await agyTurn({ purpose, model, prompt, declared: transport }); }
+      // THE STOP AND THE CHARGE REACH THE LANE (self-audit round 3, assignment 3 (sealed bb1287a), L-306 and L-301): the turn's
+      // signal cancels the agy process group, and the call is admitted at its point of spend (after the jail build, before
+      // the spawn), so a lane turn that fails before its spawn is not a provider call.
+      refuseIfClosed({ vendor, model, pool, transport: settings.transport, purpose });
+      // Each admission is one provider call: the CLI lane's one spawn, or each request the model gateway admits for the SDK seat (L-150).
+      let laneCharged = 0;
+      // THE ATTEMPT'S TRANSPORT (KG-6): the one agyTurn resolved, agy-cli or agy-sdk; the seat's own (`agy`, or a declared
+      // lane's agy-cli) only when the turn failed before it resolved one. `settings` keeps the seat's transport as selected.
+      let ran = null;
+      const admitLane = () => { admitProviderCall({ vendor, model, pool, transport: ran ?? settings.transport, purpose }); laneCharged += 1; };
+      try { r = await agyTurn({ purpose, model, prompt, declared: transport, ...(signal ? { signal } : {}), admit: admitLane, onTransport: t => { ran = t; } }); }
       catch (e) {
-        recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: failureOutcome(e),
-          status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200), usage: null, settings, ms: Date.now() - a0 });
+        // An identity mismatch (L-504 invariant 3) is recorded with BOTH identities, the model asked for and the one reported.
+        recordAttempt({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, outcome: failureOutcome(e),
+          status: e?.status ?? null, code: e?.code ?? null, why: String(e?.message ?? e).slice(0, 200), usage: null, settings, ms: Date.now() - a0, provider_requests: laneCharged,
+          ...(e?.identity ? { identity: e.identity } : {}) });
         progress({ event: "turn.error", seat: vendor, model, detail: String(e?.message ?? e).slice(0, 200) }); throw e;
       }
       const ms = Date.now() - t0;
       const usage = usageOf(r.usage);
-      recordAttempt({ vendor, model, pool: pool ?? vendor, transport: settings.transport, purpose, outcome: "ok", status: null, code: null, why: null, usage, settings, ms: Date.now() - a0 });
+      recordAttempt({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, outcome: "ok", status: null, code: null, why: null, usage, settings, ms: Date.now() - a0, provider_requests: laneCharged });
       // The agy transports take no effort. The protocol never decides one for these seats; if one
       // arrives anyway it is recorded as not carried rather than silently dropped.
-      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "agy", purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
-        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}), ...chosen });
-      // The agy transports report no served model; it is recorded as unreported (null), never guessed.
+      // THE TURN'S TRANSPORT (KG-6): the one agyTurn resolved, agy-cli or agy-sdk, as on the attempt, so the metrics map the
+      // turn (its `accepted` outcome) onto its executable capability; `settings` keeps the seat's transport as selected.
+      run.turns.push({ vendor, model, pool: pool ?? vendor, transport: ran ?? settings.transport, purpose, ms, chars: r.text.length, prompt_chars: prompt.length, response_id: r.response_id, streamed: true,
+        tool_calls: r.tool_calls, subagent_calls: r.subagent_calls, usage, settings, attempts: 1, ...(effort ? { effort_not_carried: effort } : {}),
+        served_model: model, served_model_source: "input", ...chosen });
+      // FORMAT REQUIREMENT (owner direction 2026-11-17). The Antigravity transports return no serving model. The model
+      // is a REQUIRED INPUT of the call (the CLI lane also checks it against the model the CLI reports at start, and
+      // fails on a mismatch or an unknown model), so the output carries that input as its model, marked
+      // served_model_source "input": it is the pinned model, not a statement by the provider about this answer.
       recordTurn({ seat: { seat_id: `${vendor}-${purpose}@${model}`, vendor, mode: purpose, occupancy_gen: 1 },
-        requested_model: model, served_model: null, response_id: r.response_id ?? null, reply: r.text, purpose, prompt, ...chosen });
+        requested_model: model, served_model: model, served_model_source: "input", response_id: r.response_id ?? null, reply: r.text, purpose, prompt, ...chosen });
       progress({ event: "turn.done", seat: vendor, model, ms, detail: `${r.text.length} chars, ${r.tool_calls} tool call(s), ${r.subagent_calls} subagent(s)` });
       return r.text;
     }
@@ -607,16 +840,45 @@ export async function runOpenItem(spec, opts = {}) {
         max_output_tokens: sent ? sent.max_output_tokens : (asked?.max_tokens ?? asked?.max_output_tokens ?? asked?.config?.maxOutputTokens ?? null),
         output_budget_policy: res?.output_budget_policy ?? null, basis: sent ? "sent" : "requested" };
     };
-    const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...extraFields });
+    const attemptOf = (extraFields, a0) => ({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms: Date.now() - a0, ...failover, ...extraFields });
     let turnAttempts = 0, settings = null;
+    // THE POINT-OF-SPEND GUARD OF A METERED GEMINI API SEAT (L-504 invariant 4; L-124 split by L-136): a Google-billed API
+    // seat is a billed request of its KIND -- "failover" when it answers a lane's proven quota refusal (the walk's
+    // quota_failover candidate: metered_gemini_failover), "primary" otherwise (an operator's or a ticket pin's Gemini API
+    // id, a re-asked seat: gemini_api_primary). Unless the billing policy admits that kind, with its budget not spent, it
+    // is refused HERE, before it is admitted or charged and before its client is asked, whatever key the environment
+    // holds; then EVERY request it makes (the first, a long-decode hop) passes the policy again at its point of spend
+    // (spendGemini below). A refusal is recorded as an attempt that made no provider request.
+    const geminiApi = isMeteredGemini({ vendor, transport: transport ?? "api" });
+    const spend = { kind: geminiKindOf({ quota_failover }), vendor, model, purpose, role: ROLE_OF_PURPOSE[purpose] ?? purpose, transport: "api" };
+    if (geminiApi) {
+      try { geminiAdmission(BILLING, spend); }
+      catch (refusal) {
+        recordAttempt(attemptOf({ outcome: failureOutcome(refusal), status: null, code: refusal.code, why: refusal.message.slice(0, 200), usage: null,
+          settings: { model, pool: pool ?? vendor, transport: transport ?? "api", effort: effort ?? null, max_output_tokens: null, output_budget_policy: null, basis: "requested" }, provider_requests: 0,
+          ...(refusal.billing ? { billing: { code: refusal.billing.code, kind: refusal.billing.kind, source: refusal.billing.source, budget: refusal.billing.budget } } : {}) }, Date.now()));
+        progress({ event: "turn.refused", seat: vendor, model, detail: refusal.message.slice(0, 300) });
+        record();
+        throw refusal;
+      }
+    }
     for (;;) {
       // With a ledger, the seat's stored conversation is checked against the ledger's turn entries for
       // the same seat before it is continued (seat-sdk: LEDGER_MISMATCH), not only against itself.
       const seatLedger = typeof LEDGER?.exchanges === "function" ? { exchanges: () => LEDGER.exchanges(`${vendor}-${purpose}@${model}`) } : null;
-      admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose });
+      refuseIfClosed({ vendor, model, pool, transport: transport ?? "api", purpose });
       turnAttempts++;
       const a0 = Date.now(), asked = budget;
+      // EVERY BILLED REQUEST IS ADMITTED BEFORE IT IS SENT, the first included (self-audit round 3, assignment 3 (sealed
+      // bb1287a), L-301): a Google long-decode hop or an Anthropic compaction is a provider call of its own, charged on the
+      // caller's meter (onCharge) and counted in this run's bound; a refusal refuses that request, and nothing is sent.
+      // A billed Gemini request is admitted by the billing policy first, then by the run (its bound and the caller's charge),
+      // and its usage row is persisted (and mirrored on run.json) -- all before it is sent.
+      const admitRequest = geminiApi
+        ? ({ request = 1 } = {}) => { spendGemini(BILLING, { ...spend, request }, () => admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose })); record(); }
+        : () => admitProviderCall({ vendor, model, pool, transport: transport ?? "api", purpose });
       try { r = await (opts.runSeatTurn ?? sdkTurn)({ vendor, purpose: `${purpose}@${pool ?? vendor}@${model}`, cwd: worktree, prompt, model, client: clientFor(vendor, pool, poolConfig), home, onEvent, signal,
+        onRequest: admitRequest, chargeFirstRequest: true,
         ...(seatLedger ? { ledger: seatLedger } : {}),
         architecture: opts.architecture === true, contractHeader: opts.contractHeader, label: `${vendor}-${purpose}`, ...(budget ? { extra: budget } : {}),
         ...(effort ? { effort } : {}) }); }
@@ -654,7 +916,7 @@ export async function runOpenItem(spec, opts = {}) {
     const ms = Date.now() - t0;
     // The successful request's usage and settings; every request the turn took is in run.attempts.
     run.turns.push({ vendor, model, pool: pool ?? vendor, transport: transport ?? "api", purpose, ms, chars: text.length, prompt_chars: prompt.length, response_id: r.result.response_id ?? null, streamed: r.result.streamed ?? false,
-      served_model: r.result.served_model ?? null, usage: usageOf(r.result.usage), settings, attempts: turnAttempts, ...chosen });
+      served_model: r.result.served_model ?? null, usage: usageOf(r.result.usage), settings, attempts: turnAttempts, ...failover, ...chosen });
     // On the ledger: signed by this seat occupancy, with the served model the provider reported beside
     // the requested one. The seat is identified as the conversation layer keys it (vendor, purpose and
     // model: sdkTurn's seat is `${purpose}@${pool}@${model}`), so two slots running different models are
@@ -677,7 +939,7 @@ export async function runOpenItem(spec, opts = {}) {
     // An escalated effort belongs to the model it was decided for; a fallback model gets its own default.
     // A `fit` candidate carries the effort its profile mapped onto its own ladder; others carry none.
     const effortFor = candidate => effort && candidate.model === effort.model ? effort.value : candidate.effort ?? null;
-    const routed = await routeCall({ candidates, cooldown, signal: opts.signal,
+    const routed = await routeSeats({ onSkip: skippedFailover, billing: BILLING, candidates, cooldown, signal: opts.signal,
       deadline: Date.now() + (opts.turnTimeoutMs ?? 900_000),
       invoke: (candidate, { signal }) => turn({ ...candidate, purpose, prompt, signal, extra: capFor(candidate.vendor, extra),
         effort: effortFor(candidate) }) });
@@ -749,7 +1011,7 @@ export async function runOpenItem(spec, opts = {}) {
       let choice;
       try { choice = choose("scout", { avoid, avoidLabs, chars: p.prompt.length, ...(k ? { roleOverride: null } : {}) }); }
       catch (e) { throw refuse(`scout ${k + 1} has no candidate after avoiding labs ${avoidLabs.join(", ")}: ${e.message}`); }
-      const routed = await routeCall({ candidates: choice.candidates, cooldown, signal: opts.signal,
+      const routed = await routeSeats({ onSkip: skippedFailover, billing: BILLING, candidates: choice.candidates, cooldown, signal: opts.signal,
         invoke: (candidate, { signal }) => {
           const cap = tokenCapFor("scout", candidate.model);
           return turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
@@ -930,7 +1192,7 @@ export async function runOpenItem(spec, opts = {}) {
         const scoutChoice = profile === "argo" ? choose("scout", { chars: p.prompt.length })
           : choose("scout", { explicit: { seat: { vendor, model, basis: "QUOTA" }, source: "intake",
             reason: `intake fan-out vendor ${vendor}: the INTAKE table's ${vendor} seat` } });
-        const routed = await routeCall({ candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
+        const routed = await routeSeats({ onSkip: skippedFailover, billing: BILLING, candidates: profile === "argo" ? scoutChoice.candidates.filter(c => c.vendor === vendor) : scoutChoice.candidates,
           cooldown, signal: opts.signal, invoke: (candidate, { signal }) => turn({ ...candidate, purpose: "scout", prompt: p.prompt, signal,
             extra: cap == null ? undefined : capFor(vendor, { tokens: cap }) }) });
         const text = routed.value;
@@ -1166,20 +1428,49 @@ export async function runOpenItem(spec, opts = {}) {
               `You own the complete assigned file, including adjacent defects that prevent the ticket from working. Fix those defects within this file and preserve unrelated behavior; the acceptance command must exit 0.` + others);
             writeFileSync(join(outDir, `implementer-prompt-${c.sl.slot}-rev${rev}.txt`), p.prompt);
             c.workPrompt = p.prompt;
+            // A REVIEWER'S FINDINGS IN THIS PROMPT ARE A CONTRIBUTION (86ce18a review, defect 3): the revised bytes are
+            // shaped by them, so the reviewer's lab joins the slot's contributors (purpose `critique`) and neither the
+            // slot's next in-run review nor the cycle's change scope may seat it. Kept in run.files, so a resume keeps it.
+            if (rev > 1 && c.pendingRevision?.reason === "review") {
+              // Each row keeps the model ASKED and the model that SERVED the turn whose text reached the prompt: under
+              // model-level independence both are contributors (independent review round 2, assignment 2 (xAI
+              // grok-4.7, 77480d6), question 6). A reviewer recorded before served names were kept has its asked model.
+              for (const r of c.pendingRevision.reviewers ?? []) {
+                const served = Array.isArray(r.served_models) && r.served_models.length ? r.served_models : [null];
+                for (const sm of served) {
+                  // A reviewer turn that named no serving model is recorded as exactly that (served_model: null, "unnamed"):
+                  // with the field omitted the row read as served by the model asked (wave 3, L-504 invariant 2).
+                  const row = { purpose: "critique", vendor: r.vendor, model: r.model, ...(sm && sm !== r.model ? { served_model: sm } : !sm ? { served_model: null, served_model_source: "unnamed" } : {}) };
+                  if (!(c.contributors ??= []).some(x => x.purpose === "critique" && x.vendor === row.vendor && x.model === row.model && (x.served_model ?? null) === (row.served_model ?? null))) {
+                    c.contributors.push({ ...row, slot: c.sl.slot, revision_input: true, via: CRITIQUE_VIA });
+                  }
+                }
+              }
+            }
             // The slot's selected seat, or the rung a recorded escalation stepped to, resolved through its
             // own transport (a lane rung is never an API pin). A rung on the same vendor keeps the pool the
             // operator named for this slot; the decision changed the model, not the credential.
             const keepPool = c.forced && c.forced.vendor === c.choice.seat.vendor && c.choice.seat.poolNamed ? { pool: c.choice.seat.pool } : {};
+            const workFrom = run.turns.length;
             const made = await roleTurn({ role: "implementer", purpose: "work", prompt: p.prompt,
               choice: c.forced ? choose("implementer", { explicit: { seat: { vendor: c.forced.vendor, model: c.forced.model, ...keepPool }, source: "escalation",
-                reason: `recorded escalation step_rung to ${c.forced.model}${c.forced.why ? `: ${c.forced.why}` : ""}` } }) : c.choice,
+                reason: `recorded escalation ${c.forced.why === "thinking level raised" ? "raise_thinking" : "step_rung"} to ${c.forced.model}${c.forced.why ? `: ${c.forced.why}` : ""}` } }) : c.choice,
               effort: c.effort ? { model: c.ranModel, value: c.effort } : null });
             c.code = strip(made.text);
             c.ranModel = made.seat.model;
             // Every model that wrote a revision contributed to the final bytes: the next revision's prompt carries the
             // previous file ("fix it; do not start over"). Kept for the reviewed scope (review/scope.mjs, owner audit RS2).
-            if (!(c.contributors ??= []).some(x => x.vendor === made.seat.vendor && x.model === made.seat.model)) {
-              c.contributors.push({ purpose: "work", vendor: made.seat.vendor, model: made.seat.model, slot: c.sl.slot });
+            // The row keeps the model ASKED and the model that SERVED the turn, with the transport's marker of where the
+            // served name came from: under model-level independence both identities are contributors (independent
+            // review round 2, assignment 2 (xAI grok-4.7, 77480d6), question 6, the work row).
+            const workRec = run.turns.slice(workFrom).findLast(t => t.purpose === "work" && t.vendor === made.seat.vendor && t.model === made.seat.model && t.prompt_chars === p.prompt.length);
+            const workServed = ledgerTurns.get(p.prompt)?.served_model ?? workRec?.served_model ?? null;
+            const workRow = { purpose: "work", vendor: made.seat.vendor, model: made.seat.model,
+              ...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),
+              // No serving model named: recorded as unknown ("unnamed"), never as the model asked (wave 3, L-504 invariant 2).
+              ...(typeof workServed === "string" && workServed.trim() ? (workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) : { served_model: null, served_model_source: "unnamed" }) };
+            if (!(c.contributors ??= []).some(x => (x.purpose ?? "work") === "work" && x.vendor === workRow.vendor && x.model === workRow.model && (x.served_model ?? null) === (workRow.served_model ?? null))) {
+              c.contributors.push({ ...workRow, slot: c.sl.slot });
             }
             // Under `fit`, the slot's effort is the one the answering seat ran with: when a fallback answered,
             // the next escalation starts from the fallback's own mapped effort, not the primary's.
@@ -1245,7 +1536,7 @@ export async function runOpenItem(spec, opts = {}) {
             // A slot already stopped takes no new decision: its stop is the record.
             for (const c of active) {
               const rec = escalationRecord({ role: "implementer", outcome: { kind: "acceptance", exit: acc.exit }, steps: c.escalationSteps ?? 0,
-                seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null } });
+                seat: { vendor: c.seat.vendor, model: c.ranModel, effort: c.effort ?? null, output: null, ...laneLadderOf(c) } });
               applyDecision(c, rec, rev);
               escalated(`slot:${c.sl.slot}`, { slot: c.sl.slot, rev, ...rec });
               progress({ event: "escalate", rev, slot: c.sl.slot, detail: `${rec.decision.action}: ${rec.decision.why}`.slice(0, 300) });
@@ -1333,14 +1624,26 @@ export async function runOpenItem(spec, opts = {}) {
       for (let k = 0; k < need; k++) {
       let reviewChoice;
       // The operator's reviewer seat, if any, is the first member; the others are the selector's, across labs.
-      try { reviewChoice = choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], chars: reviewChars,
-        ...(k ? { roleOverride: null } : {}) }); }
+      try {
+        if (IN_RUN_MODEL) {
+          // By model: every candidate of the role, minus contributing models (and unresolved ones); untouched labs first.
+          const keys = contributorKeys(scope.contributions, ID_POLICY);
+          const all = choose("reviewer", { avoid: usedVendors, avoidLabs: usedLabs, chars: reviewChars, ...(k ? { roleOverride: null } : {}) });
+          const ok = all.candidates.filter(c => c && !candidateRefusal({ vendor: c.vendor, model: c.model }, keys, ID_POLICY));
+          const touched = c => keys.contributing_labs.includes(resolveModel(c.vendor, c.model, ID_POLICY).lab);
+          const ordered = [...ok.filter(c => !touched(c)), ...ok.filter(touched)];
+          if (!ordered.length) throw new Error(`no reviewer model is left that did not contribute to these bytes (contributors: ${keys.models.join(", ") || "none"}` +
+            `${keys.unresolved.length ? `; unresolved: ${keys.unresolved.map(u => u.model).join(", ")}` : ""})`);
+          reviewChoice = { ...all, seat: ordered[0], candidates: ordered, selection: ordered[0].selection };
+        } else reviewChoice = choose("reviewer", { avoid: [...avoid, ...usedVendors], avoidLabs: [...avoidLabs, ...usedLabs], chars: reviewChars,
+          ...(k ? { roleOverride: null } : {}) });
+      }
       catch (e) {
         if (k) throw panelRefusal(built, `reviewer ${k + 1} has no candidate after avoiding labs ${[...avoidLabs, ...usedLabs].join(", ")}: ${e.message}`);
         throw new Error(`no clean reviewer: no reviewer candidate left after avoiding ${avoid.join(", ")} (labs ${avoidLabs.join(", ")}): ${e.message}`);
       }
       const pairing = { reviewer: reviewChoice.seat.vendor, why: reviewChoice.selection.reason };
-      assertReviewCutsAcross({ contributors: scope.contributions, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
+      if (!IN_RUN_MODEL) assertReviewCutsAcross({ contributors: scope.contributions, producer: { vendor: built.seat.vendor }, reviewer: { vendor: pairing.reviewer } });
       let seat = { vendor: pairing.reviewer, seat_id: toReview.length === 1 ? `${pairing.reviewer}-critique` : `${pairing.reviewer}-critique-${built.sl.slot}`, mode: "critique", occupancy_gen: 1 };
       let rref = `refs/seat/${seat.seat_id}/wip`;
       await board.refs.branch({ name: rref, from: built.wip, author: seat });
@@ -1355,15 +1658,34 @@ export async function runOpenItem(spec, opts = {}) {
         "behaviour it broke, or a case the acceptance test does not cover that would fail. If the executed acceptance failed, " +
         "you must request changes. End your reply with a line reading exactly `VERDICT: approve` or `VERDICT: request_changes`.");
       assertStage({ ...board, ref: REF, stage: "critique", match: r => r.item === (built.itemKey ?? r.item) && r.target === built.bytes });
-      const reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
-      // Law 3 on the reviewer that actually answered, not the one paired in advance.
-      assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, contributors: scope.contributions });
+      let reviewed;
+      if (IN_RUN_MODEL) {
+        // ADMISSION OF THE ANSWER, by the model that answered. An answer whose serving model is unnamed or unresolved, or
+        // is a contributor, is not a review: it is kept (the turn is on the ledger, and run.review_rejections names the
+        // seat, the serving model and the reason), and the next eligible candidate is asked.
+        const keys = contributorKeys(scope.contributions, ID_POLICY);
+        for (const cand of reviewChoice.candidates) {
+          const got = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: { ...reviewChoice, seat: cand, candidates: [cand], selection: cand.selection }, extra: { tokens: 4000 } });
+          const servedBy = ledgerTurns.get(p.prompt)?.served_model ?? run.turns.findLast(t => t.purpose === "critique" && t.vendor === got.seat.vendor && t.model === got.seat.model)?.served_model ?? null;
+          const why = reviewerRefusal({ vendor: got.seat.vendor, model: got.seat.model, served_model: servedBy }, keys, ID_POLICY);
+          if (!why) { reviewed = got; break; }
+          (run.review_rejections ??= []).push({ slot: built.sl.slot, rev, vendor: got.seat.vendor, model: got.seat.model, served_model: servedBy, why });
+          progress({ event: "review.rejected", seat: got.seat.vendor, slot: built.sl.slot, detail: why.slice(0, 200) });
+          record();
+        }
+        if (!reviewed) throw Object.assign(new Error(`no reviewer model is left whose answer could be admitted for ${built.sl.slot} ` +
+          `(${(run.review_rejections ?? []).filter(x => x.slot === built.sl.slot && x.rev === rev).map(x => `${x.vendor}/${x.model}: ${x.why}`).join("; ").slice(0, 400)})`), { code: "REVIEW_NOT_ADMITTED" });
+      } else {
+        reviewed = await roleTurn({ role: "reviewer", purpose: "critique", prompt: p.prompt, choice: reviewChoice, extra: { tokens: 4000 } });
+        // Law 3 on the reviewer that actually answered, not the one paired in advance.
+        assertLaw({ kind: "review", producer: built.seat, checker: reviewed.seat, contributors: scope.contributions });
+      }
       const reviewedLab = labOf(reviewed.seat.vendor, reviewed.seat.model ?? null);
       if (usedLabs.includes(reviewedLab) || usedVendors.includes(reviewed.seat.vendor)) {
         throw panelRefusal(built, `reviewer ${k + 1} answered from ${reviewed.seat.vendor}/${reviewed.seat.model}, a lab already on the panel`);
       }
       if (reviewed.seat.vendor !== seat.vendor) {
-        assertReviewCutsAcross({ contributors: scope.contributions, producer: built.seat, reviewer: reviewed.seat });
+        if (!IN_RUN_MODEL) assertReviewCutsAcross({ contributors: scope.contributions, producer: built.seat, reviewer: reviewed.seat });
         seat = { ...seat, vendor: reviewed.seat.vendor, seat_id: `${reviewed.seat.vendor}-critique-${built.sl.slot}` };
         rref = `refs/seat/${seat.seat_id}/wip`;
         await board.refs.branch({ name: rref, from: built.wip, author: seat });
@@ -1373,15 +1695,43 @@ export async function runOpenItem(spec, opts = {}) {
       reviewText = reviewed.text;
       const reviewFile = (toReview.length === 1 ? "review" : `review-${built.sl.slot}`) + (need > 1 ? `-${reviewed.seat.vendor}` : "");
       writeFileSync(join(outDir, `${reviewFile}.md`), `# ${reviewed.seat.vendor} · ${reviewed.seat.model} reviewing ${built.seat.vendor} on ${built.sl.slot} (rev ${rev})\n\n${reviewText}\n`);
+      // The served model of the turn just made on this seat: the ledger's record of that prompt, else run.turns.
+      const servedOfTurn = (prompt, from) => ledgerTurns.get(prompt)?.served_model
+        ?? run.turns.slice(from).findLast(t => t.purpose === "critique" && t.vendor === reviewed.seat.vendor && t.model === reviewed.seat.model)?.served_model ?? null;
+      // Every serving model whose text is in reviewText (it is what a revision prompt would carry).
+      const servedNames = [servedOfTurn(p.prompt, 0)];
+      // The prompt of the turn whose reply the verdict is parsed from: the review on the ledger cites THAT turn.
+      let verdictPrompt = p.prompt;
       let m = reviewText.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
       if (!m) {
         progress({ event: "reask", seat: seat.vendor, detail: "no VERDICT line; asking once more" });
-        const again = await turn({ ...reviewed.seat, purpose: "critique", extra: capFor(reviewed.seat.vendor, { tokens: 800 }),
-          prompt: NO_TOOLS + "Your previous reply ended without the required verdict. You cannot read anything further; the file and the " +
-            "executed result were in the message before. Reply with ONE line, exactly `VERDICT: approve` or `VERDICT: request_changes`, " +
-            "then at most three sentences naming the strongest specific flaw if you requested changes." });
-        reviewText += `\n\n[re-asked]\n${again}`;
-        m = again.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
+        const reaskPrompt = NO_TOOLS + "Your previous reply ended without the required verdict. You cannot read anything further; the file and the " +
+          "executed result were in the message before. Reply with ONE line, exactly `VERDICT: approve` or `VERDICT: request_changes`, " +
+          "then at most three sentences naming the strongest specific flaw if you requested changes.";
+        const from = run.turns.length;
+        ledgerTurns.delete(reaskPrompt);   // an earlier slot's re-ask (same prompt text) is not this one
+        const again = await turn({ ...reviewed.seat, purpose: "critique", extra: capFor(reviewed.seat.vendor, { tokens: 800 }), prompt: reaskPrompt });
+        // ADMISSION OF THE RE-ASK, on the model that answered IT (independent review round 2, assignment 2 (xAI grok-4.7,
+        // 77480d6), question 3). The first answer was admitted; this is a second turn, possibly served by another model.
+        // Under the model rule it is checked with reviewerRefusal against the slot's contributors; under the lab rule a
+        // named serving model must be of the reviewer's lab. A refused re-ask supplies no verdict and no text: the slot
+        // fails closed (request_changes), recorded under the first, admitted turn.
+        const againServed = servedOfTurn(reaskPrompt, from);
+        const againWhy = IN_RUN_MODEL
+          ? reviewerRefusal({ vendor: reviewed.seat.vendor, model: reviewed.seat.model, served_model: againServed }, contributorKeys(scope.contributions, ID_POLICY), ID_POLICY)
+          : typeof againServed === "string" && againServed.trim() && labOf(reviewed.seat.vendor, againServed) !== reviewedLab
+            ? `the re-ask was asked of ${reviewed.seat.vendor}/${reviewed.seat.model} (${reviewedLab}) and answered by ${againServed} (${labOf(reviewed.seat.vendor, againServed)})` : null;
+        if (againWhy) {
+          (run.review_rejections ??= []).push({ slot: built.sl.slot, rev, vendor: reviewed.seat.vendor, model: reviewed.seat.model, served_model: againServed, why: againWhy, reask: true });
+          progress({ event: "review.rejected", seat: reviewed.seat.vendor, slot: built.sl.slot, detail: `re-ask: ${againWhy}`.slice(0, 200) });
+          reviewText += `\n\n[re-asked; the answer was not admitted: ${againWhy}]`;
+          m = null;
+        } else {
+          reviewText += `\n\n[re-asked]\n${again}`;
+          servedNames.push(againServed);
+          m = again.match(/^\s*VERDICT:\s*(approve|request_changes)\s*$/mi);
+          if (m) verdictPrompt = reaskPrompt;
+        }
       }
       const memberVerdict = m ? m[1].toLowerCase() : "request_changes";
       if (!m) progress({ event: "verdict", seat: seat.vendor, detail: "unparseable → request_changes" });
@@ -1390,16 +1740,19 @@ export async function runOpenItem(spec, opts = {}) {
       // On the ledger, the review cites the work turn it judged (which cites the plan). Cold review is then
       // re-derivable: no lab, seat or response in that lineage may have made the review.
       const workTurn = built.workPrompt && ledgerTurns.get(built.workPrompt);
-      const critiqueTurn = ledgerTurns.get(p.prompt);
+      // The turn whose reply the verdict was parsed from (the re-ask, when it supplied it), not always the first.
+      const critiqueTurn = ledgerTurns.get(verdictPrompt);
       if (LEDGER?.recordReview && workTurn && critiqueTurn) {
         LEDGER.recordReview({ seat: { seat_id: `${reviewed.seat.vendor}-critique@${reviewed.seat.model}`, vendor: reviewed.seat.vendor, mode: "critique", occupancy_gen: 1 },
           model: reviewed.seat.model, served_model: critiqueTurn.served_model, response_id: critiqueTurn.response_id,
-          verdict: memberVerdict, findings: memberFindings.map(f => f.note).join("\n"), targets: [workTurn.hash] });
+          verdict: memberVerdict, findings: memberFindings.map(f => f.note).join("\n"), targets: [workTurn.hash],
+          ...(IN_RUN_MODEL ? { identity_policy: ID_POLICY } : {}) });
       }
       const c = await publish({ ...board, ref: rref, author: seat, msg: "review",
         entries: [{ kind: "critique", links: { target: built.bytes }, payload: { target: { slot: built.sl.slot, rev }, verdict: memberVerdict, findings: memberFindings } }] });
       if (!c.ok) throw new Error(`critique publish: ${c.why}`);
-      panel.push({ rref, seat: reviewed.seat, lab: reviewedLab, verdict: memberVerdict, findings: memberFindings });
+      panel.push({ rref, seat: reviewed.seat, lab: reviewedLab, verdict: memberVerdict, findings: memberFindings,
+        served_models: [...new Set(servedNames.filter(x => typeof x === "string" && x.trim()))] });
       usedVendors.push(reviewed.seat.vendor); usedLabs.push(reviewedLab);
       }
       for (const member of panel) {
@@ -1417,13 +1770,16 @@ export async function runOpenItem(spec, opts = {}) {
       } else if (verdict === "request_changes") {
         // The verdict is an outcome for the MAKER's seat: the protocol decides its next revision, which a
         // resume then runs (a passing acceptance alone would otherwise just re-review the same bytes).
-        const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0,
-          seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null } });
+        const rec = escalationRecord({ role: "implementer", outcome: { kind: "critique", verdict }, steps: built.escalationSteps ?? 0, ...(ESCALATION ? { protocol: ESCALATION } : {}),
+          seat: { vendor: built.seat.vendor, model: built.ranModel ?? built.seat.model ?? null, effort: built.effort ?? null, output: null, ...laneLadderOf(built) } });
         const { action } = rec.decision;
         applyDecision(built, rec, rev);
         // A failed acceptance already sends the slot back to revision; only a rejection of PASSING work
         // needs its own pending revision, with the findings the implementer must address.
-        if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000) };
+        // The reviewers whose findings these are (members that requested changes): if the findings reach a revision
+        // prompt, those reviewers become contributors of the slot (above, where the prompt is built).
+        if (action !== "stop" && recordedExit === 0) built.pendingRevision = { reason: "review", findings: findings.map(f => f.note).join("\n").slice(0, 2000),
+          reviewers: panel.filter(x => x.findings.length).map(x => ({ vendor: x.seat.vendor, model: x.seat.model, served_models: x.served_models ?? [] })) };
         escalated(`slot:${built.sl.slot}`, { slot: built.sl.slot, rev, ...rec });
         const file = run.files.find(f => f.slot === built.sl.slot);
         if (file) file.escalation = escalationState(built);
@@ -1519,7 +1875,8 @@ export async function runOpenItem(spec, opts = {}) {
     const msg = String(e?.message ?? e).slice(0, 400);
     try { progress({ event: "run.error", detail: msg }); } catch { /* nothing left to write with */ }
     try {
-      run.error = { stage, message: msg, at: new Date().toISOString() };
+      // The refusal's own code and, for an identity mismatch, both identities (L-504): the precise refusal is on the record.
+      run.error = { stage, message: msg, at: new Date().toISOString(), ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.identity ? { identity: e.identity } : {}) };
       if (recordAllowed) for (const file of run.files ?? []) {
         if (!file.bytes) continue;
         const out = join(outDir, "artifact-latest", file.path);

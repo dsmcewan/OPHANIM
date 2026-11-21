@@ -29,6 +29,7 @@ There are no retained run records in this repository to count from. `pantheon/ST
 - Fewer than 20 board runs that needed a coordinated review: `insufficient_evidence`.
 - At 20 or more: **enough** if at least 95% completed their coordinated review (a completion after a bounded resume counts); **not enough** otherwise, with the counts by cause.
 - A run that did not ship needed no review and is not counted. A pending review never counts as a completion.
+- The rule counts **unique, verified, live observations** (86ce18a review): a copy of a bundle already seen (same run.json digest, cycle and commit) is a duplicate, not a run; a bundle whose named run.json is missing or differs from its digest is unverified and outside the rate; a run whose run.json does not declare `providers.kind: live` (fixtures, undeclared) is synthetic and reported beside the rule, never in it. Failed, unknown and inconclusive outcomes stay counted; unknown and inconclusive are non-completions.
 
 ## If the report says not enough
 

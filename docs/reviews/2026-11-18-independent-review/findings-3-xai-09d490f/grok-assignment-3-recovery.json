@@ -1,0 +1,23 @@
+{
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "assignment": 3,
+  "requested_model": "grok-4.7",
+  "original_runner_status": "incomplete",
+  "original_runner_stop_reason": "grok returned no final text (13659 event(s), 0 unparsed line(s))",
+  "original_transcript_sha256": "8243904bd3955a85a86201f1567b049c1c935c385f6b23f08fedf63354d877cc",
+  "cli_exit_code": 0,
+  "cli_stop_reason": "end_turn",
+  "cli_num_turns": 91,
+  "recovered_file": "grok-assignment-3-recovered-final.md",
+  "recovered_utf8_bytes": 15392,
+  "recovered_sha256": "4e93571e2e97b381147388cd3192428772f6c256ba8d6e0b7ba7f15907543477",
+  "public_text_chunks_joined": 4151,
+  "first_retained_event_index": 585,
+  "last_retained_event_index": 4735,
+  "last_tool_event_index": 583,
+  "extraction": "Concatenate, in order without separators or edits, every type=text event data string after the last tool_call/tool_call_update event and before the final end event. No thought events are used.",
+  "source_transcript_modified": false,
+  "runner_code_modified": false,
+  "reason": "The pinned parseGrokStream handles result/message shapes but does not extract native type=text/data chunks.",
+  "next_step": "Supply original transcript plus this derived public final message to the harness maintainer; no model rerun was needed for extraction."
+}

@@ -1,0 +1,44 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": 1,
+  "base_commit": "08ee51a",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**"],
+  "workers": {
+    "agent-1-lifecycle": {
+      "branch": "wave1/lifecycle",
+      "files": ["ophanim/operate/scheduler.mjs", "ophanim/operate/work-ledger.mjs", "ophanim/operate/gates.mjs", "ophanim/operate/reconcile.mjs",
+                "ophanim/operate/context.mjs", "ophanim/operate/stages.mjs", "ophanim/operate/test-fixtures.mjs", "ophanim/operate/evidence-recovery.mjs",
+                "ophanim/operate/service.mjs", "ophanim/operate/cli.mjs", "docs/operate-service.md", "docs/context-and-evidence.md",
+                "ophanim/operate/*.test.mjs (existing lifecycle tests it must change, plus new)"],
+      "region_limits": {
+        "ophanim/operate/context.mjs": "dossier construction, views, versionOf, retriever wiring; NOT investigate() (wave 2, agent 2)",
+        "ophanim/operate/stages.mjs": "plan stage, ticketOf, evidenceFor, plan resume, outcome reuse; NOT turn construction, contributions/validator identity (wave 2), runOpenItem call (wave 2, agent 3)"
+      }
+    },
+    "agent-4-sandbox-runner": {
+      "branch": "wave1/sandbox-runner",
+      "files": ["pantheon/src/agy/**", "pantheon/src/board/agy-cli.mjs", "pantheon/src/sdk/agy-turn.mjs", "pantheon/src/review-runner/**",
+                "pantheon/scripts/run-review.mjs", "pantheon/scripts/agy-worker-probe.mjs", "pantheon/.agents/**",
+                "docs/routing-task-profile.md (credential isolation and sandbox sections only)",
+                "docs/reviews/2026-11-18-independent-review/{README,HARNESS-cli,HARNESS}.md (runner sections)",
+                "pantheon/tests/{agy-*,review-runner-*,verify-jail-*}.test.mjs", "pantheon/tests/fixtures/review-clis.mjs", "pantheon/tests/fixtures/agy-*"],
+      "interface_rule": "exported signatures of agy-turn.mjs and agy-cli.mjs used by ophanim/operate and pantheon/src/pipeline stay backward compatible; any needed caller change is reported, not made"
+    },
+    "agent-5a-ci": {
+      "branch": "wave1/ci-gates",
+      "files": [".github/workflows/**", "ophanim/public/ci-summary.mjs", "ophanim/public/ci-summary.test.mjs", "scripts/test-gates/** (new)", "package.json (scripts block only)"],
+      "interface_rule": "no edits to existing tests or implementation code; lint runs report-only"
+    },
+    "read-only-L001-L002": {
+      "files": [],
+      "note": "investigation only; no file writes; produces a decision brief for the owner"
+    }
+  },
+  "dependencies": [
+    "agent-1 changes the work-ledger claim and scheduler attempt identity; consumers: scheduler, live-run (reads claims and spent()), service; agent 3 (wave 2) builds on this — not in wave 1",
+    "agent-4 changes agy-turn/agy-cli internals (jailing, env scrub); callers in pantheon/src/pipeline/turns.mjs and ophanim/operate/stages.mjs keep the same call signatures; agent 3 (wave 2) builds per-request charging on top",
+    "agent-5a adds CI gates; if its gate fails the current suites (e.g. a skipped real-bwrap test in CI), that is reported, not fixed by editing tests",
+    "package.json is touched only by agent-5a (scripts block); agents 1 and 4 add no scripts or dependencies"
+  ]
+}

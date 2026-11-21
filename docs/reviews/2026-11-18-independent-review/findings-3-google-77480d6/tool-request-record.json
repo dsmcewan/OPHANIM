@@ -1,0 +1,6 @@
+{
+  "method": "retained CLI records",
+  "tool_requests": [],
+  "coverage_note": "The runner retains a capped tail of own events; inspect the original transcript for its event and retention counts.",
+  "potential_findings_references": []
+}

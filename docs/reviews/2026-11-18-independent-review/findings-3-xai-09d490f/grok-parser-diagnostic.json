@@ -1,0 +1,35 @@
+{
+  "commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "runner_status": "incomplete",
+  "stop_reason": "grok returned no final text (13659 event(s), 0 unparsed line(s))",
+  "last_public_events": [
+    {
+      "type": "text",
+      "data": "."
+    },
+    {
+      "type": "text",
+      "data": "7"
+    },
+    {
+      "type": "available_commands"
+    },
+    {
+      "type": "usage"
+    },
+    {
+      "type": "end",
+      "stopReason": "end_turn",
+      "num_turns": 91
+    }
+  ],
+  "pinned_parser_return": {
+    "final_text": null,
+    "events": 5,
+    "unparsed": 0,
+    "error": null
+  },
+  "source": "pantheon/src/review-runner/grok.mjs:104",
+  "recovery": "grok-assignment-3-recovery.json",
+  "note": "Read-only reproduction using retained public events; no provider request and no source changes."
+}

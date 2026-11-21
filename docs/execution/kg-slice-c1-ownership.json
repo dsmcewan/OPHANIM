@@ -1,0 +1,30 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "KG Slice C1",
+  "base_commit": "b10cf0a",
+  "authorization": "owner directive 2026-11-20 and the owner's Slice C decisions of 2026-11-20 (bubble per seat; work by evidence, review by lab; live routing unchanged, eligibility advisory, metrics recorded)",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**", "docs/knowledge-graph/directive-2026-11-20.md", "docs/knowledge-graph/inventory.md", "docs/knowledge-graph/inventory.json", "package.json", "package-lock.json"],
+  "dependencies": ["runs concurrently with Slice B (ophanim/graph/**, ophanim/operate/context.mjs) and Slice E (packages/graph/federation.mjs, packages/graph/index.mjs, packages/graph/tests/federation*); disjoint",
+    "region limits written from the brief's decisions KC1-KC8; the sandbox of the SDK seat is C2's, not this slice's"],
+  "subwaves": {
+    "KGC1": {
+      "agent-kg-slice-c1": {
+        "branch": "kg/slice-c1",
+        "base_commit": "b10cf0a",
+        "findings": ["knowledge-graph Slice C1 (capability graph, advisory eligibility, metrics)"],
+        "files": ["pantheon/src/capability/**", "pantheon/tests/capability-*.test.mjs", "pantheon/tests/capability.mutate.mjs", "pantheon/tests/fixtures/capability-*",
+                  "pantheon/src/route/frontier.mjs", "pantheon/src/ledger/kinds.mjs", "packages/graph/schema.mjs", "docs/knowledge-graph/architecture.md", "docs/knowledge-graph/slice-c1.md"],
+        "new_files": ["pantheon/src/capability/**", "pantheon/tests/capability-*.test.mjs", "pantheon/tests/capability.mutate.mjs", "pantheon/tests/fixtures/capability-*", "docs/knowledge-graph/slice-c1.md"],
+        "region_limits": {
+          "pantheon/src/capability/**": "KC1-KC3, KC5: the capability extractors, the bubble, advisory eligibility, metrics and their report",
+          "pantheon/src/route/frontier.mjs": "KC4: record the advisory eligibility decision and the snapshot digest beside each selection; the selected seat never changes",
+          "pantheon/src/ledger/kinds.mjs": "KC4: the capability snapshot as an input beside facts and seating; additions only",
+          "packages/graph/schema.mjs": "KC7: capability-domain entity and relationship types ADDED, contract version 1.1.0; no existing type changed",
+          "docs/knowledge-graph/architecture.md": "KC7: only the registry table and the contract version",
+          "docs/knowledge-graph/slice-c1.md": "KC8"
+        }
+      }
+    }
+  }
+}

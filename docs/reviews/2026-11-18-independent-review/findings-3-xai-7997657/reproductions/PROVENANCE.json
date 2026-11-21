@@ -1,0 +1,112 @@
+{
+  "commit": "7997657e77d597c6dfda8b7d971d0e4499c88b3a",
+  "note": "Extracted verbatim from recorded write_test arguments. Not executed again during this handoff. Existing runs include nonzero exits; inspect test output and assertions before interpreting a finding.",
+  "fixtures": [
+    {
+      "original_worktree_path": ".review-tests/exec-reliability.test.mjs",
+      "bundle_path": "grok/reproductions/.review-tests/exec-reliability.test.mjs",
+      "source_transcript": "grok/findings-3-xai.transcript.json",
+      "provider_call_n": 34,
+      "turn": 34,
+      "call_id": "call-78be9549-5438-445c-b5b7-b2be6833dd61-95",
+      "bytes": 12202,
+      "sha256": "cd054f0b5ca6ff476fbe15f8139c03702d281854a9287571511ea6fbf1af2f25"
+    },
+    {
+      "original_worktree_path": ".review-tests/exec-reliability-2.test.mjs",
+      "bundle_path": "grok/reproductions/.review-tests/exec-reliability-2.test.mjs",
+      "source_transcript": "grok/findings-3-xai.transcript.json",
+      "provider_call_n": 40,
+      "turn": 40,
+      "call_id": "call-b40973c7-245d-433d-8ae7-04220ef6a44c-105",
+      "bytes": 6171,
+      "sha256": "f351a5a7d04812ef0f49c2d80c12f9942065e06b1dc06fcf864b4a1caeb3d532"
+    },
+    {
+      "original_worktree_path": ".review-tests/exec-reliability-3.test.mjs",
+      "bundle_path": "grok/reproductions/.review-tests/exec-reliability-3.test.mjs",
+      "source_transcript": "grok/findings-3-xai.transcript.json",
+      "provider_call_n": 42,
+      "turn": 42,
+      "call_id": "call-17977d5a-4f00-45d1-b867-600604ee5e3e-107",
+      "bytes": 3906,
+      "sha256": "61b73e9fb65609cb9fa2047687dce5b42e1c3c9b2e7ca0871bdff3118b28a926"
+    },
+    {
+      "original_worktree_path": ".review-tests/exec-restart-charge.test.mjs",
+      "bundle_path": "grok/reproductions/.review-tests/exec-restart-charge.test.mjs",
+      "source_transcript": "grok/findings-3-xai.transcript.json",
+      "provider_call_n": 45,
+      "turn": 45,
+      "call_id": "call-d187211b-ae19-4b8b-a322-7b6c090b04c4-111",
+      "bytes": 2493,
+      "sha256": "78c5ee6a8c754bbd7e7e784ab4f7cd0502862614dfe20f37e55fcf624399ab2c"
+    }
+  ],
+  "recorded_test_runs": [
+    {
+      "n": 97,
+      "turn": 35,
+      "name": "run_tests",
+      "args": {
+        "files": [
+          ".review-tests/exec-reliability.test.mjs"
+        ]
+      },
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_ms": 1362,
+      "result_sha256": "a1c008e8e8393d0eaf7a8cb76495f9566e6c304dc017130e122cb7637fcecab5",
+      "result_bytes": 3881,
+      "result_text": "exit_code: 1\nduration_ms: 1360  output_bytes: 3826\n---\n✔ stale holder records a passed stage after the lease is released as expired, and the next tick treats it as done (180.396007ms)\n✖ concurrency greater than 1 lets two stages start on the same remaining budget and exceed total_provider_calls (149.221312ms)\n✖ elapsed_ms is not enforced while a stage is running (150.187842ms)\n✔ a self-consistent tampered checkpoint is resumed as approved without re-running verify (426.53365ms)\n✔ metered Gemini API failover is a second provider call inside one counted implementer turn (62.19273ms)\n✖ meteredFailover false does not call the API and records the disable (2.505127ms)\nℹ tests 6\nℹ suites 0\nℹ pass 3\nℹ fail 3\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1274.777294\n\n✖ failing tests:\n\ntest at .review-tests/exec-reliability.test.mjs:62:1\n✖ concurrency greater than 1 lets two stages start on the same remaining budget and exceed total_provider_calls (149.221312ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + 'provider-call budget: 0 left of 5, a stage needs up to 5'\n  - null\n  \n      at TestContext.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability.test.mjs:78:12)\n      at async Test.run (node:internal/test_runner/test:1332:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 'provider-call budget: 0 left of 5, a stage needs up to 5',\n    expected: null,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at .review-tests/exec-reliability.test.mjs:82:1\n✖ elapsed_ms is not enforced while a stage is running (150.187842ms)\n  AssertionError [ERR_ASSERTION]: the overrunning stage was not stopped\n  + actual - expected\n  \n  + 'elapsed limit 40 ms reached'\n  - null\n  \n      at TestContext.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability.test.mjs:96:12)\n      at async Test.run (node:internal/test_runner/test:1332:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: 'elapsed limit 40 ms reached',\n    expected: null,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at .review-tests/exec-reliability.test.mjs:160:1\n✖ meteredFailover false does not call the API and records the disable (2.505127ms)\n  AssertionError [ERR_ASSERTION]: The validation function is expected to return \"true\". Received false\n  \n  Caught error:\n  \n  Error: the control dir /tmp/ophanim-review-4jnGNb/tmp/pantheon-agy-control-5GHTSz and the worktree /tmp must be disjoint\n      at async TestContext.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability.test.mjs:171:3)\n      at async Test.run (node:internal/test_runner/test:1332:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: Error: the control dir /tmp/ophanim-review-4jnGNb/tmp/pantheon-agy-control-5GHTSz and the worktree /tmp must be disjoint\n        at prepareWorkerWorkspace (file:///tmp/ophanim-review-4jnGNb/worktree/pantheon/src/agy/workspace.mjs:130:63)\n        at async Object.implementer (file:///tmp/ophanim-review-4jnGNb/worktree/pantheon/src/pipeline/turns.mjs:210:7)\n        at async waitForActual (node:assert:646:5)\n        at async strict.rejects (node:assert:769:25)\n        at async TestContext.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability.test.mjs:171:3)\n        at async Test.run (node:internal/test_runner/test:1332:7)\n        at async Test.processPendingSubtests (node:internal/test_runner/test:911:7),\n    operator: 'rejects',\n    diff: 'simple'\n  }\n"
+    },
+    {
+      "n": 107,
+      "turn": 41,
+      "name": "run_tests",
+      "args": {
+        "files": [
+          ".review-tests/exec-reliability-2.test.mjs"
+        ]
+      },
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_ms": 578,
+      "result_sha256": "c21678b3daa217596251f978f68a4774a823eb3a0a7221ffde65d6957cd1cd9f",
+      "result_bytes": 1969,
+      "result_text": "exit_code: 1\nduration_ms: 576  output_bytes: 1915\n---\n✔ concurrent stages that exceed the budget are recorded passed; the stop does not unwind them (121.772496ms)\n✔ a stage that overruns elapsed_ms is still recorded passed (97.528252ms)\n✔ meteredFailover false never calls the API (22.181441ms)\n✖ a leftover git index.lock from a killed git blocks the next worktree bind (21.343005ms)\n✖ two processes cannot both claim the same item while the lease is live (49.003027ms)\nℹ tests 5\nℹ suites 0\nℹ pass 3\nℹ fail 2\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 512.952276\n\n✖ failing tests:\n\ntest at .review-tests/exec-reliability-2.test.mjs:82:1\n✖ a leftover git index.lock from a killed git blocks the next worktree bind (21.343005ms)\n  AssertionError [ERR_ASSERTION]: Missing expected rejection.\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async TestContext.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability-2.test.mjs:88:5)\n      at async Test.run (node:internal/test_runner/test:1332:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: /index.lock|Unable to create/,\n    operator: 'rejects',\n    diff: 'simple'\n  }\n\ntest at .review-tests/exec-reliability-2.test.mjs:92:1\n✖ two processes cannot both claim the same item while the lease is live (49.003027ms)\n  SyntaxError: Unexpected end of JSON input\n      at JSON.parse (<anonymous>)\n      at ChildProcess.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability-2.test.mjs:109:38)\n      at ChildProcess.emit (node:events:509:28)\n      at maybeClose (node:internal/child_process:1124:16)\n      at Socket.<anonymous> (node:internal/child_process:481:11)\n      at Socket.emit (node:events:509:28)\n      at Pipe.<anonymous> (node:net:351:12)\n"
+    },
+    {
+      "n": 109,
+      "turn": 43,
+      "name": "run_tests",
+      "args": {
+        "files": [
+          ".review-tests/exec-reliability-3.test.mjs"
+        ]
+      },
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_ms": 320,
+      "result_sha256": "dffa5b51f192a61c1e0e58a72c50563a7208580085bf9c0a968e13fd7e458439",
+      "result_bytes": 1155,
+      "result_text": "exit_code: 1\nduration_ms: 319  output_bytes: 1101\n---\n✔ two processes: the ledger lock refuses a second live claim (95.797967ms)\n✖ orphan worktree and index.lock: what the next git command does (46.158178ms)\n✔ a half-written checkpoint temp file is not a checkpoint (1.984319ms)\nℹ tests 3\nℹ suites 0\nℹ pass 2\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 264.150609\n\n✖ failing tests:\n\ntest at .review-tests/exec-reliability-3.test.mjs:43:1\n✖ orphan worktree and index.lock: what the next git command does (46.158178ms)\n  AssertionError [ERR_ASSERTION]: index.lock should block git status\n  \n  false !== true\n  \n      at TestContext.<anonymous> (file:///tmp/ophanim-review-4jnGNb/worktree/.review-tests/exec-reliability-3.test.mjs:60:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1332:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: false,\n    expected: true,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+    },
+    {
+      "n": 113,
+      "turn": 46,
+      "name": "run_tests",
+      "args": {
+        "files": [
+          ".review-tests/exec-restart-charge.test.mjs"
+        ]
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_ms": 315,
+      "result_sha256": "c16daf5acc2e9b9274d54ab95325a5607125071ec4740389908a8c34a0aa8ad7",
+      "result_bytes": 284,
+      "result_text": "exit_code: 0\nduration_ms: 314  output_bytes: 231\n---\n✔ a claim killed before recordStage is absent from spent(), and the resume charges the stage again (102.207992ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 256.378732\n"
+    }
+  ]
+}

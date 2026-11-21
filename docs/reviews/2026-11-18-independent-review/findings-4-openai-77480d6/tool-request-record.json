@@ -1,0 +1,85 @@
+{
+  "method": "native SDK session tool requests; conversation and reasoning messages excluded",
+  "native_sources": [
+    {
+      "name": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "sha256": "e679160e7403345b9036872412c594ea48e3c3c817f8123f94684255f4880bea",
+      "bytes": 904508
+    }
+  ],
+  "malformed_records": 0,
+  "tool_requests": [
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 16,
+      "timestamp": "2026-11-19T03:13:04.111Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"rg --files -g AGENTS.md -g '*agy*' -g '*a2a*' -g 'paths.mjs' -g 'implement.mjs'\",\"max_output_tokens\":6000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 23,
+      "timestamp": "2026-11-19T03:13:09.336Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"cat pantheon/AGENTS.md\",\"max_output_tokens\":6000}));\ntext(await tools.exec_command({cmd:\"nl -ba pantheon/src/agy/jail-hook.mjs\",\"max_output_tokens\":14000}));\ntext(await tools.exec_command({cmd:\"nl -ba pantheon/src/agy/sandbox.mjs\",\"max_output_tokens\":18000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 30,
+      "timestamp": "2026-11-19T03:13:13.367Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"nl -ba pantheon/src/agy/jail-hook.mjs | sed -n '136,380p'\",\"max_output_tokens\":11000}));\ntext(await tools.exec_command({cmd:\"nl -ba pantheon/src/agy/sandbox.mjs | sed -n '1,203p'\",\"max_output_tokens\":10000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 36,
+      "timestamp": "2026-11-19T03:13:17.932Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"nl -ba pantheon/src/agy/workspace.mjs\",\"max_output_tokens\":10000}));\ntext(await tools.exec_command({cmd:\"rg -n 'jail|changed|status|HEAD|ignored|symlink' pantheon/src/pipeline/implement.mjs pantheon/src/pipeline/paths.mjs; rg -n 'sandbox|dangerously|env|token|redact|mcp|dropGemini|gemini_state' pantheon/src/board/agy-cli.mjs\",\"max_output_tokens\":10000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 46,
+      "timestamp": "2026-11-19T03:13:25.522Z",
+      "name": "exec",
+      "input": "const cmds=[\"nl -ba pantheon/src/pipeline/implement.mjs | sed -n '95,175p'; nl -ba pantheon/src/pipeline/paths.mjs\",\"nl -ba pantheon/src/pipeline/a2a-shim.mjs\",\"nl -ba pantheon/src/pipeline/a2a-mcp-server.mjs\",\"nl -ba pantheon/src/board/agy-cli.mjs | sed -n '135,175p'; nl -ba pantheon/src/board/agy-cli.mjs | sed -n '546,632p'\"];\nconst r=await Promise.allSettled(cmds.map(cmd=>tools.exec_command({cmd,max_output_tokens:8500})));r.forEach(text);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 54,
+      "timestamp": "2026-11-19T03:13:31.676Z",
+      "name": "exec",
+      "input": "const cmds=[\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-jail-hook.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-sandbox.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-worker.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/pipeline-run.test.mjs\"];\n(await Promise.allSettled(cmds.map(cmd=>tools.exec_command({cmd,max_output_tokens:5000,yield_time_ms:1000})))).forEach(text);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 64,
+      "timestamp": "2026-11-19T03:13:38.628Z",
+      "name": "exec",
+      "input": "text(await tools.exec_command({cmd:\"rg -n 'first|Path|closed|timeout|wrapper|quote' pantheon/tests/agy-jail-hook.test.mjs; rg -n 'jailReach|outside_jail_reach|reachable_by_jail|host_changes' pantheon/scripts/agy-worker-probe.mjs pantheon/scripts/agy-layout-bisect.mjs ophanim/operate/live-run.mjs; rg -n 'runAgyWorkerTurn|base_env|prepareWorkerWorkspace|PANTHEON_A2A_TOKEN|chmod|socketDir' pantheon/src/pipeline/index.mjs pantheon/src -g '*.mjs'\",\"max_output_tokens\":6500}));\ntext(await tools.exec_command({cmd:\"nl -ba pantheon/tests/agy-jail-hook.test.mjs | sed -n '55,190p'; nl -ba pantheon/src/board/agy-cli.mjs | sed -n '175,190p'\",\"max_output_tokens\":6000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 72,
+      "timestamp": "2026-11-19T03:13:49.201Z",
+      "name": "exec",
+      "input": "const cmds=[\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/pipeline-a2a.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/pipeline-mcp.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-preflight.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-worker-probe.test.mjs\"];\n(await Promise.allSettled(cmds.map(cmd=>tools.exec_command({cmd,max_output_tokens:2000,yield_time_ms:1000})))).forEach(text);\ntext(await tools.write_stdin({session_id:41913,chars:\"\",max_output_tokens:2000,yield_time_ms:1000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 84,
+      "timestamp": "2026-11-19T03:13:58.249Z",
+      "name": "exec",
+      "input": "const cmds=[\"rg -n 'verify_cmd|RESERVED' pantheon/src/pipeline/work-units.mjs; nl -ba pantheon/src/pipeline/turns.mjs | sed -n '198,235p'; nl -ba pantheon/src/pipeline/index.mjs | sed -n '75,105p'\",\"nl -ba pantheon/scripts/agy-worker-probe.mjs | sed -n '125,170p'; nl -ba pantheon/scripts/agy-worker-probe.mjs | sed -n '525,580p'; rg -n 'sandbox|dangerously|keep|token|env|jailReach' ophanim/operate/live-run.mjs pantheon/scripts/agy-layout-bisect.mjs\",\"nl -ba pantheon/src/board/agy-cli.mjs | sed -n '632,675p'; nl -ba pantheon/tests/agy-jail-hook.test.mjs | sed -n '204,255p'; cat pantheon/.agents/agents/pantheon-unit-worker/agent.md; git status --short; git rev-parse HEAD\"];\n(await Promise.allSettled(cmds.map(cmd=>tools.exec_command({cmd,max_output_tokens:5500})))).forEach(text);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T22-12-53-01a1f1ca-fab0-7b12-9730-b22e3733f59c.jsonl",
+      "line": 92,
+      "timestamp": "2026-11-19T03:14:10.270Z",
+      "name": "exec",
+      "input": "const cmds=[\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-observed-pass-1.5.10.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-observed-1.5.10.test.mjs\",\"env NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 node --test pantheon/tests/agy-card-tools.test.mjs\"];\n(await Promise.allSettled(cmds.map(cmd=>tools.exec_command({cmd,max_output_tokens:2000,yield_time_ms:1000})))).forEach(text);\ntext(await tools.exec_command({cmd:\"rg -n 'function output|redact|token' pantheon/scripts/agy-worker-probe.mjs; nl -ba pantheon/src/agy/quota.mjs | sed -n '1,100p'; rg -n 'jailReach|untouchedBy|hostChanges' pantheon/tests/agy-observed-pass-1.5.10.test.mjs; rg -n 'runAgyTurn|runAgyWorkerTurn|--sandbox|dangerously-skip-permissions' pantheon/src/sdk/agy-turn.mjs pantheon/src/pipeline/turns.mjs pantheon/scripts/agy-worker-probe.mjs\",\"max_output_tokens\":4500}));\n"
+    }
+  ],
+  "coverage_note": "Records tool requests, not an OS trace of transitive file reads.",
+  "potential_findings_references": []
+}

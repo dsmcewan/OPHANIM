@@ -6,9 +6,17 @@ import {modelId} from '../src/config/models.mjs';
 test('frontier seats match requested providers and model IDs',()=>{
   const expected={planner:['anthropic',modelId('anthropic','fable')],implementer:['openai',modelId('openai','astra')],
     scout:['xai',modelId('xai','grok-4.3')],reviewer:['xai',modelId('xai','grok-4.7')],
-    synthesis:['agy_google',modelId('google','carbon')],fast_loop:['agy_google',modelId('google','argon')]};
-  for(const [role,[vendor,model]]of Object.entries(expected)){
-    const first=frontierCandidates(role)[0];assert.equal(first.vendor,vendor);assert.equal(first.model,model);assert.equal(first.transport,'api');
+    // Owner direction 2026-11-17: a Google seat starts on its Antigravity lane (`-high`); the metered API id follows
+    // it only as that lane's quota failover.
+    synthesis:['agy_google',`${modelId('google','carbon')}-high`,'agy-cli'],fast_loop:['agy_google',`${modelId('google','argon')}-high`,'agy-cli']};
+  for(const [role,[vendor,model,transport='api']]of Object.entries(expected)){
+    const first=frontierCandidates(role)[0];assert.equal(first.vendor,vendor);assert.equal(first.model,model);assert.equal(first.transport,transport);
+  }
+  for(const [role,name] of [['synthesis','carbon'],['fast_loop','argon']]){
+    const [lane,spare]=frontierCandidates(role);
+    assert.equal(spare.model,modelId('google',name));assert.equal(spare.transport,'api');
+    assert.deepEqual(spare.quota_failover,{base:modelId('google',name),lanes:[lane.model]},'the API id is only the lane\'s quota failover');
+    assert.equal(lane.quota_failover,undefined);
   }
   assert.deepEqual(frontierCandidates('controller'),[]);
 });

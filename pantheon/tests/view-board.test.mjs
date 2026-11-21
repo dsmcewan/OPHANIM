@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createViewServer } from "../src/view/server.mjs";
 import { publish } from "../src/board/dag.mjs";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { withBoard, seeded, seat } from "./board-helper.mjs";
 
 /** Start the view against a board root and ask it one question. Always closed. */
@@ -45,8 +47,13 @@ test("the view reports the shipping head and each seat's branch class", () => wi
 test("a boardRoot with no board is reported, and the view never tries to create one", async () => {
   // The view is a reader. Pointed at a directory that holds no board it must say so -- not mkdir an
   // object store, and not block the handler trying to.
-  const r = await ask("/board", { home: "/tmp", boardRoot: "/tmp" });
-  assert.ok(r.board, "it still answers");
-  assert.match(r.board.error, /no board at \/tmp/);
-  assert.equal(existsSync("/tmp/objects"), false, "and it created nothing");
+  // A fresh empty directory of the test's own, not the host's /tmp: what else lives there (another run's objects/, say)
+  // is not this test's to assume.
+  const empty = mkdtempSync(join(tmpdir(), "pantheon-view-noboard-"));
+  try {
+    const r = await ask("/board", { home: empty, boardRoot: empty });
+    assert.ok(r.board, "it still answers");
+    assert.ok(r.board.error.startsWith(`no board at ${empty} `), r.board.error);
+    assert.equal(existsSync(join(empty, "objects")), false, "and it created nothing");
+  } finally { rmSync(empty, { recursive: true, force: true }); }
 });

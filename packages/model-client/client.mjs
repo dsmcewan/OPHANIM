@@ -4,10 +4,35 @@ import {exchange} from './wire.mjs';
 import {CAPABILITIES} from './registry.mjs';
 import {googleCountConfig} from './google-count.mjs';
 
-export async function sendModelTurn({client,onEvent,countTokens,beforeGenerate,responseMode='any',compactAfterBytes=512000,deadline=Date.now()+900000,...args}){
+// THE PROVIDER CALL (docs/routing-task-profile.md, "What one provider call is"; self-audit round 3, assignment 3 (sealed
+// bb1287a), L-301): one billed GENERATION request -- a compaction, the turn's request, and each Google continuation hop
+// (up to 16, each billed). `onRequest` (optional) is called BEFORE EVERY ONE of them, the first included, with
+// {request: n, kind: 'compaction' | 'generation'}; a throw refuses it and nothing is sent. Token counts (countTokens,
+// inputTokens.count) are not generation requests and are not charged (L-604).
+export const GENERATION_METHODS=Object.freeze({responses:['create'],messages:['create'],models:['generateContent','generateContentStream']});
+/** `client` with every generation method preceded by `onRequest` (see above); the original client is not changed. */
+export function chargedClient(client,onRequest,{kind=()=>'generation'}={}){
+  if(typeof onRequest!=='function')return client;
+  let n=0;
+  const wrap=(resource,methods)=>{
+    if(!resource)return resource;
+    const o=Object.create(resource);
+    for(const m of methods)if(typeof resource[m]==='function')o[m]=async(...a)=>{await onRequest({request:++n,kind:kind(m,a)});return resource[m](...a);};
+    return o;
+  };
+  const c=Object.create(client);
+  for(const [name,methods] of Object.entries(GENERATION_METHODS))if(client[name])c[name]=wrap(client[name],methods);
+  if(client.beta?.messages)c.beta=Object.assign(Object.create(client.beta),{messages:wrap(client.beta.messages,GENERATION_METHODS.messages)});
+  return c;
+}
+
+export async function sendModelTurn({client,onEvent,countTokens,beforeGenerate,onRequest,responseMode='any',compactAfterBytes=512000,deadline=Date.now()+900000,...args}){
   if(!client)throw new Error('SDK client required');
   if(!['any','text_only'].includes(responseMode))throw new Error('Unsupported response mode');
   if(beforeGenerate!==undefined&&typeof beforeGenerate!=='function')throw new Error('Invalid generation preflight');
+  if(onRequest!==undefined&&typeof onRequest!=='function')throw new Error('Invalid request charge');
+  // Every billed request through the charge; a compaction is the request made with a `compaction` body.
+  client=chargedClient(client,onRequest,{kind:(m,a)=>a?.[0]?.compaction?'compaction':'generation'});
   return boundedCall(async signal=>{
     signal.throwIfAborted();
     let history=args.history??[];

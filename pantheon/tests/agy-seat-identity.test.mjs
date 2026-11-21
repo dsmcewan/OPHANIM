@@ -48,8 +48,10 @@ function assertIdentityShape(id) {
     assert.ok(id.sdk.version.length > 0, "installed must carry a version");
     assert.equal(typeof id.sdk.path, "string");
     assert.ok(existsSync(id.sdk.path), `sdk path must exist: ${id.sdk.path}`);
-    // distribution may be null only for an install no distribution owns (e.g. a bare sys.path drop-in)
-    if (id.sdk.distribution !== null) assert.equal(typeof id.sdk.distribution, "string");
+    // distribution may be null only for an install no distribution owns (e.g. a bare sys.path drop-in); otherwise a
+    // string. Asserted on every installed identity: a missing key (undefined) or any other type fails.
+    assert.ok(id.sdk.distribution === null || typeof id.sdk.distribution === "string",
+      `sdk.distribution must be a string or null, got ${JSON.stringify(id.sdk.distribution)} (${typeof id.sdk.distribution})`);
   }
 }
 

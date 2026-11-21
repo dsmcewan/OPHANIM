@@ -1,0 +1,29 @@
+{
+  "assignment": 4,
+  "lab": "OpenAI",
+  "requested_model": "gpt-6.1-sol",
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "status": "complete",
+  "stop_reason": "final answer",
+  "via": "subscription",
+  "transport": "codex-sdk",
+  "started_at": "2026-11-19T00:22:18.337Z",
+  "ended_at": "2026-11-19T00:23:03.163Z",
+  "worktree_check": {
+    "changed": [],
+    "violations": [],
+    "limits": [
+      "a change inside a directory git already listed as ignored before the run (e.g. node_modules/) is not seen",
+      "only the worktree is checked: a CLI's own sandbox decides what it could write elsewhere"
+    ]
+  },
+  "original_transcript_sha256": "45f02733dd24dde6cde051d38e708a12cadea29b5324469e92902574e49a9f16",
+  "original_report_transcript_hash_verified": true,
+  "delivered_transcript_sha256": "45f02733dd24dde6cde051d38e708a12cadea29b5324469e92902574e49a9f16",
+  "credential_prefix_redactions": 0,
+  "reproductions": [],
+  "source_report": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-4/docs/reviews/2026-11-18-independent-review/findings-4-openai.md",
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-4/docs/reviews/2026-11-18-independent-review/findings-4-openai.transcript.json",
+  "served_model_note": "CLI identity is input, not an observed provider model",
+  "provider_served_models": null
+}

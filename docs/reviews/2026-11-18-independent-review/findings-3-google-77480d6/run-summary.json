@@ -1,0 +1,40 @@
+{
+  "review_id": "agy-a3-dry",
+  "assignment": 3,
+  "lab": "Google",
+  "requested_model": "gemini-4-carbon",
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "status": "complete",
+  "stop_reason": "final answer",
+  "transport": "agy-cli",
+  "default_reviewer": {
+    "lab": "xAI",
+    "vendor": "xai",
+    "model": "grok-4.7"
+  },
+  "reviewer_override": true,
+  "started_at": "2026-11-19T03:17:12.456Z",
+  "ended_at": "2026-11-19T03:22:40.842Z",
+  "worktree_check": {
+    "changed": [],
+    "violations": [],
+    "limits": [
+      "a change inside a directory git already listed as ignored before the run (e.g. node_modules/) is not seen",
+      "only the worktree is checked: a CLI's own sandbox decides what it could write elsewhere"
+    ]
+  },
+  "grok_permissions": null,
+  "reproduction_files": [],
+  "continuation_chain": [],
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/agy-a3-dry/docs/reviews/2026-11-18-independent-review/findings-3-google.transcript.json",
+  "source_report": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/agy-a3-dry/docs/reviews/2026-11-18-independent-review/findings-3-google.md",
+  "folder": "/home/colchis/Projects/OPHANIM-review-handoff-77480d6-20261118T215738-0500/assignment-3-google",
+  "zip": "/home/colchis/Projects/OPHANIM-review-handoff-77480d6-20261118T215738-0500/assignment-3-google.zip",
+  "private_runtime_namespace": false,
+  "original_transcript_sha256": "0fdcfbe57dae89f7d657c5f68645a4684936c1defc3ee6920387530e0f4ef5a1",
+  "delivered_transcript_sha256": "0fdcfbe57dae89f7d657c5f68645a4684936c1defc3ee6920387530e0f4ef5a1",
+  "header_hash_verified": true,
+  "token_prefix_redactions": 0,
+  "coverage_status": "source inspection blocked",
+  "coverage_receipt": "review-coverage.json"
+}

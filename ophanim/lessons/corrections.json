@@ -1,6 +1,6 @@
 {
   "schema": "ophanim.owner-corrections/v1",
-  "purpose": "Every correction the owner has had to make, as a failure class with its instances and a detector. Owner conditions 2026-11-17 (docs/self-evaluation.md): corrections must influence future planning and evaluation (7); the owner's corrective intervention must decrease (8); the self-improvement mechanism is not successful until it detects and corrects a previously observed class without the owner pointing it out again. An instance observed_by 'owner' is an intervention; observed_by 'mechanism' is a detection the owner did not have to make.",
+  "purpose": "Every correction the owner has had to make, as a failure class with its instances and a detector. Owner conditions 2026-11-17 (docs/self-evaluation.md): corrections must influence future planning and evaluation (7); the owner's corrective intervention must decrease (8); the self-improvement mechanism is not successful until it detects and corrects a previously observed class without the owner pointing it out again. An instance observed_by 'owner' is an intervention; observed_by 'mechanism' is a detection the owner did not have to make. Owner ruling 2026-11-20 (PR 68): discovering a defect, repairing it, and proving that a reusable mechanism would catch its recurrence are recorded apart. An instance observed_by 'review' was found by an independent review: it is evidence that the review worked, never a detection of this mechanism. by_detector marks an instance the class's own registered check found; the mechanism is successful only for such an instance, of a class the owner had already raised, that the mechanism also corrected. corrected_by says who repaired an instance; recurrence_check names the reusable check that was seen to catch it again.",
   "classes": [
     {
       "id": "declared-dimension-not-serialized",
@@ -31,6 +31,14 @@
           "date": "2026-11-17",
           "ref": "f96531a",
           "note": "reservation put planner and maker on openai; doc said only four labs exist"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-17",
+          "ref": "ophanim/operate/stages.mjs (delegated stage executors, before d609b7a)",
+          "note": "a delegated implementation moved the planner into the implementer's lab to leave the coordinated review its pool; caught in self-review before push and removed; the stage tests now show the four-lab capacity pending directly; ophanim/operate/stages.test.mjs 'the four configured labs: ...' now fails on that code. Not counted as mechanism success: no registered detector caught it. Owner ruling 2026-11-20 (PR 68): this is evidence that the independent review worked; it is not a detection by this class's registered check, and it does not count toward the mechanism's success.",
+          "detected_by": "integrator review of a delegated diff; no executable detector fired (the stage tests passed with the co-seated planner)",
+          "corrected_by": "integrator"
         }
       ],
       "fixed_in": "a73d185",
@@ -62,6 +70,15 @@
           "date": "2026-11-17",
           "ref": "d4f9644",
           "note": "automatic assessment wrote measured:true once n was sufficient"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "docs/execution/research-team-report.md at 5b1f979",
+          "detected_by": "the independent review of ea858a6..af23623",
+          "note": "the qualification report said items 6, 7 and 8 of the research specification's verification list passed. Each passed its own tests and a mutation; each failed a reproduction the tests did not take (limits passed by a caller, a resumed team, a member citing another's source). 'Pass' was written for a property where only one path to it had been shown",
+          "corrected_by": "integrator",
+          "recurrence_check": "none yet: a report row still rests on whoever writes it; the register's L-737 and the corrected report record the case"
         }
       ],
       "fixed_in": "62e54e8 (automatic path only; the general write-side refusal is the owner's candidate a5f9c4e/b6b5cd0, not public)",
@@ -145,6 +162,14 @@
           "date": "2026-11-17",
           "ref": "4221a94",
           "note": "CI synthetic-proof (WF4 guard) detected paths in a new review record before anyone pointed it out; the owner corrected it (a364832), so this is a detection, not a correction by the mechanism"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "ophanim/knowledge-graphs at c14fed0 (docs/knowledge-graph/inventory.md:300, inventory.json:153)",
+          "detected_by": "ophanim/tests/machine-paths.test.mjs (WF4), the class's registered detector, in CI after the push",
+          "note": "the knowledge-graph inventory named its scratch probe by an absolute home path; the coordinator pushed a documents-only commit without running the cheap proof checks first. Fixed by naming the script without its path. Not counted as mechanism success: the detection came from CI after the push, not before it, and the correction was the integrator's. Next step: run the proof suite's machine-paths and corrections tests before pushing any documents-only commit"
         }
       ],
       "fixed_in": "a364832",
@@ -243,6 +268,47 @@
           "date": "2026-11-17",
           "ref": "practice-measure-plan-title.test.mjs (pre-commit)",
           "note": "a bare /TITLE:/ counted reviewer prompts (they quote the work item) as planner calls, and a total boundary of 30 was too loose to stop any run; caught by printing what matched and what ran, fixed with the planner's own instruction and a boundary that binds"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-19",
+          "ref": "4a040f1 (sdk-intake.mutate.mjs, G5)",
+          "note": "the test that an idle subagent keeps its slot never bound a trajectory, so it passed whether or not the slot was freed; caught when the mutation that frees the slot survived, fixed by starting the children the test speaks of"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "22ecb82 (mutation run and one sweep of uncovered refusal lines)",
+          "note": "with each refusal line that no mutation covered disabled in turn, 22 in the new controller modules were noticed by no test, and six of twelve mutations of the SDK bridge survived a suite that ran whole sessions only; one acceptance item (a subagent's own failed request) had no test. Caught by disabling the lines and by reading the acceptance list line by line; each now has a test that fails without it. Limits: the sweep was by pattern and was run once (docs/OPEN-LIMITATIONS.md L-720)"
+        },
+        {
+          "observed_by": "review",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "6ee0fea (independent review of that commit)",
+          "note": "a mutation that survived was read as proof that the mutated line was a duplicate: the gateway's stop check on arrival was removed, with a comment saying it decided nothing the later check did not. Every test passing without the line showed only that no test told the two apart. A reviewer given the diff, and not the author's conclusion, showed what the line alone did (a stopped gateway answered a stalled upload at once and held none of it). Restored, with a test of its own. Limits: one case; the author had weighed the difference and judged it negligible before writing the comment. Owner ruling 2026-11-20 (PR 68): this is evidence that the independent review worked; it is not a detection by this class's registered check, and it does not count toward the mechanism's success.",
+          "detected_by": "the independent review of 6ee0fea: a reviewer given the diff, not the author's conclusion",
+          "recurrence_check": "pantheon/tests/antigravity-gateway.test.mjs (the stop on arrival); mutation W7 of ophanim/operate/sdk-intake.mutate.mjs killed on ea858a6"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "a3377f6 (PR 68), before it was committed",
+          "detected_by": "the full proof suite, run on the uncommitted tree after the targeted tests had passed",
+          "note": "the research lifecycle tests passed with research on by default and each session's directory under the item's state. Their fixture kept that state outside the repository and passed a scripted session, so they never met the transport's rule that a session's directory and the repository it reads are disjoint. Two existing tests, whose fixture keeps state inside the repository and declares primary execution, saw a plan that waited on evidence start a real research session, fail on CONTROL_IN_WORKTREE and plan twice. In a default checkout every team would have failed at its first session. Repaired before the commit; the lifecycle tests now keep the item's state inside the repository and assert where each session's directory was (register L-735)",
+          "corrected_by": "integrator",
+          "recurrence_check": "ophanim/operate/research-lifecycle.test.mjs keeps the item's state inside the repository and asserts where each session's directory was; mutations RS58 and RS60 killed on a3377f6"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "ea858a6..af23623 (PR 68)",
+          "detected_by": "the independent review of ea858a6..af23623: each reviewer removed the property a test names and ran the test",
+          "note": "tests that stayed green with their property removed: the admitted record written after the session had started; the depth cap on a caller's limits; symlink resolution in the scope check; a cancelled team recording no conclusion; a session's directory removed however it ends; and, in the retired relay's test file, an expected refusal code the test supplied itself when the connection was cut",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/research-team.test.mjs (A MEMBER IS ON THE RECORD BEFORE ITS SESSION STARTS; THE CEILINGS ARE THE CONTROLLER'S), pantheon/tests/antigravity-turn.test.mjs (a link out of the scope). Not all were given a test: L-743 and L-745 list the ones left"
         }
       ],
       "fixed_in": null,
@@ -288,6 +354,460 @@
         "kind": "test",
         "file": "pantheon/tests/review-capacity.test.mjs",
         "name": "strict: two contributing labs leave the configured cycle pool short"
+      }
+    },
+    {
+      "id": "push-gated-on-wrong-signal",
+      "class": "A commit or push is chained on a command's exit status that does not reflect the test result (for example grep finding a summary line), so a red suite is pushed.",
+      "source": "self-observed 2026-11-17: 99f0545 pushed with a failing test; CI (WF4) caught it",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "99f0545",
+          "note": "the chain was gated on grep's exit status; the backlog JSON carried an absolute key path and a proof test failed",
+          "detected_by": "CI after the push (qualification.yml)",
+          "corrected_by": "integrator"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-19",
+          "ref": "PR 68, the five commits before 9770094",
+          "note": "five commits were pushed while the qualification gate was red: the SDK contract suite skipped on the runner (no SDK installed there) and the no-skip gate failed, while the same suites were green where the SDK was installed. The pushes followed the local result; CI was not read until the pull request's events were. Fixed by installing the pinned SDK in the workflow"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "642887b (PR 68)",
+          "note": "a check written to stop a push on a moved base printed that the base had moved, and the same command went on to commit and push: the check was joined to the rest with ';', so its failure stopped nothing. The base had moved (the L-136 billing policy had landed) and the pull request conflicted in twelve files. Caught by reading the command's own output; the base was merged and the suites re-run before any result was reported for that commit. The third instance of this class, and the second in this run: a note to fetch the base before each push did not prevent it"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "662431c (PR 68)",
+          "detected_by": "the owner's Evidence-Driven Reflection: reading the session's own commands",
+          "note": "the '&&' gate written after the previous instance stopped a push as designed: the base had moved again. The next command pushed the same verified commit without the gate, and listed what the base had added only after the push. The addition was two documentation files, merged and pushed twenty seconds later, and no result was reported for the head in between. Not noticed at the time. The gate bound one command, not its author; what needed gating was the report and the pull request's state, not the push. One instance: recorded, not made a rule"
+        }
+      ],
+      "fixed_in": "b8bf3d9 (the path); the commit chain is now gated on the parsed fail count being 0",
+      "detector": {
+        "kind": "none",
+        "why": "session conduct before push; CI (qualification.yml, npm run test:proof) detected it only after the push",
+        "next": "gate every commit and push on the parsed '# fail' counts of the suites being 0, never on a pipeline's exit status"
+      }
+    },
+    {
+      "id": "output-checked-not-consumed",
+      "class": "A produced artifact is checked field by field in a test but never passed to the consumer that must accept it, so it is reported working while the consumer would refuse it.",
+      "source": "self-observed 2026-11-17: the lifecycle's outcome proposal was asserted in stages.test but never applied; status apply refused it (operate/ cycle scope, no ticket location)",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-17",
+          "ref": "ophanim/operate/stages.mjs before 2ae2116",
+          "detected_by": "the evidence-recovery tests, which re-check proposals as apply does",
+          "corrected_by": "integrator",
+          "note": "the PR description had said the outcome is a proposal for the owner; it would not have applied. Not counted as mechanism success: no registered detector existed for the class"
+        }
+      ],
+      "fixed_in": "2ae2116",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/stages.test.mjs",
+        "name": "with a SYNTHETIC fifth reviewer lab, a Ready item with no ticket goes through reviewed planning"
+      }
+    },
+    {
+      "id": "stored-not-delivered",
+      "class": "Information is recorded somewhere (a ticket field, a ledger, a file) and the record says a model was given it, but it never enters that model's prompt.",
+      "source": "owner direction 2026-11-17 'provide evidence before asking the model to diagnose or plan'; docs/context-and-evidence.md",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "1fbe96c",
+          "note": "the owner asked for the trace; it found the planner shown an alphabetical 48 KB of files, reviewers shown only diffs, and revision findings stored as ticket constraints the worker never reads"
+        }
+      ],
+      "fixed_in": "this commit (context.mjs dossier and retrieval; the carried plan delivered in the run's goal)",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/context.test.mjs",
+        "name": "reviewers and validators use their own evidence"
+      }
+    },
+    {
+      "id": "bound-declared-not-enforced",
+      "class": "A limit, a containment rule or a completeness claim is stated in the design and checked on the easy path only: another path (a link, a wide row, a second view of the same source, a multi-byte character) passes it.",
+      "source": "owner review of PR #67 at 22cbbb8 (2026-11-17): four defects in ophanim/operate/context.mjs",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-17",
+          "ref": "22cbbb8",
+          "note": "symlinks escaped containment; requirement and history shared one identity; cut sources had no continuation; grep and the investigation total exceeded their byte budgets"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-19",
+          "ref": "l136/billing-policy before 0fbf93e (l136-billing.mutate.mjs, first full run)",
+          "detected_by": "mutation D2 of pantheon/tests/l136-billing.mutate.mjs, the change's own runner",
+          "note": "\"off when absent at every entry point\" was tested through the CLI flags; the serve test always declared billing in its service config, so a serve config without billing resolving to ON survived. Fixed by a nothing-declared serve case; D2 then killed. Not counted as mechanism success: the class's registered detector did not fire, and one instance is not a demonstrated mechanism"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-19",
+          "ref": "22ecb82 (independent review of the Antigravity SDK transport)",
+          "note": "the same class in new code, two days after the owner raised it: the controller judged a tool call on the argument name the tool declares, and the SDK's runtime also read another spelling. run_command ran the command in `commandline` outside the verify jail; invoke_subagent started twelve subagents from `subagents` after the governor admitted one from `Subagents` (the ceiling). Found by a reviewer probing the installed runtime, not by this class's detector test, which is about its first instance; fixed by refusing any key a tool does not declare. Owner ruling 2026-11-20 (PR 68): this is evidence that the independent review worked; it is not a detection by this class's registered check, and it does not count toward the mechanism's success.",
+          "detected_by": "the independent review of the Antigravity SDK transport (before 22ecb82): a reviewer probing the installed runtime",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/antigravity-turn.test.mjs (ARGS_UNDECLARED); mutations A1 and A2 of ophanim/operate/sdk-intake.mutate.mjs killed on ea858a6"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "22ecb82, found at 6ee0fea (independent review)",
+          "note": "the class a third time in this transport: the gateway's contract was 'abort() forwards nothing afterwards', and it kept the stop as its reason text, so the stop held on the easy path only (a reason with words). An abort with an empty reason, or a signal aborted with an error that has no message, left it open: the next request was charged and forwarded. No shipped caller sends one. Found by the reviewer, not by the author's 157 mutations, none of which varied the reason. Fixed: any abort stops the gateway. Owner ruling 2026-11-20 (PR 68): this is evidence that the independent review worked; it is not a detection by this class's registered check, and it does not count toward the mechanism's success.",
+          "detected_by": "the independent review of 6ee0fea",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/antigravity-gateway.test.mjs (an abort with an empty reason); mutation W21 killed on ea858a6"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "59fdac2, found at fc4707d (independent review of the billing merge)",
+          "detected_by": "a fresh reviewer given the merge's hand-written code and five questions, not the author's conclusions",
+          "note": "the class twice more, in what the merge wrote and the documents claimed. 'A changed policy wakes it at once' held through the scheduler's tick and not through the live-run launcher, which read only the plain gate and answered that there was nothing to dispatch until the pending's retry time. 'A budget that runs out inside a session ends the session and blocks the unit' held when the session failed and not when it ended well after the refusal (the implementer's own request was already in flight): the unit was approved. No budget was exceeded in either case. The author's tests and 160 killed mutations had not found them; both now have a test that failed first and a mutation. Not marked as corrected by the mechanism: that ruling is the owner's. Owner ruling 2026-11-20 (PR 68): this is evidence that the independent review worked; it is not a detection by this class's registered check, and it does not count toward the mechanism's success.",
+          "corrected_by": "integrator",
+          "recurrence_check": "ophanim/operate/live-run.test.mjs and pantheon/tests/pipeline-antigravity-sdk.test.mjs; mutations L11, L12 and P24 killed on ea858a6"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "1975839, 9186323 (PR 68)",
+          "detected_by": "reading the runner while listing what a delegation's fields do, for the register",
+          "note": "a research delegation's tools and scope were checked when it was admitted, recorded on its node and written into its prompt, and the session it ran in was given every read tool on the whole repository. The transport now takes the assignment and refuses a tool it was not given and a read outside its scope (a3377f6)",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/antigravity-turn.test.mjs :: A RESEARCH ASSIGNMENT'S TOOLS AND SCOPE ARE ITS SESSION'S; mutations RS52, RS53 and RS57 killed on a3377f6"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "fabc00e, 757827b (PR 68)",
+          "detected_by": "the mutation runner (RS8): leaving the repository's bind writable in a research session's jail failed no test",
+          "note": "the code rewrote the jail's bind to read-only and separately marked the bind's record as read-only; the tests read the record. A test now writes from inside the jail with no tool call and sees it fail. Two more of 66 mutations survived the same run for want of a test (a refused charge did not have to stop the team at once; the findings passed up had no tested bound); both have tests now",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/antigravity-turn.test.mjs :: REAL JAIL, A RESEARCH SESSION; seen to fail with the bind left writable (mutation RS8 applied by hand)"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "ea858a6..af23623 (PR 68), the research team and the gateway",
+          "detected_by": "the independent review of ea858a6..af23623: four reviewers given the change and the owner's requirements, not the author's report",
+          "note": "bounds reported as enforced held only on the path the tests took: a caller's limits raised the active ceiling above the coordinator model's (20 members under Carbon); the team's request bound restarted at each resume; after a refused charge the pool started every waiting specialist; gap research re-activated without bound; a research session could read the controller's private key with the default scope; the real key followed an upstream redirect",
+          "corrected_by": "integrator",
+          "recurrence_check": "pantheon/tests/research-team.test.mjs, pantheon/tests/antigravity-turn.test.mjs, ophanim/operate/research.test.mjs, ophanim/operate/research-lifecycle.test.mjs, pantheon/tests/antigravity-gateway.test.mjs; mutation RV5 of ophanim/operate/sdk-intake.mutate.mjs and RV1 to RV29 with it"
+        }
+      ],
+      "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/context-bounds.test.mjs",
+        "name": "4. budgets hold before anything enters a prompt"
+      }
+    },
+    {
+      "id": "verification-cost-unbounded",
+      "class": "Completed work is re-verified with full suites and full mutation sweeps, each mutation running the expensive real-process suites, and verification grows with test opportunities instead of checking the acceptance contract once on the final commit; the owner has to bound the execution.",
+      "source": "owner direction 2026-11-20 during L-136: \"Finish the current mutation run. Do not initiate another broad sweep or expand scope based solely on additional test opportunities ... Use deterministic, isolated tests for mutation coverage wherever possible. Reserve expensive real-SDK execution for the integration behaviors that genuinely require it ... Record nonblocking improvements as future tickets instead of extending this execution indefinitely.\"",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-20",
+          "ref": "613a4e2",
+          "note": "about two hours of the agent's run went to two full mutation runs of each runner and two full verification sets; each of the 26 L-136 mutations runs all three suites, about 55 s of real-process tests, even where the fast policy suite decides it. The re-runs answered real findings (a surviving mutation, a gate failure), so the cost per cycle, not the reason for re-running, is what the owner bounded"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-20",
+          "ref": "PR 68 after 22ecb82",
+          "note": "after one surviving mutation, a sweep of every uncovered refusal line and then mutations of the SDK bridge at about 25 s each against the installed SDK were started, with no evaluation against the nine acceptance items; the owner stopped it. The evaluation then found the one acceptance item with no test, which the sweep had not. The same direction the owner gave during L-136 on the same day: recorded here as that class's second instance, not as a class of its own. The acceptance evaluation is in the pull request; the bridge is now tested without a session; what remains is recorded as L-719 and L-720"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "execution conduct and test-infrastructure cost, not a code property",
+        "next": "the coordinator's briefs state a verification budget (one full verification on the final commit; after a fix, re-run only the affected tests and mutations); a runner that maps each mutation to the suites that decide it is future work (docs/execution/l136-report.md)"
+      }
+    },
+    {
+      "id": "brief-manifest-disagree",
+      "class": "The coordinator's dispatch documents for the same work contradict each other or themselves (a file the brief allows that the manifest omits; a region limit that forbids what the brief requires; a brief that says to read a file it also forbids), so a correct change reads as a violation and the agent must choose which instruction to obey.",
+      "source": "self-observed at the L-136 and L-146 integrations (2026-11-20)",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "docs/execution/l136-ownership.json (amended at fd9f001)",
+          "detected_by": "check-ownership.mjs: UNOWNED pantheon/src/route/gemini-billing.mjs",
+          "note": "the brief allowed \"a module beside it that it re-exports\"; the manifest listed quota-failover.mjs only"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "docs/execution/l146-ownership.json (amended at integration)",
+          "detected_by": "the L-146 agent, in its report",
+          "note": "the region limit kept cycle-review-http-turn.mjs's use through --turn unchanged; the brief required the fix that changes it"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the L-136, L-146 and L-148 briefs (scratch, not committed)",
+          "detected_by": "the L-148 agent, in its report",
+          "note": "each brief said to read the owner decision verbatim in docs/OPEN-LIMITATIONS.md and also listed that file as never to be read; the L-148 agent read only the decision's diff hunk. The L-148 manifest itself was written from the brief and its check found no conflict; the launcher label repair fell outside it (amended)"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "docs/execution/l150-ownership.json (amended at integration)",
+          "detected_by": "the L-150 agent, in its report",
+          "note": "the region limit allowed run-item.mjs's SDK branch only, while the design's per-request admission needed one line in turn(); and the brief's list of runners to --check left out wave3-agy-spend.mutate.mjs, whose S6 and G6 the change broke (found by the coordinator). Next step added: --check every committed *.mutate.mjs, not a chosen list"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "kg/slice-c2 e0902da; integration 8df1c4c",
+          "detected_by": "the Slice C2 agent's budget run (every test naming PANTHEON_AGY_TRANSPORT or agy-seat), before its commit",
+          "note": "the C2 brief required every existing SDK-transport test to keep passing (KS2) but the manifest granted only l150-billing and agy-seat-identity; four more suites (wave3-spend, wave3-agy-guard, l136-billing, reliability-r3-a3) spawned the seat with fakes that wrote under /tmp, which the jail hides, and asserted transport agy: 12 failures. The agent stayed inside its manifest and handed over a patch, which the coordinator reviewed and applied. Next step, as before: list every file the brief's own verification list names (here: every test that names the transport) in the manifest before dispatch"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the integration toolkit (1f6e2ae); manifest-reach also caught the guest-seat manifest (2295293)",
+          "detected_by": "scripts/test-gates/manifest-reach.mjs, now this class's detector",
+          "note": "the class now has a mechanical detector: manifest-reach fails a manifest that does not grant or hold every test that imports, and every runner that imports or edits, a module the agent may change. It caught the hand-written guest-seat manifest (capability.mutate.mjs, a target-edit the import-based reach missed) and flagged the D2 and jail-fds manifests. The owner asked for this toolkit (\"after market toolkit\"). Next step: run manifest-reach on every manifest before dispatch"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the pentest slice at integration (45dab29)",
+          "detected_by": "ophanim/ledger/layering.test.mjs and the gate's coverage orphan check (scripts/test-gates/suites.mjs coverage), not manifest-reach",
+          "note": "the brief placed the federation and graph-integrity attacks under packages/graph/tests/pentest/, where importing the shared harness breaks the graph layering rule, and three pentest files where no suite's glob reaches (test:gates would fail, CI would never run them). The brief's verification budget listed neither check. manifest-reach could not see it: both checks find their files by directory scan or glob, not by import. Fixed by moving the files and adding the two pentest directories to test:proof; the layering rule did not loosen. Next step: every brief that adds files lists layering.test.mjs and the coverage orphan check in its budget"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "scripts/test-gates/toolkit-manifest.test.mjs",
+        "name": "manifest reach: a manifest missing a reached test or runner FAILS, naming each"
+      },
+      "fixed_in": "1f6e2ae"
+    },
+    {
+      "id": "text-reader-misses-new-shape",
+      "class": "A reader that parses source code as text (never executing it) is written against the shapes present when it is written; a later file in a new but legal shape is read partly or not at all, and the reader reports what it read without saying what it could not.",
+      "source": "coordinator integration of the knowledge-graph slices, 2026-11-20: the Slice B mutation-runner reader (ophanim/graph/extract/verification.mjs) twice failed on runners written concurrently by other slices",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "dcecdc9",
+          "detected_by": "ophanim/graph/extract.test.mjs (\"mutation runners are read as TEXT\"), the class's registered detector, at integration before the push",
+          "note": "packages/graph/tests/federation.mutate.mjs (Slice E) writes its edit helper as one(from, to, file = FED) and a constant-first test helper; the reader assumed one(FILE, ...) and (file, pattern) helpers, so the E runner's targets were not read. Fixed by reading the helper's own signature"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "e6c4fe0",
+          "detected_by": "ophanim/graph/extract.test.mjs, at integration before the push (it also turned the Slice B mutation runner's baseline red)",
+          "note": "pantheon/tests/capability.mutate.mjs (Slice C1) declares its file constants as template literals built from another constant; the reader read single-quoted constants only, so no C1 mutation had a target file. Fixed by resolving template constants through earlier constants, leaving any other substitution unread. Both runners were written on bases that did not yet contain the reader, so their slices could not have run its test. Next step: every later brief that adds or changes a *.mutate.mjs runner puts ophanim/graph/extract.test.mjs in its verification budget"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "kg/checkpoint fc02390; reader fixed on ophanim/knowledge-graphs",
+          "detected_by": "the checkpoint agent, comparing the reader's count against the runner's own --check count (the same cross-check as the class's detector, ophanim/graph/extract.test.mjs), before its commit",
+          "note": "an apostrophe in a section comment inside the checkpoint runner's MUTATIONS opened a string for the reader, so a bracket in a later edit string closed the table early: 16 of 20 mutations read. The agent reworded its comment (a workaround in the runner, not a fix); the coordinator made the reader blank comments before parsing, with a synthetic case that fails on the old reader, and every committed runner reads identically before and after. The brief's next step (extract.test.mjs in the budget of any brief that adds a runner) caught it before integration this time"
+        },
+        {
+          "observed_by": "mechanism",
+          "by_detector": true,
+          "corrected_by": "integrator",
+          "date": "2026-11-21",
+          "ref": "merge 73dc8d0 of PR #67's branch; reader fixed in 682460e",
+          "detected_by": "ophanim/graph/extract.test.mjs (the class's detector), run on the merged tree before the push",
+          "note": "the base's ophanim/operate/sdk-intake.mutate.mjs lists each mutation's tests as spreads of an object's lists (`[...T.gov, ...T.pipe]`); the reader read `...T` alone, so all 302 mutations had no deciding test and T2 had to run the runner in full. A spread now takes an object key, with a synthetic case that fails on the old reader; T2 then listed 46 of the 302 as touched by this branch. The same run found the history reader listing no path for a merge (now --cc), a sibling shape of the same reader family"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/graph/extract.test.mjs",
+        "name": "mutation runners are read as TEXT"
+      }
+    },
+    {
+      "id": "withheld-path-read",
+      "class": "A repository-wide search or listing run by an agent displays content from withheld paths (the independent reviewers' findings-* directories), which no agent may read; the exposure is accidental, through a command that names no exclusion.",
+      "source": "the coordinator's standing rule that findings-* paths are withheld and must never be read by agents (reviewers must not see each other's findings); disclosed by the Slice B2 agent in its report, 2026-11-20",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/slice-b2 (dd2b578)",
+          "detected_by": "the Slice B2 agent itself, disclosed in its report",
+          "note": "a git grep run without the findings-* exclusion displayed about 6 code lines from 4 tracked files under docs/reviews/.../findings-*/, and tree listings and a test's cited paths showed findings-* path names; nothing was used, no fact, file or commit names a withheld path, and the slice added a test (mutation D12) that no fact does. Not counted as mechanism success: the rule was broken before anything detected it. Next step: every brief gives the exact exclusion for repository-wide searches (git grep ... -- ':(exclude,glob)**/findings-*/**'), and the agent lists only paths outside them"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/jail-fds-closer (552022d)",
+          "detected_by": "the KG-11 closer agent itself, disclosed in its report",
+          "note": "a NEAR MISS: one Grep tool call over **/*.mutate.mjs ran without excluding findings-* paths; no withheld path matched and nothing was shown or used, and every later search used git grep with the exclusion. The brief named the exclusion for git grep only; later briefs name Glob and Grep as well (the self-repair and hub briefs)"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "agent",
+          "date": "2026-11-20",
+          "ref": "kg/hub-spoke (7d77566)",
+          "detected_by": "the hub-readiness agent itself, disclosed in its report",
+          "note": "two early commands reached findings-* paths before filtering them out of their output: `git ls-files | grep -v findings` (path names only) and `grep -rln openCentral --include=*.mjs .` without the exclusion (it searched file contents under those paths; matching names were filtered from what was shown). Nothing was displayed or used, and later commands used the exclusion. The third instance in one day: the brief named the exclusion, so the next step is the mechanical one this class already records (a pre-integration scan of an agent transcript for withheld paths)"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "command conduct inside an agent's session; the slice's own test guards only what reaches the graph",
+        "next": "the exclusion pathspec in every brief; a later check could scan agent transcripts for withheld paths before integration"
+      }
+    },
+    {
+      "id": "runner-deciding-tests-changed-not-rerun",
+      "class": "An integration re-runs a mutation runner in full only when its TARGET files change; a change to one of its DECIDING test files is not treated as a reason, so the runner can go red at baseline unnoticed (CI runs only --check).",
+      "source": "coordinator, at the integration of the knowledge-graph Slice D1 and the shallow-history fix, 2026-11-20",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "D1 merge 02a7916; fixed at the shallow-history integration",
+          "detected_by": "graph-b.mutate.mjs's own red-baseline check (exit 3), when the coordinator ran it in full for an unrelated fix",
+          "note": "Slice D1 added a real-history why-it-exists test to ophanim/graph/cli.test.mjs, a deciding file of graph-b.mutate.mjs, whose copy was a one-commit repository; the D1 brief and the coordinator re-ran only the runners whose targets changed. Next step: briefs and integrations re-run in full every runner whose target OR deciding test files changed"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "the integration toolkit (1f6e2ae)",
+          "detected_by": "scripts/test-gates/affected-runners.mjs, now this class's detector",
+          "note": "affected-runners lists every runner whose own file, target files OR deciding test files changed between two commits, and --run runs each in full. The class now has a mechanical detector. Next step: run affected-runners at every integration and re-run what it lists"
+        }
+      ],
+      "detector": {
+        "kind": "test",
+        "file": "scripts/test-gates/toolkit-affected.test.mjs",
+        "name": "affected runners: a changed DECIDING test lists its runner; a changed target lists its runner"
+      },
+      "fixed_in": "1f6e2ae"
+    },
+    {
+      "id": "test-asserts-whole-environment",
+      "class": "A test asserts about the whole host environment (every open descriptor, every directory in the shared tmpdir) rather than about what it created, so it passes on the machine it was written on and fails where the environment differs: a CI runner that leaks descriptors into its jobs, or two suites sharing one tmpdir.",
+      "source": "self-observed at the jail integration (2026-11-20): CI at d9d626f, and the KG-11 agent's simultaneous suite runs",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "corrected_by": "integrator",
+          "date": "2026-11-20",
+          "ref": "pantheon/tests/jail-fds.test.mjs (CI d9d626f; fixed in 90407d3)",
+          "detected_by": "CI: the GitHub Actions runner leaks descriptors 142 and 145 into every job",
+          "note": "two closer cells expected an exact descriptor list; they now measure the descriptors the host hands down (ambientFds) and expect the handed set plus those, while the closer must still leave stdio only"
+        },
+        {
+          "observed_by": "mechanism",
+          "corrected_by": null,
+          "date": "2026-11-20",
+          "ref": "register KG-20",
+          "detected_by": "three simultaneous `cd pantheon && node --test` runs (the KG-11 agent)",
+          "note": "four cells assert that no pantheon-agy-* directory of theirs is left in the shared tmpdir and see the other runs' directories; open"
+        }
+      ],
+      "detector": {
+        "kind": "none",
+        "why": "no gate runs the suites in an environment that differs on purpose; CI differed by accident here",
+        "next": "a toolkit mode that runs the real-bwrap suites with planted inherited descriptors (a shell holding high fds open) and a pre-populated tmpdir, so a cell that asserts about the whole environment fails at integration rather than in CI"
+      }
+    },
+    {
+      "id": "misses-fixed-without-cause",
+      "class": "Defects found late (by a mutation run, a merge, CI or a review) are fixed and reported one by one, without asking why each was missed and which other paths rest on the same assumption, so the next change repeats the mechanism.",
+      "source": "owner question 2026-11-19 ('Where do the missed failures come from. Explain why they were missed.'); owner's Evidence-Driven Reflection direction 2026-11-20; owner condition 7 (docs/self-evaluation.md)",
+      "instances": [
+        {
+          "observed_by": "owner",
+          "date": "2026-11-19",
+          "ref": "PR 68 at d4f945e",
+          "note": "ten late-found defects had been fixed and listed; the causes were stated only when the owner asked. The answer named five (green accepted without a red run, tests written from the implementation, two enforcement points never compared, a stale base, CI not read) and missed the one the next day showed: no test had been derived from the acceptance list itself"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "59fdac2 (PR 68, the merge of the billing policy)",
+          "detected_by": "the owner's Evidence-Driven Reflection: asked where observed behaviour had differed from expected",
+          "note": "a test written during the merge failed for a reason that was not determined, and 23 seconds later its scenario was replaced by one that passed. The abandoned scenario had shown a behaviour change: a fit ticket pinned to an Antigravity lane falls to the primary Gemini API seat when the lane is refused for quota, where the base moved to the next lane. That went unrecorded until the reflection (register L-721). The failure itself is explained from the source only (the second arm of a comparison does not ask a lane that the first arm's refusal put in cooldown), not by a run. The same step as the surviving mutation read as a duplicate at 6ee0fea: an unexpected result was made to pass before it was explained. Not marked as corrected by the mechanism: the owner's direction prompted the reflection, and that ruling is the owner's"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "a step of the work, not a property of the code; no executable check exists for it",
+        "next": "when a defect is found after its code was reported working, record with the fix which assumption let it through and which other paths share it, and check those paths before the next report. Evidence for it so far is this one run"
+      }
+    },
+    {
+      "id": "report-figure-not-derived",
+      "class": "A figure or a result in a report (a count, a pass total, the commit a result belongs to) is written from memory, or carried over from an earlier run, instead of being read from a record when the report is written, so the report states what no record supports.",
+      "source": "self-observed 2026-11-20 on PR 68, when the owner's Evidence-Driven Reflection direction required the session's records to be read",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "22ecb82 (PR 68)",
+          "detected_by": "the mutation runner, when it was run on that commit",
+          "note": "the pull request cited this branch's mutation runner as 85 of 85 killed beside a commit it had not been run on. Run on that commit, one mutation survived and one run never ended (register L-713)"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-20",
+          "ref": "fc4707d (PR 68)",
+          "detected_by": "the owner's Evidence-Driven Reflection: every figure in the pull request was compared with the session's records",
+          "note": "the pull request said the base had been merged six times (the history shows five merges), and the register and the merge's commit message said twenty board tests now declare primary Gemini execution (the run's record shows nineteen: the twentieth test that failed was one of the five restated). Both were written from memory. The pull request and the register are corrected; the commit message stands. The other figures in the pull request were re-derived and hold, except the count of refusal lines no test noticed (22), which is as recorded at the time"
+        },
+        {
+          "observed_by": "review",
+          "date": "2026-11-20",
+          "ref": "the brief for the independent review of the billing merge (not committed)",
+          "detected_by": "the independent reviewer, who checked the range before relying on it",
+          "note": "the brief said the two merges after 59fdac2 had touched no source file. The second had brought the base's L-146 changes to three source files and five scripts; what was true was that they touched no file this branch changes. A claim written from memory, this time in a brief another agent would have relied on. Owner ruling 2026-11-20 (PR 68): this is evidence that the independent review worked; it is not a detection by this class's registered check, and it does not count toward the mechanism's success."
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "reporting conduct; nothing executable compares a report's figures with the run records",
+        "next": "before a report is sent, re-derive each figure in it with a command whose output is in the same session's record, and name the commit each result was measured on; say so where a figure is recalled and not re-derived. Evidence so far is one run"
       }
     }
   ]

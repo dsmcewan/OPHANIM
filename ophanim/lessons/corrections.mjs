@@ -9,14 +9,24 @@
 // Inputs: the registry file. Outputs: report() -> per-class state, the intervention series, repeated classes, and
 // the success verdict. Invariants: a class has a detector that is a named test in a tracked test file, or an explicit
 // `none` with why and next step; success is never claimed from detections the owner had to correct.
-// Ordering rule for success: a class counts only when a mechanism instance with corrected_by "mechanism" is dated
-// after EVERY owner instance of that class. That is the criterion's "later": the owner raised it first, and did not
-// have to raise it again on or after the day the mechanism handled it. A mechanism correction that precedes the
-// owner's instance is the opposite event (the owner had to raise a class the mechanism had already met), and it is
-// a repeat, not a success. Dates are YYYY-MM-DD with no time of day, so a same-day owner and mechanism pair cannot
-// be ordered and is not success; neither is a pair where either date is missing or malformed. The position of an
-// instance in the list is never used as evidence of order.
-// Must never: count a class as covered because a document describes it, or turn a missing detector into a pass.
+//
+// THREE THINGS KEPT APART (owner ruling 2026-11-20, PR 68): DISCOVERING a defect, REPAIRING it, and PROVING that a
+// reusable mechanism would catch its recurrence.
+//   who discovered it   an instance's `observed_by`: `owner` (an intervention), `review` (an independent review found
+//                       it: evidence that the REVIEW worked, never a detection of this mechanism), or `mechanism`
+//                       (anything else that is not the owner: a test, a mutation run, a suite, a reading of the code).
+//                       `by_detector: true` says the class's OWN registered check (its `detector` test) is what found it.
+//   who repaired it     `corrected_by` (owner, integrator, mechanism).
+//   recurrence proven   `recurrence_check`: the reusable check that was SEEN to catch this instance again, and how.
+// The mechanism is successful only when the class's own registered check detected a class the owner had already
+// raised, and the mechanism corrected it, without the owner. A review's find, or another check's, is not that.
+// ORDER: "already raised" and "without the owner" are about sequence, so success needs a mechanism-corrected detection
+// dated AFTER EVERY owner instance of the class. An owner instance dated on or after the correction means the owner had
+// to raise the class again (a repeat, not a success). Dates are YYYY-MM-DD with no time of day, so a same-day pair
+// cannot be ordered and is not success; an instance with a missing or malformed date cannot be placed and also blocks
+// success. The position of an instance in the list is never evidence of order.
+// Must never: count a class as covered because a document describes it, turn a missing detector into a pass, or count
+// what a review found as a success of the registered check.
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -31,7 +41,10 @@ export function load(file = REGISTRY) {
   return reg;
 }
 
-/** Problems with the registry itself: a class with no usable detector statement, or a test detector that does not exist. */
+/**
+ * Problems with the registry itself: a class with no usable detector statement, or a test detector that does not
+ * exist.
+ */
 export function problems(reg, {root = ROOT} = {}) {
   const out = [], ids = new Set();
   for (const c of reg.classes) {
@@ -39,12 +52,19 @@ export function problems(reg, {root = ROOT} = {}) {
     ids.add(c.id);
     if (!c.class || !c.source) out.push(`${c.id}: class and source are required`);
     if (!Array.isArray(c.instances) || !c.instances.length) out.push(`${c.id}: no recorded instance`);
-    for (const i of c.instances ?? []) if (!['owner', 'mechanism'].includes(i.observed_by)) out.push(`${c.id}: instance observed_by must be owner or mechanism`);
+    for (const i of c.instances ?? []) {
+      if (!['owner', 'review', 'mechanism'].includes(i.observed_by)) out.push(`${c.id}: instance observed_by must be owner, review or mechanism`);
+      if (i.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(i.date))) out.push(`${c.id}: an instance's date is YYYY-MM-DD (${i.date}): dates are compared as dates`);
+      if (i.observed_by === 'review' && !(typeof i.detected_by === 'string' && i.detected_by.trim())) out.push(`${c.id}: an instance a review found says which review (detected_by)`);
+      if (i.by_detector === true && i.observed_by !== 'mechanism') out.push(`${c.id}: by_detector is for an instance the registered check found, not one a review or the owner found`);
+      else if (i.by_detector === true && c.detector?.kind !== 'test') out.push(`${c.id}: an instance claims the class's registered check (by_detector), and the class has none`);
+    }
     const d = c.detector;
     if (d?.kind === 'test') {
       const f = path.join(root, d.file);
       if (!fs.existsSync(f)) out.push(`${c.id}: detector file ${d.file} does not exist`);
-      else if (!d.name || !fs.readFileSync(f, 'utf8').includes(d.name)) out.push(`${c.id}: no test named "${d.name}" in ${d.file}`);
+      else if (!d.name || !fs.readFileSync(f, 'utf8').includes(d.name))
+        out.push(`${c.id}: no test named "${d.name}" in ${d.file}`);
     } else if (d?.kind === 'none') {
       if (!d.why || !d.next) out.push(`${c.id}: a missing detector states why and the next step`);
     } else out.push(`${c.id}: detector kind must be test or none`);
@@ -52,42 +72,48 @@ export function problems(reg, {root = ROOT} = {}) {
   return out;
 }
 
-// String comparison is date order only for well-formed YYYY-MM-DD; anything else is treated as unordered so that a
-// missing or malformed date can never make a pair look like "owner first, mechanism later".
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const strictlyBefore = (a, b) => DAY.test(a) && DAY.test(b) && a < b;
-
-/** The ordering rule in the header: some mechanism-corrected instance is dated after every owner instance. */
-function demonstratesSuccess(c) {
-  const raised = c.instances.filter(i => i.observed_by === 'owner');
-  return raised.length > 0 && c.instances.some(m => m.observed_by === 'mechanism' && m.corrected_by === 'mechanism' &&
-    raised.every(o => strictlyBefore(o.date, m.date)));
-}
-
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const NAMES_A_CHECK = /[\w./-]+\.test\.mjs|\bmutation\s+[A-Z]+\d+\b/;
 export function report(reg) {
   const classes = reg.classes.map(c => {
     const byOwner = c.instances.filter(i => i.observed_by === 'owner');
+    const byReview = c.instances.filter(i => i.observed_by === 'review');
     const byMechanism = c.instances.filter(i => i.observed_by === 'mechanism');
+    // ITS OWN REGISTERED CHECK: a class with no detector has none, whatever an instance claims (independent review of
+    // a1d090f, finding 3.1: report() counted such a claim; only problems() refused it).
+    const byOwnCheck = c.detector.kind === 'test' ? byMechanism.filter(i => i.by_detector === true) : [];
+    const day = d => (DATE.test(d ?? '') ? Date.parse(d) : NaN);
     return {id: c.id, detector: c.detector.kind === 'test' ? `${c.detector.file} :: ${c.detector.name}` : `none (${c.detector.why})`,
-      fixed: Boolean(c.fixed_in), owner_interventions: byOwner.length, detections: byMechanism.length,
+      fixed: Boolean(c.fixed_in), owner_interventions: byOwner.length, found_by_review: byReview.length, detections: byMechanism.length, detected_by_own_check: byOwnCheck.length,
       corrected_by_mechanism: byMechanism.filter(i => i.corrected_by === 'mechanism').length,
+      // The three things, apart: every instance was discovered; one is repaired when it says who corrected it; its
+      // recurrence is proven only when it names the reusable check that was seen to catch it.
+      discovered: c.instances.length, repaired: c.instances.filter(i => typeof i.corrected_by === 'string' && i.corrected_by).length,
+      // A recurrence is proven by a check that is NAMED (a test file, or a mutation of a runner), not by any text in the field (3.5).
+      recurrence_proven: c.instances.filter(i => typeof i.recurrence_check === 'string' && NAMES_A_CHECK.test(i.recurrence_check)).length,
+      // Dates are compared as dates (3.3), and strictly: the correction must come after EVERY owner instance. The owner
+      // raising the class again on or after the check's detection means the mechanism missed a recurrence (3.4), and a
+      // same-day or undated pair cannot be ordered, so neither is a success. (NaN compares false, so an undated instance
+      // on either side fails the test.)
+      succeeded: byOwner.length > 0 && byOwnCheck.some(i => i.corrected_by === 'mechanism' && byOwner.every(o => day(o.date) < day(i.date))),
       // Condition 7: the owner raising the same class again is evidence the improvement process needs examination.
       repeated: byOwner.length > 1};
   });
   const series = {};
-  for (const c of reg.classes) for (const i of c.instances) if (i.observed_by === 'owner') series[i.date] = (series[i.date] ?? 0) + 1;
+  for (const c of reg.classes) for (const i of c.instances) if (i.observed_by === 'owner') series[i.date] =
+    (series[i.date] ?? 0) + 1;
   const dates = Object.keys(series).sort();
-  // Success, per the owner: a class the owner raised is LATER detected AND corrected without the owner pointing it
-  // out. Counts alone cannot tell that from the owner raising a class the mechanism had already met, so this is
-  // decided on dates.
-  const success = reg.classes.filter(demonstratesSuccess).map(c => c.id);
+  // Success, per the owner: a previously observed class detected BY ITS OWN REGISTERED CHECK and corrected by the
+  // mechanism, without the owner pointing it out. What a review found, or another check, is on the record and is not this.
+  const success = classes.filter(c => c.succeeded).map(c => c.id);
   return {
     classes,
     interventions_by_date: dates.map(d => ({date: d, owner_interventions: series[d]})),
     repeated_classes: classes.filter(c => c.repeated).map(c => c.id),
+    review_found: classes.filter(c => c.found_by_review > 0).map(c => ({class: c.id, instances: c.found_by_review})),
     without_detector: classes.filter(c => c.detector.startsWith('none')).map(c => c.id),
     success: success.length ? {demonstrated: true, classes: success}
-      : {demonstrated: false, why: 'no class the owner raised has yet been detected and corrected by the mechanism on a later date, with no owner instance on or after it'},
+      : {demonstrated: false, why: 'no previously observed class has yet been detected by its own registered check and corrected without the owner'},
   };
 }
 
@@ -98,10 +124,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const r = report(reg);
   if (process.argv.includes('--json')) { console.log(JSON.stringify(r, null, 2)); process.exit(0); }
   for (const c of r.classes) {
-    console.log(`${c.id}: owner ${c.owner_interventions}, detected ${c.detections} (corrected by mechanism ${c.corrected_by_mechanism})` +
-      `${c.repeated ? ' REPEATED' : ''}${c.fixed ? '' : ' OPEN'}\n  detector: ${c.detector}`);
+    console.log(`${c.id}: owner ${c.owner_interventions}, found by review ${c.found_by_review}, detected otherwise ${c.detections} (by its own registered check ${c.detected_by_own_check}; corrected by mechanism ${c.corrected_by_mechanism})` +
+      `; repaired ${c.repaired} of ${c.discovered}, recurrence proven ${c.recurrence_proven}${c.repeated ? ' REPEATED' : ''}${c.fixed ? '' : ' OPEN'}\n  detector: ${c.detector}`);
   }
   console.log(`interventions by date: ${r.interventions_by_date.map(x => `${x.date} ${x.owner_interventions}`).join(', ')}`);
   console.log(`repeated (owner had to raise again): ${r.repeated_classes.join(', ') || 'none'}`);
+  console.log(`found by independent review (evidence the review worked, not a detection of this mechanism): ${r.review_found.map(x => `${x.class} ${x.instances}`).join(', ') || 'none'}`);
   console.log(`self-improvement success: ${r.success.demonstrated ? r.success.classes.join(', ') : `not demonstrated: ${r.success.why}`}`);
 }

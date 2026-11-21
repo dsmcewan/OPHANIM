@@ -1,0 +1,314 @@
+{
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "assignment": 3,
+  "requested_model": "gpt-6-astra",
+  "thread_id": "01a1f173-a2b0-7172-89c6-55cfe94bcfd6",
+  "native_sources": [
+    {
+      "file": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "bytes": 1368032,
+      "sha256": "a3d660ba392dee56f2367e5104d7320eb389b06951a62731af97ca8d42eeca0d",
+      "private_original": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/private-extra-gpt-native-rollouts/rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl"
+    }
+  ],
+  "tool_requests": [
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 16,
+      "timestamp": "2026-11-19T01:37:38.582Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_9eacc1f3b1b5491cbc0de09931ea1191",
+      "input": "text(ALL_TOOLS.filter(x=>/read_file|list_directory|search.*file/.test(x.name+\" \"+x.description)).map(x=>({name:x.name,description:x.description.slice(0,100)})).slice(0,100))\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 22,
+      "timestamp": "2026-11-19T01:37:45.422Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_1277a0973d224024ade3ff4993bcb055",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n+import fs from 'node:fs';\\n+for (const p of ['AGENTS.md','ophanim/operate/scheduler.mjs','ophanim/operate/work-ledger.mjs']) {\\n+ if(fs.existsSync(p)) console.log('\\\\nFILE '+p+'\\\\n'+fs.readFileSync(p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n'));\\n+}\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:24000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 30,
+      "timestamp": "2026-11-19T01:37:48.660Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_d0eb799db4e6492a9df8d3fc378efa68",
+      "input": "text(await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",workdir:\"/tmp/ophanim-review-U4Ctdv/worktree\",max_output_tokens:24000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 37,
+      "timestamp": "2026-11-19T01:37:54.071Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_3e335527b54d4382b0405f37ef2a3c6c",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n import fs from 'node:fs';\\n+console.log('cwd',process.cwd(),fs.readdirSync('/tmp/ophanim-review-U4Ctdv/worktree'));\\n+process.chdir('/tmp/ophanim-review-U4Ctdv/worktree');\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",workdir:\"/tmp/ophanim-review-U4Ctdv/worktree\",max_output_tokens:24000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 47,
+      "timestamp": "2026-11-19T01:38:00.743Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_b39450dbb9514f76875eebbff28ec0bb",
+      "input": "const t=ALL_TOOLS.find(x=>x.name.endsWith(\"remote_desktop_commander_read_file\"));text(await tools[t.name]({path:\"/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\"}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 54,
+      "timestamp": "2026-11-19T01:38:08.898Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_16238021c0774443a1f4822604f5d28f",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n import fs from 'node:fs';\\n+throw new Error('INSPECTION '+fs.readFileSync('/tmp/ophanim-review-U4Ctdv/worktree/ophanim/operate/scheduler.mjs','utf8'));\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:20000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 62,
+      "timestamp": "2026-11-19T01:38:16.107Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_ee2e4a2d837d48318e5c10d8b6318ffc",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error('INSPECTION '+fs.readFileSync('/tmp/ophanim-review-U4Ctdv/worktree/ophanim/operate/scheduler.mjs','utf8'));\\n+const root='/tmp/ophanim-review-U4Ctdv/worktree/';\\n+throw new Error(['AGENTS.md','ophanim/AGENTS.md','ophanim/operate/AGENTS.md','pantheon/AGENTS.md','ophanim/operate/work-ledger.mjs','pantheon/src/pipeline/checkpoint.mjs'].filter(p=>fs.existsSync(root+p)).map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:22000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 70,
+      "timestamp": "2026-11-19T01:38:23.471Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_177d73c27147453dbf7c224111e5988b",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error(['AGENTS.md','ophanim/AGENTS.md','ophanim/operate/AGENTS.md','pantheon/AGENTS.md','ophanim/operate/work-ledger.mjs','pantheon/src/pipeline/checkpoint.mjs'].filter(p=>fs.existsSync(root+p)).map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n+throw new Error(['pantheon/src/pipeline/index.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:23000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 79,
+      "timestamp": "2026-11-19T01:38:32.541Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_e04df09475af460396ed83f1536b51fb",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error(['pantheon/src/pipeline/index.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n+throw new Error(['pantheon/src/pipeline/turns.mjs','pantheon/src/route/quota-failover.mjs','pantheon/src/agy/quota.mjs','pantheon/tests/fixtures/dispatch.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:18000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 87,
+      "timestamp": "2026-11-19T01:38:39.980Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_095a450fb3a54e48be451c9c23ad8955",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error(['pantheon/src/pipeline/turns.mjs','pantheon/src/route/quota-failover.mjs','pantheon/src/agy/quota.mjs','pantheon/tests/fixtures/dispatch.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n+throw new Error(['ophanim/operate/live-run.mjs','pantheon/tests/pipeline-resume.test.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:15000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 95,
+      "timestamp": "2026-11-19T01:38:48.372Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_131d29e94ad048efa0a0e6021051a647",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error(['ophanim/operate/live-run.mjs','pantheon/tests/pipeline-resume.test.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['pantheon/tests/fixtures/pipeline-stages.mjs',1,240],['ophanim/operate/scheduler.test.mjs',1,170],['packages/ledger/chain.mjs',1,40]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:9500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 102,
+      "timestamp": "2026-11-19T01:38:57.312Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_957a1f4398714cb8b14c508084914155",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/existing.test.mjs\\n+import fs from 'node:fs';\\n+const root = '/tmp/ophanim-review-U4Ctdv/worktree';\\n+fs.mkdirSync(root+'/.review-tests/tmp',{recursive:true});\\n+process.env.TMPDIR=root+'/.review-tests/tmp';\\n+for(const f of ['ophanim/operate/scheduler.test.mjs','ophanim/operate/live-run.test.mjs','pantheon/tests/pipeline-run.test.mjs','pantheon/tests/pipeline-ladder.test.mjs','pantheon/tests/pipeline-resume.test.mjs','pantheon/tests/pipeline-async.test.mjs','pantheon/tests/pipeline-turns.test.mjs','pantheon/tests/quota-failover.test.mjs','pantheon/tests/provider-call-bound-resume.test.mjs']) await import(root+'/'+f);\\n*** End Patch\"));\ntext(await tools.exec_command({cmd:\"node --test .review-tests/existing.test.mjs\",yield_time_ms:1000,max_output_tokens:2000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 110,
+      "timestamp": "2026-11-19T01:39:07.274Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_a4661a4a18cb47cabda64025a48e90b9",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error([['pantheon/tests/fixtures/pipeline-stages.mjs',1,240],['ophanim/operate/scheduler.test.mjs',1,170],['packages/ledger/chain.mjs',1,40]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['pantheon/src/route/quota-failover.mjs',1,250],['pantheon/src/pipeline/turns.mjs',230,290],['pantheon/src/pipeline/dispatch.mjs',1,150],['ophanim/operate/work-ledger.mjs',128,185]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:10000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 118,
+      "timestamp": "2026-11-19T01:39:16.823Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_8fd9320ba8294118ac81d093dacc3a56",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error([['pantheon/src/route/quota-failover.mjs',1,250],['pantheon/src/pipeline/turns.mjs',230,290],['pantheon/src/pipeline/dispatch.mjs',1,150],['ophanim/operate/work-ledger.mjs',128,185]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['packages/ledger/chain.mjs',1,2000],['pantheon/src/board/run-item.mjs',1,2000],['ophanim/operate/stages.mjs',1,2000]].map(([p])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).filter(l=>/lock|append|charge|budget|provider_calls|resume|checkpoint|pipeline|argo|legacy/.test(l)).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:10500})).output);\ntext(await tools.write_stdin({session_id:64110,chars:\"\",yield_time_ms:1000,max_output_tokens:3500}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 128,
+      "timestamp": "2026-11-19T01:39:28.609Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_8743f31c9f4c4e4d8d27b82ba9be39de",
+      "input": "text(await tools.exec_command({cmd:\"node --test pantheon/tests/pipeline-resume.test.mjs\",max_output_tokens:3000}));\ntext(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error([['packages/ledger/chain.mjs',1,2000],['pantheon/src/board/run-item.mjs',1,2000],['ophanim/operate/stages.mjs',1,2000]].map(([p])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).filter(l=>/lock|append|charge|budget|provider_calls|resume|checkpoint|pipeline|argo|legacy/.test(l)).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['ophanim/operate/stages.mjs',109,127],['ophanim/operate/stages.mjs',653,695],['pantheon/src/board/run-item.mjs',420,470],['pantheon/src/board/run-item.mjs',850,875],['pantheon/src/sdk/live.mjs',1,230]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:8500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 137,
+      "timestamp": "2026-11-19T01:39:45.465Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_65f80569621040348da29aa376a8f096",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/checkpoint.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {runPipeline} from '../pantheon/src/pipeline/index.mjs';\\n+import {tempRepo,seats,unit,scripted} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n+const scratch='/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/tmp';\\n+fs.mkdirSync(scratch,{recursive:true}); process.env.TMPDIR=scratch;\\n+const env=await tempRepo();\\n+try {\\n+ const plan=[unit('a')], checkpoints={dir:join(env.root,'checkpoints')};\\n+ const go=async name=>runPipeline({repo:env.repo,base:'main',plan:{work_units:plan},seats:seats(),turns:scripted({plan}).turns,dir:join(env.root,name),run_id:name,checkpoints});\\n+ const one=await go('one'); assert.equal(one.status,'completed',JSON.stringify(one));\\n+ const file=one.units.a.checkpoint.file;\\n+ const cp=JSON.parse(fs.readFileSync(file,'utf8'));\\n+ cp.review_digest='sha256:'+'0'.repeat(64); cp.rubric_hash='sha256:'+'1'.repeat(64);\\n+ cp.reviewer={vendor:'invented',model:'never-reviewed'};\\n+ fs.writeFileSync(file,JSON.stringify(cp));\\n+ const two=await go('two');\\n+ assert.equal(two.units.a.resumed,false,'TAMPER ACCEPTED: fabricated review/rubric hashes and reviewer resumed as approved; calls='+two.provider_calls.total);\\n+} finally {await env.cleanup();}\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/checkpoint.test.mjs\",max_output_tokens:4000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 145,
+      "timestamp": "2026-11-19T01:40:03.309Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_24aeda307048450fa65e76bb9f03e8e5",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/checkpoint.test.mjs\\n@@\\n-import {runPipeline} from '../pantheon/src/pipeline/index.mjs';\\n-import {tempRepo,seats,unit,scripted} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n+import {runPipeline,unitKey} from '../pantheon/src/pipeline/index.mjs';\\n+import {writeCheckpoint} from '../pantheon/src/pipeline/checkpoint.mjs';\\n+import {tempRepo,seats,unit,scripted,sh} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n@@\\n-const env=await tempRepo();\\n+const env=await tempRepo({'src/a/impl.mjs':'export const id=\\\"a\\\";\\\\n'});\\n@@\\n- const one=await go('one'); assert.equal(one.status,'completed',JSON.stringify(one));\\n- const file=one.units.a.checkpoint.file;\\n- const cp=JSON.parse(fs.readFileSync(file,'utf8'));\\n- cp.review_digest='sha256:'+'0'.repeat(64); cp.rubric_hash='sha256:'+'1'.repeat(64);\\n- cp.reviewer={vendor:'invented',model:'never-reviewed'};\\n- fs.writeFileSync(file,JSON.stringify(cp));\\n+ const base=(await sh('git rev-parse HEAD',env.repo)).trim(), tree=(await sh('git rev-parse HEAD^{tree}',env.repo)).trim();\\n+ await writeCheckpoint({dir:checkpoints.dir,patch:'',record:{unit_key:unitKey({unit:plan[0],base_commit:base}),unit_id:'a',base_commit:base,unit_base_commit:base,commit:base,tree,upstream:[],review_digest:'sha256:'+'0'.repeat(64),rubric_hash:'sha256:'+'1'.repeat(64),reviewer:{vendor:'invented',model:'never-reviewed'},verify:{cmd:plan[0].verify_cmd,exit_code:0}}});\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/checkpoint.test.mjs\",max_output_tokens:2000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 153,
+      "timestamp": "2026-11-19T01:40:31.341Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_774e72ac581b45299d5555085440b9ea",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/race-child.mjs\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {tick} from '../ophanim/operate/scheduler.mjs';\\n+const [root,item,line]=process.argv.slice(2);\\n+let waited=false;\\n+const clock=()=>{\\n+ if(!waited && new Error().stack.includes('scheduler.mjs:'+line+':')){\\n+  waited=true; fs.writeFileSync(join(root,item+'.ready'),'ready');\\n+  const end=Date.now()+10000;\\n+  while(!fs.existsSync(join(root,'go'))){if(Date.now()>end)throw new Error('barrier timed out'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}\\n+ }\\n+ return Date.now();\\n+};\\n+const result=await tick({repo:root,statusRoot:join(root,'status'),workRoot:join(root,'work'),only:item,clock,\\n+ limits:{total_provider_calls:1,stage_provider_calls:1,iterations:1},\\n+ executors:{plan:async ctx=>{ctx.charge(); return {status:'failed',outputs:{mock_call:true},usage:{provider_calls:1},next:{stage:'plan',why:'fixture stop'}};}}});\\n+fs.writeFileSync(join(root,item+'.result'),JSON.stringify(result));\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/budget-race.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {spawn} from 'node:child_process';\\n+import {openStatusLedger} from '../packages/ledger/status.mjs';\\n+import {openWorkLedger} from '../ophanim/operate/work-ledger.mjs';\\n+import {tick,spent} from '../ophanim/operate/scheduler.mjs';\\n+const scratch='/tmp/ophanim-review-U4Ctdv/worktree/.review-tests';\\n+const root=fs.mkdtempSync(join(scratch,'race-')); const children=[];\\n+try {\\n+ const S=openStatusLedger({root:join(root,'status')});\\n+ for(const item of ['alpha','beta']) S.set({item,title:item,state:'Ready',basis:'fixture',checked:'2026-11-18'});\\n+ fs.mkdirSync(join(root,'tickets'));\\n+ await tick({repo:root,statusRoot:join(root,'status'),workRoot:join(root,'work'),limits:{total_provider_calls:100},executors:{}});\\n+ const lines=fs.readFileSync(new URL('../ophanim/operate/scheduler.mjs',import.meta.url),'utf8').split('\\\\n');\\n+ const line=lines.findIndex(l=>l.includes('try { claim = work.claim('))+1;\\n+ const results=['alpha','beta'].map(item=>new Promise((resolve,reject)=>{\\n+  const c=spawn(process.execPath,[join(scratch,'race-child.mjs'),root,item,String(line)],{stdio:['ignore','pipe','pipe']}); children.push(c);\\n+  let err=''; c.stderr.on('data',d=>err+=d);c.on('error',reject); c.on('close',code=>code===0?resolve():reject(new Error(err)));\\n+ }));\\n+ const end=Date.now()+10000;\\n+ while(!['alpha','beta'].every(i=>fs.existsSync(join(root,i+'.ready')))) {if(Date.now()>end)throw new Error('children did not reach barrier');await new Promise(r=>setTimeout(r,10));}\\n+ fs.writeFileSync(join(root,'go'),'go'); await Promise.all(results);\\n+ const w=openWorkLedger({root:join(root,'work')}); assert.equal(w.verify().ok,true);\\n+ assert.ok(spent(w).calls<=1,'TOTAL BUDGET EXCEEDED: '+JSON.stringify(spent(w))+' against total_provider_calls=1');\\n+} finally {for(const c of children)if(c.exitCode===null)c.kill('SIGKILL');fs.rmSync(root,{recursive:true,force:true});}\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/budget-race.test.mjs\",max_output_tokens:2500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 163,
+      "timestamp": "2026-11-19T01:40:50.824Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_8e3cd05c7bcf4fa28f3026a078ce41d2",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error([['ophanim/operate/stages.mjs',109,127],['ophanim/operate/stages.mjs',653,695],['pantheon/src/board/run-item.mjs',420,470],['pantheon/src/board/run-item.mjs',850,875],['pantheon/src/sdk/live.mjs',1,230]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['pantheon/src/sdk/agy-turn.mjs',1,240],['pantheon/src/pipeline/review.mjs',90,225],['ophanim/operate/live-run.mjs',398,484],['pantheon/tests/provider-call-bound-resume.test.mjs',1,180]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:10500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 170,
+      "timestamp": "2026-11-19T01:41:16.673Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_c991cbbd5eef44d184efce5e54653202",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/elapsed.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {openStatusLedger} from '../packages/ledger/status.mjs';\\n+import {openWorkLedger} from '../ophanim/operate/work-ledger.mjs';\\n+import {tick} from '../ophanim/operate/scheduler.mjs';\\n+const root=fs.mkdtempSync('/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/elapsed-');\\n+try {\\n+ const statusRoot=join(root,'status'),workRoot=join(root,'work');\\n+ openStatusLedger({root:statusRoot}).set({item:'alpha',title:'Alpha',state:'Ready',basis:'fixture',checked:'2026-11-18'});\\n+ fs.mkdirSync(join(root,'tickets'));\\n+ const r=await tick({repo:root,statusRoot,workRoot,limits:{total_provider_calls:1,stage_provider_calls:1,elapsed_ms:100,lease_ms:10000,iterations:1},executors:{plan:async ctx=>{\\n+  ctx.charge(); await new Promise(r=>setTimeout(r,150));\\n+  assert.equal(ctx.signal.aborted,true);\\n+  return {status:'passed',outputs:{partial:'answer arrived after deadline'},usage:{provider_calls:1},next:{stage:'implement',why:'approved'}};\\n+ }}});\\n+ const stage=openWorkLedger({root:workRoot}).stages()[0];\\n+ assert.notEqual(stage.status,'passed','ELAPSED stage recorded passed: '+JSON.stringify({status:stage.status,outputs:stage.outputs,stopped:r.stopped}));\\n+} finally {fs.rmSync(root,{recursive:true,force:true});}\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/existing-results.test.mjs\\n+import {run} from 'node:test';\\n+import fs from 'node:fs';\\n+const root='/tmp/ophanim-review-U4Ctdv/worktree';\\n+fs.mkdirSync(root+'/.review-tests/tmp',{recursive:true});process.env.TMPDIR=root+'/.review-tests/tmp';\\n+const events=[];\\n+const stream=run({files:['ophanim/operate/scheduler.test.mjs','ophanim/operate/live-run.test.mjs','pantheon/tests/pipeline-ladder.test.mjs','pantheon/tests/pipeline-turns.test.mjs','pantheon/tests/quota-failover.test.mjs','pantheon/tests/provider-call-bound-resume.test.mjs'].map(f=>root+'/'+f),concurrency:1});\\n+for await(const e of stream) if(['test:fail','test:summary'].includes(e.type))events.push({type:e.type,...e.data,details:e.data.details?{...e.data.details,error:String(e.data.details.error),cause:String(e.data.details.error?.cause)}:undefined});\\n+fs.writeFileSync(root+'/.review-tests/existing-results.json',JSON.stringify(events,null,2));\\n+throw new Error('EXISTING RESULTS '+JSON.stringify(events));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/elapsed.test.mjs\",max_output_tokens:2500})).output);\ntext(await tools.exec_command({cmd:\"node --test .review-tests/existing-results.test.mjs\",yield_time_ms:1000,max_output_tokens:1000}));\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 179,
+      "timestamp": "2026-11-19T01:41:27.683Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_9930c8b660df4665a85df4721fb7e1f4",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error([['pantheon/src/sdk/agy-turn.mjs',1,240],['pantheon/src/pipeline/review.mjs',90,225],['ophanim/operate/live-run.mjs',398,484],['pantheon/tests/provider-call-bound-resume.test.mjs',1,180]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['pantheon/src/pipeline/a2a-shim.mjs',180,330],['pantheon/src/pipeline/review.mjs',1,89],['pantheon/src/pipeline/implement.mjs',100,220],['pantheon/src/pipeline/git.mjs',1,150],['ophanim/operate/stages.mjs',804,842]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:8500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 187,
+      "timestamp": "2026-11-19T01:41:49.741Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_f5b4b429b4f349f69f3724fc7001aa89",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/restart-child.mjs\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {runPipeline} from '../pantheon/src/pipeline/index.mjs';\\n+import {seats,unit,scripted} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n+const [repo,dir]=process.argv.slice(2),plan=[unit('a')];\\n+const s=scripted({plan,dispatch:async()=>{fs.writeFileSync(join(dir,'call-sent'),'one mock provider call');await new Promise(()=>{});}});\\n+const alive=setInterval(()=>{},1000);\\n+await runPipeline({repo,base:'main',plan:{work_units:plan},seats:seats(),turns:s.turns,dir});clearInterval(alive);\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/restart.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {spawn} from 'node:child_process';\\n+import {runPipeline} from '../pantheon/src/pipeline/index.mjs';\\n+import {tempRepo,seats,unit,scripted} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n+const scratch='/tmp/ophanim-review-U4Ctdv/worktree/.review-tests';\\n+fs.mkdirSync(join(scratch,'tmp'),{recursive:true});process.env.TMPDIR=join(scratch,'tmp');\\n+const env=await tempRepo();let child;\\n+try {\\n+ child=spawn(process.execPath,[join(scratch,'restart-child.mjs'),env.repo,env.dir],{stdio:'ignore'});\\n+ const closed=new Promise(r=>child.on('close',r)),end=Date.now()+10000;\\n+ while(!fs.existsSync(join(env.dir,'call-sent'))){if(Date.now()>end)throw new Error('child did not dispatch'); await new Promise(r=>setTimeout(r,10));}\\n+ child.kill('SIGKILL');await closed;\\n+ const interrupted=JSON.parse(fs.readFileSync(join(env.dir,'pipeline.json'),'utf8'));\\n+ const plan=[unit('a')];\\n+ const resumed=await runPipeline({repo:env.repo,base:'main',plan:{work_units:plan},seats:seats(),turns:scripted({plan}).turns,dir:env.dir});\\n+ assert.equal(interrupted.provider_calls.total,1,'RESTART LOST CALL: recorded '+interrupted.provider_calls.total+' despite mock call sent; next run '+resumed.status+': '+resumed.reason);\\n+} finally {if(child?.exitCode===null)child.kill('SIGKILL');await env.cleanup();}\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/restart.test.mjs\",max_output_tokens:2200})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 195,
+      "timestamp": "2026-11-19T01:42:11.812Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_679012d6326b435d8660a1eede8dcc39",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/single-failover.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {runPipeline} from '../pantheon/src/pipeline/index.mjs';\\n+import {pipelineTurns} from '../pantheon/src/pipeline/turns.mjs';\\n+import {laneFirstTurn} from '../pantheon/src/sdk/agy-turn.mjs';\\n+import {tempRepo,seats,unit} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n+const scratch='/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/tmp';fs.mkdirSync(scratch,{recursive:true});process.env.TMPDIR=scratch;\\n+const env=await tempRepo();\\n+try {\\n+ let sent=0;\\n+ const lane=async()=>{sent++;throw Object.assign(new Error('quota'),{status:429,code:'quota_exhausted'});};\\n+ const api=async({model})=>{sent++;return {served_model:model,text:JSON.stringify({unit_id:'a',cohesive:false,specialist_role:'node-esm-library-engineer',difficulty:'medium',rubric:['file exists'],notes:'fixture ends at dispatch'})};};\\n+ const plan=[unit('a')],seat={vendor:'agy_google',model:'gemini-4-hydrogen-medium'};\\n+ const r=await runPipeline({repo:env.repo,base:'main',plan:{work_units:plan},seats:seats({dispatcher:()=>seat}),turns:pipelineTurns({turn:args=>laneFirstTurn(args,{lane,api})}),dir:env.dir,limits:{max_provider_calls:1,judge_vendor:'agy_google'},sameModel:()=>true});\\n+ assert.equal(sent,r.provider_calls.total,'UNCOUNTED SINGLE-TURN FAILOVER: sent='+sent+', charged='+r.provider_calls.total+', max_provider_calls=1');\\n+} finally {await env.cleanup();}\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/single-failover.test.mjs\",max_output_tokens:2000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 205,
+      "timestamp": "2026-11-19T01:42:47.128Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_15712edbf2d94b79bd5430eae091eac9",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {openWorkLedger} from '../ophanim/operate/work-ledger.mjs';\\n+import {openStatusLedger} from '../packages/ledger/status.mjs';\\n+import {spent} from '../ophanim/operate/scheduler.mjs';\\n+import {runVerify} from '../pantheon/src/pipeline/review.mjs';\\n+import {laneFirstTurn} from '../pantheon/src/sdk/agy-turn.mjs';\\n+import {pipelineTurns} from '../pantheon/src/pipeline/turns.mjs';\\n+import {lockConflicts,waves} from '../pantheon/src/pipeline/index.mjs';\\n+import {unit} from '../pantheon/tests/fixtures/pipeline-stages.mjs';\\n+import {statusLedgerState,runConfirmed} from '../ophanim/operate/live-run.mjs';\\n+const root=fs.mkdtempSync('/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive-');\\n+try {\\n+ const w=openWorkLedger({root:join(root,'leases')});\\n+ const at=Date.now(), budget={provider_calls:2,iterations:1,elapsed_ms:100,retries:1};\\n+ const c=w.claim({item:'alpha',stage:'plan',attempt:1,inputs:{},holder:'old',budget,lease_ms:100,at:new Date(at).toISOString()});\\n+ w.recordSpend({claim:c,provider_calls:1,at:new Date(at+1).toISOString()});\\n+ assert.throws(()=>w.claim({item:'alpha',stage:'plan',attempt:1,inputs:{},holder:'duplicate',budget,at:new Date(at+2).toISOString()}),/already claimed/);\\n+ const newer=w.claim({item:'alpha',stage:'plan',attempt:2,inputs:{},holder:'new',budget,at:new Date(at+101).toISOString()});\\n+ assert.equal(w.released(c).outcome,'expired');\\n+ assert.throws(()=>w.recordSpend({claim:c,provider_calls:2}),/LEASE_FENCED/);\\n+ assert.throws(()=>w.recordStage({claim:c}),/LEASE_FENCED/);\\n+ assert.equal(spent(w,{now:at+102}).calls,1);assert.ok(newer);assert.equal(w.verify().ok,true);\\n+ const overlap=[unit('a'),unit('b',{owned_paths:['src/a/impl.mjs']})];\\n+ assert.equal(lockConflicts(overlap).length,1);assert.ok(waves(overlap).every(w=>w.length===1));\\n+ const v=await runVerify({worktree:root,verify_cmd:'sleep 2',timeout_ms:30});\\n+ assert.equal(v.timed_out,true);assert.equal(v.passed,false);assert.ok(v.duration_ms<1000);\\n+ let apiCalls=0,probes=0;\\n+ const quota=()=>Object.assign(new Error('quota'),{code:'quota_exhausted',status:429});\\n+ await assert.rejects(()=>laneFirstTurn({vendor:'agy_google',model:'gemini-4-hydrogen-medium',prompt:'fixture'},{lane:async()=>{throw quota();},api:async()=>{apiCalls++;},failover:false}),e=>e.quota_failover.disabled===true);\\n+ const turns=pipelineTurns({turn:async()=>{},agy:{run:async()=>{throw quota();},probe:async()=>{probes++;return {state:'exhausted'};},api:async()=>{apiCalls++;},meteredFailover:false}});\\n+ await assert.rejects(()=>turns.implementer({vendor:'agy_google',model:'gemini-4-hydrogen-medium',prompt:'fixture',cwd:root,control_dir:join(root,'control'),owned_paths:[],unit_id:'a'}),e=>e.quota_failover.disabled===true);\\n+ assert.equal(apiCalls,0);assert.equal(probes,1);\\n+ const repo=join(root,'repo'),statusRoot=join(root,'status');fs.mkdirSync(repo);fs.mkdirSync(join(repo,'tickets'));\\n+ openStatusLedger({root:statusRoot}).set({item:'alpha',title:'Alpha',state:'Ready',basis:'fixture',checked:'2026-11-18'});\\n+ const m={item:'alpha',candidate_commit:'0'.repeat(40),out_dir:join(root,'out'),ledgers:{status_root:statusRoot,work_root:join(root,'runwork')},limits:{total_provider_calls:1,stage_provider_calls:1,elapsed_ms:10000,stage_attempts:1,revisions:1,pipeline:{}},credentials:{gemini_api_key:'not-used'},billing:{metered_gemini_failover:false}};\\n+ const result=await runConfirmed({manifest:m,digest:'sha256:'+'0'.repeat(64),file:'fixture'}, {},statusLedgerState(statusRoot),{state:'absent'},{repo,seats:{},makeExecutorsImpl:async()=>({plan:async ctx=>{ctx.charge();return {status:'failed',usage:{provider_calls:1},next:{stage:'plan',why:'PROVIDER_CALL_LIMIT: fixture budget spent'}};}})});\\n+ assert.equal(result.record.verification.ok,true,JSON.stringify(result.record.verification));\\n+ assert.notEqual(result.record.verification.process.pid,process.pid);\\n+ assert.ok(result.record.budget_stops.some(s=>s.source==='stage'));\\n+ assert.equal(result.record.acceptance.met,false);\\n+} finally {fs.rmSync(root,{recursive:true,force:true});}\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/positive.test.mjs\",max_output_tokens:3000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 213,
+      "timestamp": "2026-11-19T01:42:54.476Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_f02b0507600f4a40bd4cb5f21ce65a63",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive.test.mjs\\n@@\\n- await assert.rejects(()=>turns.implementer({vendor:'agy_google',model:'gemini-4-hydrogen-medium',prompt:'fixture',cwd:root,control_dir:join(root,'control'),owned_paths:[],unit_id:'a'}),e=>e.quota_failover.disabled===true);\\n+ await assert.rejects(()=>turns.implementer({vendor:'agy_google',model:'gemini-4-hydrogen-medium',prompt:'fixture',cwd:root,control_dir:join(root,'control'),owned_paths:['src/**'],verify_cmd:'true',unit_id:'a'}),e=>e.quota_failover?.disabled===true);\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/positive.test.mjs\",max_output_tokens:3000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 219,
+      "timestamp": "2026-11-19T01:43:01.729Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_48b69c2834a64805a751cbacb336feec",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive.test.mjs\\n@@\\n- await assert.rejects(()=>turns.implementer({vendor:'agy_google',model:'gemini-4-hydrogen-medium',prompt:'fixture',cwd:root,control_dir:join(root,'control'),owned_paths:['src/**'],verify_cmd:'true',unit_id:'a'}),e=>e.quota_failover?.disabled===true);\\n+ fs.mkdirSync(join(root,'worker'));\\n+ await assert.rejects(()=>turns.implementer({vendor:'agy_google',model:'gemini-4-hydrogen-medium',prompt:'fixture',cwd:join(root,'worker'),control_dir:join(root,'control'),owned_paths:['src/**'],verify_cmd:'true',unit_id:'a'}),e=>e.quota_failover?.disabled===true);\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/positive.test.mjs\",max_output_tokens:3000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 227,
+      "timestamp": "2026-11-19T01:43:09.162Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_c96291b3fea3474c8b9693fd10f479fd",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n const root='/tmp/ophanim-review-U4Ctdv/worktree/';\\n+throw new Error(JSON.stringify({execArgv:process.execArgv,nodeOptions:process.env.NODE_OPTIONS,testContext:process.env.NODE_TEST_CONTEXT,log:String(console.log),argv:process.argv}));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:2000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 235,
+      "timestamp": "2026-11-19T01:43:19.680Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_0d666e0ce8f6483fb1a63040e30dd833",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive.test.mjs\\n@@\\n- const result=await runConfirmed({manifest:m,digest:'sha256:'+'0'.repeat(64),file:'fixture'}, {},statusLedgerState(statusRoot),{state:'absent'},{repo,seats:{},makeExecutorsImpl:async()=>({plan:async ctx=>{ctx.charge();return {status:'failed',usage:{provider_calls:1},next:{stage:'plan',why:'PROVIDER_CALL_LIMIT: fixture budget spent'}};}})});\\n+ delete process.env.NODE_TEST_CONTEXT;\\n+ const result=await runConfirmed({manifest:m,digest:'sha256:'+'0'.repeat(64),file:'fixture'}, {},statusLedgerState(statusRoot),{state:'absent'},{repo,seats:{},makeExecutorsImpl:async()=>({plan:async ctx=>{ctx.charge();return {status:'failed',usage:{provider_calls:1},next:{stage:'plan',why:'PROVIDER_CALL_LIMIT: fixture budget spent'}};}})});\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/positive.test.mjs\",max_output_tokens:1800})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 243,
+      "timestamp": "2026-11-19T01:43:37.443Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_b703e662cdb8400787d599f8c8fa0d1e",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive.test.mjs\\n@@\\n- assert.equal(result.record.verification.ok,true,JSON.stringify(result.record.verification));\\n- assert.notEqual(result.record.verification.process.pid,process.pid);\\n+ fs.writeFileSync('/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/verification-result.json',JSON.stringify(result.record.verification,null,2));\\n+ assert.equal(result.record.verification.in_process.ok,true);\\n+ assert.equal(result.record.verification.process.exit_code,0);\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error(JSON.stringify({execArgv:process.execArgv,nodeOptions:process.env.NODE_OPTIONS,testContext:process.env.NODE_TEST_CONTEXT,log:String(console.log),argv:process.argv}));\\n-throw new Error([['pantheon/src/pipeline/a2a-shim.mjs',180,330],['pantheon/src/pipeline/review.mjs',1,89],['pantheon/src/pipeline/implement.mjs',100,220],['pantheon/src/pipeline/git.mjs',1,150],['ophanim/operate/stages.mjs',804,842]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n+throw new Error(['pantheon/src/board/agy-cli.mjs','pantheon/src/agy/quota.mjs','pantheon/src/pipeline/a2a-shim.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).filter(l=>/timeout|print|signal|kill|listen|close|chmod|onCall/.test(l)).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/positive.test.mjs\",max_output_tokens:1500})).output);\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:6500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 251,
+      "timestamp": "2026-11-19T01:43:52.685Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_5c0c5e6c40e04f64a7dd0c2ae1a2a8f9",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/board-resume-budget.test.mjs\\n+import assert from 'node:assert/strict';\\n+import fs from 'node:fs';\\n+import {join} from 'node:path';\\n+import {withDispatch} from '../pantheon/tests/fixtures/dispatch.mjs';\\n+import {runOpenItem,providerCallsOf} from '../pantheon/src/board/run-item.mjs';\\n+const scratch='/tmp/ophanim-review-U4Ctdv/worktree/.review-tests/tmp';fs.mkdirSync(scratch,{recursive:true});process.env.TMPDIR=scratch;\\n+await withDispatch(async({spec,opts,calls,fault,agy})=>{\\n+ let fail=true;\\n+ fault(c=>fail&&/VERDICT/.test(c.prompt)?{error:Object.assign(new Error('quota'),{status:429,code:'insufficient_quota'})}:null);\\n+ const o=opts(),s=spec('resume-stage-budget');\\n+ const first=await runOpenItem(s,{...o,maxProviderCalls:4});\\n+ assert.equal(first.shipped,false,JSON.stringify(first));\\n+ const before=providerCallsOf(JSON.parse(fs.readFileSync(join(first.board,'run.json'),'utf8')).attempts);\\n+ assert.equal(before,4);\\n+ fail=false;\\n+ // Exact argument used by stages.mjs: callsBefore + current stage budget.\\n+ const stageBudget=1;\\n+ const second=await runOpenItem(s,{...o,resume:first.board,maxProviderCalls:before+stageBudget});\\n+ const r=JSON.parse(fs.readFileSync(join(second.board,'run.json'),'utf8'));\\n+ const delta=providerCallsOf(r.attempts)-before;\\n+ assert.ok(delta<=stageBudget,'RESUMED STAGE OVERRUN: '+delta+' new calls against stage budget 1; invocation limit='+r.provider_calls.limit+', callsBefore='+before);\\n+});\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/board-resume-budget.test.mjs\",max_output_tokens:3500})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 259,
+      "timestamp": "2026-11-19T01:43:57.008Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_9d6af3ebb47a4115ae4570bec0448aa8",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/board-resume-budget.test.mjs\\n@@\\n- assert.equal(before,4);\\n+ assert.equal(before,4,JSON.stringify(first.error));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/board-resume-budget.test.mjs\",max_output_tokens:2000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 267,
+      "timestamp": "2026-11-19T01:44:16.739Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_4066941acbb04d41beed6254c6529a86",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n@@\\n-throw new Error(['pantheon/src/board/agy-cli.mjs','pantheon/src/agy/quota.mjs','pantheon/src/pipeline/a2a-shim.mjs'].map(p=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).filter(l=>/timeout|print|signal|kill|listen|close|chmod|onCall/.test(l)).join('\\\\n')).join('\\\\n'));\\n+throw new Error([['ophanim/operate/scheduler.mjs',140,242],['ophanim/operate/scheduler.mjs',290,330],['ophanim/operate/live-run.mjs',387,400],['pantheon/src/pipeline/a2a-shim.mjs',130,150]].map(([p,a,b])=>'\\\\nFILE '+p+'\\\\n'+fs.readFileSync(root+p,'utf8').split('\\\\n').map((l,i)=>`${i+1}: ${l}`).slice(a-1,b).join('\\\\n')).join('\\\\n'));\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/inspect.test.mjs\",max_output_tokens:6000})).output);\n"
+    },
+    {
+      "source": "rollout-2026-11-18T20-37-29-01a1f173-a2b0-7172-89c6-55cfe94bcfd6.jsonl",
+      "line": 275,
+      "timestamp": "2026-11-19T01:44:39.382Z",
+      "kind": "custom_tool_call",
+      "name": "exec",
+      "call_id": "call_0ccfd888d3494bcc9394b5f98f8dc139",
+      "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/positive.test.mjs\\n@@\\n-import {spent} from '../ophanim/operate/scheduler.mjs';\\n+import {spent,tick} from '../ophanim/operate/scheduler.mjs';\\n@@\\n  assert.ok(result.record.budget_stops.some(s=>s.source==='stage'));\\n  assert.equal(result.record.acceptance.met,false);\\n+ const concurrentStatus=join(root,'concurrent-status'),concurrentWork=join(root,'concurrent-work');\\n+ const S=openStatusLedger({root:concurrentStatus});\\n+ for(const item of ['alpha','beta'])S.set({item,title:item,state:'Ready',basis:'fixture',checked:'2026-11-18'});\\n+ let active=0,maximum=0;\\n+ const concurrent=await tick({repo,statusRoot:concurrentStatus,workRoot:concurrentWork,limits:{total_provider_calls:2,stage_provider_calls:1,concurrency:2},executors:{plan:async ctx=>{\\n+  active++;maximum=Math.max(maximum,active);ctx.charge();await new Promise(r=>setTimeout(r,20));active--;\\n+  return {status:'failed',usage:{provider_calls:1},next:{stage:'plan',why:'fixture stop'}};\\n+ }}});\\n+ assert.equal(maximum,2);assert.equal(concurrent.spent.calls,2);assert.equal(concurrent.dispatched.length,2);\\n*** Delete File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/inspect.test.mjs\\n*** Delete File: /tmp/ophanim-review-U4Ctdv/worktree/.review-tests/existing-results.test.mjs\\n*** End Patch\"));\ntext((await tools.exec_command({cmd:\"node --test .review-tests/positive.test.mjs .review-tests/budget-race.test.mjs .review-tests/single-failover.test.mjs .review-tests/checkpoint.test.mjs .review-tests/elapsed.test.mjs .review-tests/restart.test.mjs\",max_output_tokens:5000})).output);\n"
+    }
+  ],
+  "excluded": "Model reasoning and conversation messages are not copied into this command-only record."
+}

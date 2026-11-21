@@ -1,0 +1,90 @@
+{
+  "record_kind": "Documentation-only verification; not a controller, TELOS or phase-exit receipt",
+  "source_commit": "3b00139dd05dee0565e7c4ad95b7befdecf73db7",
+  "ci": {
+    "run": 43776592976,
+    "job": 133004148103,
+    "conclusion": "success",
+    "steps": [
+      "npm test",
+      "npm run test:proof"
+    ],
+    "freshly_rerun_here": false,
+    "original_path_proof_reverified_here": false
+  },
+  "selector": {
+    "command": "node --test ophanim/efficiency/investigation/select.test.mjs",
+    "node": "24.22.1",
+    "executor": "separate native peer phase0_budget_evidence",
+    "exit": 0,
+    "passed": 10,
+    "failed": 0,
+    "skipped": 0,
+    "log": "evidence/selector-tests.log",
+    "log_sha256": "294601cfe79637de4456112fb94658848c47b0f795f2877828f30451045e2e9c",
+    "scope": "Existing pure selector semantics using synthetic in-memory test inputs; not a selector receipt for this roadmap"
+  },
+  "document_checks": {
+    "status": "passed",
+    "items": 12,
+    "unique_ids": true,
+    "unique_output_ownership": true,
+    "dependency_targets_exist": true,
+    "acyclic": true,
+    "acceptance_eligibility_owner_stop_present": true,
+    "source_hashes_verified": 26,
+    "source_hash_comparison": "git show source_commit:path",
+    "budget_values_null": true,
+    "execution_and_selector_invocation_false": true,
+    "formatting": "UTF-8 JSON/Markdown, newline terminated, no trailing whitespace"
+  },
+  "reviewed_document_sha256": {
+    "README.md": "a74b1be7661ae8378d642744e76437b635f0c44d2900b7f3093758bf5eab42ea",
+    "docs/planning/phase0-2-evaluation/README.md": "1a304b06390e713119e35b389d08626422a1531fdbb2085722b50ed8f2e3ff6e",
+    "docs/planning/phase0-2-evaluation/evaluation.json": "ea19e2347afd2d6538dd8ee5b0828e5446c7abf8a552d27ec39f242a7eaf922f",
+    "docs/planning/phase0-2-evaluation/VERIFICATION.md": "d2da379ffe9f3cc24c22a172f786604a02e4e696117bdd6239d70380c2a4ab41"
+  },
+  "independent_review": {
+    "status": "passed_documentary_review",
+    "initial_candidate": "691f1994df322f33aa0c7d17c0c5199a32d28138",
+    "scope": "Exact packet source/evidence/eligibility and coverage; separate native peers, not cross-vendor or TELOS authorization",
+    "initial_results": [
+      {
+        "reviewer": "phase0_budget_evidence",
+        "result": "bounded approval; no material findings"
+      },
+      {
+        "reviewer": "phase0_control_evidence",
+        "result": "bounded approval; one low clarification",
+        "finding": "Retained-proof eligibility must not make an expired CI directory a permanent prerequisite.",
+        "repair": "Clarified separately justified and authorized fresh qualification as an alternative; no run authorized."
+      }
+    ],
+    "final_reviewed_candidate": "f34dcb8675dcce66cf2cce837ee706023ebc0be5",
+    "final_results": [
+      {
+        "reviewer": "phase0_control_evidence",
+        "result": "Bounded approval carries forward; clarification resolved; no additional findings.",
+        "scope": "Operational/source/evidence/qualification claims; exact initial candidate and narrow clarification rebind."
+      },
+      {
+        "reviewer": "phase0_budget_evidence",
+        "result": "Approval rebound; no findings; all four document hashes match.",
+        "scope": "Budget/authority/value/acceptance limits; exact initial candidate and narrow clarification rebind."
+      }
+    ],
+    "remaining_findings": [],
+    "record_only_update": "After the reviewed candidate, this file records returned peer results only; reviewed document hashes remain unchanged."
+  },
+  "limits": {
+    "runtime_changes": false,
+    "public_api_changes": false,
+    "authority_changes": false,
+    "paid_model_calls": 0,
+    "provider_calls": 0,
+    "new_experiments": 0,
+    "signed_source_optimization_rerun": false,
+    "production_actions": false,
+    "source_registration_or_release": false
+  }
+}
