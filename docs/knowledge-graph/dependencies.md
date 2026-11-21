@@ -1,9 +1,9 @@
 # Knowledge graphs: the dependency graph
 
 **Direction** The owner, 2026-11-20: "We need a dependency graph as well."; "Investigative systems automation through provence centered evidence and auditing ... We can have every single thing in there. Figure it out."; "Build it here bring in Telis, Argo, Lexi functionality. don't wait for the coordinator".
-**Contract** `ophanim.graph/v1`, 1.1.0, unchanged (`docs/knowledge-graph/architecture.md`). Nothing here adds an entity type, a relationship type or a file of `packages/graph/`.
-**Base** `ophanim/knowledge-graphs` at `6196c07` (merged in; first cut from `1f4666b`). Every source declares its extractor's version (`checkpoint.md` section 5a); the two that read code include the parser's version. Every real number below is of this repository at `0eea481`, TELOS at `0c9b539` (the commit this repository pins), ARGO at `a218ee3` and LEXI at `4a9faf3` (the commits their checkouts held).
-**Standing** Built in one session outside the coordinator's slices, on the owner's direction. Not independently reviewed. Register: KG-30 to KG-38.
+**Contract** `ophanim.graph/v1`, 1.2.0 (Slice B2's), unchanged by these sources (`docs/knowledge-graph/architecture.md`). Nothing here adds an entity type, a relationship type or a file of `packages/graph/`.
+**Base** `main` at `6511f59` (merged at `21d2bca`). Ported onto Slice B2 at `2d13a5b` (the owner: "Combine, B2 as base"): B2's sources stand for everything both efforts held, and only what B2 lacks is here, opt-in. Every source declares its extractor's version (`checkpoint.md` section 5a); the two that read code include the parser's version. The numbers in section 2 are of this repository at `2f83a50` with TELOS at `0c9b539`; section 3's are of the readings before the port, at `0eea481`.
+**Standing** Built in one session outside the coordinator's slices, on the owner's direction; ported onto B2; taken over by the coordinator on 2026-11-21, after PR #75 closed when its base branch was deleted (the owner chose that the coordinator finish it). Not independently reviewed. Register: KG-30 to KG-38.
 
 ## 1. In one paragraph
 
@@ -11,22 +11,21 @@ There is no second graph. Each kind of dependency is one more **registered sourc
 
 ## 2. The sources
 
-| Source | Module | Basis | Reads | States | Facts |
-|---|---|---|---|---|---:|
-| `ophanim.code` | `deps/code.mjs` | structural | every `.mjs/.js/.cjs/.ts/.tsx/.py` file, `package.json` and lockfiles at the commit | packages (declared where, locked at what), platform modules, environment variable **names**, programs run, files read and written by path, calls between functions | 16,476 |
-| `ophanim.code-text` | `deps/text.mjs` | textual | the same parse | `mentions` only: a host or a tracked path a string names | 409 |
-| `ophanim.pins` | `deps/pins.mjs` | declared | `ophanim/governance.mjs` (as text), `PROVENANCE.json`, the CI workflows, `package.json` | the TELOS commit and 13 file digests as declared, the 5 local checker digests, the ARGO lineage, CI actions and the Node version | 82 |
-| `ophanim.ownership` | `deps/authority.mjs` | declared | `docs/execution/*-ownership.json` | each manifest as an authorization that `governs` the files its paths cover at the commit | 1,779 |
-| `ophanim.runtime.<name>` | `deps/runtime.mjs` | declared | one runtime state directory (`ophanim.runtime/v1` on `refs/board/ophanim`), after its chain verifies | obligations and what each depends on, attempts and their workers, accepted outputs and confirmed effects, by digest | per state |
-| `sibling.<name>.code`, `.code-text` | the same two modules | as above | a sibling's checkout at a commit | the same facts under the sibling's own node ids (`<name>:<path>`) | 8,240 / 13,024 / 5,538 |
-| `sibling.telos.weave` | `deps/weave.mjs` | declared | TELOS's committed Clotho ledger snapshot | each record TELOS wove and signed, after the chain, every record hash and every signature are checked | 4,817 |
-| `sibling.<name>.declared` | `deps/declared.mjs` | declared | requirements, compose files, workflows, `OWNERSHIP.json`, `CURRENT-AUTHORITY.json`, `REPO_INVENTORY.md`, gate records | distributions required, services and the variable names they are given, CI actions, ownership lanes, the active and superseded plans, audited commits, gates | 41 / 672 / 161 |
+What this repository's code needs (packages and what the lockfile resolves, built-ins, environment variable names, programs, hosts, files read by path, the pins, the ownership manifests, other literals) is Slice B2's: `ophanim.packages`, `.imports`, `.environment`, `.paths`, `.pins`, `.authority`, `.literals`, in the default open. These sources add what B2 does not hold, and none of them is in the default open (`ORDER` is unchanged): `ophanim/graph/deps/index.mjs` composes them beside B2's when asked.
 
-Composed with the systems and evidence sources (`deps/index.mjs`), the graph is 19 sources, 72,012 assertions (18,786 entities, 53,226 relationships), built in about ten seconds.
+| Source | Module | Basis | Reads | States | Facts at `2f83a50` |
+|---|---|---|---|---|---:|
+| `ophanim.calls` | `deps/code.mjs` | structural | this repository's code at the commit | which function calls which: a function depends on the function it calls, in its file, in another file, through a re-export or a workspace package, and on the package it calls into | 16,452 |
+| `ophanim.runtime.<name>` | `deps/runtime.mjs` | declared | one runtime state directory (`ophanim.runtime/v1`), after its chain verifies | what the board source's obligation nodes lack: attempts and their workers, accepted outputs and confirmed effects (by digest), the state node; never a dependency between obligations (the board source's fact) | per state |
+| `sibling.<name>.code`, `.code-text` | `deps/code.mjs`, `deps/text.mjs` | structural, textual | a sibling's checkout at a commit (TELOS at the commit this repository pins); never executed | the whole of what its code needs, in B2's types and id forms, under the sibling's own file ids (`<name>:<path>`), each under a `systems/repository` entity; mentions apart | TELOS: 8,255 / 639 |
+| `sibling.telos.weave` | `deps/weave.mjs` | declared | TELOS's committed Clotho ledger snapshot | each record TELOS wove and signed, after the chain, every record hash and every signature are checked | 4,817 |
+| `sibling.<name>.declared` | `deps/declared.mjs` | declared | requirements, compose files, workflows, `OWNERSHIP.json`, `CURRENT-AUTHORITY.json`, `REPO_INVENTORY.md`, gate records | distributions required, services and the variable names they are given, CI actions, ownership lanes, the active authorization, the commits an inventory audited | TELOS: 41 |
+
+Composed with B2's default sources, with TELOS and without an ARGO or LEXI checkout (each listed absent, with why), the graph is 18 sources, 63,960 assertions (15,517 entities, 48,443 relationships), at `2f83a50` (`node ophanim/graph/deps/cli.mjs stats --telos <checkout>`). PR #75's author measured all four repositories at `2d13a5b`: 23 sources, 73,151 facts, about 13 seconds.
 
 **Readers.** JavaScript and TypeScript are read by the TypeScript compiler's parser, already a dev dependency (`deps/parse.mjs`); no type checker runs and no file is imported or executed. Python is read by a line-and-token reader in the same shape (`deps/python.mjs`): it reads no calls. Manifests have readers of their own (`deps/manifests.mjs`).
 
-**Ids** (`deps/ids.mjs`) use registered types only: a package, platform module, program, action or image is a `systems/component` (`npm:`, `pypi:`, `python:`, `node:`, `program:`, `action:`, `image:`); an environment variable is a `systems/interface` (`env:NAME`, never a value); a host or a composed service is a `systems/service`; a sibling's file is `<name>:<path>`.
+**Ids** (`deps/ids.mjs`) are Slice B2's, re-exported unchanged: a package (`systems/package`), an environment variable by NAME (`systems/environment-variable`), a program (`systems/executable`), a host (`systems/host`), a repository (`systems/repository`). The sibling repositories' and Python's forms are added in the same types (`<repository>:<path>` for a sibling's file, `python/<module>`, `pypi/<name>`, `image/<name>`). Nothing here adds a type.
 
 ## 3. What was brought in from TELOS, ARGO and LEXI
 
@@ -74,9 +73,9 @@ Every line of an answer names the relationship, the lines it was read from and t
 
 ## 6. Verification
 
-Tests are `ophanim/graph/deps-*.test.mjs` (run by `npm run test:proof`): 136 tests, each on a repository or a signed weave made by the test. Nine defects were found by running the sources on the real repositories, by the graph refusing a fact, or by checking this document's own numbers, and each was covered by a test before it was repaired: a call outside any function to an imported package collided with the import's own edge; a workspace's lockfile entry was read as a package with no name; a specifier that names no package broke call resolution; mention lines were merged across targets; the order of an answer's gaps followed assertion ids; a repository whose inventory names itself was stated twice; a path of four segments was taken for a graph id; one commit gave different pin facts with and without a TELOS checkout (the coordinator's finding); a sibling's file first seen as an import target lost its own attributes.
+Tests are `ophanim/graph/deps-*.test.mjs` (run by `npm run test:proof`): 115 tests at `2f83a50`, each on a repository or a signed weave made by the test. Before the port, nine defects were found by running the sources on the real repositories, by the graph refusing a fact, or by checking this document's own numbers; each was covered by a test before it was repaired.
 
-**Mutation check.** 56 lines of the modules written in the main session were each changed once and the relevant tests run: 51 failed a test at first; 4 had no test case, now added, and fail one; 1 was a condition that could never matter, now removed. The workers reported the same check on their modules: 16 lines of the pins and ownership sources (15 failed a test, 1 redundant line removed) and 6 of the runtime source (all failed a test). The two readers (`python.mjs`, `manifests.mjs`) were not mutation-checked. The script is not kept in the repository (KG-38).
+**Mutation check.** `ophanim/graph/deps.mutate.mjs` (`2f83a50`, written by the coordinator's agent after the takeover), on the harness of the other runners (`--only`, `--check`, a disposable copy; exit 2, 3 or 1): 40 mutations, at least one per module and per "Must never" clause, each against its deciding tests. All 40 KILLED, the baseline 115/115; the coordinator re-ran 8 of them (D1, D8, D10, D21, D26, D27, D29, D35): all killed. The draft run left five surviving (D8, D10, D21, D27, D35); each gained a test that fails with its mutation and passes without it. No module changed. The Python and manifest readers are now mutation-checked (D13 to D17). This repairs KG-38.
 
 ## 7. Limits
 
