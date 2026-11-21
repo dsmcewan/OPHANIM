@@ -171,6 +171,20 @@ test('simultaneous process retries retain exactly one durable message', async t 
   assert.equal(store.inbox('claude').length, 1);
 });
 
+test('one persistent desktop store process handles repeated requests and delivery receipts', async t => {
+  const { path, store } = fixture(t), cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+  const msg = store.send({ from: 'claude', to: 'codex', key: 'persistent', text: 'Check persistent delivery.' });
+  const client = new MCPClient(process.execPath, [cli, 'desktop-rpc', '--db', path]);
+  t.after(() => client.close());
+  await client.initialize();
+  for (let i = 0; i < 10; i++) assert.equal((await client.request('desktop/call', { op: 'outbox' }))[0].id, msg.id);
+  await client.request('desktop/call', { op: 'delivery-begin', id: msg.id });
+  await client.request('desktop/call', { op: 'delivery-finish', id: msg.id, state: 'delivered', evidence: { thread: 'original-desktop' } });
+  assert.equal(store.get(msg.id).delivery_state, 'delivered');
+  assert.equal(store.get(msg.id).acknowledged_at, null);
+  await assert.rejects(client.request('desktop/call', { op: 'run-shell', text: 'must not execute' }), /not exposed/i);
+});
+
 test('startup waits for a concurrent database creator before changing journal mode', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'ophanim-collab-startup-'));
   const path = join(dir, 'fresh.sqlite');

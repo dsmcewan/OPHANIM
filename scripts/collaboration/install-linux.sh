@@ -6,7 +6,7 @@ workspace=/home/colchis/Projects/OPHANIM-shared
 target="$workspace/collaboration"
 umask 077
 mkdir -p "$target" "$target/state" "$HOME/.config/systemd/user"
-for source in store.mjs cli.mjs mcp-server.mjs mcp-client.mjs github-bridge.mjs cloud-transport.mjs agent-instructions.md config.json; do
+for source in store.mjs cli.mjs mcp-server.mjs mcp-client.mjs desktop-store.mjs github-bridge.mjs cloud-transport.mjs agent-instructions.md config.json; do
   cp -- "$source_root/$source" "$target/$source"
 done
 cat > "$workspace/collab" <<'EOF'

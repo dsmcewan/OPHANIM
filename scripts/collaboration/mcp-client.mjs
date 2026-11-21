@@ -33,8 +33,8 @@ export class MCPClient {
       });
     });
   }
-  async initialize() {
-    const result = await this.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'ophanim-collaboration', version: '0.1.0' } });
+  async initialize(timeout = 15000) {
+    const result = await this.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'ophanim-collaboration', version: '0.1.0' } }, timeout);
     this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     return result;
   }

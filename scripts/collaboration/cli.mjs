@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { serveMCP } from './mcp-server.mjs';
 import { runGithubBridge } from './github-bridge.mjs';
+import { serveDesktopStore } from './desktop-store.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [command, id] } = parseArgs({ allowPositionals: true, options: {
@@ -20,6 +21,7 @@ try {
   let result;
   switch (command) {
     case 'mcp': serveMCP(store, who); break;
+    case 'desktop-rpc': serveDesktopStore(store); break;
     case 'send': result = store.send({ from: who, to: o.to, key: o.key, subject: o.subject, text: o['text-file'] ? readFileSync(o['text-file'], 'utf8') : o.text, replyTo: o['reply-to'] }); break;
     case 'inbox': result = store.inbox(who, o.all); break;
     case 'ack': result = store.ack(who, id, o.note); break;
@@ -37,5 +39,5 @@ try {
     case 'bridge': await runGithubBridge(store, JSON.parse(readFileSync(o.config ?? join(root, 'config.json'), 'utf8')), o.once); break;
     default: throw new Error('Usage: collab {send|inbox|ack|status|events|claim|renew|release|bridge|mcp} [options]');
   }
-  if (command !== 'mcp') { if (result !== undefined) console.log(JSON.stringify(result, null, 2)); store.close(); }
+  if (!['mcp', 'desktop-rpc'].includes(command)) { if (result !== undefined) console.log(JSON.stringify(result, null, 2)); store.close(); }
 } catch (e) { console.error(e.message); store.close(); process.exitCode = 1; }

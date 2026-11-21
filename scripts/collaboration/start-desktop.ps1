@@ -45,7 +45,7 @@ $taskRunDir = Join-Path $SourceRoot 'run'
 New-Item -ItemType Directory -Path $taskRunDir -Force | Out-Null
 $taskPowerShell = (Get-Process -Id $PID).Path
 $taskProcess = Start-Process -FilePath $taskPowerShell -ArgumentList @('-NoProfile','-NonInteractive','-File',('"' + $taskRunner + '"'),'-SourceRoot',('"' + $SourceRoot + '"'),'-ConfigPath',('"' + $taskConfigPath + '"')) -WorkingDirectory $SourceRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskRunDir 'desktop.stdout.log') -RedirectStandardError (Join-Path $taskRunDir 'desktop.stderr.log')
-$taskReadyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+$taskReadyDeadline = [DateTime]::UtcNow.AddSeconds(50)
 while ([DateTime]::UtcNow -lt $taskReadyDeadline) {
     $taskProcess.Refresh()
     if ($taskProcess.HasExited) { throw 'Desktop supervisor exited before its worker connected; inspect run/desktop.stderr.log' }
@@ -58,4 +58,4 @@ while ([DateTime]::UtcNow -lt $taskReadyDeadline) {
     }
     Start-Sleep -Milliseconds 100
 }
-throw 'Desktop worker did not confirm its connection within 10 seconds; inspect run/desktop.stderr.log'
+throw 'Desktop worker did not confirm its connection within 50 seconds; inspect run/desktop.stderr.log'

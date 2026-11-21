@@ -2,10 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { MCPClient } from './mcp-client.mjs';
-const exec = promisify(execFile);
 const root = dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(readFileSync(process.argv[2] ?? join(root, 'desktop.local.json'), 'utf8'));
 if (process.platform !== 'win32') throw new Error('Run the desktop bridge on Windows');
@@ -18,9 +15,22 @@ writeFileSync(lockPath, JSON.stringify({ pid: process.pid, supervisor_pid: Numbe
 const cleanup = () => { try { if (JSON.parse(readFileSync(lockPath, 'utf8')).pid === process.pid) unlinkSync(lockPath); } catch {} };
 process.on('exit', cleanup);
 process.on('SIGINT', () => process.exit(0)); process.on('SIGTERM', () => process.exit(0));
+let database = null;
 const cli = async (...args) => {
-  const result = await exec('wsl.exe', ['-d', config.distro, '--', config.node, config.cli, ...args], { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
-  return result.stdout.trim() ? JSON.parse(result.stdout) : null;
+  let client = database;
+  try {
+    if (!client) {
+      client = new MCPClient('wsl.exe', ['-d', config.distro, '--exec', config.node, config.cli, 'desktop-rpc']);
+      await client.initialize(45000);
+      await client.request('desktop/call', { op: 'delivery-recover' });
+      database = client;
+    }
+    const value = flag => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
+    return await client.request('desktop/call', { op: args[0], id: args[1], state: value('--state'), evidence: value('--evidence') ? JSON.parse(value('--evidence')) : undefined }, 30000);
+  } catch (error) {
+    client?.close(); database = null;
+    throw error;
+  }
 };
 const health = data => cli('health', '--route', 'desktop', '--evidence', JSON.stringify({ checked_at: Date.now(), pid: process.pid, ...data }));
 const app = new MCPClient(process.execPath, [config.appToolsServer]);
@@ -47,4 +57,4 @@ try {
     } catch (e) { await health({ ok: false, error: e.message }).catch(() => {}); console.error(e.message); }
     await new Promise(resolve => setTimeout(resolve, config.pollMs ?? 3000));
   }
-} finally { app.close(); }
+} finally { app.close(); database?.close(); }

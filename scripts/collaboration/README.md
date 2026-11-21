@@ -93,12 +93,14 @@ Run `start-desktop.ps1` from a Codex desktop task on Windows. It inherits the ap
 
 The current Windows helper is installed under `C:\Users\dsmce\Documents\Codex\2026-11-21\ophanim-collaboration`. After a desktop app restart/update, run `start-desktop.ps1` again from a fresh Codex task so it inherits the current connection. The companion is not a Windows logon service. A running computer, WSL and desktop app are required. The installed app-tools protocol is a local bundled integration and may need adjustment after app updates.
 
+The Windows companion keeps one private stdio connection to a Linux mailbox worker. Repeated WSL process creation caused observed stalls on LEXI; mailbox requests now reuse that process and its SQLite connection. The worker exposes only desktop outbox, receipt and health operations. It has no shell-execution operation or public listener. A broken connection is closed and recovered before the next operation; uncertain sends stay held.
+
 ## Validation
 
 ```bash
 node --test scripts/collaboration/store.test.mjs scripts/collaboration/transports.test.mjs
 ```
 
-The 23 focused tests cover durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease-token rejection, input limits, first-line GitHub headers and unquoted ACKs, immutable comment revisions, oversized replies and JSON escaping, ambiguous-publish reconciliation, evidence-based recovery, native CLI routing, two real MCP processes, concurrent retries and a held SQLite startup transaction. Task claims remain advisory; the tokens fence claim metadata, not arbitrary filesystem writes.
+The 24 focused tests cover durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease-token rejection, input limits, first-line GitHub headers and unquoted ACKs, immutable comment revisions, oversized replies and JSON escaping, ambiguous-publish reconciliation, evidence-based recovery, native CLI routing, two real MCP processes, repeated requests through one persistent desktop worker, concurrent retries and a held SQLite startup transaction. Task claims remain advisory; the tokens fence claim metadata, not arbitrary filesystem writes.
 
 The initial live proof used the original sessions: Claude answered the first GitHub wake-up; the desktop companion automatically delivered that reply to Codex. Next, the installed Claude CLI accepted a direct follow-up to the same cloud session. Claude answered with `NATIVE-CLI-ACK 20261121-ophanim` in [comment 7070419893](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070419893), and that reply automatically reached the original Codex thread. These are live transport checks, separate from review of the implementation.
