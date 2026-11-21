@@ -17,7 +17,13 @@ if (Test-Path -LiteralPath $taskLockPath) {
             Write-Output "Desktop bridge already running as PID $($taskLock.pid)"; exit 0
         }
         Stop-Process -Id $taskLock.pid
-        if ($taskLock.supervisor_pid) { Wait-Process -Id $taskLock.supervisor_pid -Timeout 10 -ErrorAction SilentlyContinue }
+        if ($taskLock.supervisor_pid) {
+            $taskStopDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while (Get-Process -Id $taskLock.supervisor_pid -ErrorAction SilentlyContinue) {
+                if ([DateTime]::UtcNow -ge $taskStopDeadline) { throw 'Old desktop supervisor has not exited; refusing to report a successful restart' }
+                Start-Sleep -Milliseconds 100
+            }
+        }
         Remove-Item -LiteralPath $taskLockPath -Force -ErrorAction SilentlyContinue
     }
 }
@@ -39,4 +45,17 @@ $taskRunDir = Join-Path $SourceRoot 'run'
 New-Item -ItemType Directory -Path $taskRunDir -Force | Out-Null
 $taskPowerShell = (Get-Process -Id $PID).Path
 $taskProcess = Start-Process -FilePath $taskPowerShell -ArgumentList @('-NoProfile','-NonInteractive','-File',('"' + $taskRunner + '"'),'-SourceRoot',('"' + $SourceRoot + '"'),'-ConfigPath',('"' + $taskConfigPath + '"')) -WorkingDirectory $SourceRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskRunDir 'desktop.stdout.log') -RedirectStandardError (Join-Path $taskRunDir 'desktop.stderr.log')
-Write-Output "Started desktop bridge supervisor as PID $($taskProcess.Id)"
+$taskReadyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+while ([DateTime]::UtcNow -lt $taskReadyDeadline) {
+    $taskProcess.Refresh()
+    if ($taskProcess.HasExited) { throw 'Desktop supervisor exited before its worker connected; inspect run/desktop.stderr.log' }
+    if (Test-Path -LiteralPath $taskLockPath) {
+        $taskReady = Get-Content -LiteralPath $taskLockPath -Raw | ConvertFrom-Json
+        $taskConnected = Select-String -LiteralPath (Join-Path $taskRunDir 'desktop.stdout.log') -SimpleMatch '"event":"desktop-connected"' -Quiet -ErrorAction SilentlyContinue
+        if ($taskReady.supervisor_pid -eq $taskProcess.Id -and $taskConnected) {
+            Write-Output "Desktop bridge connected as worker PID $($taskReady.pid), supervisor PID $($taskProcess.Id)"; exit 0
+        }
+    }
+    Start-Sleep -Milliseconds 100
+}
+throw 'Desktop worker did not confirm its connection within 10 seconds; inspect run/desktop.stderr.log'

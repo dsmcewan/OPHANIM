@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { sendCloud } from './cloud-transport.mjs';
 import { createHash } from 'node:crypto';
-import { replyHeader } from './store.mjs';
+import { replyHeader, MessageRefused } from './store.mjs';
 const exec = promisify(execFile);
 export const marker = id => `<!-- ophanim-collab-message:${id} -->`;
 
@@ -37,17 +37,19 @@ export async function githubTick(store, config, api = githubAPI, cloud = sendClo
   }
   for (const comment of comments) {
     if (comment.id <= config.afterComment || !config.allowedAuthors.includes(comment.user?.login) || !replyHeader(comment.body)) continue;
-    if (Buffer.byteLength(comment.body) > 32768) {
-      const hash = createHash('sha256').update(comment.body).digest('hex');
-      const key = `rejected-comment-${comment.id}-${hash}`;
-      if (!store.meta(key)) {
-        const evidence = { comment_id: comment.id, url: comment.html_url, sha256: hash, reason: 'Reply exceeds the 32768-byte message limit; read the source comment.' };
+    const hash = createHash('sha256').update(comment.body).digest('hex');
+    const key = `rejected-comment-${comment.id}-${hash}`;
+    if (store.meta(key)) continue;
+    try { store.importComment(comment, config.allowedAuthors); }
+    catch (error) {
+      if (!(error instanceof MessageRefused)) throw error;
+      store.transaction(() => {
+        if (store.meta(key)) return;
+        const evidence = { comment_id: comment.id, url: comment.html_url, sha256: hash, reason: error.message };
         store.event(null, 'github-import-rejected', 'github', evidence);
         store.meta(key, evidence);
-      }
-      continue;
+      });
     }
-    store.importComment(comment, config.allowedAuthors);
   }
   for (const pending of store.uncertain('github')) {
     const found = comments.find(c => config.allowedAuthors.includes(c.user?.login) && c.body?.includes(marker(pending.id)));

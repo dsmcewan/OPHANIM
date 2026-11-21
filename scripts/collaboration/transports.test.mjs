@@ -78,6 +78,22 @@ test('an oversized incoming reply cannot block another outgoing message', async 
   assert.equal(store.events().filter(e => e.kind === 'github-import-rejected').length, 1);
 });
 
+test('JSON escaping cannot turn a small reply into a bridge-wide poison pill', async t => {
+  const { store } = fixture(t), msg = store.send(message);
+  const body = 'OPHANIM-COLLAB REPLY\n' + '"\n'.repeat(10000);
+  assert.ok(Buffer.byteLength(body) < 32768);
+  const comments = [
+    { id: 100, user: { login: 'owner' }, body, html_url: 'https://github.com/test/100' },
+    { id: 101, user: { login: 'owner' }, body: 'OPHANIM-COLLAB REPLY\n\nLater valid reply.' },
+  ];
+  const api = async (_, data) => data ? { id: 102, html_url: 'https://github.com/test/102' } : comments;
+  await githubTick(store, config, api);
+  await githubTick(store, config, api);
+  assert.equal(store.get(msg.id).delivery_state, 'delivered');
+  assert.equal(store.inbox('codex').length, 1);
+  assert.equal(store.events().filter(e => e.kind === 'github-import-rejected').length, 1);
+});
+
 test('only a first-line protocol header imports a reply', t => {
   const { store } = fixture(t);
   assert.equal(store.importComment({ id: 110, user: { login: 'owner' }, body: 'Owner note\n\nOPHANIM-COLLAB ACK' }, ['owner']), null);

@@ -5,13 +5,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_DB = join(dirname(fileURLToPath(import.meta.url)), 'state', 'collaboration.sqlite');
+// Rejected messages are distinct from transient database failures, which must remain retryable.
+export class MessageRefused extends Error {}
 export const agent = value => {
-  if (!['codex', 'claude'].includes(value)) throw new Error('Unknown collaboration agent');
+  if (!['codex', 'claude'].includes(value)) throw new MessageRefused('Unknown collaboration agent');
   return value;
 };
 const bounded = (value, name, max, fallback) => {
   value ??= fallback;
-  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > max) throw new Error(`${name} missing or too long (maximum size ${max} bytes)`);
+  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > max) throw new MessageRefused(`${name} missing or too long (maximum size ${max} bytes)`);
   return value;
 };
 
@@ -78,21 +80,21 @@ export class Store {
   get(id) { return this.decode(this.db.prepare('SELECT * FROM messages WHERE id=?').get(id)); }
   send(input) {
     const from = agent(input.from), to = agent(input.to);
-    if (from === to) throw new Error('Messages require different sender and recipient');
+    if (from === to) throw new MessageRefused('Messages require different sender and recipient');
     const key = bounded(input.key, 'request key', 160);
     const payload = {
       from, to, subject: bounded(input.subject, 'subject', 200, 'Collaboration message'),
       text: bounded(input.text, 'text', 32768), replyTo: input.replyTo ?? null,
       provenance: input.provenance ?? { transport: 'local', identity: 'same-owner process; role is asserted' },
     };
-    if (Buffer.byteLength(JSON.stringify(payload)) > 40000) throw new Error('Message payload too long');
+    if (Buffer.byteLength(JSON.stringify(payload)) > 40000) throw new MessageRefused('Message payload too long');
     return this.transaction(() => {
       const existing = this.db.prepare('SELECT * FROM messages WHERE from_agent=? AND request_key=?').get(from, key);
       if (existing) {
-        if (existing.payload !== JSON.stringify(payload)) throw new Error('Idempotency key conflict: payload changed');
+        if (existing.payload !== JSON.stringify(payload)) throw new MessageRefused('Idempotency key conflict: payload changed');
         return this.decode(existing);
       }
-      if (payload.replyTo && !this.get(payload.replyTo)) throw new Error('Unknown reply target');
+      if (payload.replyTo && !this.get(payload.replyTo)) throw new MessageRefused('Unknown reply target');
       const id = randomUUID();
       this.db.prepare('INSERT INTO messages(id,from_agent,to_agent,request_key,payload,created_at) VALUES(?,?,?,?,?,?)')
         .run(id, from, to, key, JSON.stringify(payload), this.now());
