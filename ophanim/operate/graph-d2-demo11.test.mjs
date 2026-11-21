@@ -17,7 +17,7 @@ import {makeExecutors} from './stages.mjs';
 import {GRAPH_ABSENT} from './gates.mjs';
 import {planId, artifactId, validationId, completionId, stageReviewId, sharedPrerequisiteId, promptId} from '../graph/work.mjs';
 import {withDispatch} from '../../pantheon/tests/fixtures/dispatch.mjs';
-import {git, json, planFor, scriptedTurn, SIX} from './test-fixtures.mjs';
+import {git, json, planFor, scriptedTurn, SIX, PRIMARY_DECLARED} from './test-fixtures.mjs';
 import {d2World, loopOf, REPO_SOURCE} from './fixtures/graph-d2.mjs';
 
 /** The prerequisite: a contract no module carries yet (SYNTHETIC). */
@@ -34,7 +34,9 @@ test('demonstration 11 (KD2-7), SYNTHETIC: an owner-authorized unplanned item is
     const ex = makeExecutors({independence: 'lab', repo, makeClientFor, turn, stateDir: w.stateDir, checked: '2026-11-20', ...SIX});
     const loop = () => loopOf(w, {repoSource: true});
     // 1. INTAKE, INVESTIGATION AND PLANNING, with the graph: both items are planned; both block after planning.
-    const r1 = await tick({repo, statusRoot: w.statusRoot, workRoot: w.workRoot, executors: ex, limits: {...LIMITS, iterations: 6}, graph: loop()});
+    // The fit implementer is a primary Gemini seat (the base's Antigravity SDK transport, L-136): the run declares it with a
+    // budget, as an operator does (`--gemini-api-primary N`), or the implement stage is pending on that refusal.
+    const r1 = await tick({repo, statusRoot: w.statusRoot, workRoot: w.workRoot, executors: ex, limits: {...LIMITS, iterations: 6}, graph: loop(), billing: PRIMARY_DECLARED});
     assert.ok(r1.intake.includes('status:graph-demo'), 'intake: the owner-signed status entry');
     assert.deepEqual(r1.dispatched.map(d => `${d.item}:${d.stage}:${d.status}`), ['graph-demo:plan:passed', 'graph-peer:plan:passed']);
     const W = () => openWorkLedger({root: w.workRoot});
@@ -66,7 +68,7 @@ test('demonstration 11 (KD2-7), SYNTHETIC: an owner-authorized unplanned item is
     const observer = loop();
     observer.open();
     assert.equal(observer.observe([REPO_SOURCE])[0].recorded, true);
-    const ticks = await watch({repo, statusRoot: w.statusRoot, workRoot: w.workRoot, executors: ex, limits: LIMITS, graph: loop(), once: true, state, only: 'graph-demo'});
+    const ticks = await watch({repo, statusRoot: w.statusRoot, workRoot: w.workRoot, executors: ex, limits: LIMITS, graph: loop(), once: true, state, only: 'graph-demo', billing: PRIMARY_DECLARED});
     assert.equal(ticks.length, 1, 'the graph change woke a tick');
     // 3. UNLOCKED: scripted execution, verification and review.
     const r2 = ticks[0];

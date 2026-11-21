@@ -460,7 +460,7 @@ export const CODE_FACTS = Object.freeze([
   ['export-refusal-contract', 'packages/graph/federation.mjs', /e\.contract !== GRAPH_SCHEMA/, 'the hub checks the contract id only (R11)'],
   ['source-nodes-never-exported', 'packages/graph/federation.mjs', /a source node commits to its whole source: never exported/, 'source nodes (and their extractor versions) never leave a department (R11)'],
   ['notice-recorded-restricted', 'packages/graph/federation.mjs', /scope: \{access: 'restricted', owner: me\.instance\},/, 'a received notice is the department\'s own restricted observation (R7, R12)'],
-  ['intake-sources', 'ophanim/operate/work-ledger.mjs', /export const INTAKE_SOURCES = Object\.freeze\(\['status', 'issue', 'ticket'\]\)/, 'work enters a work ledger only from a status item, an issue or a ticket (R7)'],
+  ['intake-sources', 'ophanim/operate/work-ledger.mjs', /export const INTAKE_SOURCES = Object\.freeze\(\['status', 'issue', 'ticket', 'prompt'\]\)/, 'work enters a work ledger only from a status item, an issue, a ticket or an owner-authorized prompt (R7)'],
   ['status-authors', 'packages/ledger/status.mjs', /authors: a => operators\.includes\(a\.key_id\)/, 'a status entry is signed by the ledger\'s own operators (R7)'],
   ['status-anchor-pinned', 'ophanim/graph/extract/ledgers.mjs', /export const STATUS_ANCHOR = 'sha256:/, 'the graph pins THIS instance\'s status ledger anchor in code (R9)'],
   ['graph-cli-status-root', 'ophanim/graph/cli.mjs', /status: \{root: path\.join\(repo, 'status\/ledger'\)\}/, 'the graph CLI reads status/ledger in the checkout, against the pinned anchor (R9)'],
