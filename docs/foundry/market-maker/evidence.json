@@ -1,0 +1,582 @@
+{
+ "schema": "ophanim.foundry.evidence/v1",
+ "note": "What the foundry recorded when it was run on the request marketMaker on 2026-11-20, with the Claude command line as the only model seat. Copied from the trial records of the run's state directory, which is not in the repository; machine paths are left out. Every result is PAPER TRADING on one recorded window of public BTCUSD trades: no order was sent.",
+ "request": {
+  "key": "marketMaker",
+  "class": "build/trading-strategy",
+  "sha256": "77d6fe4e75e4eaba7ddd67b3565ab39055958314655bbeddac0837185a06d9a8"
+ },
+ "runs": [
+  {
+   "run": 1,
+   "at": "2026-11-20T11:41:26.324Z",
+   "trials": [
+    1,
+    2,
+    3
+   ],
+   "arms": [
+    {
+     "setup": "claude-haiku-4-5-20251001>claude-haiku-4-5-20251001>claude-fable-5-2",
+     "basis": "not yet measured for this class of task",
+     "review_independent": false
+    },
+    {
+     "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+     "basis": "not yet measured for this class of task",
+     "review_independent": false
+    },
+    {
+     "setup": "claude-haiku-4-5-20251001>claude-opus-5-5>claude-fable-5-2",
+     "basis": "not yet measured for this class of task",
+     "review_independent": false
+    }
+   ],
+   "winner": "claude-haiku-4-5-20251001>claude-opus-5-5>claude-fable-5-2",
+   "sufficient": false,
+   "spent_usd": 1.024842
+  },
+  {
+   "run": 2,
+   "at": "2026-11-20T11:50:55.195Z",
+   "trials": [
+    4
+   ],
+   "arms": [
+    {
+     "setup": "claude-haiku-4-5-20251001>claude-opus-5-5>claude-fable-5-2",
+     "basis": "the best setup measured so far for this class of task",
+     "review_independent": false
+    }
+   ],
+   "winner": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+   "sufficient": false,
+   "spent_usd": 0.032115
+  },
+  {
+   "run": 3,
+   "at": "2026-11-20T11:52:13.202Z",
+   "trials": [
+    5,
+    6
+   ],
+   "arms": [
+    {
+     "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+     "basis": "the best setup measured so far for this class of task",
+     "review_independent": false
+    }
+   ],
+   "winner": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+   "sufficient": false,
+   "spent_usd": 0.872281
+  }
+ ],
+ "spent_usd": 1.929238,
+ "ranking": {
+  "criterion": [
+   "accepted_rate desc",
+   "operation_score desc (when the request defines one)",
+   "median_ms of accepted trials asc",
+   "median_cost_usd asc"
+  ],
+  "ranked": [
+   {
+    "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+    "trials": 2,
+    "accepted": 2,
+    "accepted_rate": 1,
+    "operation_score": -11.597614499999999,
+    "median_ms": 175206.5,
+    "median_cost_usd": 0.37663749999999996,
+    "tokens": 27374
+   },
+   {
+    "setup": "claude-haiku-4-5-20251001>claude-haiku-4-5-20251001>claude-fable-5-2",
+    "trials": 1,
+    "accepted": 1,
+    "accepted_rate": 1,
+    "operation_score": -15.405696,
+    "median_ms": 137235,
+    "median_cost_usd": 0.274035,
+    "tokens": 27258
+   },
+   {
+    "setup": "claude-haiku-4-5-20251001>claude-opus-5-5>claude-fable-5-2",
+    "trials": 2,
+    "accepted": 1,
+    "accepted_rate": 0.5,
+    "operation_score": -6.522618,
+    "median_ms": 103204,
+    "median_cost_usd": 0.363225,
+    "tokens": 19771
+   }
+  ],
+  "winner": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+  "sufficient": false,
+  "why": "fewer than 3 accepted trials for at least one setup: the order is what was measured so far, not an established difference",
+  "digest": "sha256:b24f2c29872546760b8385649df87fe9224d0a0a6e1acc5ddcac71bd39391269"
+ },
+ "trials": [
+  {
+   "trial": 1,
+   "setup": "claude-haiku-4-5-20251001>claude-haiku-4-5-20251001>claude-fable-5-2",
+   "implementer": "claude-haiku-4-5-20251001",
+   "planner": "claude-haiku-4-5-20251001",
+   "reviewer": "claude-fable-5-2",
+   "rework_of": null,
+   "live": true,
+   "transport": "claude-cli",
+   "started_at": "2026-11-20T11:41:26.507Z",
+   "built": true,
+   "verified": true,
+   "isolation": "bwrap-v1",
+   "dependencies_ok": true,
+   "accepted": true,
+   "review": "request_changes",
+   "review_independent": false,
+   "shipped": false,
+   "ship_why": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:2a9f2d7231bb",
+   "build_ms": 137235,
+   "provider_calls": 3,
+   "tokens": {
+    "input": 10201,
+    "output": 17057,
+    "complete": true
+   },
+   "cost_usd": 0.274035,
+   "identity_ok": true,
+   "turns": [
+    {
+     "purpose": "plan",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 11255
+    },
+    {
+     "purpose": "work",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 89232
+    },
+    {
+     "purpose": "critique",
+     "requested": "claude-fable-5-2",
+     "served": "claude-fable-5-2",
+     "ms": 36163
+    }
+   ],
+   "operation": {
+    "ok": true,
+    "score_usd": -15.405696,
+    "fills": 109,
+    "two_sided_share": 1,
+    "max_abs_inventory_btc": 0.01765149,
+    "inventory_btc": 0.01765149,
+    "fees_usd": 0.893055,
+    "violations": 0
+   },
+   "product": [
+    {
+     "path": "strategy.mjs",
+     "sha256": "ce5fda7d9227cbb07874fd6b063ab4e6f27d2c373e1116b6b50e03c2f217d7ad",
+     "bytes": 2952
+    }
+   ],
+   "error": {
+    "stage": "ship",
+    "message": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:2a9f2d7231bb"
+   }
+  },
+  {
+   "trial": 2,
+   "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+   "implementer": "claude-sonnet-5",
+   "planner": "claude-haiku-4-5-20251001",
+   "reviewer": "claude-fable-5-2",
+   "rework_of": null,
+   "live": true,
+   "transport": "claude-cli",
+   "started_at": "2026-11-20T11:43:44.037Z",
+   "built": true,
+   "verified": true,
+   "isolation": "bwrap-v1",
+   "dependencies_ok": true,
+   "accepted": true,
+   "review": "request_changes",
+   "review_independent": false,
+   "shipped": false,
+   "ship_why": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:3e144351e73b",
+   "build_ms": 183533,
+   "provider_calls": 3,
+   "tokens": {
+    "input": 11595,
+    "output": 15999,
+    "complete": true
+   },
+   "cost_usd": 0.387582,
+   "identity_ok": true,
+   "turns": [
+    {
+     "purpose": "plan",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 9020
+    },
+    {
+     "purpose": "work",
+     "requested": "claude-sonnet-5",
+     "served": "claude-sonnet-5",
+     "ms": 121740
+    },
+    {
+     "purpose": "critique",
+     "requested": "claude-fable-5-2",
+     "served": "claude-fable-5-2",
+     "ms": 52254
+    }
+   ],
+   "operation": {
+    "ok": true,
+    "score_usd": -11.274526,
+    "fills": 66,
+    "two_sided_share": 1,
+    "max_abs_inventory_btc": 0.01542735,
+    "inventory_btc": 0.01479529,
+    "fees_usd": 0.900596,
+    "violations": 0
+   },
+   "product": [
+    {
+     "path": "strategy.mjs",
+     "sha256": "a43b8a5ee16de280fc8a83506359e3d705938f666f656e35ef117d1cd37f3254",
+     "bytes": 3347
+    }
+   ],
+   "error": {
+    "stage": "ship",
+    "message": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:3e144351e73b"
+   }
+  },
+  {
+   "trial": 3,
+   "setup": "claude-haiku-4-5-20251001>claude-opus-5-5>claude-fable-5-2",
+   "implementer": "claude-opus-5-5",
+   "planner": "claude-haiku-4-5-20251001",
+   "reviewer": "claude-fable-5-2",
+   "rework_of": null,
+   "live": true,
+   "transport": "claude-cli",
+   "started_at": "2026-11-20T11:46:47.635Z",
+   "built": true,
+   "verified": true,
+   "isolation": "bwrap-v1",
+   "dependencies_ok": true,
+   "accepted": true,
+   "review": "request_changes",
+   "review_independent": false,
+   "shipped": false,
+   "ship_why": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:c357de0570a1",
+   "build_ms": 103204,
+   "provider_calls": 3,
+   "tokens": {
+    "input": 11388,
+    "output": 8383,
+    "complete": true
+   },
+   "cost_usd": 0.363225,
+   "identity_ok": true,
+   "turns": [
+    {
+     "purpose": "plan",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 10770
+    },
+    {
+     "purpose": "work",
+     "requested": "claude-opus-5-5",
+     "served": "claude-opus-5-5",
+     "ms": 37015
+    },
+    {
+     "purpose": "critique",
+     "requested": "claude-fable-5-2",
+     "served": "claude-fable-5-2",
+     "ms": 54826
+    }
+   ],
+   "operation": {
+    "ok": true,
+    "score_usd": -6.522618,
+    "fills": 53,
+    "two_sided_share": 1,
+    "max_abs_inventory_btc": 0.00887059,
+    "inventory_btc": 0.00887059,
+    "fees_usd": 0.446695,
+    "violations": 0
+   },
+   "product": [
+    {
+     "path": "strategy.mjs",
+     "sha256": "c6c2090847338a765907482467b1f90b6f0e6b61c5bb01eb74ab22dba5970baa",
+     "bytes": 2992
+    }
+   ],
+   "error": {
+    "stage": "ship",
+    "message": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:c357de0570a1"
+   }
+  },
+  {
+   "trial": 4,
+   "setup": "claude-haiku-4-5-20251001>claude-opus-5-5>claude-fable-5-2",
+   "implementer": "claude-opus-5-5",
+   "planner": "claude-haiku-4-5-20251001",
+   "reviewer": "claude-fable-5-2",
+   "rework_of": null,
+   "live": true,
+   "transport": "claude-cli",
+   "started_at": "2026-11-20T11:50:55.423Z",
+   "built": false,
+   "verified": false,
+   "isolation": null,
+   "dependencies_ok": null,
+   "accepted": false,
+   "review": null,
+   "review_independent": false,
+   "shipped": false,
+   "ship_why": null,
+   "build_ms": 56414,
+   "provider_calls": 1,
+   "tokens": {
+    "input": 2335,
+    "output": 5956,
+    "complete": true
+   },
+   "cost_usd": 0.032115,
+   "identity_ok": true,
+   "turns": [
+    {
+     "purpose": "plan",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 56227
+    }
+   ],
+   "operation": null,
+   "product": [],
+   "error": {
+    "stage": "plan",
+    "message": "planner did not answer in the required form; got: ## Work Plan: Implement Market-Making Strategy Module\n\n**Task 1: Core Strategy Implementation**\n- Assignee: Backend/Algorithm Developer\n- Kind: Implementation\n- Instruction: Create strategy.mjs (pure "
+   }
+  },
+  {
+   "trial": 5,
+   "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+   "implementer": "claude-sonnet-5",
+   "planner": "claude-haiku-4-5-20251001",
+   "reviewer": "claude-fable-5-2",
+   "rework_of": null,
+   "live": true,
+   "transport": "claude-cli",
+   "started_at": "2026-11-20T11:52:13.419Z",
+   "built": true,
+   "verified": true,
+   "isolation": "bwrap-v1",
+   "dependencies_ok": true,
+   "accepted": true,
+   "review": "request_changes",
+   "review_independent": false,
+   "shipped": false,
+   "ship_why": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:d87a833170ca",
+   "build_ms": 166880,
+   "provider_calls": 3,
+   "tokens": {
+    "input": 11573,
+    "output": 15581,
+    "complete": true
+   },
+   "cost_usd": 0.365693,
+   "identity_ok": true,
+   "turns": [
+    {
+     "purpose": "plan",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 16038
+    },
+    {
+     "purpose": "work",
+     "requested": "claude-sonnet-5",
+     "served": "claude-sonnet-5",
+     "ms": 104584
+    },
+    {
+     "purpose": "critique",
+     "requested": "claude-fable-5-2",
+     "served": "claude-fable-5-2",
+     "ms": 45596
+    }
+   ],
+   "operation": {
+    "ok": true,
+    "score_usd": -11.920703,
+    "fills": 67,
+    "two_sided_share": 1,
+    "max_abs_inventory_btc": 0.01742735,
+    "inventory_btc": 0.01506071,
+    "fees_usd": 0.978237,
+    "violations": 0
+   },
+   "product": [
+    {
+     "path": "strategy.mjs",
+     "sha256": "279f97486d54ba8fd4210e371b3c667c7bee0ab45a9cbd6f5564dc33db4e57d4",
+     "bytes": 3561
+    }
+   ],
+   "error": {
+    "stage": "ship",
+    "message": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: 1 blocking finding(s) on blob:d87a833170ca"
+   }
+  },
+  {
+   "trial": 6,
+   "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+   "implementer": "claude-sonnet-5",
+   "planner": "claude-haiku-4-5-20251001",
+   "reviewer": "claude-fable-5-2",
+   "rework_of": 5,
+   "live": true,
+   "transport": "claude-cli",
+   "started_at": "2026-11-20T11:55:00.617Z",
+   "built": true,
+   "verified": true,
+   "isolation": "bwrap-v1",
+   "dependencies_ok": true,
+   "accepted": true,
+   "review": "approve",
+   "review_independent": false,
+   "shipped": false,
+   "ship_why": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: the only approval of blob:5867bee8e44f is from anthropic, the maker's own lab",
+   "build_ms": 176855,
+   "provider_calls": 3,
+   "tokens": {
+    "input": 20747,
+    "output": 15991,
+    "complete": true
+   },
+   "cost_usd": 0.506588,
+   "identity_ok": true,
+   "turns": [
+    {
+     "purpose": "plan",
+     "requested": "claude-haiku-4-5-20251001",
+     "served": "claude-haiku-4-5-20251001",
+     "ms": 14349
+    },
+    {
+     "purpose": "work",
+     "requested": "claude-sonnet-5",
+     "served": "claude-sonnet-5",
+     "ms": 94207
+    },
+    {
+     "purpose": "critique",
+     "requested": "claude-fable-5-2",
+     "served": "claude-fable-5-2",
+     "ms": 67635
+    }
+   ],
+   "operation": {
+    "ok": true,
+    "score_usd": -4.251703,
+    "fills": 24,
+    "two_sided_share": 1,
+    "max_abs_inventory_btc": 0.00542071,
+    "inventory_btc": 0.00542071,
+    "fees_usd": 0.263483,
+    "violations": 0
+   },
+   "product": [
+    {
+     "path": "strategy.mjs",
+     "sha256": "7948f3ebcf5168db1f2f6e716300055ef4e7a77e46d950732a565916189fb85d",
+     "bytes": 4797
+    }
+   ],
+   "error": {
+    "stage": "ship",
+    "message": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: the only approval of blob:5867bee8e44f is from anthropic, the maker's own lab"
+   }
+  }
+ ],
+ "product": {
+  "schema": "ophanim.foundry.product/v1",
+  "request": {
+   "key": "marketMaker",
+   "class": "build/trading-strategy",
+   "sha256": "77d6fe4e75e4eaba7ddd67b3565ab39055958314655bbeddac0837185a06d9a8"
+  },
+  "trial": 6,
+  "setup": "claude-haiku-4-5-20251001>claude-sonnet-5>claude-fable-5-2",
+  "files": [
+   {
+    "path": "strategy.mjs",
+    "sha256": "7948f3ebcf5168db1f2f6e716300055ef4e7a77e46d950732a565916189fb85d",
+    "bytes": 4797
+   }
+  ],
+  "accepted": true,
+  "verified_by": "node seed/acceptance.mjs exited 0 in bwrap-v1",
+  "dependencies": {
+   "relative": [],
+   "builtins": [],
+   "packages": [],
+   "env": [],
+   "hosts": [],
+   "programs": [],
+   "reads": [],
+   "writes": [],
+   "unresolved": 0
+  },
+  "operation": {
+   "ok": true,
+   "exit": 0,
+   "isolation": "bwrap-v1",
+   "ms": 66,
+   "report": {
+    "window": "second half, not replayed by the acceptance",
+    "paper": true,
+    "score": -4.251703,
+    "trades": 249,
+    "quoted": 249,
+    "two_sided": 249,
+    "two_sided_share": 1,
+    "fills": 24,
+    "volume_btc": 0.02129251,
+    "inventory_btc": 0.00542071,
+    "max_abs_inventory_btc": 0.00542071,
+    "fees_usd": 0.263483,
+    "pnl_usd": -4.251703,
+    "last_price": 61642,
+    "first_price": 61638.16,
+    "low": 61579.45,
+    "high": 62235.62,
+    "violations": 0,
+    "first_violations": []
+   },
+   "score": -4.251703,
+   "why": null
+  },
+  "review": "approve",
+  "rework_of": 5,
+  "review_independent": false,
+  "review_note": "no capability of a lab other than anthropic is reachable here: the reviewer is another model of the same lab, which is not an independent review",
+  "shipped": false,
+  "ship_why": "the controller did not schedule integrate for marketMaker (predicate not satisfied); ship gates: REVIEW: artifact:strategy: the only approval of blob:5867bee8e44f is from anthropic, the maker's own lab",
+  "live": true,
+  "transport": "claude-cli"
+ }
+}
