@@ -18,6 +18,25 @@ foundry lives (PR #76 merged there at `52bd1ee`). It is not on main.
    for.
 4. `2026-11-21-foundry-fixes/fix-4-day-tape-partition.md`: the day tape drops its last trade.
 
+## Launch order (the owner's choice, 2026-11-21)
+
+**Specialized builders A, then B, then foundry fix 1, then foundry fixes 2 to 4.** This is a sequencing choice, not a
+dependency between the items. The foundry fixes are run with main's OPHANIM (below), so once A and B are
+on main, fix 1 is built with its tests written first, by a session that does not write its code. Its deterministic $0.10
+grant and its overlapping-call case are then the first real test of that rule, on the kind of defect it exists to catch:
+a builder and its tests sharing one mistaken assumption.
+
+Three conditions go with it:
+
+1. **B gets more than the automatic panel.** A and B are themselves built the old way, a builder writing its own tests,
+   because the pipeline that removes that is not yet there. Before B is accepted, have it reviewed independently as well,
+   as the earlier review runs were.
+2. **No live foundry run with real money until fix 1 lands.** The foundry's shared cap can be exceeded ($1.70 spent
+   against $1 in the coordinator's stand-in run), and this order keeps that open for longer. Synthetic runs are
+   unaffected.
+3. **PR #84 merged before these runs.** Without it, a provider refusing the account uses up an item's plan attempts
+   instead of stopping the run and waiting.
+
 ## Before starting
 
 **Check these calls of the coordinator's before you register.** Each request states its call as a requirement, and
@@ -56,6 +75,9 @@ Run in WSL with the four keys passed through (`WSLENV`), as before.
   ```
 
 ### Task 2: Register fix 1
+
+- [ ] Only after specialized builders A and B are accepted and on main (the launch order above), and
+  PR #84 is merged.
 
 - [ ] Run:
 
