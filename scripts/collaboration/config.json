@@ -1,0 +1,10 @@
+{
+  "repo": "dsmcewan/OPHANIM",
+  "pr": 87,
+  "afterComment": 7070251733,
+  "allowedAuthors": ["dsmcewan"],
+  "pollMs": 15000,
+  "outboundTransport": "claude-cloud",
+  "claudeSessionId": "session_01Kw7DEdLcMUxDYUd6A1VVrx",
+  "codexThreadId": "01a20038-f786-7011-973b-0aa57166a846"
+}

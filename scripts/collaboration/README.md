@@ -1,0 +1,95 @@
+# Codex and Claude collaboration on LEXI
+
+This connects the existing Codex desktop conversation and Claude's existing cloud session. It also gives local Codex and Claude Code processes the same durable mailbox and task ownership tools.
+
+The workhorse is the collaboration bridge. A local SQLite mailbox stores messages, request keys, delivery receipts, explicit acknowledgements and renewable task claims. The Linux user service sends queued messages through the owner's authenticated Claude Code CLI. It reads replies from the agreed GitHub conversation. A Windows companion delivers those replies into the original Codex desktop thread through the installed Codex app-tools MCP server and its named pipe. No new model session, login, public listener or model API key is required by the relay.
+
+```mermaid
+flowchart LR
+    CX[Codex desktop] -->|collab send| DB[(LEXI mailbox)]
+    LC[Local Codex or Claude MCP tools] <--> DB
+    DB -->|Claude Code CLI cloud follow-up| CL[Existing Claude cloud session]
+    CL -->|Marked reply| GH[OPHANIM PR 87]
+    GH -->|Import every 15 seconds| DB
+    DB -->|Desktop companion every 3 seconds| CX
+```
+
+## Everyday use
+
+The existing launchers now supply the collaboration tools:
+
+```bash
+~/Projects/OPHANIM-shared/open codex
+~/Projects/OPHANIM-shared/open claude
+```
+
+Both clients receive `collab_send`, `collab_inbox`, `collab_ack`, `collab_status`, `collab_claim`, `collab_renew` and `collab_release`. Identity is fixed by each launcher's environment. Read the inbox at task boundaries, acknowledge read messages explicitly, claim a task before editing, and include paths, hashes and actual check results in handoffs. Claims are advisory coordination between consenting processes, not filesystem write enforcement. Independent changes belong in separate worktrees.
+
+The CLI works from the existing desktop task through `wsl -d kali-linux --` and directly inside Kali:
+
+```bash
+~/Projects/OPHANIM-shared/collab inbox --agent codex
+~/Projects/OPHANIM-shared/collab send --from codex --to claude \
+  --key infrastructure-review-v1 --subject 'Review the collaboration bridge' \
+  --text 'Please inspect the source at the supplied commit and return concrete findings.'
+~/Projects/OPHANIM-shared/collab ack MESSAGE_UUID --agent codex --note 'Read; checking the reproduction.'
+~/Projects/OPHANIM-shared/collab claim task:transport-review --agent claude
+~/Projects/OPHANIM-shared/collab status
+```
+
+For longer messages use `--text-file PATH`; no prompt is interpolated into shell code. Reuse a request key only with an identical message. A duplicate key with changed content is refused.
+
+Claude cloud cannot read LEXI's filesystem. Share code through an OPHANIM branch and name the commit in the message. The direct wake command, also used by the service, is:
+
+```bash
+claude -p --cloud session_01Kw7DEdLcMUxDYUd6A1VVrx --output-format json < message.txt
+```
+
+This posts a follow-up to the existing cloud session and exits after the server accepts it. It does not wait for the model's response. See [Claude's official CLI follow-up documentation](https://code.claude.com/docs/en/claude-code-on-the-web#send-follow-ups-from-the-cli).
+
+Claude replies on [PR #87](https://github.com/dsmcewan/OPHANIM/pull/87) using:
+
+```text
+OPHANIM-COLLAB REPLY
+ACK MESSAGE_UUID
+
+The finding or question, with evidence.
+```
+
+Only the configured GitHub account is imported. The record preserves the account, comment URL and content revision. That verifies the GitHub account, not which model or session wrote the comment. Edits become new message versions; old versions remain readable. Messages are peer information within the owner's original scope, not new human authorization.
+
+## Delivery and failure behavior
+
+SQLite transactions and unique sender/request keys prevent duplicate durable requests. A dispatcher first claims a queued message. A successful CLI or app-tools response records delivery. Only an explicit acknowledgement records reading. None of these establishes completion, independent review, acceptance, merge or release.
+
+A dispatcher crash or lost response leaves an uncertain delivery, held without automatic replay. GitHub publications can be reconciled by their exact message marker. Claude CLI and desktop deliveries with unknown outcomes require reconciliation with the recipient; the bridge does not silently retry them or switch transports. Inspect `collab status` and `collab events MESSAGE_UUID`.
+
+The Windows companion can only deliver to the fixed Codex thread in its local config. It does not expose Codex's wider app-management toolset to peers. Acknowledgements do not automatically generate another message, avoiding an acknowledgement loop. Local roles are assertions by processes running as the same owner; this is not an adversarial multi-user broker.
+
+## Install and operate
+
+Node 24 is required (`node:sqlite`), along with the existing Claude OAuth login and GitHub CLI login. The Linux installer uses the existing native Node 24.18.0. It installs beside the pinned checkout, preserves its reviewed bytes, backs up the launcher before the single-line change and adds a Claude MCP entry scoped to this project.
+
+```bash
+bash scripts/collaboration/install-linux.sh
+systemctl --user status ophanim-collaboration.service
+journalctl --user -u ophanim-collaboration.service -n 30
+systemctl --user restart ophanim-collaboration.service
+systemctl --user disable --now ophanim-collaboration.service
+```
+
+The user service is enabled for the normal WSL user lifecycle; it does not enable system-wide lingering or change account settings. The bridge uses an OS file lock to prevent two GitHub/Claude dispatchers. Mailbox state lives at `~/Projects/OPHANIM-shared/collaboration/state/collaboration.sqlite`, with owner-only creation permissions. State is not committed.
+
+Run `start-desktop.ps1` from a Codex desktop task on Windows. It inherits the app's existing named-pipe connection and starts a hidden Node process. It does not export the connection to the network or store account secrets. Runtime files are under `run/` and `desktop.local.json`, both ignored. The helper is idempotent while its existing process is alive. Use `stop-desktop.ps1` to stop only the verified companion process.
+
+The current Windows helper is installed under `C:\Users\dsmce\Documents\Codex\2026-11-21\ophanim-collaboration`. After a desktop app restart/update, run `start-desktop.ps1` again from a fresh Codex task so it inherits the current connection. The companion is not a Windows logon service. A running computer, WSL and desktop app are required. The installed app-tools protocol is a local bundled integration and may need adjustment after app updates.
+
+## Validation
+
+```bash
+node --test scripts/collaboration/store.test.mjs scripts/collaboration/transports.test.mjs
+```
+
+The 15 focused tests cover durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease fencing, input limits, GitHub account/marker filtering, immutable comment revisions, ambiguous-publish reconciliation, native CLI routing, two real MCP processes, concurrent retries and a held SQLite startup transaction.
+
+The initial live proof used the original sessions: Claude answered the first GitHub wake-up; the desktop companion automatically delivered that reply to Codex. Next, the installed Claude CLI accepted a direct follow-up to the same cloud session. Claude answered with `NATIVE-CLI-ACK 20261121-ophanim` in [comment 7070419893](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070419893), and that reply automatically reached the original Codex thread. These are live transport checks, separate from review of the implementation.
