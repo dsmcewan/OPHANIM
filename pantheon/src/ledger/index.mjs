@@ -8,5 +8,5 @@ export {OPERATOR, CONTROLLER, PANTHEON_DOMAIN, pantheonLedgerKinds, pantheonSyst
 export {boardScopes, scopeOf} from './scopes.mjs';
 export {CYCLE, FINDING, RESOLUTION, CLOSE, ATTEMPT, SEVERITIES, REVIEW_BRIEF, reviewPrompt, parseReview, deriveCycle, closeClaim, cycleKinds, cycleRecorder, ledgerView} from './cycle-kinds.mjs';
 export {reviewCycle, reviewSeats, DEFAULT_MAX_ATTEMPTS} from './review-cycle.mjs';
-export {PRACTICE, PRACTICE_SCHEMA, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, DEFAULT_PRACTICE_SCOPE, ASSESSMENT_OUTCOMES, CANDIDATE_OUTCOMES,
+export {PRACTICE, PRACTICE_SCHEMA, CYCLE_CONTRACT, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, carriesPractice, DEFAULT_PRACTICE_SCOPE, ASSESSMENT_OUTCOMES, CANDIDATE_OUTCOMES,
   practiceKinds, practiceRecorder, admittedPractice, loadPractice, withPractice, currentPolicy, dispositionsOf} from './practice-kinds.mjs';

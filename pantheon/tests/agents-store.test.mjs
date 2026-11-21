@@ -14,14 +14,19 @@ test("every listed agent names a role that actually exists in ROLES", () => {
   }
 });
 
-test("the implementer ladder leads with agy_google, then the three openai rungs, in the seating table's order", () => {
-  // agy_google/claude-sonnet-4-6 added 2026-09-29 (operator instruction: "The implementers will be
-  // Sonnet 4.6 through Agy as well") -- see seating.mjs's implementer table for the full reasoning.
+test("the implementer ladder is the three openai rungs then the two Antigravity Gemini fallbacks, in the seating table's order", () => {
+  // The agy_google/claude-sonnet-4-6 rung (operator seating 2026-09-29) was removed 2026-11-17, owner
+  // direction: Antigravity serves Gemini models only -- see seating.mjs's implementer table.
+  // The same day (owner direction: "seat Carbon and the other Gemini ids through Antigravity") two
+  // Antigravity Gemini rows were APPENDED after the openai rungs, as fallbacks.
   const impl = listAgents().filter(a => a.role === "implementer");
-  assert.deepEqual(impl.map(a => a.model), ["claude-sonnet-4-6", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"],
+  assert.deepEqual(impl.map(a => a.model),
+    ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gemini-4-carbon-high", "gemini-4-argon-high"],
     "these are the rungs the ticket's per-slot model choice picks between");
-  assert.equal(impl[0].vendor, "agy_google", "the operator's new top rung");
-  assert.ok(impl.slice(1).every(a => a.vendor === "openai"), "SURFACE still seats the rest of this ladder on one lab");
+  assert.deepEqual(impl.map(a => a.vendor), ["openai", "openai", "openai", "agy_google", "agy_google"],
+    "SURFACE seats the three leading rungs on one lab; the Antigravity Gemini rows follow them");
+  assert.ok(!impl.some(a => a.vendor === "agy_google" && !a.model.startsWith("gemini-")),
+    "no Claude implementer rung runs through Antigravity");
 });
 
 test("scout is listed even though it sits OUTSIDE the board -- it comes from INTAKE, not SEATING", () => {
@@ -128,6 +133,6 @@ test("the cap exception is per MODEL, not per role -- the store cannot diverge f
 test("the agy_google reviewer resolves toolless:false while the xai reviewer does not", () => {
   // Same role, two labs, opposite preambles -- this is the pair that proves the merge is real
   // rather than a role-level constant wearing a vendor's name.
-  assert.equal(getAgent("reviewer@agy_google/gemini-3.6-flash").tuning.toolless, false);
+  assert.equal(getAgent("reviewer@agy_google/gemini-3.8-flash-high").tuning.toolless, false);
   assert.equal(getAgent("reviewer@xai/grok-4.7").tuning.toolless, true);
 });

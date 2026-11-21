@@ -578,6 +578,36 @@
     "quote": "Supported (low, medium, high); minimal is not supported and returns an error"
    },
    "status": "Stable; no shutdown date announced (aistudio.google.com/docs/deprecations, released September 2, 2026)"
+  },
+  "gemini-4-hydrogen": {
+   "vendor": "agy_google",
+   "api_id": true,
+   "window": {
+    "value": 1048576,
+    "source": "owner statement 2026-11-17",
+    "quote": "owner-stated 2026-11-17: gemini-4-hydrogen context window 1048576"
+   },
+   "output": {
+    "value": 65536,
+    "source": "owner statement 2026-11-17",
+    "quote": "owner-stated 2026-11-17: gemini-4-hydrogen max output tokens 65536"
+   },
+   "efforts": {
+    "values": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ],
+    "default": null,
+    "source": "owner statement 2026-11-17",
+    "quote": "owner-stated 2026-11-17: gemini-4-hydrogen valid thinking levels low, medium, high, xhigh"
+   },
+   "surface": "genai",
+   "notes": [
+    "Seated on owner direction 2026-11-17. Every figure is the owner's statement, not a vendor page: no URL is recorded because none was read.",
+    "Never send `minimal` or a thinking budget for this model: neither is among the stated thinking levels."
+   ]
   }
  }
 }

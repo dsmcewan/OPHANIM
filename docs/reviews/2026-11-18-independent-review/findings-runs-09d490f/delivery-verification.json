@@ -1,0 +1,29 @@
+{
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "assignments": [
+    {
+      "assignment": 1,
+      "status": "complete",
+      "hash_verified_files": 5,
+      "zip_verified": true,
+      "known_credential_scan": "clear",
+      "zip_sha256": "37055fd9a98a14f46cf83b076f3a792e6589ca50122cfa544c60b90599e71c8c"
+    },
+    {
+      "assignment": 2,
+      "status": "complete",
+      "hash_verified_files": 8,
+      "zip_verified": true,
+      "known_credential_scan": "clear",
+      "zip_sha256": "bcf01376041db556cbdb1d9c068cafe60d18a37b71b8071641ebb881b27d876b"
+    },
+    {
+      "assignment": 4,
+      "status": "complete",
+      "hash_verified_files": 4,
+      "zip_verified": true,
+      "known_credential_scan": "clear",
+      "zip_sha256": "006d27597b31964d2aa55bb0b05e6dd83df555f166febb313bcda625dfddf708"
+    }
+  ]
+}

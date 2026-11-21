@@ -15,23 +15,103 @@ jobs:
       - name: Prepare the isolated runner
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap python3-venv
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           OPHANIM_TELOS_ROOT="$RUNNER_TEMP/ophanim-telos"
           printf 'OPHANIM_TELOS_ROOT=%s\n' "$OPHANIM_TELOS_ROOT" >> "$GITHUB_ENV"
           git clone --no-checkout https://github.com/dsmcewan/TELOS.git "$OPHANIM_TELOS_ROOT"
           git -C "$OPHANIM_TELOS_ROOT" checkout --detach 0c9b539ddbb08e1464603faf786e0d5cdfc33fb8
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      # The Antigravity SDK transport's contract suite (pantheon/tests/antigravity-sdk-contract.test.mjs) runs the
+      # INSTALLED google-antigravity SDK and its bundled runtime in the real jail, against a scripted provider on
+      # loopback. Without the SDK every test of it skips as UNVERIFIED, and the gate below FAILS on a skip in a
+      # real-bwrap suite. So the pinned SDK is installed here, hash-checked, at the transport's default path. No
+      # credential is involved and nothing reaches Google.
+      - name: Install the pinned Antigravity SDK (hash-checked)
+        timeout-minutes: 4
+        run: |
+          python3 -m venv "$HOME/.local/share/pantheon/venv-antigravity"
+          "$HOME/.local/share/pantheon/venv-antigravity/bin/pip" install --no-input --disable-pip-version-check \
+            --require-hashes -r pantheon/scripts/antigravity-requirements.txt
+          "$HOME/.local/share/pantheon/venv-antigravity/bin/python" pantheon/scripts/antigravity-bridge.py --identity
+      # The test gate, run mode over EVERY suite (scripts/test-gates/check.mjs; L-503, L-505, L-506). Each test file runs
+      # in its own `node --test` with a per-file event reporter, so every result is attributed to its file. A suite
+      # FAILS on fail or cancelled > 0, on a failing describe()/before() that node:test leaves out of `fail`, on any
+      # skip in a real-bwrap suite while `bwrap --ro-bind / / true` works here (UNVERIFIED, which also fails this job,
+      # where it does not), on a file that did not report its own summary (process.exit mid-file, a crash, a kill:
+      # node:test then still says `fail 0`), and on a HUNG file: every test has a timeout (node:test cancels it by
+      # name) and every file a watchdog (the gate kills its process group and names it), so a never-settling test or
+      # an open handle ends in a named FAIL within minutes, not as this job's timeout. It runs first so its verdict is
+      # recorded even if a later step uses up the job's time.
+      - name: Test gate, every suite re-run per file (incomplete runs, hangs, cancelled, real-bwrap skips)
+        if: always()
+        timeout-minutes: 13
+        shell: bash
+        run: |
+          status=0
+          npm run test:gates -- \
+            --json "$RUNNER_TEMP/test-gate-run.json" --report "$RUNNER_TEMP/test-gate-run.md" \
+            --out "$RUNNER_TEMP/test-gate-run" || status=$?
+          cat "$RUNNER_TEMP/test-gate-run.md" >> "$GITHUB_STEP_SUMMARY" || true
+          exit $status
+      # The plain suite runs, whose logs the log gate below reads. Each step is bounded well below the job's timeout:
+      # a run that hangs where the per-test timeout cannot reach (a package suite that names its files; an open
+      # handle) ends with its step, and the log gate reports the missing summary instead of the job timing out.
       - name: npm test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
         shell: bash
         run: npm test 2>&1 | tee "$RUNNER_TEMP/npm-test.log"
       - name: npm run test:proof
+        if: ${{ !cancelled() }}
+        timeout-minutes: 6
         shell: bash
         run: npm run test:proof 2>&1 | tee "$RUNNER_TEMP/test-proof.log"
+      - name: npm run test:gates:self
+        if: always()
+        timeout-minutes: 3
+        shell: bash
+        run: npm run test:gates:self 2>&1 | tee "$RUNNER_TEMP/test-gates-self.log"
       - name: Verification summary
         if: always()
         run: >-
           node ophanim/public/ci-summary.mjs
           "npm test=$RUNNER_TEMP/npm-test.log"
           "test:proof=$RUNNER_TEMP/test-proof.log"
+          "test:gates:self=$RUNNER_TEMP/test-gates-self.log"
           >> "$GITHUB_STEP_SUMMARY"
+      # The test gate on this run's own logs (L-503). A suite FAILS on fail or cancelled > 0 (node:test counts a
+      # timed-out test or a cut-off file as cancelled, not fail), on a listed failure the summary does not count, on a
+      # missing summary (a step cut off by its timeout), and on any skip in a real-bwrap suite while bwrap works here.
+      # A text log cannot show a silent mid-file exit; the per-file run above is what catches that.
+      - name: Test gate on this run's logs (cancelled, missing, real-bwrap skips)
+        if: always()
+        shell: bash
+        run: |
+          status=0
+          node scripts/test-gates/check.mjs logs \
+            "npm test=$RUNNER_TEMP/npm-test.log" \
+            "test:proof=$RUNNER_TEMP/test-proof.log" \
+            "test:gates:self=$RUNNER_TEMP/test-gates-self.log" \
+            --json "$RUNNER_TEMP/test-gate-logs.json" --report "$RUNNER_TEMP/test-gate-logs.md" || status=$?
+          cat "$RUNNER_TEMP/test-gate-logs.md" >> "$GITHUB_STEP_SUMMARY" || true
+          exit $status
+      # The test lint (scripts/test-gates/lint-tests.mjs; L-503), ENFORCING: an unsuppressed finding -- a test that may be
+      # unable to fail -- fails this job. A suppression counts only with a specific reason (`-- <at least five words>`);
+      # every finding, the suppressed ones with their reasons, is in the step summary, and the JSON record is kept with
+      # the gate records. The gate's coverage check (suites.mjs lintEnforcement) fails if this step stops enforcing.
+      - name: Test lint (enforcing; an unsuppressed finding fails the job)
+        if: always()
+        shell: bash
+        run: npm run --silent test:lint -- --enforce --json "$RUNNER_TEMP/test-lint.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the gate records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gate-records
+          path: |
+            ${{ runner.temp }}/test-gate-*.json
+            ${{ runner.temp }}/test-gate-*.md
+            ${{ runner.temp }}/test-lint.json
+            ${{ runner.temp }}/test-gate-run/
+          if-no-files-found: warn

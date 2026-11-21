@@ -1,0 +1,53 @@
+{
+  "schema": "pantheon.agy-observed/v1",
+  "agy_version": "1.5.10",
+  "lane": "gemini-3.8-flash-low",
+  "observed": "2026-11-18, the owner's machine: the first real worker turn (scripts/agy-worker-probe.mjs at commit 5efbba5). Turn exit 0, status SUCCESS, num_turns 1; probe exit 1.",
+  "placeholders": {
+    "<wt>": "the unit's worktree (absolute, real)",
+    "<ctl>": "the unit's control dir (absolute, real)",
+    "<home>": "the owner's HOME",
+    "<t>": "a timestamp the CLI printed (elided)",
+    "<json>": "the A2A relay's JSON answer (elided)"
+  },
+  "notes": [
+    "Paths are normalised to the placeholders above; nothing else was changed. No secret appears in this file.",
+    "The deny reasons are what src/agy/jail-hook.mjs at 5efbba5 prints for a tool it does not know (write_file was not in WRITE_TOOLS); the owner's report gave them as <reason>."
+  ],
+  "log_lines": {
+    "hooks_loaded": "loaded 1 named hooks from 1 hooks.json file(s)",
+    "workspace_dirs": "Creating CLI server backend: product=antigravity workspaceDirs=[<ctl> <wt>] ..."
+  },
+  "hook_cwd": "<ctl>/.agents",
+  "verify_cmd": "node -e \"process.exit(0)\"",
+  "roles": ["probe-helper"],
+  "owned_paths": ["allowed/**"],
+  "hook_payloads": [
+    {"stepIdx":2,"modelName":"gemini-3.8-flash-low","toolCall":{"args":{"Content":"forbidden","Path":"<wt>/forbidden.txt"},"id":"call_1","name":"write_file"}},
+    {"stepIdx":4,"modelName":"gemini-3.8-flash-low","toolCall":{"args":{"Content":"probe-ok","Path":"<wt>/allowed/probe.txt"},"id":"call_2","name":"write_file"}},
+    {"stepIdx":6,"modelName":"gemini-3.8-flash-low","toolCall":{"args":{"question":"Reply with the word PROBE-ANSWER.","role":"probe-helper","toolSummary":"Ask probe helper"},"id":"call_3","name":"mcp_pantheon-subagents_ask_subagent"}},
+    {"stepIdx":8,"modelName":"gemini-3.8-flash-low","toolCall":{"args":{"CommandLine":"node -e \"process.exit(0)\"","WaitMsBeforeAsync":5000,"toolSummary":"Verify unit"},"id":"call_4","name":"run_command"}}
+  ],
+  "hook_decisions_at_5efbba5": [
+    {"tool":"write_file","decision":"deny","reason":"tool write_file is not allowed for a unit worker"},
+    {"tool":"write_file","decision":"deny","reason":"tool write_file is not allowed for a unit worker"},
+    {"tool":"mcp_pantheon-subagents_ask_subagent","decision":"auto_approve","reason":"pantheon-subagents/ask_subagent role probe-helper (direct)"},
+    {"tool":"run_command","decision":"auto_approve","reason":"the unit's verify_cmd"}
+  ],
+  "tool_steps": [
+    {"tool_name":"write_file","state":"ACTIVE","tool_info":null},
+    {"tool_name":"write_file","state":"ERROR","tool_info":{"error":{"type":"TOOL_ERROR","message":"tool call denied by pre-tool hook: tool write_file is not allowed for a unit worker"}}},
+    {"tool_name":"write_file","state":"ACTIVE","tool_info":null},
+    {"tool_name":"write_file","state":"ERROR","tool_info":{"error":{"type":"TOOL_ERROR","message":"tool call denied by pre-tool hook: tool write_file is not allowed for a unit worker"}}},
+    {"tool_name":"mcp_pantheon-subagents_ask_subagent","state":"ACTIVE","tool_info":null},
+    {"tool_name":"mcp_pantheon-subagents_ask_subagent","state":"DONE","tool_info":{"output":"Created At: <t>\nCompleted At: <t>\n<json>"}},
+    {"tool_name":"run_command","state":"ACTIVE","tool_info":null},
+    {"tool_name":"run_command","state":"ERROR","tool_info":{"error":{"type":"TOOL_ERROR","message":"run_command: failed to build agentapi shell injection: failed to write agentapi script: open <home>/.gemini/antigravity-cli/bin/agentapi: read-only file system"}}}
+  ],
+  "host_change": {
+    "path": "<home>/.gemini/antigravity-cli/log/cli-20261114_185251.log",
+    "change": "changed",
+    "grew_by_bytes": 306,
+    "note": "the only host change; inside the jail <home>/.gemini/antigravity-cli is the per-run scratch copy and log/ an empty scratch subdir"
+  }
+}

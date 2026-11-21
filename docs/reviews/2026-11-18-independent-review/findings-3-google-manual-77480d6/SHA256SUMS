@@ -1,0 +1,9 @@
+9fa74037ca5f8b2c94185ce5cf2cb32f706ecc400ca337c75d5cb8c9108b3a1e  ./PROMPT.md
+8f3f36f1be9444c6b606091b63567fb43cad5d8f2d4c46c16c406f7f3372defe  ./README.md
+455bdb37be11799ab62ba8592d6b5fcdd705781e0c4bf6c0d396d9fe52a542e0  ./agy-session-transcript.jsonl
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./changed-outside-review-tests.txt
+21d2ec84efa1988b90b808eb8a47ca26978c7589e67f7e9f4deb12173f6e997a  ./findings-3-google.md
+32dc88d9793668626c8341e512c0deaf44950588ce62d3176ea9ca94c692a500  ./package-info.json
+e5a3327746514279350d3c8d6c2afa5fb6e5e4dbd5fe416bb702543586c5815a  ./prompt.sha256
+eda4c65072284caea3a3bb9f1cad754e769d2e884fb18fdb5a478b4423511c3a  ./reproductions/.review-tests/assignment3-reliability.test.mjs
+574c43bc2c2417faa9a13152455c0decd4a56ca02f50c8492e47f4e1b34e4cba  ./session-info.json

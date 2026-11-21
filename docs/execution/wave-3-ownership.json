@@ -1,0 +1,243 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": 3,
+  "base_commit": "ef78a7474557b9068ff4d0925522e679e2689e44",
+  "authorization": "owner, 2026-11-19: Wave 3 expanded with L-126, L-505, L-506 as qualification infrastructure (3A); 3B = L-504, L-124, L-106, L-503. 3A integrated and verified before final qualification claims from 3B.",
+  "frozen": {
+    "candidate": "af0dc3012688703ccac0f6de31836822a3279eae",
+    "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484",
+    "independent_review_evidence": "docs/reviews/**/findings-*/** (read-only; never read by agents)"
+  },
+  "coordinator_only": [
+    "docs/OPEN-LIMITATIONS.md",
+    "docs/execution/**",
+    "docs/reviews/**"
+  ],
+  "dependencies": [
+    "3A-lock and 3A-gate share no file and no interface: they may run concurrently",
+    "3B's lint enforcement edits scripts/test-gates/lint-tests.mjs and the qualification workflow, which 3A-gate owns: 3B is dispatched only after 3A is integrated, with its own manifest section added here before dispatch",
+    "3B's final qualification claims rest on the 3A gate (hung and cut-off files detected): 3B is verified on the integrated 3A gate",
+    "3B is split: 3B-1 runs three agents concurrently (evidence+wake, identity, agy guard+spend) from the integrated 3A commit; 3B-2 (lint review and enforcement, L-503) runs after 3B-1 is integrated, because lint fixes touch test files every 3B-1 agent owns and enforcement must cover their new tests",
+    "shared hot files have ONE owner each in 3B-1: stages.mjs and live-run.mjs -> identity; context/gates/reconcile/scheduler -> evidence+wake; agy-cli/run-item/sdk/turns/util -> agy+spend. A needed change in another owner's file is written as a patch under the agent's report, not made; the coordinator routes it",
+    "L-123 (writable verification boundary) is unresolved: no 3B claim may assert artifact integrity after verification",
+    "3B-2 runs two agents from the 3B-1 integration commit, split by tree: 3b-lint-ophanim (ophanim findings + the lint rules and their CI enforcement) and 3b-lint-pantheon (pantheon and packages findings). Rule changes only for a demonstrated false positive/negative with a self-test; the integrated tree must pass `lint-tests.mjs --enforce`",
+    "3B-2 follow-up (coordinator, after both agents reported): P1 (recorded codex argv names the binary twice under the outer runtime) is repaired by 3b-lint-pantheon because the strengthened round2 test cannot land without it; the 32 rule misreads are resolved by 3b-lint-ophanim refining the rule, validated against both branches, not by suppression"
+  ],
+  "subwaves": {
+    "3A": {
+      "agent-3a-lock": {
+        "branch": "wave3/review-runner-lock",
+        "base_commit": "ef78a74",
+        "findings": [
+          "L-126"
+        ],
+        "files": [
+          "pantheon/src/review-runner/index.mjs",
+          "pantheon/src/review-runner/review-copy.mjs",
+          "pantheon/src/review-runner/continue.mjs",
+          "pantheon/scripts/agy-worker-probe.mjs",
+          "pantheon/tests/review-runner-*.test.mjs",
+          "pantheon/tests/review-runner-helper.mjs"
+        ],
+        "new_files": [
+          "pantheon/tests/review-runner-repo-lock.test.mjs"
+        ],
+        "interface_rules": [
+          "uses repoMutex from pantheon/src/pipeline/git.mjs as exported at ef78a74; git.mjs is NOT edited (a needed change there is reported, not made)",
+          "the review runner's withheld-findings rule, single-commit review copy, jail, env scrub and coverage gate must not be weakened"
+        ]
+      },
+      "agent-3a-gate": {
+        "branch": "wave3/test-gate",
+        "base_commit": "ef78a74",
+        "findings": [
+          "L-505",
+          "L-506"
+        ],
+        "files": [
+          "scripts/test-gates/check.mjs",
+          "scripts/test-gates/events-reporter.mjs",
+          "scripts/test-gates/parse-log.mjs",
+          "scripts/test-gates/suites.mjs",
+          "scripts/test-gates/real-bwrap.mjs",
+          "scripts/test-gates/check.test.mjs",
+          "scripts/test-gates/fixtures/**",
+          ".github/workflows/qualification.yml",
+          "ophanim/public/ci-summary.mjs"
+        ],
+        "new_files": [],
+        "allowed_extra": [
+          "package.json"
+        ],
+        "region_limits": {
+          "package.json": "the \"scripts\" entries test, test:proof, test:gates, test:gates:self only",
+          ".github/workflows/qualification.yml": "test and gate steps; the TELOS pin, bubblewrap setup and permissions are not changed",
+          "scripts/test-gates/lint-tests.mjs": "not owned (3B)"
+        },
+        "interface_rules": [
+          "the gate may only become stricter: no existing FAIL condition (cancelled, missing summary, real-bwrap skip) is relaxed",
+          "real-bwrap-suites.json baseline is coordinator-maintained; the gate's derivation of it may not change"
+        ]
+      }
+    },
+    "3B-1": {
+      "agent-3b-evidence": {
+        "branch": "wave3/evidence-wake",
+        "base_commit": "3A integration commit",
+        "findings": [
+          "L-504 invariant 1 (version equals delivered bytes, every retriever op)",
+          "L-106 (status-entry wake, every stage)"
+        ],
+        "files": [
+          "ophanim/operate/context.mjs",
+          "ophanim/operate/gates.mjs",
+          "ophanim/operate/reconcile.mjs",
+          "ophanim/operate/scheduler.mjs",
+          "ophanim/operate/work-ledger.mjs",
+          "ophanim/operate/context*.test.mjs",
+          "ophanim/operate/lifecycle-evidence*.test.mjs",
+          "ophanim/operate/evidence-recovery.test.mjs",
+          "ophanim/operate/lifecycle-identity-r3.test.mjs",
+          "ophanim/operate/scheduler.test.mjs",
+          "ophanim/operate/wave3-evidence*.test.mjs",
+          "ophanim/operate/wave3-wake*.test.mjs",
+          "ophanim/operate/wave3-evidence.mutate.mjs"
+        ],
+        "new_files": [
+          "ophanim/operate/wave3-evidence.test.mjs",
+          "ophanim/operate/wave3-wake.test.mjs",
+          "ophanim/operate/wave3-evidence.mutate.mjs"
+        ],
+        "region_limits": {
+          "ophanim/operate/gates.mjs": "evidence checks (:40-109) and wake (:170-190, :276-282, :351-356); reuse/reassessment identity logic (:191-204, :286-337) only if required by an assigned invariant, reported in the sibling table"
+        }
+      },
+      "agent-3b-identity": {
+        "branch": "wave3/identity-projections",
+        "base_commit": "3A integration commit",
+        "findings": [
+          "L-504 invariant 2 (identity preserved through every projection)"
+        ],
+        "files": [
+          "ophanim/operate/stages.mjs",
+          "ophanim/operate/live-run.mjs",
+          "ophanim/operate/test-fixtures.mjs",
+          "pantheon/src/pipeline/record.mjs",
+          "pantheon/src/pipeline/checkpoint.mjs",
+          "pantheon/src/pipeline/index.mjs",
+          "pantheon/src/pipeline/dispatch.mjs",
+          "pantheon/src/pipeline/review.mjs",
+          "pantheon/src/pipeline/implement.mjs",
+          "pantheon/src/pipeline/a2a-shim.mjs",
+          "pantheon/src/review/**",
+          "pantheon/src/ledger/**",
+          "pantheon/src/board/operate.mjs",
+          "packages/ledger/status.mjs",
+          "ophanim/public/provenance.mjs",
+          "ophanim/public/record.mjs",
+          "ophanim/operate/{independence,independence-r2-a2,plan-lineage,revision-reassessment,validator-identity,wave2-identity,fit-lifecycle,live-run,stages}.test.mjs",
+          "ophanim/operate/wave3-identity*.test.mjs",
+          "ophanim/operate/wave3-identity.mutate.mjs",
+          "pantheon/tests/{independence-r2-a2,ledger-*,cycle-*,pipeline-run,pipeline-resume,pipeline-review,pipeline-async,pipeline-stage5-*,review-admission,review-capacity*,review-critique-contribution,review-cross-lab,review-identity-policy,review-model-independence,review-scope}.test.mjs",
+          "pantheon/tests/wave3-identity*.test.mjs",
+          "ophanim/public/{public-record,work-projection}.test.mjs",
+          "packages/ledger/tests/status-proposal.test.mjs"
+        ],
+        "new_files": [
+          "ophanim/operate/wave3-identity.test.mjs",
+          "pantheon/tests/wave3-identity.test.mjs",
+          "ophanim/operate/wave3-identity.mutate.mjs"
+        ],
+        "region_limits": {
+          "ophanim/operate/stages.mjs": "identity projections and lineage; the meter, BUDGET_STOP and worktree recovery (wave 2b) are not changed; evidence/agy/spend changes requested by the other agents are routed by the coordinator",
+          "ophanim/operate/live-run.mjs": "servedIdentities/subagentReceipt (:433-476); billing/failover regions only if the agy+spend agent's routed patch requires it",
+          "pantheon/src/pipeline/index.mjs": "lineage, stage-5 and checkpoint projections; NOT the lock, worktree or charging regions"
+        }
+      },
+      "agent-3b-agy-spend": {
+        "branch": "wave3/agy-guard-spend",
+        "base_commit": "3A integration commit",
+        "findings": [
+          "L-504 invariant 3 (agy model guard, every entry point)",
+          "L-504 invariant 4 (no metered spend with failover off, every seat)",
+          "L-124 (point-of-spend guard at the agy SDK seat)"
+        ],
+        "files": [
+          "pantheon/src/board/agy-cli.mjs",
+          "pantheon/src/board/run-item.mjs",
+          "pantheon/src/sdk/**",
+          "pantheon/src/pipeline/turns.mjs",
+          "pantheon/src/pipeline/util.mjs",
+          "pantheon/src/route/quota-failover.mjs",
+          "pantheon/src/role/seating.mjs",
+          "pantheon/src/review-runner/subscription.mjs",
+          "pantheon/scripts/agy-seat.py",
+          "pantheon/tests/{agy-*,board-agy-*,board-cli-lane-seat,board-reviewer-reseat-lab,quota-failover,pipeline-turns,reliability-r3-a3,sdk-*,frontier-adapter}.test.mjs",
+          "pantheon/tests/wave3-agy*.test.mjs",
+          "pantheon/tests/wave3-spend*.test.mjs",
+          "pantheon/tests/wave3-agy-spend.mutate.mjs",
+          "ophanim/operate/reliability-r3-a3.test.mjs",
+          "ophanim/operate/reliability-r2-a3*.test.mjs"
+        ],
+        "new_files": [
+          "pantheon/tests/wave3-agy-guard.test.mjs",
+          "pantheon/tests/wave3-spend.test.mjs",
+          "pantheon/tests/wave3-agy-spend.mutate.mjs"
+        ],
+        "region_limits": {
+          "pantheon/src/review-runner/subscription.mjs": "the agy worker call path only; review-runner index/copy/continue belong to 3A (integrated first)"
+        }
+      }
+    },
+    "3B-2": {
+      "agent-3b-lint-ophanim": {
+        "branch": "wave3/lint-ophanim",
+        "base_commit": "3B-1 integration commit",
+        "findings": [
+          "L-503 (ophanim findings, then enforcement)"
+        ],
+        "files": [
+          "ophanim/governance/governance.test.mjs",
+          "ophanim/ledger/efficiency-kinds.test.mjs",
+          "ophanim/operate/{context-bounds,context,exec-reliability-a3,exec-reliability,fit-lifecycle,lifecycle-evidence-review,lifecycle-identity-r3,plan-lineage,reliability-r2-a3,revision-reassessment,scheduler,stages}.test.mjs",
+          "ophanim/public/public-record.test.mjs",
+          "ophanim/tests/{fixtures,runtime-boundaries}.test.mjs",
+          "ophanim/operate/test-fixtures.mjs",
+          "scripts/test-gates/lint-tests.mjs",
+          "scripts/test-gates/lint-tests.test.mjs",
+          "scripts/test-gates/suites.mjs",
+          "scripts/test-gates/check.test.mjs",
+          ".github/workflows/qualification.yml"
+        ],
+        "new_files": [],
+        "allowed_extra": [
+          "package.json"
+        ],
+        "region_limits": {
+          "package.json": "the test:lint entry only",
+          ".github/workflows/qualification.yml": "the Test lint step only",
+          "scripts/test-gates/suites.mjs": "the coverage check that the workflow's lint step enforces"
+        }
+      },
+      "agent-3b-lint-pantheon": {
+        "branch": "wave3/lint-pantheon",
+        "base_commit": "3B-1 integration commit",
+        "findings": [
+          "L-503 (pantheon and packages findings)"
+        ],
+        "files": [
+          "packages/ledger/tests/{append,status-proposal}.test.mjs",
+          "packages/model-client/tests/request.test.mjs",
+          "pantheon/tests/{acceptance-tool-links,agy-jail-hook,agy-observed-pass-1.5.10,agy-sandbox-r2a4,agy-sandbox,agy-seat-identity,agy-tool-drift,agy-worker-probe,agy-worker,context-chain,fit-matrix,frontier-adapter,practice-paired,review-model-independence,review-runner-cli-units,review-runner-continue,review-runner-round2,review-runner-run,review-runner-subscription,role-seating,route-dispatch-selection,route-protocol,route-task-profile,seat-argv,view-bus}.test.mjs",
+          "pantheon/tests/fixtures/**",
+          "pantheon/tests/review-runner-helper.mjs",
+          "pantheon/src/review-runner/subscription.mjs"
+        ],
+        "new_files": [],
+        "region_limits": {
+          "pantheon/src/review-runner/subscription.mjs": "follow-up only: the plan argv construction when the outer runtime is applied (~:282, production defect P1 exposed by the strengthened review-runner-round2 test); nothing else"
+        }
+      }
+    }
+  }
+}

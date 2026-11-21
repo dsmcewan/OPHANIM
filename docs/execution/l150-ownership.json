@@ -1,0 +1,39 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "L-150, L-151",
+  "base_commit": "af1df59",
+  "authorization": "owner, 2026-11-20: L-150 approved (per-request authorization and charging inside the python SDK seat, through the existing central policy, over a bounded controller channel; never one charge per launch nor a charge for requests not made); L-151 approved (direct agy-seat.py execution off by default, governed by a controller-issued scoped capability or the same central admission; no credential-based exception)",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**"],
+  "dependencies": ["single agent; region limits written from the brief's DESIGN section (D1-D8); the owner decision is quoted in the brief, not pointed at",
+    "the design is conditional on the SDK investigation: a stop condition is reported to the coordinator before any workaround",
+    "post-hoc amendment (coordinator, 2026-11-20, at integration): (a) run-item.mjs turn(): laneCharged = 1 became += 1, outside the literal SDK-branch region, so the run's provider_requests counts each request the relay admits; the CLI lane's single admission is unchanged; accepted (the design D4 needs it; the region limit was narrower than the design). (b) the coordinator retargeted l136 T2, wave3 S6 and wave3 G6 (their targets were the removed spawn charge and a renamed variable) and added the relay's idle and lifetime bound test with mutations M20 and M21 (b9cbafb)"],
+  "subwaves": {
+    "L150": {
+      "agent-l150-relay": {
+        "branch": "l150/sdk-relay",
+        "base_commit": "af1df59",
+        "findings": ["L-150", "L-151"],
+        "files": ["pantheon/src/route/gemini-relay.mjs", "pantheon/src/route/gemini-billing.mjs",
+                  "pantheon/src/board/run-item.mjs", "pantheon/src/board/agy-cli.mjs",
+                  "pantheon/scripts/agy-seat.py", "pantheon/bin/agy-seat.mjs",
+                  "docs/billing-policy.md",
+                  "pantheon/tests/l150-*.test.mjs", "pantheon/tests/l150-billing.mutate.mjs", "pantheon/tests/fixtures/l150-*", "pantheon/tests/fixtures/l150-*/**",
+                  "pantheon/tests/agents-render.test.mjs", "pantheon/tests/agy-seat-identity.test.mjs", "pantheon/tests/board-agy-planner-role.test.mjs",
+                  "pantheon/tests/board-reviewer-reseat-lab.test.mjs", "pantheon/tests/l136-billing.test.mjs", "pantheon/tests/mcp-agents-server.test.mjs",
+                  "pantheon/tests/reliability-r3-a3.test.mjs", "pantheon/tests/review-runner-cli-units.test.mjs", "pantheon/tests/review-runner-subscription.test.mjs",
+                  "pantheon/tests/route-protocol.test.mjs", "pantheon/tests/seating-agy.test.mjs", "pantheon/tests/wave3-agy-guard.test.mjs", "pantheon/tests/wave3-spend.test.mjs"],
+        "new_files": ["pantheon/src/route/gemini-relay.mjs", "pantheon/bin/agy-seat.mjs", "pantheon/tests/l150-*.test.mjs", "pantheon/tests/l150-billing.mutate.mjs", "pantheon/tests/fixtures/l150-*", "pantheon/tests/fixtures/l150-*/**"],
+        "region_limits": {
+          "pantheon/src/route/gemini-relay.mjs": "D1: the loopback metering relay; admission and charging only through spendGemini; an allowlist of methods, fail closed; the session cap; bounded channel",
+          "pantheon/src/route/gemini-billing.mjs": "additions only (e.g. request identity and lineage fields, a separate outcome record that never changes the count); every existing caller behaves as before",
+          "pantheon/src/board/run-item.mjs": "D4: the SDK seat branch (transport sdk) only: the up-front policy check kept, the one charge at spawn replaced by the relay, the usage and lineage records",
+          "pantheon/src/board/agy-cli.mjs": "D2: agySdkEnvOf only, and only to withhold the real Gemini and Vertex credentials from a relayed child and pass the scoped capability; the allowlist and every other scrub unchanged or tightened",
+          "pantheon/scripts/agy-seat.py": "D2, D3, D7: refuse metered execution without a capability; point the SDK at the relay with the capability as its key; report a relay refusal and keep its output and progress",
+          "pantheon/bin/agy-seat.mjs": "D3, optional: a standalone governed launcher over the same relay and spendGemini",
+          "existing tests listed above": "only where a test asserts that the SDK child receives the real key or is charged once per launch: changed to assert the stronger property (capability given, key withheld; charged per request); every such change listed in the report; no assertion weakened"
+        }
+      }
+    }
+  }
+}

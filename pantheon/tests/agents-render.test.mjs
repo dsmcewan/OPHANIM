@@ -5,7 +5,7 @@ import { getAgent } from "../src/agents/store.mjs";
 import { ROLES } from "../src/role/roles.mjs";
 
 const reviewer = getAgent("reviewer@xai/grok-4.7");
-const agyReviewer = getAgent("reviewer@agy_google/gemini-3.6-flash");
+const agyReviewer = getAgent("reviewer@agy_google/gemini-3.8-flash-high");
 const implementer = getAgent("implementer@openai/gpt-6-astra");
 
 test("every declared format renders every seat without throwing", () => {

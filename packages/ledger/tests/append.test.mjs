@@ -57,6 +57,7 @@ test('SY5: an external edit after caching is still caught, even with the mtime p
   const e = JSON.parse(lines[2]);
   e.order_sig = (e.order_sig[0] === 'A' ? 'B' : 'A') + e.order_sig.slice(1);
   const edited = [...lines.slice(0, 2), JSON.stringify(e), ...lines.slice(3)].join('\n') + '\n';
+  // test-lint: allow truncated-sequence -- edited is the WHOLE file rebuilt from lines.slice(0, 2), the edited entry and lines.slice(3), no line dropped; the two whole files' lengths are compared
   assert.equal(edited.length, original.length, 'the edit keeps the file size');
   const {atime, mtime} = fs.statSync(file);
   fs.writeFileSync(file, edited);

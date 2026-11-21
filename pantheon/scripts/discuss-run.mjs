@@ -1,6 +1,20 @@
 #!/usr/bin/env node
 // Four seats hold an actual discussion, through the live view so it is watchable.
+//
+// GEMINI BILLING (register L-148; docs/billing-policy.md): this script is an HTTP CLIENT of the view server and holds NO
+// billing authority. Every provider call happens in the server process, which admits and charges each Gemini request
+// itself (bin/pantheon-view.mjs --gemini-api-primary N); nothing this script sends can authorize one, so a billing flag
+// given here is refused at startup. A seat the server refuses is printed with its code and recovery condition and
+// recorded as that seat's failed turn; the other seats go on.
 import { runDiscussion, selfInterestedStances } from "../src/swarm/discuss.mjs";
+import { FLAG_OF, GEMINI_BILLING_INVALID, GEMINI_BILLING_REFUSALS, USAGE_FLAG } from "../src/route/gemini-billing.mjs";
+
+const billingFlag = process.argv.slice(2).find(a => [...Object.values(FLAG_OF), USAGE_FLAG].some(f => a === f || a.startsWith(`${f}=`)));
+if (billingFlag) {
+  console.error(`discuss-run: ${GEMINI_BILLING_INVALID}: ${billingFlag.split("=")[0]} is not taken here: this script only sends turns to the view server, `
+    + "and Gemini billing is authorized only by that server (start pantheon-view with --gemini-api-primary N); nothing ran");
+  process.exit(2);
+}
 
 const base = process.env.PANTHEON_VIEW ?? "http://127.0.0.1:7777";
 const question = process.argv[2] ??
@@ -27,18 +41,28 @@ const SEATS = {
 };
 const state = async () => (await (await fetch(`${base}/seats`)).json()).state;
 
+// A seat's failed turn, as the server reported it. A billing refusal is printed whole (its code and the condition that
+// would admit it) and its code and recovery lead the failure the discussion records for the seat.
+function refusedSeat(seat, round, res) {
+  const why = res?.why ?? "failed";
+  if (!(GEMINI_BILLING_REFUSALS.includes(res?.code) || res?.recovery)) return why;
+  console.log(`gemini_refused ${JSON.stringify({ seat, round, code: res.code ?? null, recovery: res.recovery ?? null })}`);
+  return `${res.code}: refused by the view server's Gemini billing policy; recovery: ${res.recovery ?? "none stated"} (${why})`;
+}
+
 // Each seat keeps ONE conversation for the whole discussion (purpose "discuss"), so its own prior
 // turns are its context and the prompt only has to carry what the OTHERS said.
 async function runSeat(seat, prompt, round) {
   const s = SEATS[seat];
-  const label = `${seat} · discuss`;
+  // An identifier (letters, digits, . _ : -): the view server refuses any other label with 400 before the turn runs.
+  const label = `${seat}.discuss`;
   const t0 = Date.now();
   const r = await fetch(`${base}/turn`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ vendor: s.vendor, model: s.model, label, purpose: "discuss", prompt }),
   }).then(x => x.json());
   const ok = r?.results?.[0]?.ok === true;
-  if (!ok) return { ok: false, why: r?.results?.[0]?.why ?? "failed", ms: Date.now() - t0 };
+  if (!ok) return { ok: false, why: refusedSeat(seat, round, r?.results?.[0]), ms: Date.now() - t0 };
   return { ok: true, text: (await state())[label]?.text ?? "", ms: Date.now() - t0 };
 }
 

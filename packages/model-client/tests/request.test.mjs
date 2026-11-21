@@ -55,7 +55,8 @@ test('Grok replay preserves encrypted reasoning/tool item order and applies a sc
   const history=[{role:'user',content:'question'}, {type:'reasoning',id:'r1',encrypted_content:'opaque\u0000bytes=='},
     {type:'function_call',call_id:'c1',name:'lookup',arguments:'{}'},{type:'function_call_output',call_id:'c1',output:'done'}];
   const {request}=prepareRequest(call('xai','grok-4.7',{history,continuity:'replay'}));
-  assert.deepEqual(request.input.slice(0,-1),history);
+  // The whole input: the replayed history unchanged, then the prompt as the one new user item.
+  assert.deepEqual(request.input,[...history,{role:'user',content:'Implement the scoped contract.'}]);
   assert.ok(request.include.includes('reasoning.encrypted_content'));
   assert.equal(request.store,false);
   assert.equal(request.prompt_cache_key,cacheKey({scope,sessionId:'s1',vendor:'xai',model:'grok-4.7'}));

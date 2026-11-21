@@ -11,7 +11,7 @@
 //
 // Inputs are entries, never edits: a changed fact is a new `facts` entry, and decisions cite the one
 // they used. That is the Merkle cascade, applied to routing.
-import {verifyEscalation, PROTOCOL} from '../route/protocol.mjs';
+import {verifyEscalation, PROTOCOLS} from '../route/protocol.mjs';
 import {chairContributions, CONTRIBUTIONS_SCHEMA} from '../board/contributions.mjs';
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {LANES} from '../config/models.mjs';
@@ -68,7 +68,7 @@ export function pantheonKinds({authors = {}, board = null, scopes = boardScopes(
     },
     escalation: {
       authors: decisions,
-      validate: p => (p?.schema === PROTOCOL && typeof p.digest === 'string' ? null : 'an escalation is a protocol record'),
+      validate: p => (PROTOCOLS.includes(p?.schema) && typeof p.digest === 'string' ? null : 'an escalation is a protocol record'),
       rederive: (e, view) => {
         const facts = one(view, e.derived_from, 'facts'), seating = one(view, e.derived_from, 'seating');
         if (!facts || !seating) return 'an escalation cites the facts and the seating it was decided under';

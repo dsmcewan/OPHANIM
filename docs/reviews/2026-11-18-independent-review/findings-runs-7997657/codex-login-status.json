@@ -1,0 +1,20 @@
+{
+  "checked_at_utc": "2026-11-18T23:35:46.742453+00:00",
+  "checked_at_local": "2026-11-18T18:35:46.742453-05:00",
+  "timezone": "America/New_York",
+  "command": [
+    "codex",
+    "login",
+    "status"
+  ],
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "WARNING: failed to clean up stale arg0 temp dirs: Permission denied (os error 13)\nLogged in using ChatGPT\n",
+  "version_command": [
+    "codex",
+    "--version"
+  ],
+  "version_exit_code": 0,
+  "version_stdout": "codex-cli 0.169.0\n",
+  "version_stderr": "WARNING: failed to clean up stale arg0 temp dirs: Permission denied (os error 13)\n"
+}

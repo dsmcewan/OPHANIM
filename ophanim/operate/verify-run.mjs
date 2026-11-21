@@ -1,0 +1,33 @@
+#!/usr/bin/env node
+// THE FRESH-PROCESS VERIFIER of a live run (live-run.mjs). The launcher spawns this file with `node`, in a new
+// process that shares no memory, no open ledger handle and no cached head with the process that ran the ticks, and
+// records ITS verdict in run.json (independent review, assignment 3, question 10: a fresh reader in the same process
+// is not a fresh process).
+//
+//   node ophanim/operate/verify-run.mjs '<json: {workRoot, item, statusRoot, statusBefore: {head, files: {digest}}, verdictFile?, runFile?}>'
+//
+// It re-opens the work ledger read-only (create: false), verifies it, takes the item's stage records FROM THE LEDGER
+// (not from the caller), verifies every run ledger they cite and the status ledger (read-only, compared with the
+// state before the run), and prints one JSON object (freshVerification's shape plus {pid}). With `verdictFile`, the
+// same object is FIRST written to that file and fsync'd, so the verdict does not depend on a stdout pipe reaching the
+// parent (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 10: a child exited 0
+// with no captured verdict). Exit 0 when it verified, 1 when it did not, 2 on a usage error.
+// Must never: write to any ledger, or take a stage list from its caller.
+import fs from 'node:fs';
+import {openWorkLedger} from './work-ledger.mjs';
+import {freshVerification} from './live-run.mjs';
+
+let args;
+try { args = JSON.parse(process.argv[2] ?? ''); } catch { process.stderr.write('usage: verify-run.mjs <json {workRoot, item, statusRoot, statusBefore}>\n'); process.exit(2); }
+let stages = [];
+try { stages = openWorkLedger({root: args.workRoot, create: false}).stages(args.item); } catch { /* freshVerification records the work ledger's failure */ }
+// `runFile` (optional): the run.json to verify too, against the ledgers (independent review round 2, assignment 3
+// (Google gemini-4-carbon, manual, 77480d6), finding 10.1).
+const out = {...freshVerification({workRoot: args.workRoot, stages, statusRoot: args.statusRoot, statusBefore: args.statusBefore, runFile: typeof args.runFile === 'string' ? args.runFile : null}), pid: process.pid, stages: stages.length};
+const line = JSON.stringify(out) + '\n';
+if (typeof args.verdictFile === 'string' && args.verdictFile) {
+  const fd = fs.openSync(args.verdictFile, 'wx', 0o600);
+  try { fs.writeSync(fd, line); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
+process.stdout.write(line);
+process.exitCode = out.ok ? 0 : 1;

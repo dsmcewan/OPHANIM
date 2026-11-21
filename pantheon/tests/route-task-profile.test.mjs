@@ -15,6 +15,7 @@ import { outputBudgetFor, TOKEN_TIERS } from "../src/config/tiers.mjs";
 import { labOf } from "../src/config/models.mjs";
 import { runOpenItem } from "../src/board/run-item.mjs";
 import { withDispatch, WORK } from "./fixtures/dispatch.mjs";
+import { optIn } from "./fixtures/billing.mjs";
 
 const CLASSES = JSON.parse(readFileSync(new URL("../src/config/classes.json", import.meta.url), "utf8"));
 const classOf = m => CLASSES.models[m]?.class;
@@ -23,7 +24,9 @@ const firstSeat = (role, o) => selectSeat(role, o).seat;
 
 test("taskProfile: legacy difficulty maps to a default profile; explicit fields win; every dimension names its basis", () => {
   const easy = taskProfile({ difficulty: "easy" });
-  assert.deepEqual([easy.depth.value, easy.output.value, easy.stakes.value, easy.ambiguity.value], ["light", "s", "normal", "settled"]);
+  // easy carries LOW stakes since 2026-11-17 (owner direction, the fit matrix): with normal stakes its class floor was
+  // standard, so no easy ticket could reach the matrix's easy column.
+  assert.deepEqual([easy.depth.value, easy.output.value, easy.stakes.value, easy.ambiguity.value], ["light", "s", "low", "settled"]);
   const medium = taskProfile({ difficulty: "medium" });
   assert.deepEqual([medium.depth.value, medium.output.value, medium.stakes.value, medium.ambiguity.value], ["standard", "m", "normal", "open"]);
   const hard = taskProfile({ difficulty: "hard" });
@@ -60,7 +63,11 @@ test("stakes from paths: ledger/governance/authority/key/security -> critical (f
   const docs = taskProfile({ difficulty: "hard" }, { paths: ["docs/guide.md", "pantheon/tests/x.test.mjs"] });
   assert.deepEqual(docs.stakes, { value: "low", basis: "derived:paths" }, "tests/docs-only is low, over the legacy hard default");
   const s = selectSeat("implementer", { profile: "fit", task: docs }).selection;
-  assert.equal(s.class_floor.value, "fast");
+  // A floor RAISES a pick and never lowers it (owner direction 2026-11-17): the profile's own floor is fast, and the
+  // hard ticket stays in the hard column.
+  assert.equal(classFloor(docs, "implementer").value, "fast");
+  assert.equal(s.class_floor.value, "frontier");
+  assert.deepEqual([s.matrix.difficulty, s.matrix.raised, s.matrix.pick], ["hard", false, "gemini-4-carbon"]);
   assert.equal(s.requirements.review_labs.value, 1);
   const ordinary = taskProfile({ difficulty: "medium" }, { paths: ["src/feature.mjs"] });
   assert.equal(ordinary.stakes.value, "normal");
@@ -76,29 +83,68 @@ test("fit: two tickets with the same legacy difficulty but different stakes/dept
   for (const role of ["planner", "implementer", "reviewer"]) {
     const a = firstSeat(role, { profile: "fit", task: routine }), b = firstSeat(role, { profile: "fit", task: grave });
     assert.notDeepEqual([a.model, a.effort], [b.model, b.effort], `${role}: ${a.model}@${a.effort} vs ${b.model}@${b.effort}`);
-    assert.ok(CLASSES.order.indexOf(classOf(b.model)) > CLASSES.order.indexOf(classOf(a.model)), `${role}: critical stakes seat a higher class`);
+    // Critical stakes raise the matrix column (medium -> hard). The class rises with it, except where the matrix's
+    // medium and hard picks share a class (the planner: both of its picks are frontier).
+    const col = x => ["easy", "medium", "hard"].indexOf(x.selection.matrix.difficulty);
+    assert.ok(col(b) > col(a), `${role}: critical stakes seat a higher matrix column`);
+    assert.equal(b.selection.matrix.raised, true);
+    assert.ok(CLASSES.order.indexOf(classOf(b.model)) >= CLASSES.order.indexOf(classOf(a.model)), `${role}: and never a lower class`);
+    if (role !== "planner") assert.ok(CLASSES.order.indexOf(classOf(b.model)) > CLASSES.order.indexOf(classOf(a.model)), `${role}: critical stakes seat a higher class`);
   }
   // And with no explicit dimension, the legacy band still discriminates under `fit`.
   assert.notDeepEqual(firstSeat("implementer", { profile: "fit", difficulty: "easy" }), firstSeat("implementer", { profile: "fit", difficulty: "hard" }));
 });
 
-test("argo and legacy are unchanged: the same picks for every role and the same policy hashes as before fit existed", () => {
-  // Pinned from the tree before this change (e481e77).
-  assert.equal(selectionPolicy("argo").hash, "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56");
-  assert.equal(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d");
-  const ARGO = { planner: "claude-fable-5-2,gemini-4-carbon,gpt-6-astra", implementer: "gpt-6-astra,claude-fable-5-2,gemini-4-carbon",
-    reviewer: "grok-4.7,gemini-4-carbon", scout: "grok-4.3", synthesis: "gemini-4-carbon", fast_loop: "gemini-4-argon" };
+test("argo was re-pinned 2026-11-17 when its Google seats went through Antigravity first; legacy was re-pinned 2026-11-17 when the Claude-via-Antigravity rungs were removed, and again when the Antigravity Gemini fallbacks were appended", () => {
+  // argo: RE-PINNED 2026-11-17, owner direction: Gemini goes through Antigravity first. It was
+  // sha256:d055a577...ee56 from the tree before fit existed (e481e77) until then. The seat table is the same; the
+  // policy now also hashes how its Google seats are served (the `-high` Antigravity lane each starts on, and the rule
+  // that keeps the metered API id only as that lane's 429/quota failover), so it is a different policy and must not
+  // be reported under the old hash.
+  assert.equal(selectionPolicy("argo").hash, "sha256:f698663054f75b33a39ba38f37ad13b5566ef899c585ab063cafff4df039d5e0");
+  assert.notEqual(selectionPolicy("argo").hash, "sha256:d055a577fcff3536e3d0692deab71821d49b78f48bbe5b6ba188065bdcf9ee56");
+  // legacy: RE-PINNED 2026-11-17. It was sha256:276ee015...b07d (e481e77) until the three Claude rungs that ran
+  // through Antigravity left the seating tables (owner direction: Antigravity serves Gemini models only). The
+  // legacy policy hashes those tables, so the hash and the implementer candidates below changed with them.
+  // RE-PINNED AGAIN the same day, from sha256:ab6ad2bd...2969, when the unbanded Antigravity Gemini fallbacks
+  // were appended to the planner and implementer ladders (owner direction: "seat Carbon and the other Gemini
+  // ids through Antigravity"). They trail every candidate list below and lead none.
+  // RE-PINNED 2026-11-19, from sha256:87225451...8df9, when the reviewer reseat and the judge's Google seat moved from
+  // gemini-3.6-flash (no Antigravity lane: served by the metered Gemini API even with the metered failover off) to the
+  // gemini-3.8-flash-high lane (independent review round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6),
+  // finding 6). The legacy policy hashes the seating tables.
+  assert.equal(selectionPolicy("legacy").hash, "sha256:0000f574015cf50f5ebcd93e7284df2581412546035a516296a49c4a2724d7e3");
+  assert.notEqual(selectionPolicy("legacy").hash, "sha256:87225451d514070ffba7a5468174b8230aa3343988a58a73fc748f83b9208df9",
+    "the legacy policy that seated gemini-3.6-flash is a different policy and must not be reported under the same hash");
+  assert.notEqual(selectionPolicy("legacy").hash, "sha256:ab6ad2bdb11347f3b79d188a78219e35c898c6db92eb4599e2a8f503f7ae2969",
+    "the legacy policy from before the Antigravity Gemini fallbacks is a different policy and must not be reported under the same hash");
+  assert.notEqual(selectionPolicy("legacy").hash, "sha256:276ee015018d940fb1c94aca42d9da1c3f1a3e55dc116deccc76726ab6b9b07d",
+    "the pre-2026-11-17 legacy policy is a different policy and must not be reported under the same hash");
+  // Each Google seat: its Antigravity lane, then the metered API id as that lane's quota failover.
+  const ARGO = { planner: "claude-fable-5-2,gemini-4-carbon-high,gemini-4-carbon,gpt-6-astra", implementer: "gpt-6-astra,claude-fable-5-2,gemini-4-carbon-high,gemini-4-carbon",
+    reviewer: "grok-4.7,gemini-4-carbon-high,gemini-4-carbon", scout: "grok-4.3", synthesis: "gemini-4-carbon-high,gemini-4-carbon", fast_loop: "gemini-4-argon-high,gemini-4-argon" };
   const task = taskProfile({ difficulty: "easy", stakes: "critical", depth: "max" });
   for (const [role, want] of Object.entries(ARGO)) for (const difficulty of ["easy", "medium", "hard"]) {
     const s = selectSeat(role, { profile: "argo", difficulty, task });
     assert.equal(s.candidates.map(c => c.model).join(","), want, `${role}/${difficulty}`);
     assert.equal(s.candidates.map(c => c.model).join(","), [...new Set(frontierCandidates(role).map(c => c.model))].join(","));
     assert.ok(s.candidates.every(c => c.effort === undefined), "argo sets no up-front effort");
+    for (const c of s.candidates.filter(c => c.vendor === "agy_google" && c.transport === "api")) {
+      assert.deepEqual(c.quota_failover, { base: c.model, lanes: [`${c.model}-high`] }, `${role}: the metered API id is only its lane's quota failover`);
+      assert.equal(c.selection.quota_failover.used, false);
+    }
   }
-  const LEGACY = { easy: "gpt-6-luna,claude-sonnet-4-6,gpt-6-astra,gpt-6-sol", medium: "gpt-6-sol,claude-sonnet-4-6,gpt-6-astra,gpt-6-luna",
-    hard: "claude-sonnet-4-6,gpt-6-astra,gpt-6-sol,gpt-6-luna" };
+  const LEGACY = { easy: "gpt-6-luna,gpt-6-astra,gpt-6-sol,gemini-4-carbon-high,gemini-4-argon-high",
+    medium: "gpt-6-sol,gpt-6-astra,gpt-6-luna,gemini-4-carbon-high,gemini-4-argon-high",
+    hard: "gpt-6-astra,gpt-6-sol,gpt-6-luna,gemini-4-carbon-high,gemini-4-argon-high" };
   for (const [difficulty, want] of Object.entries(LEGACY)) {
     assert.equal(selectSeat("implementer", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
+  }
+  const LEGACY_PLANNER = { easy: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol,gemini-4-carbon-high",
+    medium: "claude-opus-5-5,claude-fable-5-2,gpt-6-sol,gemini-4-carbon-high",
+    hard: "claude-fable-5-2,claude-opus-5-5,gpt-6-sol,gemini-4-carbon-high" };
+  for (const [difficulty, want] of Object.entries(LEGACY_PLANNER)) {
+    assert.equal(selectSeat("planner", { profile: "legacy", difficulty }).candidates.map(c => c.model).join(","), want);
   }
   assert.notEqual(selectionPolicy("fit").hash, selectionPolicy("argo").hash);
 });
@@ -144,9 +190,12 @@ test("effort maps onto each model's OWN documented ladder, and the mapping is re
 });
 
 test("fit fallbacks cross labs at the same class before stepping class, and never go below the floor", () => {
-  for (const [role, stakes] of [["implementer", "critical"], ["implementer", "low"], ["planner", "normal"], ["reviewer", "normal"]]) {
+  // The matrix pick leads (fit-matrix.mjs, owner direction 2026-11-17); the rule below is the order AFTER it. A metered
+  // Gemini API id stands behind its Antigravity lane as a quota failover and is not a place in the lab rotation.
+  for (const [role, stakes] of [["planner", "critical"], ["reviewer", "low"], ["planner", "normal"], ["reviewer", "normal"]]) {
     const { candidates, selection } = selectSeat(role, { profile: "fit", task: taskProfile({ difficulty: "medium", stakes }) });
-    const models = [...new Map(candidates.map(c => [c.model, c])).values()];
+    assert.equal(candidates[0].selection.eligibility, "fit-matrix", `${role}/${stakes}: the matrix pick leads`);
+    const models = [...new Map(candidates.filter(c => c.selection.eligibility !== "fit-matrix" && !c.quota_failover).map(c => [c.model, c])).values()];
     const rank = c => CLASSES.order.indexOf(classOf(c.model));
     const floor = CLASSES.order.indexOf(selection.class_floor.value);
     for (const [i, c] of models.entries()) {
@@ -155,16 +204,32 @@ test("fit fallbacks cross labs at the same class before stepping class, and neve
     }
     for (const cls of new Set(models.map(rank))) {
       const inClass = models.filter(c => rank(c) === cls), labs = new Set(inClass.map(c => labOf(c.vendor, c.model)));
-      const head = inClass.slice(0, labs.size).map(c => labOf(c.vendor, c.model));
-      assert.equal(new Set(head).size, labs.size, `${role}/${stakes}: one of each lab before a second from any (${inClass.map(c => c.model)})`);
+      // Where each lab first appears in the class: one of each lab before a second from any means the first appearances
+      // are exactly the class's first labs.size positions (the rest of the class may repeat a lab).
+      const firstAt = [...labs].map(lab => inClass.findIndex(c => labOf(c.vendor, c.model) === lab)).sort((a, b) => a - b);
+      assert.deepEqual(firstAt, [...labs].map((_, i) => i), `${role}/${stakes}: one of each lab before a second from any (${inClass.map(c => c.model)})`);
     }
-    assert.ok(models.some((c, i) => i && labOf(c.vendor, c.model) !== labOf(models[0].vendor, models[0].model)), "the first fallback set reaches another lab");
+    assert.ok(models.some(c => labOf(c.vendor, c.model) !== labOf(candidates[0].vendor, candidates[0].model)), "the fallback set reaches another lab");
+  }
+  // The implementer's order is its matrix ladder, nothing else (owner direction 2026-11-19: the Gemini API itself, with
+  // no Antigravity lane in front and no failover seat behind).
+  for (const [stakes, want] of [["low", "gemini-4-neon,gemini-4-argon"], ["critical", "gemini-4-carbon,gemini-4-hydrogen,gemini-4-argon"]]) {
+    assert.equal(selectSeat("implementer", { profile: "fit", task: taskProfile({ difficulty: "medium", stakes }) }).candidates.map(c => c.model).join(","), want, `implementer/${stakes}`);
   }
 });
 
 test("fit candidates come from the whole registry the role's labs allow, and record which basis admitted each", () => {
   const registry = registryModels();
-  assert.equal(registry.length, 21, "18 API registry models + 3 lane models");
+  // 19 API models since 2026-11-17: gemini-4-hydrogen (owner-stated), the quota failover of the Hydrogen lanes.
+  assert.equal(registry.length, 32, "19 API registry models + the 13 live lane models; retired lanes are never candidates");
+  const laneModels = registry.map(r => r.model).filter(m => /^gemini-(3\.8-flash|4-(carbon|argon|hydrogen))-(low|medium|high|xhigh)$/.test(m));
+  assert.deepEqual(laneModels.sort(), [
+    "gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium",
+    "gemini-4-argon-high", "gemini-4-argon-low", "gemini-4-argon-medium",
+    "gemini-4-carbon-high", "gemini-4-carbon-low", "gemini-4-carbon-medium",
+    "gemini-4-hydrogen-high", "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-xhigh",
+  ], "the 13 live Antigravity Gemini lanes (declared 2026-11-17), seated or not, are fit candidates");
+  for (const retired of ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]) assert.ok(!registry.some(r => r.model === retired), `${retired} is retired`);
   for (const { model } of registry) {
     const c = CLASSES.models[model];
     assert.ok(c && CLASSES.order.includes(c.class), `${model} has a declared class`);
@@ -172,11 +237,13 @@ test("fit candidates come from the whole registry the role's labs allow, and rec
     assert.ok(["VENDOR", "TASTE"].includes(c.basis), model);
     if (c.basis === "VENDOR") assert.ok(c.source && c.quote, `${model}: a VENDOR class carries its quoted source`);
   }
-  const { candidates } = selectSeat("implementer", { profile: "fit", task: taskProfile({ stakes: "critical" }) });
+  // Shown on the planner: under the fit matrix the implementer's order is its lane ladder alone (above).
+  const { candidates } = selectSeat("planner", { profile: "fit", task: taskProfile({}) });
   const seen = new Map(candidates.map(c => [c.model, c.selection.eligibility]));
+  assert.equal(seen.get("claude-opus-5-5"), "fit-matrix", "the matrix pick");
   assert.equal(seen.get("gpt-6-sol"), "role-table");
   assert.match(seen.get("gpt-6.1-sol"), /^lab-allowed:openai$/, "a registry model the role's tables never named, admitted by lab");
-  assert.ok(!candidates.some(c => labOf(c.vendor, c.model) === "xai"), "a lab no implementer table allows is not reached");
+  assert.ok(!candidates.some(c => labOf(c.vendor, c.model) === "xai"), "a lab no planner table allows is not reached");
   const r = selectSeat("implementer", { profile: "fit", task: taskProfile({}) }).selection;
   assert.equal(r.kind.filter, "unfiltered");
   assert.match(r.kind.why, /no cited capability fact/);
@@ -187,7 +254,15 @@ test("fit still excludes unrecorded windows (M7) against a measured context esti
   for (const lane of ["claude-sonnet-4-6", "claude-opus-4-6-thinking", "gemini-3.8-flash-high"]) {
     assert.ok(!s.candidates.some(c => c.model === lane), `${lane} is not admitted`);
   }
-  assert.ok(s.selection.excluded.some(e => e.model === "claude-sonnet-4-6" && /window unrecorded/.test(e.why)));
+  // The retired Claude lanes are not candidates at all, so they are not listed as excluded either.
+  assert.ok(!s.selection.excluded.some(e => /^claude-(sonnet|opus)-4-6/.test(e.model)));
+  // Every LIVE lane has a cited window since 2026-11-17 (lanes.json, owner direction), so the live lane is now
+  // admitted on that bound and refused beyond it; no live candidate is left with an unrecorded window to exclude.
+  const scout = selectSeat("scout", { profile: "fit", needsContext: 3000, task: taskProfile({ difficulty: "easy" }) });
+  assert.ok(scout.candidates.some(c => c.model === "gemini-3.8-flash-high"), "the lane is admitted on its cited window");
+  assert.ok(!scout.selection.excluded.some(e => /window unrecorded/.test(e.why)), JSON.stringify(scout.selection.excluded));
+  assert.throws(() => selectSeat("scout", { profile: "fit", needsContext: 2_000_000, task: taskProfile({ difficulty: "easy" }) }), /no admitted candidate/,
+    "work larger than every cited window is admitted nowhere, the lanes included");
   assert.deepEqual(s.selection.task.context, { value: 3000, basis: "derived:prompt-chars" });
   const big = selectSeat("reviewer", { profile: "fit", needsContext: 600000, task: taskProfile({}) });
   assert.ok(big.candidates.every(c => !/^grok-4\.[567]$/.test(c.model)), "500k-window models are excluded for a 600k estimate");
@@ -214,8 +289,8 @@ test("board tickets may declare the fit dimensions; a value outside a dimension'
 });
 
 test("fit through the real dispatcher: every turn records the profile, and the request carries the mapped effort", async () => {
-  await withDispatch(async ({ spec, opts, calls }) => {
-    const r = await runOpenItem(spec("fitRun", { difficulty: "medium", depth: "max" }), opts({ profile: "fit" }));
+  await withDispatch(async ({ spec, opts, calls, agy }) => {
+    const r = await runOpenItem(spec("fitRun", { difficulty: "medium", depth: "max" }), opts({ profile: "fit", billing: optIn({ primary: 100 }) }));
     assert.equal(r.shipped, true, JSON.stringify(r.error));
     const run = JSON.parse(readFileSync(join(r.board, "run.json"), "utf8"));
     assert.ok(run.turns.length >= 4);
@@ -230,13 +305,24 @@ test("fit through the real dispatcher: every turn records the profile, and the r
       assert.ok(turn, `a ${purpose} turn ran`);
       assert.equal(turn.selection.source, "policy");
       const want = turn.selection.effort.value;
+      if (purpose === "work") {
+        // The fit matrix's medium implementer is gemini-4-neon, whose window is unrecorded: it is not admitted against
+        // the prompt's context estimate, so the next rung answers (fit-sdk-routing.test.mjs). On this per-file board the
+        // implementer is one tool-less turn through the Gemini API, at the thinking level the matrix seats the model at
+        // (not the task depth's): no agy CLI lane is started for it.
+        assert.deepEqual([turn.model, turn.transport, want], ["gemini-4-argon", "api", "high"]);
+        assert.match(turn.selection.effort.mapped, /the thinking level the fit matrix seats gemini-4-argon at/);
+        assert.ok(turn.selection.excluded.some(e => e.model === "gemini-4-neon" && /window unrecorded/.test(e.why)), "the pick it could not admit is on the record, with the reason");
+        assert.deepEqual(agy().filter(a => a.agent === "pantheon-implementer"), [], "no agy CLI implementer ran");
+        assert.deepEqual(calls.filter(c => WORK.test(c.prompt)).map(c => [c.vendor, c.model, c.effort]), [["agy_google", "gemini-4-argon", "high"]]);
+        continue;
+      }
       assert.ok(want, `${purpose}: an effort was chosen up front (${turn.model})`);
       const asked = calls.filter(c => c.model === turn.model);
       assert.ok(asked.length, `${purpose}: ${turn.model} was requested`);
       assert.ok(asked.every(c => c.effort === want), `${purpose}: the request carried effort ${want} (got ${asked.map(c => c.effort)})`);
       assert.ok(Number.isInteger(turn.selection.requirements.review_labs.value));
     }
-    const work = calls.filter(c => WORK.test(c.prompt));
-    assert.equal(work.length, 1);
+    assert.equal(run.turns.filter(t => t.purpose === "work").length, 1);
   });
 });

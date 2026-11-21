@@ -1,0 +1,55 @@
+{
+  "assignment": 3,
+  "lab": "xAI",
+  "requested_model": "grok-4.7",
+  "reviewed_commit": "09d490feae4df80effa081d08a02ea240f3dc854",
+  "status": "incomplete",
+  "stop_reason": "grok returned no final text (13659 event(s), 0 unparsed line(s))",
+  "via": "subscription",
+  "transport": "grok-cli",
+  "started_at": "2026-11-19T01:00:22.913Z",
+  "ended_at": "2026-11-19T01:45:12.115Z",
+  "worktree_check": {
+    "changed": [
+      ".review-tests/exec-reliability.test.mjs",
+      ".review-tests/orphan-hang.mjs",
+      ".review-tests/stall-stage.mjs"
+    ],
+    "violations": [],
+    "limits": [
+      "a change inside a directory git already listed as ignored before the run (e.g. node_modules/) is not seen",
+      "only the worktree is checked: a CLI's own sandbox decides what it could write elsewhere"
+    ]
+  },
+  "original_transcript_sha256": "8243904bd3955a85a86201f1567b049c1c935c385f6b23f08fedf63354d877cc",
+  "original_report_transcript_hash_verified": true,
+  "delivered_transcript_sha256": "8243904bd3955a85a86201f1567b049c1c935c385f6b23f08fedf63354d877cc",
+  "credential_prefix_redactions": 0,
+  "reproductions": [
+    {
+      "path": "reproductions/.review-tests/exec-reliability.test.mjs",
+      "original_path": ".review-tests/exec-reliability.test.mjs",
+      "truncated": false,
+      "sha256": "0e61a043ef3e8755f4b55f3085138e91c48276ab13cdaa42e243625ee38ce73a"
+    },
+    {
+      "path": "reproductions/.review-tests/orphan-hang.mjs",
+      "original_path": ".review-tests/orphan-hang.mjs",
+      "truncated": false,
+      "sha256": "3b6728e9062b2fd296b3319f2375a38e0028749d5f10210a8600752295f968f8"
+    },
+    {
+      "path": "reproductions/.review-tests/stall-stage.mjs",
+      "original_path": ".review-tests/stall-stage.mjs",
+      "truncated": false,
+      "sha256": "fa252a060ebe63ef809f229cea8a66db876f5117d0c7889f37cb3499a526b40a"
+    }
+  ],
+  "source_report": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-3/docs/reviews/2026-11-18-independent-review/findings-3-xai.md",
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-09d490f-ropadygg/assignment-3/docs/reviews/2026-11-18-independent-review/findings-3-xai.transcript.json",
+  "served_model_note": "CLI identity is input, not an observed provider model",
+  "provider_served_models": null,
+  "extra_review": false,
+  "recovered_final_answer": true,
+  "recovery_receipt": "grok-assignment-3-recovery.json"
+}

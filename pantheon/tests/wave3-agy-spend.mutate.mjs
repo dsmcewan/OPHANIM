@@ -1,0 +1,200 @@
+#!/usr/bin/env node
+// MUTATION RUNNER for L-504 invariants 3 (the Antigravity model guard) and 4 (no metered Gemini spend the billing policy
+// does not admit), L-124 (the point-of-spend guard of the python SDK seat; split by L-136 into the failover and primary
+// settings), and invariant 2 on the board's contributor rows (an unnamed serving model stays unknown; patch
+// 3b-identity-1): wave 3, sub-wave 3B-1. Every mutation re-introduces
+// a plausible regression of one enumerated path, on a DISPOSABLE COPY of this tree (never the tree itself); the two suites
+// of this work run there, and the mutation is undone.
+//
+//   node pantheon/tests/wave3-agy-spend.mutate.mjs [--only G1,S4] [--log DIR] [--copy-root DIR] [--run-bound-ms N] [--check]
+//   (a run of the suites that does not end within --run-bound-ms, 20 minutes unless given, is killed and reported as HUNG: exit 4)
+//
+// Each mutation names its edits: {file, from, to}, the EXACT text replaced. The runner EXITS NON-ZERO when a target does not
+// occur exactly once (2), when the unmutated suites are not green (3), or when any mutation SURVIVES (1): the suites stay
+// green with it. A mutation with several edits applies all of them (a path guarded twice regresses only when both go).
+// The copy is made under --copy-root (default: the home directory), NOT under /tmp: the agy jail mounts a fresh tmpfs
+// there. The suites need bwrap (they run the fake agy CLI inside the real jail).
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {execFileSync, spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const SUITES = ['pantheon/tests/wave3-agy-guard.test.mjs', 'pantheon/tests/wave3-spend.test.mjs'];
+const AGY = 'pantheon/src/board/agy-cli.mjs', RUN = 'pantheon/src/board/run-item.mjs', SUB = 'pantheon/src/review-runner/subscription.mjs';
+const TURN = 'pantheon/src/sdk/agy-turn.mjs', LIVE = 'pantheon/src/sdk/live.mjs', PIPE = 'pantheon/src/pipeline/turns.mjs', QF = 'pantheon/src/route/quota-failover.mjs';
+const one = (file, from, to) => ({file, from, to});
+// The point-of-spend guard of the board's Gemini API seat, both of its checks (up front, and per request).
+const RUN_API_GUARD = [one(RUN, '    if (geminiApi) {\n      try { geminiAdmission(BILLING, spend); }', '    if (false) {\n      try { geminiAdmission(BILLING, spend); }'),
+  one(RUN, '      const admitRequest = geminiApi\n', '      const admitRequest = false\n')];
+
+export const MUTATIONS = [
+  // ---- invariant 3: the model guard, per entry point -------------------------------------------------------------
+  {id: 'G1', path: 'A1/A2 runAgyCliTurn (single-turn seats, board CLI seats)', what: 'the single-turn seat reads the exit status and quota refusal before the identity (the base order)',
+    edits: [one(AGY, '  if (mismatch) throw agyModelMismatch(mismatch, evidence);\n', '')]},
+  {id: 'G2', path: 'B1/B2 runAgyWorkerTurn (pipeline implementer, review runner)', what: 'the worker reads its failure, timeout and quota refusal before the identity (the base order)',
+    edits: [one(AGY, '  if (mismatch) throw agyModelMismatch(mismatch, more);\n', '')]},
+  {id: 'G3', path: 'A1/A2/B1/B2 every CLI entry point', what: 'the identity check compares the agent only: another model passes the early check',
+    edits: [one(AGY, 'return reported.agent === agent && reported.model === model ? null', 'return reported.agent === agent ? null')]},
+  {id: 'G4', path: 'A1/A2 runAgyCliTurn', what: 'a result with no init is refused without the distinct code or the identities (the base error)',
+    edits: [one(AGY, '    throw agyModelMismatch({ requested: { agent, model }, reported: { agent: init?.agent ?? null, model: init?.model ?? null } }, evidence);',
+      '    throw Object.assign(new Error(`agy CLI identity mismatch: expected ${agent}/${model}, got none/none`), evidence);')]},
+  {id: 'G5', path: 'B1 runAgyWorkerTurn', what: 'a worker result with no init is a lane_failure again: the pipeline ladder steps to another model',
+    edits: [one(AGY, '    throw agyModelMismatch({ requested: { agent, model }, reported: { agent: init?.agent ?? null, model: init?.model ?? null } }, { detail: "identity", ...more });',
+      '    throw laneFailure("stream", `agy CLI identity mismatch: expected ${agent}/${model}, got none/none`, { detail: "identity", ...more });')]},
+  {id: 'G6', path: 'C the python SDK seat', what: 'the SDK seat\'s reported model is not compared: the request is stamped as served (the base)',
+    edits: [one(RUN, 'if ((reported !== null && reported !== model) || (reported === null && sdkRun.status === 0 && out?.ok === true)) {', 'if (false) {')]},
+  {id: 'G7', path: 'B2 the review runner', what: 'a mismatched review run is an ordinary incomplete run again (continuable, its session kept)',
+    edits: [one(SUB, '    if (e.code === AGY_MODEL_MISMATCH) {', '    if (false) {')]},
+  {id: 'G8', path: 'B2 the review runner', what: 'the findings header stamps the lane as served even for a mismatch',
+    edits: [one(SUB, '      ...(r.identity_mismatch ? [`- served_model: none', '      ...(false ? [`- served_model: none')]},
+  {id: 'G9', path: 'A2/C the board', what: 'the failed attempt drops the two identities',
+    edits: [one(RUN, 'provider_requests: laneCharged,\n          ...(e?.identity ? { identity: e.identity } : {}) });', 'provider_requests: laneCharged });')]},
+  {id: 'G10', path: 'A2/C/B the board', what: 'run.error drops the refusal\'s code and identities (the base record)',
+    edits: [one(RUN, ', ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.identity ? { identity: e.identity } : {}) };', ' };')]},
+  // ---- invariant 2 on the board's contributor rows (patch 3b-identity-1): an unnamed serving model stays unknown --------
+  {id: 'I1', path: 'board critique contributor row', what: 'a reviewer turn that named no serving model is recorded with served_model omitted (reads as the model asked)',
+    edits: [one(RUN, '...(sm && sm !== r.model ? { served_model: sm } : !sm ? { served_model: null, served_model_source: "unnamed" } : {}) };', '...(sm && sm !== r.model ? { served_model: sm } : {}) };')]},
+  {id: 'I2', path: 'board work contributor row', what: 'a work turn that named no serving model is recorded with served_model omitted (reads as the model asked)',
+    edits: [one(RUN, '...(typeof workServed === "string" && workServed.trim() ? (workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) : { served_model: null, served_model_source: "unnamed" }) };',
+      '...(workRec?.served_model_source ? { served_model_source: workRec.served_model_source } : {}) };')]},
+  {id: 'I3', path: 'board critique contributor row', what: 'a serving model the reviewer\'s provider named is dropped from the row',
+    edits: [one(RUN, '...(sm && sm !== r.model ? { served_model: sm } : !sm ?', '...(false ? { served_model: sm } : !sm ?')]},
+  {id: 'I4', path: 'board work contributor row', what: 'a serving model the worker\'s provider named is dropped from the row',
+    edits: [one(RUN, '...(typeof workServed === "string" && workServed.trim() && workServed !== made.seat.model ? { served_model: workServed } : {}),', '')]},
+  // ---- invariant 4 / L-124 / L-136: no metered Gemini call the billing policy does not admit, per seat and path ---------
+  {id: 'S1', path: 'L/P liveTurn -> laneFirstTurn, a lane quota refusal', what: 'laneFirstTurn asks the metered API on a lane quota refusal without the policy (only the caller\'s admission)',
+    edits: [one(TURN, '      spendGemini(billing, { kind: "failover", vendor: spare.vendor', '      ((_b, _a, admit) => admit())(billing, { kind: "failover", vendor: spare.vendor')]},
+  {id: 'S2', path: 'L/P liveTurn -> laneFirstTurn, a Gemini seat with no lane (primary)', what: 'the primary guard removed: a laneless Gemini seat goes to the metered API (laneFirstTurn up front and the API seat per request)',
+    edits: [one(TURN, '  if (!viaLane && isMeteredGemini({ vendor, transport: "api" })) {', '  if (false) {'),
+      one(LIVE, '    const gemini = isMeteredGemini({ vendor, transport: "api" });', '    const gemini = false;')]},
+  {id: 'S3', path: 'L/P liveTurn wiring', what: 'liveTurn does not carry its billing context into laneFirstTurn',
+    edits: [one(LIVE, 'laneFirstTurn({ ...args, billing: args?.billing ?? billing }, { lane: agySingleTurn, api })', 'laneFirstTurn({ ...args, billing: args?.billing ?? null }, { lane: agySingleTurn, api })')]},
+  {id: 'S4', path: 'I the pipeline implementer', what: 'the implementer asks the metered API on a proven quota refusal without the policy',
+    edits: [one(PIPE, '        spendGemini(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer"', '        ((_b, _a, admit) => admit())(billing, { kind: "failover", vendor: spare.vendor, model: spare.model, purpose: "implementer"')]},
+  {id: 'S5', path: 'B(api) the board\'s Gemini API seat (operator seat, ticket pin)', what: 'the point-of-spend guard of the API seat removed (up front and per request)',
+    edits: RUN_API_GUARD},
+  {id: 'S6', path: 'B(sdk) the python SDK seat (L-124)', what: 'the SDK seat\'s point-of-spend guard removed (before the venv check and at the spawn)',
+    edits: [one(RUN, '      try { geminiAdmission(BILLING, spend); }\n      catch (refusal) { progress({ event: "turn.refused", seat: "agy_google", model, detail: refusal.message.slice(0, 300) }); record(); throw refusal; }\n', ''),
+      // L-150: the one charge at the spawn became the charge of each request at the seat's gateway session (seat-session.mjs,
+      // since the relay's retirement, L-724); the guard removed there
+      // keeps the run's own admission (as the old mutation kept admit()) but skips the policy and the usage row.
+      one('pantheon/src/antigravity/seat-session.mjs', '      row = spendGemini(billing, {', '      row = ((b, a, f) => (f(a), a))(billing, {')]},
+  {id: 'S7', path: 'B(sdk) the python SDK seat (L-124, split by L-136)', what: 'the SDK seat is classified as a failover: the failover switch admits a primary seat',
+    edits: [one(RUN, '      const spend = { kind: "primary", vendor: "agy_google", model, purpose, role, transport: "sdk" };', '      const spend = { kind: "failover", vendor: "agy_google", model, purpose, role, transport: "sdk" };')]},
+  {id: 'S8', path: 'B(spare) the walk\'s quota-failover candidate', what: 'both protections of the spare removed: the walk reaches it and the seat is not refused at spend',
+    edits: [one(QF, '      try { geminiAdmission(billing, { kind: "failover", vendor: c.vendor, model: c.model, purpose: c.role ?? null, role: c.role ?? null, transport: "api" }); }', '      try { /* no policy */ }'),
+      ...RUN_API_GUARD]},
+  {id: 'S9', path: 'B the board wiring', what: 'runOpenItem does not carry opts.billing',
+    edits: [one(RUN, 'const BILLING = opts.billing ?? geminiBilling();', 'const BILLING = geminiBilling();')]},
+  {id: 'S10', path: 'B(api) the board\'s Gemini API seat (L-136 split)', what: 'every Gemini API seat is classified as a failover: the failover switch admits an operator\'s or a ticket\'s primary seat',
+    edits: [one(RUN, '    const spend = { kind: geminiKindOf({ quota_failover }), vendor, model, purpose, role: ROLE_OF_PURPOSE[purpose] ?? purpose, transport: "api" };', '    const spend = { kind: "failover", vendor, model, purpose, role: ROLE_OF_PURPOSE[purpose] ?? purpose, transport: "api" };')]},
+  {id: 'S11', path: 'L laneFirstTurn, a Gemini seat with no lane (L-136 split)', what: 'the laneless Gemini seat is classified as a failover: the failover switch admits primary execution',
+    edits: [one(TURN, '    geminiAdmission(billing, { kind: "primary", vendor, model, purpose: seat?.role ?? null', '    geminiAdmission(billing, { kind: "failover", vendor, model, purpose: seat?.role ?? null'),
+      one(TURN, '...sig, billing, billingKind: "primary", ...(admits ? { admitRequest } : ch) });', '...sig, billing, billingKind: "failover", ...(admits ? { admitRequest } : ch) });')]},
+];
+
+const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
+function copyTree(dest) {
+  const files = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard', '-z'], {encoding: 'utf8', maxBuffer: 1 << 28}).split('\0').filter(Boolean);
+  for (const f of files) {
+    const from = path.join(ROOT, f);
+    if (!fs.existsSync(from) || fs.lstatSync(from).isDirectory()) continue;
+    fs.mkdirSync(path.dirname(path.join(dest, f)), {recursive: true});
+    fs.copyFileSync(from, path.join(dest, f));
+  }
+  for (const nm of ['node_modules', 'pantheon/node_modules', 'packages/model-client/node_modules', 'packages/ledger/node_modules']) {
+    if (fs.existsSync(path.join(ROOT, nm))) fs.symlinkSync(path.join(ROOT, nm), path.join(dest, nm), 'dir');
+  }
+  const g = (...a) => execFileSync('git', ['-C', dest, ...a], {stdio: 'ignore'});
+  g('init', '-q', '-b', 'main'); g('-c', 'user.name=mutation', '-c', 'user.email=mutation@example.invalid', 'add', '-A');
+  g('-c', 'user.name=mutation', '-c', 'user.email=mutation@example.invalid', 'commit', '-q', '-m', 'mutation copy');
+}
+/** The longest ONE run of the suites may take (--run-bound-ms). A run that does not end is not a result: it is HUNG. */
+const RUN_BOUND_MS = 20 * 60_000;
+const bound = Number(arg('--run-bound-ms', RUN_BOUND_MS));
+if (!Number.isInteger(bound) || bound < 1) { console.error('--run-bound-ms is a positive whole number of milliseconds'); process.exit(2); }
+/** After a run that was cut: kill what it left working in the copy (best effort; found through /proc, so on Linux). */
+const reap = dir => {
+  let n = 0;
+  try {
+    for (const p of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(p) || Number(p) === process.pid) continue;
+      let cwd; try { cwd = fs.readlinkSync(`/proc/${p}/cwd`); } catch { continue; }
+      if (cwd === dir || cwd.startsWith(dir + path.sep)) { try { process.kill(Number(p), 'SIGKILL'); n += 1; } catch { /* gone */ } }
+    }
+  } catch { /* no /proc here */ }
+  return n;
+};
+// A test that fails and leaves a listener or a child behind keeps `node --test` from ending. That is a defect of the
+// TEST (the same hang would hold up CI on a real regression), and it is reported as one, not waited for forever.
+const bounded = (dir, r) => {
+  const hung = r.error?.code === 'ETIMEDOUT';
+  const reaped = hung ? reap(dir) : 0;
+  return {hung, out: `${r.stdout ?? ''}${r.stderr ?? ''}${hung ? `\n[runner] the run did not end within ${bound} ms and was killed; ${reaped} process(es) left in the copy were killed too\n` : ''}`};
+};
+// KILLED means a test FAILED. A run that only timed a test out, or ended without a count, went red too, and says so; a
+// run that did not end is not a result at all.
+const outcomeOf = (r, red) => r.hung ? 'hung' : !red ? 'survived' : r.fail > 0 ? 'killed' : r.cancelled > 0 ? 'killed-by-timeout' : 'killed-no-count';
+const LABEL = {killed: 'KILLED  ', survived: 'SURVIVED', hung: 'HUNG    ', 'killed-by-timeout': 'KILLED (a test timed out; none failed)', 'killed-no-count': 'KILLED (the run ended without a count)'};
+const tally = summary => { const n = k => summary.filter(x => x.outcome === k).length;
+  return `${n('killed-by-timeout') + n('killed-no-count') ? ` (${n('killed-by-timeout')} by a timeout only, ${n('killed-no-count')} without a count)` : ''}${n('hung') ? `, ${n('hung')} HUNG` : ''}`; };
+const runSuites = (dir, logFile) => {
+  const r = spawnSync(process.execPath, ['--test', '--test-concurrency=2', '--test-timeout=300000', ...SUITES], {cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28, env: {...process.env}, timeout: bound, killSignal: 'SIGKILL'});
+  const {hung, out} = bounded(dir, r);
+  fs.writeFileSync(logFile, out);
+  const count = k => Number(new RegExp(`^ℹ ${k} (\\d+)`, 'm').exec(out)?.[1] ?? NaN);
+  return {status: r.status, hung, tests: count('tests'), pass: count('pass'), fail: count('fail'), cancelled: count('cancelled'), skipped: count('skipped'),
+    failed: [...new Set(out.split('\n').filter(l => /^\s*✖ /.test(l) && !/failing tests/.test(l)).map(l => l.trim().replace(/ \(\d+(\.\d+)?ms\)$/, '')))]};
+};
+
+const only = arg('--only')?.split(',') ?? null;
+const chosen = MUTATIONS.filter(m => !only || only.includes(m.id));
+// Every edit must apply EXACTLY ONCE on this tree, before anything is run.
+const bad = chosen.flatMap(m => m.edits.map(e => ({m, e, n: fs.readFileSync(path.join(ROOT, e.file), 'utf8').split(e.from).length - 1}))).filter(x => x.n !== 1);
+if (bad.length) {
+  for (const {m, e, n} of bad) console.error(`${m.id}: the target occurs ${n} time(s) in ${e.file}; a mutation applies exactly once`);
+  process.exit(2);
+}
+if (process.argv.includes('--check')) { console.log(`${chosen.length} mutation(s), every target occurring exactly once`); process.exit(0); }
+const copyRoot = path.resolve(arg('--copy-root', os.homedir()));
+const logDir = path.resolve(arg('--log', path.join(copyRoot, `wave3-agy-spend-mutations-${Date.now()}`)));
+fs.mkdirSync(logDir, {recursive: true});
+const copy = fs.mkdtempSync(path.join(copyRoot, 'wave3-agy-spend-mutate-'));
+let exit = 0;
+const summary = [];
+try {
+  copyTree(copy);
+  const baseline = runSuites(copy, path.join(logDir, 'baseline.log'));
+  console.log(`baseline: ${baseline.pass}/${baseline.tests} pass, ${baseline.fail} fail, ${baseline.cancelled} cancelled, ${baseline.skipped} skipped${baseline.hung ? `; DID NOT END within ${bound} ms` : ''}`);
+  if (baseline.hung || baseline.status !== 0 || baseline.fail || baseline.cancelled || baseline.skipped || !(baseline.tests > 0)) {
+    console.error('the unmutated suites are not green: no mutation result would mean anything');
+    exit = 3;
+  } else {
+    for (const m of chosen) {
+      const originals = new Map();
+      for (const e of m.edits) {
+        const file = path.join(copy, e.file);
+        if (!originals.has(file)) originals.set(file, fs.readFileSync(file, 'utf8'));
+        const before = fs.readFileSync(file, 'utf8');
+        fs.writeFileSync(file, before.replace(e.from, () => e.to));
+        if (fs.readFileSync(file, 'utf8') === before) { console.error(`${m.id}: EDIT DID NOT APPLY in ${e.file}`); exit = 2; }
+      }
+      const r = runSuites(copy, path.join(logDir, `${m.id}.log`));
+      for (const [file, text] of originals) fs.writeFileSync(file, text);
+      const killed = !r.hung && r.status !== 0 && (r.fail > 0 || r.cancelled > 0 || !Number.isFinite(r.tests));
+      const outcome = outcomeOf(r, killed);
+      summary.push({id: m.id, path: m.path, what: m.what, files: [...new Set(m.edits.map(e => e.file))], killed, outcome, tests: r.tests, pass: r.pass, fail: r.fail, cancelled: r.cancelled, failed: r.failed.slice(0, 12)});
+      console.log(`${m.id} ${LABEL[outcome]} ${r.pass}/${r.tests} pass, ${r.fail} fail  [${m.path}] ${m.what}`);
+      for (const f of r.failed.slice(0, 4)) console.log(`    ${f.slice(0, 200)}`);
+      if (r.hung) { console.log(`    the suites did not end within ${bound} ms: a test that fails here leaves something running (a listener, a child); fix the test`); exit = Math.max(exit, 4); }
+      else if (!killed) exit = Math.max(exit, 1);
+    }
+  }
+} finally {
+  fs.writeFileSync(path.join(logDir, 'summary.json'), JSON.stringify({root: ROOT, suites: SUITES, mutations: summary}, null, 2) + '\n');
+  fs.rmSync(copy, {recursive: true, force: true});
+}
+console.log(`${summary.filter(x => x.killed).length}/${summary.length} killed${tally(summary)}; logs: ${logDir}`);
+process.exit(exit);

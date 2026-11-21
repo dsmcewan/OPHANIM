@@ -6,6 +6,9 @@
 //
 // A log holding several npm scripts (`npm test` runs three packages) is split at each `> name@version
 // script` header, so every suite is counted on its own. A log that is missing is reported, not skipped.
+// `cancelled` is its own column, in bold when non-zero: node:test counts a timed-out test, or a file cut off before
+// its tests finished, as cancelled and NOT as fail, so `fail 0` alone does not mean the suite ran (L-503). The
+// pass/fail judgement is scripts/test-gates/check.mjs; this table only shows the counts.
 //
 // Inputs:  LABEL=LOG arguments; the status ledger, verified by running packages/ledger/status.mjs verify.
 // Outputs: Markdown on stdout; exit code 1 if the status ledger does not verify.
@@ -44,10 +47,10 @@ export function summary(logs, {statusVerify = null} = {}) {
   return [
     '## Verification summary',
     '',
-    '| Suite | Tests | Pass | Fail | Skipped | Todo |',
-    '|---|---|---|---|---|---|',
-    ...rows.map(r => (r.missing ? `| ${r.suite} | no result (the step did not run or did not finish) | | | | |`
-      : `| ${r.suite} | ${n(r.tests)} | ${n(r.pass)} | ${n(r.fail)} | ${n(r.skipped)} | ${n(r.todo)} |`)),
+    '| Suite | Tests | Pass | Fail | Skipped | Todo | Cancelled |',
+    '|---|---|---|---|---|---|---|',
+    ...rows.map(r => (r.missing ? `| ${r.suite} | no result (the step did not run or did not finish) | | | | | |`
+      : `| ${r.suite} | ${n(r.tests)} | ${n(r.pass)} | ${n(r.fail)} | ${n(r.skipped)} | ${n(r.todo)} | ${n(r.cancelled) ? `**${r.cancelled}**` : 0} |`)),
     '',
     ...(statusVerify
       ? ['### Status ledger', '', '`node packages/ledger/status.mjs verify`', '', '```', statusVerify.trim(), '```', '']

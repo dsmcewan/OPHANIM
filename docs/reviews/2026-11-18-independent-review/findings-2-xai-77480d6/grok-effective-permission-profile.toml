@@ -1,0 +1,12 @@
+[permission]
+rules = [
+  { action = "allow", tool = "Read" },
+  { action = "allow", tool = "Grep" },
+  { action = "allow", tool = "Edit" },
+  { action = "allow", tool = "Bash", pattern = "node --test *" },
+  { action = "allow", tool = "Bash", pattern = "npm run test:proof" },
+  { action = "allow", tool = "Bash", pattern = "npm test" },
+]
+
+# Compatibility form for the installed Grok CLI 1.0.44; same six allowances.
+allow = ["Read", "Grep", "Edit", "Bash(node --test *)", "Bash(npm run test:proof)", "Bash(npm test)"]

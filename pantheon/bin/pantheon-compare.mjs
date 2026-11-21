@@ -20,6 +20,14 @@
 // and it spends up to 2 x tickets x --max-provider-calls provider calls, plus n per shipped run with a cycle
 // review. Live and --clients are exclusive.
 //
+// THE GEMINI BILLING POLICY (register L-136; docs/billing-policy.md), both OFF when absent:
+//   --metered-gemini-failover N   the metered Gemini API may answer an Antigravity lane's quota refusal in a run's walk
+//   --gemini-api-primary N        primary Gemini API execution: a Gemini API seat of a run (a ticket's pin), a Google
+//                                 cycle reviewer (served by the API, no lane), a --turn module's Gemini API seat
+// N, a positive integer, bounds the billed requests of that kind for the WHOLE comparison (every ticket, both arms, the
+// cycle reviews), counted from <dir>/gemini-billing.jsonl, written before each request. Malformed or unbudgeted: a usage
+// error. A GEMINI_API_KEY authorizes nothing; with --clients the fake clients' Gemini seats are admitted the same way.
+//
 // Writes the comparison record to --out and prints {record, digest, synthetic, evidence}: `evidence` is the
 // citation a practice disposition carries. It records nothing on any ledger and never writes the status
 // ledger. Exit codes: 0 written, 1 refused, 2 usage.
@@ -29,6 +37,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { readTicket } from "../src/board/operate.mjs";
 import { compareProfiles, compareArms, dispatchRunner, comparisonEvidence } from "../src/practice/compare.mjs";
+import { billingFromFlags, geminiBilling, geminiUsageFile, billingRecord } from "../src/route/quota-failover.mjs";
 
 const REPO_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const argv = process.argv.slice(2);
@@ -42,7 +51,7 @@ for (let i = 0; i < argv.length; i++) {
   if (k === "item") items.push(argv[++i]); else opts[k] = argv[++i];
 }
 function usage(why) {
-  console.error(`${why}\nusage: pantheon-compare --item NAME... --max-provider-calls N --out FILE (--clients MODULE [--turn MODULE] | --live) [--revisions R] [--baseline argo] [--candidate fit] [--question TEXT] [--repo DIR] [--dir WORKDIR]`);
+  console.error(`${why}\nusage: pantheon-compare --item NAME... --max-provider-calls N --out FILE (--clients MODULE [--turn MODULE] | --live) [--revisions R] [--baseline argo] [--candidate fit] [--question TEXT] [--repo DIR] [--dir WORKDIR] [--metered-gemini-failover N] [--gemini-api-primary N]`);
   process.exit(2);
 }
 const int = (k, dflt) => {
@@ -78,17 +87,14 @@ async function liveClients() {
   const clients = {};
   return (v, { pool = v, poolConfig } = {}) => (clients[`${v}:${pool}`] ??= makeClient(v, { OpenAI, GoogleGenAI, Anthropic, poolConfig }));
 }
-async function liveTurn() {
-  const [{ default: OpenAI }, { GoogleGenAI }, { default: Anthropic }, { makeClient, sendTurn }] = await Promise.all([
-    import("openai"), import("@google/genai"), import("@anthropic-ai/sdk"), import("../src/sdk/adapter.mjs")]);
-  const clients = new Map();
-  return async ({ vendor, model, prompt }) => {
-    if (!clients.has(vendor)) clients.set(vendor, makeClient(vendor, { OpenAI, GoogleGenAI, Anthropic }));
-    const r = await sendTurn({ client: clients.get(vendor), vendor, model, prompt, label: `${vendor}-compare-cycle-review` });
-    if (r.complete === false) throw new Error(`${vendor}/${model}: the reply did not complete (${r.terminal_state ?? "unknown"})`);
-    return { text: r.text ?? "", response_id: r.response_id ?? null, served_model: r.served_model ?? null };
-  };
+// The live cycle-review turn: the API seat (src/sdk/live.mjs apiTurn), every Gemini request of it admitted by the policy.
+async function liveTurn(billing) {
+  const { apiTurn } = await import("../src/sdk/live.mjs");
+  return apiTurn({ label: "compare-cycle-review", billing });
 }
+// THE BILLING POLICY, resolved before any work.
+let policy;
+try { policy = billingFromFlags(opts); } catch (e) { usage(e.message); }
 
 try {
   const tickets = items.map(item => {
@@ -96,13 +102,17 @@ try {
     if (t.why) throw Object.assign(new Error(t.why), { code: "TICKET" });
     return { spec: t.spec, digest: t.digest };
   });
+  const workDir = resolve(opts.dir ?? join(repo, "outputs", "compare", `compare-${Date.now()}`));
+  mkdirSync(workDir, { recursive: true });
+  // The comparison's Gemini usage record: one budget per kind across every run and cycle review of it.
+  const billing = geminiBilling({ policy, ledger: geminiUsageFile(join(workDir, "gemini-billing.jsonl")) });
+  const billingShown = () => (r => ({ policy: r.policy, where: r.where, used: { failover: billing.ledger.used("failover"), primary: billing.ledger.used("primary") }, refusals: r.refusals }))(billingRecord(billing));
   const makeClientFor = opts.live ? await liveClients() : await load(opts.clients);
-  const cycleTurn = opts.live ? await liveTurn() : opts.turn ? await load(opts.turn) : null;
+  const { billedTurnModule } = await import("../src/sdk/live.mjs");
+  const cycleTurn = opts.live ? await liveTurn(billing) : opts.turn ? billedTurnModule(await load(opts.turn), billing) : null;
   const providers = opts.live
     ? { kind: "live", clients: "live SDK clients (src/sdk/adapter.mjs makeClient)", turn: "live SDK reviewer turns" }
     : { kind: "fake", clients: moduleId(opts.clients), turn: opts.turn ? moduleId(opts.turn) : null };
-  const workDir = resolve(opts.dir ?? join(repo, "outputs", "compare", `compare-${Date.now()}`));
-  mkdirSync(workDir, { recursive: true });
   const bounds = { maxProviderCalls, revisions, ...(cycleTurn ? { cycle_review: { n, max_attempts: 1 } } : {}) };
   if (measure !== null) {
     // The declared plan is pinned by its bytes: the record carries its path and sha256.
@@ -111,20 +121,20 @@ try {
     if (!plan) usage(`the declared measurement plan ${planFile} does not exist; a measurement runs only against a plan fixed beforehand`);
     const record = await compareArms({ tickets, arms: MEASURES[measure](opts.profile ?? "argo"), bounds: { maxProviderCalls, revisions }, totalProviderCalls,
       providers, plan, question: opts.question ?? "Does the work item's title from the ticket, instead of from a planner model, change in-run results, and at what cost?",
-      runner: dispatchRunner({ makeClientFor, dir: workDir }) });
+      runner: dispatchRunner({ makeClientFor, dir: workDir, runOpts: { billing } }) });
     const out = resolve(opts.out);
     writeFileSync(out, JSON.stringify(record, null, 2) + "\n");
     console.log(JSON.stringify({ record: out, digest: record.digest, synthetic: record.synthetic, evidence: comparisonEvidence(record), plan,
       spent_provider_calls: record.spent_provider_calls, total_provider_calls: record.total_provider_calls,
-      pairs: record.paired.pairs, not_paired: record.paired.unpaired, accepted: record.paired.all.accepted ?? null }, null, 2));
+      pairs: record.paired.pairs, not_paired: record.paired.unpaired, accepted: record.paired.all.accepted ?? null, gemini_billing: billingShown() }, null, 2));
     process.exit(0);
   }
   const record = await compareProfiles({ tickets, baseline: opts.baseline ?? "argo", candidate: opts.candidate ?? "fit", bounds, providers,
-    question: opts.question ?? null, runner: dispatchRunner({ makeClientFor, dir: workDir, cycleTurn, n }) });
+    question: opts.question ?? null, runner: dispatchRunner({ makeClientFor, dir: workDir, cycleTurn, n, runOpts: { billing } }) });
   const out = resolve(opts.out);
   writeFileSync(out, JSON.stringify(record, null, 2) + "\n");
   console.log(JSON.stringify({ record: out, digest: record.digest, synthetic: record.synthetic, evidence: comparisonEvidence(record),
-    accepted: { [record.profiles.baseline.profile]: record.aggregate.baseline.all.accepted, [record.profiles.candidate.profile]: record.aggregate.candidate.all.accepted } }, null, 2));
+    accepted: { [record.profiles.baseline.profile]: record.aggregate.baseline.all.accepted, [record.profiles.candidate.profile]: record.aggregate.candidate.all.accepted }, gemini_billing: billingShown() }, null, 2));
   process.exit(0);
 } catch (err) {
   console.log(JSON.stringify({ refused: err.message, code: err.code ?? null }, null, 2));

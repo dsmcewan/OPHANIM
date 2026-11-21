@@ -65,8 +65,10 @@ test("worker escalation is never prevented: when a fallback in a second lab writ
       // The first implementer revision fails acceptance; its revision is then answered by a fallback in another lab.
       let wrote = 0;
       implement(() => (++wrote === 1 ? "export const ok = false;\n" : "export const ok = true;\n"));
-      // Under fit, a worker's fallbacks cross labs (argo's implementer fallbacks are all one lab). The revision after
-      // the first is refused by quota on the lab that wrote the first, so a fallback in another lab writes it.
+      // Under legacy, a worker's fallbacks cross labs: the revision after the first is refused by quota on the lab that
+      // wrote the first, so a fallback in another lab writes it. (This ran under fit until the fit matrix, owner
+      // direction 2026-11-17: fit's implementer ladder is Antigravity Gemini lanes only, one lab; argo's implementer
+      // stops instead of revising when acceptance fails.)
       let first = null;
       fault((req) => {
         if (!WORK.test(req.prompt ?? "")) return null;
@@ -74,7 +76,7 @@ test("worker escalation is never prevented: when a fallback in a second lab writ
         return req.vendor === first ? { error: Object.assign(new Error("You exceeded your current quota"), { status: 429, code: "insufficient_quota" }) } : null;
       });
       const r = await runBoardItem({ repo, item: "bound-item", statusRoot, makeClientFor, turn: approve, dir: join(repo, "board"), out: join(repo, "bundle"),
-        runOpts: { scouts: ["xai"], planTitle: "ticket", revisions: 3, profile: "fit" } });
+        runOpts: { scouts: ["xai"], planTitle: "ticket", revisions: 3, profile: "legacy" } });
       const run = JSON.parse(readFileSync(join(repo, "board", "run.json"), "utf8"));
       const workLabs = [...new Set(run.turns.filter(t => t.purpose === "work").map(t => t.vendor))];
       assert.ok(workLabs.length >= 2, `a fallback in a second lab wrote a revision (work vendors: ${workLabs})`);

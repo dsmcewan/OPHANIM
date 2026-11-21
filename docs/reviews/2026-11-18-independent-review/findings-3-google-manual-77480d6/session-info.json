@@ -1,0 +1,18 @@
+{
+  "assignment": 3,
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "lab": "Google",
+  "requested_model": "gemini-4-carbon",
+  "lane": "gemini-4-carbon-high",
+  "served_model": "gemini-4-carbon",
+  "served_model_source": "input",
+  "reviewer_override": true,
+  "default_reviewer": "xai/grok-4.7",
+  "transport": "agy-cli (in-session manual run per owner selection)",
+  "conversation_id": "bbe4a2f6-24ba-4777-8863-20e37242310e",
+  "prompt_template_sha256": "5e8fd1ca30c7b88ece7c00876c71b0a02875bdfff93feafb380d569846e8626d",
+  "prompt_sha256": "9fa74037ca5f8b2c94185ce5cf2cb32f706ecc400ca337c75d5cb8c9108b3a1e",
+  "review_test_file": "src/.review-tests/assignment3-reliability.test.mjs",
+  "review_test_result": "15 passed, 0 failed (exit 0)",
+  "findings_file": "findings-3-google.md"
+}

@@ -4,26 +4,31 @@
 // running. Checking only the final HTTP response would pass a server that buffered everything
 // and delivered it at the end — which is the exact failure the view exists to remove, so the
 // assertion is again temporal: at least one delta must reach the SSE client BEFORE /turn returns.
+//
+// Usage: node scripts/view-check.mjs [seat,seat,...] [--gemini-api-primary N --gemini-usage FILE]. THE GEMINI BILLING
+// POLICY (register L-146; docs/billing-policy.md), OFF when absent: an agy_google seat is the metered Gemini API, so it
+// runs only with --gemini-api-primary N, at most N billed requests counted from --gemini-usage FILE (required with it;
+// each request is recorded there before it is sent). Gated in this script's own client factory: src/view/server.mjs is
+// shared with bin/pantheon-view.mjs and is unchanged. A key authorizes nothing.
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { createViewServer } from "../src/view/server.mjs";
-import { makeClient } from "../src/sdk/adapter.mjs";
+import { makeClient, ADAPTERS } from "../src/sdk/adapter.mjs";
+import { operatorGemini } from "../src/sdk/live.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const seats = (process.argv[2] ?? "openai,anthropic").split(",");
+const gemini = operatorGemini(process.argv.slice(2), { script: "view-check", make: v => makeClient(v, { OpenAI, GoogleGenAI, Anthropic }) });
+const seats = (gemini.argv[0] ?? "openai,anthropic").split(",");
 const home = mkdtempSync(join(tmpdir(), "pantheon-view-"));
 let failed = false;
 const say = (ok, line) => { if (!ok) failed = true; console.log(`${ok ? "ok  " : "FAIL"}  ${line}`); };
 
 const models = { anthropic: "claude-haiku-4-5-20251001" };
-const cache = new Map();
-const makeClientFor = v => {
-  if (!cache.has(v)) cache.set(v, makeClient(v, { OpenAI, GoogleGenAI, Anthropic }));
-  return cache.get(v);
-};
+// The model a seat runs is the one the server will ask for (models[v], else the adapter's default): the admission names it.
+const makeClientFor = v => gemini.clientFor(v, { model: models[v] ?? ADAPTERS[v]?.default_model ?? null, purpose: "view-check" });
 
 const { listen, server } = createViewServer({ makeClientFor, home });
 const addr = await listen(0);

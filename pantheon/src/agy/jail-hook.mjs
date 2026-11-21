@@ -1,0 +1,600 @@
+#!/usr/bin/env node
+// THE PRE-MUTATION JAIL: an Antigravity PreToolUse hook (registered in <control_dir>/.agents/hooks.json through the
+// per-unit wrapper <control_dir>/pantheon-jail-hook, which runs `node jail-hook.mjs <jail.json>`).
+//
+// Reads the hook input JSON on stdin (documented fields: toolCall.name, toolCall.args — e.g. TargetFile, CommandLine,
+// Cwd — stepIdx, conversationId, workspacePaths, transcriptPath, modelName; a few other plausible spellings of the
+// name/args are read too, see toolCallOf) and prints EXACTLY ONE decision line on stdout, then exits 0.
+//
+// HOOK SEMANTICS (OWNER-STATED 2026-11-18, not in the docs we read; scripts/agy-worker-probe.mjs confirms or refutes):
+//   - agy IGNORES hook exit codes; an EMPTY stdout ALLOWS the tool; `{}` DENIES it.
+//   - headless `--mode=accept-edits` soft-denies Ask-tier tools (run_command, MCP) when a hook answers only "allow".
+//   Therefore this hook always prints one explicit decision: "auto_approve" or "deny" (never "allow", never nothing),
+//   and every code path — an unreadable or non-JSON jail.json, stdin that is not JSON, a policy missing fields, a
+//   thrown error, an unhandled rejection, stdin that never closes (a deny after STDIN_TIMEOUT_MS, then the process
+//   EXITS) — ends in a printed deny with exit code 0. A decision that cannot be WRITTEN (a closed or broken stdout) is
+//   exit code WRITE_FAILED_EXIT, and the wrapper (workspace.mjs hookWrapper), which reads this process's stdout through
+//   a pipe and forwards one complete decision line as soon as it has one, prints a deny itself; it also kills this
+//   process and prints a deny when no decision came within WRAPPER_TIMEOUT_S. Printing nothing would FAIL OPEN.
+//
+// THE DECISION TABLE (decide(policy, payload)):
+//   write tools (WRITE_TOOLS: write_file, write_to_file, replace_file_content, multi_replace_file_content)
+//       EVERY path-like argument is a target (writePathArgsOf: args.Path, args.TargetFile, args.AbsolutePath, args.File
+//       -- WRITE_PATH_KEYS -- every other key naming a path/file/dir/target/uri at any depth, and every other top-level
+//       string starting with /, ~ or file: under a key that is not content-like) and they must all name the SAME file
+//       (OBSERVED on agy 1.5.10, owner's machine, 2026-11-18: the real write tool is `write_file` with args {Path,
+//       Content}, emitted although the card listed write_to_file). auto_approve ONLY when every target is an absolute
+//       path with no `.` or `..` component AS WRITTEN, that, resolved WITHOUT following a final symlink and with every
+//       intermediate symlink resolved, stays inside the worktree, is not inside .git or .agents, and is matched by the
+//       unit's owned_paths (pipeline/paths.mjs matchesOwned) both as written and as resolved; else deny.
+//   run_command
+//       auto_approve ONLY when args.CommandLine (trimmed) equals the unit's WORKER verify command exactly -- the policy's
+//       worker_verify_cmd, which must be the unit's VERIFY LAUNCHER <control_dir>/pantheon-verify (isVerifyLauncher; a
+//       policy naming anything else, or nothing, allows no command) -- and args.Cwd, if given, resolves to the worktree;
+//       else deny. The launcher (src/agy/verify-jail.mjs) runs `cd '<worktree>' && <verify_cmd>` in a fresh verify jail
+//       with no credential reachable (the CREDENTIAL-ISOLATION INVARIANT, in that module's header). (OBSERVED on agy
+//       1.5.10, 2026-11-18: the run_command payload carries only {CommandLine, WaitMsBeforeAsync, toolSummary}: there is
+//       no Cwd to request. The plain verify_cmd, and the earlier `cd '<worktree>' && <verify_cmd>`, are DENIED: they
+//       would run as agy's child, with agy's environment, descriptors and view of the OAuth state and the MCP config.)
+//   run_command under a REVIEW policy (jail.json carries `run_command_policy`; absent -> the worker rule above, unchanged)
+//       {kind: "node-test", allowed_files_glob: [...], files: [...] | null, max_files, suites: {<name>: <exact command>}}:
+//       auto_approve ONLY a CommandLine (trimmed) that equals one of `suites`' commands exactly, or that is exactly
+//       `cd '<worktree>' && node --test <f1> [<f2> ...]` (decideReviewCommand: one space between files, each a plain
+//       worktree-relative path of [A-Za-z0-9_./-] not starting with '-', no '.', '..', .git or .agents segment, an
+//       existing regular file whose real path stays inside the worktree, listed in `files` when given, else matched by
+//       `allowed_files_glob`, both as written and as resolved); Cwd as for the worker; else deny. Used by the review
+//       runner (src/review-runner/agy.mjs): no shell metacharacter can reach the command, so it runs nothing else.
+//   read tools (READ_TOOLS, read_file included: observed on agy 1.5.11)
+//       auto_approve (not "allow": owner-stated, "allow" may be soft-denied) when every path argument has no `.` or
+//       `..` component and resolves inside the worktree; deny otherwise (the control dir included: its MCP config holds
+//       the A2A bearer token), and deny when no path argument is found.
+//   MCP, OWNER-STATED: tools are lazy-loaded by default and called through the built-in `call_mcp_tool` with args
+//   {ServerName, ToolName, Arguments}; with `tools.ask_subagent.eager = true` in mcp_config.json the tool may instead be
+//   called directly (its name spelled as one of MCP_NAMES, args {role, question}). BOTH forms are auto_approved ONLY
+//   for server pantheon-subagents, tool ask_subagent, and a `role` (Arguments.role / args.role) in the unit's roles;
+//   any other server, tool or role -> deny.
+//   invoke_subagent, define_subagent (native subagents would escape the jail) -> hard deny.
+//   anything else (unknown tools, malformed input) -> deny.
+//
+// Every invocation is appended as ONE JSON line to <control_dir>/run/jail.log (the policy's `log`, or run/jail.log
+// next to jail.json when the policy cannot be read): the raw stdin verbatim, the parsed payload when it parses, the
+// hook's cwd (owner-stated: agy runs hooks with cwd = .agents/), the decision and its reason, with the known secrets
+// (the control dir's MCP env, this process's secret-named env) and Bearer/token= pairs redacted. That file is the ONLY one
+// this hook writes; a logging failure never changes or delays the decision (the decision is printed first).
+// There is no PostToolUse audit hook any more: under these semantics a post-tool hook's output is meaningless and
+// risky; the audit is the PreToolUse log.
+import { appendFileSync, lstatSync, readFileSync, realpathSync, writeSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { matchesOwned } from "../pipeline/paths.mjs";
+import { matchGlob } from "../review-runner/sandbox.mjs";
+import { controlDirSecrets, redactDeep, secretValues } from "./redact.mjs";
+
+export const WRITE_TOOLS = Object.freeze(["write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"]);
+/**
+ * The arguments that name a write's target (observed on agy 1.5.10: write_file {Path, Content}). EVERY one present is
+ * checked, together with every other path-like argument (writePathArgsOf), and they must all name the same file.
+ */
+export const WRITE_PATH_KEYS = Object.freeze(["Path", "TargetFile", "AbsolutePath", "File"]);
+/** Single-quote a word for a POSIX shell (always quoted: the result is compared byte for byte). */
+export const shQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
+/**
+ * THE SCRIPT THE VERIFY JAIL RUNS for a worker: `cd '<worktree>' && <verify_cmd>` (verify_cmd trimmed). run_command has
+ * no Cwd (observed on agy 1.5.10), so the script sets its own directory. It is no longer the worker's command: that is
+ * the unit's verify launcher (VERIFY_LAUNCHER_NAME, src/agy/verify-jail.mjs), which runs this script in the verify jail.
+ */
+export const VERIFY_LAUNCHER_NAME = "pantheon-verify";
+/** Is `cmd` a verify launcher path (absolute, plain characters, named pantheon-verify, in `control_dir` when given)? */
+export function isVerifyLauncher(cmd, control_dir = null) {
+  if (typeof cmd !== "string" || !/^\/[A-Za-z0-9_./@%+=:,-]+$/.test(cmd) || cmd.split("/").includes("..") || cmd.split("/").includes(".")) return false;
+  if (cmd.split("/").pop() !== VERIFY_LAUNCHER_NAME) return false;
+  return !control_dir || dirname(cmd) === control_dir;
+}
+export function workerVerifyCommand(worktree, verify_cmd) {
+  if (typeof worktree !== "string" || !isAbsolute(worktree)) throw Object.assign(new Error(`workerVerifyCommand: the worktree must be an absolute path, not ${JSON.stringify(worktree)}`), { code: "BAD_INPUT" });
+  if (typeof verify_cmd !== "string" || !verify_cmd.trim()) return null;
+  const why = verifyCmdProblem(verify_cmd);
+  if (why) throw Object.assign(new Error(`workerVerifyCommand: ${why}`), { code: "BAD_VERIFY_CMD" });
+  return `cd ${shQuote(worktree)} && ${verify_cmd.trim()}`;
+}
+
+// THE SAFE FORM OF A verify_cmd (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 3:
+// verify_cmd was inserted verbatim as shell code after `cd '<worktree>' &&`, and plan validation required only a
+// non-empty string). CHOICE: constrain it, at plan validation (pipeline/work-units.mjs) and here, rather than exec it
+// without a shell (the controller's ground-truth run is `sh -c`, and planners write `test -f a && ! grep -q x b`).
+// The safe form is one line of SIMPLE COMMANDS joined by ` && `, each optionally negated by a leading `!` word; a word is
+// made of [A-Za-z0-9_./:=@%+,*?[\]^-] characters, '...' single-quoted text (no newline) and "..." double-quoted text
+// without $, ` or \. So ; | || & > < ( ) { } $ ` \ # ~ and newlines never appear outside quotes, every command runs
+// only after `cd '<worktree>'` (and each one before it) succeeded, and no expansion or redirection reaches the shell.
+// It does not make the command's CONTENT safe: it runs worker-editable code (and `sh -c '...'` is one simple command);
+// that is what the bwrap jail contains.
+const VERIFY_WORD_CHAR = /[A-Za-z0-9_./:=@%+,*?[\]^-]/;
+/** Why `cmd` is not a verify_cmd in the safe form (above), or null. */
+export function verifyCmdProblem(cmd) {
+  if (typeof cmd !== "string" || !cmd.trim()) return "verify_cmd is a non-empty string";
+  const s = cmd.trim();
+  if (/[\n\r\0]/.test(s)) return "verify_cmd is one line (no newline or NUL)";
+  let i = 0, words = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === " " || c === "\t") { i++; continue; }
+    if (c === "&" && s[i + 1] === "&" && (s[i + 2] === " " || s[i + 2] === "\t")) {
+      if (!words) return "verify_cmd has an empty command before `&&`";
+      i += 2; words = 0; continue;
+    }
+    if (c === "!" && !words && (s[i + 1] === " " || s[i + 1] === "\t")) { i++; continue; }   // a negated command
+    while (i < s.length && s[i] !== " " && s[i] !== "\t") {
+      const ch = s[i];
+      if (ch === "'") { const j = s.indexOf("'", i + 1); if (j < 0) return "verify_cmd has an unterminated single quote"; i = j + 1; continue; }
+      if (ch === '"') {
+        let j = i + 1;
+        for (; j < s.length && s[j] !== '"'; j++) if ("$`\\".includes(s[j])) return `verify_cmd has ${JSON.stringify(s[j])} inside double quotes (no expansion is allowed)`;
+        if (j >= s.length) return "verify_cmd has an unterminated double quote";
+        i = j + 1; continue;
+      }
+      if (!VERIFY_WORD_CHAR.test(ch)) return `verify_cmd has the shell metacharacter ${JSON.stringify(ch)} outside quotes: only simple commands joined by " && " are allowed`;
+      i++;
+    }
+    words++;
+  }
+  if (!words) return "verify_cmd ends with `&&` or `!`";
+  return null;
+}
+// Read-only tools of the Antigravity/Cascade tool family whose path arguments the jail can check. read_file: OBSERVED on
+// agy 1.5.11 (assignment 3 Antigravity run at 77480d6, 2026-11-19, findings-3-google-77480d6): the installed CLI
+// advertised read_file {Path} as its only file-reading tool (beside run_command, manage_task, write_file, edit_file,
+// list_resources, read_resource, call_mcp_tool), and this hook denied all 8 source reads as "tool read_file is not
+// allowed for a unit worker". It gets the same path containment as view_file. edit_file, list_resources and
+// read_resource stay denied: no observed arguments, and the last two read MCP resources, not files.
+export const READ_TOOLS = Object.freeze(["view_file", "read_file", "grep_search", "list_dir", "find_by_name", "view_file_outline", "view_code_item", "codebase_search"]);
+export const MCP_SERVER = "pantheon-subagents", MCP_TOOL = "ask_subagent";
+export const MCP_WRAPPER = "call_mcp_tool";   // owner-stated: the built-in lazy MCP caller
+export const HARD_DENY = Object.freeze(["invoke_subagent", "define_subagent"]);
+// Undocumented: the spelling of an eagerly loaded MCP tool's name in toolCall.name. Every plausible spelling of THIS
+// tool is accepted; anything else that looks like an MCP tool is denied as "another MCP tool".
+export const MCP_NAMES = Object.freeze([MCP_TOOL, `${MCP_SERVER}/${MCP_TOOL}`, `${MCP_SERVER}__${MCP_TOOL}`, `mcp__${MCP_SERVER}__${MCP_TOOL}`,
+  `${MCP_SERVER}.${MCP_TOOL}`, `${MCP_SERVER}:${MCP_TOOL}`, `mcp_${MCP_SERVER}_${MCP_TOOL}`, `mcp:${MCP_SERVER}:${MCP_TOOL}`]);
+const READ_KEYS = ["AbsolutePath", "TargetFile", "File", "FilePath", "Path", "SearchPath", "SearchDirectory", "DirectoryPath", "Directory", "TargetDirectories", "Paths"];
+const FORBIDDEN_SEGMENTS = [".git", ".agents"];
+// A stuck stdin is a deny, not a kill: the node hook answers after STDIN_TIMEOUT_MS and EXITS; the wrapper
+// (workspace.mjs hookWrapper) kills a node that has not answered after its own, longer WRAPPER_TIMEOUT_S and prints a
+// deny itself. Both are well under the CLI's 30 s hook timeout (hooks.json), at which an empty stdout would ALLOW.
+// Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 1. The env variable
+// PANTHEON_JAIL_STDIN_TIMEOUT_MS may only LOWER the node timer (tests).
+export const STDIN_TIMEOUT_MS = 10000;
+export const WRAPPER_TIMEOUT_S = 20;
+/** The node hook's exit code when its decision could not be written (the wrapper then prints a deny). */
+export const WRITE_FAILED_EXIT = 3;
+const RAW_LOG_CAP = 1024 * 1024;
+
+const inside = (root, p) => p === root || p.startsWith(root + sep);
+const realOr = p => { try { return realpathSync(p); } catch { return null; } };
+const deny = reason => ({ decision: "deny", reason });
+const approve = reason => ({ decision: "auto_approve", reason });
+const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+const msg = e => String(e?.message ?? e).slice(0, 300);
+
+/** The real path a write to `abs` lands on, resolving intermediate symlinks; a final symlink is refused. */
+function landing(root, abs) {
+  const rel = relative(root, abs);
+  const segs = rel === "" ? [] : rel.split(sep);
+  let cur = root;
+  for (let i = 0; i < segs.length; i++) {
+    const next = join(cur, segs[i]);
+    let st;
+    try { st = lstatSync(next); } catch { return { real: join(next, ...segs.slice(i + 1)) }; }
+    if (st.isSymbolicLink()) {
+      if (i === segs.length - 1) return { why: `${abs} is a symlink: the jail does not write through a final symlink` };
+      const r = realOr(next);
+      if (!r || !inside(root, r)) return { why: `${join(...segs.slice(0, i + 1))} is a symlink that leaves the worktree (to ${r ?? "a missing target"})` };
+      cur = r;
+    } else {
+      if (i === segs.length - 1 && st.isDirectory()) return { why: `${abs} is a directory` };
+      cur = next;
+    }
+  }
+  return { real: cur };
+}
+const forbidden = rel => rel.split(/[\\/]/).map(s => s.toLowerCase()).find(s => FORBIDDEN_SEGMENTS.includes(s));
+
+/** Map a path written against the worktree as given (not real) onto the real worktree root. */
+function onRoot(policy, p) {
+  const n = resolve(p);
+  for (const base of [policy.worktree, policy.worktree_given].filter(Boolean)) if (inside(base, n)) return join(policy.worktree, relative(base, n));
+  return n;
+}
+
+/** {key, value} of the first present WRITE_PATH_KEYS argument, or null (kept for callers; decideWrite checks them ALL). */
+export function writeTargetOf(args) {
+  if (!isObj(args)) return null;
+  const key = WRITE_PATH_KEYS.find(k => args[k] !== undefined && args[k] !== null);
+  return key ? { key, value: args[key] } : null;
+}
+
+// A key that names a path (at any depth): Path, TargetFile, AbsolutePath, File, SourcePath, DestinationPath,
+// TargetDirectory, Uri, ...; never a content-like key (TargetContent, ReplacementContent, CodeContent, Instruction).
+const PATH_KEY = /(path|paths|file|files|filename|dir|dirs|directory|directories|destination|dest|uri|url|target)$/i;
+const CONTENT_KEY = /content|instruction|description|summary|message|markdown|language|comment|text|query|pattern|code|chunk|explanation/i;
+const looksLikePath = v => typeof v === "string" && v.length < 4096 && !/[\n\r]/.test(v) && /^(\/|~|file:)/.test(v);
+/**
+ * EVERY path-like argument of a write: each WRITE_PATH_KEYS argument, every other key (at any depth) whose name says
+ * path/file/dir/target/uri, and every other top-level string that looks like a path (starts with /, ~ or file:) unless
+ * its key is content-like. Returns [{key, value}] (the value as given: a non-string is refused by decideWrite).
+ * Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 2: only the FIRST recognised path
+ * argument was checked, so an owned Path could launder an unowned TargetFile.
+ */
+export function writePathArgsOf(args) {
+  if (!isObj(args)) return [];
+  const out = [];
+  const walk = (o, pre, top) => {
+    for (const [k, v] of Object.entries(o)) {
+      const key = pre ? `${pre}.${k}` : k;
+      if (v === undefined || v === null) continue;
+      if (top && WRITE_PATH_KEYS.includes(k)) { out.push({ key, value: v }); continue; }   // a non-string here is refused
+      if (PATH_KEY.test(k) && !CONTENT_KEY.test(k)) {
+        // A boolean or number (EmptyFile: true) names no path; a string, each string of an array, or a nested object does.
+        if (Array.isArray(v)) v.forEach((x, i) => { if (typeof x === "string") out.push({ key: `${key}[${i}]`, value: x }); else if (isObj(x)) walk(x, `${key}[${i}]`, false); });
+        else if (isObj(v)) walk(v, key, false);
+        else if (typeof v === "string") out.push({ key, value: v });
+        continue;
+      }
+      if (CONTENT_KEY.test(k)) continue;
+      if (top && looksLikePath(v)) out.push({ key, value: v });
+      else if (isObj(v)) walk(v, key, false);
+      else if (Array.isArray(v)) v.forEach((x, i) => { if (isObj(x)) walk(x, `${key}[${i}]`, false); });
+    }
+  };
+  walk(args, "", true);
+  return out;
+}
+/** A `.` or `..` component of a path AS WRITTEN, refused before any normalisation (a symlink then `..` differs on disk). */
+export const traversalOf = p => String(p).split(/[\\/]+/).find(s => s === ".." || s === ".") ?? null;
+
+export function decideWrite(policy, args) {
+  const targets = writePathArgsOf(args);
+  if (!targets.length) return deny(`the write names no target (${WRITE_PATH_KEYS.join(", ")})`);
+  const ok = [];
+  for (const { key, value } of targets) {
+    const t = writeTarget(policy, key, value);
+    if (t.decision) return t;
+    ok.push({ key, ...t });
+  }
+  if (new Set(ok.map(t => t.real)).size > 1) return deny(`the write's path arguments name different files (${ok.map(t => `${t.key}=${t.rel}`).join(", ")}): conflicting targets are refused`);
+  return approve(`${ok[0].rel} is owned by unit ${policy.unit_id}`);
+}
+
+/** One write target -> {rel, real}, or a deny. */
+function writeTarget(policy, key, target) {
+  if (typeof target !== "string" || !target.trim()) return deny(`the write's ${key} is not a path`);
+  if (!isAbsolute(target)) return deny(`${key} "${target}" is not absolute; the jail resolves absolute paths only`);
+  const dots = traversalOf(target);
+  if (dots) return deny(`${key} "${target}" has a "${dots}" component: traversal is refused before normalisation`);
+  const root = policy.worktree, abs = onRoot(policy, target);
+  if (!inside(root, abs) || abs === root) return deny(`${target} is outside the unit's worktree ${root}`);
+  const rel = relative(root, abs).split(sep).join("/");
+  const seg = forbidden(rel);
+  if (seg) return deny(`${rel} is inside ${seg}: never written by a worker`);
+  const land = landing(root, abs);
+  if (land.why) return deny(land.why);
+  if (!inside(root, land.real)) return deny(`${target} resolves to ${land.real}, outside the worktree`);
+  const realRel = relative(root, land.real).split(sep).join("/");
+  const seg2 = forbidden(realRel);
+  if (seg2) return deny(`${rel} resolves into ${seg2}`);
+  if (!matchesOwned(rel, policy.owned_paths) || !matchesOwned(realRel, policy.owned_paths)) return deny(`${rel}${realRel !== rel ? ` (resolved ${realRel})` : ""} is not one of the unit's owned paths (${policy.owned_paths.join(", ")})`);
+  return { rel, real: land.real };
+}
+
+export function decideCommand(policy, args) {
+  const cmd = typeof args?.CommandLine === "string" ? args.CommandLine.trim() : null;
+  if (!cmd) return deny("run_command names no CommandLine");
+  if (typeof policy.verify_cmd !== "string" || !policy.verify_cmd.trim()) return deny("this unit allows no command (no verify_cmd)");
+  // The worker command as written into jail.json: the unit's verify launcher, nothing else (credential isolation: the
+  // verify_cmd runs only inside the verify jail, never as agy's own child).
+  const want = typeof policy.worker_verify_cmd === "string" ? policy.worker_verify_cmd.trim() : "";
+  if (!isVerifyLauncher(want, typeof policy.control_dir === "string" ? policy.control_dir : null)) return deny(`this unit's policy names no verify launcher (${JSON.stringify(want || null)}): worker-controlled code runs only in the verify jail, so no command is allowed`);
+  if (cmd !== want) return deny(`only the unit's verify_cmd may run, exactly as the worker command ${JSON.stringify(want)}, not ${JSON.stringify(cmd)}`);
+  if (args.Cwd !== undefined && args.Cwd !== null && args.Cwd !== "") {
+    if (typeof args.Cwd !== "string" || !isAbsolute(args.Cwd)) return deny(`Cwd ${JSON.stringify(args.Cwd)} is not an absolute path`);
+    const r = realOr(args.Cwd);
+    if (r !== policy.worktree) return deny(`verify_cmd runs in the worktree ${policy.worktree}, not in ${args.Cwd}`);
+  }
+  return approve("the unit's worker verify command");
+}
+
+/** The exact prefix of a review's node --test command before credential isolation (now refused): `cd '<worktree>' && node --test `. */
+export const reviewTestPrefix = worktree => `cd ${shQuote(worktree)} && node --test `;
+/** The review runner's launchers in its control dir: pantheon-test (test files as arguments) and pantheon-suite-<name>. */
+export const REVIEW_TEST_LAUNCHER = "pantheon-test";
+export const REVIEW_SUITE_LAUNCHER = name => `pantheon-suite-${name}`;
+const launcherIn = (cmd, control_dir, name) => typeof cmd === "string" && /^\/[A-Za-z0-9_./@%+=:,-]+$/.test(cmd) && !cmd.split("/").some(s => s === "." || s === "..")
+  && typeof control_dir === "string" && dirname(cmd) === control_dir && cmd.split("/").pop() === name;
+const REVIEW_TEST_FILE = /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/;
+
+/** run_command under a review's run_command_policy (see the decision table). */
+export function decideReviewCommand(policy, rcp, args) {
+  const cmd = typeof args?.CommandLine === "string" ? args.CommandLine.trim() : null;
+  if (!cmd) return deny("run_command names no CommandLine");
+  if (!isObj(rcp) || rcp.kind !== "node-test") return deny(`unknown run_command_policy ${JSON.stringify(rcp?.kind ?? null)}: no command is allowed`);
+  if (args.Cwd !== undefined && args.Cwd !== null && args.Cwd !== "") {
+    if (typeof args.Cwd !== "string" || !isAbsolute(args.Cwd)) return deny(`Cwd ${JSON.stringify(args.Cwd)} is not an absolute path`);
+    if (realOr(args.Cwd) !== policy.worktree) return deny(`review commands run in the worktree ${policy.worktree}, not in ${args.Cwd}`);
+  }
+  // CREDENTIAL ISOLATION: the code under review runs ONLY through the review's verify launchers in its control dir
+  // (src/agy/verify-jail.mjs), never as agy's own child (agy holds the OAuth scratch copy).
+  if (!launcherIn(rcp.launcher, policy.control_dir, REVIEW_TEST_LAUNCHER)) return deny(`this review's policy names no test launcher in its control dir (${JSON.stringify(rcp.launcher ?? null)}): code under review runs only in the verify jail, so no command is allowed`);
+  const suites = isObj(rcp.suites) ? Object.entries(rcp.suites).filter(([n, c]) => typeof c === "string" && launcherIn(c, policy.control_dir, REVIEW_SUITE_LAUNCHER(n))) : [];
+  const suite = suites.find(([, c]) => c === cmd);
+  if (suite) return approve(`the review suite launcher "${suite[0]}"`);
+  const prefix = `${rcp.launcher} `;
+  if (!cmd.startsWith(prefix)) return deny(`only the review's listed commands may run (${prefix}<test files>${suites.length ? ` or a listed suite launcher` : ""}), not ${JSON.stringify(cmd)}`);
+  const files = cmd.slice(prefix.length).split(" ");
+  const max = Number.isSafeInteger(rcp.max_files) && rcp.max_files > 0 ? rcp.max_files : 50;
+  if (files.length > max) return deny(`at most ${max} test files per command`);
+  const listed = Array.isArray(rcp.files) ? rcp.files : null;
+  const globs = Array.isArray(rcp.allowed_files_glob) ? rcp.allowed_files_glob.filter(g => typeof g === "string") : [];
+  const allowed = rel => (listed ? listed.includes(rel) : globs.some(g => matchGlob(g, [rel]).length > 0));
+  for (const f of files) {
+    if (!REVIEW_TEST_FILE.test(f)) return deny(`test file ${JSON.stringify(f)} is not a plain worktree-relative path (letters, digits, _ . / - only, one space between files)`);
+    const segs = f.split("/");
+    if (segs.some(s => s === "" || s === "." || s === "..")) return deny(`test file ${f}: empty, '.' or '..' segments are refused`);
+    const seg = forbidden(f);
+    if (seg) return deny(`test file ${f} is inside ${seg}`);
+    if (!allowed(f)) return deny(`${f} is not ${listed ? "one of the test files this review lists" : `matched by the review's allowed test files (${globs.join(", ")})`}`);
+    const abs = join(policy.worktree, ...segs);
+    const r = realOr(abs);
+    if (!r) return deny(`test file ${f} does not exist`);
+    if (!inside(policy.worktree, r) || r === policy.worktree) return deny(`test file ${f} resolves to ${r}, outside the worktree`);
+    let st; try { st = lstatSync(r); } catch { return deny(`test file ${f} cannot be read`); }
+    if (!st.isFile()) return deny(`test file ${f} is not a regular file`);
+    const realRel = relative(policy.worktree, r).split(sep).join("/");
+    if (forbidden(realRel) || !allowed(realRel)) return deny(`test file ${f} resolves to ${realRel}, which is not allowed`);
+  }
+  return approve(`node --test on ${files.length} allowed test file(s)`);
+}
+
+/**
+ * Reads: every path argument must resolve inside the WORKTREE. The control dir is NOT readable (independent review
+ * round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7: its .agents/mcp_config.json carries the A2A bearer
+ * token for the MCP relay, and the read tools could read it), nor is anything that resolves into it.
+ */
+export function decideRead(policy, args) {
+  const paths = READ_KEYS.flatMap(k => (Array.isArray(args?.[k]) ? args[k] : [args?.[k]])).filter(v => typeof v === "string" && v.trim());
+  if (!paths.length) return deny("a read names no path argument the jail can check");
+  const ctl = typeof policy.control_dir === "string" && policy.control_dir ? policy.control_dir : null;
+  for (const p of paths) {
+    if (!isAbsolute(p)) return deny(`read path "${p}" is not absolute`);
+    const dots = traversalOf(p);
+    if (dots) return deny(`read path "${p}" has a "${dots}" component: traversal is refused before normalisation`);
+    const abs = onRoot(policy, p);
+    // The deepest existing ancestor's real path decides (a symlink inside a root that points out is caught here).
+    let at = abs, r = null;
+    while (!(r = realOr(at)) && at !== resolve(at, "..")) at = resolve(at, "..");
+    const landed = r ? join(r, relative(at, abs)) : abs;
+    if (ctl && (inside(ctl, landed) || inside(ctl, abs))) return deny(`${p} is inside the control dir: it holds the unit's MCP credentials and is never read by the model`);
+    if (!inside(policy.worktree, landed)) return deny(`${p} is outside the worktree`);
+  }
+  return approve("a read inside the worktree");
+}
+
+/** The MCP identity of a DIRECT (eager) tool call: {server, tool} when it looks like an MCP tool, else null. */
+function mcpOf(call) {
+  const name = call.name;
+  const server = call.server ?? call.serverName ?? call.mcpServer ?? call.mcp_server ?? null;
+  if (typeof server === "string") return { server, tool: call.tool ?? call.toolName ?? name };
+  if (MCP_NAMES.includes(name)) return { server: MCP_SERVER, tool: MCP_TOOL };
+  const m = /^(?:mcp(?:__|_|:))?([A-Za-z0-9_.-]+?)(?:__|\/|:|\.)([A-Za-z0-9_-]+)$/.exec(name);
+  return m && (name.startsWith("mcp") || /__|\/|:/.test(name)) ? { server: m[1], tool: m[2] } : null;
+}
+const parsedArgs = v => {
+  if (typeof v === "string") { try { const p = JSON.parse(v); return isObj(p) ? p : null; } catch { return null; } }
+  return isObj(v) ? v : v == null ? {} : null;
+};
+
+/** One MCP call {form, server, tool, args} -> the decision. */
+export function decideMcp(policy, { form, server, tool, args }) {
+  const where = `${server}/${tool} (${form})`;
+  if (server !== MCP_SERVER || tool !== MCP_TOOL) return deny(`MCP tool ${where} is not allowed (only ${MCP_SERVER}/${MCP_TOOL})`);
+  if (policy.mcp && policy.mcp.enabled === false) return deny(`this unit has no ${MCP_SERVER} MCP server configured`);
+  if (!isObj(args)) return deny(`${where}: its arguments are not a JSON object`);
+  const role = args.role;
+  if (typeof role !== "string" || !role) return deny(`${where}: names no role`);
+  if (!policy.roles.includes(role)) return deny(`${where}: role "${role}" is not one of the unit's subagent roles (${policy.roles.join(", ") || "none"})`);
+  return approve(`${MCP_SERVER}/${MCP_TOOL} role ${role} (${form})`);
+}
+
+/**
+ * The tool call of a payload: {name, args, call} or null. Reads the documented toolCall.{name,args} first, then the
+ * spellings other hook protocols use (tool_call, tool_name/tool_input, toolName/toolArgs); a string `args` is parsed.
+ */
+export function toolCallOf(payload) {
+  if (!isObj(payload)) return null;
+  const c = isObj(payload.toolCall) ? payload.toolCall : isObj(payload.tool_call) ? payload.tool_call : null;
+  const name = c ? (c.name ?? c.toolName ?? c.tool_name) : (payload.tool_name ?? payload.toolName);
+  if (typeof name !== "string" || !name) return null;
+  const rawArgs = c ? (c.args ?? c.arguments ?? c.input) : (payload.tool_input ?? payload.toolArgs ?? payload.args);
+  return { name, args: parsedArgs(rawArgs), call: c ?? { name } };
+}
+
+/** The MCP view of a call: {form: "call_mcp_tool" | "direct", server, tool, args} or null when it is not an MCP call. */
+export function mcpCallOf(tc) {
+  if (!tc) return null;
+  if (tc.name === MCP_WRAPPER) {
+    const a = tc.args ?? {};
+    return { form: MCP_WRAPPER, server: typeof a.ServerName === "string" ? a.ServerName : null, tool: typeof a.ToolName === "string" ? a.ToolName : null, args: parsedArgs(a.Arguments) };
+  }
+  const m = mcpOf({ ...tc.call, name: tc.name });
+  return m ? { form: "direct", server: m.server, tool: m.tool, args: tc.args } : null;
+}
+
+// ---- THE HOOK'S CLASSIFICATION OF A TOOL NAME, and TOOL DRIFT (self-audit round 3, assignment 4 (sealed fe2a612), L-502) --
+// Every tool the hook decides on falls in one class (decideUnsafe): write, exec (run_command), read, mcp, hard_deny, or
+// deny (named here: the network and messaging tools the role cards list -- search_web, read_url_content, send_message --
+// and the CLI's browser tools; denied with a reason, as before by default). Anything else is denied as UNKNOWN. That
+// default is safe, but it is silent: a new or renamed read tool would make a reviewer blind (a denial per read), and a
+// new exec-like tool the CLI routed past the hook would not be seen at all. toolDrift() names, for a list of advertised
+// tool names, every one the hook does not classify that LOOKS read-, write-, exec- or network-like (toolLooksLike: a
+// name-based guess, deliberately broad); the agy preflight (board/agy-cli.mjs runAgyPreflight, check `tool_drift`) fails
+// on any, naming it and the discovery method.
+export const DENIED_TOOLS = Object.freeze(["search_web", "read_url_content", "send_message", "browser_subagent", "open_browser_url", "read_browser_page", "capture_browser_screenshot", "browser_preview"]);
+/** The hook's class of a tool name: "write" | "exec" | "read" | "mcp" | "hard_deny" | "deny" | null (unclassified). */
+export function classifyTool(name) {
+  if (typeof name !== "string" || !name) return null;
+  if (WRITE_TOOLS.includes(name)) return "write";
+  if (name === "run_command") return "exec";
+  if (READ_TOOLS.includes(name)) return "read";
+  if (HARD_DENY.includes(name)) return "hard_deny";
+  if (name === MCP_WRAPPER || MCP_NAMES.includes(name)) return "mcp";
+  if (DENIED_TOOLS.includes(name)) return "deny";
+  return null;
+}
+/** What a tool name looks like (a broad guess): "exec" | "write" | "network" | "read" | null. */
+export function toolLooksLike(name) {
+  const n = String(name ?? "").toLowerCase();
+  if (/run|exec|command|shell|terminal|bash|spawn|subagent|process|kill|schedul|job|task|eval/.test(n)) return "exec";
+  if (/write|edit|replace|create|delete|remove|move|rename|patch|apply|insert|mkdir|save|upload/.test(n)) return "write";
+  if (/web|url|http|browser|fetch|download|send|message|mail|net/.test(n)) return "network";
+  if (/read|view|grep|search|find|list|glob|cat|open|outline|code_item|ls|file|dir/.test(n)) return "read";
+  return null;
+}
+/**
+ * {ok, unclassified: [{name, looks_like, sources}], unknown: [{name, sources}]} for `discovered` ({name: [sources]}):
+ * `unclassified` are the read/write/exec/network-like names the hook does not classify (ok: false when any); `unknown`
+ * the other unclassified names (denied by default; recorded).
+ */
+export function toolDrift(discovered = {}) {
+  const unclassified = [], unknown = [];
+  for (const [name, sources] of Object.entries(discovered)) {
+    if (classifyTool(name)) continue;
+    const looks = toolLooksLike(name);
+    (looks ? unclassified : unknown).push({ name, ...(looks ? { looks_like: looks } : {}), sources: [...new Set(sources)] });
+  }
+  return { ok: unclassified.length === 0, unclassified, unknown };
+}
+
+function checkPolicy(policy) {
+  if (!isObj(policy)) throw new Error("the policy is not an object");
+  for (const k of ["worktree"]) if (typeof policy[k] !== "string" || !policy[k]) throw new Error(`the policy lacks ${k}`);
+  for (const k of ["owned_paths", "roles"]) if (!Array.isArray(policy[k])) throw new Error(`the policy lacks ${k}`);
+}
+
+function decideUnsafe(policy, payload) {
+  checkPolicy(policy);
+  const tc = toolCallOf(payload);
+  if (!tc) return deny("malformed hook input: no toolCall.name");
+  if (HARD_DENY.includes(tc.name)) return deny(`${tc.name} is not available to a unit worker: native subagents would escape the jail`);
+  if (tc.args === null) return deny(`malformed hook input: the arguments of ${tc.name} are not a JSON object`);
+  if (WRITE_TOOLS.includes(tc.name)) return decideWrite(policy, tc.args);
+  if (tc.name === "run_command") return policy.run_command_policy !== undefined && policy.run_command_policy !== null ? decideReviewCommand(policy, policy.run_command_policy, tc.args) : decideCommand(policy, tc.args);
+  if (READ_TOOLS.includes(tc.name)) return decideRead(policy, tc.args);
+  if (DENIED_TOOLS.includes(tc.name)) return deny(`${tc.name} is a network, browser or messaging tool: never allowed in the jail`);
+  const mcp = mcpCallOf(tc);
+  if (mcp) return decideMcp(policy, mcp);
+  return deny(`tool ${tc.name} is not allowed for a unit worker`);
+}
+/** The decision for one PreToolUse payload under `policy`. Never throws: an exception is a deny. */
+export function decide(policy, payload) {
+  try {
+    const d = decideUnsafe(policy, payload);
+    return d && (d.decision === "auto_approve" || d.decision === "deny") ? d : deny("hook exception: no decision");
+  } catch (e) { return deny(`hook exception: ${msg(e)}`); }
+}
+
+export function loadPolicy(file) {
+  const p = JSON.parse(readFileSync(file, "utf8"));
+  checkPolicy(p);
+  return { ...p, worktree_given: p.worktree_given ?? p.worktree, worktree: realOr(p.worktree) ?? p.worktree, control_dir: p.control_dir ? (realOr(p.control_dir) ?? p.control_dir) : null };
+}
+
+const summary = tc => {
+  const a = isObj(tc?.args) ? tc.args : {};
+  const pick = Object.fromEntries([...new Set(["TargetFile", "CommandLine", "Cwd", ...WRITE_PATH_KEYS, ...READ_KEYS, "ServerName", "ToolName"])].filter(k => typeof a[k] === "string").map(k => [k, a[k].slice(0, 500)]));
+  return { tool: typeof tc?.name === "string" ? tc.name : null, args: pick };
+};
+
+// ---- the process ----------------------------------------------------------------------------------------------------
+
+/** Write all of `text` to `fd` (a pipe may take part of it, or say EAGAIN); throws when the fd cannot take it. */
+function writeAll(fd, text) {
+  let buf = Buffer.from(text), tries = 0;
+  while (buf.length) {
+    try { const n = writeSync(fd, buf); buf = buf.subarray(n); tries = 0; }
+    catch (e) { if (e?.code !== "EAGAIN" || ++tries > 1000) throw e; }
+  }
+}
+/** The node timer: STDIN_TIMEOUT_MS, or a LOWER PANTHEON_JAIL_STDIN_TIMEOUT_MS (never a higher one). */
+export const stdinTimeoutMs = (env = process.env) => {
+  const n = Number(env.PANTHEON_JAIL_STDIN_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 10 && n < STDIN_TIMEOUT_MS ? Math.floor(n) : STDIN_TIMEOUT_MS;
+};
+
+function main() {
+  // printed: a decision was attempted; wrote: it reached stdout whole. A decision that could not be written is NOT an
+  // answer (an empty stdout would ALLOW): the process exits WRITE_FAILED_EXIT and the wrapper prints a deny itself.
+  // Independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 1.
+  let printed = false, wrote = false;
+  const emit = d => {
+    if (printed) return;
+    printed = true;
+    try { writeAll(1, JSON.stringify(d) + "\n"); wrote = true; } catch { wrote = false; }
+  };
+  const settle = () => { process.exitCode = printed && wrote ? 0 : WRITE_FAILED_EXIT; };
+  const failClosed = e => { emit(deny(`hook exception: ${msg(e)}`)); settle(); };
+  try { process.stdout.on("error", () => {}); } catch { /* ignore */ }
+  process.on("uncaughtException", failClosed);
+  process.on("unhandledRejection", failClosed);
+  process.on("exit", () => { if (!printed) emit(deny("hook exception: the hook ended without a decision")); settle(); });
+
+  const file = process.argv[2];
+  const fallbackLog = typeof file === "string" && file ? join(dirname(resolve(file)), "run", "jail.log") : null;
+  const chunks = [];
+  let done = false;
+  const finish = (raw, stdinWhy = null) => {
+    if (done) return;
+    done = true;
+    let policy = null, payload, parsed = false, out;
+    try { payload = JSON.parse(raw); parsed = true; } catch { /* decided below */ }
+    try {
+      try { policy = loadPolicy(file); } catch (e) { throw new Error(`the jail policy ${file} could not be read: ${msg(e)}`); }
+      if (stdinWhy) out = deny(`hook exception: ${stdinWhy}`);
+      else if (!parsed) out = deny("malformed hook input: not JSON");
+      else out = decide(policy, payload);
+    } catch (e) { out = deny(`hook exception: ${msg(e)}`); }
+    emit(out);                         // the decision first: the log can never delay or change it
+    try {
+      const tc = parsed ? toolCallOf(payload) : null;
+      const mcp = tc ? mcpCallOf(tc) : null;
+      // REDACTED (independent review round 2, assignment 4 (OpenAI gpt-6-astra, 77480d6), question 7): the known
+      // secrets -- the control dir's MCP env (the A2A bearer token) and this process's secret-named env -- and
+      // Bearer / token= shaped pairs, in the raw stdin, the payload and every logged field.
+      const secrets = secretValues(process.env, controlDirSecrets(policy?.control_dir ?? (file ? dirname(resolve(file)) : null)));
+      const rawCut = raw.length > RAW_LOG_CAP ? raw.slice(0, RAW_LOG_CAP) : raw;
+      const row = redactDeep({ at: new Date().toISOString(), event: "PreToolUse", unit_id: policy?.unit_id ?? null, cwd: process.cwd(),
+        raw: rawCut, ...(raw.length > RAW_LOG_CAP ? { raw_truncated: raw.length } : {}),
+        payload: parsed ? payload : null, ...summary(tc), ...(mcp ? { mcp: { form: mcp.form, server: mcp.server, tool: mcp.tool, role: isObj(mcp.args) ? mcp.args.role ?? null : null } } : {}),
+        step: isObj(payload) ? payload.stepIdx ?? null : null, decision: out.decision, reason: out.reason ?? null }, secrets);
+      if (row.raw !== rawCut) row.raw_redacted = true;
+      const log = typeof policy?.log === "string" && policy.log ? policy.log : fallbackLog;
+      if (log) appendFileSync(log, JSON.stringify(row) + "\n");
+    } catch { /* the log is evidence, not the decision */ }
+  };
+  const ms = stdinTimeoutMs();
+  // A stdin that never closes: the deny is printed, logged, and the process EXITS (it used to linger with the stdin open
+  // until the CLI's own hook timeout killed it, so the wrapper forwarded nothing: an empty stdout ALLOWS).
+  const timer = setTimeout(() => {
+    finish(Buffer.concat(chunks).toString("utf8"), `stdin did not close within ${ms} ms`);
+    try { process.stdin.destroy(); } catch { /* exiting anyway */ }
+    process.exit();
+  }, ms);
+  process.stdin.on("data", c => { chunks.push(c); });
+  process.stdin.on("end", () => { clearTimeout(timer); finish(Buffer.concat(chunks).toString("utf8")); });
+  process.stdin.on("error", e => { clearTimeout(timer); finish(Buffer.concat(chunks).toString("utf8"), `stdin failed: ${msg(e)}`); });
+}
+
+const self = fileURLToPath(import.meta.url);
+if (process.argv[1] && (realOr(process.argv[1]) ?? process.argv[1]) === (realOr(self) ?? self)) {
+  try { main(); } catch (e) {
+    let ok = false;
+    try { writeAll(1, JSON.stringify(deny(`hook exception: ${msg(e)}`)) + "\n"); ok = true; } catch { /* the wrapper prints the deny */ }
+    process.exitCode = ok ? 0 : WRITE_FAILED_EXIT;
+  }
+}

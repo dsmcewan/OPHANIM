@@ -65,6 +65,8 @@ export interface TurnOptions extends RequestOptions {
   compactAfterBytes?:number;
   countTokens?:TokenCounter;
   onEvent?:(event:OpaqueItem)=>void;
+  /** Called before EVERY billed generation request (compaction, the request, each continuation hop); throw to refuse it. */
+  onRequest?:(request:{request:number;kind:'compaction'|'generation'})=>void|Promise<void>;
 }
 export interface TurnResult {
   vendor:Vendor;
@@ -81,6 +83,8 @@ export interface TurnResult {
   usage:unknown;
 }
 export function sendModelTurn(options:TurnOptions):Promise<TurnResult>;
+export const GENERATION_METHODS:Readonly<Record<'responses'|'messages'|'models',readonly string[]>>;
+export function chargedClient<T>(client:T,onRequest?:(request:{request:number;kind:string})=>unknown,options?:{kind?:(method:string,args:unknown[])=>string}):T;
 
 export interface Candidate {vendor:Vendor;model:string;pool:string;poolConfig?:unknown}
 export interface Cooldown {
@@ -96,7 +100,7 @@ export interface CooldownStore extends Cooldown {
 export function openCooldownStore(directory:string):CooldownStore;
 export interface FailureClassification {retryable:boolean;retryMs:number|null;quota:boolean}
 export function classifyFailure(error:unknown,now?:number):FailureClassification;
-export function routeCall<T,S extends Candidate=Candidate>(options:{candidates:S[];invoke:(seat:S,options:{signal:AbortSignal;attempt:number})=>Promise<T>;signal?:AbortSignal;deadline?:number;cooldown?:Cooldown;maxAttempts?:number}):Promise<{value:T;seat:S;attempts:OpaqueItem[]}>;
+export function routeCall<T,S extends Candidate=Candidate>(options:{candidates:S[];invoke:(seat:S,options:{signal:AbortSignal;attempt:number})=>Promise<T>;signal?:AbortSignal;deadline?:number;cooldown?:Cooldown;maxAttempts?:number;admit?:(attempt:{vendor:string;model:string;pool:string;attempt:number})=>void|Promise<void>}):Promise<{value:T;seat:S;attempts:OpaqueItem[]}>;
 export function boundedCall<T>(fn:(signal:AbortSignal)=>Promise<T>,options?:{signal?:AbortSignal;deadline?:number}):Promise<T>;
 
 export function modelId(vendor:string,name:string):string;

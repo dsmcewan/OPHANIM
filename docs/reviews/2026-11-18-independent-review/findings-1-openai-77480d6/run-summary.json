@@ -1,0 +1,46 @@
+{
+  "review_id": "sol-a1",
+  "assignment": 1,
+  "lab": "OpenAI",
+  "requested_model": "gpt-6.1-sol",
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "status": "complete",
+  "stop_reason": "final answer",
+  "transport": "codex-sdk",
+  "default_reviewer": {
+    "lab": "Google",
+    "vendor": "gemini",
+    "model": "gemini-4-carbon"
+  },
+  "reviewer_override": true,
+  "started_at": "2026-11-19T03:12:49.663Z",
+  "ended_at": "2026-11-19T03:16:16.162Z",
+  "worktree_check": {
+    "changed": [
+      ".review-tests/lifecycle-independent.test.mjs"
+    ],
+    "violations": [],
+    "limits": [
+      "a change inside a directory git already listed as ignored before the run (e.g. node_modules/) is not seen",
+      "only the worktree is checked: a CLI's own sandbox decides what it could write elsewhere"
+    ]
+  },
+  "grok_permissions": null,
+  "reproduction_files": [
+    {
+      "path": "reproductions/.review-tests/lifecycle-independent.test.mjs",
+      "sha256": "47190cc29800e911d0a1b2ced1dc79ad0970204a5f144391758d44f2342fd5a9",
+      "truncated": false
+    }
+  ],
+  "continuation_chain": [],
+  "source_transcript": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/sol-a1/docs/reviews/2026-11-18-independent-review/findings-1-openai.transcript.json",
+  "source_report": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w/sol-a1/docs/reviews/2026-11-18-independent-review/findings-1-openai.md",
+  "folder": "/home/colchis/Projects/OPHANIM-review-handoff-77480d6-20261118T215738-0500/assignment-1-openai",
+  "zip": "/home/colchis/Projects/OPHANIM-review-handoff-77480d6-20261118T215738-0500/assignment-1-openai.zip",
+  "private_runtime_namespace": true,
+  "original_transcript_sha256": "87e4b49cd6311a525dffc4fbc63ae51fbd14fa05ee856c71fecd7dd8a47922d8",
+  "delivered_transcript_sha256": "87e4b49cd6311a525dffc4fbc63ae51fbd14fa05ee856c71fecd7dd8a47922d8",
+  "header_hash_verified": true,
+  "token_prefix_redactions": 0
+}

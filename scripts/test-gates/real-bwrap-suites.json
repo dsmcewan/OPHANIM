@@ -1,0 +1,27 @@
+{
+  "schema": "ophanim.real-bwrap-suites/v1",
+  "note": "Recorded baseline only. The gate derives the list from source on every run (test files that call sandboxAvailable(\"bwrap\")); a difference is printed as NEW or GONE. Update this file when a suite deliberately joins or leaves.",
+  "gated": [
+    "ophanim/operate/live-run.test.mjs",
+    "ophanim/operate/reliability-r3-a3.test.mjs",
+    "ophanim/operate/reliability-wave2b.test.mjs",
+    "pantheon/tests/agy-layout-bisect.test.mjs",
+    "pantheon/tests/agy-preflight.test.mjs",
+    "pantheon/tests/agy-sandbox-r2a4.test.mjs",
+    "pantheon/tests/agy-sandbox.test.mjs",
+    "pantheon/tests/agy-single-turn-jail.test.mjs",
+    "pantheon/tests/agy-tool-drift.test.mjs",
+    "pantheon/tests/agy-worker-probe.test.mjs",
+    "pantheon/tests/agy-worker.test.mjs",
+    "pantheon/tests/antigravity-sdk-contract.test.mjs",
+    "pantheon/tests/antigravity-turn.test.mjs",
+    "pantheon/tests/reliability-r3-a3.test.mjs",
+    "pantheon/tests/review-runner-cli-units.test.mjs",
+    "pantheon/tests/review-runner-continue.test.mjs",
+    "pantheon/tests/review-runner-coverage.test.mjs",
+    "pantheon/tests/review-runner-round2.test.mjs",
+    "pantheon/tests/review-runner-subscription.test.mjs",
+    "pantheon/tests/verify-deadline-r2a3-f9.test.mjs",
+    "pantheon/tests/verify-jail-credential-isolation.test.mjs"
+  ]
+}

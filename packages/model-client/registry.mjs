@@ -9,6 +9,10 @@ export const CAPABILITIES=Object.freeze({
   [modelId('anthropic','fable')]:{vendor:'anthropic',surface:'messages',window:1000000,output:128000,efforts:['low','medium','high','xhigh','max'],compaction:true},
   [modelId('google','carbon')]:{vendor:'agy_google',surface:'genai',window:1048576,output:262144,efforts:['low','medium','high'],combined:true},
   [modelId('google','argon')]:{vendor:'agy_google',surface:'genai',window:1048576,output:262144,efforts:['low','medium','high'],combined:true},
+  // Owner-stated 2026-11-17 (pantheon/src/config/capability-facts.json): window 1048576, max output 65536, thinking
+  // levels low|medium|high|xhigh. The request builder never sends `minimal` (folded to `low`) or a thinking budget
+  // (dropped) for it. Pantheon reaches this id only as the quota failover of an Antigravity Hydrogen lane.
+  [modelId('google','hydrogen')]:{vendor:'agy_google',surface:'genai',window:1048576,output:65536,efforts:['low','medium','high','xhigh'],combined:true},
   [modelId('openai','astra')]:{vendor:'openai',surface:'responses',window:1050000,output:128000,efforts:['low','medium','high','xhigh','max'],inputCeiling:250000},
   [modelId('xai','grok-4.3')]:{vendor:'xai',surface:'responses',window:1000000,output:null,efforts:['none','low','medium','high','xhigh']},
   [modelId('xai','grok-4.7')]:{vendor:'xai',surface:'responses',window:500000,output:null,efforts:['low','medium','high','xhigh']},

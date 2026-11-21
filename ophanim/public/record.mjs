@@ -13,7 +13,9 @@
 //          for plan(), the issue numbers already known and the configured human owner login.
 // Outputs: readStatusRecord (the verified board plus each item's signed history), plan (the desired
 //          labels and issues: title, body, labels, open/closed, assignees), and the pieces they are
-//          built from (labelCatalog, labelsFor, issueBody, evidenceSection, provenanceNotice).
+//          built from (labelCatalog, labelsFor, issueBody, workSection, evidenceSection, provenanceNotice).
+//          The work ledger's view of each item (stage, gate, claim, budget, usage, blocker, team, evidence)
+//          is read by work.mjs and passed to plan() as `work`; this module stays pure.
 // Invariants: deterministic given the ledger; readStatusRecord throws unless the ledger verifies (it
 //          opens it with openStatusLedger's defaults, which create an empty ledger where none exists);
 //          everything after that read is pure; every generated body carries the provenance notice.
@@ -139,9 +141,11 @@ export function evidenceSection(ev) {
     '',
     `- **Run ledger:** anchor ${short(ev.run.ledger_anchor)}, head ${short(ev.run.ledger_head)}; run.json digest ${short(ev.run.run_json_digest)}; shipped: ${ev.run.shipped ? 'yes' : 'no'}; gate verdict entry ${short(ev.run.gate_entry)}`,
     `- **Review cycle:** ${rv ? `${short(rv.cycle)} on the ledger anchored at ${short(rv.cycle_ledger_anchor)}; close entry ${short(rv.close_entry)}; outcome **${rv.outcome ?? 'open'}**` : 'none cited'}`,
+    // The served model with the marker of where it came from, when the evidence records one ("input": the model the
+    // seat was required to run, recorded by the transport, not a provider's statement; wave 3, L-504 invariant 2).
     ...(rv ? ['', '| Reviewer seat (vendor) | Requested model | Served model | Lab |', '|---|---|---|---|',
       ...rv.reviewers.map(r =>
-        `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')} | ${cell(r.lab)} |`),
+        `| ${cell(r.vendor)} | ${cell(r.model)} | ${cell(r.served_model ?? 'not reported')}${r.served_model_source ? ` (${cell(r.served_model_source)})` : ''} | ${cell(r.lab)} |`),
       ''] : []),
     `- **Commit:** ${ev.commit ? `\`${ev.commit}\`` : 'none'}`,
     `- **Tests:** ${ev.tests ? `\`${cell(ev.tests.cmd)}\` exited ${ev.tests.exit}` : 'none recorded'}`,
@@ -157,10 +161,81 @@ export function evidenceSection(ev) {
 }
 
 /**
- * The issue body for one item. `link(id)` renders a reference to another item (an issue number once the
- * publisher knows it). `dependents` are the items that depend on this one.
+ * Who is working on the item and how far it has got, from the work ledger (work.mjs readWorkRecord): the earliest
+ * unmet gate and its reason, the latest stage record, the claim and lease, the budget and usage (unknown stays
+ * unknown), the blocker, the team of the latest stage (model seats, as text: never GitHub assignees) and the
+ * evidence of the chain the gate reuses. `work` is {ledger, item} or null when no work ledger was read.
  */
-export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = [], ledgerPath = 'status/ledger'}) {
+export function workSection(work) {
+  const code = v => (v == null ? 'not recorded' : `\`${cell(v)}\``);
+  const L = work?.ledger ?? null, w = work?.item ?? null;
+  const head = ['## Work', ''];
+  if (!L) return [...head, 'The work ledger was not read for this projection: no stage, claim, usage or blocker is shown.', ''];
+  const source = L.state === 'verified'
+    ? `From the work ledger (\`${L.path}\`), the controller's signed record of the governed lifecycle (plan, implement, review, validate, outcome), verified in full against its anchor \`${L.anchor}\`. The status ledger stays authoritative for the state above.`
+    : L.state === 'absent'
+      ? `There is no work ledger at \`${L.path}\` yet: no stage has been claimed, run or paid for. The gate below is computed from the status ledger and the repository alone.`
+      : `The work ledger at \`${L.path}\` **did not verify** (${cell(L.why)}); nothing from it is shown. The gate below is computed without it.`;
+  if (!w) return [...head, source, ''];
+  const g = w.gate, c = w.claim, b = w.blocker;
+  const claim = !c ? 'none recorded'
+    : !c.released ? `held by ${code(c.holder)} for \`${c.stage}\` (attempt ${c.attempt}), leased ${c.leased_at}, lease until **${c.until}**; not released (a lease that passes without a result is released as \`expired\` on the controller's next tick)`
+      : `none held; the last claim (\`${c.stage}\`, attempt ${c.attempt}, ${code(c.holder)}) was released \`${c.released.outcome}\`: ${cell(c.released.why)}`;
+  const budget = c ? `${c.budget.provider_calls} provider calls, ${c.budget.iterations} iteration(s), ${c.budget.retries} retries, ${c.budget.elapsed_ms} ms (declared on the latest claim, before dispatch)` : 'none declared';
+  const u = w.usage;
+  const usage = u.known_records + u.unknown_records === 0 ? 'none recorded'
+    : `${u.provider_calls} provider call(s) recorded on ${u.known_records} stage record(s)` + (u.tokens != null ? `, ${u.tokens} token(s)` : '')
+      + (u.unknown_records ? `; usage **unknown** on ${u.unknown_records} stage record(s) (unknown, not zero)` : '');
+  // The Model cell names the model that answered; the name asked beside it when it differs, and the marker of where the
+  // served name came from (it showed one name only: wave 3, L-504 invariant 2). A team row is a public view: it feeds no
+  // decision. An answer that named no serving model shows the name asked, marked "unnamed".
+  const seat = t => {
+    const served = t.served_model ?? (t.served_model_source === 'unnamed' ? null : t.model ?? null), asked = t.requested_model ?? (t.served_model !== undefined ? t.model : null) ?? null;
+    const note = [...(asked && served && asked !== served ? [`asked ${asked}`] : []), ...(t.served_model_source ? [t.served_model_source] : [])];
+    return `| ${cell(t.role)} | ${cell(t.vendor ?? '—')} | ${cell(served ?? asked ?? t.model ?? '—')}${note.length ? ` (${cell(note.join('; '))})` : ''} | ${cell(t.lab ?? '—')} |`;
+  };
+  const ev = w.evidence;
+  // Evidence taken from the latest attempt after the reused chain (not part of it) says so.
+  const from = stage => (ev.attempt?.stage === stage ? ` (from the latest \`${stage}\` attempt, \`${ev.attempt.status}\`, not part of the reused chain)` : '');
+  const gateLine = `- **Earliest unmet gate:** \`${g.gate}\`${g.mode ? ` (mode \`${g.mode}\`)` : ''}${g.reason ? `: ${cell(g.reason)}` : ''}`;
+  const blockerLine = `- **Blocker:** ${b ? `${cell(b.what)}; responsible role \`${cell(b.role)}\`; resumes when ${cell(b.resume_when)}` : 'none'}`;
+  if (!w.claim && !w.stages.length) {
+    return [...head, source, '', gateLine, blockerLine,
+      '- **Stage, claim, team, budget, usage, evidence:** none recorded on the work ledger for this item yet', ''];
+  }
+  return [
+    ...head, source, '',
+    gateLine,
+    `- **Current stage:** ${w.latest ? `\`${w.latest.stage}\`, attempt ${w.latest.attempt}, \`${w.latest.status}\`${w.latest.next?.why ? ` (${cell(w.latest.next.why)})` : ''}; record \`${w.latest.hash}\`` : 'none recorded'}`,
+    `- **Claim:** ${claim}`,
+    `- **Budget:** ${budget}`,
+    `- **Usage so far:** ${usage}`,
+    blockerLine,
+    '',
+    '**Team of the latest stage record.** Model seats, shown as text: none is a GitHub user, so none is ever an assignee or a reviewer.',
+    '',
+    ...(w.team.length ? ['| Role | Vendor | Model | Lab |', '|---|---|---|---|', ...w.team.map(seat)] : ['No team recorded.']),
+    '',
+    '**Evidence: the chain the gate reuses, and its latest attempt**',
+    '',
+    `- Stage records: ${ev.chain.length ? ev.chain.map(s => `${s.stage} \`${s.hash}\``).join(', ') : 'none valid'}`,
+    `- Plan: ${ev.plan ? `outputs digest \`${ev.plan.outputs}\`${ev.plan.ticket ? `; ticket \`${cell(ev.plan.ticket.path)}\` (\`${ev.plan.ticket.digest}\`)` : ''}` : 'not recorded'}`,
+    `- Commit: ${code(ev.commit)}${ev.commit != null ? from('implement') : ''}`,
+    `- Review cycle: ${ev.review ? `${code(ev.review.cycle)}; close ${code(ev.review.close)}; outcome ${code(ev.review.outcome)}${from('review')}` : 'not recorded'}`,
+    `- Validation verdict: ${code(ev.verdict)}${ev.verdict != null ? from('validate') : ''}`,
+    `- Proposal: ${code(ev.proposal)}${ev.proposal != null ? from('outcome') : ''}`,
+    '',
+    ...(w.stages.length ? ['| # | Stage | Attempt | Status | Team (roles) | Provider calls | Record |', '|---|---|---|---|---|---|---|',
+      ...w.stages.map((s, i) => `| ${i + 1} | ${s.stage} | ${s.attempt} | ${s.status} | ${cell(s.team.map(t => t.role).join(', ') || '—')} | ${s.provider_calls ?? 'unknown'} | \`${s.hash}\` |`), ''] : []),
+  ];
+}
+
+/**
+ * The issue body for one item. `link(id)` renders a reference to another item (an issue number once the
+ * publisher knows it). `dependents` are the items that depend on this one. `work` is {ledger, item} from the
+ * work ledger (workSection), or null when it was not read.
+ */
+export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = [], ledgerPath = 'status/ledger', work = null}) {
   const owner = ownerRoleOf(item);
   const waiting = item.waiting_on ? `${item.waiting_on}: ${WAITING_MEANS[item.waiting_on] ?? item.waiting_on}` : null;
   const deps = item.depends_on ?? [];
@@ -190,6 +265,7 @@ export function issueBody(item, {anchor, link = id => `\`${id}\``, dependents = 
     `- **Depends on:** ${deps.length ? deps.map(link).join(', ') : 'none'}`,
     `- **Depended on by:** ${dependents.length ? dependents.map(link).join(', ') : 'none'}`,
     '',
+    ...workSection(work),
     ...evidenceSection(item.evidence),
     '## Status history',
     '',
@@ -243,9 +319,10 @@ export function dependencyOrder(items) {
 /**
  * The desired public record: labels and one issue per item. `numbers` maps item id -> issue number where
  * known (apply); without it, dependency links name the item id. `ownerLogin` is the one GitHub login that
- * may be assigned, and only to decision-authority items.
+ * may be assigned, and only to decision-authority items. `work` is readWorkRecord's result (work.mjs) or null;
+ * it adds each item's Work section and never changes labels, state or assignees.
  */
-export function plan(record, {numbers = new Map(), ownerLogin = null, ledgerPath = 'status/ledger'} = {}) {
+export function plan(record, {numbers = new Map(), ownerLogin = null, ledgerPath = 'status/ledger', work = null} = {}) {
   const ids = new Set(record.items.map(i => i.item));
   // An item reference: its issue number once known, else its id (flagged when it is not on the board).
   const link = id => (numbers.has(id) ? `#${numbers.get(id)} (\`${id}\`)`
@@ -262,7 +339,8 @@ export function plan(record, {numbers = new Map(), ownerLogin = null, ledgerPath
       item: item.item,
       title: `${item.title} [${item.item}]`,
       body: issueBody(item, {anchor: record.anchor, link,
-        dependents: (dependents.get(item.item) ?? []).sort(), ledgerPath}),
+        dependents: (dependents.get(item.item) ?? []).sort(), ledgerPath,
+        work: work ? {ledger: work.ledger, item: work.items.get(item.item) ?? null} : null}),
       labels: labelsFor(item),
       state: item.state === 'Resolved' ? 'closed' : 'open',
       state_reason: item.state === 'Resolved' ? 'completed' : null,

@@ -1,0 +1,33 @@
+{
+  "schema": "ophanim.wave-ownership/v1",
+  "wave": "L-148",
+  "base_commit": "acf4e3c",
+  "authorization": "owner, 2026-11-20: L-148 approved (bring pantheon-view.mjs, swarm-run.mjs and discuss-run.mjs under the L-136/L-146 billing contract through the existing shared helper; enforcement at the provider-call boundary; concurrent requests within one shared budget; no reset on restart; inventory every remaining Google API egress path, report uncovered ones as findings)",
+  "frozen": {"candidate": "af0dc3012688703ccac0f6de31836822a3279eae", "sealed_audits": "refs/heads/audit/round3-self-audit@449ca427a2dc41da1e0039b834432eed9c334484"},
+  "coordinator_only": ["docs/OPEN-LIMITATIONS.md", "docs/execution/**", "docs/reviews/**", "ophanim/lessons/**"],
+  "dependencies": ["single agent; the region limits below are written from the brief's DESIGN section (lessons class brief-manifest-disagree): where the brief requires a change, the limit allows it",
+    "pantheon/src/swarm/** is NOT owned: the swarm and discussion orchestration already records a seat's failed turn and continues; if a refusal cannot be carried without changing it, the agent stops and reports",
+    "post-hoc amendment (coordinator, 2026-11-20, at integration): the launchers' seat labels (210ccca, 2 lines) are accepted under the standing rule that a defect necessary to establish an assigned invariant is repaired. Both launchers sent labels the view server refuses with 400 (server.mjs:205, badId), so no seat of either ever reached a provider and owner item 9 could not be shown at the launchers. The repair is a separate commit; register L-152"],
+  "subwaves": {
+    "L148": {
+      "agent-l148-billing": {
+        "branch": "l148/view-billing",
+        "base_commit": "acf4e3c",
+        "findings": ["L-148"],
+        "files": ["pantheon/bin/pantheon-view.mjs", "pantheon/scripts/swarm-run.mjs", "pantheon/scripts/discuss-run.mjs",
+                  "pantheon/src/view/server.mjs", "pantheon/src/sdk/live.mjs", "pantheon/src/route/gemini-billing.mjs",
+                  "docs/billing-policy.md",
+                  "pantheon/tests/l148-*.test.mjs", "pantheon/tests/l148-billing.mutate.mjs", "pantheon/tests/fixtures/l148-*"],
+        "new_files": ["pantheon/tests/l148-*.test.mjs", "pantheon/tests/l148-billing.mutate.mjs", "pantheon/tests/fixtures/l148-*"],
+        "region_limits": {
+          "pantheon/bin/pantheon-view.mjs": "its client factory goes through sdk/live.mjs operatorGemini (the provider-call boundary) with the usage record fixed under the seat home it serves; its flags; nothing else",
+          "pantheon/scripts/swarm-run.mjs, pantheon/scripts/discuss-run.mjs": "no billing authority of their own: a billing flag given to them is refused at startup; a seat's refusal from the server is recorded with its code and recovery condition and the run goes on as it does for any failed seat",
+          "pantheon/src/view/server.mjs": "runTurn carries a billing refusal's code and recovery condition onto the bus error event and the /turn result, and a client-supplied billing field is never read as authorization; the origin policy, http-safety, the subscriber bound, the per-seat lock and the reseat semantics are unchanged",
+          "pantheon/src/sdk/live.mjs": "operatorGemini additions only (e.g. a refusal's recovery condition, the record directory); the five L-146 scripts behave as before",
+          "pantheon/src/route/gemini-billing.mjs": "geminiUsageFile's count-and-append made atomic across processes that share one record (re-derived under an exclusive lock; a crash cannot block a restart), or nothing if the agent shows two processes cannot share a record; one process's results unchanged",
+          "existing tests": "not edited"
+        }
+      }
+    }
+  }
+}

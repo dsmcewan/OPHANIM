@@ -2,6 +2,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';import {join} from 'node:path';
 import {withPipeline} from './fixtures/pipeline.mjs';import {runOpenItem} from '../src/board/run-item.mjs';
 import {openBoard,checkout} from '../src/board/index.mjs';
+import {fakeAgy} from './fixtures/dispatch.mjs';
 const spec=repo=>({key:'fallover',repo_root:repo,title:'test',goal:'test',question:'q',copy:[],acceptance_cmd:'true',slot:'code',path:'code.mjs'});
 test('a 400 after a 429 retry is terminal on the actual board path',async()=>{
  await withPipeline(async({repo,opts})=>{
@@ -14,17 +15,30 @@ test('a 400 after a 429 retry is terminal on the actual board path',async()=>{
   assert.deepEqual(other,['xai']);
  });
 });
-test('planner fallback publishes under the actual Google identity through the API transport',async()=>{
+// Owner direction 2026-11-17: a Google seat is served by its Antigravity lane first. The planner's Google fallback
+// therefore answers through the (fake) agy CLI; the metered Gemini API client is never asked. Before, it answered
+// through the API transport; the property kept is the published identity.
+test('planner fallback publishes under the actual Google identity, through Antigravity first',async()=>{
  await withPipeline(async({repo,opts})=>{
-  const base=opts.makeClientFor;
-  const result=await runOpenItem(spec(repo),{...opts,seatOverrides:{implementer:opts.seatOverrides.implementer,reviewer:opts.seatOverrides.reviewer},makeClientFor:vendor=>{
-   if(vendor==='anthropic')return {messages:{create:async()=>{throw Object.assign(new Error('quota'),{status:429});}}};
-   if(vendor==='agy_google')return {models:{countTokens:async()=>({totalTokens:100}),generateContentStream:async function*(){yield {candidates:[{finishReason:'STOP',content:{parts:[{text:'TITLE: fallback implementation'}]}}]};}}};
-   return base(vendor);
-  }});
-  assert.equal(result.shipped,true,JSON.stringify(result.error));
-  const run=JSON.parse(readFileSync(join(result.board,'run.json'),'utf8'));assert.equal(run.planner_vendor,'agy_google');
-  const b=openBoard(result.board);const plan=checkout(b.store,b.refs.resolve('refs/seat/agy_google-plan/wip'));
-  assert.equal(plan.slots.plan.author.vendor,'agy_google');
+  const base=opts.makeClientFor;const before={cli:process.env.PANTHEON_AGY_CLI,log:process.env.FAKE_AGY_LOG};
+  process.env.PANTHEON_AGY_CLI=fakeAgy(repo);process.env.FAKE_AGY_LOG=join(repo,'agy.log');const sd=process.env.PANTHEON_AGY_STATE_DIRS;process.env.PANTHEON_AGY_STATE_DIRS=repo;
+  let api=0;
+  try{
+   const result=await runOpenItem(spec(repo),{...opts,seatOverrides:{implementer:opts.seatOverrides.implementer,reviewer:opts.seatOverrides.reviewer},makeClientFor:vendor=>{
+    if(vendor==='anthropic')return {messages:{create:async()=>{throw Object.assign(new Error('quota'),{status:429});}}};
+    if(vendor==='agy_google')return {models:{countTokens:async()=>({totalTokens:100}),generateContentStream:async function*(){api++;yield {candidates:[{finishReason:'STOP',content:{parts:[{text:'TITLE: fallback implementation'}]}}]};}}};
+    return base(vendor);
+   }});
+   assert.equal(result.shipped,true,JSON.stringify(result.error));
+   const run=JSON.parse(readFileSync(join(result.board,'run.json'),'utf8'));assert.equal(run.planner_vendor,'agy_google');
+   const plan0=run.turns.find(t=>t.purpose==='plan');
+   assert.equal(plan0.model,'gemini-4-carbon-high');assert.equal(plan0.transport,'agy-cli');
+   assert.equal(api,0,'the metered Gemini API was not called: the lane answered');
+   assert.match(readFileSync(process.env.FAKE_AGY_LOG,'utf8'),/pantheon-planner gemini-4-carbon-high/);
+   const b=openBoard(result.board);const plan=checkout(b.store,b.refs.resolve('refs/seat/agy_google-plan/wip'));
+   assert.equal(plan.slots.plan.author.vendor,'agy_google');
+  }finally{
+   for(const [k,v] of [['PANTHEON_AGY_CLI',before.cli],['FAKE_AGY_LOG',before.log],['PANTHEON_AGY_STATE_DIRS',sd]]){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+  }
  });
 });

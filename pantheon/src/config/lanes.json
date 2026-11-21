@@ -4,19 +4,184 @@
       "vendor": "agy_google",
       "transport": "agy-cli",
       "lab": "anthropic",
-      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner and pantheon-implementer"
+      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner and pantheon-implementer",
+      "retired": "2026-11-17, owner direction: Antigravity serves Gemini models only. Kept so recorded ledgers still resolve this name to its lab; never seated or dispatched. Also no longer offered by `agy models` (2026-11-17)."
     },
     "claude-opus-4-6-thinking": {
       "vendor": "agy_google",
       "transport": "agy-cli",
       "lab": "anthropic",
-      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner"
+      "basis": "operator seating 2026-09-29; live-validated through .agents/agents/pantheon-planner",
+      "retired": "2026-11-17, owner direction: Antigravity serves Gemini models only. Kept so recorded ledgers still resolve this name to its lab; never seated or dispatched. Also no longer offered by `agy models` (2026-11-17)."
     },
     "gemini-3.8-flash-high": {
       "vendor": "agy_google",
       "transport": "agy-cli",
       "lab": "google",
-      "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking. The lane name is not a Gemini API id; the API model `gemini-3.8-flash` is (aistudio.google.com/docs/models, read 2026-11-16)"
+      "basis": "the name `agy models` prints for gemini-3.8-flash at high thinking. The lane name is not a Gemini API id; the API model `gemini-3.8-flash` is (aistudio.google.com/docs/models, read 2026-11-16)",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-3.8-flash: \"Input token limit 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Input token limit 1,048,576"
+      },
+      "base": "gemini-3.8-flash",
+      "thinking": "high"
+    },
+    "gemini-4-carbon-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Carbon (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-4-carbon: \"Context window (unified input and output token limit) 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Context window (unified input and output token limit) 1,048,576"
+      },
+      "base": "gemini-4-carbon",
+      "thinking": "low"
+    },
+    "gemini-4-carbon-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Carbon (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-4-carbon: \"Context window (unified input and output token limit) 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Context window (unified input and output token limit) 1,048,576"
+      },
+      "base": "gemini-4-carbon",
+      "thinking": "medium"
+    },
+    "gemini-4-carbon-high": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Carbon (High)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-4-carbon: \"Context window (unified input and output token limit) 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Context window (unified input and output token limit) 1,048,576"
+      },
+      "base": "gemini-4-carbon",
+      "thinking": "high"
+    },
+    "gemini-4-argon-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Argon (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-4-argon: \"Context window (unified input and output token limit) 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Context window (unified input and output token limit) 1,048,576"
+      },
+      "base": "gemini-4-argon",
+      "thinking": "low"
+    },
+    "gemini-4-argon-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Argon (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-4-argon: \"Context window (unified input and output token limit) 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Context window (unified input and output token limit) 1,048,576"
+      },
+      "base": "gemini-4-argon",
+      "thinking": "medium"
+    },
+    "gemini-4-argon-high": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Argon (High)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-4-argon: \"Context window (unified input and output token limit) 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Context window (unified input and output token limit) 1,048,576"
+      },
+      "base": "gemini-4-argon",
+      "thinking": "high"
+    },
+    "gemini-4-hydrogen-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner statement 2026-11-17",
+        "quote": "owner-stated 2026-11-17: gemini-4-hydrogen context window 1048576"
+      },
+      "base": "gemini-4-hydrogen",
+      "thinking": "low"
+    },
+    "gemini-4-hydrogen-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner statement 2026-11-17",
+        "quote": "owner-stated 2026-11-17: gemini-4-hydrogen context window 1048576"
+      },
+      "base": "gemini-4-hydrogen",
+      "thinking": "medium"
+    },
+    "gemini-4-hydrogen-high": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (High)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner statement 2026-11-17",
+        "quote": "owner-stated 2026-11-17: gemini-4-hydrogen context window 1048576"
+      },
+      "base": "gemini-4-hydrogen",
+      "thinking": "high"
+    },
+    "gemini-4-hydrogen-xhigh": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 4 Hydrogen (XHigh)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner statement 2026-11-17",
+        "quote": "owner-stated 2026-11-17: gemini-4-hydrogen context window 1048576"
+      },
+      "base": "gemini-4-hydrogen",
+      "thinking": "xhigh"
+    },
+    "gemini-3.8-flash-low": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 3.8 Flash (Low)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-3.8-flash: \"Input token limit 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Input token limit 1,048,576"
+      },
+      "base": "gemini-3.8-flash",
+      "thinking": "low"
+    },
+    "gemini-3.8-flash-medium": {
+      "vendor": "agy_google",
+      "transport": "agy-cli",
+      "lab": "google",
+      "basis": "owner's `agy models` output, 2026-11-17 (label: Gemini 3.8 Flash (Medium)). An Antigravity lane name with its thinking level in the id; not a Gemini API id. Antigravity documents no context window (antigravity.google/docs/models, read 2026-11-17); the `window` recorded here is cited in its own `source`.",
+      "window": {
+        "value": 1048576,
+        "source": "owner direction 2026-11-17: Antigravity lanes are primary; figure is the base model's documented Gemini API window (https://aistudio.google.com/docs/models/gemini-3.8-flash: \"Input token limit 1,048,576\"); Antigravity itself documents no window",
+        "quote": "Input token limit 1,048,576"
+      },
+      "base": "gemini-3.8-flash",
+      "thinking": "medium"
     }
   }
 }

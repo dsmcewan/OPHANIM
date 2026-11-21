@@ -13,9 +13,29 @@
 // at the cycle's attempt limit.
 import {SEATING, candidatesFor} from '../role/seating.mjs';
 import {labOf} from './lineage-kinds.mjs';
-import {REVIEW_BRIEF, reviewPrompt, parseReview, sha} from './cycle-kinds.mjs';
+import {REVIEW_BRIEF, reviewPrompt, parseReview, sha, REQUIRED_REVIEW_LABS, CYCLE_CONTRACT_V1, CYCLE_CONTRACT_V3, independenceRefusal, answerRefusal, seatLab} from './cycle-kinds.mjs';
+import {resolveModel, contributorKeys, candidateRefusal, candidateIdentity, currentPolicy, identityOf} from '../review/identity.mjs';
 import {promptSha} from '../context/chain.mjs';
 import {canonical} from '../../../packages/ledger/canonical.mjs';
+
+/**
+ * The raw contributor names a v3 cycle records: every requested and served model of each contribution, and a
+ * contribution that names a lab and no model as {vendor, model: null, lab} (its lab is excluded outright). The ledger
+ * re-derives the cycle's exclusions from exactly these rows (cycle-kinds.mjs v3LineageRefusal).
+ * EACH NAME ROW KEEPS THE IDENTITY OF ITS CONTRIBUTION (wave 3, L-504 invariant 2): a contribution that states more than
+ * one plain name (a requested and a served name, an unnamed answer, a marker) is recorded on every one of its name rows
+ * with {requested_model, served_model, served_model_source} as review/identity.mjs identityOf reads it, so the cycle
+ * says which name was asked, which answered (null: none was named) and where the served name came from. A plain row
+ * ({vendor, model}: one name, nothing else stated) is recorded as before. The lab of a named contributor is the cycle's
+ * own resolution under its pinned policy (author_labs), never the controller's claim, so it is not copied here.
+ */
+export const contributorRows = contributions => contributions.flatMap(c => {
+  const names = [...new Set([c.model, c.served_model, c.requested_model].filter(Boolean))];
+  const stated = ['served_model', 'requested_model', 'served_model_source'].some(k => c[k] !== undefined && c[k] !== null) || (Object.hasOwn(c, 'served_model') && c.model);
+  const who = stated ? identityOf(c) : null;
+  const id = who ? {requested_model: who.requested_model, served_model: who.served_model, ...(who.served_model_source ? {served_model_source: who.served_model_source} : {})} : {};
+  return names.length ? names.map(model => ({vendor: c.vendor ?? null, model, ...id})) : [{vendor: c.vendor ?? null, model: null, ...(c.lab ? {lab: c.lab} : {})}];
+});
 
 /** Tries per reviewer seat of one cycle, the first included, unless the caller names another limit. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -27,12 +47,15 @@ const refuse = (code, why) => Object.assign(new Error(why), {code});
  * does not hold (with an Anthropic author, the reviewer table has two other labs and the third comes from
  * another chair). Throws when the seating table has fewer than `n` labs left.
  */
-export function reviewSeats({n = 3, avoidLabs = [], seating = SEATING, facts = undefined} = {}) {
+// `policy` (optional): the identity policy a lab-rule cycle pins (cycle-kinds.mjs lab_identity). With it a candidate's lab
+// is resolved under that policy, and a candidate it cannot resolve is not seated (L-204); without it, labOf as before.
+export function reviewSeats({n = 3, avoidLabs = [], seating = SEATING, facts = undefined, policy = null} = {}) {
   const out = [], taken = new Set(avoidLabs);
   for (const role of ['reviewer', ...Object.keys(seating).filter(r => r !== 'reviewer')]) {
     for (const c of candidatesFor(role, {seating, ...(facts ? {facts} : {})})) {
-      const lab = labOf(c.vendor, c.model);
-      if (taken.has(lab) || !c.model) continue;
+      if (!c.model) continue;
+      const lab = policy ? candidateIdentity({vendor: c.vendor, model: c.model}, policy).lab ?? null : labOf(c.vendor, c.model);
+      if (!lab || taken.has(lab)) continue;
       taken.add(lab);
       out.push({vendor: c.vendor, model: c.model, lab, role, why: c.why});
       if (out.length === n) return out;
@@ -42,12 +65,56 @@ export function reviewSeats({n = 3, avoidLabs = [], seating = SEATING, facts = u
 }
 
 /**
+ * Reviewer seats on `n` distinct labs under MODEL-level independence (pantheon.cycle/v3; owner direction 2026-11-17).
+ * A candidate is eligible unless it IS a contributing model (by identity: an effort level, alias, snapshot or route of
+ * a contributor is that contributor) or its lab is excluded outright (a contribution with no identifiable model).
+ * One seat per lab. Labs that did not contribute are filled first, in the tables' order; then, as needed, labs that
+ * did contribute, each with its first eligible model. Such a seat is marked `shared_lab` with the contributing models
+ * of its lab. There is no fixed limit on shared-lab seats. Throws NO_SEATS when fewer than `n` labs have an eligible model.
+ *   contributions  rows {vendor, model, served_model?, lab} (review/scope.mjs), or
+ *   excluded       {models: [identity ids], labs: [labs], contributing_labs: [labs]} (a cycle's own record)
+ */
+// `last` (optional): labs ordered after every other eligible lab, contributing or not -- the validator's preference for a
+// lab outside the change-review panel (owner decision L-002, 2026-11-19). It only reorders; it excludes nothing.
+export function reviewSeatsByModel({n = 3, contributions = [], excluded = null, seating = SEATING, facts = undefined, policy = currentPolicy(), last = []} = {}) {
+  const keys = excluded ?? contributorKeys(contributions, policy);
+  // A contributor that cannot be identified: no reviewer can be shown not to be it, so no panel qualifies.
+  if ((keys.unresolved ?? []).length) {
+    throw Object.assign(new Error(`reviewSeatsByModel: a contributor's identity is unresolved (${keys.unresolved.map(u => `${u.vendor}/${u.model}: ${u.why}`).join('; ')}); declare it in the identity rules`),
+      {code: 'NO_SEATS', eligible_labs: [], unresolved: keys.unresolved});
+  }
+  const contributing = new Set(keys.contributing_labs ?? [...keys.labs, ...keys.models.map(m => m.split('/')[0])]);
+  const byLab = new Map();
+  for (const role of ['reviewer', ...Object.keys(seating).filter(r => r !== 'reviewer')]) {
+    for (const c of candidatesFor(role, {seating, ...(facts ? {facts} : {})})) {
+      if (!c.model || candidateRefusal({vendor: c.vendor, model: c.model}, keys, policy)) continue;   // contributors and unresolved candidates
+      const who = resolveModel(c.vendor, c.model, policy), lab = who.lab;
+      if (!byLab.has(lab)) byLab.set(lab, {vendor: c.vendor, model: c.model, lab, role, why: c.why, identity: who.id});
+    }
+  }
+  const rank = l => (last.includes(l) ? 2 : 0) + (contributing.has(l) ? 1 : 0);
+  const order = [...byLab.keys()].map((l, i) => [l, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([l]) => l);
+  const seats = order.slice(0, n).map(l => {
+    const s = byLab.get(l), shared = contributing.has(l);
+    return {...s, shared_lab: shared, ...(shared ? {shared_with: keys.models.filter(m => m.startsWith(`${l}/`))} : {})};
+  });
+  if (seats.length < n) {
+    throw Object.assign(new Error(`reviewSeatsByModel: ${seats.length} lab(s) have a model that did not contribute (${order.join(', ') || 'none'}); ${n} distinct labs are required`),
+      {code: 'NO_SEATS', eligible_labs: order});
+  }
+  return seats;
+}
+
+/**
  * Ask each seat for its review of an open cycle and record what came back: the turn, the review and its
  * findings, and one attempt per seat (`tried` holds the attempts each lab already made). Seats are asked
  * concurrently; a seat that throws, or whose review the ledger refuses, is a failed attempt.
  */
 async function askSeats({ledger, cycle, seats, prompt, turn, author_turns, tried = new Map(), max_attempts, resumed, at}) {
-  const answers = await Promise.allSettled(seats.map(s => turn({vendor: s.vendor, model: s.model, prompt, seat: s})));
+  const c = ledger.cycleState(cycle).cycle;
+  // `admit`: the cycle's own admission of an answer, handed to the turn so that a turn which asks the seat more than once
+  // (retrieval rounds) admits EVERY answer it is given by the rule the ledger applies to the review (L-201).
+  const answers = await Promise.allSettled(seats.map(s => turn({vendor: s.vendor, model: s.model, prompt, seat: s, admit: answer => answerRefusal(c, s, answer)})));
   const reviews = [], failed = [];
   for (const [i, s] of seats.entries()) {
     const attempt = (tried.get(s.lab) ?? 0) + 1;
@@ -61,14 +128,20 @@ async function askSeats({ledger, cycle, seats, prompt, turn, author_turns, tried
     const served_model = r.served_model ?? null, response_id = r.response_id ?? null, reply = r.text ?? '';
     let review = null;
     try {
-      const t = ledger.recordTurn({seat, requested_model: s.model, served_model, response_id, reply, purpose: 'cycle-review', prompt, cites: [cycle]});
+      // The seat's earlier retrieval rounds, each with the model that answered it, recorded before its answer: the ledger
+      // admits each by the review's own rule (lineage-kinds.mjs roundRefusal). A round's prompt is its own.
+      for (const x of Array.isArray(r.rounds) ? r.rounds : []) {
+        ledger.recordTurn({seat, requested_model: s.model, served_model: x.served_model ?? null, served_model_source: x.served_model_source ?? null, response_id: x.response_id ?? null,
+          reply: x.text ?? '', purpose: 'cycle-review-round', prompt: x.prompt ?? null, cites: [cycle]});
+      }
+      const t = ledger.recordTurn({seat, requested_model: s.model, served_model, served_model_source: r.served_model_source ?? null, response_id, reply, purpose: 'cycle-review', prompt, cites: [cycle]});
       const parsed = parseReview(reply);
       review = ledger.recordReview({seat, model: s.model, served_model, response_id, verdict: parsed.verdict,
         findings: parsed.findings.map(f => `[${f.severity}] ${f.file ?? '-'}${f.line ? `:${f.line}` : ''} ${f.claim}`).join('\n'),
         targets: [cycle, ...author_turns], turn: t});
       ledger.recordAttempt({cycle, seat: s, attempt, max_attempts, outcome: 'reviewed', review, resumed, at: at ?? new Date().toISOString()});
       const findings = parsed.findings.map((finding, index) => ({hash: ledger.recordFinding({review, index, finding}), ...finding}));
-      reviews.push({vendor: s.vendor, model: s.model, served_model, lab: labOf(s.vendor, served_model ?? s.model), turn: t, review, verdict: parsed.verdict, parsed: parsed.parsed, findings});
+      reviews.push({vendor: s.vendor, model: s.model, served_model, ...(r.served_model_source ? {served_model_source: r.served_model_source} : {}), lab: s.lab, turn: t, review, verdict: parsed.verdict, parsed: parsed.parsed, findings});
     } catch (err) {
       // A review that was recorded stands (resume completes its findings); only a seat with none failed.
       if (review) failed.push({vendor: s.vendor, model: s.model, lab: s.lab, attempt, why: err.message, review});
@@ -88,14 +161,35 @@ async function askSeats({ledger, cycle, seats, prompt, turn, author_turns, tried
  *   max_attempts  tries per seat for the cycle, the first included (default DEFAULT_MAX_ATTEMPTS)
  *   contract, policy, practice_scope  the cycle contract it opens under (default pantheon.cycle/v2), the
  *           selection policy in effect and the practice scope (cycleRecorder.openCycle)
+ *   required_reviewers  the independent labs the review requires, recorded on the cycle (at least
+ *           REQUIRED_REVIEW_LABS; a board run and the CLI pass it). Fewer seats than that is refused before the
+ *           cycle opens (REVIEW_LABS_BELOW_REQUIRED), and the cycle cannot close on fewer labs.
  * Returns the cycle, each recorded review with its findings, and the seats that failed. A failed seat
  * leaves the cycle unable to close; `resume: true` with the same change tries it again.
  */
 export async function reviewCycle({ledger, change, seats = null, turn, n = 3, brief = REVIEW_BRIEF, opened_at, resume = false, max_attempts, at,
-  contract, policy, practice_scope}) {
+  contract, policy, practice_scope, required_reviewers}) {
   if (typeof turn !== 'function') throw new Error('reviewCycle: pass turn({vendor, model, prompt, seat}) -> {text, response_id, served_model}');
   if (resume) return resumeCycle({ledger, change, seats, turn, brief, max_attempts, at});
   const {scope, head, diff, files = [], author_labs = [], author_turns = []} = change ?? {};
+  // Model-level independence is asked for explicitly (change.independence: 'model', with the contributions); it opens
+  // the cycle under pantheon.cycle/v3. Without it the cycle opens as before, under the lab rule.
+  const byModel = change?.independence === 'model';
+  // A lab-rule (v2) cycle may pin the identity its labs are resolved under (L-204): `change.lab_identity`, an identity
+  // policy. The lifecycle (ophanim/operate/stages.mjs) and the board's coordinated review (board/operate.mjs) always pass
+  // it; a caller that does not opens the shape recorded before it.
+  const labPinned = !byModel && contract !== CYCLE_CONTRACT_V1 && change?.lab_identity ? change.lab_identity : null;
+  // The identity policy the cycle is opened and pinned under: the current one, or the one the caller names (a re-review
+  // after a reassessment is made under the corrected policy that reassessment used).
+  const pinned = byModel ? change.identity_policy ?? currentPolicy() : null;
+  const keys = byModel ? contributorKeys(change.contributions ?? [], pinned) : null;
+  if (byModel && keys.unresolved.length) throw refuse('UNRESOLVED_CONTRIBUTOR', `reviewCycle: a contributor's identity is unresolved (${keys.unresolved.map(u => `${u.vendor}/${u.model}`).join(', ')}); no review can qualify`);
+  // Every NEWLY opened cycle needs three distinct labs (independent review, assignment 2, question 5): the default
+  // contract (and v3) records the requirement, so the ledger itself refuses a close on fewer labs. A v1 cycle keeps its
+  // old payload byte for byte, so its floor is enforced here, before it opens. Cycles already on a ledger are verified
+  // under the rules they recorded; this changes only what a new cycle may be opened with.
+  const opensV1 = !byModel && contract === CYCLE_CONTRACT_V1;
+  if (!opensV1 && required_reviewers === undefined) required_reviewers = Math.max(n, REQUIRED_REVIEW_LABS);
   if (typeof diff !== 'string' || diff === '') throw new Error('reviewCycle: the change carries its diff text');
   const last = ledger.lastCycle(scope);
   if (last && !last.close) {
@@ -105,14 +199,31 @@ export async function reviewCycle({ledger, change, seats = null, turn, n = 3, br
   if (!base) throw new Error(`reviewCycle: no base given and no earlier cycle of "${scope}" on the ledger`);
   const limit = max_attempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(limit) || limit < 1) throw new Error('reviewCycle: max_attempts is a positive integer');
-  const chosen = (seats ?? reviewSeats({n, avoidLabs: author_labs})).map(s => ({...s, lab: labOf(s.vendor, s.model)}));
+  const chosen = (seats ?? (byModel ? reviewSeatsByModel({n, excluded: keys, policy: pinned}) : reviewSeats({n, avoidLabs: author_labs, policy: labPinned})))
+    .map(s => ({...s, lab: byModel ? resolveModel(s.vendor, s.model, pinned)?.lab ?? null : labPinned ? candidateIdentity(s, labPinned).lab ?? null : labOf(s.vendor, s.model)}));
   const labs = chosen.map(s => s.lab);
+  const unknown = chosen.find(s => !s.lab);
+  if (unknown) throw refuse('UNRESOLVED_REVIEWER', `reviewCycle: the seat ${unknown.vendor}/${unknown.model} resolves to no lab under the cycle's identity rules: ${candidateIdentity(unknown, pinned ?? labPinned ?? currentPolicy()).why}`);
   if (new Set(labs).size !== labs.length) throw Object.assign(new Error(`reviewCycle: reviewers share a lab (${labs.join(', ')})`), {code: 'SAME_LAB'});
-  const authored = labs.find(l => author_labs.includes(l));
-  if (authored) throw Object.assign(new Error(`reviewCycle: the ${authored} lab authored the change and may not review it`), {code: 'SAME_LAB'});
+  if (required_reviewers !== undefined && !(Number.isInteger(required_reviewers) && required_reviewers >= REQUIRED_REVIEW_LABS && chosen.length >= required_reviewers)) {
+    throw refuse('REVIEW_LABS_BELOW_REQUIRED', `reviewCycle: the review requires ${Math.max(Number(required_reviewers) || 0, REQUIRED_REVIEW_LABS)} independent labs ` +
+      `and ${chosen.length} reviewer seat(s) were given; a caller cannot lower it`);
+  }
+  if (opensV1 && chosen.length < REQUIRED_REVIEW_LABS) {
+    throw refuse('REVIEW_LABS_BELOW_REQUIRED', `reviewCycle: a new cycle requires ${REQUIRED_REVIEW_LABS} independent labs and ${chosen.length} reviewer seat(s) were given`);
+  }
+  if (byModel) {
+    for (const s of chosen) { const why = candidateRefusal(s, keys, pinned); if (why) throw Object.assign(new Error(`reviewCycle: ${why}`), {code: 'CONTRIBUTOR'}); }
+  } else {
+    const authored = labs.find(l => author_labs.includes(l));
+    if (authored) throw Object.assign(new Error(`reviewCycle: the ${authored} lab authored the change and may not review it`), {code: 'SAME_LAB'});
+  }
 
   const prompt = reviewPrompt({brief, base, head, files, diff});
-  const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs, author_turns, opened_at, contract, policy, practice_scope});
+  const cycle = ledger.openCycle({scope, base, head, diff, files, prompt, brief, reviewers: chosen.length, author_labs: byModel ? keys.contributing_labs : author_labs, author_turns, opened_at,
+    contract: byModel ? CYCLE_CONTRACT_V3 : contract, policy, practice_scope, ...(required_reviewers !== undefined ? {required_reviewers} : {}),
+    ...(byModel ? {author_models: keys.models, excluded_labs: keys.labs, identity_policy: pinned,
+      contributors: contributorRows(change.contributions ?? [])} : {}), ...(labPinned ? {lab_identity: labPinned} : {})});
   const {reviews, failed} = await askSeats({ledger, cycle, seats: chosen, prompt, turn, author_turns, max_attempts: limit, resumed: false, at});
   return {cycle, scope, base, head, prompt_sha: promptSha(prompt), reviews, failed, complete: failed.length === 0, max_attempts: limit};
 }
@@ -171,7 +282,8 @@ async function resumeCycle({ledger, change, seats, turn, brief, max_attempts, at
     if (a.outcome === 'failed' && !reviewed.has(a.seat.lab)) failedSeat.set(a.seat.lab, {vendor: a.seat.vendor, model: a.seat.model, lab: a.seat.lab});
   }
   const missing = c.reviewers - state.reviews.length;
-  const retained = state.reviews.map(r => ({vendor: r.seat.vendor, model: r.model, served_model: r.served_model, lab: r.lab, turn: r.turn, review: r.hash,
+  // A retained review keeps the marker of where its served name came from (wave 3, L-504 invariant 2: it was dropped here).
+  const retained = state.reviews.map(r => ({vendor: r.seat.vendor, model: r.model, served_model: r.served_model, ...(r.served_model_source ? {served_model_source: r.served_model_source} : {}), lab: r.lab, turn: r.turn, review: r.hash,
     verdict: r.verdict, parsed: r.reported.parsed, retained: true,
     findings: state.findings.filter(f => f.review === r.hash).map(f => ({hash: f.hash, ...findingFields(f.payload)}))}));
   const result = extra => ({cycle, scope, base: c.base, head: c.head, prompt_sha: c.prompt_sha, resumed: true, max_attempts: limit,
@@ -180,7 +292,7 @@ async function resumeCycle({ledger, change, seats, turn, brief, max_attempts, at
 
   let chosen;
   if (seats) {
-    chosen = seats.map(s => ({...s, lab: labOf(s.vendor, s.model)}));
+    chosen = seats.map(s => ({...s, lab: seatLab(c, s) ?? labOf(s.vendor, s.model)}));
     const labs = chosen.map(s => s.lab);
     if (new Set(labs).size !== labs.length) throw refuse('SAME_LAB', `reviewCycle resume: reviewers share a lab (${labs.join(', ')})`);
     // The seats are the cycle's original list: those whose lab has reviewed are kept, not asked again.
@@ -199,12 +311,15 @@ async function resumeCycle({ledger, change, seats, turn, brief, max_attempts, at
       // No attempts on record for some seats (a cycle opened before attempts were recorded): the
       // default seating, as the original review used it, on labs that have not reviewed.
       let defaults = [];
-      try { defaults = reviewSeats({n: c.reviewers, avoidLabs: c.author_labs}); } catch { defaults = []; }
+      try {
+        defaults = c.contract === CYCLE_CONTRACT_V3 ? reviewSeatsByModel({n: c.reviewers, excluded: {models: c.author_models, labs: c.excluded_labs, contributing_labs: c.author_labs}, policy: c.identity_policy.rules})
+          : reviewSeats({n: c.reviewers, avoidLabs: c.author_labs, policy: c.lab_identity?.rules ?? null});
+      } catch { defaults = []; }
       for (const s of defaults) if (!reviewed.has(s.lab) && !chosen.some(x => x.lab === s.lab)) chosen.push(s);
     }
   }
-  const authored = chosen.find(s => c.author_labs.includes(s.lab));
-  if (authored) throw refuse('SAME_LAB', `reviewCycle resume: the ${authored.lab} lab authored the change and may not review it`);
+  // The cycle's own contract decides who may review it: its lab rule (v1, v2) or its contributing models (v3).
+  for (const s of chosen) { const why = independenceRefusal(c, s); if (why) throw refuse(c.contract === CYCLE_CONTRACT_V3 ? 'CONTRIBUTOR' : 'SAME_LAB', `reviewCycle resume: ${why}`); }
   chosen = chosen.slice(0, missing);
   if (!chosen.length) throw refuse('NO_SEATS', `reviewCycle resume: ${missing} review(s) are missing and no seat is left to ask`);
   const exhausted = chosen.filter(s => (tried.get(s.lab) ?? 0) >= limit);

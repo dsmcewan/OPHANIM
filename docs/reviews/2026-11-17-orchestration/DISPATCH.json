@@ -1,0 +1,354 @@
+{
+  "schema": "ophanim.dispatch-demo/v1",
+  "head": "f29f5709dbd1601dbe7470bde0fe4ffbeba79758",
+  "issues_source": "GitHub issues snapshot of 2026-11-17 (dsmcewan/OPHANIM, all states, 59 issues, read through the GitHub MCP list_issues tool)",
+  "provider_calls": 0,
+  "phases": {
+    "A": {
+      "what": "tick with no work ledger",
+      "exit": 1,
+      "refusal": "refused: no work ledger at status/work: pass --init to create it here (it generates the controller key on this machine)",
+      "work_ledger_created": false
+    },
+    "B": {
+      "what": "tick --init at the default limits (total provider calls 0)",
+      "exit": 0,
+      "dispatched": [],
+      "intake": 59,
+      "recovery": [
+        {
+          "item": "p1-p7",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "p8-p9",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "terminal-state",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "q1-q6",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "q7-measurement",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "facts",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "protocol",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "reasoning-context",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "swarms",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "token-tiers",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "agy-escalation",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "live-reseat",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "frontier-move",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "gemini-3.8",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "layered-review",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "k1",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "k2",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "k3",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "k4",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "k5",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "ledger-default",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "off-ledger-records",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "status-board",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "shared-package",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "board-resolver",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "review-every-cycle",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "signer",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "gate-on-run-path",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "ref-write-gap",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "ru2-frontier-forgery",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "ru1-cross-lab",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "fw1-stored-answer",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "public-record",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "me1-author-signature",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "sy1-ledger-caller",
+          "outcome": "not-found",
+          "searched": 2
+        },
+        {
+          "item": "supply-portability",
+          "outcome": "not-found",
+          "searched": 2
+        }
+      ],
+      "stopped": "provider-call budget: 0 left of 0, a stage needs up to 40",
+      "note": "no --total-provider-calls declared: nothing that may call a provider was dispatched",
+      "refusal": null
+    },
+    "C": {
+      "what": "tick with a declared budget and recording executors",
+      "limits": {
+        "total_provider_calls": 200,
+        "stage_provider_calls": 40,
+        "iterations": 20
+      },
+      "dispatched": [
+        {
+          "item": "co1-readability",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "me3-canonical",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "review-mutants",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "routing-coordination-practices",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        },
+        {
+          "item": "workflow-handoff-controls",
+          "stage": "plan",
+          "attempt": 1,
+          "status": "blocked"
+        }
+      ],
+      "received": [
+        {
+          "item": "co1-readability",
+          "stage": "plan",
+          "mode": "revalidate",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "a ticket exists; its assumptions, scope, dependencies and acceptance criteria need re-checking"
+        },
+        {
+          "item": "me3-canonical",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        },
+        {
+          "item": "review-mutants",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        },
+        {
+          "item": "routing-coordination-practices",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        },
+        {
+          "item": "workflow-handoff-controls",
+          "stage": "plan",
+          "mode": "author",
+          "attempt": 1,
+          "budget": {
+            "provider_calls": 40,
+            "iterations": 1,
+            "elapsed_ms": 3600000,
+            "retries": 3
+          },
+          "upstream": null,
+          "reuse": [],
+          "reason": "no approved plan and no ticket: evaluation and planning"
+        }
+      ],
+      "blocked": 58,
+      "blocked_by_gate": [
+        [
+          "blocked",
+          22
+        ],
+        [
+          "evidence-gap",
+          36
+        ]
+      ],
+      "intake": 0,
+      "skipped": [],
+      "stopped": null
+    },
+    "D": {
+      "what": "the same tick again",
+      "dispatched": 0,
+      "intake": 0,
+      "stopped": null
+    },
+    "E": {
+      "what": "tick without the controller key",
+      "exit": 3,
+      "block": "NO_AUTHORITY",
+      "entries_before": 112,
+      "entries_after": 112,
+      "verified": true
+    }
+  },
+  "work_ledger": {
+    "entries": 112,
+    "verified": true
+  }
+}

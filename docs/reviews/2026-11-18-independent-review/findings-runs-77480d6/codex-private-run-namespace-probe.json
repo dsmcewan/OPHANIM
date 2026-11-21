@@ -1,0 +1,16 @@
+{
+  "exit_code": 0,
+  "commit": "77480d6b262c92ceca5a159cc5be3e3ee627b922",
+  "preflight_ok": true,
+  "failed": [],
+  "permission_profile_ok": true,
+  "permission_profile_stderr": null,
+  "outer_runtime_namespace": {
+    "root": "host read-only",
+    "run": "private tmpfs",
+    "tmp": "private tmpfs",
+    "only_persistent_writable_root": "/home/colchis/Projects/OPHANIM-review-77480d6-s7aehe1w"
+  },
+  "inner_permission_profile_changed": false,
+  "model_turns": 0
+}

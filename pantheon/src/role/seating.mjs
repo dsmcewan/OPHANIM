@@ -161,33 +161,9 @@ export const SEATING = {
   // The QUOTA basis elsewhere means "its own subscription"; for anthropic it means "shared with whoever
   // is driving", which is a different fact and has to be said rather than discovered per run.
   planner: [
-    // SONNET 4.6 VIA AGY IS THE ACTUAL DEFAULT, CORRECTED 2026-09-29. First landed with Opus 4.6 as
-    // this rung (same day); the operator's own words, immediately after: "Sonnet will suffice at
-    // most of what it's given to plan, saving tokens on a lesser model. But if it needs advice Opus
-    // can step in. Not everything needs to be routed through Opus. That's what is being avoided."
-    // Sonnet sits first -- candidatesFor/roleTurn's real dispatch is pure array order, so position,
-    // not band, is what makes this the actual default -- and carries the cheap/usually-sufficient
-    // band, mirroring how opus-5-5 (not fable) catches most requests on the anthropic ladder just
-    // below: the dearer model comes SECOND in this file's own established convention, not first.
-    // Same agy CLI OAuth quota as implementer's own top rung, independent of the anthropic pool this
-    // session is rationing and of openai (confirmed dead). No env var needed: agyTurn forces the CLI
-    // lane unconditionally for planner (the SDK lane has no --role planner at all, on any input).
-    { vendor: "agy_google", model: "claude-sonnet-4-6", band: "easy", basis: "TASTE",
-      why: "the operator's actual instruction: Sonnet handles most planning work, saving tokens " +
-        "against a stronger rung most tasks don't need. Same charter as implementer's top rung, " +
-        "different quota from anthropic below" },
-    // OPUS 4.6 VIA AGY -- the escalation, reached when Sonnet's own rung is unavailable (this
-    // ladder's only working notion of "needs advice": Pantheon has no mechanism for a model to flag
-    // mid-turn that a harder rung should answer instead; a pin or an explicit seatOverride is the
-    // operator's way to put a specific hard ticket straight on this rung instead of waiting for it).
-    // Live-validated 2026-09-29: a real turn on claude-opus-4-6-thinking via
-    // .agents/agents/pantheon-planner (correct reply, 0 tool calls), then a full ticket shipped
-    // end to end with this seat as planner (validateAgyCliOpusSonnet1) -- both runs predate this
-    // correction and used Opus as the top rung; the CLI path itself is unaffected by the reorder.
-    { vendor: "agy_google", model: "claude-opus-4-6-thinking", band: "hard", basis: "TASTE",
-      why: "the escalation the operator described -- 'if it needs advice, Opus can step in' -- kept " +
-        "on the same agy_google quota as the Sonnet rung above rather than falling all the way to " +
-        "the anthropic hose for what is still, deliberately, not the default" },
+    // The two Claude rungs that ran through Antigravity (claude-sonnet-4-6, claude-opus-4-6-thinking; operator seating
+    // 2026-09-29) were removed on 2026-11-17, owner direction: Antigravity serves Gemini models only. Those ids are also
+    // no longer offered (`agy models`, 2026-11-17).
     // FABLE 5.1 -> OPUS 5.5, both anthropic. The operator named these two on 2026-09-28; this is a
     // stated preference, not a measurement, and nothing below ranks the occupants.
     //
@@ -248,23 +224,14 @@ export const SEATING = {
         "is available. gpt-6-sol rather than astra or luna because this is the middle of the " +
         "operator's openai ladder: a plan is structure, not a one-line edit and not the dearest " +
         "reasoning in the table. Quality here is unmeasured, like every other seat in this file" },
+    // Antigravity Gemini seat, owner direction 2026-11-17 ("seat Carbon and the other Gemini ids through Antigravity").
+    // Appended, unbanded: it changes no band's pick and is reached only as a fallback, by a pin, or by the fit profile.
+    { vendor: "agy_google", model: "gemini-4-carbon-high", basis: "QUOTA",
+      why: "the Antigravity subscription pool, separate from the metered provider APIs; the model is pinned by the lane id, thinking level included" },
   ],
   implementer: [
-    // SONNET 4.6 VIA AGY, operator instruction 2026-09-29: "The implementers will be Sonnet 4.6
-    // through Agy as well." Same mechanism and same reasoning as the planner entry above: agy CLI
-    // OAuth login, separate quota from both the rationed anthropic pool and openai below (confirmed
-    // dead, HTTP 429 "no credits remaining", live-checked this session). No env var needed: agyTurn
-    // forces the CLI lane unconditionally for implementer too (the SDK lane has no --role
-    // implementer at all, on any input).
-    // Live-validated 2026-09-29 twice: an isolated real turn on claude-sonnet-4-6 via
-    // .agents/agents/pantheon-implementer -- exact NO_TOOLS text-only reply, the same contract
-    // every other vendor's implementer runs under (see run-item.mjs's agyTurn), 0 tool calls --
-    // then a full ticket shipped end to end with this seat as implementer AND with zero
-    // seatOverrides at all, true default routing (validateAgyCliOpusSonnet1, validateAgyDefaultE2E1).
-    { vendor: "agy_google", model: "claude-sonnet-4-6", band: "hard", basis: "TASTE",
-      why: "the operator's stated top rung for implementing as of 2026-09-29, chosen specifically " +
-        "to avoid both the rationed anthropic pool and openai's dead credits. Same charter, " +
-        "different quota from the openai ladder below" },
+    // The Sonnet 4.6 rung through Antigravity (operator seating 2026-09-29) was removed on 2026-11-17, owner direction:
+    // Antigravity serves Gemini models only.
     // ASTRA -> SOL -> LUNA, all openai. SURFACE justifies the LAB, not the rung: the Responses-API-only
     // constraint is recorded against the vendor, so it is why openai holds this chair and not why astra
     // outranks luna. That ordering is the operator's and is labelled as such.
@@ -294,6 +261,14 @@ export const SEATING = {
     { vendor: "openai", model: modelId("openai", "luna"), band: "easy", basis: "TASTE",
       why: "same lab and surface again, and the better seating for a small mechanical edit, which it " +
         "turns around faster. The operator's band assignment; no measurement of code quality here" },
+    // Antigravity Gemini seat, owner direction 2026-11-17 ("seat Carbon and the other Gemini ids through Antigravity").
+    // Appended, unbanded: it changes no band's pick and is reached only as a fallback, by a pin, or by the fit profile.
+    { vendor: "agy_google", model: "gemini-4-carbon-high", basis: "QUOTA",
+      why: "the Antigravity subscription pool, separate from the metered provider APIs; the model is pinned by the lane id, thinking level included" },
+    // Antigravity Gemini seat, owner direction 2026-11-17 ("seat Carbon and the other Gemini ids through Antigravity").
+    // Appended, unbanded: it changes no band's pick and is reached only as a fallback, by a pin, or by the fit profile.
+    { vendor: "agy_google", model: "gemini-4-argon-high", basis: "QUOTA",
+      why: "the Antigravity subscription pool, separate from the metered provider APIs; the model is pinned by the lane id, thinking level included" },
   ],
   reviewer: [
     // GROK, and never the maker's lab. Those are two different statements and both are load-bearing:
@@ -309,7 +284,11 @@ export const SEATING = {
         "harness has actually called and had answer (2026-09-27)" },
     // The isolation tail: if the implementer is ever seated on xai, grok cannot review its own lab.
     // These are RESEATS, not lesser reviewers -- the chair has to have somewhere to go.
-    { vendor: "agy_google", model: modelId("google", "gemini-3.6-flash"), band: "easy", basis: "ISOLATION",
+    // An Antigravity seat names a DECLARED LANE (config/lanes.json): gemini-3.6-flash has none, so seated here it was
+    // served by the metered Gemini API even with the metered failover off (independent review round 2, assignment 3
+    // (Google gemini-4-carbon, manual, 77480d6), finding 6). Every agy_google seat of this table names a lane, or an
+    // API id that has one (tests/reliability-r2-a3.test.mjs).
+    { vendor: "agy_google", model: AGY_GEMINI_HIGH, band: "easy", basis: "ISOLATION",
       why: "the reseat when the implementer holds the xai lab; a reviewer may never share the maker's" },
     { vendor: "anthropic", tier: "default", basis: "ISOLATION",
       why: "last reseat, same reason: what disqualifies a reviewer is the lab it shares, never its size" },
@@ -336,7 +315,8 @@ export const SEATING = {
         "participate, so this order is a starting point that assertJudgeEligible overrides" },
     { vendor: "openai", tier: "strong", basis: "ISOLATION",
       why: "same rule: eligible only when openai produced none of what is being judged" },
-    { vendor: "agy_google", tier: "default", basis: "ISOLATION",
+    // A lane, not the router's tier default: gemini-3.6-flash has no Antigravity lane (finding 6, above).
+    { vendor: "agy_google", model: AGY_GEMINI_HIGH, basis: "ISOLATION",
       why: "same rule; a cheap judge is acceptable because judging reads rather than produces" },
     { vendor: "xai", tier: "default", basis: "ISOLATION",
       why: "same rule; last resort, and if every vendor participated there is no clean judge at all" },

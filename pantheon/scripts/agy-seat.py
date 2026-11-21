@@ -13,14 +13,27 @@
 # Role text comes from .agents/agents/pantheon-<role>/agent.md -- the SAME files the agy CLI lane
 # loads (agy -p --agent pantheon-<role>) -- so the two lanes cannot drift on what the seat is told.
 #
-#   SEAT_PLAN=<task_id> .venv-antigravity/bin/python scripts/agy-seat.py --role reviewer \
+#   node bin/agy-seat.mjs --gemini-api-primary N --gemini-usage FILE -- --role reviewer \
 #       --workspace <dir> --model gemini-3.7-flash --brief brief.txt [--schema schema.json] \
 #       --out <dir> [--progress <file>] [--max-model-calls 40] [--max-tool-calls 60] [--timeout 900]
 #
+# (the governed launcher runs this script with the controller's capability; pantheon-board does the same for its SDK
+# seat; `python scripts/agy-seat.py ...` alone refuses, see below).
+#
 # Exit 0 on a completed turn (whatever the verdict), 2 on usage, 3 on a vendor/harness error, 4 on
-# timeout. The final result is one JSON line on stdout and result.json under --out.
+# timeout, 5 when the controller's model gateway refused a request (the turn ended on it; its output and progress kept).
+# The final result is one JSON line on stdout and result.json under --out.
 # --identity anywhere in the arguments prints one runtime identity JSON line and exits 0 without a vendor call.
 # The runtime field in results and progress records identifies the interpreter and the loaded SDK.
+#
+# EVERY GEMINI REQUEST IS METERED BY THE CONTROLLER (register L-150, L-151; docs/billing-policy.md). The SDK's requests are
+# sent by its bundled harness to the endpoint's base URL; this seat points that base URL at the controller's loopback
+# model gateway (pantheon/src/antigravity/gateway.mjs, opened for this seat by seat-session.mjs: the one mechanism, register
+# L-724) and gives the token the controller issued for this session as the endpoint's key. The gateway has each request
+# authorized and charged through the central policy before it forwards it with the real credential, which this process
+# never holds. Without a capability (PANTHEON_AGY_GATEWAY_URL and PANTHEON_AGY_GATEWAY_TOKEN, set by pantheon-board or
+# bin/agy-seat.mjs) the seat refuses before any Agent or client
+# exists: ZERO requests, whatever key the environment holds. A key in the environment is removed before the SDK starts.
 import argparse
 import asyncio
 import importlib
@@ -30,6 +43,8 @@ import os
 import re
 import sys
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +55,53 @@ try:
 except ImportError as e:
   Agent = LocalAgentConfig = types = hooks = policy = None
   _SDK_IMPORT_ERROR = str(e)
+try:
+  from google.antigravity.models import DEFAULT_IMAGE_GENERATION_MODEL
+except ImportError:
+  DEFAULT_IMAGE_GENERATION_MODEL = None
+
+GATEWAY_URL_ENV = "PANTHEON_AGY_GATEWAY_URL"
+GATEWAY_TOKEN_ENV = "PANTHEON_AGY_GATEWAY_TOKEN"
+GATEWAY_MARK = "PANTHEON_GATEWAY_REFUSED"
+GATEWAY_STATUS_PATH = "/_pantheon/session"
+# Removed from this process's environment before the SDK starts, so neither the harness nor anything it runs can send a
+# request the gateway does not see, or with a credential (defence in depth: the controller already withholds them).
+WITHHELD = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
+
+
+def gateway_capability() -> tuple[dict | None, dict | None]:
+  """({url, token}, None) for a controller-issued capability on a loopback gateway, or (None, refusal)."""
+  url, token = os.environ.get(GATEWAY_URL_ENV) or "", os.environ.get(GATEWAY_TOKEN_ENV) or ""
+  if not url or not token:
+    return None, {"code": "PANTHEON_GATEWAY_CAPABILITY_ABSENT", "provider_requests": 0,
+                  "why": f"no metering capability ({GATEWAY_URL_ENV} and {GATEWAY_TOKEN_ENV}): metered execution is off by default, and a "
+                         "Gemini key in the environment authorizes nothing; no Agent or client was constructed and no request was sent",
+                  "recovery": "launch the seat through the controller (pantheon-board with --gemini-api-primary N, or bin/agy-seat.mjs "
+                              "--gemini-api-primary N --gemini-usage FILE), which issues a capability for one session"}
+  u = urllib.parse.urlparse(url)
+  if u.scheme != "http" or u.hostname not in ("127.0.0.1", "localhost", "::1") or u.path not in ("", "/") or u.query or u.username:
+    return None, {"code": "PANTHEON_GATEWAY_CAPABILITY_ABSENT", "provider_requests": 0,
+                  "why": f"{GATEWAY_URL_ENV} is not a loopback model gateway ({url!r}): no request was sent",
+                  "recovery": "launch the seat through the controller (pantheon-board, or bin/agy-seat.mjs), which gives the URL of its own loopback gateway"}
+  return {"url": f"http://{u.netloc}", "token": token}, None
+
+
+def gateway_session(cap: dict) -> dict | None:
+  """The gateway's account of this session (admitted, refused), or None when it cannot be read. Never a provider request."""
+  try:
+    req = urllib.request.Request(cap["url"] + GATEWAY_STATUS_PATH, headers={"x-goog-api-key": cap["token"]})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=5) as r:
+      return json.loads(r.read().decode("utf-8"))
+  except Exception:
+    return None
+
+
+def gateway_refusal(text: str) -> dict | None:
+  """The refused charge an SDK error carries ({code, message}), or None."""
+  m = re.search(GATEWAY_MARK + r" ([A-Z_]+): (.*)", text or "", re.S)
+  return {"code": m.group(1), "message": (GATEWAY_MARK + " " + m.group(1) + ": " + m.group(2))[:800]} if m else None
 
 T0 = time.time()
 PROGRESS: Path | None = None
@@ -170,6 +232,8 @@ async def narrate(response: Any, state: dict, every: float = 15.0) -> None:
     try:
       async for tok in response:
         state["text_chars"] += len(tok)
+        if state["text_chars"] <= 2_000_000:
+          state["text_parts"].append(tok)
     except Exception as e:
       state["stream_note"] = f"text: {e!r}"[:200]
 
@@ -187,6 +251,39 @@ async def narrate(response: Any, state: dict, every: float = 15.0) -> None:
   finally:
     state["done"] = True
     hb.cancel()
+
+
+# The refusals that end a session's metered work: the budget, the policy, the run's own bound, the session's cap and its end.
+FINAL_REFUSALS = ("METERED_GEMINI_BUDGET_EXHAUSTED", "GEMINI_PRIMARY_DISABLED", "PROVIDER_CALL_LIMIT", "ABORTED", "PANTHEON_SESSION_CAP", "PANTHEON_SESSION_EXPIRED")
+
+
+def final_refusal(summary: dict | None) -> dict | None:
+  for r in (summary or {}).get("refused") or []:
+    if r.get("code") in FINAL_REFUSALS:
+      return {"code": r["code"], "message": f"{GATEWAY_MARK} {r['code']}: {r.get('why', '')}"[:800], "recovery": r.get("recovery")}
+  return None
+
+
+def ended_on_refusal(result: dict, refusal: dict, summary: dict | None, state: dict, out: Path) -> int:
+  """THE TURN ENDS ON A REFUSAL OF THE GATEWAY (D7): reported with its code and recovery, its partial output and progress kept."""
+  partial = "".join(state.get("text_parts") or [])
+  if partial:
+    (out / "response.partial.md").write_text(partial, encoding="utf-8")
+  recovery = refusal.get("recovery")
+  for r in (summary or {}).get("refused") or []:
+    if recovery is None and r.get("code") == refusal["code"]:
+      recovery = r.get("recovery")
+  if recovery is None:
+    m = re.search(r"\(recovery: (.*?)\)(?:, Status|\s*$)", refusal.get("message", ""), re.S)
+    recovery = m.group(1)[:400] if m else None
+  result.update(ok=False, refused={"code": refusal["code"], "message": refusal["message"], "recovery": recovery,
+                                   "admitted": (summary or {}).get("admitted"), "partial_output_chars": len(partial)},
+                gateway=summary, tool_calls=state["tools"], subagent_calls=state["subagents"])
+  progress("turn.refused", detail=f"{refusal['code']}: the model gateway refused a request; "
+           f"{(summary or {}).get('admitted', '?')} request(s) were admitted before it; partial output {len(partial)} chars kept"[:300])
+  (out / "result.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
+  print(json.dumps({k: v for k, v in result.items() if k != "text"}, ensure_ascii=False), flush=True)
+  return 5
 
 
 async def main() -> int:
@@ -223,10 +320,26 @@ async def main() -> int:
   out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
   PROGRESS = Path(a.progress) if a.progress else out / "progress.jsonl"
   SEAT["model"] = a.model; SEAT["stage"] = a.stage
-  vertex_project = os.environ.get("PANTHEON_AGY_VERTEX_PROJECT")
-  if not os.environ.get("GEMINI_API_KEY") and not vertex_project:
-    print(json.dumps({"ok": False, "error": "GEMINI_API_KEY absent", "runtime": runtime}), flush=True)
+  # NO METERED EXECUTION WITHOUT THE CONTROLLER'S CAPABILITY (L-151), checked before any Agent or client exists.
+  cap, refused = gateway_capability()
+  if refused is None and os.environ.get("PANTHEON_AGY_VERTEX_PROJECT"):
+    refused = {"code": "PANTHEON_GATEWAY_VERTEX_UNSUPPORTED", "provider_requests": 0,
+               "why": "PANTHEON_AGY_VERTEX_PROJECT asks for Vertex, and the model gateway carries Gemini API requests only: no request was sent",
+               "recovery": "unset PANTHEON_AGY_VERTEX_PROJECT (the gateway forwards with the controller's GEMINI_API_KEY)"}
+  if refused is not None:
+    progress("seat.refused", detail=f"{refused['code']}: {refused['why']}"[:300])
+    print(json.dumps({"ok": False, "error": f"{refused['code']}: {refused['why']}", "refused": refused, "model": a.model,
+                      "role": a.role, "runtime": runtime}), flush=True)
     return 2
+  if not all(hasattr(types, n) for n in ("GeminiAPIEndpoint", "ModelTarget", "ModelType")):
+    refused = {"code": "PANTHEON_GATEWAY_SDK_UNSUPPORTED", "provider_requests": 0,
+               "why": "this google-antigravity has no GeminiAPIEndpoint/ModelTarget, so its requests cannot be pointed at the model gateway: none was sent",
+               "recovery": "install a google-antigravity with types.GeminiAPIEndpoint(base_url, api_key) (0.1.24 was verified)"}
+    progress("seat.refused", detail=f"{refused['code']}: {refused['why']}"[:300])
+    print(json.dumps({"ok": False, "error": f"{refused['code']}: {refused['why']}", "refused": refused, "model": a.model, "role": a.role, "runtime": runtime}), flush=True)
+    return 2
+  for k in WITHHELD:
+    os.environ.pop(k, None)
 
   repo = Path(a.repo)
   fm, body = load_agent_card(repo, a.role)
@@ -251,13 +364,18 @@ async def main() -> int:
   if subagents:
     enabled.append(types.BuiltinTools.START_SUBAGENT)
 
-  state = {"tools": 0, "subagents": 0, "thought_chars": 0, "text_chars": 0, "done": False,
+  state = {"tools": 0, "subagents": 0, "thought_chars": 0, "text_chars": 0, "text_parts": [], "done": False,
            "brief_chars": len(brief), "stream_note": None}
-  vertex_kw = ({"vertex": True, "project": vertex_project,
-                "location": os.environ.get("PANTHEON_AGY_VERTEX_LOCATION", "global")} if vertex_project else {})
+  # EVERY MODEL THE AGENT MAY CALL -- the seat's text model and the image model the SDK would otherwise add with its own
+  # default endpoint -- is reached through the gateway, the session's token as its key. A subagent runs against this endpoint too
+  # (the SDK pins only a model name for a subagent), and GOOGLE_GEMINI_BASE_URL in the harness's environment sends any
+  # endpoint left without a base URL there as well.
+  endpoint = types.GeminiAPIEndpoint(base_url=cap["url"], api_key=cap["token"])
+  targets = [types.ModelTarget(name=a.model, types=[types.ModelType.TEXT], endpoint=endpoint),
+             types.ModelTarget(name=DEFAULT_IMAGE_GENERATION_MODEL or "gemini-3.1-flash-lite-image", types=[types.ModelType.IMAGE], endpoint=endpoint)]
   config = LocalAgentConfig(
-      **vertex_kw,
-      model=a.model,
+      models=targets,
+      env={"GOOGLE_GEMINI_BASE_URL": cap["url"]},
       system_instructions=body,
       workspaces=[a.workspace],
       capabilities=types.CapabilitiesConfig(
@@ -288,6 +406,7 @@ async def main() -> int:
         except Exception:
           pass
         result["error"] = "timeout"
+        result["gateway"] = gateway_session(cap)
         (out / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
         print(json.dumps(result), flush=True)
         return 4
@@ -313,11 +432,24 @@ async def main() -> int:
                     stream_note=state["stream_note"])
   except Exception as e:
     result["error"] = f"{type(e).__name__}: {e}"[:1500]
+    summary = gateway_session(cap)
+    refusal = gateway_refusal(str(e)) or final_refusal(summary)
+    if refusal is not None:
+      return ended_on_refusal(result, refusal, summary, state, out)
+    result["gateway"] = summary
     progress("turn.error", detail=result["error"][:300])
     (out / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     print(json.dumps(result), flush=True)
     return 3
 
+  # A refusal the SDK did not raise (its harness ended the turn on the error step): the gateway's own account says so.
+  summary = gateway_session(cap)
+  result["gateway"] = summary
+  refusal = final_refusal(summary)
+  if refusal is not None:
+    result["ok"] = False
+    result["error"] = refusal["message"]
+    return ended_on_refusal(result, refusal, summary, state, out)
   (out / "result.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
   (out / "response.md").write_text(text, encoding="utf-8")
   progress("turn.done", ms=int((time.time() - started) * 1000),

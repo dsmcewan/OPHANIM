@@ -1,0 +1,316 @@
+{
+  "schema": "ophanim.service-demo/v1",
+  "providers": "scripted (no provider called)",
+  "limits": {
+    "total_provider_calls": 120,
+    "stage_provider_calls": 40,
+    "iterations": 12,
+    "concurrency": 1,
+    "stage_attempts": 3
+  },
+  "issues": [
+    {
+      "number": 101,
+      "title": "Alpha for issue-item"
+    },
+    {
+      "number": 102,
+      "title": "Alpha for ticket-item"
+    },
+    {
+      "number": 103,
+      "title": "A coordination question"
+    }
+  ],
+  "runs": [
+    {
+      "label": "A: the four configured labs",
+      "service": {
+        "code": 0,
+        "stopped": "max-ticks",
+        "ticks": 1,
+        "restart_ticks": 1,
+        "restart_dispatched": 0,
+        "status": {
+          "state": "stopped"
+        },
+        "events": [
+          "started",
+          "dispatch",
+          "stage",
+          "tick",
+          "stopped"
+        ]
+      },
+      "spend": {
+        "cap": 120,
+        "scripted_turns": 8,
+        "scripted_work_calls": 0,
+        "recorded": 8
+      },
+      "intake": [
+        "status:issue-item (item)",
+        "status:ticket-item (item)",
+        "issue:103 (candidate)"
+      ],
+      "items": {
+        "issue-item": {
+          "stages": [
+            {
+              "stage": "plan",
+              "attempt": 1,
+              "status": "passed",
+              "mode": "author",
+              "team": [
+                "planner:anthropic",
+                "plan-reviewer:xai",
+                "plan-reviewer:google",
+                "plan-reviewer:openai"
+              ],
+              "provider_calls": 4,
+              "blocker": null,
+              "next": "implement"
+            },
+            {
+              "stage": "implement",
+              "attempt": 1,
+              "status": "pending",
+              "mode": null,
+              "team": [],
+              "provider_calls": 0,
+              "blocker": "REVIEW_CAPACITY_PENDING: the configured cycle reviewer pool offers fewer than 3 labs outside the labs that contributed to the change (anthropic, openai); produced work and evidence are kept and the review is pending",
+              "next": "implement"
+            }
+          ],
+          "gate": "blocked"
+        },
+        "ticket-item": {
+          "stages": [
+            {
+              "stage": "plan",
+              "attempt": 1,
+              "status": "passed",
+              "mode": "revalidate",
+              "team": [
+                "planner:anthropic",
+                "plan-reviewer:xai",
+                "plan-reviewer:google",
+                "plan-reviewer:openai"
+              ],
+              "provider_calls": 4,
+              "blocker": null,
+              "next": "implement"
+            },
+            {
+              "stage": "implement",
+              "attempt": 1,
+              "status": "pending",
+              "mode": null,
+              "team": [],
+              "provider_calls": 0,
+              "blocker": "REVIEW_CAPACITY_PENDING: the configured cycle reviewer pool offers fewer than 3 labs outside the labs that contributed to the change (anthropic, openai); produced work and evidence are kept and the review is pending",
+              "next": "implement"
+            }
+          ],
+          "gate": "blocked"
+        }
+      },
+      "ticket_item_ticket_kept": true,
+      "issue_item_ticket_written": true,
+      "candidate_executed": false
+    },
+    {
+      "label": "B: with a SYNTHETIC fifth reviewer lab (test-only; not configured)",
+      "service": {
+        "code": 0,
+        "stopped": "max-ticks",
+        "ticks": 1,
+        "restart_ticks": 1,
+        "restart_dispatched": 0,
+        "status": {
+          "state": "stopped"
+        },
+        "events": [
+          "started",
+          "dispatch",
+          "stage",
+          "tick",
+          "stopped"
+        ]
+      },
+      "spend": {
+        "cap": 120,
+        "scripted_turns": 16,
+        "scripted_work_calls": 6,
+        "recorded": 22
+      },
+      "intake": [
+        "status:issue-item (item)",
+        "status:ticket-item (item)",
+        "issue:103 (candidate)"
+      ],
+      "items": {
+        "issue-item": {
+          "stages": [
+            {
+              "stage": "plan",
+              "attempt": 1,
+              "status": "passed",
+              "mode": "author",
+              "team": [
+                "planner:anthropic",
+                "plan-reviewer:xai",
+                "plan-reviewer:google",
+                "plan-reviewer:synthlab"
+              ],
+              "provider_calls": 4,
+              "blocker": null,
+              "next": "implement"
+            },
+            {
+              "stage": "implement",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [
+                "scout:xai",
+                "work:openai",
+                "critique:xai"
+              ],
+              "provider_calls": 3,
+              "blocker": null,
+              "next": "review"
+            },
+            {
+              "stage": "review",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [
+                "cycle-reviewer:xai",
+                "cycle-reviewer:google",
+                "cycle-reviewer:synthlab"
+              ],
+              "provider_calls": 3,
+              "blocker": null,
+              "next": "validate"
+            },
+            {
+              "stage": "validate",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [
+                "validator:xai"
+              ],
+              "provider_calls": 1,
+              "blocker": null,
+              "next": "outcome"
+            },
+            {
+              "stage": "outcome",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [],
+              "provider_calls": 0,
+              "blocker": null,
+              "next": null
+            }
+          ],
+          "gate": "awaiting-owner"
+        },
+        "ticket-item": {
+          "stages": [
+            {
+              "stage": "plan",
+              "attempt": 1,
+              "status": "passed",
+              "mode": "revalidate",
+              "team": [
+                "planner:anthropic",
+                "plan-reviewer:xai",
+                "plan-reviewer:google",
+                "plan-reviewer:synthlab"
+              ],
+              "provider_calls": 4,
+              "blocker": null,
+              "next": "implement"
+            },
+            {
+              "stage": "implement",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [
+                "scout:xai",
+                "work:openai",
+                "critique:xai"
+              ],
+              "provider_calls": 3,
+              "blocker": null,
+              "next": "review"
+            },
+            {
+              "stage": "review",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [
+                "cycle-reviewer:xai",
+                "cycle-reviewer:google",
+                "cycle-reviewer:synthlab"
+              ],
+              "provider_calls": 3,
+              "blocker": null,
+              "next": "validate"
+            },
+            {
+              "stage": "validate",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [
+                "validator:xai"
+              ],
+              "provider_calls": 1,
+              "blocker": null,
+              "next": "outcome"
+            },
+            {
+              "stage": "outcome",
+              "attempt": 1,
+              "status": "passed",
+              "mode": null,
+              "team": [],
+              "provider_calls": 0,
+              "blocker": null,
+              "next": null
+            }
+          ],
+          "gate": "awaiting-owner"
+        }
+      },
+      "ticket_item_ticket_kept": true,
+      "issue_item_ticket_written": true,
+      "candidate_executed": false,
+      "applied": [
+        {
+          "item": "issue-item",
+          "state": "Resolved",
+          "checked": "structural"
+        },
+        {
+          "item": "ticket-item",
+          "state": "Resolved",
+          "checked": "structural"
+        }
+      ],
+      "after_apply": {
+        "issue-item": "complete",
+        "ticket-item": "complete"
+      },
+      "status_entries": 5
+    }
+  ]
+}

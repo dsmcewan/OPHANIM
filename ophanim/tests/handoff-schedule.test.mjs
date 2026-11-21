@@ -140,7 +140,9 @@ test('a settled head reused under frontier handoff makes no TELOS calls',()=>wit
 test('refill scheduling fills a freed slot before the slow attempt finishes',()=>withState(async stateDir=>{
   // a is slow; b, c, d are quick. With two slots, wave waits for a before
   // starting c; refill starts c and d as soon as b settles.
-  const worker=makeWorker({a:120}),obligations=[spec('a'),spec('b'),spec('c'),spec('d')];
+  // a's duration must exceed the controller's per-attempt overhead for b and c with room to spare: at 120 ms a loaded
+  // CI runner settled a first (CI on 75945ea: +a +b =b +c =a +d). 1500 ms keeps the property under load.
+  const worker=makeWorker({a:1500}),obligations=[spec('a'),spec('b'),spec('c'),spec('d')];
   const order=async (dir,schedule)=>{
     const auth=authority();
     const result=await runRuntime({stateDir:dir,obligations,workers:[worker],governance:auth.governance,slots:2,schedule});

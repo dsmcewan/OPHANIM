@@ -127,8 +127,8 @@ test('the assessment records its result and debit on the ledger and measures fro
   assert.equal(value.measuredNetMs, own.observedSavingMs - 400, 'the realized result carries its assessment cost; the debit is not charged');
   assert.equal(value.unmeasuredAssessments, 1);
   assert.equal(value.measuredNetIsUpperBound, true);
-  const kinds = L.read().map(e => e.kind);
-  assert.deepEqual(kinds.slice(1), ['efficiency.promotion', 'efficiency.use', 'efficiency.trace', 'efficiency.result', 'efficiency.debit', 'efficiency.assessed']);
+  // The whole chain: the anchor's genesis, then exactly the entries this run and assessment appended, in order.
+  assert.deepEqual(L.read().map(e => e.kind), ['genesis', 'efficiency.promotion', 'efficiency.use', 'efficiency.trace', 'efficiency.result', 'efficiency.debit', 'efficiency.assessed']);
   const debit = L.payloadOf(L.read().at(-2));
   assert.equal(debit.charged, false);
   assert.equal(debit.traceSha, record.traceSha);
@@ -160,7 +160,7 @@ test('a run records its trace and assessment as entries; forged ones are refused
   const r = efficiencyRecorder({ledger: L, controller, order: controller});
   const output = await executeRequest({...runRequest, stateDir}, {ledger: r});
   const record = output.efficiency, reportDir = path.dirname(record.reportFile);
-  assert.deepEqual(L.read().slice(1).map(e => e.kind), ['efficiency.trace', 'efficiency.assessed']);
+  assert.deepEqual(L.read().map(e => e.kind), ['genesis', 'efficiency.trace', 'efficiency.assessed']);
   const [traceEntry, assessedEntry] = L.read().slice(1);
   assert.deepEqual(record.ledger, {trace: L.hashOf(traceEntry), assessed: L.hashOf(assessedEntry)});
   assert.deepEqual(assessedEntry.derived_from, [record.ledger.trace]);

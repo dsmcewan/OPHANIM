@@ -1,0 +1,72 @@
+diff -ru a/ophanim/operate/stages.mjs b/ophanim/operate/stages.mjs
+--- a/ophanim/operate/stages.mjs	2026-11-19 10:13:39.282877159 +0000
++++ b/ophanim/operate/stages.mjs	2026-11-19 10:13:39.284299918 +0000
+@@ -126,9 +126,13 @@
+     if (typeof ctx.charge === 'function') { try { ctx.charge(1); } catch (e) { m.refused++; throw e; } }
+     m.made++;
+   };
++  // L-301 (self-audit round 3, assignment 3 (sealed bb1287a)): the second charge contract of sdk/live.mjs. Nothing is
++  // charged before the turn; every provider call is admitted at its point of spend (the API's each request, a lane's CLI
++  // between its jail build and its spawn, a failover), so a lane turn that fails before its spawn costs nothing. The
++  // refusals are checked up front too (an aborted stage or a spent budget opens no seat).
+   m.turn = args => {
+-    try { admit(); } catch (e) { return Promise.reject(e); }
+-    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), charge: admit}));
++    if (ctx.signal?.aborted || m.made >= m.limit) { try { admit(); } catch (e) { return Promise.reject(e); } }
++    return Promise.resolve().then(() => turn({...args, ...(ctx.signal ? {signal: ctx.signal} : {}), admitRequest: () => admit()}));
+   };
+   m.left = () => m.limit - m.made;
+   return m;
+@@ -344,10 +348,10 @@
+  * investigation ended on the stage's provider-call budget, read as a transient reviewer failure (independent review
+  * round 2, assignment 3 (Google gemini-4-carbon, manual, 77480d6), finding 2.3). `whys` are the failed seats' reasons.
+  */
+-const BUDGET_STOP = /PROVIDER_CALL_LIMIT|the stage's provider-call budget/;
++// L-308: by the refusal's CODE (the meter's PROVIDER_CALL_LIMIT), never by its words. `whys` are {code, why} rows.
+ const budgetStopOf = (m, whys, {stage, kept}) => {
+   // Only when THIS attempt's budget is what ran out: its meter refused a call, or it has (almost) nothing left.
+-  const hit = whys.filter(w => BUDGET_STOP.test(w ?? ''));
++  const hit = whys.filter(w => w?.code === 'PROVIDER_CALL_LIMIT' || w?.limit_reached === 'provider_calls').map(w => w.why);
+   if (!hit.length || !(m.refused > 0 || m.left() <= 1)) return null;
+   const what = `STAGE_PROVIDER_CALLS: the ${stage} stage's provider-call budget of ${m.limit} was spent (${m.made} made, ${m.refused} refused) before every review was recorded (${hit.join('; ')}); ${kept}`;
+   return {blocker: {code: 'STAGE_PROVIDER_CALLS', what, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, with a fresh stage budget; the open cycle is resumed, never reopened', transient: true},
+@@ -1576,6 +1580,14 @@
+         blocker: {code: 'METERED_FAILOVER_DISABLED', what, role: 'lead@orch', resume_when: 'the lane\'s quota resets, or the owner allows the metered Gemini failover', transient: true},
+         next: {stage: 'validate', why: 'the validator was refused for quota with the metered failover off'}});
+     }
++    // L-308: a validator that ran out of the stage's provider-call budget is a transient budget stop, like plan and review,
++    // not a defect of the validation.
++    if (!judged && (m.refused > 0 || m.left() < 1)) {
++      const what = `STAGE_PROVIDER_CALLS: the validate stage's provider-call budget of ${m.limit} was spent (${m.made} made, ${m.refused} refused) before a judgment was recorded (${refusedJ.join('; ')}); the validated commit and its tests are kept`;
++      return result('pending', {outputs: {...outputs, cause: 'stage-provider-calls'}, team, usage: usage(),
++        blocker: {code: 'STAGE_PROVIDER_CALLS', what, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, with a fresh stage budget', transient: true},
++        next: {stage: 'validate', why: 'the validate stage\'s provider-call budget was spent before a judgment'}});
++    }
+     if (!judged) return result('failed', {outputs: {...outputs, cause: 'validation-defect'}, team, usage: usage(), next: {stage: 'validate', why: `no well-formed validator judgment (${refusedJ.join('; ')})`}});
+     // A red test cannot be accepted, and a green test alone cannot pass: the judgment is required.
+     let verdict = judged.verdict;
+diff -ru a/pantheon/src/pipeline/index.mjs b/pantheon/src/pipeline/index.mjs
+--- a/pantheon/src/pipeline/index.mjs	2026-11-19 10:13:39.283041890 +0000
++++ b/pantheon/src/pipeline/index.mjs	2026-11-19 10:13:39.284582973 +0000
+@@ -217,15 +217,13 @@
+     // ON DISK BEFORE THE CALL: a record that cannot be written refuses the call.
+     if (!persist()) throw recordError();
+   };
++  // L-301: the second charge contract (sdk/live.mjs, pipeline/turns.mjs): nothing is charged before the turn; every call
++  // is admitted at its point of spend (a lane's worker session between its jail build and its spawn, each API request, a
++  // failover). The refusal is still checked first, so a spent bound or an abort opens no seat.
++  const refuseIfClosed = role => { if (signal?.aborted || run.provider_calls.total >= lim.max_provider_calls) admit(role); };
+   const counted = role => async args => {
+-    admit(role);
+-    // `charge`: a second provider call made inside this turn (the metered API failover) is admitted here first. EVERY
+-    // role gets it: a single-turn seat (dispatcher, reviewer, subagent) on a Gemini lane fails over too (sdk/agy-turn.mjs
+-    // laneFirstTurn) (independent review, assignment 3 (OpenAI gpt-6-astra extra review, 09d490f), question 1).
+-    // `charge("continuation")`: a further billed request of the same turn (a Google continuation hop, a compaction),
+-    // admitted and counted the same way (by_role.continuation) (independent review round 2, assignment 3 (Google
+-    // gemini-4-carbon, manual, 77480d6), finding 1.1).
+-    return turns[role]({ ...args, charge: what => admit(what === "continuation" ? "continuation" : "metered_failover") });
++    refuseIfClosed(role);
++    return turns[role]({ ...args, admitRequest: ({ kind } = {}) => admit(kind === "continuation" ? "continuation" : kind === "failover" ? "metered_failover" : role) });
+   };
+   const T = { dispatcher: counted("dispatcher"), implementer: counted("implementer"), subagent: counted("subagent"), reviewer: counted("reviewer") };
+ 
