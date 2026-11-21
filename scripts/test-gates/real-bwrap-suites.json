@@ -23,6 +23,7 @@
     "pantheon/tests/review-runner-cli-units.test.mjs",
     "pantheon/tests/review-runner-continue.test.mjs",
     "pantheon/tests/review-runner-coverage.test.mjs",
+    "pantheon/tests/review-runner-relay.test.mjs",
     "pantheon/tests/review-runner-round2.test.mjs",
     "pantheon/tests/review-runner-subscription.test.mjs",
     "pantheon/tests/verify-deadline-r2a3-f9.test.mjs",
