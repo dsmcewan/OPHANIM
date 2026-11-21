@@ -63,6 +63,48 @@ test('the registry refuses what would blur them: the registered check claimed fo
   assert.deepEqual(one(withTest, {observed_by: 'review', date: '2026-11-17', detected_by: 'the third independent review'}), []);
 });
 
+// The ordering cases (owner criterion, 2026-11-17: a class the owner raised is LATER detected and corrected). Each case
+// differs from the success case only in who came when, so counting instances without their dates cannot pass them.
+// A date carries no time of day: a pair on the same day cannot be ordered, and an undated instance cannot be placed.
+const raised = date => ({observed_by: 'owner', date});
+const caught = date => ({observed_by: 'mechanism', by_detector: true, corrected_by: 'mechanism', date});
+const ordered = (...instances) => report({classes: [{id: 'k', class: 'c', source: 's', fixed_in: 'x', detector: withTest, instances}]});
+
+test('ordering: the owner raises a class, the registered check later detects it and the mechanism corrects it: success', () => {
+  assert.deepEqual(ordered(raised('2026-11-17'), caught('2026-11-19')).success, {demonstrated: true, classes: ['k']});
+});
+
+test('ordering: the mechanism met a class first and the owner still had to raise it later: not success', () => {
+  assert.equal(ordered(caught('2026-11-17'), raised('2026-11-19')).success.demonstrated, false);
+});
+
+test('ordering: owner, mechanism, then the owner again: not success, and the class is repeated', () => {
+  const r = ordered(raised('2026-11-16'), caught('2026-11-17'), raised('2026-11-19'));
+  assert.equal(r.success.demonstrated, false);
+  assert.deepEqual(r.repeated_classes, ['k']);
+});
+
+test('ordering: the owner and the mechanism on the same day cannot be ordered, so it is not success, whatever order they are listed in', () => {
+  assert.equal(ordered(raised('2026-11-17'), caught('2026-11-17')).success.demonstrated, false);
+  assert.equal(ordered(caught('2026-11-17'), raised('2026-11-17')).success.demonstrated, false);
+});
+
+test('ordering: an owner instance on the day of the mechanism\'s correction counts as the owner raising it again, so it is not success', () => {
+  assert.equal(ordered(raised('2026-11-16'), caught('2026-11-18'), raised('2026-11-18')).success.demonstrated, false);
+});
+
+test('ordering: an instance with no date cannot be placed, so it cannot support success or be ignored', () => {
+  assert.equal(ordered(raised('2026-11-17'), caught(undefined)).success.demonstrated, false);
+  assert.equal(ordered(raised(undefined), caught('2026-11-19')).success.demonstrated, false);
+  assert.equal(ordered(raised('2026-11-16'), raised(undefined), caught('2026-11-19')).success.demonstrated, false);
+});
+
+test('ordering: after a repeat, a correction later than every owner instance is success, and the class stays repeated', () => {
+  const r = ordered(raised('2026-11-16'), caught('2026-11-17'), raised('2026-11-18'), caught('2026-11-20'));
+  assert.deepEqual(r.success, {demonstrated: true, classes: ['k']});
+  assert.deepEqual(r.repeated_classes, ['k']);
+});
+
 test('the current record: repeated classes are named, and success is not claimed', () => {
   const r = report(load());
   assert.ok(r.repeated_classes.includes('unqualified-claim-as-measurement'), 'the owner raised it more than once');

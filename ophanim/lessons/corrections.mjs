@@ -20,6 +20,11 @@
 //   recurrence proven   `recurrence_check`: the reusable check that was SEEN to catch this instance again, and how.
 // The mechanism is successful only when the class's own registered check detected a class the owner had already
 // raised, and the mechanism corrected it, without the owner. A review's find, or another check's, is not that.
+// ORDER: "already raised" and "without the owner" are about sequence, so success needs a mechanism-corrected detection
+// dated AFTER EVERY owner instance of the class. An owner instance dated on or after the correction means the owner had
+// to raise the class again (a repeat, not a success). Dates are YYYY-MM-DD with no time of day, so a same-day pair
+// cannot be ordered and is not success; an instance with a missing or malformed date cannot be placed and also blocks
+// success. The position of an instance in the list is never evidence of order.
 // Must never: count a class as covered because a document describes it, turn a missing detector into a pass, or count
 // what a review found as a success of the registered check.
 import fs from 'node:fs';
@@ -74,8 +79,6 @@ export function report(reg) {
     const byOwner = c.instances.filter(i => i.observed_by === 'owner');
     const byReview = c.instances.filter(i => i.observed_by === 'review');
     const byMechanism = c.instances.filter(i => i.observed_by === 'mechanism');
-    // "A previously observed class": the registered check's detection counts only from the owner's first raising on.
-    const raised = byOwner.map(i => i.date).filter(Boolean).sort()[0] ?? null;
     // ITS OWN REGISTERED CHECK: a class with no detector has none, whatever an instance claims (independent review of
     // a1d090f, finding 3.1: report() counted such a claim; only problems() refused it).
     const byOwnCheck = c.detector.kind === 'test' ? byMechanism.filter(i => i.by_detector === true) : [];
@@ -88,9 +91,11 @@ export function report(reg) {
       discovered: c.instances.length, repaired: c.instances.filter(i => typeof i.corrected_by === 'string' && i.corrected_by).length,
       // A recurrence is proven by a check that is NAMED (a test file, or a mutation of a runner), not by any text in the field (3.5).
       recurrence_proven: c.instances.filter(i => typeof i.recurrence_check === 'string' && NAMES_A_CHECK.test(i.recurrence_check)).length,
-      // Dates are compared as dates (3.3). And the owner raising the class AGAIN after the check's detection means the
-      // mechanism missed a recurrence: that detection is not a success (3.4).
-      succeeded: raised !== null && byOwnCheck.some(i => i.corrected_by === 'mechanism' && day(i.date) >= day(raised) && !byOwner.some(o => day(o.date) > day(i.date))),
+      // Dates are compared as dates (3.3), and strictly: the correction must come after EVERY owner instance. The owner
+      // raising the class again on or after the check's detection means the mechanism missed a recurrence (3.4), and a
+      // same-day or undated pair cannot be ordered, so neither is a success. (NaN compares false, so an undated instance
+      // on either side fails the test.)
+      succeeded: byOwner.length > 0 && byOwnCheck.some(i => i.corrected_by === 'mechanism' && byOwner.every(o => day(o.date) < day(i.date))),
       // Condition 7: the owner raising the same class again is evidence the improvement process needs examination.
       repeated: byOwner.length > 1};
   });
