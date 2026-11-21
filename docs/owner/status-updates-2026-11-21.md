@@ -21,7 +21,7 @@ $S '{"item":"kg-live-evidence","title":"Knowledge-graph demonstrations on live m
 
 $S '{"item":"kg-39-provider-refusal","title":"Operate: a provider refusing the account stops the tick and uses no attempt (KG-39)","state":"In progress","owner_role":"impl@build","checked":"2026-11-21","basis":"Draft PR #84."}'
 
-$S '{"item":"specialized-builders","title":"Specialized builders: real trades, tests written first","state":"In progress","owner_role":"lead@orch","checked":"2026-11-21","basis":"Design and requests in draft PR #86."}'
+$S '{"item":"specialized-builders","title":"Specialized builders: real trades, tests written first","state":"In progress","owner_role":"lead@orch","checked":"2026-11-21","basis":"Design and requests merged as PR #86 (1e20dd8): specialized builders and four foundry fixes. Launch order (builders A, then B, then foundry fix 1) in draft PR #89; not yet implemented."}'
 
 $S '{"item":"l001-l002-capacity","title":"Date the L-001/L-002 capacity figures and re-check them on main","state":"In progress","checked":"2026-11-21","basis":"Draft PR #85; docs/execution/l001-l002."}'
 
