@@ -35,6 +35,8 @@ test("RELAY: conclusions are read from `## Relayed test conclusions`, verbatim, 
   const text = `## ${CONCLUSIONS_HEADING}\n- R1: it passes,\n  so question 1 holds\n- R2:\n- R3: fails at line 4\n\nModel: gpt-6-astra\n## Model\nx\n`;
   assert.deepEqual([...parseConclusions(text)], [["R1", "it passes,\nso question 1 holds"], ["R3", "fails at line 4"]],
     "an empty conclusion is no conclusion, and the unindented line after the list is not part of R3's");
+  // The model's name written straight after the last conclusion, with no blank line between: not part of it.
+  assert.deepEqual([...parseConclusions(`## ${CONCLUSIONS_HEADING}\n- R1: it passes\nModel: gpt-6-astra\n`)], [["R1", "it passes"]]);
 });
 
 test("RELAY: a suite launcher runs alone, the test launcher with its files", () => {
@@ -173,6 +175,10 @@ test("RELAY through run-review: codex requests a test, the runner runs it in the
   const runs = r.sdk.filter(c => c.kind === "run");
   assert.equal(runs.length, 2, "two turns");
   assert.equal(runs[1].resume_id, runs[0].resume_id ?? JSON.parse(await r.read("findings-2-openai.transcript.json")).cli.thread_id, "the second turn resumes codex's own thread");
+  // Codex is told how to request a test and how to report on it (relay.mjs relayLines), not only shown a launcher.
+  assert.match(inputs[0], /- none that you run yourself: .*The RUNNER runs a test for you instead: a relayed test\./);
+  assert.match(inputs[0], new RegExp(`end a reply with a section headed exactly \`## ${REQUESTS_HEADING}\``));
+  assert.match(inputs[0], new RegExp(`a section headed exactly \`## ${CONCLUSIONS_HEADING}\``));
   assert.match(inputs[1], /^# Results of your test requests/);
   assert.match(inputs[1], new RegExp(`review copy of commit \`${f.repo.commit}\``));
   assert.match(inputs[1], /## R1: `.*pantheon-test pantheon\/tests\/other\.test\.mjs`\n\nexit 0 after \d+ ms\./, "R1 ran, and its exit code went back to codex");

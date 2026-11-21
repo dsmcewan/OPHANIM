@@ -24,7 +24,10 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const T = 'pantheon/tests/';
-const SUITES = [`${T}review-runner-relay.test.mjs`, `${T}review-runner-subscription.test.mjs`, `${T}review-runner-cli-units.test.mjs`, `${T}review-pr.test.mjs`];
+// Not review-runner-subscription.test.mjs: its grok and agy jails mount an empty /tmp, which hides a copy made under it,
+// and one of its tests reads a recorded `findings-runs-*` file, which the copy leaves out (seen at 777d32d: 5 of 82
+// failed in the unmutated copy). Every relay rule is decided by the suites below.
+const SUITES = [`${T}review-runner-relay.test.mjs`, `${T}review-runner-cli-units.test.mjs`, `${T}review-pr.test.mjs`];
 const R = 'pantheon/src/review-runner/', RELAY = `${R}relay.mjs`, COV = `${R}coverage.mjs`, SUB = `${R}subscription.mjs`, PR = `${R}pr-review.mjs`;
 const one = (file, from, to) => ({file, from, to});
 const t = (file, pattern) => [`${T}${file}.test.mjs`, pattern];
@@ -64,7 +67,7 @@ export const MUTATIONS = [
   {id: 'T15', what: 'which runner executed a test is not recorded', tests: [t('review-runner-relay', '^RELAY: each request is decided'), t('review-runner-relay', '^RELAY through run-review: codex requests a test')],
     edits: [one(RELAY, '      executed_by: { runner: EXECUTED_BY, launcher:', '      executed_by: { runner: null, launcher:')]},
   // ---- the relay offered to codex, and its record in the action's result --------------------------------------------
-  {id: 'T16', what: 'codex is not offered the relay', tests: [t('review-runner-subscription', '^codex dry run: the SDK transport'), t('review-runner-relay', '^RELAY through run-review: codex requests a test')],
+  {id: 'T16', what: 'codex is not offered the relay', tests: [t('review-runner-relay', '^RELAY through run-review: codex requests a test')],
     edits: [one(SUB, '    if (relayed) cmds.lines = relayLines({ lines: cmds.lines, commit: opts.commit });', '    if (false) cmds.lines = relayLines({ lines: cmds.lines, commit: opts.commit });')]},
   {id: 'T17', what: 'the review\'s launchers are not written for codex', tests: [t('review-runner-relay', '^RELAY through run-review: codex requests a test')],
     edits: [one(SUB, '    if ((transport === "grok-cli" || relayed) && !opts.dryRun) {', '    if (transport === "grok-cli" && !opts.dryRun) {')]},
