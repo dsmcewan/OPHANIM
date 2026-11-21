@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-16",
+  "source_commit": "931610cad84e68227c51461c4a4a392e63ea387d",
+  "local_root": ".ophanim/learning-board",
+  "ref": "refs/board/planning-fundamentals",
+  "initial_commit": "commit:dee497513720fa94f207ddc48dac96c64832f77cd8153809f71fa4eac844830c",
+  "seed_sha256": "07531e5a6e52207d93c00402d2de4d2fb8e07adc2bac58fe3de5e322ed268071",
+  "reachable_objects_rehashed": 10,
+  "parent_mode": "700",
+  "root_mode": "700",
+  "items": [
+    {
+      "key": "LF-001",
+      "state": "ready",
+      "depends_on": [],
+      "learning_status": "not_attempted"
+    },
+    {
+      "key": "LF-002",
+      "state": "blocked",
+      "depends_on": [
+        "LF-001"
+      ],
+      "learning_status": "not_attempted"
+    },
+    {
+      "key": "LF-003",
+      "state": "blocked",
+      "depends_on": [
+        "LF-002"
+      ],
+      "learning_status": "not_attempted"
+    },
+    {
+      "key": "LF-004",
+      "state": "blocked",
+      "depends_on": [
+        "LF-003"
+      ],
+      "learning_status": "not_attempted"
+    },
+    {
+      "key": "LF-005",
+      "state": "blocked",
+      "depends_on": [
+        "LF-004"
+      ],
+      "learning_status": "not_attempted"
+    },
+    {
+      "key": "LF-006",
+      "state": "blocked",
+      "depends_on": [
+        "LF-005"
+      ],
+      "learning_status": "not_attempted"
+    }
+  ],
+  "acceptance": {
+    "ok": false,
+    "rows": [
+      {
+        "prompt": "A human acknowledges the separate assessor's evidence from an unfamiliar uncoached transfer exercise and its demonstrated limits. Initialization, coaching feedback and document existence do not satisfy this criterion.",
+        "type": "human_ack",
+        "executed": false,
+        "ok": false,
+        "why": "awaiting a human acknowledgement"
+      }
+    ],
+    "why": "awaiting a human acknowledgement"
+  },
+  "leases": {},
+  "occupancy": {},
+  "checks": {
+    "seed_round_trip": "exact entry payload match by slot",
+    "entry_schema": "8 stored entries validated",
+    "readback": "separate Node process",
+    "repeat_init": "unchanged commit",
+    "reachable_hashes": "all re-read and verified"
+  },
+  "verification_corrections": [
+    "Initial schema probe passed boardState wrappers containing cid to validateEntry and failed FIELD; corrected to validate stored hashed entries.",
+    "Initial round-trip probe sorted by insertion-order-sensitive JSON strings and mismatched equivalent slots; corrected to compare payloads by stable slot. No board mutation was needed for either probe repair."
+  ],
+  "peer_review": {
+    "reviewer": "native peer learning_board_scout; setup review, not learner assessment",
+    "results": {
+      "init": "pass",
+      "same_seed_rerun": "preserves commit",
+      "six_items": "one ready, five blocked",
+      "acceptance": "false; awaiting human acknowledgment",
+      "activity": {
+        "leases": {},
+        "occupancy": {}
+      },
+      "status_read": "byte-for-byte filesystem unchanged",
+      "later_state_rerun": "preserves public-API transition",
+      "malformed_ref": "refused without overwrite",
+      "provider_calls": 0
+    },
+    "limitation": "Nested store symlinks are not checked; documentation narrowed to canonical parent/root paths."
+  },
+  "background_dispatch_started": false,
+  "paid_model_calls": 0,
+  "limits": [
+    "Local initialization only; ignored mutable state is not transported by Git.",
+    "Qualitative criteria and human acknowledgment remain unfulfilled.",
+    "No numeric provider budget declared; an undeclared budget is not a technical execution block.",
+    "One operator publication bookkeeping turn is not a model request."
+  ]
+}
