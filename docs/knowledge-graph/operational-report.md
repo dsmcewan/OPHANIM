@@ -95,7 +95,7 @@ B15 and B16 (`e664d4d`) closed the other two cells that had none, the context op
 - KG-19 (a wall-clock test fragile under load), KG-20 (concurrent suites share the tmpdir), KG-24.
 
 **In progress:**
-- PR #75's opt-in dependency sources (function calls, the runtime record, TELOS/ARGO/LEXI), taken over by the coordinator: main merged in, its 110 tests passing, its mutation runner being written (KG-30 to KG-38).
+- PR #75's opt-in dependency sources (function calls, the runtime record, TELOS/ARGO/LEXI), taken over by the coordinator after #75 closed: `main` merged in; a committed mutation runner, 40 of 40 killed, with 5 tests added; its document and register rows at the ported state (KG-38 repaired; KG-30 to KG-37 open, KG-30 for the independent review). It goes to `main` in its own pull request.
 
 **Not demonstrated live:**
 - No demonstration has run on live models.
@@ -124,7 +124,7 @@ B15 and B16 (`e664d4d`) closed the other two cells that had none, the context op
 | Hub readiness | `7d77566`, `c104196`; merge `188937b`; `3f5fd77` |
 | Self-repair lane | `5ad4b62`, `27a9992`, `7a6e9f3`; merge `09424ad`; `f4f5bf0`, `338d375`, `566ef3a`, `f6de0f4`, `fe64246`, `578856a` |
 | Merge of PR #67's last commits | `73dc8d0`, `682460e`, `b9760b9`, `53f71fb`, `89de1fe`, `709a9f8`, `8b55cc0`, `b98f074`; on `main` as `6511f59` |
-| KG-23, the bridge's capability | `0bf1cc5`, `eca61d4` |
+| KG-23, the bridge's capability | `0bf1cc5`, `eca61d4`; on `main` as `b73bf9d` (#81) |
 | The demonstrations, run | `e664d4d` |
 
 ## 7. Reproducing this
