@@ -157,3 +157,20 @@ Added to `packages/graph/schema.mjs` and the registry tables of `architecture.md
 - The metrics' `accepted` is attributed to the final revision's work turns; a multi-slot run whose slots have different seats is attributed by turn order.
 - The default snapshot is built once per process; a registry edited while a process runs is seen by the next process.
 - This container holds no live execution records; every metric shown here is synthetic.
+
+## 13. The Antigravity SDK bridge (register KG-23, added after the merge of PR #67)
+
+Since the base's `f58dfc0` the `fit` implementer is an Antigravity SDK session: the bridge (`pantheon/scripts/antigravity-bridge.py`, driven by `pantheon/src/antigravity/turn.mjs`). Its seat reads `{transport: "api", direct_api: true, session_transport: "antigravity-sdk"}`. Before this section the graph had no profile for it, and the advisory recorded such a seat as the shared API client's capability, or as none (gemini-4-neon).
+
+| Component | Recorded as | From |
+|---|---|---|
+| runtime | `antigravity-sdk-bridge`: the SDK's Agent, every tool call decided by the controller, subagents admitted by the governor (Hydrogen-pinned; Carbon 8, Neon 4, Hydrogen 0); effort carried as the thinking level | turn.mjs, subagents.mjs, config/antigravity-sdk.json |
+| transport | `antigravity-sdk`: primary metered Gemini, each request admitted and charged by the controller's model gateway | pipeline/turns.mjs, turn.mjs |
+| environment | `bridge-jail`: the worker's bwrap profile, the HOME's credential directories covered; refused rather than started unjailed unless a caller passes `sandbox.allowUnsandboxed` (no launcher here does) | turn.mjs |
+| credential scope | `bridge-gateway`: the gateway session's URL and token in the start message; the environment a short allowlist | turn.mjs |
+| tools | `antigravity-sdk/read`, `/write`, `/run_command`, `/invoke_subagent` | turn.mjs |
+| limitations | `L-704` (network shared, as L-004 for the CLI lanes), `L-715` (three unhooked runtime tools), `bridge-state-persists` (KG-24) | sandbox.mjs, config, turn.mjs, pipeline/index.mjs |
+
+The serving rule `sdk-config-models` serves the SDK config's five models; `capabilityOfSeat` maps a seat whose `session_transport` is `antigravity-sdk` to them. **The bubble:** sandbox, credentials and tools hold; **lifetime does not**: the gateway session is closed and the process group killed on every path, but the session's HOME and the SDK's state stay in the unit's control dir after the run (KG-24). So the bridge's capabilities are established and **not isolated**, and a decision that requires the bubble excludes them, naming the lifetime.
+
+Tests: `pantheon/tests/capability-sdk-bridge.test.mjs` (3 cells, failing on the code before). Mutations: `capability.mutate.mjs` C20 (session_transport ignored), C21 (no model served), C22 (lifetime claimed to hold), all killed.

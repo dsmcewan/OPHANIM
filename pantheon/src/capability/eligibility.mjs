@@ -85,10 +85,13 @@ function effortsOf(ix, occ) {
 }
 
 /** The capability id a live seat ({vendor, model, transport}) is served as, under the same rule as frontier.mjs seatTransport. */
-export function capabilityOfSeat(ix, {vendor, model, transport = null}, {role = null, agy_transport = 'cli'} = {}) {
+export function capabilityOfSeat(ix, {vendor, model, transport = null, session_transport = null}, {role = null, agy_transport = 'cli'} = {}) {
   const lane = ix.node(E('lane', model));
   let profile;
-  if (transport === 'api' || transport === 'agy-cli' || transport === 'agy-sdk') profile = transport;
+  // A fit seat on the Antigravity SDK transport reads {transport: "api", direct_api: true, session_transport:
+  // "antigravity-sdk"}: its session is the bridge's, not the shared API client's (register KG-23).
+  if (session_transport === 'antigravity-sdk') profile = 'antigravity-sdk';
+  else if (transport === 'api' || transport === 'agy-cli' || transport === 'agy-sdk') profile = transport;
   else if (transport === 'agy') profile = ['reviewer', 'scout'].includes(role) && agy_transport === 'sdk' ? 'agy-sdk' : 'agy-cli';
   else if (lane) profile = 'agy-cli';
   else {

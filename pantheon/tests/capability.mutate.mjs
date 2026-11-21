@@ -21,8 +21,8 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const T = 'pantheon/tests/';
-const SUITES = [`${T}capability-graph.test.mjs`, `${T}capability-eligibility.test.mjs`, `${T}capability-advisory.test.mjs`, `${T}capability-metrics.test.mjs`];
-const C = 'pantheon/src/capability/', GRAPH = `${C}graph.mjs`, ELIG = `${C}eligibility.mjs`, ADV = `${C}advisory.mjs`, METRICS = `${C}metrics.mjs`, KINDS = 'pantheon/src/ledger/kinds.mjs';
+const SUITES = [`${T}capability-graph.test.mjs`, `${T}capability-eligibility.test.mjs`, `${T}capability-advisory.test.mjs`, `${T}capability-metrics.test.mjs`, `${T}capability-sdk-bridge.test.mjs`];
+const C = 'pantheon/src/capability/', RUNTIMES = `${C}runtimes.json`, GRAPH = `${C}graph.mjs`, ELIG = `${C}eligibility.mjs`, ADV = `${C}advisory.mjs`, METRICS = `${C}metrics.mjs`, KINDS = 'pantheon/src/ledger/kinds.mjs';
 const one = (file, from, to) => ({file, from, to});
 const t = (file, pattern) => [`${T}capability-${file}.test.mjs`, pattern];
 
@@ -76,6 +76,14 @@ export const MUTATIONS = [
   // ---- the ledger input (KC4) -------------------------------------------------------------------------------------------
   {id: 'C18', what: 'a capability snapshot whose digest is not the digest of its sources is admitted as a ledger input', tests: [t('advisory', '^the capability snapshot is a ledger input')],
     edits: [one(KINDS, "        if (snapshotDigestOf(e.payload) !== e.payload.digest) return 'the capability snapshot digest is not the digest of its sources';\n", '')]},
+  // ---- register KG-23: the fit implementer on the Antigravity SDK transport -------------------------------------------
+  {id: 'C20', what: 'a seat\'s session_transport is ignored: a fit implementer on the Antigravity SDK transport is advised as the shared API client', tests: [t('sdk-bridge', '^KG-23: every fit implementer seat')],
+    edits: [one(ELIG, "  if (session_transport === 'antigravity-sdk') profile = 'antigravity-sdk';", "  if (false) profile = 'antigravity-sdk';")]},
+  {id: 'C21', what: 'the Antigravity SDK transport serves no model: the bridge has no executable capability', tests: [t('sdk-bridge', '^KG-23: the bridge capability is established'), t('graph', '^extraction:')],
+    edits: [one(GRAPH, "  if (select === 'sdk-config-models') return Object.keys(sdk?.models ?? {}).sort().map(model => ({vendor: sdk.vendor, model, served_as: 'model'}));",
+      "  if (select === 'sdk-config-models') return [];")]},
+  {id: 'C22', what: 'the bridge recorded as isolated: its lifetime claimed to hold although its state outlives the session', tests: [t('sdk-bridge', '^KG-23: the bridge capability is established'), t('sdk-bridge', '^KG-23: a decision that requires the bubble')],
+    edits: [one(RUNTIMES, '"lifetime": {"holds": false, "why": "the gateway session is closed', '"lifetime": {"holds": true, "why": "the gateway session is closed')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
