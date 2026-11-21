@@ -112,7 +112,11 @@ export function historyAt(repo, commit) {
   if (!COMMIT.test(commit ?? '')) throw new Error(`${commit} is not a commit id`);
   return cached(`${repo}\0history\0${commit}`, () => {
     const cut = new Set(historyCut(repo));
-    const raw = run(repo, ['log', '--no-renames', '--name-only', '--format=%x01%H%x00%P%x00%aI%x00%s', commit], {encoding: 'utf8'});
+    // `--cc` lists, for a MERGE, the paths it changed relative to EVERY parent (a conflict resolved by hand, or a change no
+    // side made); without it `git log --name-only` lists none for a merge, and a file a merge resolved derived from no
+    // commit after the merge's parents (found at the merge of PR #67's branch, 73dc8d0). A path a merge took from one side
+    // as it was is not listed: that side's commit changed it. Other commits are listed as before.
+    const raw = run(repo, ['log', '--no-renames', '--name-only', '--cc', '--format=%x01%H%x00%P%x00%aI%x00%s', commit], {encoding: 'utf8'});
     const out = [];
     for (const chunk of raw.split('\x01')) {
       if (!chunk.trim()) continue;

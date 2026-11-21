@@ -137,10 +137,11 @@ export function mutationTable(source) {
       : h.first.slice(1, -1).replace(/\$\{(\w+)\}/g, (_, v) => (v === h.param ? arg : consts.get(v) ?? ''));
     return [first, ...strings(args).slice(1)];
   };
-  // The values of a list literal's elements: strings, constants, spreads, `T.key` and helper calls (a call's
+  // The values of a list literal's elements: strings, constants, spreads (of a list or of an object's `T.key`: the
+  // sdk-intake runner's `[...T.gov, ...T.pipe]`, coordinator fix at the merge of PR #67's branch), `T.key` and helper calls (a call's
   // arguments are read to their balanced close, so a parenthesis inside a string argument does not end it).
   function elements(body, depth = 0) {
-    const out = [], inner = body.slice(1, -1), TOKEN = /\.\.\.([A-Z]\w*)|([a-z]\w*)\(|'((?:[^'\\\n]|\\.)*)'|\b([A-Z]\w*(?:\.\w+)?)\b|`([^`\n]*)`/y;
+    const out = [], inner = body.slice(1, -1), TOKEN = /\.\.\.([A-Z]\w*(?:\.\w+)?)|([a-z]\w*)\(|'((?:[^'\\\n]|\\.)*)'|\b([A-Z]\w*(?:\.\w+)?)\b|`([^`\n]*)`/y;
     for (let i = 0; i < inner.length;) {
       TOKEN.lastIndex = i;
       const m = TOKEN.exec(inner);
