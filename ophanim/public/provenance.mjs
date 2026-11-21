@@ -195,7 +195,8 @@ function practiceLines(rec) {
   return [
     // The model-selection policy the cycle opened under, when it records one.
     ...(pol ?
-      [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, ''] : []),
+      [`Selection policy in effect: policy \`${pol.version}\` (profile \`${pol.profile}\`, \`${pol.hash}\`).`, '']
+        : []),
     '| Stage | Outcome | Basis | Comparison evidence | Question | Admitted | Entry |',
     '|---|---|---|---|---|---|---|',
     ...rec.practice.map(

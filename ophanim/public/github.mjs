@@ -301,7 +301,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         console.log(files.map(f => path.relative(process.cwd(), f)).join('\n'));
       } else {
         if (!opened)
-          throw Object.assign(new Error('pr-provenance needs --ledger DIR (a system or review-cycle ledger)'), {usage: true});
+          throw Object.assign(new Error('pr-provenance needs --ledger DIR (a system or review-cycle ledger)'),
+            {usage: true});
         const cycles = P.listCycles(opened.view).filter(c => !opts.scope || c.scope === opts.scope);
         const cycle = opts.cycle ?? cycles.at(-1)?.hash;
         if (!cycle) throw new Error('no cycle on this ledger');
