@@ -112,8 +112,9 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
   const childEnv = scrub.env;
   const secrets = secretValues(env);
   const write_allowed = Boolean(permissions.write_test);
-  const harnessTemplate = await readFile(join(repoRoot, REVIEW_DIR, "HARNESS-cli.md"), "utf8").catch(() => null);
-  if (harnessTemplate === null) { err(`run-review: refused: ${REVIEW_DIR}/HARNESS-cli.md is missing\n`); return EXIT.refused; }
+  const reviewDir = opts.reviewDir ?? REVIEW_DIR;
+  const harnessTemplate = await readFile(join(repoRoot, reviewDir, "HARNESS-cli.md"), "utf8").catch(() => null);
+  if (harnessTemplate === null) { err(`run-review: refused: ${reviewDir}/HARNESS-cli.md is missing\n`); return EXIT.refused; }
 
   // The lane (agy only).
   let lane = null;
@@ -243,12 +244,12 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     // ---- per transport: argv, sandbox, writable paths, preflight ------------------------------------------------
     const plan = {
       schema: SUB_PLAN_SCHEMA, dry_run: opts.dryRun, via: "subscription", transport,
-      assignment: { n: opts.n, title: row.title, file: `${REVIEW_DIR}/${row.file}`, scope: row.scope, testing: row.testing },
+      assignment: { n: opts.n, title: row.title, file: `${reviewDir}/${row.file}`, scope: row.scope, testing: row.testing },
       lab: row.lab, vendor: row.vendor, requested_model: row.model, ...(lane ? { lane } : {}), commit: opts.commit,
       default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}),
       subscription_coverage: COVERAGE[transport],
       prompt: {
-        harness_cli_template: { path: `${REVIEW_DIR}/HARNESS-cli.md`, sha256: sha256(harnessTemplate) },
+        harness_cli_template: { path: `${reviewDir}/HARNESS-cli.md`, sha256: sha256(harnessTemplate) },
         harness_sha256: sha256(harness), brief_sha256: sha256(b.brief), readme_sha256: sha256(b.readme), assignment_sha256: sha256(b.assignmentText),
         sha256: sha256(prompt), bytes: Buffer.byteLength(prompt),
         ...(opts.dryRun ? { note: "computed with the dry run's stand-in worktree path; a real run's prompt names its own worktree and records its own sha256" } : {}),

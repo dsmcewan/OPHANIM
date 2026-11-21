@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { reviewTmpBase } from "./cli-common.mjs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { REVIEW_DIR, BriefError, loadBrief, reviewerHeaderLines, sha256, inScopePaths, listedTests, testingLine } from "./brief.mjs";
+import { REVIEW_DIR, REVIEW_DIR_RE, BriefError, loadBrief, reviewerHeaderLines, sha256, inScopePaths, listedTests, testingLine } from "./brief.mjs";
 import { CAPS, permissionsFor, toolDefinitions, createToolbox } from "./tools.mjs";
 import { coverageGate, coverageHeaderLine, coverageOfApi, gatedStatus, testsAllowedBy } from "./coverage.mjs";
 import { buildChildEnv, WITHHELD } from "./sandbox.mjs";
@@ -46,6 +46,9 @@ const USAGE = `usage: node pantheon/scripts/run-review.mjs --via api|subscriptio
   [--continue <findings-<n>-<lab>.transcript.json>]   resume an incomplete review of the same assignment
   [--gemini-api-primary N]   allow the Gemini API (a Google reviewer --via api) at most N billed requests; off by default
   [--metered-gemini-failover N]   resolved with the same policy; no seat here fails over from a lane
+  [--review-dir docs/reviews/<name>]   read README.md, the assignment file and HARNESS*.md from another round's
+                       directory of the owner's checkout (default docs/reviews/2026-11-18-independent-review);
+                       the findings default to that directory too
   [--out DIR] [--dry-run] [--keep] [--force] [--telos-root DIR]`;
 
 const CAPABILITY_FACTS = JSON.parse(await readFile(new URL("../config/capability-facts.json", import.meta.url), "utf8"));
@@ -78,7 +81,7 @@ function parseCli(argv) {
       via: { type: "string" }, "max-wall-s": { type: "string" }, "allow-api-key-in-cli": { type: "boolean" }, "skip-model-check": { type: "boolean" },
       "grok-state-dir": { type: "string" }, continue: { type: "string" }, "codex-cli": { type: "string" }, "grok-cli": { type: "string" }, "agy-cli": { type: "string" },
       reviewer: { type: "string" }, "codex-outer-runtime": { type: "string" }, "grok-permissions-inspect": { type: "string" },
-      "gemini-api-primary": { type: "string" }, "metered-gemini-failover": { type: "string" },
+      "gemini-api-primary": { type: "string" }, "metered-gemini-failover": { type: "string" }, "review-dir": { type: "string" },
     } }).values;
   } catch (e) { throw new UsageError(e.message); }
   // THE BILLING POLICY, resolved before anything is read or run (see the header): malformed or unbudgeted is a usage error.
@@ -87,6 +90,7 @@ function parseCli(argv) {
   if (v.help) throw new UsageError("help");
   if (!/^[1-4]$/.test(v.assignment ?? "")) throw new UsageError("--assignment must be 1, 2, 3 or 4");
   if (!/^[0-9a-f]{40}$/.test(v.commit ?? "")) throw new UsageError("--commit must be a full 40-character lowercase hex commit id");
+  if (v["review-dir"] !== undefined && !REVIEW_DIR_RE.test(v["review-dir"])) throw new UsageError(`--review-dir must be docs/reviews/<name> (one directory, letters, digits, . _ -), got ${JSON.stringify(v["review-dir"])}`);
   // --via has no default: the owner chooses between metered API spend and the subscription CLIs every time.
   const reviewer = v.reviewer === undefined ? null : parseReviewer(v.reviewer);
   if (v.via !== "api" && v.via !== "subscription") throw new UsageError("--via is required: api (the metered API, the owner's key) or subscription (the vendors' CLIs, signed in to the owner's subscriptions)");
@@ -112,7 +116,7 @@ function parseCli(argv) {
       notes.push(`--${k} is an API-mode cap; the subscription CLIs expose no such cap, so it is ignored (the wall clock bounds the run)`);
     }
   }
-  return { via: v.via, n: Number(v.assignment), commit: v.commit, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
+  return { via: v.via, n: Number(v.assignment), commit: v.commit, reviewDir: v["review-dir"] ?? REVIEW_DIR, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
     allowApiKeyInCli: !!v["allow-api-key-in-cli"], skipModelCheck: !!v["skip-model-check"], grokStateDir: v["grok-state-dir"] ?? null,
     codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null, reviewer,
     codexOuterRuntime: v["codex-outer-runtime"] ?? "auto", grokPermissionsInspect: v["grok-permissions-inspect"] ? v["grok-permissions-inspect"].trim().split(/ +/) : null, billing };
@@ -144,7 +148,7 @@ async function loadAssignment(opts, { repoRoot, env, harnessValues }) {
   if (ls.code !== 0) throw new Refusal(`cannot list commit ${commit}`);
   const files = ls.stdout.split("\0").filter(Boolean);
   let b;
-  try { b = await loadBrief({ repoRoot, n, commit, harnessValues }); }
+  try { b = await loadBrief({ repoRoot, n, commit, harnessValues, reviewDir: opts.reviewDir ?? REVIEW_DIR }); }
   catch (e) { if (e instanceof BriefError || e.code === "ENOENT") throw new Refusal(e.message); throw e; }
   const row = withReviewer(b.row, opts.reviewer);
   b.row = row;
@@ -156,7 +160,7 @@ async function loadAssignment(opts, { repoRoot, env, harnessValues }) {
 }
 
 const outPathsFor = (opts, row, repoRoot, cwd) => {
-  const outDir = opts.out ? resolve(cwd, opts.out) : join(repoRoot, REVIEW_DIR);
+  const outDir = opts.out ? resolve(cwd, opts.out) : join(repoRoot, opts.reviewDir ?? REVIEW_DIR);
   const lab = row.lab.toLowerCase();
   return { findings: join(outDir, `findings-${opts.n}-${lab}.md`), transcript: join(outDir, `findings-${opts.n}-${lab}.transcript.json`) };
 };
@@ -181,7 +185,8 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
   const sameAs = async (rel, text) => { const c = await atCommit(rel); return c === null ? "absent at commit" : c === text; };
 
   const vendor = VENDORS[row.vendor];
-  const outDir = opts.out ? resolve(cwd, opts.out) : join(repoRoot, REVIEW_DIR);
+  const reviewDir = opts.reviewDir ?? REVIEW_DIR;
+  const outDir = opts.out ? resolve(cwd, opts.out) : join(repoRoot, reviewDir);
   const lab = row.lab.toLowerCase();
   const findings = join(outDir, `findings-${n}-${lab}.md`);
   const transcript = join(outDir, `findings-${n}-${lab}.transcript.json`);
@@ -191,22 +196,22 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
     schema: PLAN_SCHEMA,
     dry_run: opts.dryRun,
     via: "api",
-    assignment: { n, title: row.title, file: `${REVIEW_DIR}/${row.file}`, scope: row.scope, testing: row.testing, testing_line_in_file: fileTesting },
+    assignment: { n, title: row.title, file: `${reviewDir}/${row.file}`, scope: row.scope, testing: row.testing, testing_line_in_file: fileTesting },
     lab: row.lab, vendor: row.vendor, model: row.model,
     default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}),
     model_facts: { cited_max_output: cited, reasoning_effort_sent: null },
     commit,
     endpoint: row.vendor === "gemini" ? vendor.endpoint.replace("<model>", row.model) : vendor.endpoint,
     request: {
-      harness_template: { path: `${REVIEW_DIR}/HARNESS.md`, bytes: Buffer.byteLength(b.harnessTemplate), sha256: sha256(b.harnessTemplate) },
+      harness_template: { path: `${reviewDir}/HARNESS.md`, bytes: Buffer.byteLength(b.harnessTemplate), sha256: sha256(b.harnessTemplate) },
       system: { bytes: Buffer.byteLength(b.system), sha256: sha256(b.system), text: b.system },
       brief: { bytes: Buffer.byteLength(b.brief), sha256: sha256(b.brief), text: b.brief,
                parts: { readme_sha256: sha256(b.readme), assignment_sha256: sha256(b.assignmentText) } },
       tools: { sha256: sha256(JSON.stringify(tools)), definitions: tools },
       source_files_match_commit: {
-        readme: await sameAs(`${REVIEW_DIR}/README.md`, b.readme),
-        assignment: await sameAs(`${REVIEW_DIR}/${row.file}`, b.assignmentText),
-        harness: await sameAs(`${REVIEW_DIR}/HARNESS.md`, b.harnessTemplate),
+        readme: await sameAs(`${reviewDir}/README.md`, b.readme),
+        assignment: await sameAs(`${reviewDir}/${row.file}`, b.assignmentText),
+        harness: await sameAs(`${reviewDir}/HARNESS.md`, b.harnessTemplate),
       },
     },
     tool_permissions: permissions,

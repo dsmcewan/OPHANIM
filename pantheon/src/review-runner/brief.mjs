@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { matchGlob } from "./sandbox.mjs";
 
 export const REVIEW_DIR = "docs/reviews/2026-11-18-independent-review";
+// --review-dir: another round's directory, one level under docs/reviews/ (no "..", no absolute path, no nesting).
+export const REVIEW_DIR_RE = /^docs\/reviews\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const SEPARATOR = "\n\n---\n\n";
 
 export const sha256 = s => createHash("sha256").update(s).digest("hex");
@@ -73,9 +75,10 @@ export function composeBrief({ readme, assignmentText, commit }) {
   return readme + SEPARATOR + assignmentText + "\n" + commitLine(commit) + "\n";
 }
 
-// Reads the three source files from `repoRoot` (the owner's checkout that holds the runner).
-export async function loadBrief({ repoRoot, n, commit, harnessValues }) {
-  const dir = join(repoRoot, REVIEW_DIR);
+// Reads the three source files from `repoRoot` (the owner's checkout that holds the runner), in `reviewDir`.
+export async function loadBrief({ repoRoot, n, commit, harnessValues, reviewDir = REVIEW_DIR }) {
+  if (!REVIEW_DIR_RE.test(reviewDir)) throw new BriefError(`review directory ${JSON.stringify(reviewDir)} is not docs/reviews/<name>`);
+  const dir = join(repoRoot, reviewDir);
   const readme = await readFile(join(dir, "README.md"), "utf8");
   const row = assignmentRow(readme, n);
   const assignmentText = await readFile(join(dir, row.file), "utf8");
