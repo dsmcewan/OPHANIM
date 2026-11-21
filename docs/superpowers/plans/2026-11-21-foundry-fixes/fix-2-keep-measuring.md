@@ -36,10 +36,15 @@ forward as if it were measured.
 ## What to build
 
 1. **Keep measuring while insufficient.** While a task class's history is not sufficient, `chooseArms` keeps every
-   eligible setup in play. Not sufficient means some setup has fewer than `MIN_SAMPLES` accepted trials.
+   eligible setup in play. Not sufficient means some **eligible** setup has fewer than `MIN_SAMPLES` accepted trials, a
+   setup with no trial yet included. Today `rankSetups` judges sufficiency over measured setups only (`setups.mjs:73`),
+   so a newly eligible setup does not count.
    - With enough slots, every setup runs.
    - With fewer slots, the least-measured setups go first: fewest trials, ties broken by the existing ranking.
-2. **Once sufficient, the existing rule applies:** the best setup leads, and one not yet measured is tried beside it.
+2. **Once every eligible setup is sufficient, the leader goes first,** followed by the others in ranking order.
+   - A newly eligible setup, with no trial yet, makes the history insufficient again. So measuring resumes, and the new
+     setup is tried.
+   - That is how the 2026-11-20 direction's "tries one not yet measured beside it" holds.
 3. **Only live trials make a live selection sufficient.** In a live run, synthetic trials stay on the record, labelled,
    but never count toward sufficiency.
 4. **The basis says what it rests on.** Each arm's recorded basis names it:
@@ -71,7 +76,10 @@ forward as if it were measured.
   - the basis names insufficiency and synthetic history, and "the best setup measured so far" appears only when the
     history is sufficient;
   - a live run does not count synthetic trials toward sufficiency.
-- **Positive control:** with sufficient live history, the best setup leads and one not yet measured is tried beside it.
+- **Positive controls, two:**
+  - when every eligible setup has enough live accepted trials, the leader goes first;
+  - the same history plus a newly eligible setup with no trial makes measuring resume: the new setup is in play, and
+    with one slot it is the one chosen.
 - `ophanim/tests/foundry.test.mjs`'s expectations that change are changed only where this rule requires it, each one
   named in the change's report.
 - A mutation runner for these rules, every mutation killed. `--check` on every runner passes, and the foundry's focused

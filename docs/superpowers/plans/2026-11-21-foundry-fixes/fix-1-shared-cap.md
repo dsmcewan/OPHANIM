@@ -65,13 +65,20 @@ run one at a time today, but the check must also hold if they do not.
 ## Done means
 
 - **Each rule has a test that fails on `52bd1ee`:**
-  - the sequence above refuses call 3, or grants it at most $0.10, and refuses call 4;
+  - **the sequence above, replayed deterministically:**
+    - call 3 is sent with a grant of exactly $0.10, the shared remainder, which is below the $0.50 per-call cap;
+    - the stand-in reports its specified $0.40, which is recorded as an overrun of $0.30 and counted;
+    - call 4 is refused `402 FOUNDRY_BUDGET`;
+  - **overlapping calls:** with a first call held open, a second call's grant is no more than the cap, less every
+    settled receipt and the first call's outstanding grant. The unused part of the first grant is released when it
+    settles;
   - the grant is no more than the shared remainder at every send, recorded through the real `claudeCliClients` and a
     stand-in command;
-  - an unknown cost is counted at its grant;
-  - an overrun is recorded.
-- **Positive controls:** a first call on a new transport with budget left is sent with its full grant, and
-  `foundry-seats.test.mjs`'s existing cells still pass.
+  - an unknown cost is counted at its grant.
+- **Positive controls:**
+  - a stand-in that honours its grant ends the same sequence at no more than $1.00;
+  - a first call on a new transport with budget left is sent with its full grant;
+  - `foundry-seats.test.mjs`'s existing cells still pass.
 - A mutation runner for these rules, every mutation killed. `--check` on every runner passes, and the foundry's focused
   tests (`ophanim/tests/foundry*.test.mjs`) pass, on Node 24.
 - A register entry with the next free `KG-` id on this branch.

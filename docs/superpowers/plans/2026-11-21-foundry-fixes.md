@@ -23,15 +23,18 @@ foundry lives (PR #76 merged there at `52bd1ee`). It is not on main.
 **Check these calls of the coordinator's before you register.** Each request states its call as a requirement, and
 registering it makes the call yours:
 - **Fix 1:**
+  - with $0.10 left, call 3 is granted exactly $0.10, and is not refused;
   - an unknown cost counts at the call's whole grant;
   - a transport that takes no per-call grant counts at the whole shared remainder;
   - an overrun is recorded;
   - the grant is rounded down to the cent.
 - **Fix 2:**
+  - sufficiency is judged over every eligible setup, including a new one with no trial;
   - in a live run, only live trials count toward sufficiency;
   - ties among the least-measured setups are broken by the existing ranking.
 - **Fix 3:** "the served model is not known" is its own reason, distinct from a mismatch.
-- **Fix 4:** the remainder goes to the last block, rather than being reserved.
+- **Fix 4:** each of the last `r` blocks takes one extra trade (`r` the remainder), rather than the remainder being
+  reserved.
 
 **Use main's OPHANIM.** The foundry branch is behind main and has no `prompt` command. So you run main's OPHANIM from
 your main checkout, with `--repo` set to a worktree of the foundry branch. Always pass your main ledgers as well:

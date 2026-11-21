@@ -20,9 +20,14 @@ on `ophanim/dependency-graph`) against the committed tape; nothing reached a pro
 
 ## What to build
 
-1. **Every trade is accounted for, exactly once, in its original order.** The remainder goes to the last block, so
-   blocks differ by at most one trade. That keeps every trade in use. The acceptance still replays the first two
-   blocks, and the operation the other four.
+1. **Every trade is accounted for, exactly once, in its original order.**
+   - With `r` the remainder of the division, each of the **last `r` blocks** takes one extra trade. So blocks differ by
+     at most one trade, and every trade is in use.
+   - For 13,387 trades, the first five blocks hold 2,231 and the last 2,232. For 14 trades, the sizes are 2, 2, 2, 2,
+     3, 3.
+   - Of the two blocks the acceptance replays, the first never takes an extra trade, and the second does only when the
+     remainder is 5.
+   - The acceptance still replays the first two blocks, and the operation the other four.
 2. **The test checks the join, not the counts.** It asserts the joined blocks equal the tape, by trade and in order.
 
 ## Left to you, the planner
@@ -42,6 +47,8 @@ report. Any recorded figures or expectations that depend on the old partition ar
   - the joined blocks equal the tape, which fails today with 1 missing;
   - a crafted tape whose partition would repeat one trade and drop another is caught by the join, where a count would
     miss it.
+- **Sizes:** 13,387 trades give 2,231 ×5 then 2,232. 14 trades give 2, 2, 2, 2, 3, 3, never a block two larger than
+  another.
 - **Positive control:** a tape whose length divides by 6 gives six equal blocks, as today.
 - A mutation runner for these rules, every mutation killed. `--check` on every runner passes, and the foundry's focused
   tests pass, on Node 24.
