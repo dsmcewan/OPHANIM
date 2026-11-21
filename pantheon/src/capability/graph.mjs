@@ -107,6 +107,8 @@ export function currentRegistries({argo = null, root = ROOT} = {}) {
     continuity: Object.fromEntries(Object.entries(SEAT_FACTS).map(([v, f]) => [v, {continuity: f.continuity ?? null, quota_pool: f.quota_pool ?? null}])),
     identity: readJson(root, 'pantheon/src/config/model-identity.json'),
     lanes: readJson(root, 'pantheon/src/config/lanes.json'),
+    // The Antigravity SDK transport's models (register KG-23): what the `sdk-config-models` serving rule serves.
+    sdk: readJson(root, 'pantheon/src/config/antigravity-sdk.json'),
     runtimes, evidence,
     roles: Object.fromEntries(Object.entries(ROLES).map(([r, x]) => [r, {needs: [...(x.needs ?? [])], may_judge: Boolean(x.mayJudge), produces_kinds: [...(x.produces_kinds ?? [])], pre_board: Boolean(x.preBoard)}])),
     roster: plainOf(ROSTER),
@@ -250,15 +252,18 @@ function extractRoles(data) {
   return out;
 }
 
-/** The serving profile's model selector (runtimes.json `serving[].select`) over the registry and the lanes. */
-function selected(select, {models, frontier, lanes}) {
+/** The serving profile's model selector (runtimes.json `serving[].select`) over the registry, the lanes and the SDK's models. */
+function selected(select, {models, frontier, lanes, sdk}) {
   const reg = registryModels(models), isFrontier = m => Object.hasOwn(frontier ?? {}, m);
   if (select === 'registry-frontier-or-not-agy') return reg.filter(m => isFrontier(m.model) || m.vendor !== 'agy_google').map(m => ({...m, served_as: 'model'}));
   if (select === 'registry-agy-not-frontier') return reg.filter(m => !isFrontier(m.model) && m.vendor === 'agy_google' && !laneTable(lanes)[m.model]).map(m => ({...m, served_as: 'model'}));
   if (select === 'lanes') return Object.entries(laneTable(lanes)).filter(([, l]) => l.transport === 'agy-cli').map(([name, l]) => ({vendor: l.vendor, model: name, served_as: 'lane', lane: l}));
+  // The Antigravity SDK transport's implementer rungs and subagent model (config/antigravity-sdk.json `models`), each served
+  // as a model: the fit implementer's seat names one with session_transport "antigravity-sdk" (register KG-23).
+  if (select === 'sdk-config-models') return Object.keys(sdk?.models ?? {}).sort().map(model => ({vendor: sdk.vendor, model, served_as: 'model'}));
   throw new Error(`runtimes.json: unknown serving selector "${select}"`);
 }
-function extractExecutable({serving, profiles, limitations, runtimes, models, frontier, lanes}, texts) {
+function extractExecutable({serving, profiles, limitations, runtimes, models, frontier, lanes, sdk}, texts) {
   const out = [], f = 'pantheon/src/capability/runtimes.json';
   const laneBases = new Set(Object.values(laneTable(lanes)).filter(l => !l.retired && l.base).map(l => l.base));
   const seen = new Set();
@@ -268,7 +273,7 @@ function extractExecutable({serving, profiles, limitations, runtimes, models, fr
     const rc = claim(rule.evidence, texts);
     const bubble = Object.fromEntries(BUBBLE.map(k => [k, bubbleComponent(p.bubble?.[k], texts)]));
     const runtime = runtimes[p.runtime] ?? null;
-    for (const m of selected(rule.select, {models, frontier, lanes})) {
+    for (const m of selected(rule.select, {models, frontier, lanes, sdk})) {
       const key = capabilityKey(rule.profile, m.vendor, m.model);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -361,7 +366,7 @@ export function sourceInputs(reg) {
   const blobs = files => Object.fromEntries(files.map(f => [f, typeof reg.evidence?.[f] === 'string' ? blobId(reg.evidence[f]) : null]));
   const runtimeFiles = [...new Set(evidenceOf(reg.runtimes).map(e => e.file))].sort();
   const exec = {serving: reg.runtimes.serving, profiles: reg.runtimes.profiles, limitations: reg.runtimes.limitations, runtimes: reg.runtimes.runtimes,
-    models: reg.models, frontier: reg.frontier, lanes: reg.lanes};
+    models: reg.models, frontier: reg.frontier, lanes: reg.lanes, sdk: reg.sdk ? {vendor: reg.sdk.vendor, transport: reg.sdk.transport, models: reg.sdk.models} : null};
   const execFiles = [...new Set(evidenceOf({serving: exec.serving, profiles: exec.profiles}).map(e => e.file))].sort();
   const ctx = {known_models, lanes: reg.lanes, roles};
   return {
