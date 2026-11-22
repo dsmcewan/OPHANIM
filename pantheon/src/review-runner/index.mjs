@@ -49,7 +49,9 @@ import { compareWorktree, worktreeState } from "./cli-common.mjs";
 //     .review-tests/ is a policy violation and the review is incomplete;
 //   - the transcript records the transport, the SDK and the bound brief's digests (README, assignment, HARNESS.md), which
 //     the PR-review coordinator compares with its binding (pr-review.mjs judgeReviewer);
-//   - --continue refuses a transcript of another transport, in either direction.
+//   - --continue refuses a transcript of another transport, in either direction, and on the SDK route refuses a
+//     transcript holding ANY recorded response not served by the requested model (or naming none): an identity-rejected
+//     response is never replayed, so its tool calls never run; the transcript is left as it was, as evidence.
 const OPENAI_SDK_PACKAGE = JSON.parse(await readFile(new URL("../../node_modules/openai/package.json", import.meta.url), "utf8").catch(() => "{}"));
 export const XAI_SDK = Object.freeze({ package: "openai", version: OPENAI_SDK_PACKAGE.version ?? null, base_url: "https://api.x.ai/v1", method: "chat.completions.create",
   request_path: "/v1/chat/completions", max_retries: 0 });
@@ -326,6 +328,15 @@ export async function main(argv, deps = {}) {
     if (prior && (prior.via ?? "api") === "api" && (prior.transport ?? null) !== (plan.transport ?? null)) {
       err(`run-review: refused: --continue ${opts.continue}: its transport is ${prior.transport ?? "the runner's own fetch"}, not ${plan.transport ?? "the runner's own fetch"}; a review continues on the transport it started on\n`);
       return EXIT.refused;
+    }
+    // PROVENANCE ACROSS THE CONTINUATION (see the header): before anything is replayed or sent.
+    if (plan.transport === "xai-sdk" && prior) {
+      const rejected = (prior.events ?? []).find(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && (e.served_model ?? e.response.model ?? null) !== plan.model);
+      if (rejected || prior.identity_mismatch) {
+        const s = rejected ? (rejected.served_model ?? rejected.response.model ?? null) : null;
+        err(`run-review: refused: --continue ${opts.continue}: ${rejected ? `its response at turn ${rejected.turn ?? "?"} ${s === null ? "named no served model" : `was served by ${s}, not ${plan.model}`}` : "it records an identity mismatch"}; an identity-rejected response is never replayed: start a fresh run (the transcript is kept as evidence)\n`);
+        return EXIT.refused;
+      }
     }
     try {
       resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: plan.lab.toLowerCase(), vendor: plan.vendor, model: plan.model, commit: plan.commit, via: "api", brief_sha256: plan.request.brief.sha256, reviewer: plan.reviewer_override ? plan.reviewer : null });

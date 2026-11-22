@@ -368,6 +368,13 @@ function routedProblems(t, reviewer, b, readmeRow) {
   else if (served.includes(null)) why.push("missing provenance: a response named no served model");
   for (const s of served) if (s !== null && s !== reviewer.model) why.push(`a response was served by ${s}, not the bound ${reviewer.model}`);
   if (t.identity_mismatch) why.push("the runner refused a response served by another model (identity_mismatch)");
+  // The facts behind the summary: every recorded response, an earlier run's included (a continuation carries them).
+  for (const e of Array.isArray(t.events) ? t.events : []) {
+    if (e?.type !== "provider_call" || !e.response || typeof e.response !== "object") continue;
+    const s = e.served_model ?? e.response.model ?? null;
+    if (s === null) why.push(`missing provenance: the recorded response at turn ${e.turn ?? "?"} named no served model`);
+    else if (s !== reviewer.model) why.push(`the recorded response at turn ${e.turn ?? "?"} was served by ${s}, not the bound ${reviewer.model}`);
+  }
   // The review copy: the check ran, and is well formed, and found nothing outside .review-tests/.
   const w = t.worktree_check;
   if (w === undefined || w === null) why.push("missing evidence: the transcript records no check of the review copy");

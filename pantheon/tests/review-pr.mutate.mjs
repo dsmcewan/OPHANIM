@@ -180,6 +180,11 @@ export const MUTATIONS = [
     edits: [one(PR, '      const writable = perms.tools.includes("write_test");', '      const writable = true;')]},
   {id: 'X33', what: 'the shared path policy lets a .. path out of .review-tests/', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
     edits: [one(`${R}cli-common.mjs`, '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));', '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`)));')]},
+  // ---- round 4 (Codex's interaction case at 1a7050f): an identity-rejected response is never replayed or counted ---------
+  {id: 'X34', what: 'a continuation replays a response served by another model (or none)', tests: [s('^XAI SDK R4: a run stopped on a response from')],
+    edits: [one(INDEX, '      if (rejected || prior.identity_mismatch) {', '      if (false) {')]},
+  {id: 'X35', what: 'the judge trusts served_models over the recorded responses', tests: [t('^XAI SDK ROUTE R4: a recorded response served by another model')],
+    edits: [one(PR, '    if (e?.type !== "provider_call" || !e.response || typeof e.response !== "object") continue;', '    continue;')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

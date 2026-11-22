@@ -608,3 +608,17 @@ test("XAI SDK ROUTE R3: a changed path outside .review-tests/ fails the judge ev
   j = await judge(wc([]), READONLY);
   assert.equal(j.status, "complete", JSON.stringify(j.why));
 });
+
+test("XAI SDK ROUTE R4: a recorded response served by another model (or none) anywhere in the events fails the judge, whatever served_models says", async () => {
+  const ev = (n, model) => ({ type: "provider_call", n, turn: n, served_model: model ?? null, response: { id: `c${n}`, ...(model ? { model } : {}), choices: [] } });
+  for (const [name, events, want] of [
+    ["a rejected response kept from an earlier run", [ev(1, "grok-4.6"), ev(2, "grok-4.7")], /the recorded response at turn 1 was served by grok-4\.6, not the bound grok-4\.7/],
+    ["a recorded response naming no model", [ev(1), ev(2, "grok-4.7")], /missing provenance: the recorded response at turn 1 named no served model/],
+  ]) {
+    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events }) }), run: OK_RUN });
+    assert.equal(j.status, "incomplete", name);
+    assert.match(j.why.join("; "), want, `${name}: ${j.why.join("; ")}`);
+  }
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events: [ev(1, "grok-4.7"), ev(2, "grok-4.7")] }) }), run: OK_RUN });
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+});

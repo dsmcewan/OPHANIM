@@ -309,3 +309,52 @@ test("XAI SDK R2: an undocumented cost-looking field, or a non-integer tick coun
   assert.deepEqual(costOf({ cost_in_usd_ticks: 0 }), { reported: true, value: 0, field: "cost_in_usd_ticks", usd: 0 });
   assert.deepEqual(costOf({ cost_in_usd_ticks: 11840000 }), { reported: true, value: 11840000, field: "cost_in_usd_ticks", usd: 0.001184 });
 });
+
+// ---- round 4 (Codex's interaction case at 1a7050f): an identity-rejected response is never replayed by --continue ------
+
+import { createHash } from "node:crypto";
+/** Two runs on ONE repository and out directory: the first, then `--continue` from its transcript. */
+async function twoRuns({ first, second, firstArgs = [], secondArgs = [] }) {
+  const repo = await fixtureRepo();
+  const outDir = await mkdtemp(join(tmpdir(), "rr-sdk-cont2-"));
+  const tj = join(outDir, "findings-3-xai.transcript.json");
+  const go = async (steps, args) => {
+    const out = capture();
+    const d = await deps({ root: repo.root, env: { XAI_API_KEY: FAKE_KEY }, fetch: async () => { throw new Error("no fetch"); }, out });
+    d.xaiClient = fakeXaiClient(steps);
+    const code = await main(["--assignment", "3", "--commit", repo.commit, ...SDK_LIMITS, "--out", outDir, ...args], d);
+    return { code, out, d };
+  };
+  const a = await go(first, firstArgs);
+  const before = await readFile(tj);
+  const b = await go(second, ["--continue", tj, ...secondArgs]);
+  const after = await readFile(tj);
+  const sha = x => createHash("sha256").update(x).digest("hex");
+  return { a, b, before: JSON.parse(before), after: JSON.parse(after), unchanged: sha(before) === sha(after) };
+}
+
+for (const [label, served, why] of [["another model", "grok-4.6", /its response at turn 1 was served by grok-4\.6, not grok-4\.7/], ["no served model", undefined, /its response at turn 1 named no served model/]]) {
+  test(`XAI SDK R4: a run stopped on a response from ${label} cannot be continued; the rejected response's tool call never runs, and the transcript is kept unchanged as evidence`, { skip: !JAIL && "bwrap unavailable" }, async () => {
+    const r = await twoRuns({ first: [() => toolTurn(served, { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7, cost_in_usd_ticks: 2000 })], second: [() => finalTurn("grok-4.7", null)] });
+    assert.equal(r.a.code, EXIT.incomplete);
+    assert.equal(r.before.events.filter(e => e.type === "tool_call").length, 0, "the first run used nothing of the rejected response");
+    assert.equal(r.b.code, EXIT.refused, r.b.out.err);
+    assert.match(r.b.out.err, why);
+    assert.match(r.b.out.err, /an identity-rejected response is never replayed: start a fresh run/);
+    assert.equal(r.b.d.xaiClient.calls.length, 0, "no model call on the refused continuation");
+    assert.ok(r.unchanged, "the rejected transcript, with its cost, is left as it was");
+    assert.deepEqual(r.before.events.find(e => e.type === "provider_call").cost, { reported: true, value: 2000, field: "cost_in_usd_ticks", usd: 2e-7 });
+  });
+}
+
+test("XAI SDK R4: the control -- a run whose every response named grok-4.7 continues on the same route and completes", { skip: !JAIL && "bwrap unavailable" }, async () => {
+  const r = await twoRuns({ firstArgs: ["--max-turns", "1"], first: [() => toolTurn("grok-4.7", null)], second: [() => finalTurn("grok-4.7", null)] });
+  assert.equal(r.a.code, EXIT.incomplete);
+  assert.match(r.before.stop_reason, /max_turns reached \(1\)/);
+  assert.equal(r.before.events.filter(e => e.type === "tool_call").length, 2, "the first run ran the verified response's tools");
+  assert.equal(r.b.code, EXIT.complete, r.b.out.err);
+  assert.equal(r.b.d.xaiClient.calls.length, 1);
+  assert.equal(r.after.status, "complete");
+  assert.equal(r.after.transport, "xai-sdk");
+  assert.ok(r.after.continued_from);
+});
