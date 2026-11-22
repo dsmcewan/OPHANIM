@@ -236,9 +236,13 @@ test('routing: dispatch is bounded per tick and oldest-first per route; unconfig
   assert.equal(store.get(stray.id).delivery_state, 'refused');
   await bridge.githubTick(store, route, gh.api);
   assert.equal(gh.posts.length, 25, 'nothing is sent again');
-  const codexBound = [];
-  for (let i = 0; i < 22; i++) codexBound.push(store.send({ from: 'claude', to: 'codex', key: `d-${i}`, text: `To Codex ${i}.` }).id);
-  assert.deepEqual(store.outbox('desktop').map(m => m.id), codexBound.slice(0, 20), 'the desktop worker still reads its 20 oldest');
+  const codexBound = [], firstTwenty = [];
+  for (let i = 0; i < 22; i++) {
+    const id = store.send({ from: 'claude', to: 'codex', key: `d-${i}`, text: `To Codex ${i}.` }).id;
+    codexBound.push(id);
+    if (i < 20) firstTwenty.push(id);
+  }
+  assert.deepEqual(store.outbox('desktop').map(m => m.id), firstTwenty, 'the desktop worker still reads its 20 oldest');
   assert.equal(store.beginDelivery(codexBound[21], 'desktop').delivery_state, 'dispatching', 'a queued message outside the first 20 can be claimed');
   assert.throws(() => store.beginDelivery(codexBound[21], 'desktop'), /already claimed/);
   assert.throws(() => store.beginDelivery(codexBound[0], 'github'), /already claimed or unavailable/, 'a route never claims another recipient\'s message');
