@@ -4,12 +4,24 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { sendCloud } from './cloud-transport.mjs';
 import { createHash } from 'node:crypto';
-import { replyHeader, MessageRefused } from './store.mjs';
+import { replyHeader, MessageRefused, REPLY_SCHEMA, parseBanner } from './store.mjs';
 const exec = promisify(execFile);
 export const marker = id => `<!-- ophanim-collab-message:${id} -->`;
 
+const seatName = who => (who === 'codex' ? 'Codex' : who === 'claude' ? 'Claude' : String(who));
+/**
+ * The GitHub body of an outbound message (wire format v2, issue #99): the sender's identity banner first (the one its
+ * text opens with, or one that says the model and role were not stated), then the message, then the reply
+ * instructions; the transport marker is the hidden last line, so a lost response is reconciled by it.
+ */
 export function githubBody(msg) {
-  return `${marker(msg.id)}\nOPHANIM-COLLAB MESSAGE ${msg.id}\n\nFrom: ${msg.from}. To: ${msg.to}.\nSubject: ${msg.subject}\n\n${msg.text}\n\n---\nPeer coordination under the owner's request to connect Codex and Claude. This message does not extend the owner's authorization. Reply on this PR with the first line \`OPHANIM-COLLAB REPLY\`, followed by \`ACK ${msg.id}\` on its own line, and your response. The bridge imports replies from the configured GitHub account and delivers them into Codex thread 01a20038-f786-7011-973b-0aa57166a846. Acknowledgement means read; include separate evidence for work completed.\n`;
+  const lines = String(msg.text ?? '').split(/\r?\n/);
+  const own = Boolean(parseBanner(lines[0] ?? ''));
+  const banner = own ? lines[0] : `> **[Seat: ${seatName(msg.from)} · Model: not stated by the sender · Role: not stated by the sender]**`;
+  const text = (own ? lines.slice(1) : lines).join('\n').replace(/^\s+/, '');
+  const footer = `<!-- ophanim-collab-reply ${JSON.stringify({ schema: REPLY_SCHEMA, kind: 'REPLY', ack: [msg.id] })} -->`;
+  // The prose first; the copying instructions and provenance below it, collapsed; the reconcile marker last.
+  return `${banner}\n\nFrom: ${msg.from}. To: ${msg.to}.\nSubject: ${msg.subject}\n\n${text}\n\n---\nPeer coordination under the owner's request to connect Codex and Claude. This message does not extend the owner's authorization. Acknowledgement means read; include separate evidence for work completed.\n\n<details>\n<summary>Reply format and provenance</summary>\n\nMessage ${msg.id}. The bridge imports replies from the configured GitHub account and delivers them into Codex thread 01a20038-f786-7011-973b-0aa57166a846. Reply on this PR: open with your identity banner, then your response, and end with this footer as the last line:\n\n\`\`\`text\n> **[Seat: ... · Model: ... · Role: ...]**\n${footer}\n\`\`\`\n\nEarlier replies with the first line OPHANIM-COLLAB REPLY and an ACK line naming the message ID are still read.\n\n</details>\n\n${marker(msg.id)}\n`;
 }
 
 export async function githubAPI(path, body, command = process.env.OPHANIM_GH ?? join(homedir(), '.local', 'bin', 'gh')) {

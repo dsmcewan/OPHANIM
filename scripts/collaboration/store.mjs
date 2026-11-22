@@ -17,18 +17,67 @@ const bounded = (value, name, max, fallback) => {
   return value;
 };
 
+// A message ID as the store issues it (randomUUID): lower-case hex in the 8-4-4-4-12 layout, nothing joined to it.
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+export const isMessageId = value => typeof value === 'string' && new RegExp(`^${UUID}$`).test(value);
+// WIRE FORMAT v2 (issue #99). The visible body opens with the sender's identity banner; the protocol metadata is a
+// strict typed HTML footer on the LAST line, invisible when rendered, so an ACK ID keeps its own boundary however the
+// prose around it is rendered (GitHub joins adjacent lines into one paragraph):
+//   > **[Seat: <seat> · Model: <model> · Role: <role>]**
+//   ...
+//   <!-- ophanim-collab-reply {"schema":"ophanim.collaboration.reply/v2","kind":"REPLY","ack":["<uuid>", ...]} -->
+// The footer has exactly those keys; kind is REPLY or ACK; ack is a list of distinct message IDs. Anything else is not a
+// protocol reply. The legacy form (first line OPHANIM-COLLAB REPLY|ACK, then ACK <uuid> lines up to the first blank
+// line) is still read, for replies already in flight.
+export const REPLY_SCHEMA = 'ophanim.collaboration.reply/v2';
+// The identity banner: three distinct, non-empty fields. It is what the comment ASSERTS; the GitHub account that
+// posted it is recorded separately and is the only part the bridge verifies.
+const BANNER = /^> \*\*\[Seat: ([^·\]\n]*) · Model: ([^·\]\n]*) · Role: ([^·\]\n]*)\]\*\*$/;
+export function parseBanner(line) {
+  const m = typeof line === 'string' ? BANNER.exec(line) : null;
+  if (!m) return null;
+  const [seat, model, role] = m.slice(1).map(s => s.trim());
+  return seat && model && role ? { seat, model, role, banner: line.slice(2) } : null;
+}
+const FOOTER = /^<!-- ophanim-collab-reply (\{.*\}) -->$/;
+const MAX_ACKS = 16;
+function footerHeader(lines) {
+  let last = lines.length - 1;
+  while (last >= 0 && lines[last].trim() === '') last--;
+  const f = last >= 0 ? FOOTER.exec(lines[last]) : null;
+  if (!f) return null;
+  let meta;
+  try { meta = JSON.parse(f[1]); } catch { return null; }
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  if (Object.keys(meta).sort().join(',') !== 'ack,kind,schema' || meta.schema !== REPLY_SCHEMA || !['REPLY', 'ACK'].includes(meta.kind)) return null;
+  if (!Array.isArray(meta.ack) || meta.ack.length > MAX_ACKS || !meta.ack.every(isMessageId) || new Set(meta.ack).size !== meta.ack.length) return null;
+  const first = lines.findIndex(l => l.trim() !== '');
+  const identity = first >= 0 ? parseBanner(lines[first]) : null;
+  if (!identity) return null;
+  return { kind: meta.kind, acknowledgements: [...meta.ack], format: 'v2', identity };
+}
 export function replyHeader(body) {
   if (typeof body !== 'string') return null;
   const lines = body.replace(/^\uFEFF/, '').split(/\r?\n/);
+  // An explicit legacy first line is read as legacy, whatever it quotes; otherwise only a v2 footer makes a reply.
+  // The legacy boundary is unchanged: an optional token in the UUID's shape, nothing else; only an exact UUID acknowledges.
   const header = /^OPHANIM-COLLAB (REPLY|ACK)(?: ([0-9a-f-]{36}))?$/.exec(lines[0]);
-  if (!header) return null;
-  const acknowledgements = header[2] ? [header[2]] : [];
+  if (!header) return footerHeader(lines);
+  const acknowledgements = header[2] && isMessageId(header[2]) ? [header[2]] : [];
   for (const line of lines.slice(1)) {
     if (line === '') break;
     const match = /^ACK ([0-9a-f-]{36})$/.exec(line);
-    if (match) acknowledgements.push(match[1]);
+    if (match && isMessageId(match[1])) acknowledgements.push(match[1]);
   }
-  return { kind: header[1], acknowledgements };
+  return { kind: header[1], acknowledgements, format: 'legacy' };
+}
+/** A v2 reply body: the banner, the text, and the typed footer as the last line. Refuses a bad banner or ID. */
+export function formatReply({ banner, text, acks = [], kind = 'REPLY' }) {
+  if (!parseBanner(banner)) throw new MessageRefused('A reply opens with an identity banner with a non-empty seat, model and role: > **[Seat: ... · Model: ... · Role: ...]**');
+  if (!['REPLY', 'ACK'].includes(kind)) throw new MessageRefused('A reply kind is REPLY or ACK');
+  if (!Array.isArray(acks) || acks.length > MAX_ACKS || !acks.every(isMessageId) || new Set(acks).size !== acks.length) throw new MessageRefused(`ACK takes up to ${MAX_ACKS} distinct message IDs, each exactly as issued`);
+  const body = String(text ?? '').replace(/\s+$/, '');
+  return `${banner}\n\n${body}\n\n<!-- ophanim-collab-reply ${JSON.stringify({ schema: REPLY_SCHEMA, kind, ack: acks })} -->\n`;
 }
 
 export class Store {
@@ -219,7 +268,8 @@ export class Store {
     const legacy = this.decode(this.db.prepare('SELECT * FROM messages WHERE from_agent=? AND request_key=?').get('claude', `github-comment-${comment.id}`));
     const imported = legacy?.text === comment.body ? legacy : this.send({ from: 'claude', to: 'codex', key: `github-comment-${comment.id}-${revision}`,
       subject: 'Claude GitHub reply', text: comment.body,
-      provenance: { transport: 'github', author, comment_id: comment.id, url: comment.html_url ?? comment.url, revision, identity: 'GitHub account verified; agent role asserted' } });
+      provenance: { transport: 'github', author, comment_id: comment.id, url: comment.html_url ?? comment.url, revision, identity: 'GitHub account verified; agent role asserted',
+        format: header.format, ...(header.identity ? { asserted_identity: { seat: header.identity.seat, model: header.identity.model, role: header.identity.role, basis: 'asserted in the comment banner; not verified by the bridge' } } : {}) } });
     for (const id of header.acknowledgements) {
       const original = this.get(id);
       if (original?.to === 'claude') this.ack('claude', original.id, `GitHub account ${author} acknowledged at ${comment.html_url ?? comment.id}`);
