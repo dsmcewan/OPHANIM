@@ -213,7 +213,12 @@ test('#136: an entry accepted before a kind gained admit() re-opens and verifies
     const n = seen.calls.length;
     assert.throws(() => claim(cold, 'declared-only'), /not admitted/, 'cached append refused');
     assert.equal(require256(fs.readFileSync(file)), require256(afterOk), 'the chain bytes are unchanged');
-    assert.deepEqual(seen.calls.slice(n).map(c => c.seq), [ok.seq + 1], 'once, for the new entry; the cached frontier was not re-admitted');
+    // The complete hook-call sequence so far: the cold refusal, the admitted append, the cached refusal -- one call
+    // per append, each for the new entry's own sequence, none for any entry already on the chain.
+    assert.deepEqual(seen.calls.map(c => [c.seq, c.proof, c.before]),
+      [[ok.seq, 'declared-only', ok.seq - 1], [ok.seq, 'retained', ok.seq - 1], [ok.seq + 1, 'declared-only', ok.seq]],
+      'once per append, for the new entry; the cached frontier was not re-admitted');
+    assert.equal(seen.calls.length, n + 1);
     assert.equal(claim(cold, 'retained').seq, ok.seq + 1, 'the head did not move: the next append takes the refused sequence');
 
     // An existing kind without a hook appends as before.
