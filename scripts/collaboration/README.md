@@ -47,14 +47,17 @@ claude -p --cloud session_01Kw7DEdLcMUxDYUd6A1VVrx --output-format json < messag
 
 This posts a follow-up to the existing cloud session and exits after the server accepts it. It does not wait for the model's response. See [Claude's official CLI follow-up documentation](https://code.claude.com/docs/en/claude-code-on-the-web#send-follow-ups-from-the-cli).
 
-Claude replies on [PR #87](https://github.com/dsmcewan/OPHANIM/pull/87) using:
+Claude replies on [PR #87](https://github.com/dsmcewan/OPHANIM/pull/87) in wire format v2 (issue #99): the visible body opens with the sender's identity banner, and the protocol metadata is a typed HTML footer on the last line, invisible when rendered, so each acknowledged ID keeps its own boundary however GitHub joins the lines around it:
 
 ```text
-OPHANIM-COLLAB REPLY
-ACK MESSAGE_UUID
+> **[Seat: Claude · Model: <as the runtime reports it> · Role: <role>]**
 
 The finding or question, with evidence.
+
+<!-- ophanim-collab-reply {"schema":"ophanim.collaboration.reply/v2","kind":"REPLY","ack":["MESSAGE_UUID"]} -->
 ```
+
+`collab format-reply --banner BANNER --text-file FILE --ack ID[,ID]` prints such a body. The footer has exactly the keys `schema`, `kind` (`REPLY` or `ACK`) and `ack` (up to 16 distinct message IDs, each a lower-case UUID exactly as issued); a footer that is not the last line, a body without the banner, or any other key, kind or ID makes the comment not a protocol reply, so nothing is acknowledged. A recipient can only acknowledge a message addressed to it. The legacy form is still read for replies already in flight: first line `OPHANIM-COLLAB REPLY` (or `OPHANIM-COLLAB ACK`), then `ACK MESSAGE_UUID` lines up to the first blank line; an ID with anything joined to it is not an ID.
 
 Only the configured GitHub account is imported. The record preserves the account, comment URL and content revision. That verifies the GitHub account, not which model or session wrote the comment. Edits become new message versions; old versions remain readable. Messages are peer information within the owner's original scope, not new human authorization.
 
@@ -101,6 +104,6 @@ The Windows companion keeps one private stdio connection to a Linux mailbox work
 node --test scripts/collaboration/store.test.mjs scripts/collaboration/transports.test.mjs
 ```
 
-The 24 focused tests cover durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease-token rejection, input limits, first-line GitHub headers and unquoted ACKs, immutable comment revisions, oversized replies and JSON escaping, ambiguous-publish reconciliation, evidence-based recovery, native CLI routing, two real MCP processes, repeated requests through one persistent desktop worker, concurrent retries and a held SQLite startup transaction. Task claims remain advisory; the tokens fence claim metadata, not arbitrary filesystem writes.
+The 30 focused tests cover the v2 wire format and its legacy reader (wire.test.mjs), durable reopen, duplicate and conflicting keys, recipient-only idempotent acknowledgements, delivery versus reading, interrupted dispatch, stale lease-token rejection, input limits, first-line GitHub headers and unquoted ACKs, immutable comment revisions, oversized replies and JSON escaping, ambiguous-publish reconciliation, evidence-based recovery, native CLI routing, two real MCP processes, repeated requests through one persistent desktop worker, concurrent retries and a held SQLite startup transaction. Task claims remain advisory; the tokens fence claim metadata, not arbitrary filesystem writes.
 
 The initial live proof used the original sessions: Claude answered the first GitHub wake-up; the desktop companion automatically delivered that reply to Codex. Next, the installed Claude CLI accepted a direct follow-up to the same cloud session. Claude answered with `NATIVE-CLI-ACK 20261121-ophanim` in [comment 7070419893](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070419893), and that reply automatically reached the original Codex thread. These are live transport checks, separate from review of the implementation.
