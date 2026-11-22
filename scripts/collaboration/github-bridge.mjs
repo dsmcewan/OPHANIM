@@ -54,21 +54,33 @@ export function routesOf(config) {
   const fallback = config.pr === undefined || config.pr === null ? null : parseTarget(`pr:${config.pr}`);
   if (config.pr !== undefined && config.pr !== null && !fallback) throw new Error(`Invalid legacy pr in the config: ${JSON.stringify(config.pr)}`);
   const allowed = new Set([...(fallback ? [fallback] : []), ...targets]);
+  // ONE ITEM, ONE TARGET: issues and pull requests share one number space and one comments endpoint, so pr:N and
+  // issue:N name the same timeline. A config naming one number in both forms is refused before anything is read.
+  const byNumber = new Map();
+  for (const t of allowed) {
+    const n = t.slice(t.indexOf(':') + 1), was = byNumber.get(n);
+    if (was && was !== t) throw new Error(`The collaboration config names item ${n} as both ${was} and ${t}; name it once`);
+    byNumber.set(n, t);
+  }
   return { allowed, fallback, routeOf: msg => msg.target ?? fallback };
 }
 const endpointOf = (config, target) => `repos/${config.repo}/issues/${target.slice(target.indexOf(':') + 1)}/comments`;
 
 export async function githubTick(store, config, api = githubAPI, cloud = sendCloud) {
   const { allowed, routeOf } = routesOf(config);
-  // Each allowlisted target's own timeline, read and imported as that target; nothing else is read.
-  const byTarget = new Map();
+  // Each allowlisted target's own timeline, read and imported as that target; nothing else is read. A target whose
+  // read fails is set aside for this tick (its replies are not imported, its sends wait, its uncertain sends stay
+  // uncertain); the other targets go on, and the tick reports every failure at its end.
+  const byTarget = new Map(), failed = new Map();
   for (const target of allowed) {
-    const comments = [];
-    for (let page = 1; ; page++) {
-      const part = await api(`${endpointOf(config, target)}?per_page=100&page=${page}`);
-      comments.push(...part); if (part.length < 100) break;
-    }
-    byTarget.set(target, comments);
+    try {
+      const comments = [];
+      for (let page = 1; ; page++) {
+        const part = await api(`${endpointOf(config, target)}?per_page=100&page=${page}`);
+        comments.push(...part); if (part.length < 100) break;
+      }
+      byTarget.set(target, comments);
+    } catch (e) { failed.set(target, `read: ${String(e?.message ?? e).slice(0, 300)}`); }
   }
   for (const [target, comments] of byTarget) for (const comment of comments) {
     if (comment.id <= config.afterComment || !config.allowedAuthors.includes(comment.user?.login) || !replyHeader(comment.body)) continue;
@@ -98,6 +110,8 @@ export async function githubTick(store, config, api = githubAPI, cloud = sendClo
       store.refuseDelivery(msg.id, { reason: 'NO_ROUTE', target: msg.target ?? null, allowed: [...allowed].sort() });
       continue;
     }
+    // A target that could not be read this tick is not written to: the message stays queued for the next tick.
+    if (failed.has(target)) continue;
     store.beginDelivery(msg.id, route);
     const body = githubBody(msg, { repo: config.repo, target: msg.target ? target : null });
     try {
@@ -109,11 +123,16 @@ export async function githubTick(store, config, api = githubAPI, cloud = sendClo
         store.finishDelivery(msg.id, 'delivered', { url: posted.html_url, comment_id: posted.id });
       }
     } catch (e) {
+      // The send may have reached GitHub: it is held as uncertain (reconciled by its marker, never replayed), and no
+      // further write goes to that target this tick; the other targets' messages are still sent.
       store.finishDelivery(msg.id, 'uncertain', { reason: e.message });
-      throw e;
+      failed.set(target, `send: ${String(e?.message ?? e).slice(0, 300)}`);
     }
   }
-  store.meta('github-health', { checked_at: Date.now(), ok: true, targets: [...allowed].sort(), imported_comments: [...byTarget.values()].reduce((n, c) => n + c.length, 0) });
+  const health = { checked_at: Date.now(), ok: failed.size === 0, targets: [...allowed].sort(), imported_comments: [...byTarget.values()].reduce((n, c) => n + c.length, 0),
+    ...(failed.size ? { failed_targets: Object.fromEntries(failed) } : {}) };
+  store.meta('github-health', health);
+  if (failed.size) throw Object.assign(new Error(`GitHub targets failed this tick: ${[...failed].map(([t, why]) => `${t}: ${why.replace(/^(read|send): /, '')}`).join('; ')}`), { healthRecorded: true });
 }
 
 export async function runGithubBridge(store, config, once = false) {
@@ -121,7 +140,7 @@ export async function runGithubBridge(store, config, once = false) {
   store.recoverDeliveries('claude-cloud');
   do {
     try { await githubTick(store, config); }
-    catch (e) { store.meta('github-health', { checked_at: Date.now(), ok: false, error: e.message }); console.error(e.message); if (once) throw e; }
+    catch (e) { if (!e.healthRecorded) store.meta('github-health', { checked_at: Date.now(), ok: false, error: e.message }); console.error(e.message); if (once) throw e; }
     if (!once) await new Promise(resolve => setTimeout(resolve, config.pollMs ?? 15000));
   } while (!once);
 }

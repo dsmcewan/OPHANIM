@@ -27,19 +27,23 @@ function fixture(t) {
 }
 /** A simulated GitHub: one comment timeline per issue/PR number; records every endpoint read and every post. */
 function github() {
-  const timelines = new Map(), reads = [], posts = [];
+  const timelines = new Map(), reads = [], posts = [], down = { read: new Set(), post: new Set() };
   let next = 1000;
   const api = async (endpoint, body) => {
     const m = /^repos\/test\/repo\/issues\/(\d+)\/comments(\?.*)?$/.exec(endpoint);
     if (!m) throw new Error(`unexpected endpoint ${endpoint}`);
     const n = Number(m[1]);
+    if (!body && down.read.has(n)) throw new Error(`HTTP 404: issue ${n} not found`);
+    // An ambiguous send: GitHub accepts the comment, and the response is lost on the way back.
+    if (body && down.post.has(n)) { const c = { id: next++, user: { login: 'owner' }, html_url: `https://github.com/test/repo/issues/${n}#c${next}`, body: body.body };
+      posts.push({ n, body: body.body, lost: true }); (timelines.get(n) ?? timelines.set(n, []).get(n)).push(c); throw new Error(`response lost posting to ${n}`); }
     if (!body) { reads.push(n); return [...(timelines.get(n) ?? [])]; }
     const c = { id: next++, user: { login: 'owner' }, html_url: `https://github.com/test/repo/issues/${n}#c${next}`, body: body.body };
     posts.push({ n, body: body.body }); (timelines.get(n) ?? timelines.set(n, []).get(n)).push(c);
     return c;
   };
   const comment = (n, body, id = next++) => { const c = { id, user: { login: 'owner' }, html_url: `https://github.com/test/repo/issues/${n}#c${id}`, body }; (timelines.get(n) ?? timelines.set(n, []).get(n)).push(c); return c; };
-  return { api, reads, posts, comment, timelines };
+  return { api, reads, posts, comment, timelines, down };
 }
 const route = { ...CONFIG, outboundTransport: 'github' };
 const byNumber = (x, y) => x - y;
@@ -150,4 +154,53 @@ test('routing: the outbound body names its route in a machine-parseable footer a
   assert.equal(wire.replyHeader(body), null, 'the body is not itself a reply');
   assert.deepEqual(wire.replyHeader(wire.formatReply({ banner: BANNER, text: 'x', acks: [a.id], target: 'pr:104' })).target, 'pr:104');
   assert.throws(() => wire.formatReply({ banner: BANNER, text: 'x', acks: [a.id], target: 'pr:0' }), wire.MessageRefused);
+});
+
+test('routing: one repository item is one target -- a config naming the same number as both pr: and issue: is refused, in either order, before any read or send', async t => {
+  const { store } = fixture(t);
+  store.send({ from: 'codex', to: 'claude', key: 'a', text: 'x', target: 'pr:104' });
+  for (const targets of [['pr:104', 'issue:104'], ['issue:104', 'pr:104']]) {
+    const gh = github();
+    await assert.rejects(bridge.githubTick(store, { ...route, targets }, gh.api), /names item 104 as both/);
+    assert.deepEqual([gh.reads.length, gh.posts.length], [0, 0], targets.join(','));
+  }
+  const gh = github();
+  await assert.rejects(bridge.githubTick(store, { ...route, pr: 87, targets: ['issue:87'] }, gh.api), /names item 87 as both/, 'the legacy pr counts as pr:87');
+  assert.deepEqual([gh.reads.length, gh.posts.length], [0, 0]);
+});
+
+test('routing: a target written in another form than the configured one is not that route -- the message is refused, and a footer naming it acknowledges nothing', async t => {
+  const { store } = fixture(t), gh = github();
+  const alias = store.send({ from: 'codex', to: 'claude', key: 'alias', text: 'x', target: 'issue:104' });
+  const a = store.send({ from: 'codex', to: 'claude', key: 'a', text: 'x', target: 'pr:104' });
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(store.get(alias.id).delivery_state, 'refused');
+  assert.deepEqual(gh.posts.map(p => p.n), [104], 'only the message routed to pr:104 is posted');
+  gh.comment(104, reply([a.id], { target: 'issue:104' }));
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(store.get(a.id).acknowledged_at, null);
+});
+
+test('routing: a failure stays with its target -- one unreadable timeline or one lost send does not stop the other targets; the tick reports every failure at the end', async t => {
+  const { store } = fixture(t), gh = github();
+  const a = store.send({ from: 'codex', to: 'claude', key: 'a', text: 'For PR 104.', target: 'pr:104' });
+  const b = store.send({ from: 'codex', to: 'claude', key: 'b', text: 'For issue 98.', target: 'issue:98' });
+  gh.down.read.add(104);
+  await assert.rejects(bridge.githubTick(store, route, gh.api), /pr:104: HTTP 404/);
+  assert.equal(store.get(b.id).delivery_state, 'delivered', 'the healthy target\'s message is sent');
+  assert.deepEqual([store.get(a.id).delivery_state, gh.posts.filter(p => p.n === 104).length], ['queued', 0], 'the unreadable target\'s message waits, unsent');
+  const health = store.meta('github-health');
+  assert.deepEqual([health.ok, Object.keys(health.failed_targets)], [false, ['pr:104']]);
+  gh.comment(98, reply([b.id]));
+  gh.down.read.delete(104); gh.down.post.add(104);
+  const c = store.send({ from: 'codex', to: 'claude', key: 'c', text: 'Also for issue 98.', target: 'issue:98' });
+  await assert.rejects(bridge.githubTick(store, route, gh.api), /pr:104: response lost/);
+  assert.notEqual(store.get(b.id).acknowledged_at, null, 'the healthy target\'s reply is imported and acknowledges');
+  assert.equal(store.get(a.id).delivery_state, 'uncertain', 'a lost send stays reconcilable, never replayed');
+  assert.equal(store.get(c.id).delivery_state, 'delivered', 'and the next message on another target is still sent');
+  gh.down.post.delete(104);
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(store.get(a.id).delivery_state, 'delivered', 'reconciled by its marker on its own timeline, not reposted');
+  assert.equal(gh.posts.filter(p => p.n === 104).length, 1);
+  assert.equal(store.meta('github-health').ok, true);
 });
