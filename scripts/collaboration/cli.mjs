@@ -14,12 +14,12 @@ const { values: o, positionals: [command, id] } = parseArgs({ allowPositionals: 
   subject: { type: 'string' }, text: { type: 'string' }, 'text-file': { type: 'string' }, 'reply-to': { type: 'string' },
   note: { type: 'string' }, token: { type: 'string' }, ttl: { type: 'string' }, db: { type: 'string' },
   route: { type: 'string' }, state: { type: 'string' }, evidence: { type: 'string' }, config: { type: 'string' },
-  all: { type: 'boolean' }, once: { type: 'boolean' }, banner: { type: 'string' }, ack: { type: 'string' },
+  all: { type: 'boolean' }, once: { type: 'boolean' }, banner: { type: 'string' }, ack: { type: 'string' }, target: { type: 'string' },
 } });
 // format-reply needs no mailbox: it prints a v2 reply body (banner, text, typed footer) and exits.
 if (command === 'format-reply') {
   try {
-    process.stdout.write(formatReply({ banner: o.banner, text: o['text-file'] ? readFileSync(o['text-file'], 'utf8') : o.text ?? '', acks: o.ack ? o.ack.split(',') : [] }));
+    process.stdout.write(formatReply({ banner: o.banner, text: o['text-file'] ? readFileSync(o['text-file'], 'utf8') : o.text ?? '', acks: o.ack ? o.ack.split(',') : [], ...(o.target ? { target: o.target } : {}) }));
   } catch (e) { console.error(e.message); process.exitCode = 1; }
   process.exit();
 }
@@ -29,7 +29,7 @@ try {
   switch (command) {
     case 'mcp': serveMCP(store, who); break;
     case 'desktop-rpc': serveDesktopStore(store); break;
-    case 'send': result = store.send({ from: who, to: o.to, key: o.key, subject: o.subject, text: o['text-file'] ? readFileSync(o['text-file'], 'utf8') : o.text, replyTo: o['reply-to'] }); break;
+    case 'send': result = store.send({ from: who, to: o.to, key: o.key, subject: o.subject, text: o['text-file'] ? readFileSync(o['text-file'], 'utf8') : o.text, replyTo: o['reply-to'], ...(o.target ? { target: o.target } : {}) }); break;
     case 'inbox': result = store.inbox(who, o.all); break;
     case 'ack': result = store.ack(who, id, o.note); break;
     case 'status': result = store.status(); break;
