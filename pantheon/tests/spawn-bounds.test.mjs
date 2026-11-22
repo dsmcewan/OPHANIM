@@ -24,8 +24,9 @@ test('timeout kills a TERM-ignoring process and descendants while the event loop
   }finally{clearInterval(timer);clearTimeout(guard);cleanup(ids);}
 });
 
-// The output cap is the only bound here. A product timeout would race child startup on a loaded runner (CI: a 500ms
-// timeout won before the child wrote, so the result was 'timeout'). The finite watchdog is an abort, which still tears
+// The output cap is the only bound here. A product timeout is a competing bound: CI run 44976655313 returned
+// 'timeout' from the earlier 500ms one (it records the stop reason, not when the child wrote; a child that writes
+// after 500ms reproduces that result deterministically). The finite watchdog is an abort, which still tears
 // the child's group down and fails the test as 'cancelled' if the cap never trips. 40 emoji are 160 UTF-8 bytes but
 // only 80 UTF-16 units (40 code points), so a 100 cap trips only when bytes are counted.
 test('output cap counts UTF-8 bytes and cancels the child',async()=>{
