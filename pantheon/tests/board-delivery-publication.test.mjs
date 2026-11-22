@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publish, boardState } from "../src/board/index.mjs";
@@ -29,6 +29,12 @@ async function scenario({ content = "// delivered\n", workerClaims = {} } = {}, 
   writeFileSync(join(repo, "a.mjs"), "// base\n");
   // The candidate's own required lint: it fails when the delivered a.mjs says LINTFAIL.
   writeFileSync(join(repo, "scripts", "test-gates", "lint-tests.mjs"), 'import fs from "node:fs";\nprocess.exit(fs.readFileSync("a.mjs", "utf8").includes("LINTFAIL") ? 1 : 0);\n');
+  // The in-gate rendezvous: run as the policy's extra test gate INSIDE the guard's box, it marks `ready` in the
+  // gate's controller-owned scratch and holds until the test writes `go` -- the authority changes while the gate
+  // provably runs, ordered by files, not by sleeps.
+  writeFileSync(join(repo, "rendezvous.test.mjs"), 'import fs from "node:fs";\nconst s = process.env.OPHANIM_GATE_SCRATCH;\n' +
+    'fs.writeFileSync(s + "/ready", String(process.pid));\nconst until = Date.now() + 60000;\n' +
+    'while (!fs.existsSync(s + "/go")) { if (Date.now() > until) process.exit(3); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); }\n');
   g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-q", "-m", "base"); g("remote", "add", "origin", remote);
   const base = g("rev-parse", "HEAD");
   try {
@@ -62,6 +68,62 @@ async function scenario({ content = "// delivered\n", workerClaims = {} } = {}, 
     });
   } finally { rmSync(d, { recursive: true, force: true }); }
 }
+
+const RDV = { ...POLICY, tests: ["rendezvous.test.mjs"] };
+/** Wait until a gate of this run is at the rendezvous, change the authority, then release the gate. */
+async function rendezvous(root, during) {
+  const at = () => readdirSync(root).filter(n => n.startsWith("publication-checkout-")).map(n => join(root, n, "scratch")).find(p => existsSync(join(p, "ready")));
+  const until = Date.now() + 60_000;
+  let scratch;
+  while (!(scratch = at())) { if (Date.now() > until) throw new Error("no gate reached the rendezvous"); await new Promise(r => setTimeout(r, 20)); }
+  await during();
+  writeFileSync(join(scratch, "go"), "");
+}
+
+test("transport entry: a verdict turned reject while the gates run is a typed pre-transport refusal; the transport is never called", async () => {
+  await scenario({}, async s => {
+    assert.equal((await s.admit()).ok, true);
+    await s.verify(); s.g("branch", "-f", BRANCH, s.candidate);
+    const t = s.stub();
+    const running = s.run({ policy: RDV, lease: await s.pubLease(), transport: t });
+    await rendezvous(s.d, () => s.verify({ verdict: "reject" }));
+    const r = await running;
+    assert.deepEqual([r.ok, r.code, r.changed, r.cause, t.calls.length, r.transport_called], [false, "AUTHORITY_CHANGED", "verdict", "NOT_VERIFIED", 0, false], r.why);
+    assert.deepEqual(r.marker.guard.gates.map(g => [g.name, g.passed]), [["test-lint", true], ["tests", true]], "every gate passed: only the authority refused");
+    assert.deepEqual([r.marker.status, r.marker.authority_at_transport, s.remoteHead()], ["refused", null, null]);
+    assert.equal(r.marker.decision.verifier.by, VERIFIER.seat_id, "the decision read before any external I/O is kept");
+    assert.equal((await s.run({ lease: await s.pubLease(), transport: t })).code, "NOT_VERIFIED", "definite, so retryable: it refuses again on its own merits");
+    assert.equal(t.calls.length, 0);
+  });
+});
+
+test("transport entry: a publication lease fenced while the gates run is the same typed refusal, never an untyped transport failure", async () => {
+  await scenario({}, async s => {
+    assert.equal((await s.admit()).ok, true);
+    await s.verify(); s.g("branch", "-f", BRANCH, s.candidate);
+    const t = s.stub();
+    const running = s.run({ policy: RDV, lease: await s.pubLease(), transport: t });
+    await rendezvous(s.d, () => s.board.runtime.fence({ resource: `publish:${KEY}`, holder: { ...PUBLISHER, seat_id: "other" }, reason: "test: fenced mid-gate" }));
+    const r = await running;
+    assert.deepEqual([r.code, r.changed, r.cause, t.calls.length, r.marker.status, s.remoteHead()], ["AUTHORITY_CHANGED", "lease", "FENCED", 0, "refused", null], r.why);
+  });
+});
+
+test("transport entry, positive control: with nothing changed at the rendezvous the transport is called once, bound to the authority it read", async () => {
+  await scenario({}, async s => {
+    assert.equal((await s.admit()).ok, true);
+    await s.verify(); s.g("branch", "-f", BRANCH, s.candidate);
+    const t = s.stub();
+    const running = s.run({ policy: RDV, lease: await s.pubLease(), transport: t });
+    await rendezvous(s.d, async () => {});
+    const r = await running;
+    assert.deepEqual([r.ok, r.code, t.calls.length], [true, "PUBLISHED", 1], r.why);
+    const a = r.marker.authority_at_transport;
+    assert.deepEqual([a?.candidate, a?.verifier?.by, a?.lease?.resource], [s.candidate, VERIFIER.seat_id, `publish:${KEY}`]);
+    assert.match(a.board_commit, /^commit:[0-9a-f]{64}$/);
+    assert.equal(a.board_commit, r.marker.decision.board_commit, "nothing changed between the decision read before I/O and the one read at transport entry");
+  });
+});
 
 test("green: a delivered, independently accepted candidate under a current publication lease reaches exactly one transport, recorded on the board", async () => {
   await scenario({}, async s => {

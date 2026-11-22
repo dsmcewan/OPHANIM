@@ -23,8 +23,10 @@
  *      repeat: no ambiguous attempt is ever re-attempted automatically. Only a definite pre-transport refusal (the
  *      guard recorded that it never called the transport) stays retryable. Every attempted marker, with its
  *      pre-attempt sha, is kept for forensics.
- *   6  a durable "attempted" marker, then the UNCHANGED publishCandidate guard, whose transport re-verifies the
- *      lease immediately before the push
+ *   6  a durable "attempted" marker (carrying the board decision, read before any external I/O), then the UNCHANGED
+ *      publishCandidate guard. At transport entry the exact delivery, the assigned verdict and the live lease are read
+ *      again TOGETHER and bound into the marker before the push; any change -- a verdict turned reject while the gates
+ *      ran, a fenced lease, another candidate -- is the typed pre-transport refusal AUTHORITY_CHANGED, never a call
  *   7  the marker is finalised and the raw guard receipt lands on the board as a trace (native CAS), digest-linked
  *
  * Trusted: the board via verifyDelivery, the runtime's lease table, the controller's policy, git in the controller's
@@ -89,6 +91,22 @@ export async function publishDelivery({ board, ref, key, policy, holder, lease, 
     ? runtime.verify({ resource: lease.resource, seat_id: holder?.seat_id, gen: lease.gen }) : no("LEASE_MISSING", `the publication lease must be publish:${key} with an integer gen`);
   const l0 = leaseOk();
   if (!l0.ok) return no(l0.code, l0.why);
+  // The three authorities, read TOGETHER from the board and the lease table (local state only, no external I/O): the
+  // exact delivery, the assigned verdict by the same deciding seat, the live lease. Read again at transport entry.
+  const authority = () => {
+    const changed = (what, r) => no("AUTHORITY_CHANGED", `the ${what} authority changed before the transport: ${r.code}: ${r.why}`, { changed: what, cause: r.code });
+    const d2 = verifyDelivery({ store, refs, ref, key });
+    if (!d2.ok) return changed("delivery", d2);
+    if (d2.candidate !== candidate) return changed("delivery", no("CANDIDATE_CHANGED", `the delivery is now ${d2.candidate}, not ${candidate}`));
+    const v2 = independentCheck({ store, refs, ref, key, verifier: policy.verifier?.key, seats: policy.verifier?.seats, candidate });
+    if (!v2.ok) return changed("verdict", v2);
+    if (v2.by !== ic.by) return changed("verdict", no("VERIFIER_CHANGED", `the verdict is now ${v2.by}'s, not ${ic.by}'s`));
+    const l2 = leaseOk();
+    if (!l2.ok) return changed("lease", l2);
+    return { ok: true, board_commit: boardState({ store, refs, ref }).commit ?? null, candidate, verifier: v2, lease: { ...lease }, read_at: new Date().toISOString() };
+  };
+  const decision = authority();
+  if (!decision.ok) return decision;
   let head = null; try { head = git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${policy.branch}^{commit}`]); } catch { /* absent */ }
   if (head !== candidate) return no("REF_MISMATCH", `refs/heads/${policy.branch} is ${head ?? "(absent)"}, not the delivered candidate ${candidate}`);
   // 5. an earlier attempt
@@ -113,27 +131,32 @@ export async function publishDelivery({ board, ref, key, policy, holder, lease, 
   // 6. the attempt, through the guard -- after recording the remote ref it starts from
   const pre = remoteHead(repo, policy.remote, policy.branch);
   if (pre === undefined) return no("REMOTE_UNKNOWN", `${policy.remote} cannot be read before the attempt; an attempt that could not be reconciled is not started`);
-  const marker = { kind: DELIVERY_PUBLICATION_KIND, key, candidate, branch: policy.branch, remote: policy.remote, verifier: ic, lease, pre_attempt_remote: pre, status: "attempted", attempted_at: new Date().toISOString() };
+  const marker = { kind: DELIVERY_PUBLICATION_KIND, key, candidate, branch: policy.branch, remote: policy.remote, verifier: ic, lease, decision, pre_attempt_remote: pre, status: "attempted", attempted_at: new Date().toISOString() };
   writeFileSync(markerPath, JSON.stringify(marker, null, 2));
-  let calls = 0;
+  let calls = 0, refusal = null, atTransport = null;
   const leased = async args => {
-    const l = leaseOk();
-    if (!l.ok) throw Object.assign(new Error(`publication lease no longer current: ${l.why}`), { code: "LEASE_LOST" });
-    if (args.sha !== candidate || args.branch !== policy.branch) throw new Error("the guard asked to publish another object or branch");
+    // Transport entry: the authorities are read again, together, and bound before the push; any change is a typed
+    // pre-transport refusal (the transport is never called, so the attempt stays definite and retryable).
+    if (args.sha !== candidate || args.branch !== policy.branch) refusal = no("GUARD_MISMATCH", "the guard asked to publish another object or branch");
+    else { const a = authority(); if (!a.ok) refusal = a; else atTransport = a; }
+    if (refusal) throw Object.assign(new Error(refusal.why), { code: refusal.code });
+    writeFileSync(markerPath, JSON.stringify({ ...marker, authority_at_transport: atTransport }, null, 2));
     calls++;
     return transport(args);
   };
   const r = await publishCandidate({ repo, sha: candidate, branch: policy.branch, remote: policy.remote, extra: testGates({ tests }), transport: leased,
     receiptRoot: join(receiptRoot, `guard-${key}-${candidate.slice(0, 12)}-${Date.now()}`), workRoot });
-  // 7. the outcome
-  const final = { ...marker, status: r.ok ? "published" : (calls ? "attempted" : "refused"), guard: { code: r.code, why: r.why, receipt: r.receipt_path, receipt_sha256: r.receipt_sha256,
+  // 7. the outcome (a refusal at transport entry is reported as itself, with the guard's raw receipt beside it)
+  const code = refusal ? refusal.code : r.code, why = refusal ? refusal.why : r.why;
+  const final = { ...marker, status: r.ok ? "published" : (calls ? "attempted" : "refused"), authority_at_transport: atTransport, refusal,
+    guard: { code: r.code, why: r.why, receipt: r.receipt_path, receipt_sha256: r.receipt_sha256,
     gates: r.gates.map(g => ({ name: g.name, status: g.status, passed: g.passed })) }, finished_at: new Date().toISOString() };
   writeFileSync(markerPath, JSON.stringify(final, null, 2));
   const bytes = Buffer.from(JSON.stringify(final));
   let trace = null;
   try {
-    const p = await publish({ ...board, ref, author: holder, entries: [{ kind: "trace", payload: { test: `publication of ${key} at ${candidate}: ${r.code}` }, blob: bytes }] });
+    const p = await publish({ ...board, ref, author: holder, entries: [{ kind: "trace", payload: { test: `publication of ${key} at ${candidate}: ${code}` }, blob: bytes }] });
     trace = p.ok ? { commit: p.commit, sha256: sha256(bytes) } : { refused: p.code };
   } catch (e) { trace = { error: String(e?.message ?? e) }; }
-  return { ok: r.ok, code: r.code, why: r.why, candidate, branch: policy.branch, transport_called: calls > 0, marker: final, trace };
+  return { ok: r.ok, code, why, ...(refusal ? { changed: refusal.changed, cause: refusal.cause } : {}), candidate, branch: policy.branch, transport_called: calls > 0, marker: final, trace };
 }
