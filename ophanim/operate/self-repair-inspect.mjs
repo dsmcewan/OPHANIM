@@ -39,8 +39,10 @@ export const fill = (tpl, vars) => tpl.flatMap(a => (a === '{files}' ? vars.file
 export async function runInspection(plan, {log = s => console.log(s)} = {}) {
   const started_at = new Date().toISOString(), steps = [], insp = plan.inspect;
   const attempt = Number.isInteger(plan.attempt) && plan.attempt > 0 ? plan.attempt : 1;
+  const token = typeof plan.token === 'string' ? plan.token : null;
   const dir = inspectionDirOf(plan.state);
-  writeJsonAtomic(path.join(dir, 'running.json'), {schema: INSPECTION_SCHEMA, commit: plan.commit, pid: process.pid, started_at, since: plan.since, attempt});
+  // The second running.json writer: the same attempt token as the lane's, with this process's own pid.
+  writeJsonAtomic(path.join(dir, 'running.json'), {schema: INSPECTION_SCHEMA, commit: plan.commit, pid: process.pid, ...(token ? {token} : {}), started_at, since: plan.since, attempt});
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-repair-inspect-'));
   let co = null;
   const run = args => { const cmd = NICE && Number.isInteger(insp.nice) ? [NICE, '-n', String(insp.nice), ...args] : args; return spawnRun(cmd[0], cmd.slice(1), {cwd: co.dir, env: process.env, timeout: insp.timeout_ms ?? 90 * 60_000}); };
@@ -80,7 +82,7 @@ export async function runInspection(plan, {log = s => console.log(s)} = {}) {
   } finally {
     try { co?.done(); } catch {}
     fs.rmSync(tmp, {recursive: true, force: true});
-    const body = {schema: INSPECTION_SCHEMA, commit: plan.commit, since: plan.since, attempt, started_at, finished_at: new Date().toISOString(), steps};
+    const body = {schema: INSPECTION_SCHEMA, commit: plan.commit, since: plan.since, attempt, ...(token ? {token} : {}), started_at, finished_at: new Date().toISOString(), steps};
     const c = inspectionCompleteness(body, plan.records);
     body.complete = c.complete; body.incomplete = c.why;
     writeJsonAtomic(path.join(dir, 'last.json'), body);
@@ -96,5 +98,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (i < 0 || !process.argv[i + 1]) { console.error('usage: self-repair-inspect.mjs --plan <plan.json>'); process.exit(2); }
   const plan = JSON.parse(fs.readFileSync(process.argv[i + 1], 'utf8'));
   if (plan?.schema !== INSPECTION_SCHEMA) { console.error(`not an ${INSPECTION_SCHEMA} plan`); process.exit(2); }
+  // The token on the argv is the identity witness the lane reads; it must be the plan's own.
+  const t = process.argv.indexOf('--token');
+  if (t >= 0 && process.argv[t + 1] !== plan.token) { console.error('the --token does not match the plan\'s attempt token'); process.exit(2); }
   runInspection(plan).then(() => { process.exitCode = 0; }, e => { console.error(`inspect: ${e.message}`); process.exitCode = 1; });
 }

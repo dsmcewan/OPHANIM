@@ -45,7 +45,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn, execFileSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {digest} from '../../packages/ledger/canonical.mjs';
 import {matchesOwned, pathsOverlap} from '../../pantheon/src/pipeline/paths.mjs';
 import {parseId, decodeKey} from '../../packages/graph/identity.mjs';
@@ -882,6 +882,57 @@ export function inspectionCompleteness(attempt, records) {
 /** The delay before attempt `n + 1` of an incomplete inspection. */
 export const inspectionRetryMs = (n, retry = DEFAULT_CONFIG.inspect.retry) => Math.min(retry.max_ms, retry.first_ms * 2 ** Math.max(0, n - 1));
 const INSPECTOR = path.join(path.dirname(new URL(import.meta.url).pathname), 'self-repair-inspect.mjs');
+/** The inspector's argv after node: the script, its plan and the attempt's token (the identity witness, #100). */
+export const inspectorArgv = (planFile, token) => [INSPECTOR, '--plan', planFile, '--token', token];
+/** How long an attempt can legitimately run: its three bounded steps, plus ten minutes of grace. */
+export const attemptEnvelopeMs = (inspect = DEFAULT_CONFIG.inspect) => 3 * (inspect?.timeout_ms ?? DEFAULT_CONFIG.inspect.timeout_ms) + 10 * 60_000;
+/**
+ * WHO HOLDS THE PID (#100). A live pid alone is not the recorded inspector: pids are reused. On Linux the process's own
+ * argv is read from /proc and must carry the inspector, its plan and the attempt's token. Returns {identity, why}:
+ *   verified    the recorded inspector, still running
+ *   mismatch    a live process that is not it (pid reuse, or the record names an unrelated process)
+ *   dead        no such process (its /proc entry is absent)
+ *   unreadable  the process exists but its argv cannot be read: the evidence is unavailable, not negative --
+ *               trusted within the attempt envelope, with the read error as its reason
+ *   unverified  live, but the identity cannot be read (no token: a record from before this rule; or no process
+ *               table, as on macOS and Windows) -- trusted only within the attempt envelope
+ *   expired     unverified and older than the envelope (or with no start time to bound it)
+ * Nothing is signalled: the process table is read, and only where there is none is kill(pid, 0) asked.
+ */
+export function inspectorIdentity(running, {state, inspect, now, procfs = '/proc'}) {
+  const pid = running?.pid;
+  if (!Number.isInteger(pid) || pid <= 0) return {identity: 'dead', why: 'the record names no process'};
+  const envelope = () => {
+    const started = Date.parse(running.started_at ?? '');
+    return Number.isFinite(started) && Date.parse(now) - started <= attemptEnvelopeMs(inspect);
+  };
+  if (fs.existsSync(procfs)) {
+    // DEAD only when the process entry is absent; a read that fails while it exists is unavailable evidence.
+    if (!fs.existsSync(path.join(procfs, String(pid)))) return {identity: 'dead', why: `no process ${pid}`};
+    let raw;
+    try { raw = fs.readFileSync(path.join(procfs, String(pid), 'cmdline')); }
+    catch (e) {
+      return envelope() ? {identity: 'unreadable', why: `the argv of process ${pid} cannot be read (${e?.code ?? 'error'}); trusted within the attempt envelope`}
+        : {identity: 'expired', why: `the argv of process ${pid} cannot be read (${e?.code ?? 'error'}) and the attempt is older than its envelope`};
+    }
+    if (typeof running.token !== 'string') {
+      return envelope() ? {identity: 'unverified', why: 'the record has no identity token (written before the identity rule); trusted within the attempt envelope'}
+        : {identity: 'expired', why: 'a record with no identity token, older than the attempt envelope'};
+    }
+    // Compared as BYTES: the argv the kernel holds against the expected argv encoded as UTF-8 (no decoding can make or
+    // hide a difference, so a non-ASCII path such as a state directory état-λ compares exactly).
+    const argv = [];
+    for (let i = 0, j; i < raw.length; i = j + 1) { j = raw.indexOf(0, i); if (j < 0) j = raw.length; argv.push(raw.subarray(i, j)); }
+    const want = inspectorArgv(path.join(inspectionDirOf(state), 'plan.json'), running.token).map(w => Buffer.from(w, 'utf8'));
+    const at = argv.findIndex((a, i) => i > 0 && a.equals(want[0]));
+    const ok = at > 0 && want.every((w, i) => argv[at + i]?.equals(w));
+    return ok ? {identity: 'verified', why: 'the process argv carries the inspector, its plan and the attempt token'}
+      : {identity: 'mismatch', why: `process ${pid} is not this attempt's inspector (its argv does not carry the recorded token)`};
+  }
+  if (!alive(pid)) return {identity: 'dead', why: `no process ${pid}`};
+  return envelope() ? {identity: 'unverified', why: 'the process table cannot be read here (no /proc): a live pid is trusted within the attempt envelope'}
+    : {identity: 'expired', why: 'the process table cannot be read here and the attempt is older than its envelope'};
+}
 /** Start the inspector as a detached background process (its output in inspection.log); returns its pid. */
 export function spawnInspection(plan, {state}) {
   const d = inspectionDirOf(state);
@@ -890,7 +941,7 @@ export function spawnInspection(plan, {state}) {
   writeJsonAtomic(planFile, plan);
   const fd = fs.openSync(path.join(d, 'inspection.log'), 'a');
   try {
-    const child = spawn(process.execPath, [INSPECTOR, '--plan', planFile], {cwd: plan.repo, detached: true, stdio: ['ignore', fd, fd], env: process.env});
+    const child = spawn(process.execPath, inspectorArgv(planFile, plan.token), {cwd: plan.repo, detached: true, stdio: ['ignore', fd, fd], env: process.env});
     child.unref();
     return child.pid;
   } finally { fs.closeSync(fd); }
@@ -899,14 +950,17 @@ export function spawnInspection(plan, {state}) {
  * An inspector that is gone without its result (running.json names a dead pid): its attempt is recorded in last.json as
  * interrupted (incomplete), unless it did write that attempt's result, and running.json is removed. Returns what it did.
  */
-function recoverInspection(state, running, last, at) {
+function recoverInspection(state, running, last, at, id = null) {
   const d = inspectionDirOf(state);
-  const finished = last?.commit === running.commit && last?.started_at === running.started_at;
-  const out = {pid: running.pid ?? null, commit: running.commit ?? null, started_at: running.started_at ?? null, result: finished ? 'its result was written' : 'interrupted'};
+  // The attempt's own result is written when last.json carries its token (or, for a record without one, the same
+  // commit and start): a very fast finish then leaves a stale running.json behind, never an interrupted result.
+  const finished = typeof running.token === 'string' ? last?.token === running.token : last?.commit === running.commit && last?.started_at === running.started_at;
+  const out = {pid: running.pid ?? null, commit: running.commit ?? null, started_at: running.started_at ?? null, result: finished ? 'its result was written' : 'interrupted',
+    ...(id ? {identity: id.identity, why: id.why} : {})};
   let wrote = last;
   if (!finished && SHA.test(running.commit ?? '')) {
-    wrote = {schema: INSPECTION_SCHEMA, commit: running.commit, since: running.since ?? null, attempt: Number.isInteger(running.attempt) ? running.attempt : 1, started_at: running.started_at ?? null,
-      finished_at: null, recovered_at: at, steps: [{name: 'inspection', error: `interrupted: the inspector (pid ${running.pid ?? 'unknown'}) ended without writing its result`}]};
+    wrote = {schema: INSPECTION_SCHEMA, commit: running.commit, since: running.since ?? null, attempt: Number.isInteger(running.attempt) ? running.attempt : 1, ...(typeof running.token === 'string' ? {token: running.token} : {}), started_at: running.started_at ?? null,
+      finished_at: null, recovered_at: at, steps: [{name: 'inspection', error: id && id.identity !== 'dead' ? `interrupted: ${id.why}` : `interrupted: the inspector (pid ${running.pid ?? 'unknown'}) ended without writing its result`}]};
     wrote.complete = false; wrote.incomplete = inspectionCompleteness(wrote, null).why;
     writeJsonAtomic(path.join(d, 'last.json'), wrote);
   }
@@ -917,13 +971,15 @@ function recoverInspection(state, running, last, at) {
  * The idle lane's decision: running, already inspected (completely), waiting to retry an incomplete attempt, skipped
  * (nothing to inspect with), started or retrying. Never throws.
  */
-export function inspectIdle({repo, state, head, config = DEFAULT_CONFIG, records, start = spawnInspection, at = () => new Date().toISOString()}) {
+export function inspectIdle({repo, state, head, config = DEFAULT_CONFIG, records, start = spawnInspection, at = () => new Date().toISOString(), procfs = '/proc'}) {
   try {
     const now = at();
     let {running, last, complete} = inspectionState(state), recovered = null;
-    // ONE AT A TIME: a live inspector is never started beside.
-    if (running && alive(running.pid)) return {state: 'running', commit: running.commit, pid: running.pid, started_at: running.started_at};
-    if (running) ({recovered, last} = recoverInspection(state, running, last, now));
+    // ONE AT A TIME: the recorded inspector, while it runs (verified, or unverifiable within its envelope), is never
+    // started beside. Any other process in the record is not it: the attempt is recovered (nothing is signalled).
+    const id = running ? inspectorIdentity(running, {state, inspect: config.inspect, now, procfs}) : null;
+    if (running && ['verified', 'unverified', 'unreadable'].includes(id.identity)) return {state: 'running', commit: running.commit, pid: running.pid, started_at: running.started_at, identity: id.identity, identity_why: id.why};
+    if (running) ({recovered, last} = recoverInspection(state, running, last, now, id));
     const judged = [complete, last].filter(x => x?.commit).map(x => ({x, c: inspectionCompleteness(x, records)}));
     const done = judged.find(j => j.x.commit === head && j.c.complete);
     if (done) return {state: 'already-inspected', commit: head, finished_at: done.x.finished_at, why: 'this commit was inspected completely; a new inspection starts when the line moves', ...(recovered ? {recovered} : {})};
@@ -939,10 +995,15 @@ export function inspectIdle({repo, state, head, config = DEFAULT_CONFIG, records
     }
     // THE COMPARISON BASE is the last COMPLETE inspection of another commit.
     const base = judged.find(j => j.x.commit !== head && j.c.complete)?.x.commit ?? null;
-    const plan = {schema: INSPECTION_SCHEMA, repo, commit: head, since: base, attempt: attempts + 1, records, state, inspect: config.inspect, at: now};
+    const plan = {schema: INSPECTION_SCHEMA, repo, commit: head, since: base, attempt: attempts + 1, token: randomUUID(), records, state, inspect: config.inspect, at: now};
+    const runningFile = path.join(inspectionDirOf(state), 'running.json');
+    const record = pid => ({schema: INSPECTION_SCHEMA, commit: head, pid, token: plan.token, started_at: plan.at, since: plan.since, attempt: plan.attempt});
+    // Recorded before the launch (no pid yet), then with its pid -- unless the inspector already finished: its result
+    // names the token, and a running.json written after it would be stale.
+    writeJsonAtomic(runningFile, record(null));
     const pid = start(plan, {state});
-    writeJsonAtomic(path.join(inspectionDirOf(state), 'running.json'), {schema: INSPECTION_SCHEMA, commit: head, pid, started_at: plan.at, since: plan.since, attempt: plan.attempt});
-    return {state: prior ? 'retrying' : 'started', commit: head, pid, since: plan.since, attempt: plan.attempt, ...(prior ? {incomplete: prior.c.why} : {}), ...(recovered ? {recovered} : {})};
+    if (inspectionState(state).last?.token !== plan.token) writeJsonAtomic(runningFile, record(pid));
+    return {state: prior ? 'retrying' : 'started', commit: head, pid, since: plan.since, attempt: plan.attempt, token: plan.token, ...(prior ? {incomplete: prior.c.why} : {}), ...(recovered ? {recovered} : {})};
   } catch (e) { return {state: 'failed', commit: head, why: cut(e.message, 300)}; }
 }
 
