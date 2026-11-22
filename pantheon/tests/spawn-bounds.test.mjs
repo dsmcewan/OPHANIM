@@ -24,8 +24,14 @@ test('timeout kills a TERM-ignoring process and descendants while the event loop
   }finally{clearInterval(timer);clearTimeout(guard);cleanup(ids);}
 });
 
+// The output cap is the only bound here. A product timeout would race child startup on a loaded runner (CI: a 500ms
+// timeout won before the child wrote, so the result was 'timeout'). The finite watchdog is an abort, which still tears
+// the child's group down and fails the test as 'cancelled' if the cap never trips. 40 emoji are 160 UTF-8 bytes but
+// only 80 UTF-16 units (40 code points), so a 100 cap trips only when bytes are counted.
 test('output cap counts UTF-8 bytes and cancels the child',async()=>{
-  const result=await spawnPromise(process.execPath,['-e',"process.stdout.write('😀'.repeat(100));setInterval(()=>{},1000)"],{maxBuffer:100,timeout:500,killGraceMs:25});
+  const watchdog=AbortSignal.timeout(10_000);
+  assert.ok(Buffer.byteLength('😀'.repeat(40))>100&&'😀'.repeat(40).length<=100,'the stimulus exceeds the cap in bytes only');
+  const result=await spawnPromise(process.execPath,['-e',"process.stdout.write('😀'.repeat(40));setInterval(()=>{},1000)"],{maxBuffer:100,signal:watchdog,killGraceMs:25});
   assert.ok(Buffer.byteLength(result.stdout)<=100);
   assert.equal(result.status,null);
   assert.equal(result.killedFor,'output_limit');
