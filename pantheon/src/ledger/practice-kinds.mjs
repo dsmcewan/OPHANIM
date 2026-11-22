@@ -235,29 +235,38 @@ function rederive(e, view) {
   if (p.outcome === 'promote' && evidenceBasis(view, p.evidence) === 'synthetic') {
     return 'a promote may not rest on synthetic evidence: a synthetic comparison verifies the mechanics only; cite a live (synthetic: false) comparison';
   }
-  // #131: a promote resting on comparison evidence binds every live comparison it rests on to a retained,
-  // finalized record that qualifies -- a declared `synthetic: false` is a claim, the retained record is the proof.
-  if (p.outcome === 'promote') {
-    const retained = new Map();
-    for (const x of p.evidence) if (x.kind === 'ledger' && view.entry(x.hash)?.kind === COMPARISON) retained.set(view.payload(x.hash)?.digest, view.payload(x.hash));
-    const live = comparisonDigests(view, p.evidence).filter(d => d.synthetic === false);
-    for (const d of live) {
-      const r = retained.get(d.sha);
-      if (!r) return `a promote resting on the live comparison ${d.sha.slice(0, 19)} cites its retained record (${COMPARISON}) on the ledger; a declared digest alone is not proof`;
-      if (r.synthetic !== d.synthetic) return 'the cited comparison digest says live; the retained record is synthetic';
-      const q = qualifyComparison(r);
-      if (!q.ok) return `the retained comparison ${d.sha.slice(0, 19)} cannot qualify a promote: ${q.why}`;
-      // The comparison must be OF this decision: its baseline arm ran the policy in effect, its candidate arm the candidate.
-      if (canonical(r.arms?.baseline?.policy ?? null) !== canonical(p.policy) || canonical(r.arms?.candidate?.policy ?? null) !== canonical(p.candidate.policy)) {
-        return `the retained comparison ${d.sha.slice(0, 19)} compared other policies than this promote decides (baseline ${r.arms?.baseline?.policy?.hash?.slice(0, 19)}, candidate ${r.arms?.candidate?.policy?.hash?.slice(0, 19)})`;
-      }
-    }
-    for (const [sha] of retained) if (!live.some(d => d.sha === sha)) return 'a promote cites a retained comparison it does not rest on: cite its digest too';
-  }
   const ledgerRefs = p.evidence.filter(x => x.kind === 'ledger').map(x => x.hash);
   if (new Set(ledgerRefs).size !== ledgerRefs.length || canonical(cited) !== canonical(ledgerRefs)) {
     return 'a practice disposition cites its cycle, the proposal it decides, and exactly its ledger evidence, in that order';
   }
+  return null;
+}
+
+/**
+ * #131/#138: the PROSPECTIVE roster rule, run by the ledger's locked admission hook (packages/ledger chain.mjs
+ * `admit`, #136) on the new-entry path of every append -- the recorder's and a direct ledger.append alike -- and
+ * never on verify or replay. A promote resting on a live comparison digest must cite that digest's retained,
+ * finalized record, which must qualify and must have compared exactly this promote's policies. A declared
+ * `synthetic: false` is a claim; the retained record is the proof. History written before the rule re-derives as
+ * it did (rederive keeps the earlier promote rules), so an earlier valid ledger still opens.
+ */
+export function bindPromote(view, p) {
+  if (p?.outcome !== 'promote' || !Array.isArray(p.evidence)) return null;
+  const retained = new Map();
+  for (const x of p.evidence) if (x.kind === 'ledger' && view.entry(x.hash)?.kind === COMPARISON) retained.set(view.payload(x.hash)?.digest, view.payload(x.hash));
+  const live = comparisonDigests(view, p.evidence).filter(d => d.synthetic === false);
+  for (const d of live) {
+    const r = retained.get(d.sha);
+    if (!r) return `a promote resting on the live comparison ${d.sha.slice(0, 19)} cites its retained record (${COMPARISON}) on the ledger; a declared digest alone is not proof`;
+    if (r.synthetic !== d.synthetic) return 'the cited comparison digest says live; the retained record is synthetic';
+    const q = qualifyComparison(r);
+    if (!q.ok) return `the retained comparison ${d.sha.slice(0, 19)} cannot qualify a promote: ${q.why}`;
+    // The comparison must be OF this decision: its baseline arm ran the policy in effect, its candidate arm the candidate.
+    if (canonical(r.arms?.baseline?.policy ?? null) !== canonical(p.policy) || canonical(r.arms?.candidate?.policy ?? null) !== canonical(p.candidate.policy)) {
+      return `the retained comparison ${d.sha.slice(0, 19)} compared other policies than this promote decides (baseline ${r.arms?.baseline?.policy?.hash?.slice(0, 19)}, candidate ${r.arms?.candidate?.policy?.hash?.slice(0, 19)})`;
+    }
+  }
+  for (const [sha] of retained) if (!live.some(d => d.sha === sha)) return 'a promote cites a retained comparison it does not rest on: cite its digest too';
   return null;
 }
 
@@ -282,7 +291,7 @@ export function evidenceBasis(view, evidence, seen = new Set()) {
 
 /** Kind spec. `authors` decides who records dispositions (the controller, which signs what the seats decided). */
 export function practiceKinds({authors = () => true} = {}) {
-  return {[PRACTICE]: {authors, validate, rederive},
+  return {[PRACTICE]: {authors, validate, rederive, admit: (e, view) => bindPromote(view, e.payload)},
     // A retained comparison stands alone: its content is its proof (validateComparison), whatever it shows.
     [COMPARISON]: {authors, validate: validateComparison, rederive: () => null}};
 }
