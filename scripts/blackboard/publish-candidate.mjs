@@ -16,7 +16,9 @@
  *      an empty gate list, a launch error, a timeout or a missing status refuses. The raw output is kept.
  *      Each gate runs inside its own bwrap box with a LEAST-PRIVILEGE read view: the allowlisted view the worker
  *      launcher uses (worker-launch.mjs READ_VIEW: /usr and its links, /etc/alternatives, fresh /proc, /dev, /tmp),
- *      the Node runtime read-only, the exact checkout read-only (the kernel refuses a write to the committed input
+ *      each positively identified interpreter FILE read-only (the guard's own process.execPath and any gate's
+ *      absolute argv[0] outside the system view, each bound as a single file from its canonical path to the path
+ *      the gate invokes -- never an inferred directory), the exact checkout read-only (the kernel refuses a write to the committed input
  *      with EROFS), and only the controller-owned scratch writable (OPHANIM_GATE_SCRATCH, TMPDIR, HOME). The host
  *      root, home, /etc and the receipt root are not mounted; the network and pid namespace are unshared. Git still reads the checkout, so `git rev-parse HEAD` works in a gate. A host
  *      where that box cannot start refuses (SANDBOX_UNAVAILABLE): there is no unboxed path.
@@ -41,7 +43,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,13 +89,29 @@ export function testGates({ tests = [], testTimeoutMs = 120_000, timeoutMs = 600
  * Publish `sha` to `branch` only if every gate passes on the exact commit. Returns the receipt: { ok, code, why, ... }.
  * `transport` is the test seam; nothing else the caller passes changes the decision.
  */
-/** The runtime a gate's argv needs beyond /usr: this Node's install prefix (for /opt/node24/bin/node, /opt/node24). */
-const runtimeRoots = () => { const r = dirname(dirname(process.execPath)); return r === "/usr" || r.startsWith("/usr/") ? [] : [r]; };
+/** Inside the system view already: /usr and the links into it. */
+const inSystemView = p => ["/usr/", "/bin/", "/lib/", "/lib64/"].some(r => p.startsWith(r));
+/**
+ * The interpreter files a gate needs beyond the system view: the guard's own Node and the gate's absolute argv[0],
+ * each a regular file, each bound by itself (canonical source -> the path invoked). Never a directory.
+ */
+export function runtimeFiles(argv0) {
+  const out = new Map();
+  for (const p of [process.execPath, argv0]) {
+    if (typeof p !== "string" || !p.startsWith("/") || inSystemView(p)) continue;
+    let real; try { real = realpathSync(p); } catch { continue; }
+    if (!statSync(real).isFile() || inSystemView(real)) continue;
+    out.set(p, real);
+  }
+  return [...out].map(([at, from]) => ({ at, from }));
+}
 
-/** The box a gate runs in: the allowlisted read view, the runtime and the checkout read-only, `scratch` writable. */
-export const gateBox = ({ checkout, scratch, bwrap = "bwrap" }) => [bwrap, "--die-with-parent", "--unshare-net", "--unshare-pid", ...READ_VIEW,
-  ...runtimeRoots().flatMap(r => ["--ro-bind", r, r]),
+/** The box a gate runs in: the allowlisted read view, single interpreter files and the checkout read-only, `scratch` writable. */
+export const gateBox = ({ checkout, scratch, bwrap = "bwrap", argv0 = null }) => [bwrap, "--die-with-parent", "--unshare-net", "--unshare-pid", ...READ_VIEW,
+  ...runtimeFiles(argv0).flatMap(({ at, from }) => ["--ro-bind", from, at]),
   "--ro-bind", checkout, checkout, "--bind", scratch, scratch, "--chdir", checkout, "--"];
+/** PATH inside a gate: the directory of each bound interpreter (it holds only that file), then the system view. */
+const gatePath = argv0 => [...new Set(runtimeFiles(argv0).map(({ at }) => dirname(at))), "/usr/bin", "/bin"].join(":");
 
 export async function publishCandidate({ repo, sha, branch, extra = [], required = REQUIRED_GATES, remote = "origin", transport = gitPushTransport, receiptRoot = null,
   workRoot = tmpdir(), now = () => Date.now(), bwrap = "bwrap" } = {}) {
@@ -147,8 +165,8 @@ export async function publishCandidate({ repo, sha, branch, extra = [], required
   for (const [i, g] of gates.entries()) {
     const t0 = now();
     let r = null, launch_error = null;
-    const boxed = [...gateBox({ checkout, scratch, bwrap }), ...g.argv];
-    try { r = await spawnPromise(boxed[0], boxed.slice(1), { cwd: checkout, env: { PATH: [...runtimeRoots().map(r => join(r, "bin")), "/usr/bin", "/bin"].join(":"), HOME: scratch, GIT_CONFIG_NOSYSTEM: "1", OPHANIM_GATE_SCRATCH: scratch, TMPDIR: scratch }, timeout: g.timeoutMs ?? 600_000, maxBuffer: 16 * 1024 * 1024 }); }
+    const boxed = [...gateBox({ checkout, scratch, bwrap, argv0: g.argv[0] }), ...g.argv];
+    try { r = await spawnPromise(boxed[0], boxed.slice(1), { cwd: checkout, env: { PATH: gatePath(g.argv[0]), HOME: scratch, GIT_CONFIG_NOSYSTEM: "1", OPHANIM_GATE_SCRATCH: scratch, TMPDIR: scratch }, timeout: g.timeoutMs ?? 600_000, maxBuffer: 16 * 1024 * 1024 }); }
     catch (e) { launch_error = e?.code ?? String(e?.message ?? e); }
     const out = `gate-${i}-${g.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
     writeFileSync(join(receiptRoot, `${out}.stdout`), r?.stdout ?? ""); writeFileSync(join(receiptRoot, `${out}.stderr`), r?.stderr ?? "");

@@ -4,11 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, copyFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { publishCandidate, testGates, REQUIRED_GATES } from "../../scripts/blackboard/publish-candidate.mjs";
+import { publishCandidate, testGates, REQUIRED_GATES, runtimeFiles } from "../../scripts/blackboard/publish-candidate.mjs";
 
 const CLI = fileURLToPath(new URL("../../scripts/blackboard/publish-candidate.mjs", import.meta.url));
 const BRANCH = "claude/candidate";
@@ -243,3 +243,43 @@ test("a gate sees only its allowlisted view: a marker outside the checkout and s
     assert.equal(existsSync(r.checkout), false);
   } finally { f.cleanup(); }
 });
+
+// ---------------------------------------------------------------- generation 4: interpreter files, never inferred directories
+const lookGate = (node, f, marker) => ({ name: "look", argv: [node, "-e", `
+  const fs = require("fs"), path = require("path");
+  const seen = { marker: fs.existsSync(${JSON.stringify(marker)}), self: process.execPath };
+  try { fs.writeFileSync("change.txt", "x"); seen.write = "WROTE"; } catch (e) { seen.write = e.code; }
+  fs.writeFileSync(path.join(process.env.OPHANIM_GATE_SCRATCH, "s.txt"), "ok"); seen.scratch = fs.readFileSync(path.join(process.env.OPHANIM_GATE_SCRATCH, "s.txt"), "utf8");
+  seen.head = require("child_process").execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  seen.child = require("child_process").execFileSync(process.execPath, ["-e", "process.stdout.write('child-ok')"], { encoding: "utf8" });
+  process.stdout.write(JSON.stringify(seen));`] });
+
+for (const layout of ["ordinary", "standalone"]) {
+  test(`${layout} interpreter placement: only the interpreter file is bound; the marker beside it is hidden, and EROFS, scratch, HEAD, a child node and cleanup hold`, async () => {
+    const f = fixture();
+    try {
+      let node = process.execPath;
+      if (layout === "standalone") {
+        // The same real Node binary in a shallow layout: its grandparent is the fixture directory, which holds the marker.
+        mkdirSync(join(f.d, "standalone")); node = join(f.d, "standalone", "node");
+        copyFileSync(process.execPath, node); chmodSync(node, 0o755);
+      }
+      const marker = join(f.d, "outside-marker.txt"); writeFileSync(marker, "harmless marker\n");
+      assert.deepEqual(runtimeFiles(node).map(x => x.at).sort(), [...new Set([process.execPath, node])].sort(), "single files only");
+      const t = stub();
+      const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [lookGate(node, f, marker)], transport: t, workRoot: f.d });
+      assert.equal(r.code, "PUBLISHED", `${r.why} :: ${r.gates.map(g => readFileSync(g.stderr_ref, "utf8")).join(" | ").slice(0, 400)}`);
+      const seen = JSON.parse(readFileSync(r.gates[1].stdout_ref, "utf8"));
+      assert.deepEqual([seen.marker, seen.self, seen.write, seen.scratch, seen.head, seen.child], [false, node, "EROFS", "ok", f.sha, "child-ok"]);
+      assert.equal(t.calls.length, 1);
+      assert.equal(existsSync(r.checkout), false);
+      // The same layout with a failing required gate leaves the destination unchanged.
+      const bad = fixture({ lint: 1 });
+      try {
+        const t2 = stub();
+        const r2 = await publishCandidate({ repo: bad.repo, sha: bad.sha, branch: BRANCH, extra: [lookGate(node, bad, marker)], transport: t2, workRoot: bad.d });
+        assert.deepEqual([r2.code, r2.gates.map(g => [g.name, g.status]), t2.calls.length, bad.remoteHead(), existsSync(r2.checkout)], ["GATE_FAILED", [["test-lint", 1]], 0, null, false]);
+      } finally { bad.cleanup(); }
+    } finally { f.cleanup(); }
+  });
+}
