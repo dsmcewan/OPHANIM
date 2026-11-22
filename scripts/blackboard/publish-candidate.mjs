@@ -14,9 +14,11 @@
  *   3  each gate runs as an argv through the bounded child runner (pantheon/src/board/spawn.mjs) with a deadline --
  *      never a shell, never a filter over its output. A gate passes only on status 0 with no signal and no kill;
  *      an empty gate list, a launch error, a timeout or a missing status refuses. The raw output is kept.
- *      Each gate runs inside its own bwrap box: the host and the checkout mounted READ-ONLY (the kernel refuses a
- *      write to the committed input with EROFS), only the controller-owned scratch writable (OPHANIM_GATE_SCRATCH,
- *      TMPDIR), the network unshared. Git still reads the checkout, so `git rev-parse HEAD` works in a gate. A host
+ *      Each gate runs inside its own bwrap box with a LEAST-PRIVILEGE read view: the allowlisted view the worker
+ *      launcher uses (worker-launch.mjs READ_VIEW: /usr and its links, /etc/alternatives, fresh /proc, /dev, /tmp),
+ *      the Node runtime read-only, the exact checkout read-only (the kernel refuses a write to the committed input
+ *      with EROFS), and only the controller-owned scratch writable (OPHANIM_GATE_SCRATCH, TMPDIR, HOME). The host
+ *      root, home, /etc and the receipt root are not mounted; the network and pid namespace are unshared. Git still reads the checkout, so `git rev-parse HEAD` works in a gate. A host
  *      where that box cannot start refuses (SANDBOX_UNAVAILABLE): there is no unboxed path.
  *      After EVERY gate, and again before the transport, the checkout must still be the committed object: an empty
  *      `git status --porcelain --untracked-files=all` and HEAD equal to the sha. A gate that changed, deleted or added
@@ -41,9 +43,10 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPromise } from "../../pantheon/src/board/spawn.mjs";
+import { READ_VIEW } from "./worker-launch.mjs";
 
 export const PUBLICATION_KIND = "ophanim.candidate-publication/1";
 const SHA = /^[0-9a-f]{40}$/;
@@ -84,8 +87,12 @@ export function testGates({ tests = [], testTimeoutMs = 120_000, timeoutMs = 600
  * Publish `sha` to `branch` only if every gate passes on the exact commit. Returns the receipt: { ok, code, why, ... }.
  * `transport` is the test seam; nothing else the caller passes changes the decision.
  */
-/** The read-only box a gate runs in: everything read-only, only `scratch` writable, no network. */
-export const gateBox = ({ checkout, scratch, bwrap = "bwrap" }) => [bwrap, "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev",
+/** The runtime a gate's argv needs beyond /usr: this Node's install prefix (for /opt/node24/bin/node, /opt/node24). */
+const runtimeRoots = () => { const r = dirname(dirname(process.execPath)); return r === "/usr" || r.startsWith("/usr/") ? [] : [r]; };
+
+/** The box a gate runs in: the allowlisted read view, the runtime and the checkout read-only, `scratch` writable. */
+export const gateBox = ({ checkout, scratch, bwrap = "bwrap" }) => [bwrap, "--die-with-parent", "--unshare-net", "--unshare-pid", ...READ_VIEW,
+  ...runtimeRoots().flatMap(r => ["--ro-bind", r, r]),
   "--ro-bind", checkout, checkout, "--bind", scratch, scratch, "--chdir", checkout, "--"];
 
 export async function publishCandidate({ repo, sha, branch, extra = [], required = REQUIRED_GATES, remote = "origin", transport = gitPushTransport, receiptRoot = null,
@@ -141,7 +148,7 @@ export async function publishCandidate({ repo, sha, branch, extra = [], required
     const t0 = now();
     let r = null, launch_error = null;
     const boxed = [...gateBox({ checkout, scratch, bwrap }), ...g.argv];
-    try { r = await spawnPromise(boxed[0], boxed.slice(1), { cwd: checkout, env: { PATH: GIT_ENV().PATH, HOME: GIT_ENV().HOME, OPHANIM_GATE_SCRATCH: scratch, TMPDIR: scratch }, timeout: g.timeoutMs ?? 600_000, maxBuffer: 16 * 1024 * 1024 }); }
+    try { r = await spawnPromise(boxed[0], boxed.slice(1), { cwd: checkout, env: { PATH: [...runtimeRoots().map(r => join(r, "bin")), "/usr/bin", "/bin"].join(":"), HOME: scratch, GIT_CONFIG_NOSYSTEM: "1", OPHANIM_GATE_SCRATCH: scratch, TMPDIR: scratch }, timeout: g.timeoutMs ?? 600_000, maxBuffer: 16 * 1024 * 1024 }); }
     catch (e) { launch_error = e?.code ?? String(e?.message ?? e); }
     const out = `gate-${i}-${g.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
     writeFileSync(join(receiptRoot, `${out}.stdout`), r?.stdout ?? ""); writeFileSync(join(receiptRoot, `${out}.stderr`), r?.stderr ?? "");

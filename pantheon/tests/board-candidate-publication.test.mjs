@@ -217,3 +217,29 @@ test("cleanup on every outcome: the clone is removed after success, a gate refus
     }
   } finally { f.cleanup(); }
 });
+
+// ---------------------------------------------------------------- generation 3: a least-privilege read view
+test("a gate sees only its allowlisted view: a marker outside the checkout and scratch is not visible, the network is refused, and EROFS, scratch and HEAD hold", async () => {
+  const f = fixture();
+  try {
+    const marker = join(f.d, "outside-marker.txt");
+    writeFileSync(marker, "harmless marker\n");
+    const t = stub();
+    const look = { name: "look", argv: [process.execPath, "-e", `
+      const fs = require("fs"), path = require("path"), net = require("net");
+      const seen = { marker: fs.existsSync(${JSON.stringify(marker)}), repo: fs.existsSync(${JSON.stringify(f.repo)}) };
+      try { fs.writeFileSync("change.txt", "x"); seen.write = "WROTE"; } catch (e) { seen.write = e.code; }
+      fs.writeFileSync(path.join(process.env.OPHANIM_GATE_SCRATCH, "s.txt"), "ok"); seen.scratch = fs.readFileSync(path.join(process.env.OPHANIM_GATE_SCRATCH, "s.txt"), "utf8");
+      seen.head = require("child_process").execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      const s = net.connect({ host: "127.0.0.1", port: 9 });
+      s.on("connect", () => { seen.net = "CONNECTED"; done(); }); s.on("error", e => { seen.net = e.code; done(); });
+      function done() { process.stdout.write(JSON.stringify(seen)); process.exit(0); }`] };
+    const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [look], transport: t, workRoot: f.d });
+    assert.equal(r.code, "PUBLISHED", r.why);
+    const seen = JSON.parse(readFileSync(r.gates[1].stdout_ref, "utf8"));
+    assert.deepEqual([seen.marker, seen.repo, seen.write, seen.scratch, seen.head], [false, false, "EROFS", "ok", f.sha]);
+    assert.notEqual(seen.net, "CONNECTED", `the network is unshared (${seen.net})`);
+    assert.equal(existsSync(marker), true, "the marker is untouched outside");
+    assert.equal(existsSync(r.checkout), false);
+  } finally { f.cleanup(); }
+});
