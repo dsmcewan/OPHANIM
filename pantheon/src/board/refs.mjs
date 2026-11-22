@@ -128,7 +128,7 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false,
    * Compare-and-swap a name. Returns { ok:false, code } on every refusal; never retries.
    * `lease` is { resource, gen } and is verified inside the critical section when supplied.
    */
-  const swap = ({ name, expected = null, next, author, lease = null, changedSlots: claimed = [], msg = "", ship = false, from = null, reset = false }) =>
+  const swap = ({ name, expected = null, next, author, lease = null, leases = [], changedSlots: claimed = [], msg = "", ship = false, from = null, reset = false }) =>
     readOnly ? Promise.reject(new Error("refs.swap: this reader is read-only")) : withSeatLock(`ref ${name}`, async () => {
       const { spec } = parseRef(name);
       if (!isCid(next)) return { ok: false, code: "BAD_CID", why: `next "${next}" is not a cid` };
@@ -236,6 +236,22 @@ export function openRefs(root, { runtime = null, store = null, readOnly = false,
           if (!runtime) return { ok: false, code: "NO_RUNTIME", why: "a lease was supplied but this refs store has no runtime to verify it against" };
           const v = runtime.verify({ resource: lease.resource, seat_id: author.seat_id, gen: lease.gen });
           if (!v.ok) return { ok: false, code: v.code, why: v.why, current };
+        }
+        // ADDITIONAL LEASES (#121). A write can depend on more than the one lease that fences its slots -- an
+        // external builder's delivery depends on every scope:<path> lease the controller granted with the
+        // item. Each is verified HERE, under the same ref lock -> lease lock as the primary one, so a fence
+        // of any of them between a caller's validation and this landing refuses the write. Absent, nothing
+        // changes. Not a substitute for `lease`: the slot fence above still keys on the primary lease only.
+        if (!Array.isArray(leases)) return { ok: false, code: "LEASES_SHAPE", why: "leases must be an array of { resource, gen }", current };
+        if (leases.length) {
+          if (!runtime) return { ok: false, code: "NO_RUNTIME", why: "additional leases were supplied but this refs store has no runtime to verify them against" };
+          for (const l of leases) {
+            if (!l || typeof l.resource !== "string" || !l.resource || !Number.isInteger(l.gen)) {
+              return { ok: false, code: "LEASES_SHAPE", why: `each additional lease must be { resource: string, gen: integer }; got ${JSON.stringify(l)}`, current };
+            }
+            const v = runtime.verify({ resource: l.resource, seat_id: author.seat_id, gen: l.gen });
+            if (!v.ok) return { ok: false, code: v.code, why: v.why, resource: l.resource, current };
+          }
         }
 
         // The new ref file is prepared first, so after the ledger records the move only the atomic rename
