@@ -77,7 +77,7 @@ The Windows companion can only deliver to the fixed Codex thread in its local co
 
 ## Install and operate
 
-Node 24 is required (`node:sqlite`), along with the existing Claude OAuth login and GitHub CLI login. The Linux installer uses the existing native Node 24.18.0. It installs beside the pinned checkout, preserves its reviewed bytes, backs up the launcher before the single-line change and adds a Claude MCP entry scoped to this project.
+Node 24 is required (`node:sqlite`), along with the existing Claude OAuth login and GitHub CLI login. The Linux installer uses the `node` on `PATH` when it runs (on LEXI, the existing native Node 24.18.0), `~/.local/bin` for the Claude and GitHub CLIs, and `~/Projects/OPHANIM-shared` as the workspace; `OPHANIM_NODE_BIN`, `OPHANIM_LOCAL_BIN` and `OPHANIM_WORKSPACE` override them. The bridge's own defaults are `~/.local/bin/gh` (`OPHANIM_GH` overrides) and `~/.local/bin/claude` (`claudeCommand` in the config overrides). It installs beside the pinned checkout, preserves its reviewed bytes, backs up the launcher before the single-line change and adds a Claude MCP entry scoped to this project.
 
 ```bash
 bash scripts/collaboration/install-linux.sh

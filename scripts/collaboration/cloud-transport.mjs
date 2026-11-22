@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // Official Claude Code follow-up transport. Uses the owner's existing account login; no relay model call.
 export async function sendCloud(config, text) {
   if (!/^session_[A-Za-z0-9]+$/.test(config.claudeSessionId ?? '')) throw new Error('Invalid configured Claude cloud session');
   return await new Promise((resolve, reject) => {
-    const child = spawn(config.claudeCommand ?? '/home/colchis/.local/bin/claude',
+    const child = spawn(config.claudeCommand ?? join(homedir(), '.local', 'bin', 'claude'),
       ['-p', '--cloud', config.claudeSessionId, '--output-format', 'json'], { stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('Claude CLI timed out; send outcome unknown')); }, 30000);

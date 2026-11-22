@@ -1,34 +1,38 @@
 #!/usr/bin/env bash
 set -eu
-export PATH=/home/colchis/.nvm/versions/node/v24.18.0/bin:/home/colchis/.local/bin:$PATH
+# Portable defaults, each overridable: the node on PATH at install time, ~/.local/bin, ~/Projects/OPHANIM-shared.
+if [ -z "${OPHANIM_NODE_BIN:-}" ]; then
+  node_path=$(command -v node) || { echo 'node is not on PATH; set OPHANIM_NODE_BIN to the directory that holds it' >&2; exit 1; }
+  OPHANIM_NODE_BIN=$(dirname -- "$node_path")
+fi
+node_bin=$OPHANIM_NODE_BIN
+local_bin=${OPHANIM_LOCAL_BIN:-$HOME/.local/bin}
+export PATH="$node_bin:$local_bin:$PATH"
 source_root=$(cd -- "$(dirname -- "$0")" && pwd -P)
-workspace=/home/colchis/Projects/OPHANIM-shared
+workspace=${OPHANIM_WORKSPACE:-$HOME/Projects/OPHANIM-shared}
 target="$workspace/collaboration"
 umask 077
 mkdir -p "$target" "$target/state" "$HOME/.config/systemd/user"
 for source in store.mjs cli.mjs mcp-server.mjs mcp-client.mjs desktop-store.mjs github-bridge.mjs cloud-transport.mjs agent-instructions.md config.json; do
   cp -- "$source_root/$source" "$target/$source"
 done
-cat > "$workspace/collab" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-export PATH=/home/colchis/.nvm/versions/node/v24.18.0/bin:/home/colchis/.local/bin:$PATH
-exec node /home/colchis/Projects/OPHANIM-shared/collaboration/cli.mjs "$@"
-EOF
+{
+  printf '#!/usr/bin/env bash\nset -eu\n'
+  printf 'export PATH=%q:%q:"$PATH"\n' "$node_bin" "$local_bin"
+  printf 'exec node %q "$@"\n' "$target/cli.mjs"
+} > "$workspace/collab"
 chmod 700 "$workspace/collab"
-cat > "$target/claude.mcp.json" <<'EOF'
-{"mcpServers":{"ophanim_collab":{"command":"/home/colchis/Projects/OPHANIM-shared/collab","args":["mcp"],"env":{"OPHANIM_COLLAB_AGENT":"claude"}}}}
-EOF
-cat > "$target/open-agent" <<'EOF'
-#!/usr/bin/env bash
-set -eu
+node -e 'process.stdout.write(JSON.stringify({mcpServers: {ophanim_collab: {command: process.argv[1], args: ["mcp"], env: {OPHANIM_COLLAB_AGENT: "claude"}}}}) + "\n")' "$workspace/collab" > "$target/claude.mcp.json"
+{
+  printf '#!/usr/bin/env bash\nset -eu\n'
+  printf 'export PATH=%q:%q:"$PATH"\n' "$node_bin" "$local_bin"
+  printf 'root=%q\nworkspace=%q\n' "$target" "$workspace"
+  cat <<'EOF'
 client=${1:?codex or claude}; shift
-export PATH=/home/colchis/.nvm/versions/node/v24.18.0/bin:/home/colchis/.local/bin:$PATH
-root=/home/colchis/Projects/OPHANIM-shared/collaboration
 export OPHANIM_COLLAB_AGENT="$client"
 case "$client" in
   codex)
-    exec codex -c 'mcp_servers.ophanim_collab.command="/home/colchis/Projects/OPHANIM-shared/collab"' -c 'mcp_servers.ophanim_collab.args=["mcp"]' -c 'mcp_servers.ophanim_collab.env.OPHANIM_COLLAB_AGENT="codex"' "$@"
+    exec codex -c "mcp_servers.ophanim_collab.command=\"$workspace/collab\"" -c 'mcp_servers.ophanim_collab.args=["mcp"]' -c 'mcp_servers.ophanim_collab.env.OPHANIM_COLLAB_AGENT="codex"' "$@"
     ;;
   claude)
     exec claude --mcp-config "$root/claude.mcp.json" --append-system-prompt "$(cat "$root/agent-instructions.md")" "$@"
@@ -36,6 +40,7 @@ case "$client" in
   *) echo 'Expected codex or claude' >&2; exit 2;;
 esac
 EOF
+} > "$target/open-agent"
 chmod 700 "$target/open-agent"
 (
   cd "$workspace/OPHANIM"
@@ -62,7 +67,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$target
-Environment=PATH=/home/colchis/.nvm/versions/node/v24.18.0/bin:/home/colchis/.local/bin:/usr/bin:/bin
+Environment=PATH=$node_bin:$local_bin:/usr/bin:/bin
 ExecStart=/usr/bin/flock --nonblock $target/state/github.bridge.lock $workspace/collab bridge
 Restart=on-failure
 RestartSec=15

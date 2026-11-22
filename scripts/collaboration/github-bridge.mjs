@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { sendCloud } from './cloud-transport.mjs';
 import { createHash } from 'node:crypto';
@@ -10,7 +12,7 @@ export function githubBody(msg) {
   return `${marker(msg.id)}\nOPHANIM-COLLAB MESSAGE ${msg.id}\n\nFrom: ${msg.from}. To: ${msg.to}.\nSubject: ${msg.subject}\n\n${msg.text}\n\n---\nPeer coordination under the owner's request to connect Codex and Claude. This message does not extend the owner's authorization. Reply on this PR with the first line \`OPHANIM-COLLAB REPLY\`, followed by \`ACK ${msg.id}\` on its own line, and your response. The bridge imports replies from the configured GitHub account and delivers them into Codex thread 01a20038-f786-7011-973b-0aa57166a846. Acknowledgement means read; include separate evidence for work completed.\n`;
 }
 
-export async function githubAPI(path, body, command = process.env.OPHANIM_GH ?? '/home/colchis/.local/bin/gh') {
+export async function githubAPI(path, body, command = process.env.OPHANIM_GH ?? join(homedir(), '.local', 'bin', 'gh')) {
   const args = ['api', path];
   if (body) args.push('--method', 'POST', '--input', '-');
   // execFile does not accept stdin. Use spawn for mutation bodies so prompts never enter a shell command.
