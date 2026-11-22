@@ -126,7 +126,7 @@ export const MUTATIONS = [
   {id: 'X8', what: 'a response naming no served model is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
     edits: [one(PR, '  else if (served.includes(null)) why.push(', '  else if (false) why.push(')]},
   {id: 'X9', what: 'a change to the review copy is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
-    edits: [one(PR, '  else if (t.worktree_check.violations?.length) why.push(', '  else if (false) why.push(')]},
+    edits: [one(PR, '  else if (w.violations.length) why.push(', '  else if (false) why.push(')]},
   {id: 'X10', what: 'a run under other limits is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
     edits: [one(PR, '  if (diff.length) why.push(`the run\'s limits', '  if (false) why.push(`the run\'s limits')]},
   {id: 'X11', what: 'an SDK run satisfies a subscription reviewer', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
@@ -134,7 +134,7 @@ export const MUTATIONS = [
   {id: 'X12', what: 'the SDK client keeps the SDK\'s own retries', tests: [s('^XAI SDK: the SDK client is built for xAI only')],
     edits: [one(INDEX, '      state.xai = await make({ apiKey: key, baseURL: XAI_SDK.base_url, maxRetries: XAI_SDK.max_retries, timeout: timeoutMs });', '      state.xai = await make({ apiKey: key, baseURL: XAI_SDK.base_url, timeout: timeoutMs });')]},
   {id: 'X13', what: 'the SDK route is not bounded by its wall clock', tests: [s('^XAI SDK: the whole run is bounded by --max-wall-s')],
-    edits: [one(INDEX, '      if (opts.limits.max_wall_s && now() - started >= opts.limits.max_wall_s * 1000) {', '      if (false) {')]},
+    edits: [one(INDEX, '    if (plan.transport === "xai-sdk" && deadline !== null && now().getTime() >= deadline) return wallStop();', '    if (false) return wallStop();')]},
   {id: 'X14', what: 'a 429 on the SDK route is retried beyond max_turns', tests: [s('^XAI SDK: the retry never exceeds max_turns')],
     edits: [one(INDEX, '        if ((status === 429 || status >= 500) && attempt === 1 && state.providerCalls < opts.limits.max_turns) {', '        if ((status === 429 || status >= 500) && attempt === 1) {')]},
   {id: 'X15', what: 'an unreported cost is recorded as zero', tests: [s('^XAI SDK: the SDK client is built for xAI only'), s('^XAI SDK: a reported cost of zero')],
@@ -147,8 +147,33 @@ export const MUTATIONS = [
     edits: [one(INDEX, '        ev.sdk_error = cls && cls !== "Error" ? cls : (e?.name ?? "Error");', '        ev.sdk_error = e?.name ?? "Error";')]},
   {id: 'X19', what: 'the SDK route may serve a non-xAI reviewer', tests: [s('^XAI SDK: usage')],
     edits: [one(INDEX, '  if (opts.xaiTransport && row.vendor !== "xai") throw new UsageError(', '  if (false) throw new UsageError(')]},
-];
-const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
+  // ---- round 2 (Codex's independent cases at 42836cc): the inner retry's deadline, provenance before effects, a judge
+  // that fails closed on an incomplete record, the documented cost field ------------------------------------------
+  {id: 'X20', what: 'an attempt (a retry included) is sent past the wall clock', tests: [s('^XAI SDK R2: the wall clock bounds the INNER retry')],
+    edits: [one(INDEX, '    if (plan.transport === "xai-sdk" && deadline !== null && now().getTime() >= deadline) return wallStop();', '    if (false) return wallStop();'),
+            one(INDEX, '          if (deadline !== null && now().getTime() + wait >= deadline) { ev.retry_skipped', '          if (false) { ev.retry_skipped')]},
+  {id: 'X21', what: 'a retry sleeps past the wall clock', tests: [s('^XAI SDK R2: the wall clock bounds the INNER retry')],
+    edits: [one(INDEX, '          if (deadline !== null && now().getTime() + wait >= deadline) { ev.retry_skipped', '          if (false) { ev.retry_skipped')]},
+  {id: 'X22', what: 'an attempt\'s abort deadline ignores the remaining wall clock', tests: [s("^XAI SDK R2: each attempt's abort deadline")],
+    edits: [one(INDEX, '      const callMs = deadline === null ? timeoutMs : Math.max(1, Math.min(timeoutMs, deadline - now().getTime()));', '      const callMs = timeoutMs;')]},
+  {id: 'X23', what: 'a response served by another model is used (its tools run)', tests: [s('^XAI SDK R2: provenance before effects'), s('^XAI SDK R2: a response naming no served model')],
+    edits: [one(INDEX, '      if (plan.transport === "xai-sdk" && r.served_model !== plan.model) {', '      if (false) {')]},
+  {id: 'X24', what: 'a cost-looking field other than cost_in_usd_ticks is read as a cost', tests: [s('^XAI SDK R2: an undocumented cost-looking field')],
+    edits: [one(INDEX, '  const v = usage && typeof usage === "object" ? usage.cost_in_usd_ticks : undefined;', '  const v = usage && typeof usage === "object" ? (usage.cost_in_usd_ticks ?? usage.cost) : undefined;')]},
+  {id: 'X25', what: 'a failed request carries no cost reading (missing from the unavailable count)', tests: [s('^XAI SDK R2: cost is read only from')],
+    edits: [one(INDEX, '        ev.cost = costOf(null); // a failed request: its cost is unavailable, never a zero', '')]},
+  {id: 'X26', what: 'a missing counter passes the judge', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '  for (const k of ["provider_calls", "tool_calls"]) if (!wholeCount(t[k])) why.push(', '  for (const k of []) if (!wholeCount(t[k])) why.push(')]},
+  {id: 'X27', what: 'a malformed worktree check passes the judge', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '  else if (typeof w !== "object" || !Array.isArray(w.changed) || !Array.isArray(w.violations)) why.push(', '  else if (false) why.push(')]},
+  {id: 'X28', what: 'the gate\'s verdict is trusted over its own coverage facts', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '    if (t.coverage_gate?.ok && !g.ok) why.push(', '    if (false) why.push(')]},
+  {id: 'X29', what: 'the coverage is not checked against the assignment\'s testing limit', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '    if (!perms) why.push(`the assignment', '    if (false) why.push(`the assignment'),
+            one(PR, '    else if (typeof c.tests_allowed === "boolean" && c.tests_allowed !== testsAllowedBy(perms)) why.push(', '    else if (false) why.push(')]},
+  {id: 'X30', what: 'the coordinator judges without the assignment\'s row', tests: [t('^XAI SDK ROUTE: the complete coordinator path')],
+    edits: [one(PR, '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run, readmeRow }));', '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run }));')]},
+];const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
 const WITHHELD = f => f.split('/').some(s => s.startsWith('findings-'));
 function copyTree(dest) {
   const files = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard', '-z'], {encoding: 'utf8', maxBuffer: 1 << 28}).split('\0').filter(Boolean);

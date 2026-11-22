@@ -39,7 +39,9 @@
 // over the official SDK (run-review.mjs --via api --xai-transport sdk, with those limits and --max-wall-s), and is judged
 // on the API transcript: via api, transport xai-sdk, every served model the bound one, the bound README, assignment and
 // HARNESS.md, the coverage gate, no change to the review copy outside .review-tests/, and its calls within the bound
-// limits. A CLI transcript never satisfies a routed reviewer, nor an SDK transcript a subscription one. Entries without a
+// limits. The judge FAILS CLOSED: a counter, a check or a coverage fact that is missing or malformed is a reason, never a
+// pass; the gate's verdict is re-derived from its own coverage facts, and those facts are checked against the
+// assignment's testing limit (the README row). A CLI transcript never satisfies a routed reviewer, nor an SDK transcript a subscription one. Entries without a
 // route dispatch and are judged exactly as before; the panel's independence rules are unchanged. A record may sit beside
 // its brief as binding.json or binding-<name>.json (a fresh leg keeps the earlier record intact).
 // The merge decision is never taken here: the result says so. Exit codes: 0 every reviewer complete (or a dry run whose
@@ -50,6 +52,8 @@ import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, stat, writeFile
 import { join, resolve, dirname, relative, isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
 import { REVIEW_DIR_RE, assignmentRow, BriefError } from "./brief.mjs";
+import { coverageGate, testsAllowedBy } from "./coverage.mjs";
+import { permissionsFor } from "./tools.mjs";
 
 export const BINDING_SCHEMA = "ophanim.pr-review/v1";
 export const RESULT_SCHEMA = "ophanim.pr-review-result/v1";
@@ -298,7 +302,7 @@ const listFiles = async dir => {
 };
 
 /** One lab's verdict from what its run left in `outDir` (see the header, step 4). */
-export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
+export async function judgeReviewer({ binding: b, reviewer, outDir, run, readmeRow = null }) {
   const lab = LABS[reviewer.lab], n = b.brief.assignment, key = lab.toLowerCase();
   const findingsPath = join(outDir, `findings-${n}-${key}.md`), transcriptPath = join(outDir, `findings-${n}-${key}.transcript.json`);
   const findings = await readFile(findingsPath, "utf8").catch(() => null);
@@ -326,7 +330,7 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
     if (pr.readme_sha256 !== b.brief.files["README.md"]) why.push("the prompt's README is not the bound README");
     if (pr.assignment_sha256 !== b.brief.files[assignmentFile]) why.push("the prompt's assignment is not the bound assignment file");
     if (!reviewer.route && pr.harness_cli_template?.sha256 !== b.brief.files["HARNESS-cli.md"]) why.push("the prompt's harness is not the bound HARNESS-cli.md");
-    if (reviewer.route) why.push(...routedProblems(t, reviewer, b));
+    if (reviewer.route) why.push(...routedProblems(t, reviewer, b, readmeRow));
   }
   const sections = findings === null ? { found_marker: false, tests_run: null, unresolved_questions: null, blockers_for_merging: null } : reviewerSections(findings);
   if (findings !== null && !sections.found_marker) why.push("missing evidence: the findings file has no reviewer message (no marker line)");
@@ -350,22 +354,44 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
   };
 }
 
-/** What a routed reviewer's transcript must show beyond the common checks (see the header). */
-function routedProblems(t, reviewer, b) {
+/** What a routed reviewer's transcript must show beyond the common checks (see the header). Fails closed. */
+const wholeCount = v => Number.isSafeInteger(v) && v >= 0;
+function routedProblems(t, reviewer, b, readmeRow) {
   const why = [], route = ROUTES[reviewer.route], L = reviewer.limits ?? {};
   if (t.via !== "api") why.push(`the transcript's via is ${t.via ?? "none"}, not api (route ${reviewer.route})`);
   if (t.transport !== route.transport) why.push(`the transcript's transport is ${t.transport ?? "none"}, not ${route.transport}`);
   if (t.prompt?.harness_template?.sha256 !== b.brief.files["HARNESS.md"]) why.push("the prompt's harness is not the bound HARNESS.md");
+  // Provenance: every response named the bound model (the runner stops at the first that did not).
   const served = Array.isArray(t.served_models) ? t.served_models : [];
   if (!served.length) why.push("missing provenance: no response named a served model");
   else if (served.includes(null)) why.push("missing provenance: a response named no served model");
   for (const s of served) if (s !== null && s !== reviewer.model) why.push(`a response was served by ${s}, not the bound ${reviewer.model}`);
-  if (!t.worktree_check) why.push("missing evidence: the transcript records no check of the review copy");
-  else if (t.worktree_check.violations?.length) why.push(`the review copy changed outside .review-tests/: ${t.worktree_check.violations.join(", ")}`);
+  if (t.identity_mismatch) why.push("the runner refused a response served by another model (identity_mismatch)");
+  // The review copy: the check ran, and is well formed, and found nothing outside .review-tests/.
+  const w = t.worktree_check;
+  if (w === undefined || w === null) why.push("missing evidence: the transcript records no check of the review copy");
+  else if (typeof w !== "object" || !Array.isArray(w.changed) || !Array.isArray(w.violations)) why.push("missing evidence: the check of the review copy is malformed (it needs its changed and violations lists)");
+  else if (w.violations.length) why.push(`the review copy changed outside .review-tests/: ${w.violations.join(", ")}`);
+  // The bounds: the bound limits, and whole-number counters within them.
   const diff = Object.keys(ROUTE_LIMITS).filter(k => t.limits?.[k] !== L[k]);
   if (diff.length) why.push(`the run's limits are not the bound limits (${diff.map(k => `${k} ${t.limits?.[k] ?? "none"} vs ${L[k]}`).join(", ")})`);
-  if (Number.isInteger(t.provider_calls) && t.provider_calls > L.max_turns) why.push(`${t.provider_calls} provider calls exceed the bound max_turns ${L.max_turns}`);
-  if (Number.isInteger(t.tool_calls) && t.tool_calls > L.max_tool_calls) why.push(`${t.tool_calls} tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
+  for (const k of ["provider_calls", "tool_calls"]) if (!wholeCount(t[k])) why.push(`missing evidence: ${k} is not a whole number`);
+  if (wholeCount(t.provider_calls) && t.provider_calls === 0) why.push("no provider call is recorded");
+  if (wholeCount(t.provider_calls) && t.provider_calls > L.max_turns) why.push(`${t.provider_calls} provider calls exceed the bound max_turns ${L.max_turns}`);
+  if (wholeCount(t.tool_calls) && t.tool_calls > L.max_tool_calls) why.push(`${t.tool_calls} tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
+  // Coverage: the facts are present and well formed, they support the gate's verdict, and they match the assignment.
+  const c = t.coverage;
+  if (!c || typeof c !== "object") why.push("missing evidence: no coverage record");
+  else {
+    const bad = ["source_reads", "denied_reads", "tests_run"].filter(k => !wholeCount(c[k]));
+    if (bad.length) why.push(`missing evidence: the coverage record's ${bad.join(", ")} ${bad.length > 1 ? "are" : "is"} not a whole number`);
+    if (typeof c.tests_allowed !== "boolean") why.push("missing evidence: the coverage record does not say whether tests are allowed");
+    const g = coverageGate(c);
+    if (t.coverage_gate?.ok && !g.ok) why.push(`the coverage facts contradict the gate: ${g.reasons.join("; ")}`);
+    const perms = readmeRow?.testing ? permissionsFor(readmeRow.testing, []) : null;
+    if (!perms) why.push(`the assignment's testing limit is not known here${readmeRow?.testing ? ` (${readmeRow.testing})` : ""}: the coverage cannot be checked against it`);
+    else if (typeof c.tests_allowed === "boolean" && c.tests_allowed !== testsAllowedBy(perms)) why.push(`the coverage record says tests are ${c.tests_allowed ? "" : "not "}allowed; the assignment's testing limit (${readmeRow.testing}) ${testsAllowedBy(perms) ? "allows them" : "does not"}`);
+  }
   return why;
 }
 
@@ -460,7 +486,7 @@ export async function main(argv, deps = {}) {
     if (opts.dryRun) {
       const ok = run.exit_code === EXIT.complete;
       results.push({ lab: LABS[reviewer.lab], lab_key: reviewer.lab, model: reviewer.model, status: ok ? "dry-run" : "incomplete", why: ok ? [] : [`the dry run exited ${run.exit_code ?? run.killed_for ?? run.signal}${run.stderr_tail.length ? `: ${run.stderr_tail.join(" | ")}` : ""}`], run, plan: `${outDir}/run-review.stdout` });
-    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run }));
+    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run, readmeRow }));
     const r = results.at(-1);
     err(`review-pr: ${r.lab}: ${r.status}${r.why.length ? ` (${r.why.join("; ")})` : ""}\n`);
   }

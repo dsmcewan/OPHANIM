@@ -450,7 +450,7 @@ const OK_RUN = { exit_code: 0, signal: null, killed_for: null, spawn_error: null
 const JB = { head: { sha: "a".repeat(40) }, brief: { assignment: 1, files: { "README.md": "1".repeat(64), "1-x.md": "2".repeat(64), "HARNESS.md": "3".repeat(64), "HARNESS-cli.md": "4".repeat(64) } } };
 
 test("XAI SDK ROUTE: judgeReviewer accepts a qualifying SDK run and records its route, transport, served model and cost reading", async () => {
-  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, outDir: await sdkRun({ binding: JB }), run: OK_RUN });
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: { lab: "xAI", model: "grok-4.7", testing: "Mock providers and isolated processes" }, outDir: await sdkRun({ binding: JB }), run: OK_RUN });
   assert.equal(j.status, "complete", JSON.stringify(j.why));
   assert.equal(j.route, "xai-sdk");
   assert.equal(j.runner.transport, "xai-sdk");
@@ -478,7 +478,7 @@ test("XAI SDK ROUTE: judgeReviewer refuses the wrong transport, the old CLI resu
     ["more calls than the limit", t => ({ ...t, provider_calls: 9 }), /9 provider calls exceed the bound max_turns 8/],
   ];
   for (const [name, edit, want] of cases) {
-    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: { lab: "xAI", model: "grok-4.7", testing: "Mock providers and isolated processes" }, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
     assert.equal(j.status, "incomplete", name);
     assert.match(j.why.join("; "), want, `${name}: ${j.why.join("; ")}`);
   }
@@ -545,4 +545,43 @@ test("XAI SDK ROUTE: the committed record for the fresh xAI leg of PR #84 binds 
   assert.equal(x.route, "xai-sdk"); assert.equal(x.model, legacy.panel.find(r => r.lab === "xai").model);
   for (const lab of ["google", "openai"]) assert.deepEqual(b.panel.find(r => r.lab === lab), legacy.panel.find(r => r.lab === lab), `${lab} keeps its route`);
   assert.ok(BINDING_NAME_RE.test("binding-xai-sdk.json"));
+});
+
+// Codex's independent cases at 42836cc (round 2): the judge FAILS CLOSED on an incomplete record. The README row gives the
+// assignment's testing limit, against which the coverage facts are checked.
+const ROW = { lab: "xAI", model: "grok-4.7", testing: "Mock providers and isolated processes" };
+
+test("XAI SDK ROUTE R2: the positive control -- the full qualifying record, judged against the assignment's row, is complete", async () => {
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB }), run: OK_RUN });
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+});
+
+test("XAI SDK ROUTE R2: a record with a required field removed, malformed or contradicting another is incomplete", async () => {
+  const drop = k => t => { const { [k]: _, ...rest } = t; return rest; };
+  const cases = [
+    ["provider_calls removed", drop("provider_calls"), /missing evidence: provider_calls is not a whole number/],
+    ["tool_calls removed", drop("tool_calls"), /missing evidence: tool_calls is not a whole number/],
+    ["provider_calls a string", t => ({ ...t, provider_calls: "3" }), /missing evidence: provider_calls is not a whole number/],
+    ["no provider call at all", t => ({ ...t, provider_calls: 0 }), /no provider call is recorded/],
+    ["worktree_check {}", t => ({ ...t, worktree_check: {} }), /missing evidence: the check of the review copy is malformed/],
+    ["worktree_check violations not a list", t => ({ ...t, worktree_check: { changed: [], violations: "none" } }), /missing evidence: the check of the review copy is malformed/],
+    ["gate ok, but no test ran", t => ({ ...t, coverage: { ...t.coverage, tests_run: 0 } }), /the coverage facts contradict the gate: no test command ran although the testing limit allows tests/],
+    ["gate ok, no source read", t => ({ ...t, coverage: { ...t.coverage, source_reads: 0 } }), /the coverage facts contradict the gate: no source file was read/],
+    ["gate ok, a denied read", t => ({ ...t, coverage: { ...t.coverage, denied_reads: 1 } }), /the coverage facts contradict the gate: 1 read\(s\) were denied/],
+    ["coverage removed", drop("coverage"), /missing evidence: no coverage record/],
+    ["tests marked not allowed although the assignment allows them", t => ({ ...t, coverage: { ...t.coverage, tests_allowed: false, tests_run: 0 } }),
+      /the coverage record says tests are not allowed; the assignment's testing limit \(Mock providers and isolated processes\) allows them/],
+    ["served_models not a list", t => ({ ...t, served_models: "grok-4.7" }), /missing provenance: no response named a served model/],
+    ["limits removed", drop("limits"), /the run's limits are not the bound limits/],
+    ["a recorded mismatch", t => ({ ...t, identity_mismatch: true }), /the runner refused a response served by another model \(identity_mismatch\)/],
+  ];
+  for (const [name, edit, want] of cases) {
+    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+    assert.equal(j.status, "incomplete", name);
+    assert.match(j.why.join("; "), want, `${name}: ${j.why.join("; ")}`);
+  }
+  // Without the assignment's row the coverage cannot be checked against it: incomplete, never assumed.
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, outDir: await sdkRun({ binding: JB }), run: OK_RUN });
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /the assignment's testing limit is not known here: the coverage cannot be checked against it/);
 });

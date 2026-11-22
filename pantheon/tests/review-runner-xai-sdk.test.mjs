@@ -100,7 +100,7 @@ test("XAI SDK: the SDK client is built for xAI only (base URL, key, no SDK retri
   const calls = t.events.filter(e => e.type === "provider_call");
   assert.deepEqual(calls.map(e => e.transport), ["xai-sdk", "xai-sdk"]);
   assert.deepEqual(calls.map(e => e.cost), [{ reported: false, value: null, field: null }, { reported: false, value: null, field: null }]);
-  assert.deepEqual(t.cost_totals, { reported_calls: 0, unreported_calls: 2, value: null, field: null });
+  assert.deepEqual(t.cost_totals, { reported_calls: 0, unreported_calls: 2, value: null, field: null, usd: null });
   assert.equal(JSON.stringify(t).includes(FAKE_KEY), false, "the key never reaches the transcript");
   const md = await r.read("findings-3-xai.md");
   assert.match(md, /- transport: xai-sdk \(openai@\d/);
@@ -112,9 +112,9 @@ test("XAI SDK: a reported cost of zero is a reading, distinct from a call that r
     () => finalTurn("grok-4.7", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 })] });
   assert.equal(r.code, EXIT.complete, r.out.err);
   const calls = r.transcript.events.filter(e => e.type === "provider_call");
-  assert.deepEqual(calls[0].cost, { reported: true, value: 0, field: "cost_in_usd_ticks" });
+  assert.deepEqual(calls[0].cost, { reported: true, value: 0, field: "cost_in_usd_ticks", usd: 0 });
   assert.deepEqual(calls[1].cost, { reported: false, value: null, field: null });
-  assert.deepEqual(r.transcript.cost_totals, { reported_calls: 1, unreported_calls: 1, value: 0, field: "cost_in_usd_ticks" });
+  assert.deepEqual(r.transcript.cost_totals, { reported_calls: 1, unreported_calls: 1, value: 0, field: "cost_in_usd_ticks", usd: 0 });
   assert.match(await r.read("findings-3-xai.md"), /- cost: 0 cost_in_usd_ticks over 1 call\(s\) that reported one; 1 call\(s\) reported none/);
 });
 
@@ -238,4 +238,74 @@ test("XAI SDK: the real SDK's own error classes -- a 429 with its Headers, then 
   const calls = r.transcript.events.filter(e => e.type === "provider_call");
   assert.deepEqual(calls.map(e => [e.attempt, e.http_status ?? null, e.sdk_error]), [[1, 429, "RateLimitError"], [2, null, "APIConnectionTimeoutError"]]);
   assert.match(r.transcript.stop_reason, /^network error: APIConnectionTimeoutError: Request timed out\./);
+});
+
+// ---- Codex's independent cases at 42836cc (round 2): the deadline across the inner retry, provenance before effects,
+// and the documented cost field ------------------------------------------------------------------------------------
+
+/** A run whose clock is advanced by the runner's own sleeps (and by `advance` inside a step). */
+function clockedExtra() {
+  const c = { t: Date.parse("2026-11-22T00:00:00Z"), sleeps: [] };
+  c.extra = { now: () => new Date(c.t), sleep: async ms => { c.sleeps.push(ms); c.t += ms; } };
+  return c;
+}
+
+test("XAI SDK R2: the wall clock bounds the INNER retry -- a 429 whose retry-after outlasts the remaining budget sends no second attempt, and the stop reason stays the deadline", async () => {
+  const c = clockedExtra();
+  const r = await run({ args: ["--max-wall-s", "1", "--max-turns", "2"], extra: c.extra,
+    steps: [() => { throw APIError.generate(429, { error: { message: "slow down" } }, "slow down", new Headers({ "retry-after": "2" })); }, () => finalTurn("grok-4.7", null)] });
+  assert.equal(r.code, EXIT.incomplete);
+  assert.equal(r.client.calls.length, 1, "no attempt is dispatched past the deadline");
+  assert.deepEqual(c.sleeps, [], "the runner does not sleep past the deadline either");
+  assert.match(r.transcript.stop_reason, /^max_wall_s reached \(1\)/);
+  assert.equal(r.transcript.status, "incomplete");
+  assert.equal(r.transcript.provider_calls, 1);
+});
+
+
+test("XAI SDK R2: each attempt's abort deadline is the smaller of --timeout-s and the run's remaining wall clock", async () => {
+  const c = clockedExtra();
+  const r = await run({ args: ["--max-wall-s", "10", "--timeout-s", "30", "--max-turns", "3"], extra: c.extra,
+    steps: [() => { c.t += 4000; throw APIError.generate(503, { error: { message: "busy" } }, "busy", new Headers({ "retry-after": "1" })); }, () => { throw APIError.generate(503, { error: { message: "busy" } }, "busy", new Headers()); }] });
+  const calls = r.transcript.events.filter(e => e.type === "provider_call");
+  assert.deepEqual(calls.map(e => e.timeout_ms), [10_000, 5_000], "10 s left at the first attempt; 10 - 4 - 1 = 5 s at the retry");
+  assert.deepEqual(c.sleeps, [1000]);
+});
+
+test("XAI SDK R2: provenance before effects -- a response served by another model is refused BEFORE its tool calls run or another request is sent", { skip: !JAIL && "bwrap unavailable" }, async () => {
+  const r = await run({ steps: [() => toolTurn("grok-4.6", { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost_in_usd_ticks: 1184000 }), () => finalTurn("grok-4.7", null)] });
+  assert.equal(r.code, EXIT.incomplete);
+  assert.equal(r.client.calls.length, 1, "no further request after the mismatch");
+  assert.equal(r.transcript.events.filter(e => e.type === "tool_call").length, 0, "the mismatched response's read_file never ran");
+  assert.match(r.transcript.stop_reason, /^served model mismatch: the response was served by grok-4\.6, not the requested grok-4\.7; its content and tool calls were not used/);
+  const ev = r.transcript.events.find(e => e.type === "provider_call");
+  assert.equal(ev.served_model, "grok-4.6");
+  assert.deepEqual(ev.usage, { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost_in_usd_ticks: 1184000 }, "the mismatched call's usage is kept as evidence");
+  assert.deepEqual(ev.cost, { reported: true, value: 1184000, field: "cost_in_usd_ticks", usd: 0.0001184 });
+  assert.deepEqual(r.transcript.served_models, ["grok-4.6"]);
+  assert.equal(r.transcript.identity_mismatch, true);
+});
+
+test("XAI SDK R2: a response naming no served model is refused before its tool calls run (missing provenance)", { skip: !JAIL && "bwrap unavailable" }, async () => {
+  const r = await run({ steps: [() => toolTurn(undefined, null), () => finalTurn("grok-4.7", null)] });
+  assert.equal(r.client.calls.length, 1);
+  assert.equal(r.transcript.events.filter(e => e.type === "tool_call").length, 0);
+  assert.match(r.transcript.stop_reason, /^missing provenance: the response named no served model/);
+});
+
+test("XAI SDK R2: cost is read only from xAI's documented usage.cost_in_usd_ticks (integer ticks, 1e10 per USD); a failed request is an unavailable reading, never a zero", async () => {
+  const c = clockedExtra();
+  const r = await run({ extra: c.extra, steps: [() => { throw APIError.generate(429, { error: { message: "slow" } }, "slow", new Headers({ "retry-after": "1" })); },
+    () => { throw APIError.generate(503, { error: { message: "busy" } }, "busy", new Headers()); }] });
+  const calls = r.transcript.events.filter(e => e.type === "provider_call");
+  assert.deepEqual(calls.map(e => e.cost), [{ reported: false, value: null, field: null }, { reported: false, value: null, field: null }]);
+  assert.deepEqual(r.transcript.cost_totals, { reported_calls: 0, unreported_calls: 2, value: null, field: null, usd: null });
+});
+
+test("XAI SDK R2: an undocumented cost-looking field, or a non-integer tick count, is not a cost reading", async () => {
+  const { costOf } = await import("../src/review-runner/index.mjs");
+  assert.deepEqual(costOf({ cost: 5 }), { reported: false, value: null, field: null });
+  assert.deepEqual(costOf({ cost_in_usd_ticks: 1.5 }), { reported: false, value: null, field: null });
+  assert.deepEqual(costOf({ cost_in_usd_ticks: 0 }), { reported: true, value: 0, field: "cost_in_usd_ticks", usd: 0 });
+  assert.deepEqual(costOf({ cost_in_usd_ticks: 11840000 }), { reported: true, value: 11840000, field: "cost_in_usd_ticks", usd: 0.001184 });
 });

@@ -35,10 +35,16 @@ import { compareWorktree, worktreeState } from "./cli-common.mjs";
 //   - the client is built ONLY for https://api.x.ai/v1, with the SDK's own retries OFF (maxRetries 0), so this runner's
 //     one retry of a 429/5xx, inside --max-turns, is the only retry; the SDK's timeout is the per-call --timeout-s, and
 //     every call also carries an abort signal at that timeout;
-//   - --max-wall-s is required: the whole run's wall clock, checked before every provider call;
+//   - --max-wall-s is required: the whole run's wall clock, checked before EVERY ATTEMPT (a retry included); a retry's
+//     wait that would outlast the remaining budget is not slept, and each attempt's abort deadline is the smaller of
+//     --timeout-s and the time left, so no request is sent, and none runs on, past the deadline;
+//   - PROVENANCE BEFORE EFFECTS: a response is used only when it names the requested model as the one that served it;
+//     a response served by another model, or naming none, stops the run before its content is taken or its tool calls
+//     run, and its served model and usage are kept as evidence;
 //   - every SDK failure or timeout is a recorded outcome (the call's event names the SDK error type and status);
-//   - the cost of each call is recorded as REPORTED (the field and its value, a zero included) or UNAVAILABLE (null),
-//     never a zero for a reading the provider did not give;
+//   - the cost of each call is xAI's documented usage.cost_in_usd_ticks (integer ticks, 10^10 per USD;
+//     https://docs.x.ai/developers/cost-tracking): REPORTED (a zero included) or UNAVAILABLE (null) -- a failed request,
+//     or a response without that field, is unavailable, never a zero;
 //   - the review copy is checked before and after the run (cli-common.mjs compareWorktree): a change outside
 //     .review-tests/ is a policy violation and the review is incomplete;
 //   - the transcript records the transport, the SDK and the bound brief's digests (README, assignment, HARNESS.md), which
@@ -53,9 +59,11 @@ async function defaultXaiClient(opts) {
   const { default: OpenAI } = await import("openai");
   return new OpenAI(opts);
 }
-/** A call's cost reading: the first numeric field of its usage whose name says cost, or unavailable. */
+/** A call's cost reading: xAI's usage.cost_in_usd_ticks when it is a whole number of ticks, or unavailable (see the header). */
+export const XAI_TICKS_PER_USD = 1e10;
 export function costOf(usage) {
-  if (usage && typeof usage === "object") for (const [k, v] of Object.entries(usage)) if (/cost/i.test(k) && typeof v === "number" && Number.isFinite(v)) return { reported: true, value: v, field: k };
+  const v = usage && typeof usage === "object" ? usage.cost_in_usd_ticks : undefined;
+  if (Number.isSafeInteger(v) && v >= 0) return { reported: true, value: v, field: "cost_in_usd_ticks", usd: v / XAI_TICKS_PER_USD };
   return { reported: false, value: null, field: null };
 }
 /** The run's cost: the sum over the calls that reported one (in their one field), and how many reported none. */
@@ -63,7 +71,8 @@ export function costTotals(events) {
   const costs = events.filter(e => e.type === "provider_call" && e.cost).map(e => e.cost);
   const rep = costs.filter(c => c.reported), fields = [...new Set(rep.map(c => c.field))];
   return { reported_calls: rep.length, unreported_calls: costs.length - rep.length,
-    value: rep.length && fields.length === 1 ? rep.reduce((s, c) => s + c.value, 0) : null, field: fields.length === 1 ? fields[0] : fields.length ? "mixed" : null };
+    value: rep.length && fields.length === 1 ? rep.reduce((s, c) => s + c.value, 0) : null, field: fields.length === 1 ? fields[0] : fields.length ? "mixed" : null,
+    usd: rep.length && fields.length === 1 && fields[0] === "cost_in_usd_ticks" ? rep.reduce((s, c) => s + c.value, 0) / XAI_TICKS_PER_USD : null };
 }
 
 export const EXIT = { complete: 0, refused: 1, usage: 2, incomplete: 3 };
@@ -444,15 +453,21 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     outer: for (;;) {
       if (stopped) break;
       if (state.providerCalls >= opts.limits.max_turns) { state.stop = `max_turns reached (${opts.limits.max_turns})`; break; }
-      if (opts.limits.max_wall_s && now() - started >= opts.limits.max_wall_s * 1000) { state.stop = `max_wall_s reached (${opts.limits.max_wall_s})`; break; }
       turn++;
       const req = conv.request();
-      const res = await providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing });
+      const res = await providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing, now, deadline: opts.limits.max_wall_s ? started.getTime() + opts.limits.max_wall_s * 1000 : null });
       if (!res.ok) { state.stop = res.reason; break; }
       const r = conv.accept(res.json);
       state.served.push(r.served_model);
       state.usage = addUsage(state.usage, r.usage);
       transcript.events.at(-1).served_model = r.served_model;
+      // PROVENANCE BEFORE EFFECTS (the SDK route; see the header): nothing of a response is used unless it names the
+      // requested model as the one that served it. Its served model and usage stay on the event above as evidence.
+      if (plan.transport === "xai-sdk" && r.served_model !== plan.model) {
+        if (r.served_model === null || r.served_model === undefined) state.stop = "missing provenance: the response named no served model; its content and tool calls were not used";
+        else { transcript.identity_mismatch = true; state.stop = `served model mismatch: the response was served by ${r.served_model}, not the requested ${plan.model}; its content and tool calls were not used`; }
+        break;
+      }
       if (r.calls.length === 0) {
         if (r.incomplete) { state.stop = `provider stopped: ${r.incomplete}`; break; }
         if (!r.text.trim()) { state.stop = "provider returned no text and no tool call"; break; }
@@ -567,9 +582,12 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   return { status, stop_reason: state.stop };
 }
 
-async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing }) {
+async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing, now = () => new Date(), deadline = null }) {
   const body = JSON.stringify(req.body);
+  const wallStop = () => ({ ok: false, reason: `max_wall_s reached (${opts.limits.max_wall_s})` });
   for (let attempt = 1; ; attempt++) {
+    // The SDK route's wall clock, before EVERY attempt (a retry included): no request is sent past the deadline.
+    if (plan.transport === "xai-sdk" && deadline !== null && now().getTime() >= deadline) return wallStop();
     // A Gemini request is PRIMARY Gemini API execution: admitted by the billing policy and recorded on its usage record
     // BEFORE it is sent, each attempt (a retry is a billed request too); refused, nothing is sent (see the header).
     let gemini = null;
@@ -589,10 +607,14 @@ async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, 
     const t0 = Date.now();
     if (plan.transport === "xai-sdk") {
       ev.transport = "xai-sdk";
+      // This attempt's abort deadline: the per-call timeout, or the run's remaining wall clock if that is shorter.
+      const callMs = deadline === null ? timeoutMs : Math.max(1, Math.min(timeoutMs, deadline - now().getTime()));
+      ev.timeout_ms = callMs;
       let json;
-      try { json = await state.xai.chat.completions.create(req.body, { signal: AbortSignal.timeout(timeoutMs) }); }
+      try { json = await state.xai.chat.completions.create(req.body, { signal: AbortSignal.timeout(callMs), timeout: callMs }); }
       catch (e) {
         ev.duration_ms = Date.now() - t0;
+        ev.cost = costOf(null); // a failed request: its cost is unavailable, never a zero
         // The SDK names its errors by class (RateLimitError, APIConnectionTimeoutError, ...) and leaves `name` as "Error".
         const cls = e?.constructor?.name;
         ev.sdk_error = cls && cls !== "Error" ? cls : (e?.name ?? "Error");
@@ -604,6 +626,8 @@ async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, 
           const h = e?.headers, raw = typeof h?.get === "function" ? h.get("retry-after") : h?.["retry-after"];
           const ra = Number(raw), wait = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 60) * 1000 : 5000;
           ev.retry_after_ms = wait;
+          // A wait that would outlast the run's remaining wall clock is not slept: the deadline is the outcome.
+          if (deadline !== null && now().getTime() + wait >= deadline) { ev.retry_skipped = "the wait would outlast --max-wall-s"; return wallStop(); }
           await sleep(wait);
           continue;
         }
