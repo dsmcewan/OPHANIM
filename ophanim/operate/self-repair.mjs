@@ -891,7 +891,9 @@ export const attemptEnvelopeMs = (inspect = DEFAULT_CONFIG.inspect) => 3 * (insp
  * argv is read from /proc and must carry the inspector, its plan and the attempt's token. Returns {identity, why}:
  *   verified    the recorded inspector, still running
  *   mismatch    a live process that is not it (pid reuse, or the record names an unrelated process)
- *   dead        no such process
+ *   dead        no such process (its /proc entry is absent)
+ *   unreadable  the process exists but its argv cannot be read: the evidence is unavailable, not negative --
+ *               trusted within the attempt envelope, with the read error as its reason
  *   unverified  live, but the identity cannot be read (no token: a record from before this rule; or no process
  *               table, as on macOS and Windows) -- trusted only within the attempt envelope
  *   expired     unverified and older than the envelope (or with no start time to bound it)
@@ -905,16 +907,25 @@ export function inspectorIdentity(running, {state, inspect, now, procfs = '/proc
     return Number.isFinite(started) && Date.parse(now) - started <= attemptEnvelopeMs(inspect);
   };
   if (fs.existsSync(procfs)) {
-    let argv;
-    try { argv = fs.readFileSync(path.join(procfs, String(pid), 'cmdline'), 'latin1').split('\0').filter(Boolean); }
-    catch { return {identity: 'dead', why: `no process ${pid}`}; }
+    // DEAD only when the process entry is absent; a read that fails while it exists is unavailable evidence.
+    if (!fs.existsSync(path.join(procfs, String(pid)))) return {identity: 'dead', why: `no process ${pid}`};
+    let raw;
+    try { raw = fs.readFileSync(path.join(procfs, String(pid), 'cmdline')); }
+    catch (e) {
+      return envelope() ? {identity: 'unreadable', why: `the argv of process ${pid} cannot be read (${e?.code ?? 'error'}); trusted within the attempt envelope`}
+        : {identity: 'expired', why: `the argv of process ${pid} cannot be read (${e?.code ?? 'error'}) and the attempt is older than its envelope`};
+    }
     if (typeof running.token !== 'string') {
       return envelope() ? {identity: 'unverified', why: 'the record has no identity token (written before the identity rule); trusted within the attempt envelope'}
         : {identity: 'expired', why: 'a record with no identity token, older than the attempt envelope'};
     }
-    const want = inspectorArgv(path.join(inspectionDirOf(state), 'plan.json'), running.token);
-    const at = argv.indexOf(want[0]);
-    const ok = at > 0 && want.every((w, i) => argv[at + i] === w);
+    // Compared as BYTES: the argv the kernel holds against the expected argv encoded as UTF-8 (no decoding can make or
+    // hide a difference, so a non-ASCII path such as a state directory état-λ compares exactly).
+    const argv = [];
+    for (let i = 0, j; i < raw.length; i = j + 1) { j = raw.indexOf(0, i); if (j < 0) j = raw.length; argv.push(raw.subarray(i, j)); }
+    const want = inspectorArgv(path.join(inspectionDirOf(state), 'plan.json'), running.token).map(w => Buffer.from(w, 'utf8'));
+    const at = argv.findIndex((a, i) => i > 0 && a.equals(want[0]));
+    const ok = at > 0 && want.every((w, i) => argv[at + i]?.equals(w));
     return ok ? {identity: 'verified', why: 'the process argv carries the inspector, its plan and the attempt token'}
       : {identity: 'mismatch', why: `process ${pid} is not this attempt's inspector (its argv does not carry the recorded token)`};
   }
@@ -967,7 +978,7 @@ export function inspectIdle({repo, state, head, config = DEFAULT_CONFIG, records
     // ONE AT A TIME: the recorded inspector, while it runs (verified, or unverifiable within its envelope), is never
     // started beside. Any other process in the record is not it: the attempt is recovered (nothing is signalled).
     const id = running ? inspectorIdentity(running, {state, inspect: config.inspect, now, procfs}) : null;
-    if (running && ['verified', 'unverified'].includes(id.identity)) return {state: 'running', commit: running.commit, pid: running.pid, started_at: running.started_at, identity: id.identity, identity_why: id.why};
+    if (running && ['verified', 'unverified', 'unreadable'].includes(id.identity)) return {state: 'running', commit: running.commit, pid: running.pid, started_at: running.started_at, identity: id.identity, identity_why: id.why};
     if (running) ({recovered, last} = recoverInspection(state, running, last, now, id));
     const judged = [complete, last].filter(x => x?.commit).map(x => ({x, c: inspectionCompleteness(x, records)}));
     const done = judged.find(j => j.x.commit === head && j.c.complete);

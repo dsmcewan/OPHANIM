@@ -374,3 +374,32 @@ test('identity: where the process table cannot be read (no /proc, as on macOS or
   const after = inspectIdle({repo: f.repo, state: f.stateDir, head: f.head, records: f.records, start: () => 1, at: () => new Date(Date.parse(started_at) + envelope + 1000).toISOString(), procfs});
   assert.equal(after.recovered?.identity, 'expired', JSON.stringify(after));
 });
+
+test('identity: a genuine inspector under a non-ASCII state directory (état-λ) is verified -- the argv is compared as bytes, not decoded as latin1', async t => {
+  const base = idleRepo(t), starts = [];
+  const f = {...base, stateDir: path.join(path.dirname(base.stateDir), 'état-λ')};
+  fs.mkdirSync(f.stateDir, {recursive: true});
+  const token = 'b7a7a0de-0000-4000-8000-0000000000e1';
+  runningRecord(f, {pid: stubInspector(t, f, token), token});
+  await new Promise(r => setTimeout(r, 150));
+  const r = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+  assert.deepEqual([r.state, r.identity, starts.length], ['running', 'verified', 0], JSON.stringify(r));
+});
+
+test('identity: a process entry whose cmdline cannot be read is UNREADABLE (not dead) -- trusted within the envelope with its reason, expired after it; an absent entry is dead and recovered at once', async t => {
+  const f = idleRepo(t), starts = [];
+  const lane = await import('./self-repair.mjs');
+  const procfs = path.join(path.dirname(f.stateDir), 'fake-proc'), pid = 424242;
+  fs.mkdirSync(path.join(procfs, String(pid), 'cmdline'), {recursive: true});   // reading it fails with EISDIR
+  const started_at = '2026-11-22T00:00:00.000Z', envelope = lane.attemptEnvelopeMs(DEFAULT_CONFIG.inspect);
+  const call = (at, p = pid) => inspectIdle({repo: f.repo, state: f.stateDir, head: f.head, records: f.records, start: plan => { starts.push(plan); return 1; }, at: () => at, procfs});
+  runningRecord(f, {pid, token: 'b7a7a0de-0000-4000-8000-0000000000e2', started_at});
+  const within = call(new Date(Date.parse(started_at) + 1000).toISOString());
+  assert.deepEqual([within.state, within.identity, starts.length], ['running', 'unreadable', 0], JSON.stringify(within));
+  assert.match(within.identity_why, /EISDIR/);
+  const after = call(new Date(Date.parse(started_at) + envelope + 1000).toISOString());
+  assert.equal(after.recovered?.identity, 'expired', JSON.stringify(after));
+  runningRecord(f, {pid: pid + 1, token: 'b7a7a0de-0000-4000-8000-0000000000e3', started_at: new Date().toISOString()});
+  const gone = call(new Date().toISOString());
+  assert.deepEqual([gone.recovered?.identity, gone.recovered?.result], ['dead', 'interrupted'], JSON.stringify(gone));
+});
