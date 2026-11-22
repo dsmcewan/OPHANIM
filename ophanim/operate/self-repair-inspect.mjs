@@ -47,7 +47,7 @@ export async function runInspection(plan, {log = s => console.log(s)} = {}) {
   const record = (name, kind, body, r) => {
     const file = writeRecord({dir: plan.records, kind, commit: plan.commit, record: body});
     steps.push({name, exit: r.exit, ms: r.ms, killed: r.killed ?? null, record: path.relative(plan.records, file)});
-    const bad = reportRefusal(kind, body, kind === 'pentest' ? r.exit : null);
+    const bad = reportRefusal(kind, body, r.exit);
     log(`inspect: ${name} exit ${r.exit} -> ${kind} record${bad ? ` (not complete: ${bad})` : ''}`);
   };
   const report = (name, kind, file, r, what) => {

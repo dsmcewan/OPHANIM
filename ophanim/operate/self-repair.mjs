@@ -273,10 +273,26 @@ export function feedRecord({repo, kind, record, env = process.env, dir = null}) 
 // ---- Detect (decision 3) ---------------------------------------------------------------------------------------------
 const testDefect = ({file, name, kind, evidence, reproduction}) => ({id: `test:${file}::${name ?? '*'}`, kind, rank: RANK[kind], title: `${kind === 'flake' ? 'flaky' : 'failing'} test ${name ?? '(the file)'} in ${file}`,
   site: [file], keys: [file], reproduction, evidence});
+/**
+ * A gate record's suite rows that Detect can read, and why each other row is skipped (a partial or malformed historical
+ * record: a row that is not an object, or whose notes or problems are not lists of text). A readable row's findings are
+ * used whatever its neighbours are.
+ */
+export function gateRows(rec) {
+  const results = rec?.record?.results, rows = [], skipped = [];
+  if (!Array.isArray(results)) return {rows, skipped: results === undefined ? [] : ['results is not a list']};
+  const texts = v => v === undefined || (Array.isArray(v) && v.every(x => typeof x === 'string'));
+  results.forEach((r, i) => {
+    if (r === null || typeof r !== 'object' || Array.isArray(r)) skipped.push(`results[${i}] is not a suite row`);
+    else if (!texts(r.notes) || !texts(r.problems)) skipped.push(`results[${i}] (${typeof r.suite === 'string' ? r.suite : 'no suite'}): its notes or problems are not lists of text`);
+    else rows.push(r);
+  });
+  return {rows, skipped};
+}
 /** The failing tests a gate record names (check.mjs: per-suite notes `fail: NAME at FILE:LINE -- ...` and its problems). */
 export function gateDefects(rec) {
   const out = [], seen = new Set();
-  for (const r of rec.record?.results ?? []) {
+  for (const r of gateRows(rec).rows) {
     for (const note of r.notes ?? []) {
       const m = /^(fail|cancelled): (.+) at ([^\s]+?):(\d+|\?) -- /.exec(note);
       if (!m || WITHHELD.test(m[3])) continue;
@@ -360,7 +376,10 @@ export function detect({repo, commit, records, register = REGISTER}) {
   const defects = [], ignored = [...(records.unreadable ?? []).map(u => ({source: u.file, why: u.why}))];
   const gate = records.gate.at(-1) ?? null;
   if (gate && gate.commit !== commit) ignored.push({source: gate.file, why: `the latest gate record names ${gate.commit.slice(0, 12)}, not the commit under repair ${String(commit).slice(0, 12)}: not used`});
-  else if (gate) defects.push(...gateDefects(gate));
+  else if (gate) {
+    defects.push(...gateDefects(gate));
+    for (const why of gateRows(gate).skipped) ignored.push({source: gate.file, why: `a gate row is not readable: ${why}`});
+  }
   for (const s of records.stress) defects.push(...stressDefects(s, commit));
   let reg = [];
   try { reg = registerDefects(repo, commit, {register}); } catch (e) { ignored.push({source: register, why: `the register could not be read at ${String(commit).slice(0, 12)}: ${cut(e.message, 200)}`}); }
@@ -792,10 +811,36 @@ const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try
 export const inspectionState = state => ({running: readJsonOr(path.join(inspectionDirOf(state), 'running.json')), last: readJsonOr(path.join(inspectionDirOf(state), 'last.json')),
   complete: readJsonOr(path.join(inspectionDirOf(state), 'complete.json'))});
 const REPORT_VERDICTS = Object.freeze(['PASS', 'FAIL', 'UNVERIFIED']);
-/** Why a report body is not a finished report of its kind, or null (the inspector checks it before recording it). */
+// The exit codes the tools give each verdict (scripts/test-gates/check.mjs: PASS 0, FAIL 1, UNVERIFIED 2, or 0 when
+// unverified is allowed; stress.mjs: PASS 0, FAIL 1, otherwise 2). A report whose verdict the exit contradicts is not
+// the tool's finished answer.
+const VERDICT_EXITS = Object.freeze({gate: {PASS: [0], FAIL: [1], UNVERIFIED: [2, 0]}, stress: {PASS: [0], FAIL: [1], UNVERIFIED: [2]}});
+const isRow = r => r !== null && typeof r === 'object' && !Array.isArray(r);
+const isTexts = v => v === undefined || (Array.isArray(v) && v.every(x => typeof x === 'string'));
+/**
+ * Why a report body is not a finished report of its kind, or null. With `exit` (the tool's exit code), the verdict must
+ * be the one that exit gives. A gate report has at least one usable suite row (a suite name, a verdict, notes and
+ * problems as lists of text) and no row that is not; a stress report's byTest rows name a file and their rounds.
+ */
 export function reportRefusal(kind, body, exit = null) {
-  if (kind === 'gate') return body?.schema === 'ophanim.test-gate/v2' && REPORT_VERDICTS.includes(body.verdict) && Array.isArray(body.results) ? null : 'not a finished test-gate/v2 report (schema, verdict, results)';
-  if (kind === 'stress') return body?.schema === 'ophanim.toolkit.stress/v1' && REPORT_VERDICTS.includes(body.verdict) && Array.isArray(body.byTest) ? null : 'not a finished toolkit.stress/v1 report (schema, verdict, byTest)';
+  const exitBad = () => (exit !== null && !(VERDICT_EXITS[kind][body.verdict] ?? []).includes(exit) ? `the ${body.verdict} report came with exit ${exit}` : null);
+  if (kind === 'gate') {
+    if (body?.schema !== 'ophanim.test-gate/v2' || !REPORT_VERDICTS.includes(body.verdict) || !Array.isArray(body.results)) return 'not a finished test-gate/v2 report (schema, verdict, results)';
+    if (!body.results.length) return 'the gate report has no suite results';
+    const bad = body.results.findIndex(r => !isRow(r) || typeof r.suite !== 'string' || !r.suite || !REPORT_VERDICTS.includes(r.verdict) || !isTexts(r.notes) || !isTexts(r.problems));
+    if (bad >= 0) return `the gate report's results[${bad}] is not a usable suite row`;
+    if (body.results.every(r => r.suite === '(none)')) return 'the gate report ran no suite';
+    if (body.verdict === 'PASS' && body.results.some(r => r.verdict !== 'PASS')) return 'the gate report says PASS over a suite that did not pass';
+    if (body.verdict !== 'FAIL' && body.results.some(r => r.verdict === 'FAIL')) return `the gate report says ${body.verdict} over a failing suite`;
+    return exitBad();
+  }
+  if (kind === 'stress') {
+    if (body?.schema !== 'ophanim.toolkit.stress/v1' || !REPORT_VERDICTS.includes(body.verdict) || !Array.isArray(body.byTest)) return 'not a finished toolkit.stress/v1 report (schema, verdict, byTest)';
+    if (!Number.isInteger(body.repeat) || body.repeat < 1) return 'the stress report names no round count';
+    const bad = body.byTest.findIndex(t => !isRow(t) || typeof t.file !== 'string' || !t.file || !Array.isArray(t.rounds) || !t.rounds.every(n => Number.isInteger(n)));
+    if (bad >= 0) return `the stress report's byTest[${bad}] is not a usable row`;
+    return exitBad();
+  }
   if (kind === 'pentest') {
     const text = typeof body?.report === 'string' ? body.report : '';
     if (!text.includes('--- summary ---')) return 'the pentest report has no summary';
@@ -829,7 +874,7 @@ export function inspectionCompleteness(attempt, records) {
     if (path.relative(path.resolve(records), f).startsWith('..')) { why.push(`${name}: the report is outside the records`); continue; }
     const r = readJsonOr(f);
     if (r?.schema !== RECORD_SCHEMA || r.kind !== kind || r.commit !== attempt.commit) { why.push(`${name}: the report ${s.record} is absent or is not a ${kind} record of ${attempt.commit.slice(0, 12)}`); continue; }
-    const bad = reportRefusal(kind, r.record, kind === 'pentest' ? s.exit : null);
+    const bad = reportRefusal(kind, r.record, s.exit);
     if (bad) why.push(`${name}: ${bad}`);
   }
   return {complete: why.length === 0, why};

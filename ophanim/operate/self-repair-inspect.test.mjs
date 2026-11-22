@@ -212,3 +212,59 @@ test('legacy state: a last.json written before the rule (no attempt) is judged b
   fs.rmSync(path.join(g2.records, legacy.steps[0].record));
   assert.match(lane.inspectionCompleteness(legacy, g2.records).why.join(' '), /gates: the report .* is absent/, 'a report that is gone cannot establish completeness');
 });
+
+// ---- THE GATE REPORT AT THE COMPLETENESS BOUNDARY: a usable suite, and the verdict its exit gives ----------------------
+/** One real inspector attempt whose gate tool writes `body` and exits `code`; the attempt as it left last.json. */
+const gateAttempt = async (f, body, code) => {
+  const inspect = {...DEFAULT_CONFIG.inspect, gates: ['node', '-e', `require('fs').writeFileSync(process.argv.at(-1), ${JSON.stringify(JSON.stringify(body))}); process.exit(${code})`, '{json}'], pentest: PENTEST_STUB, nice: null, timeout_ms: 60_000};
+  await runInspection({schema: INSPECTION_SCHEMA, repo: f.repo, commit: f.head, since: null, records: f.records, state: f.stateDir, inspect}, {log: () => {}});
+  return inspectionState(f.stateDir).last;
+};
+const GATE = (verdict, results) => ({schema: 'ophanim.test-gate/v2', verdict, results});
+const ROW = (suite, verdict, notes = []) => ({suite, verdict, problems: [], unverified: [], notes});
+
+test('gate report: no suite, a row that is not a suite, or a verdict its exit contradicts is INCOMPLETE and retried, never cached as inspected', async t => {
+  for (const [what, body, code, why] of [
+    ['results: []', GATE('PASS', []), 0, /no suite results/],
+    ['results: [null]', GATE('PASS', [null]), 0, /results\[0\] is not a usable suite row/],
+    ['a row with no suite name', GATE('PASS', [{verdict: 'PASS', notes: []}]), 0, /results\[0\] is not a usable suite row/],
+    ['notes that are not text', GATE('FAIL', [{suite: 'test', verdict: 'FAIL', notes: [7]}]), 1, /results\[0\] is not a usable suite row/],
+    ['only the "(none)" placeholder', GATE('FAIL', [ROW('(none)', 'FAIL')]), 1, /ran no suite/],
+    ['PASS with exit 1', GATE('PASS', [ROW('test', 'PASS')]), 1, /PASS report came with exit 1/],
+    ['FAIL with exit 0', GATE('FAIL', [ROW('test', 'FAIL', ['fail: adds at test/calc.test.mjs:4 -- x'])]), 0, /FAIL report came with exit 0/],
+    ['PASS over a failing suite', GATE('PASS', [ROW('test', 'FAIL')]), 0, /PASS over a suite that did not pass/],
+  ]) {
+    const f = idleRepo(t), starts = [];
+    const last = await gateAttempt(f, body, code);
+    assert.equal(last.complete, false, `${what}: ${JSON.stringify(last.incomplete)}`);
+    assert.match(last.incomplete.join(' '), why, what);
+    assert.equal(inspectionState(f.stateDir).complete, null, `${what}: no complete.json`);
+    const r = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+    assert.deepEqual([r.state, r.attempt, starts.length], ['retrying', 2, 1], `${what}: ${JSON.stringify(r)}`);
+  }
+});
+
+test('gate report: the producer\'s finished layouts are complete -- PASS/0, FAIL/1, UNVERIFIED/2 and UNVERIFIED/0 (allowed), and a row without notes', async t => {
+  for (const [what, body, code] of [
+    ['PASS, exit 0', GATE('PASS', [ROW('test', 'PASS'), ROW('pantheon', 'PASS')]), 0],
+    ['FAIL, exit 1', GATE('FAIL', [ROW('test', 'FAIL', ['fail: adds at test/calc.test.mjs:4 -- x']), ROW('pantheon', 'PASS')]), 1],
+    ['FAIL over passing suites (coverage), exit 1', GATE('FAIL', [ROW('test', 'PASS')]), 1],
+    ['UNVERIFIED, exit 2', GATE('UNVERIFIED', [ROW('test', 'UNVERIFIED')]), 2],
+    ['UNVERIFIED allowed, exit 0', GATE('UNVERIFIED', [ROW('test', 'UNVERIFIED')]), 0],
+    ['a row without notes or problems', GATE('PASS', [{suite: 'test', verdict: 'PASS', counts: null}]), 0],
+  ]) {
+    const f = idleRepo(t);
+    const last = await gateAttempt(f, body, code);
+    assert.deepEqual([last.complete, last.incomplete], [true, []], what);
+  }
+});
+
+test('Detect reads a historical gate record with malformed rows: it does not throw, the readable rows\' failing tests are kept, and each skipped row is recorded', async t => {
+  const f = idleRepo(t);
+  const body = GATE('FAIL', [null, 'text', {suite: 'x', verdict: 'FAIL', notes: 'not a list'}, ROW('test', 'FAIL', ['fail: adds at test/calc.test.mjs:4 -- testCodeFailure: x'])]);
+  writeRecord({dir: f.records, kind: 'gate', commit: f.head, record: body});
+  const d = detect({repo: f.repo, commit: f.head, records: readRecords(f.records)});
+  assert.deepEqual(d.defects.map(x => x.id), ['test:test/calc.test.mjs::adds']);
+  assert.deepEqual(d.ignored.map(x => x.why.replace(/^a gate row is not readable: /, '')),
+    ['results[0] is not a suite row', 'results[1] is not a suite row', 'results[2] (x): its notes or problems are not lists of text']);
+});
