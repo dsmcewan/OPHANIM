@@ -13,6 +13,7 @@ import * as bridge from './github-bridge.mjs';
 const { Store, replyHeader } = wire;
 const IDENTITY = '**[Seat: Claude · Model: (stated by the sender) · Role: Implementer]**';
 const BANNER = `> ${IDENTITY}`;
+const ASSERTED = { seat: 'Claude', model: '(stated by the sender)', role: 'Implementer', banner: IDENTITY };
 const SCHEMA = 'ophanim.collaboration.reply/v2';
 const footer = obj => `<!-- ophanim-collab-reply ${JSON.stringify(obj)} -->`;
 const v2 = (acks, { kind = 'REPLY', text = 'Read; working on it.', banner = BANNER } = {}) => `${banner}\n\n${text}\n\n${footer({ schema: SCHEMA, kind, ack: acks })}`;
@@ -32,8 +33,9 @@ test('wire: a reply that opens with its identity banner acknowledges through its
   assert.ok(imported, 'the reply is imported');
   assert.notEqual(store.get(a.id).acknowledged_at, null);
   assert.notEqual(store.get(b.id).acknowledged_at, null);
-  assert.equal(imported.provenance.asserted_identity, IDENTITY);
-  assert.deepEqual(replyHeader(v2([a.id], { kind: 'ACK' })), { kind: 'ACK', acknowledgements: [a.id], format: 'v2', identity: IDENTITY });
+  assert.deepEqual(imported.provenance.asserted_identity, { seat: 'Claude', model: '(stated by the sender)', role: 'Implementer', basis: 'asserted in the comment banner; not verified by the bridge' });
+  assert.equal(imported.provenance.identity, 'GitHub account verified; agent role asserted', 'the account identity is recorded apart from what the banner asserts');
+  assert.deepEqual(replyHeader(v2([a.id], { kind: 'ACK' })), { kind: 'ACK', acknowledgements: [a.id], format: 'v2', identity: ASSERTED });
 });
 
 test('wire: formatReply round-trips -- banner first, footer last, each ACK ID on its own boundary whatever the prose says', () => {
@@ -43,10 +45,22 @@ test('wire: formatReply round-trips -- banner first, footer last, each ACK ID on
   const lines = body.trimEnd().split('\n');
   assert.equal(lines[0], BANNER);
   assert.equal(lines.at(-1), footer({ schema: SCHEMA, kind: 'REPLY', ack: ids }));
-  assert.deepEqual(replyHeader(body), { kind: 'REPLY', acknowledgements: ids, format: 'v2', identity: IDENTITY });
+  assert.deepEqual(replyHeader(body), { kind: 'REPLY', acknowledgements: ids, format: 'v2', identity: ASSERTED });
   assert.deepEqual(replyHeader(wire.formatReply({ banner: BANNER, text: 'No ACK.', acks: [] })).acknowledgements, []);
   assert.throws(() => wire.formatReply({ banner: BANNER, text: 'x', acks: [`${ids[0]}Read`] }), wire.MessageRefused, 'a concatenated ID is refused by the formatter');
   assert.throws(() => wire.formatReply({ banner: 'Claude here', text: 'x', acks: [] }), wire.MessageRefused, 'the banner is required');
+});
+
+test('wire: the banner has three distinct non-empty fields -- seat, model and role; an incomplete one is refused by the formatter and not read as a reply', t => {
+  const store = fixture(t), a = toClaude(store);
+  assert.deepEqual(wire.parseBanner('> **[Seat: Claude · Model: m-1 · Role: Implementer]**'), { seat: 'Claude', model: 'm-1', role: 'Implementer', banner: '**[Seat: Claude · Model: m-1 · Role: Implementer]**' });
+  for (const banner of ['> **[Seat: Claude]**', '> **[Seat: Claude · Role: Implementer]**', '> **[Seat: Claude · Model:  · Role: Implementer]**', '> **[Seat:  · Model: m · Role: r]**',
+    '> **[Seat: Claude · Model: m · Role: ]**', '> **[Seat: Claude · Model: m · Role: r · Extra: x]**', '**[Seat: Claude · Model: m · Role: r]**']) {
+    assert.equal(wire.parseBanner(banner), null, banner);
+    assert.throws(() => wire.formatReply({ banner, text: 'x', acks: [a.id] }), wire.MessageRefused, banner);
+    store.importComment(comment(v2([a.id], { banner })), ['owner']);
+    assert.equal(store.get(a.id).acknowledged_at, null, banner);
+  }
 });
 
 test('wire: a concatenated, malformed or misplaced ACK never marks a message read', t => {
@@ -84,6 +98,7 @@ test('wire: legacy first-line replies already in flight still import and acknowl
   assert.equal(store.importComment({ ...comment(v2([b.id])), user: { login: 'someone' } }, ['owner']), null);
   assert.equal(store.get(b.id).acknowledged_at, null);
   assert.equal(replyHeader(`OPHANIM-COLLAB REPLY\nACK ${a.id}`).format, 'legacy');
+  for (const first of ['OPHANIM-COLLAB REPLY status', 'OPHANIM-COLLAB REPLY read and acting', 'OPHANIM-COLLAB ACK x']) assert.equal(replyHeader(`${first}\nACK ${a.id}`), null, `${first}: the legacy boundary admits only a UUID-shaped token`);
   const quoting = `OPHANIM-COLLAB REPLY\nACK ${b.id}\n\nThe new footer looks like:\n${footer({ schema: SCHEMA, kind: 'REPLY', ack: [a.id] })}\nand I will use it next time.`;
   assert.deepEqual(replyHeader(quoting), { kind: 'REPLY', acknowledgements: [b.id], format: 'legacy' }, 'a legacy reply that quotes a footer is still a legacy reply, acknowledging only its own header');
 });
@@ -98,7 +113,11 @@ test('wire: an outbound GitHub body opens with the sender\'s banner, hides its t
   assert.equal(lines.at(-1), bridge.marker(msg.id), 'the reconcile marker is the hidden last line');
   assert.ok(!/^OPHANIM-COLLAB MESSAGE/m.test(body), 'no visible transport token line');
   assert.equal(replyHeader(body), null);
-  assert.match(body, new RegExp(`ophanim-collab-reply \\{"schema":"${SCHEMA.replace(/[./]/g, '\\$&')}","kind":"REPLY","ack":\\["${msg.id}"\\]\\}`), 'it shows the footer the reply must end with');
+  const open = body.indexOf('<details>'), close = body.indexOf('</details>');
+  assert.ok(open > body.indexOf('Please review.') && close > open, 'the copying instructions are collapsed below the prose');
+  const outside = body.slice(0, open) + body.slice(close);
+  assert.ok(!outside.includes('ophanim-collab-reply') && !/ACK [0-9a-f-]{36}/.test(outside), 'no reply footer or ACK instruction outside the collapsed block');
+  assert.ok(body.slice(open, close).includes(footer({ schema: SCHEMA, kind: 'REPLY', ack: [msg.id] })), 'the footer the reply must end with is in the collapsed block');
   const plain = store.send({ from: 'codex', to: 'claude', key: 'plain', subject: 'S', text: 'No banner here.' });
   assert.match(bridge.githubBody(plain).split('\n')[0], /^> \*\*\[Seat: Codex · Model: not stated by the sender · Role: not stated by the sender\]\*\*$/, 'a message without a banner gets one that says what is not known');
 });
