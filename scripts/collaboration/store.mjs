@@ -30,6 +30,8 @@ export const isMessageId = value => typeof value === 'string' && new RegExp(`^${
 // protocol reply. The legacy form (first line OPHANIM-COLLAB REPLY|ACK, then ACK <uuid> lines up to the first blank
 // line) is still read, for replies already in flight.
 export const REPLY_SCHEMA = 'ophanim.collaboration.reply/v2';
+// A ROUTE (issue #98): one issue or pull request of the configured repository, written `pr:N` or `issue:N` exactly.
+export const parseTarget = value => (typeof value === 'string' && /^(pr|issue):[1-9][0-9]{0,8}$/.test(value) ? value : null);
 // The identity banner: three distinct, non-empty fields. It is what the comment ASSERTS; the GitHub account that
 // posted it is recorded separately and is the only part the bridge verifies.
 const BANNER = /^> \*\*\[Seat: ([^·\]\n]*) · Model: ([^·\]\n]*) · Role: ([^·\]\n]*)\]\*\*$/;
@@ -49,12 +51,14 @@ function footerHeader(lines) {
   let meta;
   try { meta = JSON.parse(f[1]); } catch { return null; }
   if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return null;
-  if (Object.keys(meta).sort().join(',') !== 'ack,kind,schema' || meta.schema !== REPLY_SCHEMA || !['REPLY', 'ACK'].includes(meta.kind)) return null;
+  const keys = Object.keys(meta).sort().join(',');
+  if (!['ack,kind,schema', 'ack,kind,schema,target'].includes(keys) || meta.schema !== REPLY_SCHEMA || !['REPLY', 'ACK'].includes(meta.kind)) return null;
+  if (Object.hasOwn(meta, 'target') && !parseTarget(meta.target)) return null;
   if (!Array.isArray(meta.ack) || meta.ack.length > MAX_ACKS || !meta.ack.every(isMessageId) || new Set(meta.ack).size !== meta.ack.length) return null;
   const first = lines.findIndex(l => l.trim() !== '');
   const identity = first >= 0 ? parseBanner(lines[first]) : null;
   if (!identity) return null;
-  return { kind: meta.kind, acknowledgements: [...meta.ack], format: 'v2', identity };
+  return { kind: meta.kind, acknowledgements: [...meta.ack], format: 'v2', identity, ...(meta.target ? { target: meta.target } : {}) };
 }
 export function replyHeader(body) {
   if (typeof body !== 'string') return null;
@@ -72,14 +76,19 @@ export function replyHeader(body) {
   return { kind: header[1], acknowledgements, format: 'legacy' };
 }
 /** A v2 reply body: the banner, the text, and the typed footer as the last line. Refuses a bad banner or ID. */
-export function formatReply({ banner, text, acks = [], kind = 'REPLY' }) {
+export function formatReply({ banner, text, acks = [], kind = 'REPLY', target }) {
   if (!parseBanner(banner)) throw new MessageRefused('A reply opens with an identity banner with a non-empty seat, model and role: > **[Seat: ... · Model: ... · Role: ...]**');
   if (!['REPLY', 'ACK'].includes(kind)) throw new MessageRefused('A reply kind is REPLY or ACK');
   if (!Array.isArray(acks) || acks.length > MAX_ACKS || !acks.every(isMessageId) || new Set(acks).size !== acks.length) throw new MessageRefused(`ACK takes up to ${MAX_ACKS} distinct message IDs, each exactly as issued`);
+  if (target !== undefined && !parseTarget(target)) throw new MessageRefused('A reply target is pr:N or issue:N');
   const body = String(text ?? '').replace(/\s+$/, '');
-  return `${banner}\n\n${body}\n\n<!-- ophanim-collab-reply ${JSON.stringify({ schema: REPLY_SCHEMA, kind, ack: acks })} -->\n`;
+  return `${banner}\n\n${body}\n\n<!-- ophanim-collab-reply ${JSON.stringify({ schema: REPLY_SCHEMA, kind, ack: acks, ...(target ? { target } : {}) })} -->\n`;
 }
 
+// Is a message routed to one of a list of targets (a JSON array; a message without a target has the route `fallback`)?
+// Two-valued: a missing target or fallback is false, never NULL, so NOT of it is the exact complement.
+const ROUTED = `(COALESCE(json_extract(payload,'$.target') IN (SELECT value FROM json_each(?)), 0)
+      OR (json_extract(payload,'$.target') IS NULL AND COALESCE(? IN (SELECT value FROM json_each(?)), 0)))`;
 export class Store {
   constructor(path = process.env.OPHANIM_COLLAB_DB ?? DEFAULT_DB, now = Date.now) {
     this.now = now;
@@ -136,6 +145,11 @@ export class Store {
       text: bounded(input.text, 'text', 32768), replyTo: input.replyTo ?? null,
       provenance: input.provenance ?? { transport: 'local', identity: 'same-owner process; role is asserted' },
     };
+    // The route is kept only when one is given, so a message without one has the payload it had before routing.
+    if (input.target !== undefined) {
+      if (!parseTarget(input.target)) throw new MessageRefused('A message target is pr:N or issue:N of the configured repository');
+      payload.target = input.target;
+    }
     if (Buffer.byteLength(JSON.stringify(payload)) > 40000) throw new MessageRefused('Message payload too long');
     return this.transaction(() => {
       const existing = this.db.prepare('SELECT * FROM messages WHERE from_agent=? AND request_key=?').get(from, key);
@@ -171,15 +185,35 @@ export class Store {
       return this.get(id);
     });
   }
-  outbox(route) {
+  recipientOf(route) {
     const to = ['github', 'claude-cloud'].includes(route) ? 'claude' : route === 'desktop' ? 'codex' : null;
     if (!to) throw new Error('Unknown delivery route');
-    return this.db.prepare("SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' ORDER BY created_at,id LIMIT 20").all(to).map(r => this.decode(r));
+    return to;
+  }
+  /** The 20 oldest queued messages a route delivers, in insertion order (created_at, then rowid: a random id is no order). */
+  outbox(route) {
+    return this.db.prepare("SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' ORDER BY created_at,rowid LIMIT 20").all(this.recipientOf(route)).map(r => this.decode(r));
+  }
+  /**
+   * ROUTED SELECTION (issue #98): FILTER, THEN TAKE. The oldest `limit` queued messages of a route whose target is in
+   * `targets` (a message without a target has the route `fallback`). Eligibility is decided in the query, so no number
+   * of older messages for other targets is examined on the way, or can delay these.
+   */
+  routedOutbox(route, { targets, fallback = null, limit = 20 }) {
+    return this.db.prepare(`SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued'
+      AND ${ROUTED} ORDER BY created_at,rowid LIMIT ?`).all(this.recipientOf(route), JSON.stringify([...targets]), fallback, JSON.stringify([...targets]), limit).map(r => this.decode(r));
+  }
+  /** The oldest `limit` queued messages of a route that NO allowed target carries (to refuse, a bounded number at a time). */
+  unroutedOutbox(route, { allowed, fallback = null, limit = 20 }) {
+    return this.db.prepare(`SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued'
+      AND NOT ${ROUTED} ORDER BY created_at,rowid LIMIT ?`).all(this.recipientOf(route), JSON.stringify([...allowed]), fallback, JSON.stringify([...allowed]), limit).map(r => this.decode(r));
   }
   beginDelivery(id, route) {
     return this.transaction(() => {
       const msg = this.get(id);
-      if (!msg || msg.acknowledged_at !== null || msg.delivery_state !== 'queued' || !this.outbox(route).some(m => m.id === id)) throw new Error('Delivery already claimed or unavailable');
+      // Admission by the message's own eligibility (queued, unacknowledged, for this route's recipient), not by its
+      // place in the first outbox page: a message behind 20 others that must wait can still be claimed.
+      if (!msg || msg.acknowledged_at !== null || msg.delivery_state !== 'queued' || msg.to !== this.recipientOf(route)) throw new Error('Delivery already claimed or unavailable');
       this.db.prepare("UPDATE messages SET delivery_state='dispatching',route=? WHERE id=?").run(route, id);
       this.event(id, 'dispatching', route);
       return this.get(id);
@@ -207,6 +241,16 @@ export class Store {
         this.event(id, 'uncertain', route, { reason: 'Previous dispatcher stopped without a delivery receipt; reconcile, never replay automatically.' });
       }
       return rows.length;
+    });
+  }
+  /** A queued message no allowed route can carry: refused once, recorded, never sent or retried. */
+  refuseDelivery(id, evidence) {
+    return this.transaction(() => {
+      const msg = this.get(id);
+      if (!msg || msg.delivery_state !== 'queued' || msg.acknowledged_at !== null) throw new Error('Only a queued message can be refused');
+      this.db.prepare("UPDATE messages SET delivery_state='refused',delivery_evidence=? WHERE id=?").run(JSON.stringify(evidence), id);
+      this.event(id, 'refused', 'github', evidence);
+      return this.get(id);
     });
   }
   uncertain(route) { return this.db.prepare("SELECT * FROM messages WHERE route=? AND delivery_state='uncertain'").all(route).map(r => this.decode(r)); }
@@ -259,7 +303,12 @@ export class Store {
       return { resource, released: true };
     });
   }
-  importComment(comment, allowedAuthors) {
+  /**
+   * Import one allowlisted reply. With `target` (the issue or PR it was read from) and `routeOf` (a message's route),
+   * an ACK counts only for a message routed to that same target, and only when the reply's footer names no other
+   * target; each refused ACK is recorded once per comment revision.
+   */
+  importComment(comment, allowedAuthors, { target = null, routeOf = null } = {}) {
     const author = comment.user?.login;
     const header = replyHeader(comment.body);
     if (!allowedAuthors.includes(author) || !header) return null;
@@ -269,10 +318,21 @@ export class Store {
     const imported = legacy?.text === comment.body ? legacy : this.send({ from: 'claude', to: 'codex', key: `github-comment-${comment.id}-${revision}`,
       subject: 'Claude GitHub reply', text: comment.body,
       provenance: { transport: 'github', author, comment_id: comment.id, url: comment.html_url ?? comment.url, revision, identity: 'GitHub account verified; agent role asserted',
-        format: header.format, ...(header.identity ? { asserted_identity: { seat: header.identity.seat, model: header.identity.model, role: header.identity.role, basis: 'asserted in the comment banner; not verified by the bridge' } } : {}) } });
+        format: header.format, ...(target ? { target } : {}), ...(header.identity ? { asserted_identity: { seat: header.identity.seat, model: header.identity.model, role: header.identity.role, basis: 'asserted in the comment banner; not verified by the bridge' } } : {}) } });
     for (const id of header.acknowledgements) {
       const original = this.get(id);
-      if (original?.to === 'claude') this.ack('claude', original.id, `GitHub account ${author} acknowledged at ${comment.html_url ?? comment.id}`);
+      if (original?.to !== 'claude') continue;
+      if (target) {
+        const routed = routeOf ? routeOf(original) : null;
+        const why = header.target && header.target !== target ? { reason: 'footer-target-mismatch', footer_target: header.target }
+          : routed !== target ? { reason: 'target-mismatch', routed_to: routed } : null;
+        if (why) {
+          const data = JSON.stringify({ ...why, posted_on: target, comment_id: comment.id, revision });
+          if (!this.db.prepare("SELECT 1 FROM events WHERE message_id=? AND kind='ack-refused' AND data=?").get(original.id, data)) this.event(original.id, 'ack-refused', 'github', JSON.parse(data));
+          continue;
+        }
+      }
+      this.ack('claude', original.id, `GitHub account ${author} acknowledged at ${comment.html_url ?? comment.id}`);
     }
     return imported;
   }
@@ -286,6 +346,7 @@ export class Store {
       schema: 'ophanim.collaboration/v1',
       messages: this.db.prepare('SELECT to_agent,delivery_state,acknowledged_at IS NOT NULL AS acknowledged,count(*) AS count FROM messages GROUP BY to_agent,delivery_state,acknowledged').all(),
       active_claims: this.db.prepare('SELECT resource,owner,generation,expires_at FROM claims WHERE released=0 AND expires_at>?').all(this.now()),
+      refused_deliveries: this.db.prepare("SELECT id,to_agent,created_at,delivery_evidence FROM messages WHERE delivery_state='refused' ORDER BY created_at").all(),
       uncertain_deliveries: this.db.prepare("SELECT id,to_agent,route,created_at,delivery_evidence FROM messages WHERE delivery_state='uncertain' ORDER BY created_at").all(),
       bridge: this.meta('github-health'), desktop: this.meta('desktop-health'),
     };
