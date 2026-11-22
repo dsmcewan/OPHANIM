@@ -370,3 +370,22 @@ test("roster promotion: a promote binds to a retained, finalized, live, budget-v
   assert.equal(ledgerView(sys.ledger).payload(promoted).outcome, "promote");
   assert.equal(sys.ledger.verify().ok, true, "the chain re-derives with the rule applied");
 }));
+
+test("roster qualification counts from validated rows: malformed attempts, evidence on an unrun arm, missing rows and undecided pairs are refused, typed", async () => {
+  const good = await armsRecord({ calls: () => 1 });
+  assert.equal(qualifyComparison(good).ok, true);
+  const edit = f => { const r = structuredClone(good); delete r.digest; f(r); return rehash(r); };
+  const cases = [
+    ["a null attempt", r => { r.results[0].baseline.provider_calls_evidence.attempts = [null]; }, /not a recorded attempt/],
+    ["an unrun arm with a recorded attempt", r => { Object.assign(r.results[1].candidate, { status: "not_run", provider_calls_counted: 0 }); r.spent_provider_calls -= 1; r.paired.pairs = 1; }, /unrun candidate arm records attempt evidence/],
+    ["no result rows, pairs 1", r => { r.results = []; r.spent_provider_calls = 0; r.paired.pairs = 1; }, /no complete outcome rows/],
+    ["both arms inconclusive, pairs 1", r => { for (const k of ["baseline", "candidate"]) r.results[1][k].accepted = null; r.paired.pairs = 2; }, /outcome rows decide 1/],
+    ["object-shaped results", r => { r.results = { 0: r.results[0] }; }, /no complete outcome rows/],
+  ];
+  for (const [label, f, re] of cases) {
+    const r = edit(f);
+    assert.equal(verifyComparison(r).ok, true, `${label}: rehashed, so integrity alone passes it`);
+    let q; assert.doesNotThrow(() => { q = qualifyComparison(r); }, label);
+    assert.equal(q.ok, false, label); assert.match(q.why, re, label);
+  }
+});

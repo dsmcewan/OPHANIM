@@ -125,8 +125,14 @@ export function qualifyComparison(r) {
   // the derived scalars (raw, counted, basis, before, spent, budget) are the producer's claims about these lists.
   const bound = r.bounds?.maxProviderCalls, total = r.total_provider_calls;
   if (!Number.isSafeInteger(bound) || bound < 1 || !Number.isSafeInteger(total) || total < 1) return {ok: false, why: 'the record does not state its per-run bound and total'};
-  let spent = 0;
-  for (const row of r.results ?? []) {
+  if (!Array.isArray(r.results) || !r.results.length || !Array.isArray(r.tickets) || r.tickets.length !== r.results.length) {
+    return {ok: false, why: 'the record has no complete outcome rows: one result row per ticket is required'};
+  }
+  const ATTEMPT_KEYS = 'outcome,purpose';
+  const attemptOk = x => plain(x) && Object.keys(x).sort().join() === ATTEMPT_KEYS && [x.purpose, x.outcome].every(v => v === null || typeof v === 'string');
+  let spent = 0, decided = 0;
+  for (const [i, row] of r.results.entries()) {
+    if (!plain(row) || typeof row.ticket !== 'string' || row.ticket !== r.tickets[i]?.key) return {ok: false, why: `result row ${i} is not the outcome row of ticket ${r.tickets[i]?.key}`};
     if (!Array.isArray(row?.order) || row.order.length !== 2 || new Set(row.order).size !== 2 || !row.order.every(k => k === 'baseline' || k === 'candidate')) {
       return {ok: false, why: `ticket ${row?.ticket}: the admission order is not recorded`};
     }
@@ -135,11 +141,13 @@ export function qualifyComparison(r) {
       if (!plain(a)) return {ok: false, why: `ticket ${row.ticket}: the ${arm} arm is missing`};
       if (a.status === 'not_run') {
         if (a.provider_calls_counted !== 0) return {ok: false, why: `ticket ${row.ticket}: an unrun ${arm} arm is charged`};
+        if (a.provider_calls_evidence !== null && a.provider_calls_evidence !== undefined) return {ok: false, why: `ticket ${row.ticket}: an unrun ${arm} arm records attempt evidence`};
         if (spent + bound <= total) return {ok: false, why: `ticket ${row.ticket}: the ${arm} arm was not run although ${spent} + ${bound} fit the total ${total}`};
         continue;
       }
       const ev = a.provider_calls_evidence;
       if (!plain(ev) || ev.truncated !== false || !Array.isArray(ev.attempts)) return {ok: false, why: `ticket ${row.ticket}: the ${arm} arm retains no complete raw attempt evidence`};
+      if (!ev.attempts.every(attemptOk)) return {ok: false, why: `ticket ${row.ticket}: the ${arm} arm's attempt evidence has an entry that is not a recorded attempt {purpose, outcome}`};
       const raw = ev.attempts.length;
       if (spent + bound > total) return {ok: false, why: `ticket ${row.ticket}: the ${arm} arm was admitted at ${spent} spent, but ${spent} + ${bound} exceeds the total ${total}`};
       if (raw > bound) return {ok: false, why: `ticket ${row.ticket}: the ${arm} arm made ${raw} recorded attempts against a per-run bound of ${bound}`};
@@ -148,9 +156,12 @@ export function qualifyComparison(r) {
       }
       spent += raw;
     }
+    // A pair is decided only when both arms ran and each says accepted true or false.
+    if (['baseline', 'candidate'].every(k => row[k].status !== 'not_run' && typeof row[k].accepted === 'boolean')) decided++;
   }
   if (spent !== r.spent_provider_calls) return {ok: false, why: `the recorded spend ${r.spent_provider_calls} is not the recounted ${spent}`};
-  if (!Number.isSafeInteger(r.paired?.pairs) || r.paired.pairs < 1) return {ok: false, why: 'no pair was decided'};
+  if (decided < 1) return {ok: false, why: 'no pair was decided in the outcome rows'};
+  if (r.paired?.pairs !== decided) return {ok: false, why: `the summary says ${JSON.stringify(r.paired?.pairs)} decided pairs; the outcome rows decide ${decided}`};
   return {ok: true, digest: r.digest};
 }
 
