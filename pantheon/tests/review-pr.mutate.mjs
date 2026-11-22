@@ -27,7 +27,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const TEST = 'pantheon/tests/review-pr.test.mjs';
 const SDK = 'pantheon/tests/review-runner-xai-sdk.test.mjs';
 const SUITES = [TEST, SDK];
-const R = 'pantheon/src/review-runner/', PR = `${R}pr-review.mjs`, BRIEF = `${R}brief.mjs`, INDEX = `${R}index.mjs`, SUB = `${R}subscription.mjs`;
+const R = 'pantheon/src/review-runner/', PR = `${R}pr-review.mjs`, BRIEF = `${R}brief.mjs`, INDEX = `${R}index.mjs`, SUB = `${R}subscription.mjs`, CLI = `${R}cli-common.mjs`;
 const one = (file, from, to) => ({file, from, to});
 const t = pattern => [TEST, pattern];
 const s = pattern => [SDK, pattern];
@@ -179,7 +179,7 @@ export const MUTATIONS = [
   {id: 'X32', what: 'the judge re-checks the changed paths as if every assignment allowed writes', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
     edits: [one(PR, '      const writable = perms.tools.includes("write_test");', '      const writable = true;')]},
   {id: 'X33', what: 'the shared path policy lets a .. path out of .review-tests/', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
-    edits: [one(`${R}cli-common.mjs`, '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));', '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`)));')]},
+    edits: [one(CLI, '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));', '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`)));')]},
   // ---- round 4 (Codex's interaction case at 1a7050f): an identity-rejected response is never replayed or counted ---------
   {id: 'X34', what: 'a continuation replays a response served by another model (or none)', tests: [s('^XAI SDK R4: a run stopped on a response from')],
     edits: [one(INDEX, '      if (rejected || prior.identity_mismatch) {', '      if (false) {')]},
