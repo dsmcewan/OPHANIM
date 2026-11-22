@@ -58,8 +58,9 @@ test("green: every gate exits 0 on the exact commit; the transport is called exa
     assert.deepEqual(transport.calls, [{ repo: f.repo, remote: "origin", sha: f.sha, branch: BRANCH }]);
     // The gates ran in a real git checkout of exactly that object, detached, separate from the work tree.
     assert.equal(r.checkout_head, f.sha);
-    assert.equal(execFileSync("git", ["-C", r.checkout, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), f.sha);
     assert.notEqual(r.checkout, f.repo);
+    assert.equal(existsSync(r.checkout), false, "the controller's clone is removed once the decision is made");
+    assert.deepEqual(r.gates.map(g => g.input_intact), [true, true], "the committed input was proven unchanged after every gate");
     assert.equal(f.g(f.repo, "status", "--porcelain"), "", "the caller's checkout was not written");
   } finally { f.cleanup(); }
 });
@@ -79,10 +80,22 @@ test("fail closed: a failing test, a timeout, an empty gate list, a bad gate, a 
     assert.equal((await run({ required: [] })).code, "NO_GATES");
     assert.equal((await run({ extra: [{ name: "x" }] })).code, "GATE_SHAPE");
     assert.equal((await run({ extra: [{ name: "nope", argv: ["/nonexistent/binary"] }] })).code, "GATE_FAILED");
-    // The head moves while the gates run: the admitted object is no longer the candidate.
-    const mover = { name: "moves-the-head", argv: ["git", "-C", f.repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "late"] };
-    const stale = await run({ extra: [mover] });
+    // The head moves while the gates run -- from OUTSIDE the box (a gate cannot write the repository): a slow gate
+    // runs, the branch is committed to meanwhile, and the admitted object is no longer the candidate.
+    const slowGate = { name: "slow-ok", argv: [process.execPath, "-e", "setTimeout(() => {}, 1500)"], timeoutMs: 20_000 };
+    const pending = run({ extra: [slowGate] });
+    await new Promise(res => setTimeout(res, 500));
+    f.g(f.repo, "commit", "-q", "--allow-empty", "-m", "late");
+    const stale = await pending;
     assert.deepEqual([stale.code, stale.gates.map(g => g.passed)], ["STALE", [true, true]]);
+    // A gate that tries to move the head itself is refused by the read-only box: it fails, and the head stays.
+    const fresh = fixture();
+    try {
+      const mover = { name: "moves-the-head", argv: ["git", "-C", fresh.repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "inside"] };
+      const m = await publishCandidate({ repo: fresh.repo, sha: fresh.sha, branch: BRANCH, extra: [mover], transport: t, workRoot: fresh.d });
+      assert.deepEqual([m.code, m.gates.map(g => [g.name, g.passed])], ["GATE_FAILED", [["test-lint", true], ["moves-the-head", false]]]);
+      assert.equal(fresh.g(fresh.repo, "rev-parse", BRANCH), fresh.sha, "the repository was not written from inside the box");
+    } finally { fresh.cleanup(); }
     assert.equal((await run({})).code, "HEAD_MISMATCH", "and from then on the candidate no longer matches the branch");
     for (const branch of ["main", "master", "feature/x", "claude", "claude/../main"]) assert.equal((await run({ branch })).code, "BRANCH_SCOPE", branch);
     assert.equal((await run({ sha: "0".repeat(40) })).code, "NO_COMMIT");
@@ -133,5 +146,74 @@ test("a gate that reads committed source through git sees the exact object: rev-
     const probe = { name: "head-is-sha", argv: [process.execPath, "-e", `const h = require("child_process").execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(); process.exit(h === ${JSON.stringify(f.sha)} ? 0 : 3);`] };
     const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [probe], transport: t, workRoot: f.d });
     assert.deepEqual([r.code, r.gates.map(g => [g.name, g.status])], ["PUBLISHED", [["test-lint", 0], ["head-is-sha", 0]]], r.why);
+  } finally { f.cleanup(); }
+});
+
+// ---------------------------------------------------------------- generation 2: the committed input across gates
+const writer = (file, text) => ({ name: `writes-${file}`, argv: [process.execPath, "-e", `require("fs").writeFileSync(${JSON.stringify(file)}, ${JSON.stringify(text)})`] });
+const reader = (file, want) => ({ name: `reads-${file}`, argv: [process.execPath, "-e", `process.exit(require("fs").readFileSync(${JSON.stringify(file)}, "utf8") === ${JSON.stringify(want)} ? 0 : 1)`] });
+
+test("in a gate the committed input is read-only by the kernel (EROFS) while scratch is writable and git still reads HEAD; a rewriting gate fails before any later gate", async () => {
+  const f = fixture();
+  try {
+    const t = stub();
+    // The probe gate records what the kernel said about a write to a tracked file, writes scratch, and reads HEAD.
+    const probe = { name: "probe", argv: [process.execPath, "-e", `
+      const fs = require("fs"), path = require("path");
+      let code; try { fs.writeFileSync("change.txt", "tampered\\n"); code = "WROTE"; } catch (e) { code = e.code; }
+      const head = require("child_process").execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      fs.writeFileSync(path.join(process.env.OPHANIM_GATE_SCRATCH, "probe.json"), JSON.stringify({ code, head }));
+      process.stdout.write(JSON.stringify({ code, head }));
+      process.exit(code === "EROFS" && head === ${JSON.stringify(f.sha)} ? 0 : 7);`] };
+    const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [probe], transport: t, workRoot: f.d });
+    assert.deepEqual([r.code, r.gates.map(g => [g.name, g.status, g.input_intact])], ["PUBLISHED", [["test-lint", 0, true], ["probe", 0, true]]], r.why);
+    assert.deepEqual(JSON.parse(readFileSync(r.gates[1].stdout_ref, "utf8")), { code: "EROFS", head: f.sha }, "kernel read-only evidence, and HEAD readable");
+    // A gate that rewrites a tracked input is stopped by the kernel: it fails, the reader after it never runs.
+    const r2 = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [writer("change.txt", "generated\n"), reader("change.txt", "generated\n")], transport: t, workRoot: f.d });
+    assert.deepEqual([r2.code, r2.gates.map(g => [g.name, g.status])], ["GATE_FAILED", [["test-lint", 0], ["writes-change.txt", 1]]]);
+    assert.match(readFileSync(r2.gates[1].stderr_ref, "utf8"), /EROFS|read-only file system/i);
+    const added = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [writer("new.json", "{}")], transport: t, workRoot: f.d });
+    assert.equal(added.code, "GATE_FAILED", "an added file is refused by the kernel too");
+    assert.equal(t.calls.length, 1, "only the probe run reached the transport");
+    for (const x of [r, r2, added]) assert.equal(existsSync(x.checkout), false);
+    assert.equal(f.g(f.repo, "status", "--porcelain"), "", "the caller's checkout is untouched");
+  } finally { f.cleanup(); }
+});
+
+test("no unboxed path: when the read-only gate box cannot start, nothing runs and nothing is published", async () => {
+  const f = fixture();
+  try {
+    const t = stub();
+    const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, transport: t, workRoot: f.d, bwrap: "/nonexistent/bwrap" });
+    assert.deepEqual([r.code, r.gates.length, t.calls.length, existsSync(r.checkout)], ["SANDBOX_UNAVAILABLE", 0, 0, false]);
+  } finally { f.cleanup(); }
+});
+
+test("benign two-stage: gate output goes to the controller's separate scratch, the next gate reads it there, and the exact commit publishes", async () => {
+  const f = fixture();
+  try {
+    const t = stub();
+    const viaScratch = [
+      { name: "produce", argv: [process.execPath, "-e", 'require("fs").writeFileSync(require("path").join(process.env.OPHANIM_GATE_SCRATCH, "status.json"), "{\\"ok\\":1}")'] },
+      { name: "consume", argv: [process.execPath, "-e", 'process.exit(require("fs").readFileSync(require("path").join(process.env.OPHANIM_GATE_SCRATCH, "status.json"), "utf8") === "{\\"ok\\":1}" ? 0 : 1)'] },
+    ];
+    const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: viaScratch, transport: t, workRoot: f.d });
+    assert.deepEqual([r.code, r.gates.map(g => [g.name, g.status, g.input_intact]), t.calls.length],
+      ["PUBLISHED", [["test-lint", 0, true], ["produce", 0, true], ["consume", 0, true]], 1], r.why);
+    assert.equal(existsSync(r.checkout), false);
+  } finally { f.cleanup(); }
+});
+
+test("cleanup on every outcome: the clone is removed after success, a gate refusal and a throwing transport; the receipt and gate hashes remain", async () => {
+  const f = fixture();
+  try {
+    const boom = async () => { throw new Error("transport down"); };
+    for (const [over, code] of [[{}, "PUBLISHED"], [{ extra: [{ name: "fails", argv: [process.execPath, "-e", "process.exit(4)"] }] }, "GATE_FAILED"], [{ transport: boom }, "TRANSPORT_FAILED"]]) {
+      const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, transport: stub(), workRoot: f.d, ...over });
+      assert.equal(r.code, code, r.why);
+      assert.equal(existsSync(r.checkout), false, `${code}: no clone left behind`);
+      const kept = JSON.parse(readFileSync(r.receipt_path, "utf8"));
+      assert.deepEqual(kept.gates.map(g => /^[0-9a-f]{64}$/.test(g.stdout_sha256)), r.gates.map(() => true), `${code}: every gate's output hash is kept`);
+    }
   } finally { f.cleanup(); }
 });
