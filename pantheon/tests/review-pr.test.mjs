@@ -635,6 +635,36 @@ test("XAI SDK ROUTE R4: a recorded response served by another model (or none) an
 });
 
 
+// ---- #118: the attestation is the RAW provider response's model; a derived event model never outranks or replaces it ----
+test("XAI SDK ROUTE #118: the judge attests a response by its raw provider model -- a derived event model that contradicts it, or claims a model the raw response does not name, fails; the valid, retried and continued controls pass", async () => {
+  const withFirst = first => t => ({ ...t, events: [first, ...OK_EVENTS().slice(1)] });
+  const raw = (model, event) => ({ type: "provider_call", n: 1, turn: 1, attempt: 1, ...(event === undefined ? {} : { served_model: event }), response: { id: "c1", ...(model === undefined ? {} : { model }), choices: [] } });
+  const verdict = async edit => judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+  // 1. raw = bound, the event agrees: complete.
+  let j = await verdict(withFirst(raw("grok-4.7", "grok-4.7")));
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  // 2. raw another model, the event model omitted: incomplete.
+  j = await verdict(withFirst(raw("grok-4.6")));
+  assert.deepEqual([j.status, /the recorded response at turn 1 was served by grok-4\.6/.test(j.why.join("; "))], ["incomplete", true], j.why.join("; "));
+  // 3. raw contradicts the derived event model: incomplete.
+  j = await verdict(withFirst(raw("grok-4.6", "grok-4.7")));
+  assert.equal(j.status, "incomplete", "a derived grok-4.7 over a raw grok-4.6");
+  assert.match(j.why.join("; "), /the recorded response at turn 1 was served by grok-4\.6/);
+  assert.match(j.why.join("; "), /turn 1: the event's served_model grok-4\.7 contradicts the provider response's model grok-4\.6/);
+  // 4. raw names no model, the event claims the bound one: incomplete.
+  j = await verdict(withFirst(raw(undefined, "grok-4.7")));
+  assert.equal(j.status, "incomplete", "a derived grok-4.7 with no raw model");
+  assert.match(j.why.join("; "), /missing provenance: the recorded response at turn 1 named no served model/);
+  // A claimed served model with no response at all is no attestation.
+  j = await verdict(withFirst({ type: "provider_call", n: 1, turn: 1, attempt: 1, served_model: "grok-4.7" }));
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /missing provenance: the call at turn 1 claims served model grok-4\.7 with no recorded provider response/);
+  // Controls: a failed-and-retried call (no response, no served model) is not a served response, and is a call.
+  j = await verdict(t => ({ ...t, provider_calls: 4, events: [{ type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: 429 }, ...OK_EVENTS()] }));
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+});
+
+
 // ---- round 5 (Codex's independent pass at 8942598): the routed judge derives its counts and coverage from the events ---
 
 test("XAI SDK ROUTE R5: the three summary-over-facts cases are refused -- empty events, more calls than the counter (over the bound), a claimed test with no test event", async () => {
