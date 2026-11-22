@@ -673,3 +673,23 @@ test("a failed SDK attempt keeps the allowlisted launch receipt and the stage it
   const ps = pre.u.attempts[0].session;
   assert.deepEqual([ps?.launch ?? null, ps?.evidence_phase ?? null], [null, "none"], "a prelaunch failure carries no launch receipt");
 });
+
+test("the recorded phase must agree with its own raw evidence, and an empty or malformed launch is no receipt: a claimed phase its evidence does not support is unknown (null), never repeated", async t => {
+  const LAUNCH = { argv: ["python3", "bridge.py"], env_names: ["HOME"], cwd: "/c", gateway: "http://127.0.0.1:1", at: "t" };
+  const blocked = (more) => pipeline(t, args => {
+    args.admit({ class: "root", type: null, model: args.seat.model });
+    try { args.admit({ class: "root", type: null, model: args.seat.model }); }
+    catch (e) { throw Object.assign(e, { transport: "antigravity-sdk", subagents: governed(args), gateway: gatewayOf(args), tool_log: [], usage: null, availability: [], ...more }); }
+    throw new Error("the second request was admitted");
+  }, { agy: { billing: optIn({ primary: 1 }) } });
+  const phase = async more => { const r = await blocked(more); const s = r.u.attempts[0].session; return [s.launch, s.evidence_phase, JSON.parse(JSON.stringify(r.disk())).units[Object.keys(r.disk().units)[0]].attempts[0].session.evidence_phase]; };
+  // A claim the evidence does not support is not recorded.
+  assert.deepEqual(await phase({ runtime: null, sandbox: { enabled: true }, launch: LAUNCH, evidence_phase: "runtime_observed" }), [LAUNCH, null, null], "runtime_observed with no runtime");
+  assert.deepEqual(await phase({ runtime: null, sandbox: { enabled: true }, launch: {}, evidence_phase: "spawn_attempted" }), [null, null, null], "an empty launch object is no launch, and spawn_attempted without one is unknown");
+  assert.deepEqual(await phase({ runtime: null, sandbox: { enabled: true }, launch: { argv: "python3 bridge.py", env_names: ["HOME"] }, evidence_phase: "spawn_attempted" }), [null, null, null], "a malformed launch is no launch");
+  // A claim the evidence does support is kept, each state distinct.
+  assert.deepEqual(await phase({ runtime: { python: "3" }, sandbox: { enabled: true }, launch: LAUNCH, evidence_phase: "runtime_observed" }), [LAUNCH, "runtime_observed", "runtime_observed"]);
+  assert.deepEqual(await phase({ runtime: null, sandbox: { enabled: true }, launch: LAUNCH, evidence_phase: "spawn_attempted" }), [LAUNCH, "spawn_attempted", "spawn_attempted"]);
+  assert.deepEqual(await phase({ runtime: null, sandbox: null, launch: null, evidence_phase: "none" }), [null, "none", "none"], "an explicit no-launch preflight stays none");
+  assert.deepEqual(await phase({ runtime: null, sandbox: { enabled: true }, launch: LAUNCH, evidence_phase: "none" }), [LAUNCH, null, null], "none contradicted by a launch is unknown");
+});

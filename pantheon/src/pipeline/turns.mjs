@@ -226,9 +226,22 @@ const EVIDENCE_PHASES = ["none", "prepared", "spawn_attempted", "runtime_observe
  */
 export function launchReceipt(launch) {
   if (!launch || typeof launch !== "object" || Array.isArray(launch)) return null;
-  const strs = v => (Array.isArray(v) ? v.filter(x => typeof x === "string").map(x => x.slice(0, 4096)).slice(0, 256) : []);
+  // A launch is an observation only with a command: an empty or malformed one (argv not a non-empty list of text,
+  // env_names not a list of text) is unavailable evidence, null -- never a receipt of empty fields.
+  if (!Array.isArray(launch.argv) || !launch.argv.length || !launch.argv.every(x => typeof x === "string")) return null;
+  if (!Array.isArray(launch.env_names) || !launch.env_names.every(x => typeof x === "string")) return null;
+  const strs = v => v.map(x => x.slice(0, 4096)).slice(0, 256);
   const one = v => (typeof v === "string" ? v.slice(0, 4096) : null);
   return { argv: strs(launch.argv), env_names: strs(launch.env_names), cwd: one(launch.cwd), gateway: one(launch.gateway), at: one(launch.at) };
+}
+/**
+ * The phase a record may keep: the one claimed, ONLY if the record's own raw evidence supports it --
+ * runtime_observed needs a runtime; spawn_attempted a launch receipt and no runtime; prepared a sandbox decision and
+ * no launch; none nothing at all. A claim its evidence does not support is unknown (null), never repeated.
+ */
+export function evidencePhase(claimed, { runtime, launch, sandbox }) {
+  const supported = { runtime_observed: !!runtime, spawn_attempted: !runtime && !!launch, prepared: !runtime && !launch && !!sandbox, none: !runtime && !launch && !sandbox };
+  return Object.hasOwn(supported, claimed) && supported[claimed] ? claimed : null;
 }
 /**
  * The evidence of one SDK session for the pipeline's record, from what runAntigravitySdkTurn returned or threw (`x`).
@@ -252,7 +265,7 @@ async function sessionEvidence(x, { control_dir, seat, unit_id, attempt, timeout
   const jail = x?.sandbox ? { enabled: x.sandbox.enabled === true, ...(x.sandbox.why ? { why: x.sandbox.why } : {}), ...(x.sandbox.home_dirs_hidden ? { home_dirs_hidden: x.sandbox.home_dirs_hidden.length } : {}) } : null;
   return { stop_reason: x?.stop_reason ?? null, conversation_id: x?.conversation_id ?? null, duration_s: x?.duration_s ?? null, timeout_s, usage: x?.usage ?? null, subagents: x?.subagents ?? null,
     gateway: x?.gateway ?? null, availability: x?.availability ?? [], runtime: x?.runtime ?? null, jail, tool_decisions,
-    launch: launchReceipt(x?.launch), evidence_phase: EVIDENCE_PHASES.includes(x?.evidence_phase) ? x.evidence_phase : null,
+    launch: launchReceipt(x?.launch), evidence_phase: EVIDENCE_PHASES.includes(x?.evidence_phase) ? evidencePhase(x.evidence_phase, { runtime: x?.runtime ?? null, launch: launchReceipt(x?.launch), sandbox: x?.sandbox ?? null }) : null,
   };
 }
 
