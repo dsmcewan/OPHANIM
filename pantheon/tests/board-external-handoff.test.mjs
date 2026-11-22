@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { publish, boardState, schedule } from "../src/board/index.mjs";
+import { publish, boardState, schedule, putBlob, putEntry, KINDS } from "../src/board/index.mjs";
 import { withBoard, seeded, CONTROLLER } from "./board-helper.mjs";
 import { admitHandoff, observeContainment, probeOutcome, verifyDelivery, RECEIPT_KIND } from "../../scripts/blackboard/worker-handoff.mjs";
 import { launchWorker, LAUNCH_KIND } from "../../scripts/blackboard/worker-launch.mjs";
@@ -375,4 +375,47 @@ test("real box: a denial target under a missing directory, and a box that never 
       await refuses(s, await s.admit({ receipt: s.writeReceipt({ kind: RECEIPT_KIND, v: 1, ticket: KEY, base: s.repo.base, candidate: s.repo.good, changed_paths: [SCOPE[0], SCOPE[3]], generations: s.gens(), containment: dead }) }), "NO_LAUNCH");
     });
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("worker launch: Git paths with spaces, under a scratch root with a space, are compared in mountinfo's escaped spelling before the worker runs; a wider bind is still refused", async () => {
+  const d = mkdtempSync(join(tmpdir(), "launch space-"));
+  try {
+    const repo = join(d, "repo dir"); mkdirSync(repo);
+    const g = (...a) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" }).trim();
+    g("init", "-q");
+    for (const f of ["plain.mjs", "planned file.mjs", "other.mjs"]) writeFileSync(join(repo, f), `// ${f}\n`);
+    g("add", "-A"); g("commit", "-q", "-m", "base"); const base = g("rev-parse", "HEAD");
+    const root = join(d, "scratch root"), rec = join(d, "receipts"); mkdirSync(root); mkdirSync(rec);
+    const scope = ["plain.mjs", "planned file.mjs"];
+    const leases = { item: { resource: "item:spaces", gen: 1 }, scopes: scope.map(p => ({ resource: `scope:${p}`, gen: 1 })) };
+    const worker = ["/bin/sh", "-c", 'printf "a\\n" >> plain.mjs; printf "b\\n" >> "planned file.mjs"'];
+    const ok = await launchWorker({ repo, ticket: { key: "spaces", base, scope }, leases, worker, root, receiptRoot: rec, timeoutMs: 20_000 });
+    assert.deepEqual([ok.receipt.outcome.phase, ok.receipt.outcome.status, ok.receipt.inbox.verdict, ok.receipt.inbox.writable], ["worker_exited", 0, "ok", ["plain.mjs", "planned file.mjs"]]);
+    assert.deepEqual(ok.receipt.changed_paths, ["plain.mjs", "planned file.mjs"]);
+    const wide = await launchWorker({ repo, ticket: { key: "spaces", base, scope }, leases, worker, root, receiptRoot: rec, timeoutMs: 20_000, grant: [...scope, "other.mjs"] });
+    assert.deepEqual([wide.receipt.outcome.phase, wide.receipt.inbox.verdict, wide.receipt.inbox.writable, wide.candidate], ["prelude_refused", "refused", ["other.mjs", "plain.mjs", "planned file.mjs"], null]);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test("durable delivery: a genuine receipt co-committed with an item naming another real candidate, or opaque receipt bytes whose links agree, does not verify", async () => {
+  await scenario(async s => {
+    const { cid, slot, links, ...payload } = s.item();
+    const land = async (bytes, candidate) => {
+      const blob = putBlob(s.board.store, bytes);
+      const tp = { test: "forged binding" };
+      const trace = putEntry(s.board.store, { kind: "trace", level: KINDS.trace.level, payload: tp, links: { log: blob }, author: HOLDER, visibility: "board" }).cid;
+      const r = await publish({ ...s.ctx, author: HOLDER, lease: s.leases.item, leases: s.leases.scopes, expect: boardState(s.ctx).commit, entries: [
+        { kind: "trace", payload: tp, blob: bytes },
+        { kind: "work_item", payload: { ...payload, state: "done", candidate_commit: candidate, delivery_receipt: { sha256: sha(bytes), blob, trace } } }] });
+      assert.equal(r.ok, true, r.why);
+      return verifyDelivery({ ...s.board, ref: s.ctx.ref, key: KEY });
+    };
+    const genuine = readFileSync(join(s.rroot, s.launched.name));
+    // offScope is a real commit with the same parent (the base); the receipt is about the launched candidate.
+    assert.equal(execFileSync("git", ["-C", s.repo.dir, "rev-list", "--parents", "-n", "1", s.repo.offScope], { encoding: "utf8" }).trim(), `${s.repo.offScope} ${s.repo.base}`);
+    const v1 = await land(genuine, s.repo.offScope);
+    assert.equal(v1.code, "EVIDENCE_MISMATCH", v1.why);
+    const v2 = await land(Buffer.from("opaque, not a receipt {"), s.repo.good);
+    assert.equal(v2.code, "EVIDENCE_UNREADABLE", v2.why);
+  });
 });

@@ -53,13 +53,18 @@ export function writableUnder(mountinfo, root) {
   return [...out].sort();
 }
 
-// The prelude: $1 nonce, $2 checkout, $3 the granted writable set ("a b c "); the worker's argv follows.
+// The prelude: $1 nonce, $2 the checkout and $3 the granted writable set, both in mountinfo's ESCAPED spelling (so a
+// space, tab, newline or backslash in a path cannot split or collide), the set newline-separated; the worker follows.
+/** mountinfo's escaping of a path (fs/proc_namespace.c: space, tab, newline and backslash as \ooo). */
+export const mountEscape = p => p.replace(/[\\ \t\n]/g, c => "\\" + c.charCodeAt(0).toString(8).padStart(3, "0"));
 export const PRELUDE_REFUSED = 97;
 const PRELUDE = [
   'n="$1"; r="$2"; want="$3"; shift 3',
-  'got=$(awk -v r="$r" \'{ n = split($6, o, ","); w = 0; for (i = 1; i <= n; i++) if (o[i] == "rw") w = 1;' +
-    ' if (w && ($5 == r || index($5, r "/") == 1)) print ($5 == r ? "." : substr($5, length(r) + 2)) }\' /proc/self/mountinfo | sort | tr "\\n" " ")',
-  'rel=$(awk -v r="$r" \'$5 == r || index($5, r "/") == 1\' /proc/self/mountinfo | base64 -w0)',
+  // r goes through the environment: awk -v would interpret the \\ooo escapes and undo them.
+  'got=$(R="$r" awk \'BEGIN { r = ENVIRON["R"] } { n = split($6, o, ","); w = 0; for (i = 1; i <= n; i++) if (o[i] == "rw") w = 1;' +
+    ' if (w && ($5 == r || index($5, r "/") == 1)) print ($5 == r ? "." : substr($5, length(r) + 2)) }\' /proc/self/mountinfo | LC_ALL=C sort)',
+  'want=$(printf "%s\\n" "$want" | LC_ALL=C sort)',
+  'rel=$(R="$r" awk \'BEGIN { r = ENVIRON["R"] } $5 == r || index($5, r "/") == 1\' /proc/self/mountinfo | base64 -w0)',
   'if [ "$got" = "$want" ]; then v=ok; else v=refused; fi',
   'printf "OPHANIM-LAUNCH %s %s %s %s\\n" "$n" "$$" "$v" "$rel"',
   '[ "$v" = ok ] || exit ' + PRELUDE_REFUSED,
@@ -84,9 +89,9 @@ export async function launchWorker({ repo, ticket, leases, worker, root, receipt
   // `grant` (tests only) lets a caller bind a different writable set from the scope the prelude checks against.
   const writable = grant ?? ticket.scope;
   const binds = writable.flatMap(p => ["--bind", join(checkout, p), join(checkout, p)]);
-  const want = [...ticket.scope].sort().join(" ") + " ";
+  const want = ticket.scope.map(mountEscape).join("\n");
   const argv = ["--die-with-parent", "--unshare-net", "--unshare-pid", ...READ_VIEW, "--ro-bind", checkout, checkout, ...binds,
-    "--chdir", checkout, "--", "/bin/sh", "-c", PRELUDE, "prelude", run_id, checkout, want, ...worker];
+    "--chdir", checkout, "--", "/bin/sh", "-c", PRELUDE, "prelude", run_id, mountEscape(checkout), want, ...worker];
   const started_at = new Date(now()).toISOString();
   let r = null, launchError = null;
   if (!missing.length) {

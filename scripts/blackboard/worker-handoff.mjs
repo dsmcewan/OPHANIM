@@ -300,7 +300,16 @@ export function verifyDelivery({ store, refs, ref, key }) {
     c = node.parents?.[0] ?? null;
   }
   if (!found) return no("NO_EVIDENCE", "no commit introduced the trace together with the delivered item");
-  const receipt = JSON.parse(bytes.toString("utf8"));
+  let receipt;
+  try { receipt = JSON.parse(bytes.toString("utf8")); } catch (e) { return no("EVIDENCE_UNREADABLE", `the receipt blob is not readable JSON: ${e.message}`); }
+  // The receipt must be about THIS delivery: a genuine receipt co-committed with an item naming another candidate is
+  // evidence of a different delivery, not of this one.
+  if (!receipt || typeof receipt !== "object" || receipt.kind !== LAUNCH_KIND || receipt.v !== 1) return no("EVIDENCE_MISMATCH", "the receipt blob is not a launch receipt");
+  const mismatch = [["ticket", receipt.ticket, key], ["candidate", receipt.candidate, it.candidate_commit], ["base", receipt.base, it.base_sha]]
+    .find(([, a, b]) => a !== b);
+  if (mismatch) return no("EVIDENCE_MISMATCH", `the receipt's ${mismatch[0]} is ${JSON.stringify(mismatch[1])}; the delivered item says ${JSON.stringify(mismatch[2])}`);
+  if (!Array.isArray(receipt.scope) || !Array.isArray(it.write_scope) || !sameSet(receipt.scope, it.write_scope)) return no("EVIDENCE_MISMATCH", "the receipt's scope is not the item's write_scope");
+  if (receipt.outcome?.phase !== "worker_exited" || receipt.outcome?.status !== 0 || receipt.inbox?.verdict !== "ok") return no("EVIDENCE_MISMATCH", "the receipt does not record a completed, in-box-verified worker run");
   return { ok: true, sha256: got, candidate: it.candidate_commit, receipt };
 }
 
