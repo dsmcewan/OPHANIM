@@ -29,6 +29,18 @@
 // and its source, the requests charged (the billing ledger's rows) and the team's own count, the usage each node
 // reported (unknown where none was reported), the examined paths, the outcome and stop reason, the findings text, the
 // context digest, and the known limitations. The work ledger and the team's evidence files stay in <state>.
+//
+// A FAILED SESSION KEEPS WHAT ITS GATEWAY SAW. The transport attaches its gateway record to the error it throws
+// (turn.mjs carry); the team runner keeps only an error's own served_model and usage (antigravity/research.mjs settle),
+// which the transport sets on success only. So this driver wraps the default transport: it records each session's
+// gateway observation (the provider's names for the requested model, answers that named none, the usage the provider
+// reported) and, on a failure, puts the provider's name and usage on the error before the team settles it -- only when
+// the provider named exactly ONE model; distinct names stay raw, unlifted, and the run is not verified. Nothing is
+// filled in: no answer means no name and unknown usage.
+//
+// EXIT STATUS: 0 only for a verified conclusion (satisfied, concluded, every coordinator session answered by
+// gemini-4-carbon alone per the provider) or a passed --dry-run preflight; 3 for a run that sent and ended without one;
+// 1 for a refusal or an error; 2 for a usage error. The verdict and its reasons are in the result.
 import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -84,8 +96,69 @@ export function graphContext(repo) {
   return {text, sha256: sha(text), bytes: Buffer.byteLength(text)};
 }
 
+const plainObj = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+/** What one session's gateway record shows about who answered and what the provider reported it used. */
+export function gatewayObservation(x, model) {
+  const g = plainObj(x?.gateway) ? x.gateway : null;
+  const names = Array.isArray(g?.served_models?.[model]) ? [...new Set(g.served_models[model].filter(n => typeof n === 'string' && n))] : [];
+  let usage = null;
+  for (const s of Array.isArray(g?.sessions) ? g.sessions : []) if (plainObj(s?.usage)) for (const [k, v] of Object.entries(s.usage)) if (Number.isFinite(v)) (usage ??= {})[k] = (usage[k] ?? 0) + v;
+  return {gateway: !!g, forwarded: Number.isFinite(g?.totals?.forwarded) ? g.totals.forwarded : null, served_names: names,
+    unnamed_answers: Number.isFinite(g?.unnamed?.[model]) ? g.unnamed[model] : 0, provider_usage: usage};
+}
+
 /**
- * The run. deps: {sdk, env, now} for tests ONLY (the live path passes none, so runResearch uses its real default SDK).
+ * The transport as the team sees it: `base` (the real default) with each session's gateway observation recorded in
+ * `log`, and, on a failure, the provider's ONE name for the requested model and its reported usage put on the error
+ * (served_model_source "provider") where the error carries none of its own. Distinct names are not lifted.
+ */
+export function observingTransport(base, log) {
+  return async opts => {
+    const entry = {node: opts?.unit?.unit_id ?? null, requested: opts?.seat?.model ?? null};
+    try {
+      const r = await base(opts);
+      log.push({...entry, ended: 'returned', error_code: null, ...gatewayObservation(r, entry.requested),
+        returned: {served_model: r?.served_model ?? null, served_model_source: r?.served_model_source ?? null, usage: plainObj(r?.usage) ? r.usage : null}});
+      return r;
+    } catch (e) {
+      const o = {...entry, ended: 'threw', error_code: e?.code ?? null, error_message: String(e?.message ?? e).slice(0, 300), ...gatewayObservation(e, entry.requested), lifted: {served_model: false, usage: false}};
+      if (plainObj(e) || e instanceof Error) {
+        if (e.served_model == null && o.served_names.length === 1) { Object.assign(e, {served_model: o.served_names[0], served_model_source: 'provider'}); o.lifted.served_model = true; }
+        if (e.usage == null && o.provider_usage) { e.usage = {...o.provider_usage}; o.lifted.usage = true; }
+      }
+      log.push(o);
+      throw e;
+    }
+  };
+}
+
+/** Success is a verified conclusion; anything else says why not. */
+export function verdictOf(result) {
+  const why = [];
+  if (result.outcome !== 'satisfied') why.push(`outcome is ${result.outcome}, not satisfied`);
+  if (result.concluded !== true) why.push('the run recorded no conclusion');
+  if (!result.findings_text) why.push('no findings were recorded');
+  const coord = (result.served ?? []).filter(x => x.kind === 'coordinator');
+  if (!coord.some(x => x.state === 'finished')) why.push('no coordinator session finished');
+  for (const x of coord) if (x.served_model !== MODEL || x.served_model_source !== 'provider') why.push(`node ${x.node} (${x.state}) is recorded as served by ${x.served_model ?? 'no model'} (${x.served_model_source ?? 'no source'}), not ${MODEL} per the provider`);
+  for (const o of result.transport_observations ?? []) {
+    if (o.served_names.length > 1) why.push(`node ${o.node}: the provider answered under distinct names ${o.served_names.join(', ')}`);
+    else if (o.served_names.length === 1 && o.served_names[0] !== MODEL) why.push(`node ${o.node}: the provider answered as ${o.served_names[0]}`);
+    if (o.unnamed_answers) why.push(`node ${o.node}: ${o.unnamed_answers} answer(s) named no model`);
+  }
+  return {success: why.length === 0, why};
+}
+
+/** The command's exit status for a result (see the header). */
+export function exitCodeOf(out) {
+  if (out.outcome === 'dry-run') return 0;
+  if (['refused', 'error'].includes(out.outcome)) return 1;
+  return out.verdict?.success === true ? 0 : 3;
+}
+
+/**
+ * The run. deps: {sdk, antigravity, deadlineMs} for tests ONLY (the live path passes none: runResearch gets the real
+ * default SDK, wrapped by observingTransport, with no transport options, under DEADLINE_MS).
  * Returns the result record (also written to <state>/probe-result.json unless dry).
  */
 export async function run({repo, state, dryRun = false, confirmSpend = false}, deps = {}) {
@@ -99,7 +172,7 @@ export async function run({repo, state, dryRun = false, confirmSpend = false}, d
   const [{openWorkLedger}, {requestResearch, researchOf, runResearch, researchTransportRefusal}, billingMod] = await Promise.all([
     import(path.join(repo, 'ophanim/operate/work-ledger.mjs')), import(path.join(repo, 'ophanim/operate/research.mjs')), import(path.join(repo, 'pantheon/src/route/gemini-billing.mjs'))]);
   // The transport's own preflight (the SDK's python and GEMINI_API_KEY): refused here, nothing is sent.
-  if (!deps.sdk) { const no = researchTransportRefusal({}); if (no) return {outcome: 'refused', why: [`transport preflight: ${no.code}: ${no.message}`], plan}; }
+  if (!deps.sdk) { const no = researchTransportRefusal(deps.antigravity ?? {}); if (no) return {outcome: 'refused', why: [`transport preflight: ${no.code}: ${no.message}`], plan}; }
 
   fs.mkdirSync(state, {recursive: true, mode: 0o700});
   const workRoot = path.join(state, 'work'), teamDir = path.join(state, 'research'), usageFile = path.join(state, 'gemini-usage.jsonl');
@@ -116,13 +189,15 @@ export async function run({repo, state, dryRun = false, confirmSpend = false}, d
     guard.push({model, at: new Date().toISOString()});
     if (model !== MODEL) throw Object.assign(new Error(`model guard: a request for ${model} is refused; only ${MODEL} may be sent`), {code: 'MODEL_GUARD'});
   };
-  const signal = AbortSignal.timeout(DEADLINE_MS);
+  const signal = AbortSignal.timeout(deps.deadlineMs ?? DEADLINE_MS);
+  const observed = [];
+  const sdk = observingTransport(deps.sdk ?? (await import(path.join(repo, 'pantheon/src/antigravity/turn.mjs'))).runAntigravitySdkTurn, observed);
   const started = new Date();
   let r, error = null;
   try {
     r = await runResearch({work, item: ITEM, request, repo, dir: teamDir, billing, admitRequest, context: context.text, head: PINNED_COMMIT, limits: {...LIMITS},
       signal, qualified: m => (m === MODEL ? null : `only ${MODEL} is qualified for this probe`), hide: [workRoot, state], controlRoot: state,
-      ...(deps.sdk ? {sdk: deps.sdk} : {})});
+      sdk, ...(deps.antigravity ? {antigravity: {...deps.antigravity}} : {})});
   } catch (e) { error = {code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 500)}; }
   const rows = work.research(ITEM);
   const nodes = rows.filter(x => x.phase === 'node');
@@ -130,8 +205,15 @@ export async function run({repo, state, dryRun = false, confirmSpend = false}, d
     schema: 'ophanim.carbon-inspection-probe/v1', outcome: error ? 'error' : r.status, stop_reason: error ? error.code : r.stop_reason, concluded: !!r?.concluded, error,
     started_at: started.toISOString(), ended_at: new Date().toISOString(), plan,
     requested: {model: MODEL, effort: 'high', selection: rows.find(x => x.phase === 'team')?.selection ?? null},
-    served: nodes.filter(x => x.state !== 'admitted').map(x => ({node: x.node, kind: x.kind, state: x.state, requested: x.seat?.model ?? null, served_model: x.served_model, served_model_source: x.served_model_source,
-      usage: x.usage ?? 'unknown (none reported)', error: x.error ?? null})),
+    served: nodes.filter(x => x.state !== 'admitted').map(x => {
+      // The usage the provider reported for this node's session(s), from their gateway records; the ledger's own
+      // count is kept beside it (it writes 0 where nothing was reported, so 0 there is not evidence of none).
+      const mine = observed.filter(o => o.node === x.node);
+      const reported = mine.map(o => o.provider_usage ?? o.returned?.usage ?? null).filter(Boolean);
+      return {node: x.node, kind: x.kind, state: x.state, requested: x.seat?.model ?? null, served_model: x.served_model ?? null, served_model_source: x.served_model_source ?? null,
+        usage: reported.length ? reported : 'unknown (none reported)', ledger_usage: x.usage ?? null, error: x.error ?? null};
+    }),
+    transport_observations: observed,
     requests: {billed_this_run: billing.rows.length, billed_all_attempts: billing.ledger.used('primary'), budget: BUDGET, billing_usage_file: path.basename(usageFile), guard_checked: guard.length, guard_models: [...new Set(guard.map(g => g.model))], team_telemetry: r?.result?.telemetry?.requests ?? null},
     examined: (r?.result?.nodes ?? []).flatMap(n => (n.examined ?? []).map(e => ({node: n.id, path: e.path ?? e.ref ?? null, bytes: e.bytes ?? null, sha256: e.sha256 ?? e.version ?? null}))),
     refusals: rows.filter(x => x.phase === 'refusal').map(x => ({code: x.code, reason: x.reason})),
@@ -143,14 +225,19 @@ export async function run({repo, state, dryRun = false, confirmSpend = false}, d
       'the graph context is a derived view at the pinned commit, cut at 6,000 bytes; the coordinator was told it is not evidence',
     ],
   };
+  result.verdict = verdictOf(result);
   fs.writeFileSync(path.join(state, 'probe-result.json'), JSON.stringify(result, null, 2) + '\n');
   return result;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const {values: v} = parseArgs({options: {repo: {type: 'string'}, state: {type: 'string'}, 'dry-run': {type: 'boolean'}, 'confirm-spend': {type: 'boolean'}}});
-  if (!v.repo || !v.state) { console.error('usage: carbon-inspection-probe.mjs --repo <clean checkout at 4e5cdd2> --state <scratch dir outside it> [--dry-run | --confirm-spend]'); process.exit(2); }
-  const out = await run({repo: path.resolve(v.repo), state: path.resolve(v.state), dryRun: !!v['dry-run'], confirmSpend: !!v['confirm-spend']});
+/** The command: parses argv, runs, prints the result, returns the exit status. `deps` is for the offline check only. */
+export async function main(argv, deps = {}) {
+  let v;
+  try { ({values: v} = parseArgs({args: argv, options: {repo: {type: 'string'}, state: {type: 'string'}, 'dry-run': {type: 'boolean'}, 'confirm-spend': {type: 'boolean'}}})); } catch { v = {}; }
+  if (!v.repo || !v.state) { console.error('usage: carbon-inspection-probe.mjs --repo <clean checkout at 4e5cdd2> --state <scratch dir outside it> [--dry-run | --confirm-spend]'); return 2; }
+  const out = await run({repo: path.resolve(v.repo), state: path.resolve(v.state), dryRun: !!v['dry-run'], confirmSpend: !!v['confirm-spend']}, deps);
   console.log(JSON.stringify(out, null, 2));
-  process.exitCode = ['refused', 'error'].includes(out.outcome) ? 1 : 0;
+  return exitCodeOf(out);
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main(process.argv.slice(2));
