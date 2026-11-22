@@ -330,7 +330,7 @@ async function twoRuns({ first, second, firstArgs = [], secondArgs = [] }) {
   const b = await go(second, ["--continue", tj, ...secondArgs]);
   const after = await readFile(tj);
   const sha = x => createHash("sha256").update(x).digest("hex");
-  return { a, b, before: JSON.parse(before), after: JSON.parse(after), unchanged: sha(before) === sha(after) };
+  return { a, b, outDir, before: JSON.parse(before), after: JSON.parse(after), unchanged: sha(before) === sha(after) };
 }
 
 for (const [label, served, why] of [["another model", "grok-4.6", /its response at turn 1 was served by grok-4\.6, not grok-4\.7/], ["no served model", undefined, /its response at turn 1 named no served model/]]) {
@@ -357,4 +357,44 @@ test("XAI SDK R4: the control -- a run whose every response named grok-4.7 conti
   assert.equal(r.after.status, "complete");
   assert.equal(r.after.transport, "xai-sdk");
   assert.ok(r.after.continued_from);
+});
+
+// ---- round 5: the real runner's own transcripts, fresh and continued, judged by the coordinator ------------------------
+import { judgeReviewer } from "../src/review-runner/pr-review.mjs";
+
+/** A binding for what the run actually reviewed (its commit and brief digests), with the xAI SDK route and these limits. */
+const bindingOf = t => ({ head: { sha: t.commit }, brief: { assignment: 3, files: { "README.md": t.prompt.readme_sha256, "3-x.md": t.prompt.assignment_sha256, "HARNESS.md": t.prompt.harness_template.sha256, "HARNESS-cli.md": "0".repeat(64) } } });
+const ROUTED = limits => ({ lab: "xai", model: "grok-4.7", route: "xai-sdk", limits });
+const ROW3 = { lab: "xAI", model: "grok-4.7", testing: "Mock providers and isolated processes" };
+const OK = { exit_code: 0, signal: null, killed_for: null, spawn_error: null, stderr_tail: [] };
+const FINAL_SECTIONS = "## Findings\n1. holds\n\n## Tests run\npantheon/tests/other.test.mjs: pass\n\n## Unresolved questions\nnone\n";
+
+test("XAI SDK R5: the real runner's continuation -- its earlier events kept, its per-run and cumulative counters -- is judged complete by the coordinator", { skip: !JAIL && "bwrap unavailable" }, async () => {
+  const final = () => ({ ...finalTurn("grok-4.7", null), choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: FINAL_SECTIONS } }] });
+  const r = await twoRuns({ firstArgs: ["--max-turns", "1"], first: [() => toolTurn("grok-4.7", null)], second: [final] });
+  assert.equal(r.b.code, EXIT.complete, r.b.out.err);
+  const t = r.after;
+  assert.equal(t.provider_calls, 1, "this run's own counter");
+  assert.equal(t.cumulative.provider_calls, 2, "both runs");
+  assert.equal(t.events.filter(e => e.type === "provider_call").length, 2, "the earlier run's events are kept");
+  const dir = r.outDir;
+  // The bound limits are the second run's (they bind per invocation).
+  const limits = { max_turns: 6, max_tool_calls: 6, max_output_tokens: 1000, timeout_s: 30 };
+  const j = await judgeReviewer({ binding: bindingOf(t), reviewer: ROUTED(limits), readmeRow: ROW3, outDir: dir, run: OK });
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+});
+
+test("XAI SDK R5: the real runner's fresh run, with a retry, is judged complete; the same transcript with a summary that drops the retry is not", { skip: !JAIL && "bwrap unavailable" }, async () => {
+  const c = clockedExtra();
+  const final = () => ({ ...finalTurn("grok-4.7", null), choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: FINAL_SECTIONS } }] });
+  const r = await run({ extra: c.extra, steps: [() => { throw APIError.generate(429, { error: { message: "slow" } }, "slow", new Headers({ "retry-after": "1" })); }, () => toolTurn("grok-4.7", null), final] });
+  assert.equal(r.code, EXIT.complete, r.out.err);
+  assert.equal(r.transcript.provider_calls, 3, "the retried attempt is counted");
+  const limits = { max_turns: 6, max_tool_calls: 6, max_output_tokens: 1000, timeout_s: 30 };
+  let j = await judgeReviewer({ binding: bindingOf(r.transcript), reviewer: ROUTED(limits), readmeRow: ROW3, outDir: r.outDir, run: OK });
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  await writeFile(join(r.outDir, "findings-3-xai.transcript.json"), JSON.stringify({ ...r.transcript, provider_calls: 2 }));
+  j = await judgeReviewer({ binding: bindingOf(r.transcript), reviewer: ROUTED(limits), readmeRow: ROW3, outDir: r.outDir, run: OK });
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /the recorded events hold 3 provider call\(s\); the transcript's provider_calls says 2/);
 });

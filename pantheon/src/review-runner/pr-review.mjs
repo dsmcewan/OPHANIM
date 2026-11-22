@@ -41,7 +41,10 @@
 // HARNESS.md, the coverage gate, no change to the review copy outside .review-tests/, and its calls within the bound
 // limits. The judge FAILS CLOSED: a counter, a check or a coverage fact that is missing or malformed is a reason, never a
 // pass; the gate's verdict is re-derived from its own coverage facts, and those facts are checked against the
-// assignment's testing limit (the README row). A CLI transcript never satisfies a routed reviewer, nor an SDK transcript a subscription one. Entries without a
+// assignment's testing limit (the README row). The COUNTS AND COVERAGE ARE DERIVED FROM THE RECORDED EVENTS (the
+// producer's own rules, coverage.mjs coverageOfApi): a fresh run's counters equal its events; a continuation keeps the
+// earlier runs' events, so ITS counters equal the events after its last continuation event, and its cumulative
+// counters equal all of them; the bound limits apply per invocation, to this run's events. A CLI transcript never satisfies a routed reviewer, nor an SDK transcript a subscription one. Entries without a
 // route dispatch and are judged exactly as before; the panel's independence rules are unchanged. A record may sit beside
 // its brief as binding.json or binding-<name>.json (a fresh leg keeps the earlier record intact).
 // The merge decision is never taken here: the result says so. Exit codes: 0 every reviewer complete (or a dry run whose
@@ -52,7 +55,7 @@ import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, stat, writeFile
 import { join, resolve, dirname, relative, isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
 import { REVIEW_DIR_RE, assignmentRow, BriefError } from "./brief.mjs";
-import { coverageGate, testsAllowedBy } from "./coverage.mjs";
+import { coverageGate, coverageOfApi, testsAllowedBy } from "./coverage.mjs";
 import { permissionsFor } from "./tools.mjs";
 import { worktreeViolations } from "./cli-common.mjs";
 
@@ -392,14 +395,38 @@ function routedProblems(t, reviewer, b, readmeRow) {
         why.push(`the review copy's changed paths contradict its violations list: ${p} is not allowed by the bound write policy${writable ? "" : " (this assignment allows no write)"}`);
     }
   }
-  // The bounds: the bound limits, and whole-number counters within them.
+  // The bounds and counts, from the recorded events (see the header).
   const diff = Object.keys(ROUTE_LIMITS).filter(k => t.limits?.[k] !== L[k]);
   if (diff.length) why.push(`the run's limits are not the bound limits (${diff.map(k => `${k} ${t.limits?.[k] ?? "none"} vs ${L[k]}`).join(", ")})`);
   for (const k of ["provider_calls", "tool_calls"]) if (!wholeCount(t[k])) why.push(`missing evidence: ${k} is not a whole number`);
-  if (wholeCount(t.provider_calls) && t.provider_calls === 0) why.push("no provider call is recorded");
-  if (wholeCount(t.provider_calls) && t.provider_calls > L.max_turns) why.push(`${t.provider_calls} provider calls exceed the bound max_turns ${L.max_turns}`);
-  if (wholeCount(t.tool_calls) && t.tool_calls > L.max_tool_calls) why.push(`${t.tool_calls} tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
-  // Coverage: the facts are present and well formed, they support the gate's verdict, and they match the assignment.
+  const events = Array.isArray(t.events) ? t.events : null;
+  if (!events) { why.push("missing evidence: the transcript records no events"); return why; }
+  const count = (list, type) => list.filter(e => e?.type === type).length;
+  const lastCont = events.reduce((at, e, i) => (e?.type === "continuation" ? i : at), -1);
+  const continued = t.continued_from !== undefined && t.continued_from !== null;
+  if (continued && lastCont < 0) why.push("a transcript continued from another records no continuation event");
+  if (!continued && lastCont >= 0) why.push("a continuation event is recorded, but the transcript names no run it continued from");
+  const thisRun = lastCont >= 0 ? events.slice(lastCont + 1) : events;
+  const pc = count(thisRun, "provider_call"), tc = count(thisRun, "tool_call"), pcAll = count(events, "provider_call"), tcAll = count(events, "tool_call");
+  const scope = lastCont >= 0 ? "this run's events (after its continuation)" : "the recorded events";
+  if (wholeCount(t.provider_calls) && t.provider_calls !== pc) why.push(`${scope} hold ${pc} provider call(s); the transcript's provider_calls says ${t.provider_calls}`);
+  if (wholeCount(t.tool_calls) && t.tool_calls !== tc) why.push(`${scope} hold ${tc} tool call(s); the transcript's tool_calls says ${t.tool_calls}`);
+  if (lastCont >= 0) {
+    const cu = t.cumulative;
+    if (!cu || typeof cu !== "object") why.push("missing evidence: a continuation records no cumulative counts");
+    else {
+      if (cu.provider_calls !== pcAll) why.push(`the recorded events hold ${pcAll} provider call(s) across the runs; cumulative.provider_calls says ${cu.provider_calls ?? "none"}`);
+      if (cu.tool_calls !== tcAll) why.push(`the recorded events hold ${tcAll} tool call(s) across the runs; cumulative.tool_calls says ${cu.tool_calls ?? "none"}`);
+    }
+  }
+  if (pc === 0) why.push("no provider call is recorded");
+  if (pc > L.max_turns) why.push(`${pc} recorded provider calls exceed the bound max_turns ${L.max_turns}`);
+  if (tc > L.max_tool_calls) why.push(`${tc} recorded tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
+  // Real model evidence: at least one recorded, successful response served by the bound model.
+  if (!events.some(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && (e.served_model ?? e.response.model) === reviewer.model))
+    why.push(`missing evidence: no recorded response was served by the bound ${reviewer.model}`);
+  // Coverage: the summary is present and well formed; the facts, re-derived from the events by the producer's own rules
+  // against the bound assignment, pass the gate and agree with the summary.
   const c = t.coverage;
   if (!c || typeof c !== "object") why.push("missing evidence: no coverage record");
   else {
@@ -408,9 +435,18 @@ function routedProblems(t, reviewer, b, readmeRow) {
     if (typeof c.tests_allowed !== "boolean") why.push("missing evidence: the coverage record does not say whether tests are allowed");
     const g = coverageGate(c);
     if (t.coverage_gate?.ok && !g.ok) why.push(`the coverage facts contradict the gate: ${g.reasons.join("; ")}`);
-    const perms = readmeRow?.testing ? permissionsFor(readmeRow.testing, []) : null;
-    if (!perms) why.push(`the assignment's testing limit is not known here${readmeRow?.testing ? ` (${readmeRow.testing})` : ""}: the coverage cannot be checked against it`);
-    else if (typeof c.tests_allowed === "boolean" && c.tests_allowed !== testsAllowedBy(perms)) why.push(`the coverage record says tests are ${c.tests_allowed ? "" : "not "}allowed; the assignment's testing limit (${readmeRow.testing}) ${testsAllowedBy(perms) ? "allows them" : "does not"}`);
+  }
+  const perms = readmeRow?.testing ? permissionsFor(readmeRow.testing, []) : null;
+  if (!perms) why.push(`the assignment's testing limit is not known here${readmeRow?.testing ? ` (${readmeRow.testing})` : ""}: the coverage cannot be checked against it`);
+  else {
+    const allowed = testsAllowedBy(perms), facts = coverageOfApi(events, { tests_allowed: allowed });
+    if (c && typeof c === "object" && typeof c.tests_allowed === "boolean" && c.tests_allowed !== allowed) why.push(`the coverage record says tests are ${c.tests_allowed ? "" : "not "}allowed; the assignment's testing limit (${readmeRow.testing}) ${allowed ? "allows them" : "does not"}`);
+    if (c && typeof c === "object") {
+      const off = ["source_reads", "denied_reads", "tests_run"].filter(k => c[k] !== facts[k]);
+      if (off.length) why.push(`the coverage summary contradicts the recorded events (${off.map(k => `${k} ${c[k]} vs ${facts[k]}`).join(", ")})`);
+    }
+    const fg = coverageGate(facts);
+    if (!fg.ok) why.push(`the recorded events do not pass the coverage gate: ${fg.reasons.join("; ")}`);
   }
   return why;
 }

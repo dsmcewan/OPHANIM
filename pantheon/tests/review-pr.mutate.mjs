@@ -169,8 +169,8 @@ export const MUTATIONS = [
   {id: 'X28', what: 'the gate\'s verdict is trusted over its own coverage facts', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
     edits: [one(PR, '    if (t.coverage_gate?.ok && !g.ok) why.push(', '    if (false) why.push(')]},
   {id: 'X29', what: 'the coverage is not checked against the assignment\'s testing limit', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
-    edits: [one(PR, '    if (!perms) why.push(`the assignment', '    if (false) why.push(`the assignment'),
-            one(PR, '    else if (typeof c.tests_allowed === "boolean" && c.tests_allowed !== testsAllowedBy(perms)) why.push(', '    else if (false) why.push(')]},
+    edits: [one(PR, '  if (!perms) why.push(`the assignment', '  if (false) why.push(`the assignment'),
+            one(PR, '    if (c && typeof c === "object" && typeof c.tests_allowed === "boolean" && c.tests_allowed !== allowed) why.push(', '    if (false) why.push(')]},
   {id: 'X30', what: 'the coordinator judges without the assignment\'s row', tests: [t('^XAI SDK ROUTE: the complete coordinator path')],
     edits: [one(PR, '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run, readmeRow }));', '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run }));')]},
   // ---- round 3 (Codex's control at 1a7050f): the changed paths, not the violations summary, decide a clean review copy --
@@ -187,6 +187,21 @@ export const MUTATIONS = [
     edits: [one(PR, '    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;', '    continue;')]},
   {id: 'X36', what: 'a call naming another served model without its response body is not checked', tests: [t('^XAI SDK ROUTE R4: a recorded response served by another model')],
     edits: [one(PR, '    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;', '    if (e?.type !== "provider_call" || !hasResponse) continue;')]},
+  // ---- round 5 (Codex's pass at 8942598): the routed judge derives its counts and coverage from the recorded events -----
+  {id: 'X37', what: 'the provider_calls counter is trusted over the recorded events', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts'), t('^XAI SDK ROUTE R5: a retry is a provider call'), s("^XAI SDK R5: the real runner's fresh run")],
+    edits: [one(PR, '  if (wholeCount(t.provider_calls) && t.provider_calls !== pc) why.push(', '  if (false) why.push(')]},
+  {id: 'X38', what: 'the bound max_turns is checked against the counter, not the recorded calls', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts')],
+    edits: [one(PR, '  if (pc > L.max_turns) why.push(', '  if (t.provider_calls > L.max_turns) why.push(')]},
+  {id: 'X39', what: 'a continuation\'s counters are compared with every event (a valid continuation fails)', tests: [t('^XAI SDK ROUTE R5: a valid continuation'), s("^XAI SDK R5: the real runner's continuation")],
+    edits: [one(PR, '  const thisRun = lastCont >= 0 ? events.slice(lastCont + 1) : events;', '  const thisRun = events;')]},
+  {id: 'X40', what: 'a continuation\'s cumulative counts are not checked', tests: [t('^XAI SDK ROUTE R5: a valid continuation')],
+    edits: [one(PR, '      if (cu.provider_calls !== pcAll) why.push(', '      if (false) why.push(')]},
+  {id: 'X41', what: 'a run with no recorded response served by the bound model passes', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts')],
+    edits: [one(PR, '  if (!events.some(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && (e.served_model ?? e.response.model) === reviewer.model))', '  if (false)')]},
+  {id: 'X42', what: 'the coverage summary is trusted over the recorded events', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts')],
+    edits: [one(PR, '      if (off.length) why.push(`the coverage summary contradicts', '      if (false) why.push(`the coverage summary contradicts')]},
+  {id: 'X43', what: 'a continued_from without its continuation event passes', tests: [t('^XAI SDK ROUTE R5: a valid continuation')],
+    edits: [one(PR, '  if (continued && lastCont < 0) why.push(', '  if (false) why.push(')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };

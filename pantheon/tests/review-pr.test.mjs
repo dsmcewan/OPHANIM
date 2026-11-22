@@ -432,6 +432,12 @@ test("XAI SDK ROUTE: runnerArgs dispatch the routed reviewer over the API with i
     "--commit", "a".repeat(40), "--max-wall-s", "900", "--telos-root", "/t", "--out", "/tmp/s/google", "--reviewer", "google:gemini-4-carbon", "--grok-state-dir", "/g", "--codex-cli", "/c", "--dry-run"]);
 });
 
+// The recorded events of a qualifying fresh run: 3 provider calls (each served by the bound model), 3 source reads and
+// one jailed test run -- the facts its counters and coverage summary must agree with.
+const served = (n, model = "grok-4.7") => ({ type: "provider_call", n, turn: n, attempt: 1, served_model: model, response: { id: `c${n}`, model, choices: [] } });
+const tool = (n, name, args, extra = {}) => ({ type: "tool_call", n, turn: n, name, args, outcome: "ok", exit_code: name === "run_tests" ? 0 : null, ...extra });
+const OK_EVENTS = () => [served(1), tool(1, "read_file", { path: "ophanim/operate/a.mjs" }), tool(2, "read_file", { path: "ophanim/operate/b.mjs" }), tool(3, "read_file", { path: "ophanim/operate/c.mjs" }),
+  served(2), tool(4, "run_tests", { files: [".review-tests/stop.test.mjs"] }), served(3)];
 // What a qualifying API/SDK run leaves in its out directory, with one thing changed per refusal.
 async function sdkRun({ binding: b, edit = t => t, findings } = {}) {
   const d = await mkdtemp(join(tmpdir(), "prr-sdk-judge-"));
@@ -440,7 +446,7 @@ async function sdkRun({ binding: b, edit = t => t, findings } = {}) {
     prompt: { readme_sha256: b.brief.files["README.md"], assignment_sha256: b.brief.files["1-x.md"], harness_template: { path: `${DIR}/HARNESS.md`, sha256: b.brief.files["HARNESS.md"] } },
     status: "complete", stop_reason: "final answer", coverage: { source_reads: 3, denied_reads: 0, tests_run: 1, tests_allowed: true, method: "tool events" }, coverage_gate: { ok: true, reasons: [] },
     limits: { ...SDK_LIMITS, max_wall_s: 900 }, provider_calls: 3, tool_calls: 4, served_models: ["grok-4.7"], worktree_check: { changed: [".review-tests/stop.test.mjs"], violations: [] },
-    cost_totals: { reported_calls: 0, unreported_calls: 3, value: null, field: null }, events: [],
+    cost_totals: { reported_calls: 0, unreported_calls: 3, value: null, field: null }, events: OK_EVENTS(),
   });
   await writeFile(join(d, "findings-1-xai.transcript.json"), JSON.stringify(t));
   await writeFile(join(d, "findings-1-xai.md"), findings ?? `header\n${MARKER}\n\n## Findings\n1. holds\n## Tests run\nnode --test .review-tests/stop.test.mjs: exit 0\n## Unresolved questions\nnone\n`);
@@ -475,7 +481,8 @@ test("XAI SDK ROUTE: judgeReviewer refuses the wrong transport, the old CLI resu
     ["a source edit", t => ({ ...t, worktree_check: { changed: ["ophanim/operate/stages.mjs"], violations: ["ophanim/operate/stages.mjs"] } }), /the review copy changed outside \.review-tests\/: ophanim\/operate\/stages\.mjs/],
     ["another brief's harness", t => ({ ...t, prompt: { ...t.prompt, harness_template: { sha256: "9".repeat(64) } } }), /the prompt's harness is not the bound HARNESS\.md/],
     ["other limits", t => ({ ...t, limits: { ...t.limits, max_turns: 50 } }), /the run's limits are not the bound limits \(max_turns 50 vs 8\)/],
-    ["more calls than the limit", t => ({ ...t, provider_calls: 9 }), /9 provider calls exceed the bound max_turns 8/],
+    // A counter alone over the limit contradicts the events (the over-the-limit EVENTS case is round 5's).
+    ["more calls than the limit", t => ({ ...t, provider_calls: 9 }), /the recorded events hold 3 provider call\(s\); the transcript's provider_calls says 9/],
   ];
   for (const [name, edit, want] of cases) {
     const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: { lab: "xAI", model: "grok-4.7", testing: "Mock providers and isolated processes" }, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
@@ -562,7 +569,7 @@ test("XAI SDK ROUTE R2: a record with a required field removed, malformed or con
     ["provider_calls removed", drop("provider_calls"), /missing evidence: provider_calls is not a whole number/],
     ["tool_calls removed", drop("tool_calls"), /missing evidence: tool_calls is not a whole number/],
     ["provider_calls a string", t => ({ ...t, provider_calls: "3" }), /missing evidence: provider_calls is not a whole number/],
-    ["no provider call at all", t => ({ ...t, provider_calls: 0 }), /no provider call is recorded/],
+    ["no provider call at all", t => ({ ...t, provider_calls: 0, events: OK_EVENTS().filter(e => e.type !== "provider_call") }), /no provider call is recorded/],
     ["worktree_check {}", t => ({ ...t, worktree_check: {} }), /missing evidence: the check of the review copy is malformed/],
     ["worktree_check violations not a list", t => ({ ...t, worktree_check: { changed: [], violations: "none" } }), /missing evidence: the check of the review copy is malformed/],
     ["gate ok, but no test ran", t => ({ ...t, coverage: { ...t.coverage, tests_run: 0 } }), /the coverage facts contradict the gate: no test command ran although the testing limit allows tests/],
@@ -610,18 +617,67 @@ test("XAI SDK ROUTE R3: a changed path outside .review-tests/ fails the judge ev
 });
 
 test("XAI SDK ROUTE R4: a recorded response served by another model (or none) anywhere in the events fails the judge, whatever served_models says", async () => {
-  const ev = (n, model) => ({ type: "provider_call", n, turn: n, served_model: model ?? null, response: { id: `c${n}`, ...(model ? { model } : {}), choices: [] } });
-  for (const [name, events, want] of [
-    ["a rejected response kept from an earlier run", [ev(1, "grok-4.6"), ev(2, "grok-4.7")], /the recorded response at turn 1 was served by grok-4\.6, not the bound grok-4\.7/],
-    ["a recorded response naming no model", [ev(1), ev(2, "grok-4.7")], /missing provenance: the recorded response at turn 1 named no served model/],
-    ["a call naming another served model without its response body", [{ type: "provider_call", n: 1, turn: 1, served_model: "grok-4.6" }, ev(2, "grok-4.7")],
+  const withFirst = first => t => ({ ...t, events: [first, ...OK_EVENTS().slice(1)] });
+  for (const [name, edit, want] of [
+    ["a rejected response kept from an earlier run", withFirst(served(1, "grok-4.6")), /the recorded response at turn 1 was served by grok-4\.6, not the bound grok-4\.7/],
+    ["a recorded response naming no model", withFirst({ type: "provider_call", n: 1, turn: 1, served_model: null, response: { id: "c1", choices: [] } }), /missing provenance: the recorded response at turn 1 named no served model/],
+    ["a call naming another served model without its response body", withFirst({ type: "provider_call", n: 1, turn: 1, served_model: "grok-4.6" }),
       /the recorded response at turn 1 was served by grok-4\.6, not the bound grok-4\.7/],
   ]) {
-    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events }) }), run: OK_RUN });
+    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
     assert.equal(j.status, "incomplete", name);
     assert.match(j.why.join("; "), want, `${name}: ${j.why.join("; ")}`);
   }
-  // A failed attempt (no response, no served model) is not a served response.
-  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events: [{ type: "provider_call", n: 1, turn: 1, http_status: 429 }, ev(2, "grok-4.7"), ev(3, "grok-4.7")] }) }), run: OK_RUN });
+  // A failed attempt (no response, no served model) is not a served response -- and it is a provider call (a retry).
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW,
+    outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, provider_calls: 4, events: [{ type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: 429 }, ...OK_EVENTS()] }) }), run: OK_RUN });
   assert.equal(j.status, "complete", JSON.stringify(j.why));
+});
+
+
+// ---- round 5 (Codex's independent pass at 8942598): the routed judge derives its counts and coverage from the events ---
+
+test("XAI SDK ROUTE R5: the three summary-over-facts cases are refused -- empty events, more calls than the counter (over the bound), a claimed test with no test event", async () => {
+  const cases = [
+    ["no events at all", t => ({ ...t, events: [] }), [/missing evidence: no recorded response was served by the bound grok-4\.7/, /the recorded events hold 0 provider call\(s\); the transcript's provider_calls says 3/,
+      /the coverage summary contradicts the recorded events \(source_reads 3 vs 0, tests_run 1 vs 0\)/]],
+    ["9 recorded calls, the counter says 3", t => ({ ...t, events: [...OK_EVENTS(), ...[4, 5, 6, 7, 8, 9].map(n => served(n))] }),
+      [/the recorded events hold 9 provider call\(s\); the transcript's provider_calls says 3/, /9 recorded provider calls exceed the bound max_turns 8/]],
+    ["a claimed test, no test event", t => ({ ...t, tool_calls: 3, events: OK_EVENTS().filter(e => e.name !== "run_tests") }),
+      [/the coverage summary contradicts the recorded events \(tests_run 1 vs 0\)/, /the recorded events do not pass the coverage gate: no test command ran although the testing limit allows tests/]],
+  ];
+  for (const [name, edit, wants] of cases) {
+    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+    assert.equal(j.status, "incomplete", name);
+    for (const w of wants) assert.match(j.why.join("; "), w, `${name}: ${j.why.join("; ")}`);
+  }
+});
+
+test("XAI SDK ROUTE R5: a retry is a provider call in the count -- an errored attempt the counter leaves out is a contradiction", async () => {
+  const retried = t => ({ ...t, events: [{ type: "provider_call", n: 1, turn: 1, attempt: 1, http_status: 429, sdk_error: "RateLimitError" }, ...OK_EVENTS()] });
+  let j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...retried(t), provider_calls: 4 }) }), run: OK_RUN });
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: retried }), run: OK_RUN });
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /the recorded events hold 4 provider call\(s\); the transcript's provider_calls says 3/);
+});
+
+test("XAI SDK ROUTE R5: a valid continuation -- earlier events kept, per-run counters over this run's events, cumulative over all -- is complete; mismatched counts are not", async () => {
+  const prior = [served(1), tool(1, "read_file", { path: "ophanim/operate/a.mjs" }), tool(2, "read_file", { path: "ophanim/operate/b.mjs" }), tool(3, "read_file", { path: "ophanim/operate/c.mjs" })];
+  const now = [{ type: "continuation", from_sha256: "f".repeat(64), method: "replayed-history" }, served(2), tool(4, "run_tests", { files: [".review-tests/stop.test.mjs"] }), served(3)];
+  const cont = (over = {}) => t => ({ ...t, events: [...prior, ...now], continued_from: { transcript: "findings-1-xai.transcript.json", sha256: "f".repeat(64), method: "replayed-history" },
+    provider_calls: 2, tool_calls: 1, cumulative: { runs: 2, provider_calls: 3, tool_calls: 4, usage: {}, wall_s: 9 }, ...over });
+  const judge = async edit => judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+  let j = await judge(cont());
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  // The false comparison this control guards against: this run's counters set to the cumulative totals.
+  j = await judge(cont({ provider_calls: 3, tool_calls: 4 }));
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /this run's events \(after its continuation\) hold 2 provider call\(s\); the transcript's provider_calls says 3/);
+  j = await judge(cont({ cumulative: { runs: 2, provider_calls: 2, tool_calls: 4, usage: {}, wall_s: 9 } }));
+  assert.match(j.why.join("; "), /the recorded events hold 3 provider call\(s\) across the runs; cumulative\.provider_calls says 2/);
+  j = await judge(cont({ cumulative: undefined }));
+  assert.match(j.why.join("; "), /missing evidence: a continuation records no cumulative counts/);
+  j = await judge(t => ({ ...cont()(t), events: [...prior, ...now.slice(1)] }));
+  assert.match(j.why.join("; "), /a transcript continued from another records no continuation event/);
 });
