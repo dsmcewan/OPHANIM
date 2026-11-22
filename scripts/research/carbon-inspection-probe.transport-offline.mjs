@@ -6,14 +6,14 @@
 // credential, no network. Only the test-only `antigravity` options (upstream, key, python, sandbox, node bound) and a
 // shorter run deadline differ from the live path, which passes none of them. Not on the live path.
 //
-// THE SANDBOX. The cases run the session UNJAILED (sandbox {enabled: false, allowUnsandboxed: true}, test-only). One
-// case, `sandboxed-conclusion`, runs the default jail (bwrap) and records a LAYOUT-SCOPED finding at this driver: the
-// driver hides its whole <state> and makes each session's control directory inside it (controlRoot). The jail sorts
-// its binds by path depth and places the research-hide tmpfs right after the repository's bind, so when the
-// repository is DEEPER than the control directory (here: the checkout under the scratchpad, <state> from mktemp under
-// /tmp) the tmpfs over <state> is emitted after the control directory's bind, covers it, and the bridge cannot chdir:
-// the session ends before its first model request. With <state> deeper than the repository the same jail works (a
-// separate replay on LEXI reached its request in three layouts). Reported, not changed here.
+// THE SANDBOX. The cases run the session UNJAILED (sandbox {enabled: false, allowUnsandboxed: true}, test-only), except
+// `sandboxed-conclusion`, which runs the default jail (bwrap) in a FIXED layout: the repository deeper than <state>.
+// bwrapArgs sorts binds by depth and the research-hide tmpfs is placed right after the repository's bind, so a session
+// control directory INSIDE the hidden <state> (the driver at bd34da6: controlRoot <state>) is covered by that tmpfs and
+// the bridge cannot chdir (0 model requests). This driver makes control directories under runResearch's default root,
+// outside <state>, so the same layout reaches the allowed read and the answer, with <state> still hidden. With
+// --baseline-driver <the bd34da6 driver file> the same case is run against it and must show the chdir failure; without
+// it that half is UNVERIFIED and the check exits 1.
 //
 // Without the SDK's python every transport case is reported UNVERIFIED and the check exits 1: nothing is passed by default.
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import assert from 'node:assert/strict';
@@ -23,7 +23,7 @@ import {fileURLToPath} from 'node:url';
 
 const SELF = fileURLToPath(import.meta.url);
 const DRIVER = path.join(path.dirname(SELF), 'carbon-inspection-probe.mjs');
-const {values: v} = parseArgs({options: {repo: {type: 'string'}, child: {type: 'string'}, state: {type: 'string'}}, strict: false});
+const {values: v} = parseArgs({options: {repo: {type: 'string'}, child: {type: 'string'}, state: {type: 'string'}, driver: {type: 'string'}, 'baseline-driver': {type: 'string'}}, strict: false});
 const repo = path.resolve(v.repo ?? '.');
 const KEY = 'FAKE-KEY-offline-carbon-probe-0123456789';
 const QUIET = 60_000;   // a stalled request: longer than any bound below
@@ -65,7 +65,7 @@ if (v.child) {
   const f = await import(path.join(repo, 'pantheon/tests/fixtures/fake-gemini.mjs'));
   const {sdkPython} = await import(path.join(repo, 'pantheon/src/antigravity/turn.mjs'));
   const up = await f.startFakeGemini({decide: a => sc.decide({...a, f}), models: {'gemini-4-carbon': {}}});
-  const {main} = await import(DRIVER);
+  const {main} = await import(path.resolve(v.driver ?? DRIVER));
   const code = await main(['--repo', repo, '--state', v.state, '--confirm-spend'], {deadlineMs: sc.deadlineMs,
     antigravity: {apiKey: KEY, upstream: up.url, python: sdkPython(), sandbox: sc.jail ? {enabled: true} : {enabled: false, allowUnsandboxed: true}, timeoutS: sc.timeoutS, graceS: 2}});
   fs.writeFileSync(path.join(v.state, 'upstream.json'), JSON.stringify(up.requests.map(r => ({seq: r.seq, model: r.model, verb: r.verb, aborted: r.aborted,
@@ -80,7 +80,7 @@ const check = async (name, fn) => { try { await fn(); results.push(`PASS  ${name
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-probe-transport-'));
 const ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(GEMINI|GOOGLE)_/.test(k)));   // no real key reaches a child
 const cli = (args, env = ENV) => spawnSync(process.execPath, [DRIVER, ...args], {env, encoding: 'utf8', timeout: 120_000});
-const child = (name, state) => { const t0 = Date.now(); const p = spawnSync(process.execPath, [SELF, '--child', name, '--repo', repo, '--state', state], {env: ENV, encoding: 'utf8', timeout: 240_000});
+const child = (name, state, driver = DRIVER) => { const t0 = Date.now(); const p = spawnSync(process.execPath, [SELF, '--child', name, '--repo', repo, '--state', state, '--driver', driver], {env: ENV, encoding: 'utf8', timeout: 240_000});
   return {status: p.status, ms: Date.now() - t0, stderr: p.stderr, result: JSON.parse(fs.readFileSync(path.join(state, 'probe-result.json'), 'utf8')),
     upstream: JSON.parse(fs.readFileSync(path.join(state, 'upstream.json'), 'utf8'))}; };
 const gen = u => u.filter(r => r.verb);
@@ -92,6 +92,9 @@ await check('CLI: --dry-run is a successful preflight (exit 0), nothing sent', a
   const p = cli(['--repo', repo, '--state', tmp(), '--dry-run']); assert.equal(p.status, 0, p.stderr); assert.equal(JSON.parse(p.stdout).outcome, 'dry-run'); });
 await check('CLI: without --confirm-spend it refuses (exit 1)', async () => {
   const p = cli(['--repo', repo, '--state', tmp()]); assert.equal(p.status, 1); assert.equal(JSON.parse(p.stdout).outcome, 'refused'); });
+await check('CLI: a --state that holds the session root (the system temporary directory) is refused (exit 1), nothing sent', async () => {
+  const p = cli(['--repo', repo, '--state', fs.realpathSync(os.tmpdir()), '--confirm-spend']); assert.equal(p.status, 1);
+  const out = JSON.parse(p.stdout); assert.equal(out.outcome, 'refused'); assert.match(out.why.join(' '), /session root .* is inside --state/); });
 await check('CLI: --confirm-spend with no key is refused by the transport preflight (exit 1), nothing sent', async () => {
   const st = tmp(), p = cli(['--repo', repo, '--state', st, '--confirm-spend']); assert.equal(p.status, 1);
   const out = JSON.parse(p.stdout); assert.equal(out.outcome, 'refused'); assert.match(out.why.join(' '), /NO_API_KEY/);
@@ -156,17 +159,34 @@ else {
   const {sandboxAvailable} = await import(path.join(repo, 'pantheon/src/agy/sandbox.mjs'));
   const bwrap = await sandboxAvailable('bwrap');
   if (!bwrap.ok) results.push(`UNVERIFIED  sandboxed-conclusion: bwrap is not usable here (${bwrap.why})`);
-  else await check('FINDING sandboxed-conclusion (the default jail, this layout: repository deeper than <state>): exit 3; the session ends before any model request (the hide tmpfs over <state> follows the control directory\'s bind); nothing charged, nothing named', async () => {
-    const st = tmp(), c = child('sandboxed-conclusion', st), r = c.result;
-    assert.equal(c.status, 3, `exit ${c.status}`);
-    assert.deepEqual([r.outcome, r.concluded, r.requests.billed_this_run, gen(c.upstream).length], ['failed', false, 0, 0], JSON.stringify([r.outcome, r.requests]));
-    const [o] = r.transport_observations;
-    assert.deepEqual([o.forwarded, o.served_names], [0, []]);
-    assert.match(o.error_message, /bwrap: Can't chdir to .*ophanim-research-/);
-    const ctl = /chdir to (\S+?):/.exec(o.error_message)?.[1] ?? null;
-    assert.ok(ctl && path.dirname(ctl) === st, `the control directory ${ctl} is directly inside <state> ${st}`);
-    results.push(`      layout: <state> ${st} (hidden: ${st}, ${path.join(st, 'work')}); controlRoot ${st}; session control dir ${ctl}; generate requests ${gen(c.upstream).length}; upstream ${JSON.stringify(c.upstream)}`);
-    results.push(`      bridge: ${o.error_message}`);
-  });
+  else {
+    const depth = p => fs.realpathSync(p).split(path.sep).filter(Boolean).length;
+    const layout = st => `repository ${fs.realpathSync(repo)} (depth ${depth(repo)}), <state> ${st} (depth ${depth(st)})`;
+    await check('sandboxed-conclusion (the default jail, repository deeper than <state>): exit 0; the allowed read and the answer are reached, verified; <state> and the work ledger stay hidden from the session', async () => {
+      const st = fs.realpathSync(tmp());
+      assert.ok(depth(repo) > depth(st), `the fixed layout: ${layout(st)}`);
+      const c = child('sandboxed-conclusion', st), r = c.result, [o] = r.transport_observations;
+      assert.equal(c.status, 0, `exit ${c.status} ${JSON.stringify(r.verdict)} ${o?.error_message ?? ''}`);
+      assert.deepEqual([r.outcome, r.concluded, r.verdict.success], ['satisfied', true, true]);
+      assert.ok(gen(c.upstream).length >= 1 && gen(c.upstream).every(x => x.key_is_fake));
+      assert.deepEqual(r.examined.map(e => e.path), ['ophanim/operate/self-repair-inspect.mjs']);
+      assert.equal(o.jail?.enabled, true, 'the session ran in the jail');
+      for (const h of [st, path.join(st, 'work')]) assert.ok(o.jail.research_hidden.includes(h), `${h} is hidden in the jail (hidden: ${o.jail.research_hidden.join(', ')})`);
+      results.push(`      layout: ${layout(st)}; generate requests ${gen(c.upstream).length}; hidden in the jail: ${o.jail.research_hidden.join(', ')}`);
+    });
+    if (!v['baseline-driver']) { results.push('UNVERIFIED  sandboxed-conclusion at the baseline driver: pass --baseline-driver <the bd34da6 carbon-inspection-probe.mjs>'); process.exitCode = 1; }
+    else await check('sandboxed-conclusion at the BASELINE driver (control directories inside <state>), the same layout: exit 3; bwrap cannot chdir; 0 model requests, nothing charged', async () => {
+      const st = fs.realpathSync(tmp());
+      assert.ok(depth(repo) > depth(st), `the fixed layout: ${layout(st)}`);
+      const c = child('sandboxed-conclusion', st, path.resolve(v['baseline-driver'])), r = c.result, [o] = r.transport_observations;
+      assert.equal(c.status, 3, `exit ${c.status}`);
+      assert.deepEqual([r.outcome, r.concluded, r.requests.billed_this_run, gen(c.upstream).length], ['failed', false, 0, 0], JSON.stringify([r.outcome, r.requests]));
+      assert.match(o.error_message, /bwrap: Can't chdir to .*ophanim-research-/);
+      const ctl = /chdir to (\S+?):/.exec(o.error_message)?.[1] ?? null;
+      assert.ok(ctl && path.dirname(ctl) === st, `the control directory ${ctl} is directly inside <state> ${st}`);
+      results.push(`      layout: ${layout(st)}; session control dir ${ctl}; generate requests ${gen(c.upstream).length}`);
+      results.push(`      bridge: ${o.error_message}`);
+    });
+  }
 }
 console.log(results.join('\n'));

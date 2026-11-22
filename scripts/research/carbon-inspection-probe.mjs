@@ -21,6 +21,10 @@
 //   scope       read-only research tools on exactly ophanim/operate/self-repair-inspect.mjs and
 //               ophanim/operate/self-repair.mjs (the transport's RESEARCH_SCOPE refuses any other read); the work ledger
 //               and <state> are outside the repository and hidden as well
+//   sessions    each session's control directory is made under runResearch's default root (the system's temporary
+//               directory), OUTSIDE <state>: a control directory inside a hidden path is covered by the jail's tmpfs
+//               whenever the repository's bind is emitted after it (bwrapArgs sorts binds by depth), and the session
+//               cannot start. Refused if the temporary directory is inside <state>
 //   context     a bounded graph view at PINNED_COMMIT: ophanim/graph/cli.mjs `dependents` of each scoped file, depth 1,
 //               at most 20 nodes and 40 edges each, cut at 6,000 bytes; its digest is recorded
 //   spend gate  without --confirm-spend nothing is sent; --dry-run prints the plan and the context and sends nothing
@@ -42,6 +46,7 @@
 // gemini-4-carbon alone per the provider) or a passed --dry-run preflight; 3 for a run that sent and ended without one;
 // 1 for a refusal or an error; 2 for a usage error. The verdict and its reasons are in the result.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -65,7 +70,11 @@ export const CONTEXT_BYTES = 6000;
 const sha = b => createHash('sha256').update(b).digest('hex');
 const git = (repo, ...a) => execFileSync('git', ['-C', repo, ...a], {encoding: 'utf8'}).trim();
 
-/** Refuses unless `repo` is a clean checkout at PINNED_COMMIT and `state` is outside it. */
+/** A path made real through its nearest existing ancestor (a --state that does not exist yet). */
+const realish = p => { const rest = []; let at = path.resolve(p); while (!fs.existsSync(at)) { rest.unshift(path.basename(at)); at = path.dirname(at); } return path.join(fs.realpathSync(at), ...rest); };
+const within = (outer, p) => { const rel = path.relative(outer, p); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
+
+/** Refuses unless `repo` is a clean checkout at PINNED_COMMIT, `state` is outside it, and the session root is outside `state`. */
 export function preconditions({repo, state}) {
   const why = [];
   if (!path.isAbsolute(repo) || !path.isAbsolute(state)) why.push('--repo and --state must be absolute paths');
@@ -76,6 +85,8 @@ export function preconditions({repo, state}) {
     if (head && git(repo, 'status', '--porcelain', '--untracked-files=all') !== '') why.push(`${repo} has uncommitted or untracked changes`);
     const rel = path.relative(fs.realpathSync(repo), path.resolve(state));
     if (!rel.startsWith('..') && !path.isAbsolute(rel)) why.push(`--state ${state} is inside the repository; it must be outside it`);
+    const sessions = fs.realpathSync(os.tmpdir());
+    if (within(realish(state), sessions)) why.push(`the session root ${sessions} (the system's temporary directory) is inside --state ${state}, which is hidden from the session; choose a --state outside it`);
   }
   return why;
 }
@@ -118,7 +129,8 @@ export function observingTransport(base, log) {
     try {
       const r = await base(opts);
       log.push({...entry, ended: 'returned', error_code: null, ...gatewayObservation(r, entry.requested),
-        returned: {served_model: r?.served_model ?? null, served_model_source: r?.served_model_source ?? null, usage: plainObj(r?.usage) ? r.usage : null}});
+        returned: {served_model: r?.served_model ?? null, served_model_source: r?.served_model_source ?? null, usage: plainObj(r?.usage) ? r.usage : null},
+        jail: plainObj(r?.sandbox) ? {enabled: r.sandbox.enabled === true, research_hidden: Array.isArray(r.sandbox.research_hidden) ? [...r.sandbox.research_hidden] : []} : null});
       return r;
     } catch (e) {
       const o = {...entry, ended: 'threw', error_code: e?.code ?? null, error_message: String(e?.message ?? e).slice(0, 300), ...gatewayObservation(e, entry.requested), lifted: {served_model: false, usage: false}};
@@ -196,7 +208,7 @@ export async function run({repo, state, dryRun = false, confirmSpend = false}, d
   let r, error = null;
   try {
     r = await runResearch({work, item: ITEM, request, repo, dir: teamDir, billing, admitRequest, context: context.text, head: PINNED_COMMIT, limits: {...LIMITS},
-      signal, qualified: m => (m === MODEL ? null : `only ${MODEL} is qualified for this probe`), hide: [workRoot, state], controlRoot: state,
+      signal, qualified: m => (m === MODEL ? null : `only ${MODEL} is qualified for this probe`), hide: [workRoot, state],
       sdk, ...(deps.antigravity ? {antigravity: {...deps.antigravity}} : {})});
   } catch (e) { error = {code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 500)}; }
   const rows = work.research(ITEM);
